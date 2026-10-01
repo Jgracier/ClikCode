@@ -31,6 +31,7 @@ import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock,
 import { logProcessWarnings } from './warnings.js';
 import { tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { paintStatus } from './render/status-line.js';
+import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
@@ -230,6 +231,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Approvals answered since the last time none was waiting: this one is
    * number answered + 1 of answered + 1 + queued. */
   private approvalsAnswered = 0;
+  /** Long pastes held as placeholders so far, for the next one's number. */
+  private pasteCount = 0;
   /** "Tell it instead" is being typed; the draft the composer held before. */
   private tellingInstead?: { draft: string; cursor: number };
   private approvalRestoreLabel?: string;
@@ -2213,6 +2216,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       let cursor = value.length;
       let selected = 0;
       let historyIndex = this.history.length;
+      // Long pastes, held out of the draft as placeholders (held-pastes.ts)
+      // and put back when it is sent.
+      let held: HeldPaste[] = [];
+      const draft = (): DraftWithPastes => ({ value, cursor, held });
+      const apply = (next: DraftWithPastes): void => { value = next.value; cursor = next.cursor; held = [...next.held]; };
       // Reserved once for the whole prompt, not recomputed per keystroke: keeping the
       // footer band a fixed height is what stops the conversation area above it from
       // reflowing (and the cursor from jumping) as the number of matches narrows.
@@ -2299,7 +2307,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // kept for the next prompt, and the caller is told why it ended.
       const interrupt = (): void => {
         if (!release()) return;
-        if (value) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${value}` : value;
+        // Kept whole: a placeholder in the next prompt's draft would have
+        // lost the paste it stood for.
+        const kept = expandPastes(value, held);
+        if (kept) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${kept}` : kept;
         rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
       };
       if (settings?.signal?.aborted) {
@@ -2322,10 +2333,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         const pasted = pastedText(key);
         if (pasted !== undefined) {
           // Pasted newlines are content, not Enter. Splitting on them is what
-          // turned one pasted block into a queue of separate messages.
-          value = value.slice(0, cursor) + pasted + value.slice(cursor);
-          cursor += pasted.length;
+          // turned one pasted block into a queue of separate messages. A long
+          // one is held as `[Pasted text #1 +40 lines]`.
+          const next = insertPaste(draft(), pasted, this.pasteCount + 1);
+          if (next.held.length > held.length) this.pasteCount += 1;
+          apply(next);
           selected = 0;
+          return draw();
+        }
+        // Ctrl+O: the held pastes back in the draft as text, to read or edit.
+        if (key === '\u000f') {
+          if (!held.length) return;
+          cursor = expandPastes(value.slice(0, cursor), held).length;
+          value = expandPastes(value, held);
+          held = [];
           return draw();
         }
         if (key === '\u001a') return this.suspendToShell();
@@ -2333,7 +2354,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\u0003') {
           // Ctrl+C clears a draft first. Leaving takes a second press, because
           // the same key also interrupts a turn and is pressed by reflex.
-          if (value) { value = ''; cursor = 0; selected = 0; historyIndex = this.history.length; return draw(); }
+          if (value) { value = ''; cursor = 0; held = []; selected = 0; historyIndex = this.history.length; return draw(); }
           if (Date.now() - exitArmedAt <= EXIT_CONFIRM_MS) return finish('/exit');
           exitArmedAt = Date.now();
           this.showTransientNotice('Press Ctrl+C again to exit', EXIT_CONFIRM_MS, draw);
@@ -2361,8 +2382,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           // and starting on the current value; the values are listed here
           // only once one is being typed (`/model op`).
           if (options.length && value.startsWith('/') && !value.includes(' ')) return runCommand(options[selected].value);
-          if (value.startsWith('/')) return runCommand(value);
-          return finish(value);
+          if (value.startsWith('/')) return runCommand(expandPastes(value, held));
+          return finish(expandPastes(value, held));
         }
         if (key === '\t' && options.length) {
           // A value fills in as it is, ready to run or to keep editing; a
@@ -2439,12 +2460,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // Escape returns to the live end here; in the waiting band it keeps
         // meaning interrupt, and a new turn rejoins on its own.
         if (key === '\u001b' && this.scrolledBack) { this.scrollTranscript(-Number.MAX_SAFE_INTEGER); return; }
+        // A placeholder is deleted whole, its paste with it.
+        const removed = key === '\u007f' || key === '\b' ? removePlaceholderAt(draft(), 'back')
+          : key === '\u001b[3~' || key === '\u0004' ? removePlaceholderAt(draft(), 'forward') : undefined;
+        if (removed) { apply(removed); selected = highlightFor(value); return draw(); }
         // Everything else is text editing, shared with the waiting composer.
         const edited = editComposer(value, cursor, key);
         if (!edited.changed) return;
         if (edited.value !== value) selected = highlightFor(edited.value);
         value = edited.value;
         cursor = edited.cursor;
+        // An edit that broke a placeholder drops its paste.
+        held = keptPastes(value, held);
         draw();
       };
       let exitArmedAt = 0;

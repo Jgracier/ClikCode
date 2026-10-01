@@ -51,7 +51,10 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     send({ id, method, params });
   });
   const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
-  const prompt = async (id) => {
+  const prompt = async (id, params) => {
+    // What was sent, for `{received}`: whether a long paste reached it whole.
+    const said = (params?.prompt ?? []).map((part) => (part?.type === 'text' ? part.text : '')).join('\n');
+    const received = /pasted row 1\n[\s\S]*pasted row 12/.test(said) && !said.includes('[Pasted text') ? 'whole' : 'missing';
     const turn = nextTurn();
     cancelled = false;
     const tool = async (toolCallId, command, result, ms) => {
@@ -111,7 +114,7 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       await sleep(ms);
       update({ sessionUpdate: 'tool_call_update', toolCallId: 'stream_1', status: 'completed' });
     }
-    for (const [index, block] of turn.blocks.map((text) => text.replace('{answers}', answers)).entries()) {
+    for (const [index, block] of turn.blocks.map((text) => text.replace('{answers}', answers).replace('{received}', received)).entries()) {
       for (const piece of block.match(/\S+\s*/g) ?? []) {
         if (cancelled) break;
         await sleep(Number(process.env.FAKE_DELAY_MS ?? 120));
@@ -137,7 +140,7 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       else if (method === 'session/load' || method === 'session/resume') { sessionId = params.sessionId; send({ id, result: { models } }); }
       else if (method === 'session/set_model') { models.currentModelId = params.modelId; send({ id, result: {} }); }
       else if (method === 'session/set_mode' || method === 'session/set_config_option') send({ id, result: {} });
-      else if (method === 'session/prompt') void prompt(id);
+      else if (method === 'session/prompt') void prompt(id, params);
       else if (method === 'session/cancel') cancelled = true;
       else if (id !== undefined) send({ id, error: { code: -32601, message: `fake grok: ${method}` } });
     }
