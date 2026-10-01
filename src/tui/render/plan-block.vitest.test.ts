@@ -31,3 +31,10 @@ describe('the plan block', () => {
     expect(rows.at(-1)).toContain('6/8 done');
   });
 });
+
+describe('a finished plan', () => {
+  it('leaves the screen once every step is done or dropped, as Claude Code and Codex do', () => {
+    expect(planBlockRows([{ content: 'a', status: 'completed' }, { content: 'b', status: 'cancelled' }], 60)).toEqual([]);
+    expect(planBlockRows([{ content: 'a', status: 'completed' }, { content: 'b', status: 'pending' }], 60).length).toBeGreaterThan(0);
+  });
+});

@@ -10,6 +10,14 @@ export function planStepSettled(entry: Pick<HarnessPlanEntry, 'status'>): boolea
   return entry.status === 'completed' || entry.status === 'cancelled';
 }
 
+/** Whether a plan still has a place on screen: while any step is open. Once
+ * every step is done (or dropped) it has said all it had to, and goes -- as
+ * Claude Code's todo list and Codex's plan do. A plan left unfinished when a
+ * turn ends stays, until the next turn starts. */
+export function planStillNeeded(entries: ReadonlyArray<Pick<HarnessPlanEntry, 'status'>>): boolean {
+  return entries.some((entry) => !planStepSettled(entry));
+}
+
 /** The visible steps with their positions, how many are settled, and how
  * many the window left out. `capacity` counts the "more" row. */
 export function planWindow<T extends Pick<HarnessPlanEntry, 'status'>>(entries: readonly T[], maxRows = PLAN_MAX_ROWS): {

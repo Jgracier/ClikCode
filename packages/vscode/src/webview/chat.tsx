@@ -5,7 +5,7 @@ import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, outputPreview } from '../../../../src/harness/protocol/activity-view';
 import { approvalKeyAction } from '../../../../src/tui/render/approval-keys';
-import { planWindow } from '../../../../src/tui/render/plan-window';
+import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
 import type { Activity, Approval, ChatModel, LiveTurn as Live, Note, TurnTrace } from '../model';
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
@@ -237,17 +237,20 @@ const TraceRow = memo(({ trace, workspace }: { trace: TurnTrace; workspace?: str
   const tools = trace.activities.filter((activity) => activity.kind !== 'thinking');
   const failed = tools.filter((activity) => activity.kind === 'tool-error').length;
   const totals = diffTotals(tools.flatMap((activity) => activity.diff ?? []));
-  const label = tools.length ? `${tools.length} step${tools.length === 1 ? '' : 's'}` : `Thought for ${duration(trace.endedAt - trace.startedAt)}`;
+  const planDone = trace.plan?.filter((entry) => entry.status === 'completed').length ?? 0;
+  const label = tools.length ? `${tools.length} step${tools.length === 1 ? '' : 's'}`
+    : trace.plan ? `Plan · ${planDone}/${trace.plan.length} done` : `Thought for ${duration(trace.endedAt - trace.startedAt)}`;
   return (
     <div class="trace">
       <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
         <span>{label}</span>
-        <span class="muted">{tools.length ? ` · ${duration(trace.endedAt - trace.startedAt)}` : ''}{failed ? ` · ${failed} failed` : ''}</span>
+        <span class="muted">{tools.length ? ` · ${duration(trace.endedAt - trace.startedAt)}` : ''}{tools.length && trace.plan ? ` · plan ${planDone}/${trace.plan.length}` : ''}{failed ? ` · ${failed} failed` : ''}</span>
         {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
       </button>
       {open ? (
         <div class="activities">
+          {trace.plan ? <Plan plan={trace.plan} expanded /> : null}
           {trace.reasoning?.length ? <Reasoning thoughts={trace.reasoning} /> : null}
           {tools.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} userIndex={trace.userIndex} />)}
         </div>
@@ -279,8 +282,8 @@ const NoteView = memo(({ note }: { note: Note }): JSX.Element => {
 
 /** The plan, windowed around the step in progress as the terminal shows it;
  * the rest one click away. */
-function Plan({ plan }: { plan: ChatModel['plan'] }): JSX.Element {
-  const [all, setAll] = useState(false);
+function Plan({ plan, expanded = false }: { plan: ChatModel['plan']; expanded?: boolean }): JSX.Element {
+  const [all, setAll] = useState(expanded);
   const { visible, done, hidden } = planWindow(plan);
   const rows = all ? plan.map((entry, index) => ({ entry, index })) : visible;
   return (
@@ -406,7 +409,9 @@ const History = memo(({ sessionId, messages, traces, notes, workspace }: Pick<Ch
 export function Transcript({ model }: { model: ChatModel }): JSX.Element {
   const parts: JSX.Element[] = [];
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
-  if (model.plan.length) parts.push(<Plan key="plan" plan={model.plan} />);
+  // A plan is on screen while it has open steps; finished, it goes, and is
+  // kept with its turn (planStillNeeded, as the terminal decides).
+  if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} />);
   if (model.running) parts.push(<LiveTurn key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} />);
   const queuedTexts = new Set(model.queued.map((item) => item.text));
   for (const submission of model.submissions) {

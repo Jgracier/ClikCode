@@ -754,6 +754,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // A new turn is the reader rejoining the conversation.
     this.alternateScrollback = 0;
     if (!rejoined) this.liveResponse = '';
+    // The last turn's plan, finished or left unfinished, is not this one's.
+    if (!rejoined) this.planEntries = [];
     // A running turn always renders as stable messages, its submitted user
     // prompt, then one live assistant slot. Keep that slot fixed for the
     // whole turn: deriving it from sessionTranscriptMessages made the anchor
