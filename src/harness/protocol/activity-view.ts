@@ -64,6 +64,7 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
     ...(next.category ? {} : prior.category ? { category: prior.category } : {}),
     ...(next.agent ? {} : prior.agent ? { agent: prior.agent } : {}),
     ...(next.diff ? {} : prior.diff ? { diff: prior.diff } : {}),
+    ...(next.childTools !== undefined || prior.childTools === undefined ? {} : { childTools: prior.childTools }),
     ...(next.durationMs !== undefined || prior.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
     ...(next.exitCode !== undefined || prior.exitCode === undefined ? {} : { exitCode: prior.exitCode }),
     // Likewise its output: a completion that carries none (most do not)
@@ -146,6 +147,16 @@ export function appendThought(prior: Thought | undefined, label: string, id?: st
   if (trimmed.startsWith(prior.text)) return withId(trimmed);
   const joined = /^[\s.,;:!?)\]'"]/.test(fragment) || /\s$/.test(prior.text) ? `${prior.text}${fragment}` : `${prior.text} ${fragment}`;
   return withId(joined.replace(/\s+/g, ' ').trim());
+}
+
+/** A sub-agent's work so far, as Claude Code counts it. */
+export function toolUses(count: number): string {
+  return `${count} tool use${count === 1 ? '' : 's'}`;
+}
+
+/** The parent row's count once one of its sub-agent's calls starts. */
+export function withChildTool<T extends Pick<HarnessActivityEvent, 'childTools'>>(parent: T, child: Pick<HarnessActivityEvent, 'kind'>): T {
+  return child.kind === 'tool-start' ? { ...parent, childTools: (parent.childTools ?? 0) + 1 } : parent;
 }
 
 /** What a sub-agent is doing now, for its parent's row: the label of its
@@ -337,10 +348,11 @@ export function formatDuration(ms: number): string {
 
 /** What follows a finished call: a non-zero exit and a run of a second or
  * more -- the exceptions, since every call exits 0 in under a second. */
-export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'exitCode' | 'durationMs'>): { parts: string[]; failed: boolean } | undefined {
+export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'exitCode' | 'durationMs' | 'childTools'>): { parts: string[]; failed: boolean } | undefined {
   if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return undefined;
   const failed = event.kind === 'tool-error' || (event.exitCode !== undefined && event.exitCode !== 0);
   const parts = [
+    ...(event.childTools ? [toolUses(event.childTools)] : []),
     ...(event.exitCode !== undefined && event.exitCode !== 0 ? [`exit ${event.exitCode}`] : []),
     ...(event.durationMs !== undefined && event.durationMs >= 1000 ? [formatDuration(event.durationMs)] : []),
   ];

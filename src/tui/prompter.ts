@@ -26,8 +26,8 @@ import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
-import { outputPreviewRows } from '../harness/protocol/activity-line.js';
-import { joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
+import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
+import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
@@ -639,6 +639,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // What it is doing (a call) or saying (its prose, its thinking) now.
       if (event.kind === 'tool-start' || event.kind === 'thinking') this.childActivity.set(event.parentId, event.label);
       else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.childActivity.delete(event.parentId);
+      // And how much it has done, as Claude Code counts it: the agent row
+      // ends "(12 tool uses, 1m 05s)".
+      if (event.kind === 'tool-start') {
+        this.activityEntries = this.activityEntries.map((entry) => {
+          const parent = entry.event;
+          if (!parent || parent.id !== event.parentId) return entry;
+          const counted = withChildTool(parent, event);
+          return { ...entry, event: counted, lines: renderActivityLine(counted).map((line) => line.trim()) };
+        });
+      }
       this.schedulePaint();
       return;
     }
@@ -1288,7 +1298,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         .map((line) => `  ${visibleSlice(line, Math.max(1, conversationInner - 2))}`) : [];
       return {
         id, done: false, responseOffset: entry.responseOffset,
-        lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(child)}`] : []), ...live, ''],
+        lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(`${child}${entry.event?.childTools ? ` · ${toolUses(entry.event.childTools)}` : ''}`)}`] : []), ...live, ''],
       };
     };
     /** A turn's own tool calls: anchored at the message count when it began,

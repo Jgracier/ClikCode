@@ -21,6 +21,9 @@ export interface HarnessActivityEvent {
    * Set from the envelope (Codex collab calls, an agent-shaped tool name)
    * rather than guessed from prose. */
   agent?: boolean;
+  /** For a sub-agent's call: how many tools the sub-agent has used under it,
+   * as Claude Code counts them ("12 tool uses"). Set by the display. */
+  childTools?: number;
   /** Set when this call belongs to a sub-agent (Claude's parent_tool_use_id).
    * It is not its own row; the parent agent row carries it. */
   parentId?: string;

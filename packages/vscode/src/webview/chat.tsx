@@ -5,13 +5,13 @@ import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   ACTIVITY_PREVIEW_LINES, activityOutcome, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
-  outputPreview, previewLinesFor, SPIN_MS, STALL_MS, waitingSpinnerGlyph,
+  outputPreview, previewLinesFor, SPIN_MS, STALL_MS, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
-import type { Activity, Approval, ChatModel, LiveTurn, Note, TurnTrace } from '../model';
+import type { Activity, Approval, ChatModel, LiveTurn, Note, ThoughtEntry, TurnTrace } from '../model';
 import type { FileDiff } from '../protocol';
 import { post } from './bus';
 import { pathIn, titleCase } from './format';
@@ -234,7 +234,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
           </button>
         ) : null}
       </div>
-      {status === 'running' && activity.child ? <div class="activity-child" title={activity.child}><Icon name="arrow-small-right" /><span>{activity.child}</span></div> : null}
+      {status === 'running' && activity.child ? <div class="activity-child" title={activity.child}><Icon name="arrow-small-right" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
       {/* A running call shows what it has printed so far, newest last -- a
           long build is visibly working instead of a bare timer. */}
       {status === 'running' && !open && activity.output?.length ? <OutputView activity={{ ...activity, outputTail: true }} budget={LIVE_OUTPUT_LINES} /> : null}
@@ -245,38 +245,121 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   );
 }
 
-/** A finished turn's steps, folded to one line above its answer. */
-const TraceRow = memo(({ trace, workspace }: { trace: TurnTrace; workspace?: string }): JSX.Element => {
+/** A run of calls a finished turn made between two paragraphs, folded to
+ * one line in its place -- "read 3 files · ran 2 commands" -- as Codex folds
+ * its work; open, the rows themselves. */
+function FoldedRun({ activities, workspace, userIndex }: { activities: Activity[]; workspace?: string; userIndex?: number }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const tools = trace.activities;
-  const failed = tools.filter((activity) => activity.kind === 'tool-error').length;
-  const totals = diffTotals(tools.flatMap((activity) => activity.diff ?? []));
-  const planDone = trace.plan?.filter((entry) => entry.status === 'completed').length ?? 0;
-  const label = tools.length ? `${tools.length} step${tools.length === 1 ? '' : 's'}`
-    : trace.plan ? `Plan · ${planDone}/${trace.plan.length} done` : `Thought for ${formatElapsed(trace.endedAt - trace.startedAt)}`;
+  const failed = activities.filter((activity) => activity.kind === 'tool-error').length;
+  const totals = diffTotals(activities.flatMap((activity) => activity.diff ?? []));
   return (
     <div class="trace">
       <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
-        <span>{label}</span>
-        <span class="muted">{tools.length ? ` · ${formatElapsed(trace.endedAt - trace.startedAt)}` : ''}{tools.length && trace.plan ? ` · plan ${planDone}/${trace.plan.length}` : ''}{failed ? ` · ${failed} failed` : ''}</span>
+        <span>{runSummary(activities)}</span>
+        {failed ? <span class="muted"> · {failed} failed</span> : null}
         {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
       </button>
-      {open ? (
-        <div class="activities">
-          {trace.plan ? <Plan plan={trace.plan} expanded /> : null}
-          {trace.reasoning?.length ? <Reasoning thoughts={trace.reasoning} /> : null}
-          {tools.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} userIndex={trace.userIndex} />)}
-        </div>
-      ) : null}
+      {open ? <div class="activities">{activities.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} userIndex={userIndex} />)}</div> : null}
+    </div>
+  );
+}
+
+/** What a run of calls did, in the terminal's folded words per kind. */
+function runSummary(activities: readonly Activity[]): string {
+  const counts = new Map<string, number>();
+  for (const activity of activities) {
+    const kind = activity.agent ? 'agent' : activity.category ?? 'other';
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return [...counts].map(([kind, count]) => (kind === 'agent' ? `ran ${count} agent${count === 1 ? '' : 's'}`
+    : kind === 'other' ? `${count} step${count === 1 ? '' : 's'}`
+      : count === 1 && activities.length === 1 ? activities[0]!.label : TOOL_CATEGORY[kind as ToolCategory].folded(count))).join(' · ');
+}
+
+/** A thought, where it happened: "Thought for 4s", open to read it. */
+function ThoughtRow({ thought }: { thought: ThoughtEntry }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <div class="trace thought-row">
+      <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span>Thought for {formatElapsed(Math.max(1000, thought.ms))}</span>
+      </button>
+      {open ? <Reasoning text={thought.text} /> : null}
+    </div>
+  );
+}
+
+function Reasoning({ text }: { text: string }): JSX.Element {
+  return <div class="reasoning" aria-label="Reasoning"><p>{text}</p></div>;
+}
+
+/** How a turn reads, live or finished, in the order it happened -- as
+ * Claude Code and Codex lay a turn out: each paragraph of the answer, and
+ * between them the calls, thoughts and messages sent into the turn at the
+ * point they came. Live, calls show as rows and the last paragraph streams;
+ * finished, each run of calls folds to one line in its place, so nothing
+ * moves when the turn ends. */
+function TurnFlow(props: {
+  text: string; activities: readonly Activity[]; thoughts: readonly ThoughtEntry[]; steers: ReadonlyArray<{ text: string; offset: number }>;
+  workspace?: string; live?: { startedAt: number }; cacheKey?: string; userIndex?: number;
+}): JSX.Element {
+  const { text } = props;
+  type Mark = { offset: number; activity?: Activity; thought?: ThoughtEntry; steer?: string };
+  const marks: Mark[] = [
+    ...props.thoughts.map((thought) => ({ offset: Math.min(thought.offset, text.length), thought })),
+    ...props.activities.map((activity) => ({ offset: Math.min(activity.offset ?? 0, text.length), activity })),
+    ...props.steers.map((steer) => ({ offset: Math.min(steer.offset, text.length), steer: steer.text })),
+  ].sort((left, right) => left.offset - right.offset);
+  const parts: JSX.Element[] = [];
+  let at = 0;
+  let run: Activity[] = [];
+  const flushRun = (): void => {
+    if (!run.length) return;
+    parts.push(props.live
+      ? <ActivityRun key={`r${run[0]!.key}`} activities={run} workspace={props.workspace} />
+      : <FoldedRun key={`r${run[0]!.key}`} activities={run} workspace={props.workspace} userIndex={props.userIndex} />);
+    run = [];
+  };
+  const paragraph = (end: number): void => {
+    const piece = text.slice(at, end);
+    if (!piece.trim()) return;
+    flushRun();
+    const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(piece);
+    parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
+    at = end;
+  };
+  for (const mark of marks) {
+    if (mark.offset > at) paragraph(mark.offset);
+    if (mark.activity) { run.push(mark.activity); continue; }
+    flushRun();
+    if (mark.thought) parts.push(<ThoughtRow key={`h${mark.offset}-${parts.length}`} thought={mark.thought} />);
+    else parts.push(<div key={`s${mark.offset}-${mark.steer}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
+  }
+  flushRun();
+  if (props.live) {
+    if (text.slice(at)) parts.push(<LiveMarkdown key={`${props.live.startedAt}-${at}`} text={text.slice(at)} />);
+  } else paragraph(text.length);
+  return <>{parts}</>;
+}
+
+/** A finished answer with how it was reached, in the order it happened.
+ * Rows and thoughts land where they came in the answer as it streamed; one
+ * whose place the saved answer no longer reads the same up to goes first. */
+const FinishedTurn = memo(({ text, trace, cacheKey, workspace }: { text: string; trace: TurnTrace; cacheKey: string; workspace?: string }): JSX.Element => {
+  const place = <T extends { offset?: number }>(item: T): T => {
+    const offset = item.offset ?? 0;
+    return offset <= text.length && text.slice(0, offset) === trace.text.slice(0, offset) ? item : { ...item, offset: 0 };
+  };
+  return (
+    <div class="message assistant" role="article" aria-label="ClikCode">
+      {trace.plan ? <Plan plan={trace.plan} folded /> : null}
+      <TurnFlow text={text} activities={trace.activities.map(place)} thoughts={(trace.reasoning ?? []).map(place)} steers={(trace.steers ?? []).map(place)}
+        workspace={workspace} cacheKey={cacheKey} userIndex={trace.userIndex} />
+      <div class="message-actions"><CopyAnswer text={text} /></div>
     </div>
   );
 });
-
-/** A turn's reasoning, each thought its own paragraph. */
-function Reasoning({ thoughts }: { thoughts: readonly string[] }): JSX.Element {
-  return <div class="reasoning" aria-label="Reasoning">{thoughts.map((thought, index) => <p key={index}>{thought}</p>)}</div>;
-}
 
 const NoteView = memo(({ note }: { note: Note }): JSX.Element => {
   const [open, setOpen] = useState(note.text.split('\n').length <= 14);
@@ -296,8 +379,19 @@ const NoteView = memo(({ note }: { note: Note }): JSX.Element => {
 
 /** The plan, windowed around the step in progress as the terminal shows it;
  * the rest one click away. */
-function Plan({ plan, expanded = false, running = false }: { plan: ChatModel['plan']; expanded?: boolean; running?: boolean }): JSX.Element {
-  const [all, setAll] = useState(expanded);
+function Plan({ plan, folded = false, running = false }: { plan: ChatModel['plan']; folded?: boolean; running?: boolean }): JSX.Element {
+  const [all, setAll] = useState(false);
+  const [open, setOpen] = useState(!folded);
+  if (!open) {
+    const done = plan.filter((entry) => entry.status === 'completed').length;
+    return (
+      <div class="trace">
+        <button type="button" class="trace-toggle" aria-expanded={false} onClick={() => { setOpen(true); setAll(true); }}>
+          <Icon name="chevron-right" /><span>Plan · {done}/{plan.length} done</span>
+        </button>
+      </div>
+    );
+  }
   const { visible, done, hidden } = planWindow(plan);
   const rows = all ? plan.map((entry, index) => ({ entry, index })) : visible;
   return (
@@ -351,7 +445,7 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
 }
 
 /** The thought being had, its newest words on one line as in the terminal;
- * open, the whole of this turn's reasoning so far. */
+ * open, all of it. Settled, it becomes a "Thought for Xs" row in place. */
 function LiveThought({ live }: { live: LiveTurn }): JSX.Element | null {
   const [open, setOpen] = useState(false);
   if (!live.thought) return null;
@@ -361,7 +455,7 @@ function LiveThought({ live }: { live: LiveTurn }): JSX.Element | null {
       <button type="button" class="thought-toggle" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} onClick={() => setOpen(!open)}>
         <Icon name="lightbulb" /><span class="thought-text">{text.length > 200 ? `…${text.slice(-200)}` : text}</span>
       </button>
-      {open ? <Reasoning thoughts={[...live.reasoning, text]} /> : null}
+      {open ? <Reasoning text={text} /> : null}
     </div>
   );
 }
@@ -381,39 +475,13 @@ function ActivityRun({ activities, workspace }: { activities: Activity[]; worksp
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
  * it, the newest still streaming; then the thought and the working line. */
-const LiveTurnView = memo(({ live, workspace, elsewhere, asking }: { live: LiveTurn | undefined; workspace?: string; elsewhere: boolean; asking: boolean }): JSX.Element => {
-  const text = live?.text ?? '';
-  type Mark = { offset: number; activity?: Activity; steer?: string };
-  const marks: Mark[] = [
-    ...(live?.activities ?? []).map((activity) => ({ offset: Math.min(activity.offset ?? 0, text.length), activity })),
-    ...(live?.steers ?? []).map((steer) => ({ offset: Math.min(steer.offset, text.length), steer: steer.text })),
-  ].sort((left, right) => left.offset - right.offset);
-  const parts: JSX.Element[] = [];
-  let at = 0;
-  let run: Activity[] = [];
-  const flushRun = (): void => {
-    if (run.length) parts.push(<ActivityRun key={`r${run[0]!.key}`} activities={run} workspace={workspace} />);
-    run = [];
-  };
-  for (const mark of marks) {
-    if (mark.offset > at && text.slice(at, mark.offset).trim()) {
-      flushRun();
-      parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: renderMarkdown(text.slice(at, mark.offset)) }} />);
-      at = mark.offset;
-    }
-    if (mark.activity) run.push(mark.activity);
-    else { flushRun(); parts.push(<div key={`s${mark.offset}-${mark.steer}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>); }
-  }
-  flushRun();
-  return (
-    <div class="message assistant live" aria-busy="true">
-      {parts}
-      {text.slice(at) ? <LiveMarkdown key={`${live?.startedAt}-${at}`} text={text.slice(at)} /> : null}
-      {live && !asking ? <LiveThought live={live} /> : null}
-      <Working live={live} elsewhere={elsewhere} asking={asking} />
-    </div>
-  );
-});
+const LiveTurnView = memo(({ live, workspace, elsewhere, asking }: { live: LiveTurn | undefined; workspace?: string; elsewhere: boolean; asking: boolean }): JSX.Element => (
+  <div class="message assistant live" aria-busy="true">
+    {live ? <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }} /> : null}
+    {live && !asking ? <LiveThought live={live} /> : null}
+    <Working live={live} elsewhere={elsewhere} asking={asking} />
+  </div>
+));
 
 /** Messages drawn at first; a long conversation shows its latest and loads
  * earlier ones on demand, so opening it stays instant. */
@@ -443,8 +511,9 @@ const History = memo(({ sessionId, messages, traces, notes, workspace }: Pick<Ch
     if (message.role === 'user') parts.push(<UserMessage key={`m${index}`} text={message.content} />);
     else {
       const trace = byUser.get(index - 1);
-      if (trace) parts.push(<TraceRow key={`t${index}`} trace={trace} workspace={workspace} />);
-      parts.push(<AssistantMessage key={`m${index}`} cacheKey={`${sessionId}#${index}`} text={message.content} />);
+      parts.push(trace
+        ? <FinishedTurn key={`m${index}`} text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} />
+        : <AssistantMessage key={`m${index}`} cacheKey={`${sessionId}#${index}`} text={message.content} />);
     }
     notesAt(index + 1);
   });
