@@ -25,12 +25,13 @@ import type { HarnessState } from '../../session/model.js';
  * every other one right now; the numbered placeholder below covers those.
  */
 /** Whether a label is one ClikCode invented because it could not read a real
- * identity -- the harness's own name, with or without the old " default"
- * suffix. A real label is an email or something the user typed. */
-function isPlaceholderAccountLabel(label: string, harness: AiLocalHarnessDefinition): boolean {
+ * identity -- the harness's own name, with the old " default" suffix, or with
+ * the number firstUnusedAccountLabel gives a second login. A real label is an
+ * email or something the user typed. */
+export function isPlaceholderAccountLabel(label: string, harness: AiLocalHarnessDefinition): boolean {
   const name = harness.displayName.toLowerCase();
   const text = label.trim().toLowerCase();
-  return text === name || text === `${name} default`;
+  return text === name || text === `${name} default` || (text.startsWith(`${name} `) && /^\d+$/.test(text.slice(name.length + 1)));
 }
 
 /** Give placeholder-labelled accounts their real names, where the harness can
@@ -67,9 +68,11 @@ export async function refreshPlaceholderAccountLabels(state: HarnessState): Prom
       item.id !== account.id && item.provider === account.provider && item.label.toLowerCase() === label.toLowerCase())) {
       // Nothing derivable (OpenCode, Copilot, Hermes, Pi and Droid keep no
       // email anywhere ClikCode can read; see vendor-identity.ts). Drop the
-      // old " default" suffix anyway: this IS that harness's account, and the suffix made a
-      // real connected account read as a placeholder row.
-      if (account.label !== harness.displayName) { account.label = harness.displayName; changed = true; }
+      // old " default" suffix anyway: this IS that harness's account, and the
+      // suffix made a real connected account read as a placeholder row.
+      // A numbered placeholder keeps its number: two unnamed logins must stay
+      // two names.
+      if (account.label.trim().toLowerCase() === `${harness.displayName.toLowerCase()} default`) { account.label = harness.displayName; changed = true; }
       continue;
     }
     account.label = label;

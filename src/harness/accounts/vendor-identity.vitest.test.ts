@@ -3,6 +3,7 @@ import {
   parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser,
 } from './vendor-identity.js';
+import { isPlaceholderAccountLabel } from './labels.js';
 
 // Shapes copied from each vendor's real output on 2026-09-30, emails replaced.
 describe('vendor account email', () => {
@@ -50,5 +51,13 @@ describe('vendor account email', () => {
   it('reads the OpenHands Cloud user', () => {
     expect(parseOpenHandsUser('{"language":"en","email":"a@example.com","email_verified":false}')).toBe('a@example.com');
     expect(parseOpenHandsUser('<!DOCTYPE html>')).toBeUndefined();
+  });
+});
+
+describe('placeholder account labels', () => {
+  const harness = { displayName: 'Cline CLI' } as Parameters<typeof isPlaceholderAccountLabel>[1];
+  it('treats invented names as replaceable and real ones as kept', () => {
+    for (const label of ['Cline CLI', 'Cline CLI default', 'Cline CLI 1', 'cline cli 12']) expect(isPlaceholderAccountLabel(label, harness)).toBe(true);
+    for (const label of ['a@example.com', 'Cline CLI work', 'Cline CLI 1a', 'Cline']) expect(isPlaceholderAccountLabel(label, harness)).toBe(false);
   });
 });
