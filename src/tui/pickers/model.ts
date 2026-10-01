@@ -54,17 +54,9 @@ async function localModelPicker(rl: HarnessPrompter, id: string, current: string
   }
   const selected = await chooseOption(rl, 'Choose a ClikCode Local model', localModelRows(choices, current));
   if (!selected) return;
-  const choice = choices.find((item) => item.id === selected);
-  if (choice?.downloadBytes) {
-    const confirmed = await chooseOption(rl, `Download ${choice.label}?`, [
-      { label: 'Cancel', value: false },
-      { label: `Download ${choice.detail.split(' · ').at(-1) ?? ''}`, value: true },
-    ]);
-    if (!confirmed) return;
-  }
-  // The handler loads it (progress on the waiting line) before the session
-  // switches; the same path `/model <id>` takes.
-  await aiSessionCommand(id, `/model --download ${localModelSelection(choices, selected)}`);
+  // The handler asks before a download, then loads it (progress on the
+  // waiting line) before the session switches: the path `/model <id>` takes.
+  await aiSessionCommand(id, `/model ${localModelSelection(choices, selected)}`);
 }
 
 /** One model as every model list shows it. A harness that drives other
