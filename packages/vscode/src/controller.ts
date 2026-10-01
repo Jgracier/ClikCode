@@ -17,7 +17,7 @@ import { applyHunks, fileHunks } from './text';
 import { readFile } from 'node:fs/promises';
 import { BridgeQuestion, DiffDocuments, fileNameIn, runInTerminal } from './ui';
 import type { FromWebview, ToWebview, WebviewRequest } from './webview-protocol';
-import { mentionFromEditor, searchWorkspaceFiles } from './mentions';
+import { mentionFromEditor, mentionFromUri, searchWorkspaceFiles } from './mentions';
 import type { Mention } from './webview-protocol';
 
 const POST_INTERVAL_MS = 40;
@@ -625,6 +625,13 @@ export class ClikCodeController implements vscode.Disposable {
     switch (request.method) {
       case 'files':
         return searchWorkspaceFiles(request.text);
+      case 'mentions':
+        return request.uris.flatMap((text) => {
+          try {
+            const uri = vscode.Uri.parse(text.trim(), true);
+            return uri.scheme === 'file' ? [mentionFromUri(uri)] : [];
+          } catch { return []; }
+        });
       case 'openInTab':
         await this.host.openInTab(request.sessionId);
         return undefined;

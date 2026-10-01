@@ -51,6 +51,9 @@ export type WebviewRequest =
   | { method: 'openInTab'; sessionId?: string }
   /** Continue a conversation in the integrated terminal: `clikcode sessions resume`. */
   | { method: 'openInTerminal'; sessionId: string }
+  /** Files dropped on the composer (from the Explorer or an editor tab) as
+   * @-mentions, by their URIs. */
+  | { method: 'mentions'; uris: string[] }
   /** An image pasted into the composer, saved where the agent can read it. */
   | { method: 'saveImage'; name: string; dataBase64: string };
 
