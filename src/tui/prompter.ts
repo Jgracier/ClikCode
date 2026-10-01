@@ -2496,7 +2496,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       paint: (composer, pickerOptions, selected, prompt, cursor, palette) =>
         this.paint(composer, pickerOptions, selected, prompt, cursor, palette),
       clearFrame: () => this.clearInteractiveFrame(),
-      setSelecting: (selecting) => { this.selecting = selecting; },
+      // A closed picker is not the frame to come back to: resume() and any
+      // repaint after it used to draw the finished list again (with the
+      // palette's hint under it) before the next frame replaced it.
+      setSelecting: (selecting) => {
+        this.selecting = selecting;
+        if (!selecting) { this.draft = ''; this.draftOptions = []; this.draftSelected = 0; this.draftCursor = 0; this.draftPrompt = '› '; this.draftPalette = undefined; }
+      },
       select: (subTitle, subOptions, subAction, subSettings) => this.select(subTitle, subOptions, subAction, subSettings),
     };
   }
