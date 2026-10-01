@@ -38,22 +38,6 @@ export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: 
   return { ...status, label: `${titleCase(status.label.replace(/(…|\.\.\.)$/, '').trim() || 'working')}…`, toneClass };
 }
 
-/** Lines of a finished command's output shown from its start and its end;
- * what lies between is counted ("… 40 lines hidden"). */
-export const COMMAND_HEAD_LINES = 2;
-export const COMMAND_TAIL_LINES = 3;
-
-/** A finished command's output as Codex shows it: the first two lines and
- * the last three, the middle counted. Only for output the harness reported
- * whole -- where it kept just a start or an end, the real ends are unknown
- * and the row shows what it has (undefined). */
-export function commandWindow(activity: Pick<Activity, 'output' | 'outputOmitted' | 'outputTail'>): { head: string[]; tail: string[]; hidden: number } | undefined {
-  const output = activity.output ?? [];
-  if (!output.length || activity.outputOmitted || activity.outputTail) return undefined;
-  if (output.length <= COMMAND_HEAD_LINES + COMMAND_TAIL_LINES + 1) return { head: output, tail: [], hidden: 0 };
-  return { head: output.slice(0, COMMAND_HEAD_LINES), tail: output.slice(-COMMAND_TAIL_LINES), hidden: output.length - COMMAND_HEAD_LINES - COMMAND_TAIL_LINES };
-}
-
 /** What a run of calls did, in the terminal's folded words per kind; one
  * call alone is its own label, in its tense. */
 export function runSummary(activities: readonly Activity[]): string {

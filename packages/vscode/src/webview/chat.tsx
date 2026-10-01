@@ -4,7 +4,7 @@ import type { JSX } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
-  ACTIVITY_PREVIEW_LINES, activityOutcome, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
+  ACTIVITY_PREVIEW_LINES, activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
   outputPreview, previewLinesFor, SPIN_MS, STALL_MS, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
@@ -18,7 +18,7 @@ import { post } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
-import { commandWindow, foldedSummary, workingStatus } from './flow';
+import { foldedSummary, workingStatus } from './flow';
 import { splitEditorContext } from '../editor-context';
 
 /** Finished messages, rendered once each and kept across a redraw of the
@@ -183,8 +183,8 @@ function OutputView({ activity, budget }: { activity: Activity; budget: number }
 }
 
 /** A finished command's output: its first lines and its last, the middle
- * counted (commandWindow). */
-function CommandOutput({ ends }: { ends: NonNullable<ReturnType<typeof commandWindow>> }): JSX.Element {
+ * counted (commandOutputPreview, the terminal's rule). */
+function CommandOutput({ ends }: { ends: NonNullable<ReturnType<typeof commandOutputPreview>> }): JSX.Element {
   return (
     <pre class="activity-output">
       {ends.head.join('\n')}
@@ -216,7 +216,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   // all of it. The rest is one click away.
   // A command's whole output: its first lines and its last (Codex).
   const budget = previewLinesFor(activity.category);
-  const ends = activity.category === 'run' && status !== 'running' ? commandWindow(activity) : undefined;
+  const ends = activity.category === 'run' && status !== 'running' ? commandOutputPreview(activity) : undefined;
   const preview = !ends && activity.output?.length && budget > 0 ? outputPreview(activity, budget) : undefined;
   const hasMore = Boolean((activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
     || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines));

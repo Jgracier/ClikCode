@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyEvent, emptyModel, sendNowPlan, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
-import { commandWindow, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
+import { foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
+import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
 import type { FileDiff, HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -85,11 +86,11 @@ describe('tool rows', () => {
 
   it("shows a command's first two and last three lines, the middle counted", () => {
     const output = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`);
-    expect(commandWindow({ output })).toEqual({ head: ['line 1', 'line 2'], tail: ['line 10', 'line 11', 'line 12'], hidden: 7 });
-    expect(commandWindow({ output: output.slice(0, 6) })).toEqual({ head: output.slice(0, 6), tail: [], hidden: 0 });
+    expect(commandOutputPreview({ category: 'run', output })).toEqual({ head: ['line 1', 'line 2'], tail: ['line 10', 'line 11', 'line 12'], hidden: 7 });
+    expect(commandOutputPreview({ category: 'run', output: output.slice(0, 5) })).toEqual({ head: output.slice(0, 5), hidden: 0, tail: [] });
     // Only part of it was kept: its real ends are unknown.
-    expect(commandWindow({ output, outputTail: true })).toBeUndefined();
-    expect(commandWindow({ output, outputOmitted: 40 })).toBeUndefined();
+    expect(commandOutputPreview({ category: 'run', output, outputOmitted: 40, outputHead: ['first', 'second'] })).toEqual({ head: ['first', 'second'], hidden: 47, tail: ['line 10', 'line 11', 'line 12'] });
+    expect(commandOutputPreview({ category: 'run', output, outputOmitted: 40 })).toBeUndefined();
   });
 
   it('folds a finished run, reads and searches in Claude Code\'s words', () => {
