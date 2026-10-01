@@ -10,6 +10,10 @@
  *   - Cursor: the dashboard call its own usage screen makes
  *     (`DashboardService/GetCurrentPeriodUsage`), with the token the CLI
  *     keeps in ~/.config/cursor/auth.json. Verified 2026-09-30.
+ *   - Kiro: its own `/usage`, run over ACP (`_kiro.dev/commands/execute`)
+ *     on one kept session -- no turn. Verified on kiro-cli 2.23.1.
+ *   - Command Code: `/alpha/billing/credits`, the call its `/usage` screen
+ *     makes, with the key in ~/.commandcode/auth.json. Verified 2026-09-30.
  *
  * Verified against copilot 1.0.88, kimi 2.0.2, amp 0.0.1790126705 and kilo
  * 7.7.6 on this machine's accounts (2026-09-30). None opens a session. */
@@ -21,6 +25,7 @@ import { spawnPortable, terminatePortable } from '../transport/spawn.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { acpDiscoverySession, queryAcp } from './acp-query.js';
 import type { HarnessSession } from '../../session/model.js';
 import { type UsageReading, type UsageWindow, usageReading, usageWindow } from './usage-reading.js';
 
@@ -216,6 +221,68 @@ export async function cursorUsageReading(_session: HarnessSession, environment: 
 
 export const cursorUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
   (await cursorUsageReading(session, environment))?.label;
+
+// ---------------------------------------------------------------- Kiro
+
+/** Kiro's `/usage` result: each `usageBreakdowns` entry a resource with a
+ * limit (its plan credits), resetting on `billingCycleReset` (a date). */
+export function kiroQuotaReading(data: unknown): UsageReading | undefined {
+  const record = data as Json | undefined;
+  const breakdowns: Json[] = Array.isArray(record?.usageBreakdowns) ? record!.usageBreakdowns : [];
+  const credits = breakdowns.find((item) => item?.resourceType === 'CREDIT' && item.hasLimit !== false && Number(item.limit) > 0);
+  if (!credits) return undefined;
+  return usageReading([usageWindow('monthly', (Number(credits.used) / Number(credits.limit)) * 100, record?.billingCycleReset)]);
+}
+
+export async function kiroUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  const harness = localHarnessForCommand('kiro');
+  if (!harness?.acp) return undefined;
+  return queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, environment, async (request, capabilities) => {
+    // One kept session per Kiro profile, never a new one per reading.
+    const started = await acpDiscoverySession(request, capabilities, `kiro:usage:${environment.HOME ?? 'default'}`);
+    const sessionId = typeof started.sessionId === 'string' ? started.sessionId : undefined;
+    if (!sessionId) return undefined;
+    const answer = await request('_kiro.dev/commands/execute', { sessionId, command: { command: 'usage', args: {} } });
+    return answer.success === false ? undefined : kiroQuotaReading(answer.data);
+  }, PROBE_TIMEOUT_MS).catch(() => undefined);
+}
+
+export const kiroUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
+  (await kiroUsageReading(session, environment))?.label;
+
+// ---------------------------------------------------------------- Command Code
+
+/** `/alpha/billing/credits`: the plan's 5-hour and weekly windows when it has
+ * them (`windowLimits.limited`, each `{used, cap, resetAt}`), else the credit
+ * balance. A balance is not a window, so it never marks the account spent. */
+export function commandCodeQuotaReading(result: unknown): UsageReading | undefined {
+  const record = result as Json | undefined;
+  const limits = record?.windowLimits as Json | undefined;
+  const window = (name: string, entry: Json | undefined): UsageWindow | undefined =>
+    entry && Number(entry.cap) > 0 ? usageWindow(name, (Number(entry.used) / Number(entry.cap)) * 100, entry.resetAt) : undefined;
+  const windows = limits?.limited ? usageReading([window('5h', limits.fiveHour), window('weekly', limits.weekly)]) : undefined;
+  if (windows) return windows;
+  const credits = record?.credits as Json | undefined;
+  const balance = ['monthlyCredits', 'purchasedCredits', 'freeCredits'].reduce((sum, key) => sum + (Number(credits?.[key]) || 0), 0);
+  return balance > 0 ? { windows: [], label: `${Number.isInteger(balance) ? balance : balance.toFixed(2)} credits left` } : undefined;
+}
+
+export async function commandCodeUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  try {
+    const home = environment.HOME ?? homedir();
+    const auth = JSON.parse(await readFile(join(home, '.commandcode', 'auth.json'), 'utf8')) as { apiKey?: unknown };
+    if (typeof auth.apiKey !== 'string' || !auth.apiKey) return undefined;
+    const response = await fetch('https://api.commandcode.ai/alpha/billing/credits', {
+      headers: { Authorization: `Bearer ${auth.apiKey}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    return response.ok ? commandCodeQuotaReading(await response.json()) : undefined;
+  } catch {
+    return undefined; // fail-open-ok: no figure beats a wrong one
+  }
+}
+
+export const commandCodeUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
+  (await commandCodeUsageReading(session, environment))?.label;
 
 // ---------------------------------------------------------------- Amp, Kilo
 
