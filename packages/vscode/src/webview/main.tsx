@@ -13,7 +13,7 @@ import { Composer, type ComposerHandle } from './composer';
 import { homeRelative, relativeTime } from './format';
 import { choose } from './picker';
 import { AccountsScreen, HistoryMenu } from './screens';
-import { inlineStep, Sheet, type InlineTarget, type OpenQuestion } from './sheet';
+import { Sheet, type OpenQuestion } from './sheet';
 import { Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
 
 const REMEDY: Record<NonNullable<ChatModel['remedy']>, { command: string; label: string }> = {
@@ -192,7 +192,6 @@ function App(): JSX.Element {
   const composer = useRef<ComposerHandle | null>(null);
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
-  const inlineTarget = useRef<InlineTarget>();
   const runningRef = useRef(false);
   runningRef.current = Boolean(model?.running);
   const approvalRef = useRef<string>();
@@ -229,17 +228,7 @@ function App(): JSX.Element {
       case 'selection': composer.current?.selection(message.mention); return;
       case 'focus': requestAnimationFrame(() => composer.current?.focus()); return;
       case 'show': showScreen(message.screen); return;
-      case 'ui-request': {
-        const step = inlineStep(inlineTarget.current, message.request);
-        if (step && step !== 'done') {
-          inlineTarget.current = { ...inlineTarget.current!, steps: inlineTarget.current!.steps - 1 };
-          post({ type: 'ui-response', id: message.id, result: step });
-          return;
-        }
-        if (step === 'done') inlineTarget.current = undefined;
-        setQuestions((items) => [...items.filter((item) => item.id !== message.id), { id: message.id, request: message.request }]);
-        return;
-      }
+      case 'ui-request': setQuestions((items) => [...items.filter((item) => item.id !== message.id), { id: message.id, request: message.request }]); return;
       case 'ui-update': setQuestions((items) => items.map((item) => (item.id === message.id ? { ...item, items: message.items } : item))); return;
       case 'ui-cancel': setQuestions((items) => items.filter((item) => item.id !== message.id)); return;
       case 'probe': post({ type: 'probeResult', id: message.id, result: probe(message) }); return;
@@ -355,7 +344,7 @@ function App(): JSX.Element {
         ) : null}
         <Composer model={model} handle={composer} onError={setError} />
       </main>
-      {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)} setInlineTarget={(target) => { inlineTarget.current = target; }} /> : null}
+      {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)} /> : null}
       {error ? <Toast message={error} onClose={() => setError(undefined)} /> : null}
     </div>
   );

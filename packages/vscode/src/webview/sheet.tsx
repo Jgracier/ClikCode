@@ -25,21 +25,7 @@ function actionIcon(value: string): string {
   return 'ellipsis';
 }
 
-/** A title that names a screen -- Settings, Accounts -- fills the panel; a
- * short choice floats as a menu. */
-export interface InlineTarget { title: string; label: string; value: string; steps: number }
-
-/** A segmented setting is cycled one value per answer (the terminal's ←/→);
- * a click on a value further along keeps answering until it is reached. */
-export function inlineStep(target: InlineTarget | undefined, request: IdeUiRequest): { index: number } | 'done' | undefined {
-  if (!target || request.kind !== 'pick' || request.title !== target.title) return undefined;
-  const index = request.items.findIndex((item) => item.label === target.label && item.inline);
-  const item = request.items[index];
-  if (!item?.inline || item.inline.current === target.value || target.steps <= 0) return 'done';
-  return { index };
-}
-
-export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickItem[]; answer: (result: IdeUiResult) => void; setInlineTarget?: (target: InlineTarget) => void }): JSX.Element {
+export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickItem[]; answer: (result: IdeUiResult) => void }): JSX.Element {
   const { request } = props.question;
   const panelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -55,7 +41,7 @@ export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickI
       <div ref={panelRef} class="sheet" role="dialog" aria-modal="true" aria-label={request.kind === 'pick' ? request.title : request.prompt}>
         {request.kind === 'input'
           ? <InputSheet prompt={request.prompt} answer={props.answer} />
-          : <PickSheet title={request.title} items={props.items ?? request.items} canGoBack={request.canGoBack} answer={props.answer} setInlineTarget={props.setInlineTarget} />}
+          : <PickSheet title={request.title} items={props.items ?? request.items} canGoBack={request.canGoBack} answer={props.answer} />}
       </div>
     </div>
   );
@@ -79,7 +65,7 @@ function InputSheet(props: { prompt: string; answer: (result: IdeUiResult) => vo
   );
 }
 
-function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoBack: boolean; answer: (result: IdeUiResult) => void; setInlineTarget?: (target: InlineTarget) => void }): JSX.Element {
+function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoBack: boolean; answer: (result: IdeUiResult) => void }): JSX.Element {
   const [search, setSearch] = useState('');
   const [confirming, setConfirming] = useState<number>();
   const input = useRef<HTMLInputElement>(null);
@@ -117,9 +103,7 @@ function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoB
                     class={choice.value === item.inline!.current ? 'on' : ''}
                     onClick={(event) => {
                       event.stopPropagation();
-                      if (choice.value === item.inline!.current) return;
-                      props.setInlineTarget?.({ title: props.title, label: item.label, value: choice.value, steps: item.inline!.choices.length });
-                      props.answer({ index });
+                      if (choice.value !== item.inline!.current) props.answer({ index, value: choice.value });
                     }}>
                     {choice.label}
                   </button>

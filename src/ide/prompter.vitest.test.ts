@@ -61,6 +61,20 @@ describe('IdePrompter', () => {
     expect(applied).toEqual(['b']);
   });
 
+  it('sets the inline value the editor clicked, however far along', async () => {
+    const { prompter, nextRequest } = harness();
+    const applied: string[] = [];
+    const first = nextRequest();
+    const choices = ['default', 'low', 'high'].map((value) => ({ label: value, value }));
+    const chosen = prompter.select('Settings', [{ label: 'Effort', value: 'effort', inline: { choices, current: 'default', apply: async (value: string) => { applied.push(value); } } }]);
+    prompter.answer((await first).id, { index: 0, value: 'high' });
+    const second = await nextRequest();
+    expect(second.request.kind === 'pick' && second.request.items[0]?.inline?.current).toBe('high');
+    prompter.answer(second.id, { cancelled: true });
+    expect(await chosen).toBeUndefined();
+    expect(applied).toEqual(['high']);
+  });
+
   it('turns a cancelled question into an empty answer, and cancels everything on close', async () => {
     const { prompter, nextRequest } = harness();
     const request = nextRequest();
