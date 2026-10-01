@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
+import { mergeActivity, sameCall } from '../../harness/protocol/activity-view.js';
 import type { HarnessActivityEvent, ToolCategory } from '../../harness/prompter.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
 import { isAgentToolName } from '../../harness/protocol/tools.js';
@@ -48,36 +49,14 @@ export function upsertActivityEvent(
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index]!;
       if (entry.anchor !== anchor || !entry.event) continue;
-      // By id, a call's row is found whatever state it is in: detail that
-      // arrives after it finished (a final diff) belongs in that row, not a
-      // new one. Without an id only an open row can be the same call.
-      if (normalized.id) { if (entry.event.id === normalized.id) return index; continue; }
-      if (entry.event.kind === 'tool-start' && entry.event.label === normalized.label) return index;
+      if (sameCall(entry.event, normalized)) return index;
     }
     return -1;
   })();
   const next = [...entries];
   if (matchIndex >= 0) {
     const prior = next[matchIndex]!;
-    const effective = {
-      ...normalized,
-      // A finished call stays finished: a later frame without a status adds
-      // its detail but cannot reopen it.
-      ...(normalized.kind === 'tool-start' && prior.event!.kind !== 'tool-start' ? { kind: prior.event!.kind } : {}),
-      ...(normalized.label === 'tool' ? { label: prior.event!.label } : {}),
-      // A completion frame routinely carries neither the name nor the input
-      // the category was derived from. The row keeps what its start knew.
-      ...(normalized.category ? {} : prior.event?.category ? { category: prior.event.category } : {}),
-      ...(normalized.agent ? {} : prior.event?.agent ? { agent: prior.event.agent } : {}),
-      ...(normalized.diff ? {} : prior.event?.diff ? { diff: prior.event.diff } : {}),
-      // Likewise its output: a completion that carries none (most do not)
-      // used to erase every line the running tool had streamed.
-      ...(normalized.output?.length || !prior.event?.output?.length ? {} : {
-        output: prior.event.output,
-        ...(prior.event.outputOmitted ? { outputOmitted: prior.event.outputOmitted } : {}),
-        ...(prior.event.outputTail ? { outputTail: true } : {}),
-      }),
-    };
+    const effective = mergeActivity(prior.event!, normalized);
     next[matchIndex] = { ...prior, event: effective, lines: renderActivityLine(effective).map((line) => line.trim()) };
   } else {
     next.push({
