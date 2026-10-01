@@ -1,4 +1,5 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
+import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { randomUUID } from 'node:crypto';
@@ -272,7 +273,7 @@ export async function sendVendorTurn(input: {
     // remember on its behalf -- and with no rule offered the prompter never
     // returns 'always' anyway. Collapsed to a boolean here so that boundary
     // is stated rather than implied.
-    onApproval: async (title: string, detail?: string) => (await prompter?.approval(title, detail)) === true,
+    onApproval: async (title: string, detail?: string, preview?: ApprovalPreview) => (await prompter?.approval(title, detail, preview)) === true,
     onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
   } satisfies HarnessTurnObserver;
   let activeTransport: ReturnType<typeof sessionTurnTransport> | undefined;

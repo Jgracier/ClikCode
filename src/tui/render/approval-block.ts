@@ -1,6 +1,8 @@
 /** The approval prompt: what a pending tool call looks like, and which keys
  * answer it. */
 
+import { fileDiffRows } from '../../harness/protocol/activity-line.js';
+import type { FileDiff } from '../../agent/line-diff.js';
 import chalk from 'chalk';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
@@ -12,8 +14,9 @@ import { wrapCodeLine, wrapWords } from './wrap.js';
 export const APPROVAL_GUARD_MS = 400;
 
 export type ApprovalPreview = {
-  /** Either unified-diff style lines, or the two sides of an edit. */
-  diff?: readonly string[] | { removed: readonly string[]; added: readonly string[] };
+  /** What the call would change, file by file -- the same hunks an edit's
+   * row shows once it has run. */
+  diff?: FileDiff[];
 };
 
 /** `rule` is the permission rule this request could be answered with once and
@@ -66,18 +69,8 @@ export function approvalBlockRows(
     .map((line, index) => `  ${index === 0 ? chalk.yellow('?') : ' '} ${chalk.bold(line)}`);
   const detail = request.detail === undefined ? []
     : clean(request.detail).split('\n').flatMap((line) => wrapCodeLine(line, inner - 2)).map((line) => `    ${line}`);
-  const diffSource = request.preview?.diff;
-  const diffLines = !diffSource ? []
-    : Array.isArray(diffSource) ? (diffSource as readonly string[]).map((line) => clean(line))
-      : [
-        ...(diffSource as { removed: readonly string[] }).removed.map((line) => `- ${clean(line)}`),
-        ...(diffSource as { added: readonly string[] }).added.map((line) => `+ ${clean(line)}`),
-      ];
-  const shownDiff = diffLines.slice(0, APPROVAL_DIFF_PREVIEW_LINES).map((line) => {
-    const clipped = visibleSlice(line.replace(/\n/g, ' '), inner - 2);
-    return `    ${line.startsWith('+') ? chalk.green(clipped) : line.startsWith('-') ? chalk.red(clipped) : clipped}`;
-  });
-  if (diffLines.length > shownDiff.length) shownDiff.push(`    ${chalk.dim(`+${diffLines.length - shownDiff.length} more`)}`);
+  const files = request.preview?.diff?.map((file) => ({ ...file, lines: file.lines.map((line) => ({ ...line, text: clean(line.text).replace(/\n/g, ' ') })) }));
+  const shownDiff = files?.length ? fileDiffRows(files, APPROVAL_DIFF_PREVIEW_LINES).map((line) => visibleSlice(line, inner + 2)) : [];
   // The "always" key is offered only when a rule came with the request, and
   // the rule itself is shown: "always" has to say what it will remember, or
   // the user is agreeing to something unstated.

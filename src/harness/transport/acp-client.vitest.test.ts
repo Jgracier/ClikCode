@@ -134,7 +134,7 @@ describe('shared ACP adapter contract', () => {
     expect(acpApprovalDetail({
       locations: [{ path: '/repo/a.ts' }],
       content: [{ type: 'diff', path: '/repo/a.ts', oldText: 'old', newText: 'new' }],
-    })).toBe('/repo/a.ts\n- old\n+ new');
+    })).toBe('/repo/a.ts'); // the change itself is the approval's preview, not text
     expect(acpApprovalDetail({ title: 'Mystery' })).toBeUndefined();
   });
 

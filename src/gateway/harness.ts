@@ -11,6 +11,7 @@
  * seam: it turns a ClikCode session into a GatewayHarnessTurnInput, and turns
  * the loop's callbacks back into the prompter's own transcript rows.
  */
+import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { McpServerSpec } from '../agent/mcp/config.js';
 import { stdout as output } from 'node:process';
 import { ModelClientError } from '../agent/models/gateway-client.js';
@@ -154,7 +155,7 @@ export async function runGatewayHarnessSessionTurn(
     // ask what they would prefer; told the truth, it carries on without.
     // The gateway path runs ClikCode's OWN agent, so a rule can be
     // remembered here: the third answer is passed straight through.
-    ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string) => (await prompter.approval(title, detail, undefined, rule)) ?? false } : {}),
+    ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => (await prompter.approval(title, detail, preview, rule)) ?? false } : {}),
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
   });
 }

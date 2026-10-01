@@ -1,4 +1,4 @@
-import { eventDiff, renderDiffPreview } from '../line-diff.js';
+import { eventDiff } from '../line-diff.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, resolveForWrite, ToolInputError } from './fs-helpers.js';
 import { readExisting, rememberWritten, writeTextAtomic } from './write-file.js';
@@ -71,7 +71,7 @@ export const editFileTool = defineTool<EditFileArgs>({
   paths: (args) => [args.path],
   async preview(args, ctx) {
     const prepared = await prepareEdits(args.path, [args], ctx, false);
-    return renderDiffPreview(prepared.before, prepared.after);
+    return eventDiff(prepared.before, prepared.after, { path: prepared.real, numbered: true });
   },
   async run(args, ctx) {
     const prepared = await prepareEdits(args.path, [args], ctx);

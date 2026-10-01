@@ -191,7 +191,7 @@ export function visibleTools(tools: readonly ToolDefinition[], planMode: boolean
 
 // ── approval text ────────────────────────────────────────────────────────────
 
-interface ApprovalPrompt { title: string; detail: string }
+interface ApprovalPrompt { title: string; detail: string; diff?: import('./line-diff.js').FileDiff[] }
 
 /** What the human approves must be exactly what runs: the FULL command is
  * never shortened, and a file change shows its path plus a diff preview. */
@@ -206,15 +206,16 @@ export async function buildApprovalPrompt(
   }
   if (tool.name === EXIT_PLAN_MODE_TOOL) return { title: 'Approve plan', detail: String(args.plan ?? '') };
   const paths = tool.paths?.(args) ?? [];
-  let preview: string | undefined;
-  try { preview = await tool.preview?.(args, ctx); } catch (error) { preview = `(preview unavailable: ${error instanceof Error ? error.message : String(error)})`; }
+  let diff: import('./line-diff.js').FileDiff[] | undefined;
+  let unavailable: string | undefined;
+  try { diff = await tool.preview?.(args, ctx); } catch (error) { unavailable = `(preview unavailable: ${error instanceof Error ? error.message : String(error)})`; }
+  const described = await tool.describe?.(args).catch(() => undefined);
   if (tool.class === 'write') {
     const shown = paths.map((entry) => path.resolve(ctx.cwd, entry)).join(', ') || tool.label(args);
-    const body = preview && preview.length > OUTPUT_CAPS.approvalDetailChars ? `${preview.slice(0, OUTPUT_CAPS.approvalDetailChars)}\n… preview truncated` : preview;
-    return { title: `Approve ${tool.label(args)}`, detail: [shown, ...(body ? ['', body] : []), '', `why: ${reason}`].join('\n') };
+    return { title: `Approve ${tool.label(args)}`, detail: [shown, ...(unavailable ? [unavailable] : []), `why: ${reason}`].join('\n'), ...(diff?.length ? { diff } : {}) };
   }
   if (tool.class === 'network') return { title: 'Approve network request', detail: `${String(args.url ?? tool.label(args))}\nwhy: ${reason}` };
-  return { title: `Approve ${tool.label(args)}`, detail: [...paths.map((entry) => path.resolve(ctx.cwd, entry)), ...(preview ? [preview] : []), `why: ${reason}`].join('\n') };
+  return { title: `Approve ${tool.label(args)}`, detail: [...paths.map((entry) => path.resolve(ctx.cwd, entry)), ...(described ? [described] : []), ...(unavailable ? [unavailable] : []), `why: ${reason}`].join('\n'), ...(diff?.length ? { diff } : {}) };
 }
 
 // ── persisted rules ──────────────────────────────────────────────────────────

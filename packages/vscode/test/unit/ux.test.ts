@@ -108,29 +108,25 @@ describe('formatting', () => {
   });
 });
 
-import { applyHunks, diffInDetail } from '../../src/text';
+import { applyHunks, fileHunks } from '../../src/text';
+import { eventDiff } from '../../../../src/agent/line-diff';
 
-describe('an agent edit described in an approval', () => {
-  const detail = [
-    '/w/math.ts', '',
-    '    return values.reduce(add, 0) / values.length;',
-    '  }', '+ ', '+ export function median(values: number[]): number {', '+   return 0;', '+ }',
-    '', 'why: ask mode',
-  ].join('\n');
+describe("a file change in an approval's preview", () => {
   const file = 'export function mean(values: number[]): number {\n  return values.reduce(add, 0) / values.length;\n}\n';
+  const edited = `${file}\nexport function median(values: number[]): number {\n  return 0;\n}\n`;
+  const [diff] = eventDiff(file, edited, { path: '/w/math.ts', numbered: true });
 
-  it('reads the path and the hunks', () => {
-    const parsed = diffInDetail(detail)!;
-    expect(parsed.path).toBe('/w/math.ts');
-    expect(parsed.hunks).toHaveLength(1);
-    expect(parsed.hunks[0]!.after.at(-1)).toBe('}');
-    expect(diffInDetail('npm test\n\ncwd: /w\nwhy: ask')).toBeUndefined();
+  it('reads as hunks of before and after', () => {
+    const hunks = fileHunks(diff!);
+    expect(hunks).toHaveLength(1);
+    expect(hunks[0]!.after.at(-1)).toBe('}');
+    expect(hunks[0]!.before).not.toContain('export function median(values: number[]): number {');
   });
 
   it('applies them to the file on disk for a whole-file diff, and refuses when a hunk does not fit', () => {
-    const after = applyHunks(file, diffInDetail(detail)!.hunks)!;
+    const after = applyHunks(file, fileHunks(diff!))!;
     expect(after).toContain('export function median(values: number[]): number {');
     expect(after.startsWith('export function mean')).toBe(true);
-    expect(applyHunks('something else\n', diffInDetail(detail)!.hunks)).toBeUndefined();
+    expect(applyHunks('something else\n', fileHunks(diff!))).toBeUndefined();
   });
 });

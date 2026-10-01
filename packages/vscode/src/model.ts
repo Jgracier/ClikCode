@@ -12,7 +12,7 @@
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
-import { diffInDetail, stripAnsi } from './text';
+import { stripAnsi } from './text';
 import type { Remedy } from './compat';
 
 export interface Activity {
@@ -291,7 +291,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
           id: event.id, title: stripAnsi(event.title),
           ...(event.detail ? { detail: stripAnsi(event.detail) } : {}),
           ...(event.rule ? { rule: event.rule } : {}),
-          hasDiff: Boolean(event.preview?.diff) || Boolean(diffInDetail(event.detail)),
+          hasDiff: Boolean(event.preview?.diff?.length),
         }],
       };
     case 'notice':

@@ -182,8 +182,10 @@ describe('approval prompts', () => {
     const prompt = await buildApprovalPrompt(tool('edit_file'), { path: 'a.txt', old_string: 'two', new_string: 'TWO' }, ctx(), 'file changes need approval');
     expect(prompt.title).toBe('Approve Edit a.txt');
     expect(prompt.detail).toContain(path.join(scope.cwd, 'a.txt'));
-    expect(prompt.detail).toContain('- two');
-    expect(prompt.detail).toContain('+ TWO');
+    // The change travels as the file's hunks, numbered, beside the text.
+    expect(prompt.diff?.[0]?.lines.filter((line) => line.kind !== 'same')).toEqual([
+      { kind: 'removed', text: 'two', line: 2 }, { kind: 'added', text: 'TWO', line: 2 },
+    ]);
     // Building the preview must not have changed the file.
     expect(await fs.readFile(path.join(scope.cwd, 'a.txt'), 'utf8')).toBe('one\ntwo\nthree\n');
   });

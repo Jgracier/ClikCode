@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { matchGlob } from './glob-match.js';
-import { diffLines, eventDiff, renderDiffPreview } from './line-diff.js';
+import { diffLines, eventDiff } from './line-diff.js';
 import { validateAgainstSchema } from './schema-validate.js';
 import {
   capHeadTail, ConfinementError, eventOutputPreview, readDenyReason, redactSecrets, resolvePath,
@@ -164,8 +164,6 @@ describe('glob, diff, schema', () => {
     // Capped with no marker line in the list: the count is the file's own.
     const added = eventDiff('', Array.from({ length: 30 }, (_, index) => `l${index}`).join('\n'));
     expect(added[0]).toMatchObject({ additions: 30, removals: 0, change: 'add' });
-    expect(renderDiffPreview('a\nb\nc', 'a\nX\nc')).toBe('  a\n- b\n+ X\n  c');
-    expect(renderDiffPreview('same', 'same')).toBe('(no changes)');
   });
 
   it('validates the schema subset', () => {

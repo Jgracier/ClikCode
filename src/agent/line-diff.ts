@@ -155,25 +155,3 @@ export function eventDiff(before: string, after: string, options: { path?: strin
 export function unifiedEventDiff(diff: string, options: { path?: string; change?: FileDiff['change'] } = {}): FileDiff[] {
   return unifiedFileDiffs(diff, options);
 }
-
-/** Unified-style preview with a little context, for approval prompts. */
-export function renderDiffPreview(before: string, after: string, options: { context?: number; maxLines?: number } = {}): string {
-  const context = options.context ?? 2;
-  const maxLines = options.maxLines ?? 60;
-  const ops = diffLines(before, after);
-  const keep = new Array<boolean>(ops.length).fill(false);
-  ops.forEach((op, index) => {
-    if (op.kind === 'same') return;
-    for (let k = Math.max(0, index - context); k <= Math.min(ops.length - 1, index + context); k++) keep[k] = true;
-  });
-  const out: string[] = [];
-  let skipped = false;
-  ops.forEach((op, index) => {
-    if (!keep[index]) { skipped = true; return; }
-    if (skipped && out.length) out.push('  ⋮');
-    skipped = false;
-    out.push(`${op.kind === 'removed' ? '-' : op.kind === 'added' ? '+' : ' '} ${op.line}`);
-  });
-  if (!out.length) return '(no changes)';
-  return out.length > maxLines ? [...out.slice(0, maxLines), `… ${out.length - maxLines} more diff lines`].join('\n') : out.join('\n');
-}
