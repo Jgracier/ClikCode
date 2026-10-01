@@ -153,9 +153,8 @@ export async function closeAllWorkerClients(): Promise<void> {
   clients.clear();
 }
 
-/** Mirrors runInteractiveTurn's own cancel/onSubmit callbacks, wired to send
- * over the socket instead of touching an in-process AbortController/
- * LiveTurnInputBroker directly -- the worker owns both of those now.
+/** The waiting band's cancel and submit callbacks, sent over the socket: the
+ * worker owns the turn's AbortController and LiveTurnInputBroker.
  *
  * Returns whatever notice the worker reported (a cancellation's "Stopped",
  * for instance) so the caller can fold it into the SAME `notice` local
