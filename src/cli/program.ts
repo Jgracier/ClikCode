@@ -34,7 +34,7 @@ ${chalk.cyan(`╚${'═'.repeat(inner)}╝`)}
 `;
 }
 
-export const CLIKCODE_BANNER = bannerBox('⚡ ClikCode', 'Local-first AI coding runtime');
+const CLIKCODE_BANNER = bannerBox('⚡ ClikCode', 'Local-first AI coding runtime');
 
 /**
  * Render a command failure. JSON mode gets a machine-readable object; human mode
@@ -74,9 +74,8 @@ export function handleCommandError(error: unknown): void {
  * Build the root program: name/description/version, the three global options,
  * the first-run banner, and the process-level error safety net.
  */
-export function buildBaseProgram(config: Conf, options: { banner?: string; version?: string } = {}): Command {
+export function buildBaseProgram(config: Conf): Command {
   const program = new Command();
-  const banner = options.banner ?? CLIKCODE_BANNER;
 
   // Restore the terminal FIRST. The ClikCode UI runs in raw mode with the
   // cursor hidden, autowrap off and bracketed paste on; an error printed into
@@ -98,7 +97,7 @@ export function buildBaseProgram(config: Conf, options: { banner?: string; versi
   program
     .name('clikcode')
     .description('The terminal harness for all your AI coding providers')
-    .version(options.version ?? CLIKCODE_VERSION)
+    .version(CLIKCODE_VERSION)
     .option('--json', 'Write results as JSON, one record per line (the default when output is not a terminal)')
     .option('--human', 'Write results as readable text (the default in a terminal)')
     .option(
@@ -113,7 +112,7 @@ export function buildBaseProgram(config: Conf, options: { banner?: string; versi
 
       // Show banner on first use for human mode only.
       if (!config.get('seenBanner') && !isJsonDefaultMode()) {
-        console.log(banner);
+        console.log(CLIKCODE_BANNER);
         config.set('seenBanner', true);
       }
     });
@@ -122,10 +121,10 @@ export function buildBaseProgram(config: Conf, options: { banner?: string; versi
 }
 
 /**
- * Install the unknown-command handler, print help when invoked bare, and parse.
- * Call last, after every command is registered.
+ * Install the unknown-command handler and parse. Call last, after every
+ * command is registered. Invoked bare, the root action runs (it opens a chat).
  */
-export function runProgram(program: Command, options: { showHelpWhenBare?: boolean; banner?: string } = {}): void {
+export function runProgram(program: Command): void {
   const name = program.name();
   program.on('command:*', () => {
     if (isJsonDefaultMode()) {
@@ -143,11 +142,6 @@ export function runProgram(program: Command, options: { showHelpWhenBare?: boole
     }
     process.exit(1);
   });
-
-  if (!process.argv.slice(2).length && options.showHelpWhenBare !== false) {
-    console.log(options.banner ?? CLIKCODE_BANNER);
-    program.outputHelp();
-  }
 
   // Always `node <script> args`: on VS Code's Electron (ELECTRON_RUN_AS_NODE,
   // the extension's fallback runtime) commander would otherwise read the
