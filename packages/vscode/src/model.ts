@@ -60,6 +60,8 @@ export interface TurnTrace {
   activities: Activity[];
   /** The turn's reasoning, one entry per thought, oldest first. */
   reasoning?: string[];
+  /** The plan the turn worked through, as it stood at the end. */
+  plan?: ChatModel['plan'];
   startedAt: number;
   endedAt: number;
 }
@@ -404,9 +406,11 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
 function endTurn(model: ChatModel): ChatModel {
   const activities = model.live?.activities ?? [];
   const reasoning = turnReasoning(model.live);
-  const traces = (activities.length || reasoning) && model.turnUserIndex !== undefined
+  const plan = model.plan.length ? model.plan : undefined;
+  const traces = (activities.length || reasoning || plan) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
-      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
+      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan } : {}),
+      startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
     }].slice(-MAX_TRACES)
     : model.traces;
   return { ...model, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined, traces };

@@ -46,6 +46,13 @@ describe('chat model', () => {
     expect(between.live!.activities[0]!.child).toBeUndefined();
   });
 
+  it('keeps a finished plan with its turn, and a new turn starts without one', () => {
+    const steps = [{ content: 'read', status: 'completed' }, { content: 'fix', status: 'completed' }];
+    const ended = turn(worker({ type: 'plan', entries: steps }), worker({ type: 'waiting-stop' }));
+    expect(ended.traces.at(-1)?.plan).toEqual(steps);
+    expect(run([worker({ type: 'waiting-start', message: 'thinking' })], ended).plan).toEqual([]);
+  });
+
   it('keeps the context window figure between turns', () => {
     const model = turn(worker({ type: 'usage', usage: { input: 10, contextUsed: 50_000, contextWindow: 200_000 } }), worker({ type: 'waiting-stop' }));
     expect(model.context).toEqual({ used: 50_000, window: 200_000, percent: 25 });

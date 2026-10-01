@@ -4,7 +4,7 @@ import chalk from 'chalk';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import type { HarnessPlanEntry } from '../../harness/events/turn-observer.js';
-import { PLAN_MAX_ROWS, planWindow } from './plan-window.js';
+import { PLAN_MAX_ROWS, planStillNeeded, planWindow } from './plan-window.js';
 
 /** The shared shape, so a plan entry means the same thing whichever harness
  * produced it. Status is compared, never exhaustively matched: a harness may
@@ -18,7 +18,7 @@ export function planBlockRows(
   /** The step in progress animates with the waiting spinner while a turn runs; `◐` otherwise. */
   activeGlyph = '◐',
 ): string[] {
-  if (!entries.length || maxRows < 1) return [];
+  if (!planStillNeeded(entries) || maxRows < 1) return [];
   const { visible, done, hidden } = planWindow(entries, maxRows);
   const rows = visible.map(({ entry }) => {
     const text = visibleSlice(sanitizeTerminalText(entry.content, { singleLine: true }).trim(), Math.max(4, width - 6));
