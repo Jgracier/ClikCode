@@ -219,14 +219,14 @@ SCENARIOS = {
         'watch': [], 'final_contains': ['signed in to Grok Build'], 'never': ['signing in to Grok Build'],
     },
     # A command that prints while it runs: its newest lines show under the
-    # spinner, and stay -- the last of them, earlier ones counted -- once a
+    # spinner, and stay -- its first and last, the middle counted -- once a
     # completion that carries no output of its own settles the row.
     'streamed-tool-output': {
         'env': {'FAKE_DELAY_MS': '60'},
         'turns': [{'streamed_tool': {'lines': [f'test file {n} passed' for n in range(1, 9)], 'ms': 700}, 'blocks': ['All the tests pass.']}],
         'steps': [('type', 'run the tests'), ('wait_for', 'All the tests pass.', 40), ('settle', 2)],
         'watch': [], 'ever': ['test file 3 passed'],
-        'final_contains': ['test file 8 passed', 'earlier lines'],
+        'final_contains': ['test file 1 passed', 'test file 8 passed', '3 lines hidden'],
     },
     # Reasoning that names itself: its heading is what the status line says
     # while the model thinks.
@@ -235,6 +235,22 @@ SCENARIOS = {
                    'blocks': ['The parser is fine.']}],
         'steps': [('type', 'check the parser'), ('wait_for', 'The parser is fine.', 30), ('settle', 2)],
         'watch': ['check the parser', 'The parser is fine.'], 'ever': ['Inspecting the parser ('],
+    },
+    # Reads and searches in a row are one row while they happen, growing in
+    # place and settling once -- never a row per call and then a merged copy
+    # under them. A long command shows its first and last lines.
+    'explore-run-merges': {
+        'turns': [{'explore': [
+            {'kind': 'read', 'title': 'Read src/a.ts', 'input': {'path': 'src/a.ts'}, 'result': '\n'.join(f'a{n}' for n in range(42))},
+            {'kind': 'read', 'title': 'Read src/b.ts', 'input': {'path': 'src/b.ts'}, 'result': 'b0\nb1\nb2'},
+            {'kind': 'search', 'title': 'Grep parseToken', 'input': {'pattern': 'parseToken'}, 'result': 'a.ts:1\nb.ts:2\nc.ts:3'},
+        ], 'long_command': {'lines': [f'build step {n} of 30' for n in range(1, 31)]},
+            'blocks': ['Explored and built.']}],
+        'steps': [('type', 'look around and build'), ('wait_for', 'Explored and built.', 40), ('settle', 2)],
+        'watch': ['look around and build', 'Explored and built.'],
+        'ever': ['Reading src/a.ts', 'Reading 2 files'],
+        'final_once': ['Read 2 files, searched 1 pattern', 'build step 1 of 30', 'build step 30 of 30', '25 lines hidden'],
+        'never': ['build step 15 of 30'],
     },
     'classic-fallback': {
         'classic': True,

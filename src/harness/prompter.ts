@@ -38,6 +38,9 @@ export interface HarnessActivityEvent {
   /** `output` is the END of the tool's output (a running command's newest
    * lines), so the omitted lines came before it. Otherwise it is the start. */
   outputTail?: boolean;
+  /** The first lines of an output cut to its tail (`outputTail` with lines
+   * omitted): what a long command set out to do, shown above how it ended. */
+  outputHead?: string[];
   /** Only ever populated where the harness's own JSON genuinely carries the
    * before/after text (confirmed so far: Claude Code's Edit/Write tool_use
    * blocks) -- never synthesized from a "files updated" style event that

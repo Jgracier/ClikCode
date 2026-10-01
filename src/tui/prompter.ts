@@ -29,8 +29,9 @@ import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivity
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { turnStatus } from '../harness/protocol/turn-flow.js';
+import { tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { paintStatus } from './render/status-line.js';
+import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
@@ -124,6 +125,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The latest call inside a running sub-agent, keyed by the parent tool id.
    * Shown as one line under that agent, never as its own row. */
   private childActivity = new Map<string, string>();
+  /** Which of this turn's reads and searches share a row (explore-groups.ts). */
+  private readonly exploreGrouping = new ExploreGrouping();
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
@@ -795,6 +798,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.toolPhase = '';
       this.toolCategory = undefined;
       this.childActivity.clear();
+      this.exploreGrouping.reset();
       this.liveActivitiesShown = -1;
       this.turnTranscript.reset();
       this.emitted.liveAnswerSettled();
@@ -1317,7 +1321,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const kind = liveWaitKind(entry.event!) ?? 'tool';
       const child = entry.event?.id ? this.childActivity.get(entry.event.id) : undefined;
       const row = runningChatLine(
-        entry.event?.label ?? '', this.reducedMotion ? 0 : this.waitingFrame, kind, entry.startedAt ? Date.now() - entry.startedAt : 0,
+        tensedLabel(entry.event?.label ?? '', true), this.reducedMotion ? 0 : this.waitingFrame, kind, entry.startedAt ? Date.now() - entry.startedAt : 0,
       ).trim();
       // What it has printed so far, newest last, under the spinner -- a long
       // build or test run is visibly working instead of a bare timer.
@@ -1328,17 +1332,41 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(`${child}${entry.event?.childTools ? ` · ${toolUses(entry.event.childTools)}` : ''}`)}`] : []), ...live, ''],
       };
     };
+    /** A run of reads and searches as one row (explore-groups.ts): the
+     * summary, and under it the last calls, dimmed. Running, the summary
+     * spins in the row's place; settled, it wears the work's glyph. */
+    const groupRow = (group: TurnGroup<ActivityEntry & GroupRow>, ended: boolean): SettlingTool => {
+      const first = group.members[0]!;
+      const { summary, calls, running } = mergedExploreLines(group.members.map((member) => member.event), ended);
+      const under = calls.map((call) => `    ${visibleSlice(call, Math.max(1, conversationInner - 4))}`);
+      if (running && !group.done) {
+        const row = runningChatLine(summary, this.reducedMotion ? 0 : this.waitingFrame, 'tool', first.startedAt ? Date.now() - first.startedAt : 0).trim();
+        return { id: group.key, done: false, responseOffset: first.responseOffset, lines: ['', `  ${row}`, ...under, ''] };
+      }
+      const { line, category } = mergedExploreSummaryLine(group.members.map((member) => member.event), summary);
+      return { id: group.key, done: group.done, responseOffset: first.responseOffset, lines: [...activityRows([line], category).slice(0, -1), ...under, ''] };
+    };
+    /** The turn's rows, looking-around runs merged. A lone call is its own
+     * row as always, except that a finished read or search waits in the live
+     * region while it is the tail: the next one may merge with it. */
+    const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: ExploreGrouping): SettlingTool[] => {
+      const rows = entries.flatMap((entry) => (entry.event ? [{ ...entry, event: entry.event, key: entry.event.id ?? `activity#${entry.sequence ?? entry.responseOffset}` }] : []));
+      return grouping.group(rows, ended, ended ? Number.POSITIVE_INFINITY : this.liveResponse.length).map((group) => {
+        if (group.merged) return groupRow(group, ended);
+        const row = toolRow(group.members[0]!, ended);
+        return row.done && !group.done ? { ...row, done: false } : row;
+      });
+    };
     /** A turn's own tool calls: anchored at the message count when it began,
      * which is at or before the index its answer lands at. */
     const turnEntries = (from: number, to = from): ActivityEntry[] => this.activityEntries.filter((entry) =>
       entry.anchor >= from && entry.anchor <= to && entry.responseOffset !== undefined && !entry.event?.parentId);
     const turnTools = (ended: boolean): SettlingTool[] => {
-      const tools: SettlingTool[] = turnEntries(this.activityAnchor)
+      const tools: SettlingTool[] = groupedRows(turnEntries(this.activityAnchor)
         // An anchor is reused: the next turn's assistant occupies the same
         // index when the previous one was never persisted. The turn that
         // produced an entry is what decides whether it belongs to this one.
-        .filter((entry) => (entry.sequence ?? 0) > this.emitted.turnSequenceFloor)
-        .map((entry) => toolRow(entry, ended));
+        .filter((entry) => (entry.sequence ?? 0) > this.emitted.turnSequenceFloor), ended, this.exploreGrouping);
       // One row on each side, matching every other message: a steer is a
       // message the user wrote mid-answer.
       const steerRows = (text: string): string[] => [
@@ -1419,7 +1447,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // An earlier turn of this window, written again at a new width: its
         // tool rows go back where they happened, as they did the first time.
         emit(new TurnTranscript().advance({
-          content: sanitizeTerminalText(message.content), tools: pastTools.map((entry) => toolRow(entry, true)),
+          content: sanitizeTerminalText(message.content), tools: groupedRows(pastTools, true, new ExploreGrouping()),
           turnEnded: true, renderBlocks,
         }).finished);
       } else {

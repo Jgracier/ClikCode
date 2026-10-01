@@ -1,6 +1,6 @@
 import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
-import { parseNativeActivityEventsFromValue } from './activity-events';
+import { activityOutput, parseNativeActivityEventsFromValue } from './activity-events';
 import type { AiLocalHarnessDefinition } from '../definition';
 import { renderActivityLine } from './activity-line';
 import { codex } from './vendor-fixtures.vitest';
@@ -16,10 +16,20 @@ describe('incremental native tool activity', () => {
     }));
     // The whole output is carried (it is short); the row decides what shows.
     expect(event).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'call-1', output: ['one', 'two', 'three', 'four'] });
-    // A command shows its LAST lines, the earlier ones counted above them --
-    // the result of a command is at its end.
-    const rows = renderActivityLine(event!).map((row) => row.replace(/\u001b\[[0-9;]*m/g, '').trim());
-    expect(rows.slice(1)).toEqual(['… 1 earlier line', 'two', 'three', 'four']);
+    // Kept whole, short output shows whole; a long one shows its first lines
+    // and its last -- what it set out to do and how it ended -- the middle
+    // counted between them (Grok, Cursor).
+    const plain = (rows: string[]): string[] => rows.map((row) => row.replace(/\u001b\[[0-9;]*m/g, '').trim());
+    expect(plain(renderActivityLine(event!)).slice(1)).toEqual(['one', 'two', 'three', 'four']);
+    const long = { ...event!, output: Array.from({ length: 9 }, (_, index) => `line ${index + 1}`) };
+    expect(plain(renderActivityLine(long)).slice(1)).toEqual(['line 1', 'line 2', '… 4 lines hidden', 'line 7', 'line 8', 'line 9']);
+    // Cut to its tail by the producer, its first kept line is mid-stream: the
+    // end is shown, the earlier lines counted above it.
+    expect(plain(renderActivityLine({ ...long, outputOmitted: 20, outputTail: true })).slice(1)).toEqual(['… 26 earlier lines', 'line 7', 'line 8', 'line 9']);
+    // Unless the producer kept its head as well, as activityOutput does.
+    const cut = { ...event!, ...activityOutput(Array.from({ length: 30 }, (_, index) => `step ${index + 1}`).join('\n'), { tail: true }) };
+    expect(cut.outputHead).toEqual(['step 1', 'step 2']);
+    expect(plain(renderActivityLine(cut)).slice(1)).toEqual(['step 1', 'step 2', '… 25 lines hidden', 'step 28', 'step 29', 'step 30']);
   });
 
   it('renders failed command completions as failures rather than green done events', () => {
