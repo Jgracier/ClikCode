@@ -1,8 +1,7 @@
 /** `/cost` and the context-window line: tokens counted and priced. */
 
 import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
-import { stdin as input, stdout as output } from 'node:process';
-import type { HarnessSession, HarnessState } from '../../session/model.js';
+import type { HarnessSession } from '../../session/model.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { sessionHarness } from './context.js';
 
@@ -25,24 +24,4 @@ export function contextUsageText(session: HarnessSession): string {
     `  total      ${formatTokens(usage.totalTokens ?? used)}`,
     `  messages   ${sessionTranscriptMessages(session).length}`,
   ].join('\n');
-}
-
-export function costReport(state: HarnessState, session: HarnessSession): { text: string; totals: { turns: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; costUsd: number; costKnown: boolean } } {
-  const invocations = state.invocations.filter((item) => item.sessionId === session.id);
-  const totals = invocations.reduce((sum, item) => ({
-    turns: sum.turns + 1, inputTokens: sum.inputTokens + (item.inputTokens ?? 0), outputTokens: sum.outputTokens + (item.outputTokens ?? 0),
-    cacheReadTokens: sum.cacheReadTokens + (item.cacheReadTokens ?? 0), costUsd: sum.costUsd + (item.costUsd ?? 0),
-    costKnown: sum.costKnown || item.costUsd !== undefined,
-  }), { turns: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0, costKnown: false });
-  const text = invocations.length
-    ? [
-      'This conversation',
-      `  turns      ${totals.turns}`,
-      `  input      ${formatTokens(totals.inputTokens)} tokens`,
-      `  cached     ${formatTokens(totals.cacheReadTokens)} tokens`,
-      `  output     ${formatTokens(totals.outputTokens)} tokens`,
-      `  cost       ${totals.costKnown ? `$${totals.costUsd.toFixed(4)}` : 'not reported (subscription plans and most vendor CLIs do not publish a price)'}`,
-    ].join('\n')
-    : 'No metered turns recorded for this conversation yet.';
-  return { text, totals };
 }

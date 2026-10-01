@@ -4,7 +4,7 @@
 import chalk from 'chalk';
 import { terminalCellWidth, visibleSlice } from './width.js';
 import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from './usage-words.js';
-export { appendThought, formatElapsed, liveWaitKind, waitingSpinnerFrame, waitingSpinnerGlyph, type Thought } from '../../harness/protocol/activity-view.js';
+export { appendThought, formatElapsed, liveWaitKind, waitingSpinnerGlyph, type Thought } from '../../harness/protocol/activity-view.js';
 import { formatElapsed, waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
 
 export { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent };

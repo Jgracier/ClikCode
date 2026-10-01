@@ -30,20 +30,3 @@ export async function chooseOption<T>(
   }
   return options[index].value;
 }
-
-/** A brand-new conversation root. How you want to work (provider, account,
- * model, effort, permissions, workspace) carries over; what you were talking
- * about does not. Crucially it takes a fresh conversationId and no parent, so
- * it lists as its own row in /resume instead of merging into the conversation
- * it was started from, and it carries no inherited name. */
-/** Which account a conversation on this provider should use.
- *
- * The rule, in one place because it was previously decided in two: keep the
- * one it already has if that still fits, otherwise the account most recently
- * used on this provider, otherwise the first ready one. Null only when the
- * provider has no ready account at all.
- *
- * Both callers used to give up and store null as soon as a provider had more
- * than one account -- on the reasoning that the user should choose -- but
- * nothing asked them to, so the next turn failed with "no account selected"
- * on exactly the setups where an account was most obviously available. */

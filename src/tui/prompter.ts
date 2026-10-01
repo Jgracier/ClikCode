@@ -6,7 +6,7 @@
 import chalk from 'chalk';
 import { pastedText } from './keys.js';
 import { backslashNewline, composerVerticalMove, editComposer, editWaitingComposer } from './composer-edit.js';
-import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, paletteDisplayRows, pickerConfirmsSelection, pickerDeletesSelection, type PaletteEntry } from './command-palette.js';
+import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, paletteDisplayRows, type PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { composerLayout } from './render/composer-layout.js';
 import { closeOpenHyperlink } from './render/hyperlinks.js';
@@ -75,8 +75,6 @@ const SCROLL_DRAIN_MS = 16;
 
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 
-const LEAVE_ALTERNATE_SCREEN = '\u001b[?1049l';
-
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 const ALTERNATE_TRANSCRIPT_ROWS = 2000;
@@ -90,7 +88,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
   private currentSession?: HarnessSession;
-  private currentAccount?: string;
   private currentNotice?: string;
   private draft = '';
   private draftOptions: readonly PickerOption<string>[] = [];
@@ -536,7 +533,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return this.journal.running ? settledTranscriptMessages(session, this.journal.prompt) : sessionTranscriptMessages(session);
   }
 
-  render(session: HarnessSession, account?: string, notice?: string, journal?: JournalState): void {
+  render(session: HarnessSession, _account?: string, notice?: string, journal?: JournalState): void {
     if (this.currentSession?.id !== session.id) {
       this.activityEntries = [];
       this.planEntries = [];
@@ -569,7 +566,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     if (!this.waitingLabel) this.waitingSubmissions = [];
     this.currentSession = session;
-    this.currentAccount = account;
     this.currentNotice = notice;
     // A render receives authoritative persisted state. Drop the transient
     // stream so the just-saved assistant message is never painted twice --

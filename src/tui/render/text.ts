@@ -1,7 +1,7 @@
 /** Terminal text as bytes: the escape sequences that may appear in it, and
  * making a string safe to print. */
 
-import { OSC8_SEQUENCE, TAB_WIDTH, terminalCellWidth, ZERO_WIDTH_SEQUENCES } from './width.js';
+import { OSC8_SEQUENCE, TAB_WIDTH, terminalCellWidth } from './width.js';
 
 /** Every escape sequence a terminal acts on. OSC and DCS/SOS/PM/APC bodies end
  * at their terminator or, failing that, at the end of the line: a model that

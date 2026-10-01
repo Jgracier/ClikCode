@@ -18,8 +18,6 @@ import { discardIfBlank, ensureSessionOnDisk } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
 import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
-import { open } from 'node:fs/promises';
-import { join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import chalk from 'chalk';
@@ -39,13 +37,13 @@ import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/acco
 import { harnessModelLabel, resolveNativeModel, warmNativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { settingLabel } from '../../tui/pickers/setting-scope.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
-import { closePersistentTransport, nativeAvailableCommands, persistentTransports } from '../../turn/vendor-process.js';
+import { closePersistentTransport, nativeAvailableCommands } from '../../turn/vendor-process.js';
 import { discardInterruptedTurn } from '../../turn/turn-journal.js';
 import { synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { turnEnvironment } from '../../turn/turn-environment.js';
 import { runSessionTurn } from '../../turn/session-turn.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
-import { emitHarnessOutput, line } from '../../harness/output.js';
+import { emitHarnessOutput } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
@@ -974,7 +972,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         }
         if (outcome.prompt) await runInteractiveTurn(id, outcome.prompt, { echo: outcome.echo !== false });
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
         const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
         // A queued turn is only consumed once its checkpoint starts. Anything
         // that throws before that -- a removed account, an unavailable model, an
