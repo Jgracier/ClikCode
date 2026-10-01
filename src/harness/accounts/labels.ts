@@ -128,14 +128,20 @@ export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, prof
     } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
   }
   if (harness.command === 'cursor') {
-    // Simplest of the three so far: no token to decode, no API call --
-    // ~/.cursor/cli-config.json carries a real, plain-text authInfo.email
-    // field directly. HOME-based account profiles keep this lookup scoped.
-    try {
-      const parsed = JSON.parse(await readFile(join(profilePath ?? homedir(), '.cursor', 'cli-config.json'), 'utf8')) as { authInfo?: { email?: string } };
-      const email = parsed.authInfo?.email;
-      return typeof email === 'string' && email ? email : undefined;
-    } catch { /* fail-open-ok: no derivable info beats a fabricated name. */ }
+    // No token to decode, no API call: cli-config.json carries a plain
+    // authInfo.email. Cursor keeps it under XDG_CONFIG_HOME when that is set
+    // -- which every ClikCode account profile sets, so a second account's is
+    // <profile>/.config/cursor/cli-config.json -- and in ~/.cursor otherwise.
+    // Reading only ~/.cursor left every added account on its placeholder.
+    const home = profilePath ?? homedir();
+    const config = profilePath ? join(profilePath, '.config') : process.env.XDG_CONFIG_HOME || join(home, '.config');
+    for (const path of [join(config, 'cursor', 'cli-config.json'), join(home, '.cursor', 'cli-config.json')]) {
+      try {
+        const parsed = JSON.parse(await readFile(path, 'utf8')) as { authInfo?: { email?: string } };
+        const email = parsed.authInfo?.email;
+        if (typeof email === 'string' && email) return email;
+      } catch { /* fail-open-ok: try the other place; no derivable info beats a fabricated name. */ }
+    }
   }
   if (harness.command === 'gemini') {
     // ~/.gemini/google_accounts.json names the signed-in Google account
