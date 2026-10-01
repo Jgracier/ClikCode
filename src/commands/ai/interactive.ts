@@ -77,6 +77,7 @@ import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from '../../worker/turn-bridge.js';
+import { retireStaleWorkers } from '../../worker/client.js';
 
 /** Commands the terminal replaced with the board. `/resume` is ← on an empty
  * prompt; `/new` is ← and typing. They stay in the registry for the surfaces
@@ -317,6 +318,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     if (!updateAnnounced && startupBuild && currentWorkerBuild() !== startupBuild) {
       updateAnnounced = true;
       if (!notice) notice = 'A newer ClikCode build is installed -- /exit and relaunch to use it.';
+      // Session workers load the entry once at spawn. Ask every idle one to
+      // step down now so Left / reopening a chat does not keep serving the
+      // old code. Busy ones finish, then go.
+      void retireStaleWorkers().catch(() => undefined);
     }
     void readState({ transcripts: [] }).then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
@@ -503,7 +508,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       if (!line) continue;
       // Left on an empty prompt: the board, through the handler /resume has.
       const viaBoard = line === BOARD_LINE;
-      if (viaBoard) line = '/resume';
+      if (viaBoard) {
+        line = '/resume';
+        // Chats left behind on an older build would otherwise keep that code
+        // until reopened or the idle timeout. Sweep now, while the board is
+        // opening, so picking any row starts a worker on this build.
+        void retireStaleWorkers().catch(() => undefined);
+      }
       let interruptedSubmission: { text: string; restoreOnEscape: boolean } | undefined;
       /** One turn with the normal waiting / cancel / live-input UI. `echo`
        * paints the submitted text as the pending user message; synthetic

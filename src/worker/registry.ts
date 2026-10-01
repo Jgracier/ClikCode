@@ -9,7 +9,7 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { link, mkdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
+import { link, mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -121,6 +121,33 @@ export async function readWorkerRecord(sessionId: string): Promise<WorkerRuntime
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
+}
+
+/** Every worker record on disk. Used to ask stale-build workers to step down
+ * without waiting for each conversation to be reopened (Left on the board,
+ * or a rebuild while this window is open). Owner files and sockets are not
+ * records. */
+export async function listWorkerRecords(): Promise<WorkerRuntimeRecord[]> {
+  let names: string[];
+  try {
+    names = await readdir(workersDirectory());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const records: WorkerRuntimeRecord[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const raw = await readFile(join(workersDirectory(), name), 'utf8');
+      const parsed = JSON.parse(raw) as Partial<WorkerRuntimeRecord>;
+      if (typeof parsed.pid !== 'number' || typeof parsed.socketPath !== 'string' || typeof parsed.token !== 'string' || typeof parsed.sessionId !== 'string') continue;
+      records.push(parsed as WorkerRuntimeRecord);
+    } catch {
+      // fail-open-ok: a corrupt record is skipped; the next spawn overwrites it
+    }
+  }
+  return records;
 }
 
 export async function writeWorkerRecord(record: WorkerRuntimeRecord): Promise<void> {

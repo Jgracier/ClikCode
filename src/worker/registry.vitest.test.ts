@@ -3,7 +3,7 @@ import { createServer } from 'node:net';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ensureWorkersDirectory, readWorkerRecord, removeWorkerRecord, socketPathFor, workerIsReachable, writeWorkerRecord } from './registry.js';
+import { ensureWorkersDirectory, listWorkerRecords, readWorkerRecord, removeWorkerRecord, socketPathFor, workerIsReachable, writeWorkerRecord } from './registry.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -36,6 +36,17 @@ describe('worker registry', () => {
   it('returns undefined for a session with no record at all', async () => {
     await isolatedHome();
     expect(await readWorkerRecord('never-written')).toBeUndefined();
+  });
+
+  it('lists every worker record and skips owner files', async () => {
+    await isolatedHome();
+    const one = { pid: 1, sessionId: 'one', socketPath: socketPathFor('one'), installationId: 'install', startedAt: new Date().toISOString(), token: 'a', build: '1:1' };
+    const two = { pid: 2, sessionId: 'two', socketPath: socketPathFor('two'), installationId: 'install', startedAt: new Date().toISOString(), token: 'b', build: '2:2' };
+    await writeWorkerRecord(one);
+    await writeWorkerRecord(two);
+    const listed = await listWorkerRecords();
+    expect(listed).toEqual(expect.arrayContaining([one, two]));
+    expect(listed).toHaveLength(2);
   });
 
   it('keeps every socket path under the platform UDS length limit regardless of session id length', () => {
