@@ -65,13 +65,8 @@ button.primary kbd, button.secondary kbd { border-color: currentColor; opacity: 
   display: flex; align-items: center; gap: 2px; padding: 6px 8px 6px 10px; min-height: 38px;
   border-bottom: 1px solid var(--border); position: relative; flex: none;
 }
-.title-button {
-  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 70%; background: none; border: none; padding: 3px 6px; margin-left: -6px;
-  border-radius: var(--radius-small); font-weight: 600;
-}
-.title-button:hover { background: var(--hover); }
-.title-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.title-button .codicon { font-size: 12px; opacity: 0.7; }
+/* The chat's name, plain: the conversations list is the history button's. */
+.title-text { min-width: 0; max-width: 70%; padding: 3px 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .running-indicator { display: inline-flex; color: var(--muted); margin-left: 2px; }
 .running-indicator .codicon { font-size: 13px; }
 .chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
