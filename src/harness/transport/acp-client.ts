@@ -729,6 +729,15 @@ class AcpSessionImpl implements AcpSession {
     // Gemini's ACP answers with `_meta.quota.token_count` {input_tokens,
     // output_tokens}, the turn's, beside the standard field.
     let usage = normalizeTurnUsage(completed.usage ?? completed._meta?.usage ?? completed._meta?.quota?.token_count);
+    // Grok sends no usage_update. Its prompt result's `_meta.totalTokens` is
+    // the context the session now occupies, and each listed model's
+    // `_meta.totalContextTokens` its window.
+    if (typeof completed._meta?.totalTokens === 'number') {
+      const modelId = completed._meta.modelId ?? live.models?.currentModelId;
+      const listed: Json[] = Array.isArray(live.models?.availableModels) ? live.models.availableModels : [];
+      const window = listed.find((item) => item?.modelId === modelId)?._meta?.totalContextTokens;
+      usage = { ...usage, contextUsed: completed._meta.totalTokens, ...(typeof window === 'number' ? { contextWindow: window } : {}) };
+    }
     if (usage && input.usageTotals === 'session') {
       this.sessionTotals = { ...this.sessionTotals, ...turnShareOf(usage, {}) };
       usage = { ...usage, ...turnShareOf(usage, turn.base) };
