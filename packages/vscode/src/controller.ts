@@ -94,7 +94,10 @@ export class ClikCodeController implements vscode.Disposable {
     this.selectionTimer = setTimeout(() => {
       this.selectionTimer = undefined;
       const setting = vscode.workspace.getConfiguration('clikcode').get<'selection' | 'file' | 'off'>('editorContext', 'file');
-      const next = setting === 'off' || (setting === 'selection' && editor.selection.isEmpty) ? undefined
+      // An unsaved scratch buffer (Untitled-1) has no file an agent could
+      // open: only text selected in it is worth sending.
+      const wholeFile = editor.selection.isEmpty;
+      const next = setting === 'off' || (wholeFile && (setting === 'selection' || scheme !== 'file')) ? undefined
         : mentionFromEditor(editor, true);
       const same = next?.path === this.selection?.path && next?.startLine === this.selection?.startLine
         && next?.endLine === this.selection?.endLine && next?.text === this.selection?.text
