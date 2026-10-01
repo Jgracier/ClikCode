@@ -105,6 +105,9 @@ export function turnCost(invocation: Invocation, weights: Readonly<Record<string
   // is stored as an integer-ish magnitude and sub-dollar turns would
   // otherwise quantise badly.
   if (invocation.costUsd !== undefined && invocation.costUsd > 0) return invocation.costUsd * 1_000_000;
+  // Kiro bills in credits and reports them per turn: the same argument --
+  // the vendor's own price, one unit per provider.
+  if (invocation.credits !== undefined && invocation.credits > 0) return invocation.credits * 1_000_000;
   const weight = (invocation.model && weights[invocation.model]) || 1;
   // No total is published by several vendors, Claude among them; the parts
   // are. Cache reads are counted at full rate deliberately -- the unit only

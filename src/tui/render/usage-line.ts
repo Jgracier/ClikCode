@@ -27,8 +27,10 @@ export function formatTurnUsage(usage?: TurnUsage, estimatedOutput = 0): string 
   const parts = [
     ...(flow.length ? [`${flow.join(' ')} tokens`] : []),
     ...(usage?.cacheRead ? [`${compactCount(usage.cacheRead)} cached`] : []),
-    ...(usage?.contextUsed ? [`${compactCount(usage.contextUsed)}${usage.contextWindow ? `/${compactCount(usage.contextWindow)}` : ''} context`] : []),
+    ...(usage?.contextUsed ? [`${compactCount(usage.contextUsed)}${usage.contextWindow ? `/${compactCount(usage.contextWindow)}` : ''} context`]
+      : usage?.contextPercent ? [`${usage.contextPercent < 10 ? usage.contextPercent.toFixed(1) : Math.round(usage.contextPercent)}% context`] : []),
     ...(usage?.costUsd ? [dollars(usage.costUsd)] : []),
+    ...(usage?.credits ? [`${usage.credits < 1 ? usage.credits.toFixed(3) : usage.credits.toFixed(2)} credits`] : []),
   ];
   return parts.join(' · ');
 }

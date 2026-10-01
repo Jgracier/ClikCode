@@ -569,6 +569,7 @@ class AcpSessionImpl implements AcpSession {
         onNotification: (method, params) => {
           if (method === 'session/update') this.update(params);
           else if (method === '_session/retrying') this.retrying(params);
+          else if (method === '_kiro.dev/metadata') this.kiroMetadata(params);
         },
         onClose: (error) => {
           if (this.live === live) {
@@ -852,6 +853,22 @@ class AcpSessionImpl implements AcpSession {
       Object.assign(usage, share);
       if (Object.keys(usage).length) input.onUsage?.(usage);
     }
+  }
+
+  /** Kiro reports no tokens. Its `_kiro.dev/metadata` notification carries
+   * the share of the context window in use and, once per turn, what the turn
+   * cost in credits (`meteringUsage` [{value, unit: "credit"}]). Verified on
+   * kiro-cli 2.23: credits arrive once, beside `turnDurationMs`. */
+  private kiroMetadata(params: Json): void {
+    const turn = this.turn;
+    if (!turn || turn.done || !turn.promptStarted) return;
+    if (typeof params.sessionId === 'string' && turn.sessionId && params.sessionId !== turn.sessionId) return;
+    const usage: TurnUsage = {};
+    if (typeof params.contextUsagePercentage === 'number' && Number.isFinite(params.contextUsagePercentage)) usage.contextPercent = params.contextUsagePercentage;
+    const metered: Json[] = Array.isArray(params.meteringUsage) ? params.meteringUsage : [];
+    const credits = metered.filter((item) => item?.unit === 'credit' && typeof item.value === 'number').reduce((sum, item) => sum + item.value, 0);
+    if (metered.length && credits > 0) usage.credits = credits;
+    if (Object.keys(usage).length) turn.input.onUsage?.(usage);
   }
 
   /** The agent's own notice that it is retrying a failed model call

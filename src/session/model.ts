@@ -144,7 +144,7 @@ export interface HarnessState {
    *  'provider-default', 'platform' -- and those fake ids then flowed into
    *  usage rollups as if a model by that name had served the request. An
    *  absent model is a fact; a fabricated one corrupts the accounting. */
-  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; sessionId?: string; latencyMs: number; contextProfile?: string }>;
+  invocations: Array<{ id: string; accountId: string; provider: string; model?: string; at: string; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number; totalTokens?: number; costUsd?: number; credits?: number; sessionId?: string; latencyMs: number; contextProfile?: string }>;
   /** Applies to every provider unless a providerSettings entry overrides it. */
   globalSettings: HarnessDefaultSettings;
   /** Keyed by AiLocalHarnessDefinition.provider; only the fields a user has set. */
