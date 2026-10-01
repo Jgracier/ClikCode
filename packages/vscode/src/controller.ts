@@ -48,7 +48,6 @@ export class ClikCodeController implements vscode.Disposable {
   private postTimer: NodeJS.Timeout | undefined;
   private refreshTimer: NodeJS.Timeout | undefined;
   private refreshedFor = '';
-  private accountTimer: NodeJS.Timeout | undefined;
   private lastAutoRestart = 0;
   /** The editor selection the pages offer with the next message. */
   private selection: Mention | undefined;
@@ -64,7 +63,6 @@ export class ClikCodeController implements vscode.Disposable {
     private readonly first: { mode: 'new' | 'continue' | 'resume'; sessionId?: string } | undefined,
     readonly label: string,
   ) {
-    this.accountTimer = setInterval(() => { if (this.visible) this.refreshStructured(true); }, 60_000);
     this.subscriptions.push(
       vscode.window.onDidChangeTextEditorSelection((event) => this.trackSelection(event.textEditor)),
       vscode.window.onDidChangeActiveTextEditor((editor) => { if (editor) this.trackSelection(editor); }),
@@ -234,7 +232,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   /** The composer footer's facts: this chat's setting choices, its provider,
    * its account and usage. Read after every change of conversation or
-   * setting; `withAccounts` alone (the minute timer) re-reads usage. */
+   * setting; `onlyAccount` (the bridge's `usage`, every 30 s) re-reads usage. */
   private refreshStructured(onlyAccount: boolean): void {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = setTimeout(() => {
@@ -748,7 +746,6 @@ export class ClikCodeController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
-    if (this.accountTimer) clearInterval(this.accountTimer);
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
     if (this.selectionTimer) clearTimeout(this.selectionTimer);
