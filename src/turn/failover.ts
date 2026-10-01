@@ -67,8 +67,11 @@ const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|faile
 // cap rather than a usage/plan/quota window, so it did not match the
 // existing "…limit" alternation, which only covers usage/session/plan/
 // weekly/monthly/daily.
-const QUOTA_TEXT = /(?:quota (?:exceeded|exhausted|reached)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
-const THROTTLE_TEXT = /(?:rate limit|too many requests|temporar(?:y|ily) throttled)/i;
+// Cursor's own error codes (cursor-agent 2026.09.26's ErrorDetails enum):
+// FREE_USER_USAGE_LIMIT / PRO_USER_USAGE_LIMIT / USAGE_PRICING_REQUIRED for a
+// spent plan, *_RATE_LIMIT_EXCEEDED and RATE_LIMITED for throttling.
+const QUOTA_TEXT = /(?:\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|quota (?:exceeded|exhausted|reached)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit))/i;
+const THROTTLE_TEXT = /(?:rate[ _]limit|\bRATE_LIMITED\b|too many requests|temporar(?:y|ily) throttled)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
  * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity

@@ -186,7 +186,9 @@ export function cursorQuotaReading(result: unknown): UsageReading | undefined {
   if (!plan) return undefined;
   const end = Number((result as Json).billingCycleEnd);
   const reset = Number.isFinite(end) && end > 0 ? end : undefined;
-  return usageReading([usageWindow('monthly', plan.totalPercentUsed, reset), usageWindow('API', plan.apiPercentUsed, reset)]);
+  const api = usageWindow('API', plan.apiPercentUsed, reset);
+  // The API share is advisory: spent, it stops named models, not Auto.
+  return usageReading([usageWindow('monthly', plan.totalPercentUsed, reset), api ? { ...api, advisory: true as const } : undefined]);
 }
 
 async function cursorAccessToken(environment: Environment): Promise<string | undefined> {

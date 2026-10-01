@@ -15,7 +15,7 @@
  * the turn. It is not an error.
  */
 import type { AiHarnessAccount } from '../harness/definition.js';
-import type { AccountUsageReading, UsageWindow } from '../harness/accounts/usage-reading.js';
+import { windowSpent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
 
 /** The soonest a spent window comes back, across every account that was
  * tried. Undefined when nothing on offer has a reset -- a spent balance, or a
@@ -25,7 +25,7 @@ export function nextQuotaReset(
 ): Date | undefined {
   const resets = accounts
     .flatMap((account) => ((account.usage as AccountUsageReading | undefined)?.windows ?? []) as readonly UsageWindow[])
-    .filter((window) => window.usedPct >= 100 && window.resetsAt !== undefined)
+    .filter((window) => windowSpent(window) && window.resetsAt !== undefined)
     .map((window) => Date.parse(window.resetsAt!))
     .filter((at) => Number.isFinite(at) && at > now)
     .sort((left, right) => left - right);

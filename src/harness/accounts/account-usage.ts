@@ -8,7 +8,7 @@ import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { BILLED_USAGE_PROBES, NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES, NATIVE_USAGE_READING_PROBES } from './usage-probes.js';
 import { learnedUsageReading } from './usage-learning.js';
-import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, quotaMarkExpiresAt, quotaMarkedAt, settleQuotaMark, usageCacheKey, usageReadingIsCurrent } from './usage-reading.js';
+import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, quotaMarkExpiresAt, quotaMarkedAt, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 
 /** How long a windowless balance reading is reused before its harness is
@@ -217,7 +217,7 @@ export function accountsDueForUsageRecheck(
     if (account.authKind !== 'vendor-cli' || account.status !== 'ready' || !canBeAsked(account)) return false;
     const reading = account.usage as AccountUsageReading | undefined;
     const windows = reading?.windows ?? [];
-    const wasSpent = account.quotaState === 'exhausted' || windows.some((window) => window.usedPct >= 100);
+    const wasSpent = account.quotaState === 'exhausted' || windows.some(windowSpent);
     if (!wasSpent) return false;
     if (windows.length && !usageReadingIsCurrent({ windows }, now)) return true;
     if (account.quotaState !== 'exhausted' || (quotaMarkExpiresAt(account) ?? Number.POSITIVE_INFINITY) > now) return false;
