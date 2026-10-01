@@ -203,6 +203,16 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 }
 .more-steps:hover, .trace-toggle:hover { color: var(--vscode-foreground); }
 .trace { margin: 2px 0 6px; }
+/* A run of reads and searches as one row, its newest calls dimmed beneath. */
+.explored { font-size: 0.93em; }
+.explored-toggle { max-width: 100%; font-size: 1em; }
+.explored-title { color: var(--vscode-foreground); }
+.explored-summary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.explored-recent { margin: 0 0 2px 20px; opacity: 0.6; }
+.explored-call { display: flex; align-items: center; gap: 6px; min-height: 20px; color: var(--muted); min-width: 0; }
+.explored-call .activity-status .codicon { font-size: 12px; }
+.explored > .activities { margin: 2px 0 0 4px; padding-left: 4px; border-left: 1px solid var(--border); }
+.activity-result::before { content: '· '; }
 .more-steps.earlier { align-self: center; }
 .trace .activities { margin: 4px 0 0; padding-left: 4px; border-left: 1px solid var(--border); }
 .working { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.93em; }

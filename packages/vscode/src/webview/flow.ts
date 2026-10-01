@@ -2,9 +2,10 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
-import { turnStatus, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { exploreRuns, exploreSummary, tensedLabel, turnStatus, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
-import type { LiveTurn } from '../model';
+import type { ToolCategory } from '../../../../src/harness/prompter';
+import type { Activity, LiveTurn } from '../model';
 import { titleCase } from './format';
 
 export interface WorkingStatus {
@@ -35,4 +36,52 @@ export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: 
     : status.tone !== 'tool' ? 'tone-cyan'
       : open?.agent ? 'tone-cyan' : open?.category ? `tone-${TOOL_CATEGORY[open.category].colour}` : 'tone-plain';
   return { ...status, label: `${titleCase(status.label.replace(/(…|\.\.\.)$/, '').trim() || 'working')}…`, toneClass };
+}
+
+/** Lines of a finished command's output shown from its start and its end;
+ * what lies between is counted ("… 40 lines hidden"). */
+export const COMMAND_HEAD_LINES = 2;
+export const COMMAND_TAIL_LINES = 3;
+
+/** A finished command's output as Codex shows it: the first two lines and
+ * the last three, the middle counted. Only for output the harness reported
+ * whole -- where it kept just a start or an end, the real ends are unknown
+ * and the row shows what it has (undefined). */
+export function commandWindow(activity: Pick<Activity, 'output' | 'outputOmitted' | 'outputTail'>): { head: string[]; tail: string[]; hidden: number } | undefined {
+  const output = activity.output ?? [];
+  if (!output.length || activity.outputOmitted || activity.outputTail) return undefined;
+  if (output.length <= COMMAND_HEAD_LINES + COMMAND_TAIL_LINES + 1) return { head: output, tail: [], hidden: 0 };
+  return { head: output.slice(0, COMMAND_HEAD_LINES), tail: output.slice(-COMMAND_TAIL_LINES), hidden: output.length - COMMAND_HEAD_LINES - COMMAND_TAIL_LINES };
+}
+
+/** What a run of calls did, in the terminal's folded words per kind; one
+ * call alone is its own label, in its tense. */
+export function runSummary(activities: readonly Activity[]): string {
+  if (activities.length === 1) return tensedLabel(activities[0]!.label, activities[0]!.kind === 'tool-start');
+  const counts = new Map<string, number>();
+  for (const activity of activities) {
+    const kind = activity.agent ? 'agent' : activity.category ?? 'other';
+    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  return [...counts].map(([kind, count]) => (kind === 'agent' ? `ran ${count} agent${count === 1 ? '' : 's'}`
+    : kind === 'other' ? `${count} step${count === 1 ? '' : 's'}`
+      : TOOL_CATEGORY[kind as ToolCategory].folded(count))).join(' · ');
+}
+
+/** A finished run of calls folded to one line: each run of looking-around
+ * calls as Claude Code says it ("Read 3 files, searched 2 patterns"), the
+ * rest by kind ("ran 2 commands"). */
+export function foldedSummary(activities: readonly Activity[]): string {
+  const segments: Array<{ explore: boolean; rows: Activity[] }> = [];
+  for (const group of exploreRuns(activities)) {
+    const last = segments[segments.length - 1];
+    if (!group.explore && last && !last.explore) last.rows.push(...group.rows);
+    else segments.push({ explore: group.explore, rows: [...group.rows] });
+  }
+  const text = segments.map((segment, index) => {
+    if (!segment.explore) return runSummary(segment.rows);
+    const said = exploreSummary(segment.rows);
+    return index ? said.charAt(0).toLowerCase() + said.slice(1) : said;
+  }).join(' · ');
+  return titleCase(text);
 }

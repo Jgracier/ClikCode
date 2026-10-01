@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, type ChatModel, type LiveTurn } from '../../src/model';
-import { workingStatus } from '../../src/webview/flow';
+import { applyEvent, emptyModel, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { commandWindow, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -32,6 +32,28 @@ describe('how long the model has thought', () => {
     expect(closed.live!.thinkingSince).toBe(9_000);
     vi.setSystemTime(12_000);
     expect(applyEvent(closed, worker({ type: 'delta', text: 'Hi' })).live!.thinkingSince).toBe(12_000);
+  });
+});
+
+describe('tool rows', () => {
+  const row = (patch: Partial<Activity>): Activity => ({ key: patch.label ?? 'k', kind: 'tool-done', label: 'tool', ...patch });
+
+  it("shows a command's first two and last three lines, the middle counted", () => {
+    const output = Array.from({ length: 12 }, (_, index) => `line ${index + 1}`);
+    expect(commandWindow({ output })).toEqual({ head: ['line 1', 'line 2'], tail: ['line 10', 'line 11', 'line 12'], hidden: 7 });
+    expect(commandWindow({ output: output.slice(0, 6) })).toEqual({ head: output.slice(0, 6), tail: [], hidden: 0 });
+    // Only part of it was kept: its real ends are unknown.
+    expect(commandWindow({ output, outputTail: true })).toBeUndefined();
+    expect(commandWindow({ output, outputOmitted: 40 })).toBeUndefined();
+  });
+
+  it('folds a finished run, reads and searches in Claude Code\'s words', () => {
+    const read = (path: string): Activity => row({ label: `Read ${path}`, category: 'read' });
+    expect(foldedSummary([read('a.ts'), read('b.ts'), row({ label: 'Grep foo', category: 'search' })])).toBe('Read 2 files, searched 1 pattern');
+    expect(foldedSummary([row({ label: '$ npm test', category: 'run' }), row({ label: '$ npm run build', category: 'run' }), read('a.ts'), read('b.ts')]))
+      .toBe('Ran 2 commands · read 2 files');
+    expect(foldedSummary([row({ label: 'Edit a.ts', category: 'edit' })])).toBe('Edited a.ts');
+    expect(runSummary([row({ label: 'Read a.ts', category: 'read', kind: 'tool-start' })])).toBe('Reading a.ts');
   });
 });
 
