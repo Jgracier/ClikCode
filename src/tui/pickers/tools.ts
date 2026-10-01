@@ -39,7 +39,7 @@ export async function interactiveToolsPicker(rl: HarnessPrompter, id: string, ha
   if (choice === '__mcp_everywhere__') return addMcpEverywhere(rl);
   const manager = managers.find(([name]) => name === choice)?.[1];
   if (!manager) return;
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
   // Both, when the vendor has both: see what is there, then change it.
@@ -65,7 +65,7 @@ async function addMcpEverywhere(rl: HarnessPrompter): Promise<void> {
   const line = (await rl.question('Command to run, or URL › ')).trim();
   if (!line) return;
   const [target, ...args] = line.split(/\s+/);
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const results = await installMcpServerEverywhere({ name, target: target!, ...(args.length ? { args } : {}) }, state.accounts);
   const added = results.filter((result) => result.ok);
   rl.panel?.(`MCP server ${name}`, results.length

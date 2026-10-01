@@ -24,11 +24,11 @@ export async function aiPermissions(mode?: string): Promise<void> {
   if (normalizedMode && !VALID_PERMISSION_MODES.includes(normalizedMode)) {
     throw new Error('permissions must be ask, bypass, or auto');
   }
-  const state = await readState();
-  const session = [...state.sessions]
-    .sort((left, right) => Number(right.status === 'active') - Number(left.status === 'active') || right.updatedAt.localeCompare(left.updatedAt))[0];
+  const indexed = await readState({ transcripts: [] });
+  const latestId = [...indexed.sessions]
+    .sort((left, right) => Number(right.status === 'active') - Number(left.status === 'active') || right.updatedAt.localeCompare(left.updatedAt))[0]?.id;
   if (normalizedMode) {
-    if (session) await aiSessionCommand(session.id, `/permissions ${normalizedMode}`);
+    if (latestId) await aiSessionCommand(latestId, `/permissions ${normalizedMode}`);
     else await aiSettingsSetGlobal('permissions', normalizedMode);
     return;
   }
@@ -36,7 +36,9 @@ export async function aiPermissions(mode?: string): Promise<void> {
   const rl = new TerminalHarnessPrompter();
   TERMINAL.active = rl;
   try {
-    if (session) {
+    if (latestId) {
+      const state = await readState({ transcripts: [latestId] });
+      const session = state.sessions.find((item) => item.id === latestId)!;
       const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
       rl.render?.(session, account);
       await interactivePermissionPicker(rl, session.id);
@@ -53,7 +55,7 @@ export async function aiPermissions(mode?: string): Promise<void> {
 }
 
 export async function interactivePermissionPicker(rl: HarnessPrompter, id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const harness = !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;

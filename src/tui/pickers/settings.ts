@@ -55,7 +55,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
   // Back from a sub-menu lands on the row it was opened from.
   let returnTo: string | undefined;
   for (;;) {
-    const state = await readState();
+    const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     if (!session) return id;
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
