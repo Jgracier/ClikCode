@@ -78,6 +78,7 @@ import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from '../../worker/turn-bridge.js';
 import { retireStaleWorkers } from '../../worker/client.js';
+import { replaceCliWithNewBuild } from './build-replace.js';
 
 /** Commands the terminal replaced with the board. `/resume` is ← on an empty
  * prompt; `/new` is ← and typing. They stay in the registry for the surfaces
@@ -322,22 +323,52 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
   claimInterval.unref();
   // This process's own build, fingerprinted once at startup the same way a
-  // session worker's is (registry.ts): a rebuild while this terminal sits
-  // open otherwise has no way to say so, and a chat that had already crashed
-  // once today on exactly this kind of silent staleness is worth a notice,
-  // not another surprise. Announced once -- a background tick is not the
-  // place to fight the many other things already writing to `notice`.
+  // session worker's is (registry.ts). The terminal cannot hot-swap the code
+  // it has loaded. When a newer build is on disk, this process re-execs onto
+  // the same chat at a quiet moment: an idle composer, or the board after
+  // running chats finish. Until then, one notice. Workers already step down
+  // on their own (idle now, busy when the turn ends).
   const startupBuild = currentWorkerBuild();
+  let updateSeen = false;
   let updateAnnounced = false;
-  const usageInterval = rl instanceof TerminalHarnessPrompter ? setInterval(() => {
-    if (!updateAnnounced && startupBuild && currentWorkerBuild() !== startupBuild) {
-      updateAnnounced = true;
-      if (!notice) notice = 'A newer ClikCode build is installed -- /exit and relaunch to use it.';
-      // Session workers load the entry once at spawn. Ask every idle one to
-      // step down now so Left / reopening a chat does not keep serving the
-      // old code. Busy ones finish, then go.
+  let usageInterval: ReturnType<typeof setInterval> | undefined;
+  const newerBuild = (): boolean => Boolean(startupBuild && currentWorkerBuild() !== startupBuild);
+  const beginBuildReplace = (): Promise<void> | undefined => {
+    if (!(rl instanceof TerminalHarnessPrompter) || !newerBuild()) return undefined;
+    const sessionId = id;
+    return replaceCliWithNewBuild({
+      sessionId,
+      closeUi: () => rl.close(),
+      release: async () => {
+        if (usageInterval) clearInterval(usageInterval);
+        clearInterval(claimInterval);
+        await closeAllWorkerClients().catch(() => undefined);
+        await closePersistentTransport().catch(() => undefined);
+        await reconcileLocalModelLeases(undefined).catch(() => undefined);
+        // The chat stays. Discarding a blank one here would make the new
+        // process's `sessions resume` miss it.
+        await releaseSessionClaim(sessionId).catch(() => undefined);
+      },
+    });
+  };
+  let notice: string | undefined;
+  const noteNewerBuild = (): void => {
+    if (!newerBuild()) return;
+    if (!updateSeen) {
+      updateSeen = true;
       void retireStaleWorkers().catch(() => undefined);
     }
+    if (rl instanceof TerminalHarnessPrompter && rl.idleForBuildReplace()) {
+      void beginBuildReplace();
+      return;
+    }
+    if (!updateAnnounced) {
+      updateAnnounced = true;
+      if (!notice) notice = 'A newer ClikCode build will load when nothing is running.';
+    }
+  };
+  usageInterval = rl instanceof TerminalHarnessPrompter ? setInterval(() => {
+    noteNewerBuild();
     void readState({ transcripts: [] }).then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);
@@ -350,7 +381,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     // refreshes it. A tick longer than the window would land inside it and
     // silently halve the real refresh rate.
   }, 15_000) : undefined;
-  let notice: string | undefined;
   /** A message to send next, without asking: the one that ran out of usage,
    * after "Resume in" moved the chat to a harness that has some. */
   let resend: string | undefined;
@@ -492,6 +522,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           line = resend;
           resend = undefined;
         } else if (rl instanceof TerminalHarnessPrompter) {
+          // A turn just ended, or the prompt is coming back. Do not wait out
+          // the usage tick to pick up a build that landed during the turn.
+          if (rl.idleForBuildReplace()) {
+            const leaving = beginBuildReplace();
+            if (leaving) { await leaving; return; }
+          }
           // The worker may start a turn while this sits here (another
           // window's, or a follow-up for a finished background shell), or
           // queue something: either ends the prompt, keeping the draft.
@@ -778,7 +814,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             // blank, and blank chats are not listed or kept.
             let fresh: string | undefined;
             for (;;) {
-              const picked = await interactiveSessionPicker(rl, fresh ?? id, BOARD_COMMANDS);
+              const picked = await interactiveSessionPicker(rl, fresh ?? id, BOARD_COMMANDS, {
+                // Running rows were on screen and have finished, and the
+                // composer is empty. Leave only when a newer build is waiting.
+                onSessionsSettled: () => Boolean(beginBuildReplace()),
+              });
               if (picked && 'command' in picked) {
                 fresh ??= await newConversation(id, { sameModel: true });
                 if (picked.command === '/provider') fresh = await interactiveEnginePicker(config, rl, fresh) ?? fresh;

@@ -2303,6 +2303,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.resumeInput = undefined;
         this.clearTransientNotice();
         if (answer) this.panelState = undefined;
+        // The submitted line is the conversation's now. Leaving it in the
+        // composer made the next idle check look like a draft still in progress.
+        this.draft = '';
         if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
         resolveQuestion(answer);
       };
@@ -2544,6 +2547,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       },
       select: (subTitle, subOptions, subAction, subSettings) => this.select(subTitle, subOptions, subAction, subSettings),
     };
+  }
+
+  /** Nothing is using this terminal: no turn, no picker, no palette, and no
+   * typed or queued draft. A newer build may replace the process here. */
+  idleForBuildReplace(): boolean {
+    return !this.closed && !this.suspended && !this.selecting && !this.paletteActive
+      && !this.waitingLabel && !this.draft && !this.queuedDraft;
   }
 
   close(): void {
