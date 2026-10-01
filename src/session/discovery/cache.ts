@@ -20,35 +20,31 @@ interface CachedDirectory { mtimeMs: number; files: Record<string, CachedSession
  *
  * These cost a subprocess each, and most of them return nothing: measured on
  * this machine, /resume spent 2.5s spawning six CLIs, of which kilo (1.66s)
- * and qwen (0.5s) found zero sessions between them. Remembering "this one had
- * nothing here" skips the spawn until the memo expires.
- *
- * Only empty results are memoized. A harness that found something is asked
- * again every time: the cost is already justified, and a stale list is worse
- * than a slow one. */
+ * and qwen (0.5s) found zero sessions between them. A recent answer stands in
+ * for the next spawn -- "nothing here" for EMPTY_LISTING_TTL_MS, a list for
+ * SEEN_LISTING_TTL_MS -- and the last list is shown at once while the next
+ * one is asked for. */
 interface CachedListing {
   at: number;
-  empty: true;
-  /** The vendor binary that said "nothing here". An update is exactly when a
-   * CLI may start finding sessions it could not see before -- a new store
-   * layout, a fixed filter -- so a memo from another build is not believed,
-   * however recent. The clock remains for the one change no file shows: a
-   * session started in another terminal. */
+  sessions: DiscoveredNativeSession[];
+  /** The vendor binary that answered. An update is exactly when a CLI may
+   * start finding sessions it could not see before -- a new store layout, a
+   * fixed filter -- so an answer from another build is not believed, however
+   * recent. The clock remains for the one change no file shows: a session
+   * started in another terminal. */
   build?: string;
 }
 
 interface DiscoveryCacheFile {
   v: 1;
   directories: Record<string, CachedDirectory>;
-  listings?: Record<string, CachedListing>;
-  /** The last list each vendor CLI gave. Fresh for SEEN_LISTING_TTL_MS, and
-   * used in place of spawning the CLI again. `build` is the binary that
-   * produced it, so an update is asked at once. */
-  seen?: Record<string, { at: number; sessions: DiscoveredNativeSession[]; build?: string }>;
+  /** The last answer each vendor CLI gave, per workspace and profile. (An
+   * older `listings` field held the empty answers apart; it is ignored.) */
+  seen?: Record<string, CachedListing>;
 }
 
-/** Enough recent lists for every CLI, account and folder in use. */
-const DISCOVERY_CACHE_MAX_SEEN = 60;
+/** Enough recent answers for every CLI, account and folder in use. */
+const DISCOVERY_CACHE_MAX_SEEN = 120;
 
 /** How long "nothing here" is believed. Short enough that a session created
  * in another terminal shows up in the resume list within a few minutes,
@@ -80,7 +76,7 @@ export async function loadDiscoveryCache(): Promise<DiscoveryCacheFile> {
     try {
       const parsed = JSON.parse(await readFile(path, 'utf8')) as DiscoveryCacheFile;
       if (parsed?.v === 1 && parsed.directories && typeof parsed.directories === 'object') {
-        data = { ...parsed, listings: parsed.listings ?? {} };
+        data = { v: 1, directories: parsed.directories, ...(parsed.seen ? { seen: parsed.seen } : {}) };
       }
     } catch { /* fail-open-ok: a missing or damaged cache only costs one full scan. */ }
   }
@@ -96,21 +92,14 @@ export async function saveDiscoveryCache(): Promise<void> {
     // Date-named vendor directories sort oldest first; drop those.
     discoveryCache.data.directories = Object.fromEntries(entries.sort(([left], [right]) => right.localeCompare(left)).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
   }
-  // Expired memos are dropped rather than accumulating one key per workspace
-  // per account for the life of the install. An expired entry is already
-  // ignored on read, so this only keeps the file honest about its own size.
-  const listings = discoveryCache.data.listings;
-  if (listings) {
-    const now = Date.now();
-    for (const [key, entry] of Object.entries(listings)) {
-      if (now - entry.at >= EMPTY_LISTING_TTL_MS) delete listings[key];
-    }
-  }
+  // Expired answers are dropped rather than accumulating one key per
+  // workspace per account for the life of the install. An expired entry is
+  // already ignored on read, so this only keeps the file honest about its size.
   const seen = discoveryCache.data.seen;
   if (seen) {
     const now = Date.now();
     for (const [key, entry] of Object.entries(seen)) {
-      if (now - entry.at >= SEEN_LISTING_TTL_MS) delete seen[key];
+      if (now - entry.at >= listingLifetime(entry)) delete seen[key];
     }
   }
   if (seen && Object.keys(seen).length > DISCOVERY_CACHE_MAX_SEEN) {
@@ -147,15 +136,6 @@ export async function cachedDirectory(directory: string, suffix: string): Promis
   return next;
 }
 
-/** Whether this harness is known to have found nothing here recently. */
-export async function listingKnownEmpty(
-  command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(), build?: string,
-): Promise<boolean> {
-  const cache = await loadDiscoveryCache();
-  const entry = cache.listings?.[listingKey(command, workspace, profile)];
-  return Boolean(entry && entry.build === build && now - entry.at < EMPTY_LISTING_TTL_MS);
-}
-
 /** Keyed by profile as well as workspace: two accounts of the same provider
  * have separate vendor stores, so "nothing here" for one says nothing about
  * the other. Leaving the profile out would let the first empty account
@@ -164,49 +144,29 @@ function listingKey(command: string, workspace: string | undefined, profile: str
   return `${command}\u0000${workspace ?? ''}\u0000${profile ?? ''}`;
 }
 
-/** Record what a vendor listing returned. An empty result is remembered so the
- * next /resume can skip the subprocess; a non-empty one forgets any memo, so a
- * harness that starts having sessions is never held back by an old "nothing". */
-export async function rememberListing(
-  command: string, workspace: string | undefined, profile: string | undefined, found: number, now = Date.now(), build?: string,
-): Promise<void> {
-  const cache = await loadDiscoveryCache();
-  cache.listings ??= {};
-  const key = listingKey(command, workspace, profile);
-  if (found > 0) {
-    if (cache.listings[key]) { delete cache.listings[key]; discoveryCache!.dirty = true; }
-    return;
-  }
-  cache.listings[key] = { at: now, empty: true, ...(build ? { build } : {}) };
-  discoveryCache!.dirty = true;
+function listingLifetime(entry: CachedListing): number {
+  return entry.sessions.length ? SEEN_LISTING_TTL_MS : EMPTY_LISTING_TTL_MS;
 }
 
-/** Keep what a vendor CLI listed. A fresh one stands in for the next spawn. */
-export async function rememberSeenListing(
+/** Keep what a vendor CLI listed, empty or not. */
+export async function rememberListing(
   command: string, workspace: string | undefined, profile: string | undefined, sessions: readonly DiscoveredNativeSession[], now = Date.now(), build?: string,
 ): Promise<void> {
   const cache = await loadDiscoveryCache();
   cache.seen ??= {};
-  const key = listingKey(command, workspace, profile);
-  if (!sessions.length) {
-    if (cache.seen[key]) { delete cache.seen[key]; discoveryCache!.dirty = true; }
-    return;
-  }
-  cache.seen[key] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
+  cache.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
   discoveryCache!.dirty = true;
 }
 
-/** Whether the last non-empty listing is recent enough to skip the CLI.
- * An updated binary is asked again: a new build is when the list changes
- * shape. */
-export async function seenListingFresh(
+/** The last answer, when it is recent enough to skip the CLI and came from
+ * this same binary; undefined when the CLI should be asked. */
+export async function freshListing(
   command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(), build?: string,
-): Promise<boolean> {
+): Promise<DiscoveredNativeSession[] | undefined> {
   const cache = await loadDiscoveryCache();
   const entry = cache.seen?.[listingKey(command, workspace, profile)];
-  if (!entry || now - entry.at >= SEEN_LISTING_TTL_MS) return false;
-  if (build && entry.build && entry.build !== build) return false;
-  return true;
+  if (!entry || entry.build !== build || now - entry.at >= listingLifetime(entry)) return undefined;
+  return entry.sessions;
 }
 
 /** What a vendor CLI listed last time, or nothing when it never has. */
