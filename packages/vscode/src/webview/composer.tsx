@@ -26,7 +26,7 @@ export interface ComposerHandle {
   selection(mention: Mention | undefined): void;
 }
 
-interface Attachment { key: string; kind: 'selection' | 'image'; label: string; mention?: Mention; path?: string }
+interface Attachment { key: string; kind: 'selection' | 'image'; label: string; mention?: Mention; path?: string; preview?: string }
 
 const sameRange = (left: Mention | undefined, right: Mention): boolean =>
   left?.path === right.path && left.startLine === right.startLine && left.endLine === right.endLine;
@@ -284,20 +284,51 @@ export function Composer(props: {
     }
   };
 
-  const onPaste = (event: ClipboardEvent): void => {
-    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
-    if (!files.length) return;
-    event.preventDefault();
+  /** Images become attachments the agent reads from a private folder, each
+   * shown as a thumbnail until it is sent. */
+  const attachImages = (files: readonly File[]): void => {
     for (const file of files) {
       const reader = new FileReader();
       reader.onload = () => {
-        const data = String(reader.result).split(',')[1] ?? '';
+        const preview = String(reader.result);
+        const data = preview.split(',')[1] ?? '';
         request<string>({ method: 'saveImage', name: file.name || 'pasted.png', dataBase64: data }).then((path) => {
-          setAttachments((items) => [...items, { key: uid(), kind: 'image', label: file.name || 'image', path }]);
+          setAttachments((items) => [...items, { key: uid(), kind: 'image', label: file.name || 'image', path, preview }]);
         }, (failure: Error) => props.onError(failure.message));
       };
       reader.readAsDataURL(file);
     }
+  };
+
+  const onPaste = (event: ClipboardEvent): void => {
+    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith('image/'));
+    if (!files.length) return;
+    event.preventDefault();
+    attachImages(files);
+  };
+
+  /** Dropped on the message box: files from the Explorer or a tab (VS Code
+   * hands those over while Shift is held) become @-mentions; images from
+   * anywhere become attachments. */
+  const [dropping, setDropping] = useState(false);
+  const onDrop = (event: DragEvent): void => {
+    event.preventDefault();
+    setDropping(false);
+    if (!connected) return;
+    const transfer = event.dataTransfer;
+    if (!transfer) return;
+    const images = [...transfer.files].filter((file) => file.type.startsWith('image/'));
+    if (images.length) { attachImages(images); return; }
+    const uris = (transfer.getData('text/uri-list') || transfer.getData('text/plain')).split(/\r?\n/).filter((line) => /^[a-z][\w+.-]*:/i.test(line.trim()));
+    if (!uris.length) {
+      if (transfer.files.length) props.onError('Only images can be dropped from outside VS Code. Hold Shift and drag files from the Explorer to mention them.');
+      return;
+    }
+    request<Mention[]>({ method: 'mentions', uris }).then((mentions) => {
+      if (!mentions.length) return;
+      const spacer = text && !/\s$/.test(text) ? ' ' : '';
+      update(`${text}${spacer}${mentions.map((mention) => `@${mention.label}`).join(' ')} `);
+    }, (failure: Error) => props.onError(failure.message));
   };
 
   const providerName = providerDisplayName(model, knownProviders()) ?? 'Choose provider';
@@ -345,7 +376,11 @@ export function Composer(props: {
           ))}
         </div>
       ) : null}
-      <div class="composer-box" data-running={model.running ? 'true' : undefined}>
+      <div class={`composer-box${dropping ? ' dropping' : ''}`} data-running={model.running ? 'true' : undefined}
+        onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; if (!dropping) setDropping(true); }}
+        onDragLeave={(event) => { if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) setDropping(false); }}
+        onDrop={onDrop}>
+        {dropping ? <div class="drop-hint" aria-hidden="true"><Icon name="cloud-upload" /> Drop to attach · hold Shift to drop files from VS Code</div> : null}
         {menu === 'provider' ? <ProviderModelPicker mode="provider" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'model' ? <ProviderModelPicker key={model.providerId} mode="model" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'effort' ? <EffortMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
@@ -374,8 +409,8 @@ export function Composer(props: {
         {attachments.length ? (
           <div class="attachments">
             {attachments.map((attachment) => (
-              <span key={attachment.key} class="attachment" title={attachment.mention?.label ?? attachment.path}>
-                <Icon name={attachment.kind === 'image' ? 'file-media' : 'code'} />
+              <span key={attachment.key} class={`attachment${attachment.preview ? ' with-thumb' : ''}`} title={attachment.mention?.label ?? attachment.path}>
+                {attachment.preview ? <img class="attachment-thumb" src={attachment.preview} alt="" /> : <Icon name={attachment.kind === 'image' ? 'file-media' : 'code'} />}
                 <span>{attachment.label}</span>
                 <button type="button" class="icon-button tiny" aria-label={`Remove ${attachment.label}`} onClick={() => setAttachments((items) => items.filter((item) => item !== attachment))}><Icon name="close" /></button>
               </span>

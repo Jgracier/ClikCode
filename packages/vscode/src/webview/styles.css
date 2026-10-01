@@ -164,6 +164,13 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .selection-context { display: flex; margin-bottom: 4px; font-size: 0.9em; }
 .selection-context .link { display: inline-flex; gap: 6px; align-items: center; }
 .selection-context.excluded .link { opacity: 0.6; text-decoration: line-through; }
+.composer-box.dropping { border-color: var(--focus); border-style: dashed; }
+.drop-hint {
+  position: absolute; inset: 0; z-index: 2; display: flex; align-items: center; justify-content: center; gap: 6px; pointer-events: none;
+  border-radius: inherit; background: color-mix(in srgb, var(--vscode-input-background) 88%, transparent); color: var(--vscode-foreground); font-size: 0.92em;
+}
+.attachment.with-thumb { padding-left: 2px; }
+.attachment-thumb { width: 22px; height: 22px; object-fit: cover; border-radius: 3px; display: block; }
 .context-meter { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0 2px; color: var(--muted); font-size: 0.9em; font-variant-numeric: tabular-nums; }
 .context-meter:hover { color: var(--vscode-foreground); }
 .context-track { fill: none; stroke: var(--border); stroke-width: 2; }
