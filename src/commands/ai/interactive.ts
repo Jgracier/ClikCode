@@ -393,20 +393,26 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let transportSessionId = id;
   /** `<session id> <route>` this terminal last prepared a worker for. */
   let preparedRoute: string | undefined;
-  /** followWorkerTurn rejects when the turn it was only watching (started by
-   * this window earlier, another window, or the queue) fails -- most often
-   * "All accounts exhausted" from a worker this window did not drive. Left
-   * uncaught this crashed the whole interactive loop merely for reopening a
-   * chat whose background turn had run out of quota. Mirrors the handling
-   * below for a turn this window submitted directly: same notice, same
-   * "Resume in" offer, when there is prompt text worth resending. */
-  const handleFollowedTurnFailure = async (error: unknown, promptText: string | undefined): Promise<void> => {
+  /** A turn failed: one this window submitted, or one it was only following
+   * (started earlier, by another window, or by the queue -- most often "All
+   * accounts exhausted" from a worker this window did not drive; left
+   * uncaught that crashed the loop merely for reopening the chat). Running
+   * out of quota is an outcome, not a fault, so it is not shown behind an
+   * "Error:". With prompt text worth resending, out of usage offers the
+   * harnesses that still have some and carries on there with the same
+   * message. */
+  const handleTurnFailure = async (error: unknown, promptText: string | undefined): Promise<void> => {
     const message = error instanceof Error ? error.message : String(error);
     if (!rl.render) { emitHarnessOutput({ panel: 'error', message }); return; }
     notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
     if (!promptText || !isUsageExhaustedMessage(message) || !(rl instanceof TerminalHarnessPrompter)) return;
+    // An account of this provider got its quota back after failover looked
+    // (a re-read landed meanwhile): send it again here, once, rather than
+    // offering to leave the provider.
     const again = promptText !== autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
     if (again) {
+      // As Resume in does: the message is sent again, so it must not also
+      // stay behind as the interrupted turn.
       await discardInterruptedTurn(id, promptText).catch(() => undefined);
       autoResent = promptText;
       resend = promptText;
@@ -460,6 +466,21 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         activeWorkspace = latest.workspace ?? process.cwd();
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
+        /** The turn the worker is running, followed to its end and shown as
+         * this window shows its own turns: the prompt as the pending message
+         * over the conversation, then the answer. `resendText` is what running
+         * out of usage offers to send again. */
+        const followRunning = async (terminal: TerminalHarnessPrompter, prompt: string | undefined, resendText: string | undefined): Promise<void> => {
+          terminal.submitted(prompt);
+          terminal.render(latest, account, undefined, { running: true, ...(prompt !== undefined ? { prompt } : {}) });
+          try {
+            const followed = await followWorkerTurn(latest.id, terminal, joinedTurn(latest, prompt));
+            if (followed.notice) notice = followed.notice;
+            if (followed.left) openBoard = true;
+          } catch (error) {
+            await handleTurnFailure(error, resendText);
+          }
+        };
         // The turn the conversation's worker is running, if any -- the
         // worker's own answer. It decides whether the journal is that turn
         // (drawn by the live view once this window follows it) or an
@@ -491,15 +512,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // end rather than the message sent into it only to be queued again.
         const runningTurn = queued && queued.kind !== 'command' ? running : undefined;
         if (runningTurn && rl instanceof TerminalHarnessPrompter) {
-          rl.submitted(runningTurn.prompt);
-          rl.render(latest, account, undefined, { running: true, ...runningTurn });
-          try {
-            const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, runningTurn.prompt));
-            if (followed.notice) notice = followed.notice;
-            if (followed.left) openBoard = true;
-          } catch (error) {
-            await handleFollowedTurnFailure(error, queued?.kind !== 'command' ? queued?.text : undefined);
-          }
+          await followRunning(rl, runningTurn.prompt, queued?.text);
           continue;
         }
         if (queued?.kind === 'command') {
@@ -532,19 +545,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // queue something: either ends the prompt, keeping the draft.
           const answer = await questionOrWorker(latest.id, (signal) => rl.question('› ', slashCommandsFor(latest), { rightArrowPalette: true, leftArrowCommand: BOARD_LINE, ...(signal ? { signal } : {}) }), queueMark);
           if ('woke' in answer) {
-            if (answer.woke === 'turn') {
-              // Shown as this window shows its own turns: the prompt as the
-              // pending message over the conversation, then the answer.
-              rl.submitted(answer.prompt);
-              rl.render(latest, account, undefined, { running: true, ...(answer.prompt !== undefined ? { prompt: answer.prompt } : {}) });
-              try {
-                const followed = await followWorkerTurn(latest.id, rl, joinedTurn(latest, answer.prompt));
-                if (followed.notice) notice = followed.notice;
-                if (followed.left) openBoard = true;
-              } catch (error) {
-                await handleFollowedTurnFailure(error, answer.prompt);
-              }
-            }
+            if (answer.woke === 'turn') await followRunning(rl, answer.prompt, answer.prompt);
             continue;
           }
           line = answer.line.trim();
@@ -986,35 +987,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           await releaseQueuedTurn(id, queuedTurnId).catch(() => undefined);
           TERMINAL.active?.restoreDraft(line);
         }
-        // Running out of quota is an outcome, not a fault. "All accounts
-        // exhausted" reads wrong behind an "Error:" that suggests something broke.
-        if (rl.render) {
-          notice = cancelled ? 'Stopped' : isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
-          // Out of usage on every account here: offer the harnesses that
-          // still have some, and carry on there with the same message.
-          if (!cancelled && !queuedTurnId && isUsageExhaustedMessage(message) && rl instanceof TerminalHarnessPrompter) {
-            // An account of this provider got its quota back after failover
-            // looked (a re-read landed meanwhile): send it again here, once,
-            // rather than offering to leave the provider.
-            const again = line !== autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
-            if (again) {
-              // As Resume in does: the message is sent again, so it must not
-              // also stay behind as the interrupted turn.
-              await discardInterruptedTurn(id, line).catch(() => undefined);
-              autoResent = line;
-              resend = line;
-              notice = undefined;
-            } else {
-              const moved = await interactiveResumeInPicker(rl, id, line).catch(() => undefined);
-              if (moved) {
-                id = moved;
-                resend = line;
-                notice = undefined;
-              }
-            }
-          }
-        }
-        else emitHarnessOutput({ panel: 'error', message });
+        if (cancelled && rl.render) notice = 'Stopped';
+        else await handleTurnFailure(error, queuedTurnId ? undefined : line);
       }
     }
   } finally {
