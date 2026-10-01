@@ -174,7 +174,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .message.assistant { position: relative; }
 .message-actions { display: flex; justify-content: flex-end; opacity: 0; transition: opacity 0.12s; margin-top: 2px; }
 .message.assistant:hover .message-actions, .message-actions:focus-within { opacity: 1; }
-.bubble-context { display: flex; gap: 4px; align-items: center; margin-top: 4px; font-size: 0.88em; opacity: 0.75; }
+.bubble-context { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; margin-top: 4px; font-size: 0.88em; opacity: 0.75; }
+.bubble-chip { display: inline-flex; gap: 4px; align-items: center; }
 .context-meter { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0 2px; color: var(--muted); font-size: 0.9em; font-variant-numeric: tabular-nums; }
 .context-meter:hover { color: var(--vscode-foreground); }
 .context-track { fill: none; stroke: var(--border); stroke-width: 2; }

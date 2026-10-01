@@ -180,6 +180,7 @@ export function chatSuite(): void {
       const proposed = (diffTab!.input as vscode.TabInputTextDiff).modified;
       const after = (await vscode.workspace.openTextDocument(proposed)).getText();
       assert.match(after, /hello from ClikCode/, 'the diff shows the proposed file');
+      await screenshot('approval');
       // Accepted from the diff editor's title bar, as a user would.
       await vscode.commands.executeCommand('clikcode.acceptProposedDiff', proposed);
       // A model may make a second edit after its first approved write. Keep
@@ -197,6 +198,7 @@ export function chatSuite(): void {
       const [folder] = vscode.workspace.workspaceFolders ?? [];
       const written = await vscode.workspace.fs.readFile(vscode.Uri.joinPath(folder!.uri, 'notes.txt')).then((bytes) => Buffer.from(bytes).toString('utf8'), () => '');
       assert.match(written, /hello from ClikCode/);
+      await screenshot('edited');
     });
 
     it('reconnects on its own when ClikCode stops underneath it', async () => {

@@ -34,26 +34,41 @@ export function problemsBlock(path: string, problems: readonly string[]): string
 }
 
 const OPEN_FILE = /^Open in the editor: `([^`\n]+)`$/;
+const SELECTION = /^`([^`\n]+)` lines? (\d+(?:-\d+)?):\n(`{3,})[\w+-]*\n[\s\S]*\n\3$/;
 const PROBLEMS = /^VS Code reports (?:this problem|these problems) in `([^`\n]+)`:\n((?:- [^\n]*(?:\n|$))+)$/;
 
 /** A sent message as typed, and the editor context the composer added after
  * it (openFileLine, problemsBlock): the transcript keeps the whole message,
  * and the bubble shows the context as a chip rather than as text the user
  * did not write. */
-export function splitEditorContext(content: string): { text: string; file?: string; problems: number } {
-  const parts = content.split('\n\n');
+export function splitEditorContext(content: string): { text: string; file?: string; problems: number; selections: string[] } {
+  let rest = content;
   let file: string | undefined;
   let problems = 0;
-  while (parts.length > 1) {
-    const last = parts[parts.length - 1]!;
-    const open = OPEN_FILE.exec(last);
-    const reported = PROBLEMS.exec(last);
+  const selections: string[] = [];
+  // From the end: each block the composer appended, back to what was typed.
+  for (;;) {
+    const cut = lastBlock(rest);
+    if (!cut) break;
+    const open = OPEN_FILE.exec(cut.block);
+    const reported = PROBLEMS.exec(cut.block);
+    const selected = SELECTION.exec(cut.block);
     if (open) file ??= open[1];
     else if (reported) { file ??= reported[1]; problems += reported[2]!.trim().split('\n').length; }
+    else if (selected) selections.unshift(`${selected[1]!.split(/[\\/]/).pop()}:${selected[2]}`);
     else break;
-    parts.pop();
+    rest = cut.before;
   }
-  return { text: parts.join('\n\n'), ...(file ? { file } : {}), problems };
+  return { text: rest, ...(file ? { file } : {}), problems, selections };
+}
+
+/** The last paragraph-separated block, a fenced one whole (its code may hold
+ * blank lines of its own). */
+function lastBlock(text: string): { before: string; block: string } | undefined {
+  const fence = /\n\n(`[^`\n]+` lines? \d+(?:-\d+)?:\n(`{3,})[\w+-]*\n[\s\S]*\n\2)$/.exec(text);
+  if (fence && fence.index > 0) return { before: text.slice(0, fence.index), block: fence[1]! };
+  const at = text.lastIndexOf('\n\n');
+  return at > 0 ? { before: text.slice(0, at), block: text.slice(at + 2) } : undefined;
 }
 
 export function questionWithSelection(question: string, context: SelectionContext): string {

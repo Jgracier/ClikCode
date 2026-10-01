@@ -62,11 +62,16 @@ function LiveMarkdown({ text }: { text: string }): JSX.Element {
 }
 
 const UserMessage = memo(({ text: content }: { text: string }): JSX.Element => {
-  const { text, file, problems } = splitEditorContext(content);
+  const { text, file, problems, selections } = splitEditorContext(content);
   return (
     <div class="message user" role="article" aria-label="You">
       <div class="bubble">
         {text}
+        {selections.length ? (
+          <div class="bubble-context" title="Sent with the selected lines">
+            {selections.map((selection) => <span key={selection} class="bubble-chip"><Icon name="code" />{selection}</span>)}
+          </div>
+        ) : null}
         {file ? (
           <div class="bubble-context" title={`Sent with the open file${problems ? ` and ${problems} problem${problems === 1 ? '' : 's'} VS Code reported there` : ''}`}>
             <Icon name="file" /><span>{file.split(/[\\/]/).pop()}</span>{problems ? <span class="context-problems"><Icon name="warning" />{problems}</span> : null}

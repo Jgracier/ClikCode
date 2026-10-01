@@ -236,7 +236,9 @@ export function Composer(props: {
     recall.current = undefined;
     setText('');
     setAttachments([]);
-    if (offered.length) setSelection({ mention: selection!.mention, included: false });
+    // The selection went with this message, offered or attached: the next
+    // one does not take it again unless asked.
+    if (selection?.included) setSelection({ mention: selection.mention, included: false });
     save({ draft: '' });
     setSuggestions([]);
   };
@@ -342,7 +344,9 @@ export function Composer(props: {
   // What streamed since the vendor last counted is an estimate (`~`), as in
   // the terminal, until its own count covers it.
   const estimate = model.running && model.live ? estimatedTokens(model.live.text.length - (model.usageTextAt ?? 0)) : 0;
-  const tokens = formatTurnUsage(model.turnUsage, estimate) || undefined;
+  // The context window has its own ring beside this; the line keeps to tokens.
+  const usage = model.turnUsage && { ...model.turnUsage, contextUsed: undefined, contextWindow: undefined, contextPercent: undefined };
+  const tokens = formatTurnUsage(usage, estimate) || undefined;
 
   const placeholder = !connected ? 'ClikCode is not connected'
     : model.running ? 'Steer the running turn, or queue a message…'
@@ -476,7 +480,7 @@ function ContextMeter({ context }: { context: NonNullable<ChatModel['context']> 
         <circle cx="8" cy="8" r={radius} class="context-track" />
         <circle cx="8" cy="8" r={radius} class="context-fill" stroke-dasharray={`${(percent / 100) * circumference} ${circumference}`} transform="rotate(-90 8 8)" />
       </svg>
-      <span>{Math.round(percent)}%</span>
+      <span>{percent > 0 && percent < 1 ? '<1' : Math.round(percent)}%</span>
     </button>
   );
 }
