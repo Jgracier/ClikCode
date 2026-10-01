@@ -109,13 +109,20 @@ function cursorRecord(value: Json, state: StreamState): NativeResponseUpdate | u
   return appendText(state, text.startsWith(shown) ? text.slice(shown.length) : text);
 }
 
-const parsers: Readonly<Record<string, ResponseParser>> = {
+/** By the parser FAMILY the catalog declares (`parser`), never by command:
+ * a harness that speaks another vendor's stream shape (Qwen, Grok, Gemini and
+ * Amp speak Claude's; Kilo speaks OpenCode's) needs no entry of its own.
+ * Keyed by command, the three that never got a delegating entry fell through
+ * to genericParser, which on Claude's stream-json appends every paragraph
+ * twice -- once from `content_block_delta`, again from the completed
+ * `assistant` message -- for want of the claude parser's sawDeltas guard. */
+export const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
   antigravity: (value) => {
     const step = value.event === 'step_update' ? object(value.step_update) : undefined;
     return step?.step_type === 'agent_response' && typeof step.text_delta === 'string' && step.text_delta
       ? { text: step.text_delta, mode: 'append' } : undefined;
   },
-  claude: (value, _harness, state) => {
+  'claude-stream-json': (value, _harness, state) => {
     // A subagent's words are its own, not the reply being written.
     if (typeof value.parent_tool_use_id === 'string' && value.parent_tool_use_id) return undefined;
     if (value.type === 'stream_event') {
@@ -149,7 +156,7 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
   // end (no timestamp_ms), and before a `retry` record (timestamp_ms alone,
   // shaped exactly like a delta). Appending those repeats printed every
   // segment twice. Without partial output only the full records exist.
-  cursor: (value, _harness, state) => {
+  'cursor-stream-json': (value, _harness, state) => {
     // A delta-shaped record repeating the whole segment is either the flush
     // before a retry or a model that really said the same thing again; the
     // vendor's next record says which. Only a `retry` follows a flush.
@@ -163,9 +170,9 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
     const update = cursorRecord(value, state);
     return prefix ? { text: `${prefix}${update?.text ?? ''}`, mode: 'append' } : update;
   },
-  cline: (value) => value.type === 'say' && typeof value.text === 'string' && value.text
+  'cline-json': (value) => value.type === 'say' && typeof value.text === 'string' && value.text
     ? { text: value.text, mode: 'replace' } : undefined,
-  pi: (value) => {
+  'pi-json': (value) => {
     const event = value.type === 'message_update' ? object(value.assistantMessageEvent) : undefined;
     return event?.type === 'text_delta' && typeof event.delta === 'string' && event.delta
       ? { text: event.delta, mode: 'append' } : undefined;
@@ -175,7 +182,7 @@ const parsers: Readonly<Record<string, ResponseParser>> = {
     const text = message?.role === 'assistant' ? contentText(message.content) : '';
     return text ? { text, mode: 'append' } : undefined;
   },
-  opencode: (value) => {
+  'opencode-json': (value) => {
     const part = value.type === 'text' ? object(value.part) : undefined;
     const text = typeof part?.text === 'string' ? part.text : typeof value.text === 'string' ? value.text : '';
     return text ? { text, mode: 'append' } : undefined;
@@ -241,40 +248,12 @@ const genericParser: ResponseParser = (value, _harness, state) => {
   return undefined;
 };
 
-/** By the parser FAMILY the catalog declares, which is what that field is for.
- *
- * The table above is keyed by COMMAND, so a harness that merely speaks
- * another vendor's stream shape needed a hand-written delegating entry --
- * `qwen: parsers.claude`, `kilo: parsers.opencode`. Three harnesses never got
- * one: Grok, Gemini and Amp all declare `claude-stream-json` and all fell
- * through to genericParser.
- *
- * That is not a cosmetic miss. On Claude's stream-json, genericParser appends
- * the text TWICE -- once from `content_block_delta`, then again from the
- * completed `assistant` message carrying the whole block -- because it has
- * none of the claude parser's sawDeltas guard. Every paragraph was printed
- * twice, bare-concatenated ("…policy work.I'll pick up from…"), which is what
- * the duplicated response on Grok actually was.
- *
- * Declaring the family is now enough; no harness needs an entry of its own to
- * reuse a parser. */
-export const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
-  'claude-stream-json': parsers.claude!,
-  'opencode-json': parsers.opencode!,
-  'cursor-stream-json': parsers.cursor!,
-  'cline-json': parsers.cline!,
-  'pi-json': parsers.pi!,
-  antigravity: parsers.antigravity!,
-  goose: parsers.goose!,
-};
+const familyParser = (harness: AiLocalHarnessDefinition): ResponseParser | undefined =>
+  harness.parser ? parsersByFamily[harness.parser] : undefined;
 
 /** The response update carried by one already-parsed record. */
 function nativeResponseUpdateFromValue(harness: AiLocalHarnessDefinition, record: Json, turn: StreamState): NativeResponseUpdate | undefined {
-  // Command first, so a harness can still have a parser of its very own.
-  const parser = parsers[harness.command]
-    ?? (harness.parser ? parsersByFamily[harness.parser] : undefined)
-    ?? genericParser;
-  return parser(record, harness, turn);
+  return (familyParser(harness) ?? genericParser)(record, harness, turn);
 }
 
 export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string, turn: StreamState): NativeResponseUpdate | undefined {
@@ -332,7 +311,7 @@ export function parseHarnessLine(
   // ultimately persisted. Without this they show nothing at all until the turn
   // ends, which on a long edit reads as a hung session.
   if (harness.parser === 'aider') return aiderLine(lineText, turn);
-  if (!parsers[harness.command] && harness.turn?.output === 'text') return { response: { text: `${lineText}\n`, mode: 'append' } };
+  if (!familyParser(harness) && harness.turn?.output === 'text') return { response: { text: `${lineText}\n`, mode: 'append' } };
   // A line that is not a record (a banner, progress chatter) carries nothing.
   return record ? parseHarnessValue(harness, record, turn) : {};
 }
@@ -368,7 +347,7 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
  * before `toolCallId` are the case (activity-events.ts). */
 function pairAnonymousCalls(harness: AiLocalHarnessDefinition, turn: StreamState, value: Json, events: NativeActivityEvent[]): NativeActivityEvent[] {
   // Only the execution pair: `toolcall_start` names its call from the message itself.
-  if (harness.command !== 'pi' || !/^tool_execution_(?:start|end)$/.test(String(value.type))) return events;
+  if (harness.parser !== 'pi-json' || !/^tool_execution_(?:start|end)$/.test(String(value.type))) return events;
   return events.map((event) => {
     if (event.id || event.kind === 'thinking') return event;
     if (event.kind === 'tool-start') {

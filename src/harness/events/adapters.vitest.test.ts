@@ -6,6 +6,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const harness = (command: string, output: 'text' | 'json' | 'json-lines' = 'json-lines'): AiLocalHarnessDefinition => ({
   command, provider: command, displayName: command, surface: 'terminal', localAuth: ['vendor-cli'], binary: command,
+  parser: AI_LOCAL_HARNESSES.find((entry) => entry.command === command)?.parser,
   turn: { startArgv: [], output },
 });
 

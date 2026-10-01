@@ -175,7 +175,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     }
   };
   values.forEach((value) => visit(value));
-  const gooseStreamText = harness.command === 'goose'
+  const gooseStreamText = harness.parser === 'goose'
     ? values.flatMap((record) => {
       const message = asRecord(record.message);
       if (record.type !== 'message' || message?.role !== 'assistant' || !Array.isArray(message.content)) return [];

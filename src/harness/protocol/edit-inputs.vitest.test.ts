@@ -31,17 +31,17 @@ describe('an edit read from its input, whatever the fields are called', () => {
 });
 
 it("gives OpenCode's and Pi's edit rows their diff, as Claude's", () => {
-  const harness = (command: string) => ({ command, provider: command, displayName: command } as AiLocalHarnessDefinition);
-  const opencode = parseNativeActivityEventsFromValue(harness('opencode'), {
+  const harness = (command: string, parser: AiLocalHarnessDefinition['parser']) => ({ command, provider: command, displayName: command, parser } as AiLocalHarnessDefinition);
+  const opencode = parseNativeActivityEventsFromValue(harness('opencode', 'opencode-json'), {
     type: 'tool_use', part: { tool: 'edit', callID: 'e1', state: { status: 'running', input: { filePath: 'a.ts', oldString: 'q', newString: 'Q' } } },
   })[0]!;
   expect(changed(opencode.diff)).toEqual({ removed: ['q'], added: ['Q'] });
-  const pi = parseNativeActivityEventsFromValue(harness('pi'), { type: 'tool_execution_start', toolCallId: 'p1', toolName: 'edit', args: { path: 'a.ts', oldText: 'r', newText: 'R' } })[0]!;
+  const pi = parseNativeActivityEventsFromValue(harness('pi', 'pi-json'), { type: 'tool_execution_start', toolCallId: 'p1', toolName: 'edit', args: { path: 'a.ts', oldText: 'r', newText: 'R' } })[0]!;
   expect(changed(pi.diff)).toEqual({ removed: ['r'], added: ['R'] });
 });
 
 it("gives Cursor's CLI turns tool rows: a command with its output and exit, an edit with its diff", () => {
-  const cursor = { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent' } as AiLocalHarnessDefinition;
+  const cursor = { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', parser: 'cursor-stream-json' } as AiLocalHarnessDefinition;
   const parse = (value: Record<string, unknown>) => parseNativeActivityEventsFromValue(cursor, value)[0];
   expect(parse({ type: 'tool_call', subtype: 'started', call_id: 'c1', tool_call: { shellToolCall: { args: { command: 'npm test' } } } }))
     .toMatchObject({ kind: 'tool-start', id: 'c1', label: '$ npm test', category: 'run' });

@@ -3,9 +3,11 @@ import { createStreamState, nativeResponseUpdate } from './adapters';
 import { nativeSessionIds } from '../protocol/session-ids';
 import { codex } from '../protocol/vendor-fixtures.vitest';
 import type { AiLocalHarnessDefinition } from '../types';
+import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 
 describe('native harness response streams', () => {
-  const harness = (command: string): AiLocalHarnessDefinition => ({ ...codex, command, displayName: command });
+  // The stream shape is the one the catalog declares for that command.
+  const harness = (command: string): AiLocalHarnessDefinition => ({ ...codex, command, displayName: command, parser: localHarnessForCommand(command)?.parser });
 
   it('extracts documented Antigravity deltas and conversation ids', () => {
     const line = JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'c3b66b04-872b-4fbe-a3a4-058a026ef20a', step_type: 'agent_response', text_delta: 'chunk' } });

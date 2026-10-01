@@ -147,7 +147,7 @@ export function parseNativeActivityEventsFromValue(harness: AiLocalHarnessDefini
     const claude = claudeShapedActivity(value, harness.command);
     if (claude) return claude;
   }
-  if (harness.command === 'goose') {
+  if (harness.parser === 'goose') {
     const goose = gooseActivity(value, harness.command);
     if (goose) return goose;
   }
@@ -259,8 +259,8 @@ function cursorActivity(value: JsonRecord): NativeActivityEvent | undefined {
 
 function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecord): NativeActivityEvent | undefined {
   const type = String(value.type ?? '');
-  if (harness.command === 'cursor') return cursorActivity(value);
-  if (harness.command === 'antigravity' && value.event === 'step_update') {
+  if (harness.parser === 'cursor-stream-json') return cursorActivity(value);
+  if (harness.parser === 'antigravity' && value.event === 'step_update') {
     const step = value.step_update && typeof value.step_update === 'object' ? value.step_update as Record<string, unknown> : undefined;
     if (step?.step_type === 'tool') {
       const state = String(step.state ?? '');
@@ -420,7 +420,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   //   message_update -> assistantMessageEvent.toolcall_start -- the model
   //     choosing the tool; the call is `partial.content[contentIndex]`, with
   //     the same id the execution then reports.
-  if (harness.command === 'pi') {
+  if (harness.parser === 'pi-json') {
     // With a toolCallId the pair settles by id, so the start can show its
     // arguments and the end, which carries none, keeps them. Without one the
     // turn's stream state gives each call an id of its own (adapters.ts), and
