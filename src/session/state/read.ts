@@ -10,7 +10,7 @@ import { readSessionTranscript } from '../store/transcripts.js';
 import { readSessionClaims, type SessionClaim } from '../claims.js';
 import { StateIndex, loadIndex } from './index-file.js';
 import { InvocationRollup, STATE_ROLLUPS } from './invocations.js';
-import { BaselinedState, STATE_BASELINE, rememberBaseline} from './merge.js';
+import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, baselineOf, rememberBaseline } from './merge.js';
 import { hidden } from '../store/data.js';
 import { ensureLayout, ensureLayoutLocked } from './migrate.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
@@ -134,9 +134,13 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
 /** Drafts this process has not stored yet. They are not part of the baseline:
  * a later write must not treat them as records that were on disk. */
 function withDrafts(state: HarnessState): HarnessState {
+  const added: HarnessSession[] = [];
   for (const session of ephemeralSessions()) {
-    if (!state.sessions.some((item) => item.id === session.id)) state.sessions.push(session);
+    if (!state.sessions.some((item) => item.id === session.id)) { state.sessions.push(session); added.push(session); }
   }
+  // Each as read: should another process store the draft before this copy is
+  // written back, the write merges against this, not over the stored record.
+  if (added.length) hidden(state, DRAFT_BASELINE, baselineOf({ ...state, sessions: added }).sessions);
   return state;
 }
 
