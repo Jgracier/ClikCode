@@ -1,4 +1,4 @@
-/** Plan usage that four more harnesses publish without a model turn, each
+/** Plan usage that five more harnesses publish without a model turn, each
  * asked of the harness itself (its own credentials, its own token refresh):
  *
  *   - Copilot: `copilot --headless --stdio` serves the Copilot SDK's JSON-RPC,
@@ -7,10 +7,16 @@
  *     read its `/usage` makes (the 5h / 7d / monthly windows).
  *   - Amp: `amp usage` prints the account's credit balance.
  *   - Kilo: `kilo profile` prints the Kilo account's balance.
+ *   - Cursor: the dashboard call its own usage screen makes
+ *     (`DashboardService/GetCurrentPeriodUsage`), with the token the CLI
+ *     keeps in ~/.config/cursor/auth.json. Verified 2026-09-30.
  *
  * Verified against copilot 1.0.88, kimi 2.0.2, amp 0.0.1790126705 and kilo
  * 7.7.6 on this machine's accounts (2026-09-30). None opens a session. */
 
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { spawnPortable, terminatePortable } from '../transport/spawn.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
@@ -163,6 +169,53 @@ export async function kimiUsageReading(_session: HarnessSession, environment: En
     terminatePortable(child);
   }
 }
+
+// ---------------------------------------------------------------- Cursor
+
+/** A `GetCurrentPeriodUsage` answer as windows. `totalPercentUsed` is the
+ * plan's included usage -- what Cursor's own "You've used 7% of your
+ * included total usage" rounds -- and `apiPercentUsed` the separate share for
+ * named (non-Auto) models. Both reset at `billingCycleEnd`, epoch ms. */
+export function cursorQuotaReading(result: unknown): UsageReading | undefined {
+  const plan = (result as Json | undefined)?.planUsage as Json | undefined;
+  if (!plan) return undefined;
+  const end = Number((result as Json).billingCycleEnd);
+  const reset = Number.isFinite(end) && end > 0 ? end : undefined;
+  return usageReading([usageWindow('monthly', plan.totalPercentUsed, reset), usageWindow('API', plan.apiPercentUsed, reset)]);
+}
+
+async function cursorAccessToken(environment: Environment): Promise<string | undefined> {
+  const home = environment.HOME ?? homedir();
+  const config = environment.XDG_CONFIG_HOME ?? process.env.XDG_CONFIG_HOME ?? join(home, '.config');
+  const parsed = JSON.parse(await readFile(join(config, 'cursor', 'auth.json'), 'utf8')) as { accessToken?: unknown };
+  return typeof parsed.accessToken === 'string' && parsed.accessToken ? parsed.accessToken : undefined;
+}
+
+export async function cursorUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  const ask = async (): Promise<Response | undefined> => {
+    const token = await cursorAccessToken(environment);
+    if (!token) return undefined;
+    return fetch('https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage', {
+      method: 'POST', body: '{}', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
+    });
+  };
+  try {
+    let response = await ask();
+    if (response?.status === 401) {
+      // An expired token: the CLI refreshes its own on `status`, then ask once more.
+      const harness = localHarnessForCommand('cursor');
+      if (harness) await captureNativeHarnessOutput(harness, ['status'], environment, PROBE_TIMEOUT_MS).catch(() => '');
+      response = await ask();
+    }
+    return response?.ok ? cursorQuotaReading(await response.json()) : undefined;
+  } catch {
+    return undefined; // fail-open-ok: no figure beats a wrong one
+  }
+}
+
+export const cursorUsageProbe = async (session: HarnessSession, environment: Environment): Promise<string | undefined> =>
+  (await cursorUsageReading(session, environment))?.label;
 
 // ---------------------------------------------------------------- Amp, Kilo
 
