@@ -121,8 +121,9 @@
       },
       {
         "command": "clikcode.openInNewTab",
-        "title": "Open in New Tab",
-        "category": "ClikCode"
+        "title": "New Chat Tab",
+        "category": "ClikCode",
+        "icon": "$(add)"
       },
       {
         "command": "clikcode.openInNewWindow",
@@ -301,6 +302,11 @@
           "group": "navigation@2"
         },
         {
+          "command": "clikcode.openInNewTab",
+          "when": "activeWebviewPanelId == 'clikcode.chatEditor'",
+          "group": "navigation@0"
+        },
+        {
           "command": "clikcode.open",
           "when": "resourceScheme != clikcode-diff",
           "group": "navigation@100"
@@ -374,6 +380,13 @@
         {
           "command": "clikcode.cancel",
           "when": "clikcode.running"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "clikcode.openInNewTab",
+          "when": "view == clikcode.chat || view == clikcode.chatSecondary",
+          "group": "navigation@0"
         }
       ]
     },

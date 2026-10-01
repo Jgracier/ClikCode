@@ -129,8 +129,15 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     return controller;
   }
 
+  /** Another chat tab, as many as wanted: a tab in the group the ClikCode
+   * tabs already share (the active one's, else the last one's), and beside
+   * the editor only for the first. Opening every chat `Beside` split the
+   * window into another column each time -- a new editor group per chat,
+   * which soon ran out of room -- where a tab was what was asked for. */
   function openTab(first: { mode: 'new' | 'continue' | 'resume'; sessionId?: string }): ClikCodeController {
-    const panel = vscode.window.createWebviewPanel(PANEL_TYPE, 'ClikCode', { viewColumn: vscode.ViewColumn.Beside, preserveFocus: false }, { retainContextWhenHidden: true });
+    const existing = [...tabs.keys()];
+    const column = (existing.find((panel) => panel.active) ?? existing.at(-1))?.viewColumn ?? vscode.ViewColumn.Beside;
+    const panel = vscode.window.createWebviewPanel(PANEL_TYPE, 'ClikCode', { viewColumn: column, preserveFocus: false }, { retainContextWhenHidden: true });
     return restoreTab(panel, first);
   }
 

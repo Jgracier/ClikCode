@@ -9,6 +9,7 @@
  * copy is the prompt this client just submitted, shown until the worker's
  * own snapshot carries it.
  */
+import { composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { asFileDiffs } from '../../../src/agent/line-diff';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
@@ -351,7 +352,9 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
       return model;
     }
     case 'usage':
-      return { ...model, accountUsage: [event.label, event.reset].filter(Boolean).join(' · ') || undefined };
+      // The terminal's own words: the reset in place of the figure once a
+      // window is spent, "Out Of Credits" for a spent balance.
+      return { ...model, accountUsage: composerUsageLabel(event.label, event.reset) };
     case 'closed':
       return event.sessionId === model.sessionId ? freshFor(model) : model;
     default:

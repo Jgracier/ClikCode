@@ -5,6 +5,9 @@ import chalk from 'chalk';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { isAgentToolName } from '../../harness/protocol/tools.js';
 import { terminalCellWidth, visibleSlice } from './width.js';
+import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from './usage-words.js';
+
+export { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent };
 
 /** Whether a still-open tool call is a command or a sub-agent. Reads and
  * edits stay in the waiting band; these two get a moving row in the chat.
@@ -104,15 +107,6 @@ export function liveConversationLines(lines: readonly string[], live: boolean): 
   return result;
 }
 
-/** How much of an allowance is left, read out of the label the harness gave.
- * Both forms appear: "42% left" and the legacy "58% used". */
-export function usageRemainingPercent(label?: string): number | undefined {
-  if (!label) return undefined;
-  const left = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*left/gi)].map((m) => Number(m[1]));
-  if (left.length) return Math.min(...left);
-  const used = [...label.matchAll(/(\d+(?:\.\d+)?)%\s*used/gi)].map((m) => Number(m[1]));
-  return used.length ? 100 - Math.max(...used) : undefined;
-}
 
 /** A rule with its label painted and the dashes left as structure.
  *
@@ -144,25 +138,7 @@ export function paintLabeledRule(
  * asks for something to be done. */
 const RULE_LABEL = (text: string): string => text;
 
-/** What the composer rule says once the allowance is gone.
- *
- * A window that refills says when, in the same words as everywhere else
- * (`Resets 5:34PM`, or with the weekday and date when that is not today).
- * A balance that does not refill has no time to give, so it says so.
- * A percentage at zero is not shown: the reset, or the credit line, is the
- * whole message. */
-export function composerUsageLabel(label?: string, resetLabel?: string): string | undefined {
-  if (resetLabel) return resetLabel;
-  if (label && /credits exhausted|out of credits/i.test(label)) return 'Out Of Credits';
-  return label;
-}
 
-function usageLabelIsSpent(label?: string): boolean {
-  if (!label) return false;
-  if (/^resets\b/i.test(label) || label === 'Out Of Credits') return true;
-  const remaining = usageRemainingPercent(label);
-  return /exhausted/i.test(label) || (remaining !== undefined && remaining <= 0);
-}
 
 /** Usage reads by state, but only one state is worth shouting about.
  *
