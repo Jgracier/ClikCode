@@ -18,7 +18,7 @@
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { delimiter, dirname, join } from 'node:path';
 import { memoryBudget, type MemoryBudget } from './budget.js';
-import { LOCAL_MODEL_CATALOG, allLocalModels, catalogModel, type CatalogModel } from './catalog.js';
+import { allLocalModels, catalogModel, type CatalogModel } from './catalog.js';
 import { chooseModel, fitModel, kvCacheBytes, meetsBar, rankModels, MIN_CONTEXT, type Fit, type Footprint, type Measurement, type RankedModel } from './choose.js';
 import { formatBytes } from './download.js';
 import { discoverHuggingFaceModels } from './discover.js';

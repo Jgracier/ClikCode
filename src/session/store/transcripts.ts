@@ -3,7 +3,7 @@
 
 import type { HarnessSession } from '../model.js';
 import { cloneData, sameData } from './data.js';
-import { withSessionLock, withStateLock } from './locks.js';
+import { withSessionLock } from './locks.js';
 import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, type SessionFile } from './records.js';
 
 type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
@@ -155,67 +155,4 @@ export async function deleteSessionTranscript(id: string): Promise<void> {
     await materializeChildrenOf(id);
     await removeSessionFile(id);
   });
-}
-
-/** The streaming fast path: one file, one lock, no index, no other sessions.
- *
- * `mutate` receives a private materialized copy and either edits it in place or
- * returns a replacement. Appending and updating the pending turn stay on the
- * fast path; rewriting existing history escalates to the state lock so children
- * referencing it can be given their own copy first. */
-async function writeSessionCheckpoint(
-  sessionId: string,
-  mutate: (transcript: SessionTranscript) => SessionTranscript | void,
-): Promise<SessionTranscript> {
-  const apply = async (allowRewrite: boolean): Promise<SessionTranscript | undefined> => {
-    const previous = await loadSessionFile(sessionId);
-    const previousMessages = previous ? await materializedMessages(previous, new Set([sessionId])) : undefined;
-    const draft: SessionTranscript = cloneData({
-      ...(previousMessages !== undefined ? { messages: previousMessages } : {}),
-      ...(previous?.pendingTurn !== undefined ? { pendingTurn: previous.pendingTurn } : {}),
-    });
-    const next = mutate(draft) ?? draft;
-    if (previous && !keepsHistory(previousMessages, next.messages)) {
-      if (!allowRewrite) return undefined;
-      await materializeChildrenOf(sessionId);
-    }
-    if (transcriptIsEmpty(next)) {
-      await removeSessionFile(sessionId);
-      return {};
-    }
-    const ref = previous?.transcriptRef;
-    const inherited = ref ? (previousMessages ?? []).slice(0, ref.uptoIndex) : [];
-    // An existing reference survives only while the inherited part is intact.
-    if (ref && inherited.length === ref.uptoIndex && commonPrefixLength(inherited, next.messages ?? []) === ref.uptoIndex) {
-      await storeSessionFile(sessionId, cloneData({
-        v: 1 as const, id: sessionId, transcriptRef: ref, messages: (next.messages ?? []).slice(ref.uptoIndex),
-        ...(next.pendingTurn !== undefined ? { pendingTurn: next.pendingTurn } : {}),
-      }));
-    } else {
-      await storeSessionFile(sessionId, cloneData({ v: 1 as const, id: sessionId, ...next }));
-    }
-    return cloneData(next);
-  };
-  const fast = await withSessionLock(sessionId, () => apply(false));
-  if (fast) return fast;
-  return (await withStateLock(() => withSessionLock(sessionId, () => apply(true))))!;
-}
-
-const FORKED_FROM = Symbol('clikcode.forkedFrom');
-
-/** Makes `child` continue from `parent`'s history without storing a second copy
- * of it. In memory the child holds ordinary materialized messages, so nothing
- * that reads it changes; on disk it records `transcriptRef` and only its own
- * messages. Returns the child for chaining. */
-function forkTranscript(parent: HarnessSession, child: HarnessSession, messages?: TranscriptMessage[]): HarnessSession {
-  const inherited = messages ?? parent.messages;
-  if (inherited?.length) child.messages = inherited.map((message) => ({ ...message }));
-  else delete child.messages;
-  child.parentSessionId ??= parent.id;
-  Object.defineProperty(child, FORKED_FROM, { value: parent.id, configurable: true, writable: true, enumerable: false });
-  return child;
-}
-
-export function transcriptParentOf(session: HarnessSession): string | undefined {
-  return (session as HarnessSession & { [FORKED_FROM]?: string })[FORKED_FROM] ?? session.parentSessionId;
 }

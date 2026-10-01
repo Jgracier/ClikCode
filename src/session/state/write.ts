@@ -8,7 +8,7 @@ import { stampListFacts } from '../list-facts.js';
 import { isBlankConversation } from '../options.js';
 import { sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
-import { deleteSessionTranscript, readSessionTranscript, transcriptParentOf, writeSessionTranscript } from '../store/transcripts.js';
+import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript } from '../store/transcripts.js';
 import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
 import { HarnessStateVersionError, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
@@ -111,7 +111,7 @@ export async function writeState(state: HarnessState): Promise<void> {
       // with what is actually stored so nothing is written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
       if (!changed) continue;
-      await writeSessionTranscript(session.id, transcript, { parentSessionId: transcriptParentOf(session), frozen: true });
+      await writeSessionTranscript(session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true });
     }
 
     // 2. The index, only when its content really differs.

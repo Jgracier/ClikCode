@@ -10,7 +10,7 @@ import { mcpAdd, mcpTargets } from '../commands/mcp.js';
 import type Conf from 'conf';
 import { sendScriptedTurn } from '../worker/scripted-send.js';
 import { aiPermissions } from '../tui/pickers/permissions.js';
-import { aiSessionInteractive, aiSessionResume } from '../commands/ai/interactive.js';
+import { aiSessionResume } from '../commands/ai/interactive.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, announceBareInteractiveLogin } from '../commands/account.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';

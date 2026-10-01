@@ -8,7 +8,7 @@ import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../mo
 import { cloneData, hidden, sameData } from '../store/data.js';
 import { transcriptOf, type SessionTranscript } from '../store/transcripts.js';
 import type { StateIndex } from './index-file.js';
-import { invocationRollups, type Invocation } from './invocations.js';
+import type { Invocation } from './invocations.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 
 export type SessionMeta = Omit<HarnessSession, 'messages' | 'pendingTurn' | 'claim'>;

@@ -25,7 +25,6 @@ import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { ensureNativeHarness } from '../../harness/transport/native/inspect.js';
 import { normalizeModelWord, optionForHarness, parseHarnessOption, sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
-import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
 import { newConversationSession } from './conversations.js';
 import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';

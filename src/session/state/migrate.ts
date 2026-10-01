@@ -11,7 +11,7 @@ import { stateDirectory } from '../store/paths.js';
 import { readSessionTranscript, writeSessionTranscript } from '../store/transcripts.js';
 import { acquireSessionClaim, claimIsHeld } from '../claims.js';
 import { HarnessStateVersionError, StateIndex, loadIndex, resetHarnessStateCaches, storeIndex } from './index-file.js';
-import { capInvocations, invocationRollups, totalsOf } from './invocations.js';
+import { capInvocations, totalsOf } from './invocations.js';
 import { splitSession } from './merge.js';
 import { HARNESS_STATE_VERSION, exists, harnessIndexPath, harnessStatePath, isoStamp } from './paths.js';
 import { HarnessSecrets, readSecretsFile, writeSecretsFile } from './secrets.js';
