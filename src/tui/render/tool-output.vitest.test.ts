@@ -50,3 +50,15 @@ describe('an approval with a change to review', () => {
     expect(rows).toEqual(expect.arrayContaining(['1   one', '2 - two', '2 + TWO', '3   three']));
   });
 });
+
+describe('a turn saved or sent by an older build', () => {
+  // Before 2026-10-01 a diff was { removed, added }. Opening a conversation
+  // replays its saved tool rows through upsertActivityEvent, and a worker
+  // still on the older build sends that shape live: `.map` on it threw
+  // "event.diff.map is not a function" and the chat would not open.
+  it('opens, its edit drawn from the old shape', () => {
+    const legacy = { kind: 'tool-done', label: 'Edit a.ts', category: 'edit', id: 'x', diff: { removed: ['old line'], added: ['new line'] } } as unknown as Parameters<typeof upsertActivityEvent>[3];
+    const entries = upsertActivityEvent([], 0, 0, legacy, 1);
+    expect(plain(entries[0]!.lines)).toEqual(['◆ Edit a.ts +1 -1', '- old line', '+ new line']);
+  });
+});
