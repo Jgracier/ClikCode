@@ -1,16 +1,7 @@
 /** The generic option picker: a titled list, type-to-filter, and per-option
- * actions.
- *
- * Its own module because it was the least entangled 139 lines in prompter.ts
- * -- measured, not guessed: four references to the prompter's own state
- * against twenty-four in the transcript emitter beside it. Everything it
- * needs from the frame is passed in as `host`, so the picker can be reasoned
- * about without the painter and the painter without the picker.
- *
- * Moved verbatim. The behaviour here has not been changed, only relocated,
- * which is the only safe way to move code that draws to a terminal and
- * cannot be verified by a test.
- */
+ * actions. Everything it needs from the frame that owns the screen is passed
+ * in as `host`, so the picker can be reasoned about without the painter and
+ * the painter without the picker. */
 
 import chalk from 'chalk';
 import type { PickerOption, PickerSettings } from '../harness/prompter.js';

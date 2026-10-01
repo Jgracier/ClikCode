@@ -491,13 +491,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // keystrokes, and the mouse, because that is how the transcript is read
       // back. Nothing else.
       //
-      // Focus reporting (?1004h) and theme notifications (?2031h) used to be
-      // asked for here and then thrown away where keys are read -- neither is
-      // acted on anywhere. Asking a phone to send two streams of events that
-      // are discarded on arrival is waste at best, and at worst it is more
-      // state for a client to hold about a session that is already failing to
-      // forward the one gesture that matters. The filters that drop them stay,
-      // for a terminal that volunteers them unasked.
+      // Not focus reporting or theme notifications: nothing acts on either,
+      // and the filters that drop them stay for a terminal that sends them
+      // unasked.
+      //
       // Selection mode means the user asked for the mouse back; taking the
       // screen must not quietly take it again.
       output.write(`${ENABLE_BRACKETED_PASTE}${SELECTION_MODE.active ? '' : OPENING_MOUSE_TRACKING}`);
@@ -1023,21 +1020,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const model = session.route === 'clikcode-local' ? localModelLabel(session.model)
       : isGatewayService(session) ? session.model ?? undefined : nativeModelLabel(harness?.command, rawModel);
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
-    // The title used to share this line with provider/model/directory, which
-    // meant a long title truncated whichever of those came after it — the
-    // exact information you'd want intact regardless of how long the title
-    // is. It gets its own line now (see titleText below).
+    // The title is not on this line: it sits on the rule under the composer,
+    // so a long one never truncates the provider, model or directory.
     return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
-  }
-
-  /** The only other place a chat's title ever appeared was a transient line in
-   * the /resume picker itself — once you were actually inside a resumed
-   * conversation there was nothing on screen confirming which one, so
-   * switching looked like it hadn't done anything even when the transcript
-   * above had in fact changed. Right-aligned on its own line so it never
-   * competes with statusText()'s provider/model/directory for space. */
-  private titleText(): string | undefined {
-    return this.currentSession?.name || undefined;
   }
 
   /** What the turn is doing, how long it has taken and how much it has
@@ -1051,11 +1036,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const tokens = formatTurnUsage(this.turnUsage, estimatedTokens(this.streamedChars - this.usageCharsCounted));
     const stalled = this.stalledMs(now);
     const status = this.pendingApproval || this.waitingCancelled ? this.waitingLabel : this.toolPhase || this.waitingLabel;
-    // "steer or queue" over-promised: only the codex app-server transport can
-    // interrupt a running turn, and every other harness silently queues for the
-    // next one. The per-submission row below the composer already reports which
-    // of the two actually happened, so the invitation just says what is always
-    // true and lets the outcome speak for itself.
+    // "send", not "steer or queue": which of the two happens depends on the
+    // harness, and each submission's own row says which it was.
     const label = `${status} (${elapsed}${tokens ? ` · ${tokens}` : ''}${stalled ? ` · nothing received for ${formatElapsed(stalled)}` : ''})`
       + `${this.cancelWaiting && !this.pendingApproval ? ' · esc to interrupt' : ''}`
       + `${this.leaveWaiting && !this.pendingApproval && !this.waitingDraft ? ' · ← conversations' : ''}`
@@ -1113,14 +1095,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
-  /** Repaint with the composer exactly as the last paint left it.
-   *
-   * This spread appeared nine times, and three of those omitted the palette
-   * -- which does not merely go unmentioned, because paint() reads absent as
-   * "there is none" and clears the saved one. The flag states which is meant.
-   *
-   * The rule the nine call sites follow, which is worth writing down because
-   * the omission made it invisible:
+  /** Repaint with the composer exactly as the last paint left it -- with its
+   * palette, or (`keepPalette: false`) without, since paint() reads an absent
+   * palette as "there is none".
    *
    *  - KEEP the palette for an incremental repaint of an edit still in
    *    progress -- a resize, a coalesced paint, a scroll, a reading-direction
@@ -1129,11 +1106,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    *  - CLEAR it where the composer is being re-established fresh and a stale
    *    palette would be wrong: a panel opening (paint() draws a panel only
    *    when no palette is up, so they are mutually exclusive), a turn ending,
-   *    and resume() after a vendor has had the TTY. In all three the palette
-   *    belongs to a command that has already run.
-   *
-   * resume() looked like an oversight next to the six that keep it, and it is
-   * not: the composer it repaints is a new one. */
+   *    and resume() after a vendor has had the TTY -- the composer it repaints
+   *    is a new one. In all three the palette belongs to a command that has
+   *    already run. */
   private repaint(options: { keepPalette: boolean } = { keepPalette: true }): void {
     if (options.keepPalette) {
       this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
@@ -1578,7 +1553,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // rule rather than needing a line of its own. Provider/model/directory
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
-    footer.push(paintTitleRule(rowWidth, this.titleText()));
+    footer.push(paintTitleRule(rowWidth, session.name || undefined));
     // Provider, model, effort and directory are one statement -- what this
     // conversation is running as -- so they read as one line in one colour
     // rather than a bright word followed by a dimmer tail. Cyan is ClikCode's
@@ -2233,14 +2208,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // footer band a fixed height is what stops the conversation area above it from
       // reflowing (and the cursor from jumping) as the number of matches narrows.
       const paletteCapacity = commands.length ? Math.min(commands.length, 8) + 2 : 0;
-      // No .slice(0, 8) here: that used to cap the real match list itself,
-      // not just what's visible at once, so typing "/" (matching every
-      // command) could never scroll to anything past the 8th regardless of
-      // how far down you pressed -- selected's own wraparound never saw
-      // past index 7 because options.length itself was capped there. The
-      // windowed scroll in paint() below already exists specifically to
-      // show a scrollable slice of a longer list; capping the list before
-      // it ever got there defeated that.
+      // Every match, not the first eight: paint() windows a longer list, so
+      // the selection can reach all of them.
       const matches = () => commandPaletteMatches(value, commands);
       // The row that runs is the row that is highlighted. When what was typed
       // names a command outright (`/new`), that command's row starts
@@ -2488,16 +2457,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Provider/model/effort pickers share the same frame and palette layout as
    * slash commands, so the conversation stays visible above them.
    *
-   * Type-to-filter: a picker with more than a screenful of options (the
-   * /resume list, across every ClikCode session plus every discovered vendor
-   * chat, easily exceeds 50) was arrow-keys-only with no count, no scroll
-   * indicator, and silent wraparound at each end -- a real conversation could
-   * sit in the middle of a list that long and be effectively unfindable by
-   * scrolling alone. Letters/digits/space now narrow the list live by
-   * substring match against label and detail (title, provider, status);
-   * arrow keys still navigate whatever is currently visible. This is why the
-   * old 'j'/'k'/'q' single-letter aliases are gone: they would collide with
-   * typing a real filter query character (searching for "qwen" or "junk"). */
+   * Type-to-filter: letters, digits and space narrow the list live by
+   * substring match against label and detail (title, provider, status), and
+   * the arrows move through what is visible -- so a long list (/resume, with
+   * every discovered vendor chat) stays findable, and no letter is a key
+   * alias that would collide with a filter query. */
   select<T>(
     title: string,
     options: readonly PickerOption<T>[],

@@ -105,28 +105,12 @@ const BOARD_COMMANDS: readonly PickerOption<string>[] = [
   { label: '/effort', detail: '· its reasoning effort', value: '/effort' },
 ];
 
-// The CLIKCODE_USE_WORKER escape hatch is gone: an ANSI terminal always runs
-// its turns through a session worker now. What remains below is not a
-// fallback for the worker -- it is the path for a terminal that has no
-// alternate screen at all, which is a different thing that was easy to
-// mistake for one.
-//
-// Three deletions the earlier plan expected here are NOT possible, and the
-// reasons are worth keeping so they are not re-attempted:
-//
-//   - The direct in-process turn below cannot go. The worker branch is
-//     gated on `rl instanceof TerminalHarnessPrompter`, and when
-//     terminalUiSupported() is false `rl` is a plain readline instead. So
-//     this path serves the cases capabilities.ts exists for -- CI consoles,
-//     IDE output panes, Emacs shells, screen-reader mode -- and a worker
-//     cannot serve them, having no screen to hand back.
-//
-//   - claim.ts therefore stays too, because that path still needs to record
-//     which process holds a conversation.
-//
-//   - claims.ts was never the worker's business at all: state/write.ts,
-//     state/read.ts and state/migrate.ts use it as the file lock that stops
-//     two processes corrupting index.json.
+// An ANSI terminal runs every turn through a session worker. A terminal with
+// no alternate screen (`terminal` undefined below: CI consoles, IDE output
+// panes, Emacs shells, screen-reader mode -- see capabilities.ts) runs its
+// turn in process: a worker has no screen to hand back to it. That path is
+// why claim.ts stays, recording which process holds a conversation.
+// claims.ts is unrelated -- it is the file lock on index.json.
 //
 // SIGINT remains ignored around client-side identity derivation and vendor
 // login, which the worker design keeps in the client. SIGHUP is different:
