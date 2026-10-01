@@ -58,11 +58,19 @@ interface JsonRpcShutdownOptions {
  * Agents put the vendor's real refusal there and a generic line in `message`:
  * Factory Droid answers `{code:-32603, message:"Internal error: Agent error",
  * data:"402 {\"detail\":\"No active subscription found. ...\",\"status\":402}"}`.
- * Read as `message` alone, a spent plan was an unexplained crash. */
+ * Read as `message` alone, a spent plan was an unexplained crash.
+ *
+ * The TypeScript ACP SDK (Cursor, and every agent built on it) answers any
+ * error it did not raise itself with `{code:-32603, message:"Internal
+ * error", data:{details:"<the error's own message>"}}` -- so `details` is
+ * read too, or a refused turn was just "Internal error" and no account
+ * switch could follow. */
 export function jsonRpcErrorDetail(data: unknown): { reason?: string; statusCode?: number } {
-  const text = typeof data === 'string' ? data.trim()
-    : data && typeof data === 'object' && typeof (data as { message?: unknown }).message === 'string' ? String((data as { message: string }).message).trim()
-    : undefined;
+  const field = (name: 'message' | 'details'): string | undefined => {
+    const value = data && typeof data === 'object' ? (data as Record<string, unknown>)[name] : undefined;
+    return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+  };
+  const text = typeof data === 'string' ? data.trim() : field('message') ?? field('details');
   if (!text) return {};
   const leading = /^(\d{3})\b\s*/.exec(text);
   const body = leading ? text.slice(leading[0].length) : text;

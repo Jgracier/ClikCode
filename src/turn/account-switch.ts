@@ -17,7 +17,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { learnedUsageReading } from '../harness/accounts/usage-learning.js';
 import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
 import { NATIVE_STREAM_USAGE_READINGS } from '../harness/accounts/stream-usage.js';
-import { accountQuotaSpent, markQuotaExhausted, settleQuotaMark, usageReadingIsCurrent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
+import { accountQuotaSpent, markQuotaExhausted, settleQuotaMark, usageReadingIsCurrent, windowSpent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
 import { localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import type { HarnessState } from '../session/model.js';
 import { usageLabelRemainingPercent } from './failover.js';
@@ -58,7 +58,7 @@ export function noteStoredQuota(account: AiHarnessAccount, state: HarnessState, 
     // A spent window is recorded as a mark too, expiring at that window's
     // reset, so the stored record says what the reading does.
     if (account.quotaState !== 'exhausted') {
-      const resets = storedWindows(account).filter((window) => window.usedPct >= 100).map((window) => window.resetsAt);
+      const resets = storedWindows(account).filter(windowSpent).map((window) => window.resetsAt);
       markQuotaExhausted(account, now, resets.includes(undefined) ? undefined : (resets as string[]).sort().at(-1));
     }
     return 0;
@@ -79,7 +79,7 @@ export function noteStoredQuota(account: AiHarnessAccount, state: HarnessState, 
     if (usageLabelRemainingPercent(reading?.label) === 0) {
       // Recorded as a mark, expiring when the learned window rolls, so every
       // screen -- which cannot recompute the learned figure -- agrees.
-      const resets = (reading?.windows ?? []).filter((window) => window.usedPct >= 100 && window.resetsAt)
+      const resets = (reading?.windows ?? []).filter((window) => windowSpent(window) && window.resetsAt)
         .map((window) => window.resetsAt!).sort();
       markQuotaExhausted(account, now, resets.at(-1));
       return 0;

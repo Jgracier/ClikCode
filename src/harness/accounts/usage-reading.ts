@@ -7,7 +7,18 @@ import type { AiHarnessAccount } from '../definition.js';
 /** One quota window as the vendor reported it. `usedPct` is the unrounded
  * percentage used (0..100+); the display label rounds, this does not, so
  * "99.6% used" is never mistaken for exhausted. */
-export interface UsageWindow { name: string; usedPct: number; resetsAt?: string }
+export interface UsageWindow {
+  name: string; usedPct: number; resetsAt?: string;
+  /** A share of the plan that, used up, still leaves the account working:
+   *  Cursor's API window covers named models only, and Auto keeps running
+   *  until the plan total is spent. Shown, never what marks it spent. */
+  advisory?: true;
+}
+
+/** Whether this window, used up, stops the account. */
+export function windowSpent(window: UsageWindow): boolean {
+  return window.usedPct >= 100 && !window.advisory;
+}
 
 /** A usage reading: the structured windows plus the label the UI shows. */
 export interface UsageReading { windows: UsageWindow[]; label?: string }
@@ -66,7 +77,7 @@ function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined 
  * soonest one when more than one window is spent. */
 export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now: number = Date.now()): string | undefined {
   const exhausted = (windows ?? [])
-    .filter((window): window is UsageWindow & { resetsAt: string } => window.usedPct >= 100 && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
+    .filter((window): window is UsageWindow & { resetsAt: string } => windowSpent(window) && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
     .sort((a, b) => Date.parse(a.resetsAt) - Date.parse(b.resetsAt));
   const next = exhausted[0];
   if (!next) return undefined;
@@ -138,7 +149,7 @@ export function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefine
 export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now()): boolean {
   const reading = account.usage as AccountUsageReading | undefined;
   const windows = reading?.windows ?? [];
-  const spent = windows.filter((window) => window.usedPct >= 100);
+  const spent = windows.filter(windowSpent);
   if (spent.some((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now)) return true;
   if (account.quotaState !== 'exhausted') return false;
   const marked = quotaMarkedAt(account);
