@@ -84,10 +84,6 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
     return !this.exited;
   }
 
-  get pid(): number | undefined {
-    return this.child.pid;
-  }
-
   send(request: IdeRequest): void {
     if (this.exited || !this.child.connected) return;
     this.child.send(request);

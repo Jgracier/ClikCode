@@ -1,7 +1,7 @@
 /** The editor's screens as data (IDE protocol revision 2).
  *
  * The terminal draws its pickers as text; an editor draws its own widgets --
- * a provider·model menu in the composer, a history list, an accounts page --
+ * a provider·model menu in the composer, a history list, an account menu --
  * and needs the same facts as records. Every answer here is read from the
  * sources the terminal's pickers read (tui/pickers/*), in their order and
  * with their rules, so the two surfaces show the same thing. Choosing goes
@@ -22,9 +22,8 @@ import { accountQuotaSpent, usageReadingIsCurrent, type UsageWindow } from '../h
 import { nativeModelCatalogForPicker } from '../harness/accounts/model-catalog.js';
 import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
-import { vendorFacingOptions } from '../harness/options.js';
 import {
-  allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort, localHarnessCapabilityManifest,
+  allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort,
   localHarnessForCommand, localHarnessForProvider,
 } from '../runtime/lazy-bridge.js';
 import { localModelChoices } from '../local-models/index.js';
@@ -32,7 +31,6 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { conversationPreview, reconcileListTurns, transcriptWasLoaded } from '../session/list-facts.js';
 import { compareProviders, conversationIdFor, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
-import { sessionClaimIsLive } from '../session/claim.js';
 import { liveWorkerSessions, sessionActivity } from '../session/liveness.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { readSessionTranscript } from '../session/store/transcripts.js';
@@ -81,11 +79,11 @@ export async function providerList(config: Conf, state: HarnessState, session: H
   const rows: IdeProvider[] = [
     {
       id: GATEWAY_ID, kind: 'gateway', name: 'ClikDeploy Gateway', installed: true, install: 'ready',
-      signedIn: gatewayConnected, accounts: gatewayConnected ? 1 : 0, current: session?.route === 'gateway', choosesModel: true,
+      signedIn: gatewayConnected, current: session?.route === 'gateway', choosesModel: true,
     },
     {
       id: LOCAL_ID, kind: 'clikcode-local', name: CLIKCODE_LOCAL_LABEL, installed: true, install: 'ready',
-      signedIn: true, accounts: 0, current: session?.route === 'clikcode-local', choosesModel: true,
+      signedIn: true, current: session?.route === 'clikcode-local', choosesModel: true,
     },
   ];
   for (const { harness, inspection } of inspected) {
@@ -95,7 +93,7 @@ export async function providerList(config: Conf, state: HarnessState, session: H
       ...(inspection.version ? { version: inspection.version } : {}),
       install: inspection.installed ? 'ready' : harnessInstallRoute(harness).kind !== 'none' ? 'auto' : 'manual',
       integration: integrationLabel(harness),
-      signedIn, accounts: state.accounts.filter((item) => item.provider === harness.provider).length,
+      signedIn,
       current: session?.route === 'local' && session.nativeHarness === harness.command,
       choosesModel: choosesModel(harness),
     });
@@ -109,7 +107,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
     const list = await savedGatewayModels({ config }) ?? await gatewayModels({ config, fresh: true });
     const current = session && isGatewayService(session) ? session.model ?? undefined : undefined;
     return {
-      provider, custom: false, ...(current ? { current } : {}),
+      provider, custom: false,
       models: [
         { id: 'auto', label: 'Automatic', detail: `the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}`, current: session?.route === 'gateway' && !current },
         ...list.models.map((model) => ({ id: model.id, label: model.id, ...(gatewayModelDetail(model) ? { detail: gatewayModelDetail(model) } : {}), current: model.id === current })),
@@ -120,7 +118,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
     const current = session?.route === 'clikcode-local' ? session.model ?? undefined : undefined;
     const choices = await localModelChoices();
     return {
-      provider, custom: false, ...(current ? { current } : {}),
+      provider, custom: false,
       models: choices.map((choice) => ({
         id: choice.id, label: choice.label,
         detail: [choice.recommended ? 'recommended' : undefined, choice.detail].filter(Boolean).join(' · '),
@@ -144,7 +142,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
       const detail = row.detail?.replace(/^·\s*/, '').replace(/(?:^|\s·\s)current$/, '').trim();
       return { id: model, label: row.label, ...(detail ? { detail } : {}), current: Boolean(onIt) && model === effective };
     });
-  return { provider, models, custom: true, ...(effective ? { current: effective } : {}) };
+  return { provider, models, custom: true };
 }
 
 /** The conversations /resume lists: one row per conversation (its latest
@@ -184,7 +182,6 @@ export async function conversationList(state: HarnessState, currentId: string | 
       title: titled,
       ...(latest.route === 'gateway' ? { provider: 'ClikDeploy Gateway' } : latest.route === 'clikcode-local' ? { provider: CLIKCODE_LOCAL_LABEL } : harness ? { provider: harness.displayName } : {}),
       ...(latest.model ? { model: sessionModelLabel(latest) ?? latest.model } : {}),
-      ...(latest.workspace ? { workspace: latest.workspace } : {}),
       updatedAt: latest.updatedAt,
       messages: opened ? messages.length : (latest.listMessageCount ?? 0),
       ...(last ? { preview: last.slice(0, 140) } : {}),
@@ -192,8 +189,6 @@ export async function conversationList(state: HarnessState, currentId: string | 
       // still marks the row, but Active vs Past is by recency, not liveness.
       ...(activity ?? (isCurrent ? 'idle' : undefined) ? { activity: activity ?? 'idle' } : {}),
       current: isCurrent,
-      elsewhere: !isCurrent && group.some((session) => sessionClaimIsLive(session)),
-      history: group.length,
     });
   }
   const sectionRank = (row: IdeConversation): number => {
@@ -277,8 +272,6 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
   if (harness) {
     settings.failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
     if (harness.planMode) settings.plan = session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
-    const available = vendorFacingOptions(localHarnessCapabilityManifest(harness).options, harness).length;
-    if (available) settings.options = { available, set: Object.keys(session.harnessOptions ?? {}).length };
   }
   return settings;
 }

@@ -73,7 +73,7 @@ describe('the conversation list', () => {
     const rows = await conversationList(await readState(), 'other');
     // Both are older than 24 hours, so Past by recency: handoff (Sep 5) then other (Sep 4).
     expect(rows.map((row) => row.id)).toEqual(['handoff', 'other']);
-    expect(rows[0]).toMatchObject({ title: 'Login bug', history: 2, messages: 2, preview: 'Done.', current: false });
+    expect(rows[0]).toMatchObject({ title: 'Login bug', messages: 2, preview: 'Done.', current: false });
     expect(rows[1]).toMatchObject({ current: true, activity: 'idle', title: 'write tests for the parser', provider: 'Codex' });
   });
 

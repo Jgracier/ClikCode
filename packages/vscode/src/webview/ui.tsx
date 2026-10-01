@@ -43,9 +43,6 @@ export function KeyList(props: {
   inputRef?: { current: HTMLInputElement | null };
   onEscape?: () => void;
   onBack?: () => void;
-  /** → on a row: open it (a provider's models). */
-  onForward?: (key: string) => void;
-  class?: string;
   emptyText?: string;
   id?: string;
 }): JSX.Element {
@@ -73,11 +70,6 @@ export function KeyList(props: {
     }
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onEscape?.(); return; }
     const input = props.inputRef?.current;
-    if (event.key === 'ArrowRight' && props.onForward && activeKey && (!input || input.selectionStart === input.value.length)) {
-      event.preventDefault();
-      props.onForward(activeKey);
-      return;
-    }
     const atStart = !input || (input.selectionStart === 0 && input.selectionEnd === 0);
     if ((event.key === 'ArrowLeft' && atStart && !input?.value) || (event.key === 'Backspace' && input && !input.value)) {
       if (props.onBack) { event.preventDefault(); props.onBack(); }
@@ -101,7 +93,7 @@ export function KeyList(props: {
   });
 
   return (
-    <div ref={listRef} class={`keylist${props.class ? ` ${props.class}` : ''}`} role="listbox" aria-label={props.label} id={props.id}
+    <div ref={listRef} class="keylist" role="listbox" aria-label={props.label} id={props.id}
       tabIndex={props.inputRef ? -1 : 0} onKeyDown={props.inputRef ? undefined : onKey}>
       {props.rows.length === 0 && props.emptyText ? <div class="keylist-empty">{props.emptyText}</div> : null}
       {props.rows.map((row) => {
