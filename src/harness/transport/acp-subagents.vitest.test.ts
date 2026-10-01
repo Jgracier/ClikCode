@@ -71,3 +71,12 @@ it("keeps a sub-agent's work under its Agent row and out of the answer, and neve
   pending.note({ kind: 'tool-done', label: 'a', id: 'a' });
   expect(pending.outstanding).toBe(1);
 });
+
+it("reads a command's output and exit code from claude-agent-acp's terminal extension", async () => {
+  const { acpActivityEvent } = await import('./acp-client.js');
+  // As 0.84 sends it once the client declares _meta.terminal_output.
+  expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'b', _meta: { terminal_output: { terminal_id: 'b', data: 'ls: cannot access x\n' } } }))
+    .toMatchObject({ kind: 'tool-start', id: 'b', output: ['ls: cannot access x'] });
+  expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'b', status: 'failed', _meta: { terminal_exit: { terminal_id: 'b', exit_code: 2, signal: null } } }))
+    .toMatchObject({ kind: 'tool-error', exitCode: 2 });
+});

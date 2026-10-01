@@ -33,6 +33,12 @@ const CANCEL_SETTLE_MS = 2000;
  * handing the turn to the next account beats waiting that out. */
 export const ACP_RATE_LIMIT_GRACE_MS = 30_000;
 
+/** What this client can show. `terminal_output`: a command's output and exit
+ * code as `_meta.terminal_output` / `_meta.terminal_exit` (claude-agent-acp's
+ * terminal extension, as codex-acp does) rather than a fenced text block with
+ * no exit code. An agent that does not know the key ignores it. */
+const ACP_CLIENT_CAPABILITIES = { _meta: { terminal_output: true } };
+
 type AcpSpawn = (binary: string, argv: readonly string[], options: SpawnOptions) => ChildProcess;
 
 export interface AcpTurnInput extends HarnessTurnObserver {
@@ -144,9 +150,13 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   // no diff content still says what it is replacing in its input.
   const fromContent = diffEntries.flatMap((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''),
     typeof entry.path === 'string' && entry.path ? { path: entry.path } : {}));
-  const outputText = content
+  const terminal = update._meta && typeof update._meta === 'object' ? update._meta as Json : undefined;
+  // `terminal_output` is `{ terminal_id, data }` (claude-agent-acp 0.84).
+  const terminalText = typeof terminal?.terminal_output?.data === 'string' ? terminal.terminal_output.data : undefined;
+  const outputText = terminalText !== undefined ? terminalText : content
     .flatMap((entry) => entry?.type === 'content' && entry.content?.type === 'text' && typeof entry.content.text === 'string' ? [entry.content.text as string] : [])
     .join('\n');
+  const exitCode = terminal?.terminal_exit?.exit_code;
   // The end of what the tool printed: a command's last lines are its result.
   const output = activityOutput(outputText, { tail: true });
   const classified = acpToolClass(update);
@@ -162,6 +172,7 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
     ...output,
     ...(diff?.length ? { diff } : {}),
     ...(completed ? commandOutcome(rawOutput) : {}),
+    ...(typeof exitCode === 'number' ? { exitCode } : {}),
   };
 }
 
@@ -607,7 +618,7 @@ class AcpSessionImpl implements AcpSession {
     if (!live.capabilities) {
       const initialized = await peer.request('initialize', {
         protocolVersion: 1,
-        clientCapabilities: {},
+        clientCapabilities: ACP_CLIENT_CAPABILITIES,
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
       }, setup);
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
