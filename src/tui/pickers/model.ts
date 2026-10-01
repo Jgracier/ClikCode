@@ -109,9 +109,13 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   if (harness) {
     // Feature-detected, never assumed: the headless prompter has no spinner.
     const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-    waiting?.startWaiting(`finding ${harness.displayName} models…`);
+    // Only a wait worth seeing gets a spinner. A warm cache answers in
+    // milliseconds, and starting and stopping one flashed a spinner and an
+    // empty composer between Settings and the list.
+    let spinning = false;
+    const spinner = setTimeout(() => { spinning = true; waiting?.startWaiting(`finding ${harness.displayName} models…`); }, 250);
     try { catalog = await nativeModelCatalogForPicker(harness, account); }
-    finally { waiting?.stopWaiting(); }
+    finally { clearTimeout(spinner); if (spinning) waiting?.stopWaiting(); }
   }
   const effective = session.model ?? catalog.configured;
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));

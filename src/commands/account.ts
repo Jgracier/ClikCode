@@ -358,17 +358,37 @@ export async function withVendorTerminal<T>(
   name = harness.displayName,
 ): Promise<T> {
   if (!surface) return work();
+  // One line in the conversation, written once the sign-in is over and
+  // saying how it went. A "signing in to" line written before it stayed
+  // there for good, whatever happened, and the vendor's own screen covered
+  // it while the sign-in ran anyway.
+  const outcome = (error: unknown): void => surface.activity?.(error === undefined
+    ? `${chalk.green('signed in to')} ${chalk.dim(name)}`
+    : `${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
   if (harness.loginCapturable) {
     surface.startWaiting(`signing in to ${name}…`);
-    try { return await work(); } finally { surface.stopWaiting(); }
+    try {
+      const result = await work();
+      surface.stopWaiting();
+      outcome(undefined);
+      return result;
+    } catch (error) {
+      surface.stopWaiting();
+      outcome(error);
+      throw error;
+    }
   }
-  surface.activity?.(`${chalk.yellow('signing in to')} ${chalk.dim(name)}`);
   await surface.suspend();
   try {
     announceBareInteractiveLogin({ ...harness, displayName: name });
-    return await work();
-  } finally {
+    const result = await work();
     surface.resume();
+    outcome(undefined);
+    return result;
+  } catch (error) {
+    surface.resume();
+    outcome(error);
+    throw error;
   }
 }
 

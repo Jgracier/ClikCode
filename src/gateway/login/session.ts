@@ -57,7 +57,10 @@ export async function runLoginSession(input: {
       announced = true;
       const notice = loginUrlNotice(url, environment);
       if (hasLocalDisplay(environment)) (io.open ?? openLoginUrl)(url);
-      io.write(`\n${notice.clipboard}${notice.lines.join('\n')}\n\n`);
+      // \r\n, not \n: the vendor's sign-in usually has the terminal raw, where
+      // a bare newline keeps the column and the second line started where
+      // the first ended.
+      io.write(`\r\n${notice.clipboard}${notice.lines.join('\r\n')}\r\n\r\n`);
     },
   });
 }
