@@ -10,7 +10,7 @@ import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { eventDiff } from '../../agent/line-diff.js';
 import { commandOutcome } from '../protocol/activity-events.js';
-import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
+import { categoryOf, commandText, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput } from '../protocol/activity-events.js';
@@ -197,15 +197,17 @@ const ACP_KIND_CATEGORY: Readonly<Record<string, ToolCategory>> = {
   execute: 'run', read: 'read', edit: 'edit', delete: 'edit', move: 'edit', search: 'search', fetch: 'fetch',
 };
 
+/** The command a call runs: `command` (string or argv), else `cmd`. */
+function acpCommand(raw: Record<string, unknown> | undefined): string | undefined {
+  return commandText(raw?.command) ?? (typeof raw?.cmd === 'string' ? raw.cmd : undefined);
+}
+
 function acpToolClass(update: Json): { category?: ToolCategory; agent?: true } {
   const raw = update.rawInput && typeof update.rawInput === 'object' ? update.rawInput as Record<string, unknown> : undefined;
   const titled = String(update.name ?? update.title ?? '');
   const head = titled.split(/[\s:(]/, 1)[0] || titled;
   const fromKind = ACP_KIND_CATEGORY[String(update.kind ?? '').toLowerCase()];
-  const command = Array.isArray(raw?.command) ? raw.command.map(String).join(' ')
-    : typeof raw?.command === 'string' ? raw.command
-      : typeof raw?.cmd === 'string' ? raw.cmd : '';
-  const category = fromKind ?? (command.trim() ? 'run' as const : categoryOf(head, raw).category);
+  const category = fromKind ?? (acpCommand(raw)?.trim() ? 'run' as const : categoryOf(head, raw).category);
   const agent = isAgentToolName(head) || isAgentToolName(String(update.tool ?? '')) ? true as const : undefined;
   return { ...(category ? { category } : {}), ...(agent ? { agent } : {}) };
 }
@@ -234,9 +236,7 @@ export function acpApprovalDetail(toolCall: Json | undefined): string | undefine
   if (!toolCall) return undefined;
   const raw: Json = toolCall.rawInput && typeof toolCall.rawInput === 'object' ? toolCall.rawInput : {};
   const lines: string[] = [];
-  const command = Array.isArray(raw.command) ? raw.command.map(String).join(' ')
-    : typeof raw.command === 'string' ? raw.command
-      : typeof raw.cmd === 'string' ? raw.cmd : undefined;
+  const command = acpCommand(raw);
   if (command) lines.push(`$ ${command}`);
   if (typeof raw.cwd === 'string') lines.push(`cwd: ${raw.cwd}`);
   const paths = new Set<string>();

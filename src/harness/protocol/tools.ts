@@ -59,6 +59,12 @@ export function argumentSummary(input?: Record<string, unknown>, max = 60): stri
   return joined ? (joined.length > max ? `${joined.slice(0, max - 1)}…` : joined) : undefined;
 }
 
+/** A call's command as one line: vendors send it as a string or as argv. */
+export function commandText(command: unknown): string | undefined {
+  if (typeof command === 'string') return command;
+  return Array.isArray(command) ? command.map(String).join(' ') : undefined;
+}
+
 export function toolLabel(name: string, input?: Record<string, unknown>, category?: ToolCategory): string {
   // Matched with separators and case removed, the same way tool NAMES are
   // below, because vendors disagree about spelling far more than about
