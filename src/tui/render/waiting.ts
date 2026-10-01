@@ -6,6 +6,7 @@ import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { isAgentToolName } from '../../harness/protocol/tools.js';
 import { terminalCellWidth, visibleSlice } from './width.js';
 import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from './usage-words.js';
+export { appendThought, type Thought } from '../../harness/protocol/activity-view.js';
 
 export { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent };
 
@@ -73,32 +74,6 @@ export function runningChatLine(label: string, frame: number, kind: 'command' | 
 }
 
 /** The reasoning shown on its one live row. */
-export type Thought = { id?: string; text: string };
-
-/** Longest thought kept: the row shows its tail, and nothing reads further. */
-const THOUGHT_LIMIT = 2000;
-
-/** A reasoning event added to the thought on screen.
- *
- * Transports differ: some send each reasoning item whole, some its running
- * total, some every 1-3 token fragment. Replacing the row with each event
- * made the last kind a flicker of single words. So within one reasoning item
- * (same id, or no ids at all) text that extends the thought -- or repeats
- * it -- replaces it, and anything else is appended; a new item id starts
- * afresh. Fragments arrive trimmed by some transports, so one without its own
- * spacing is joined with a space -- a word split mid-way reads better than
- * words run together. */
-export function appendThought(prior: Thought | undefined, label: string, id?: string): Thought | undefined {
-  const fragment = label.replace(/\s+/g, ' ');
-  const trimmed = fragment.trim();
-  if (!trimmed || trimmed.toLowerCase() === 'thinking') return prior;
-  const withId = (text: string): Thought => ({ ...(id === undefined ? {} : { id }), text: text.length > THOUGHT_LIMIT ? text.slice(-THOUGHT_LIMIT) : text });
-  if (!prior || prior.id !== id) return withId(trimmed);
-  if (trimmed.startsWith(prior.text)) return withId(trimmed);
-  const joined = /^[\s.,;:!?)\]'"]/.test(fragment) || /\s$/.test(prior.text) ? `${prior.text}${fragment}` : `${prior.text} ${fragment}`;
-  return withId(joined.replace(/\s+/g, ' ').trim());
-}
-
 /** A live response must end on content, not its decorative separator. On a
  * short mobile viewport the last replaceable row may be the only row visible. */
 export function liveConversationLines(lines: readonly string[], live: boolean): string[] {

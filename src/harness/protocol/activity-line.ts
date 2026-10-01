@@ -5,7 +5,7 @@ import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { FileDiff } from '../../agent/line-diff.js';
-import { previewLinesFor } from './activity-events.js';
+import { DIFF_PREVIEW_LINES, diffPreview, diffTotals, outputPreview, previewLinesFor } from './activity-view.js';
 import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
@@ -43,18 +43,14 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   return [summaryWithCounts(summary, event.diff), ...fileDiffRows(event.diff, DIFF_PREVIEW_LINES)];
 }
 
-/** Diff lines an edit's row shows, across all its files. */
-const DIFF_PREVIEW_LINES = 12;
-/** Files of one change shown before the rest are counted. */
-const DIFF_PREVIEW_FILES = 4;
-
 function changeCounts(additions: number, removals: number): string {
   return [additions ? chalk.green(`+${additions}`) : '', removals ? chalk.red(`-${removals}`) : ''].filter(Boolean).join(' ');
 }
 
 /** The row's label, then what the change added and removed in all. */
 function summaryWithCounts(summary: string, files: readonly FileDiff[]): string {
-  const counts = changeCounts(files.reduce((sum, file) => sum + file.additions, 0), files.reduce((sum, file) => sum + file.removals, 0));
+  const totals = diffTotals(files);
+  const counts = changeCounts(totals.additions, totals.removals);
   return counts ? `${summary} ${counts}` : summary;
 }
 
@@ -63,21 +59,15 @@ function summaryWithCounts(summary: string, files: readonly FileDiff[]): string 
  * context dim, `⋮` where unchanged lines between hunks are left out -- the
  * lines a reviewer needs, not two flat lists of what went and what came. */
 export function fileDiffRows(files: readonly FileDiff[], budget: number): string[] {
-  const shownFiles = files.slice(0, DIFF_PREVIEW_FILES);
-  const numbers = shownFiles.flatMap((file) => file.lines.flatMap((line) => line.line === undefined ? [] : [line.line]));
-  const gutter = numbers.length ? String(Math.max(...numbers)).length : 0;
+  const preview = diffPreview(files, budget);
+  const gutter = preview.gutter;
   const rows: string[] = [];
-  let left = budget;
-  let hidden = 0;
-  for (const file of shownFiles) {
+  for (const { file, lines } of preview.files) {
     if (files.length > 1) {
       const what = file.change === 'add' ? ' (new)' : file.change === 'delete' ? ' (deleted)' : '';
       rows.push(`    ${chalk.dim(`${file.path ?? 'file'}${what}`)} ${changeCounts(file.additions, file.removals)}`.trimEnd());
     }
-    const visible = file.lines.slice(0, Math.max(0, left));
-    left -= visible.length;
-    hidden += file.lines.length - visible.length + (file.omitted ?? 0);
-    for (const line of visible) {
+    for (const line of lines) {
       const number = gutter ? `${line.line === undefined ? ''.padStart(gutter) : String(line.line).padStart(gutter)} ` : '';
       if (line.kind === 'gap') rows.push(`    ${chalk.dim(`${''.padStart(gutter)}${gutter ? ' ' : ''}\u22ee`)}`);
       else if (line.kind === 'removed') rows.push(`    ${chalk.dim(number)}${chalk.red(`- ${line.text}`)}`);
@@ -85,27 +75,19 @@ export function fileDiffRows(files: readonly FileDiff[], budget: number): string
       else rows.push(`    ${chalk.dim(`${number}  ${line.text}`)}`);
     }
   }
-  const moreFiles = files.length - shownFiles.length;
   const notes = [
-    ...(hidden > 0 ? [`${hidden} more line${hidden === 1 ? '' : 's'}`] : []),
-    ...(moreFiles > 0 ? [`${moreFiles} more file${moreFiles === 1 ? '' : 's'}`] : []),
+    ...(preview.hiddenLines > 0 ? [`${preview.hiddenLines} more line${preview.hiddenLines === 1 ? '' : 's'}`] : []),
+    ...(preview.moreFiles > 0 ? [`${preview.moreFiles} more file${preview.moreFiles === 1 ? '' : 's'}`] : []),
   ];
   return notes.length ? [...rows, `    ${chalk.dim(`\u2026 ${notes.join(', ')}`)}`] : rows;
 }
 
-/** A tool's output under its row, at most `budget` lines. A command's result
- * is at its end, and so is all a producer kept of a long stream
- * (`outputTail`), so those show their LAST lines, the earlier ones counted
- * above them; anything else shows its first lines, the rest counted below.
- * Showing the first of a kept tail put a long command's middle on screen. */
+/** outputPreview's choice, painted for the terminal. */
 export function outputPreviewRows(event: HarnessActivityEvent, budget: number): string[] {
-  const output = event.output ?? [];
-  if (!output.length || budget <= 0) return [];
-  const fromEnd = event.outputTail === true || (event.category === 'run' && !event.outputOmitted);
-  const visible = fromEnd ? output.slice(-budget) : output.slice(0, budget);
-  const hidden = output.length - visible.length + (event.outputOmitted ?? 0);
+  const { lines, hidden, fromEnd } = outputPreview(event, budget);
+  if (!lines.length) return [];
   const note = hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} ${fromEnd ? 'earlier' : 'more'} line${hidden === 1 ? '' : 's'}`)}`] : [];
-  const rows = visible.map((line) => `    ${chalk.dim(line)}`);
+  const rows = lines.map((line) => `    ${chalk.dim(line)}`);
   return fromEnd ? [...note, ...rows] : [...rows, ...note];
 }
 
