@@ -12,6 +12,7 @@ import { post } from './bus';
 import { duration, pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
+import { splitEditorContext } from '../editor-context';
 
 /** Finished messages, rendered once each and kept across a redraw of the
  * transcript (another conversation and back). Keyed by conversation and
@@ -60,7 +61,21 @@ function LiveMarkdown({ text }: { text: string }): JSX.Element {
   );
 }
 
-const UserMessage = memo(({ text }: { text: string }): JSX.Element => <div class="message user" role="article" aria-label="You"><div class="bubble">{text}</div></div>);
+const UserMessage = memo(({ text: content }: { text: string }): JSX.Element => {
+  const { text, file, problems } = splitEditorContext(content);
+  return (
+    <div class="message user" role="article" aria-label="You">
+      <div class="bubble">
+        {text}
+        {file ? (
+          <div class="bubble-context" title={`Sent with the open file${problems ? ` and ${problems} problem${problems === 1 ? '' : 's'} VS Code reported there` : ''}`}>
+            <Icon name="file" /><span>{file.split(/[\\/]/).pop()}</span>{problems ? <span class="context-problems"><Icon name="warning" />{problems}</span> : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+});
 
 const CATEGORY_ICON: Record<string, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
 

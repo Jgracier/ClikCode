@@ -6,6 +6,7 @@ import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../..
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
 import { conversationState } from '../../src/conversation-state';
+import { splitEditorContext } from '../../src/editor-context';
 import { inlineStep } from '../../src/webview/sheet';
 import { pathIn, relativeTime, resetIn } from '../../src/webview/format';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
@@ -174,6 +175,13 @@ describe('editor context', () => {
     const selected = composeMessage('why', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'a.ts', startLine: 3, endLine: 3, text: 'x', languageId: 'typescript', problems } }]);
     expect(selected).toContain('`a.ts` line 3:');
     expect(selected).toContain('VS Code reports this problem');
+  });
+
+  it('splits the context back off what was typed, for the bubble and for recall', () => {
+    const sent = composeMessage('fix it', [{ kind: 'context', mention: { path: '/w/a.ts', label: 'src/a.ts', problems: ['line 1 error: x', 'line 2 warning: y'] } }]);
+    expect(splitEditorContext(sent)).toEqual({ text: 'fix it', file: 'src/a.ts', problems: 2 });
+    expect(splitEditorContext('just text\n\nmore')).toEqual({ text: 'just text\n\nmore', problems: 0 });
+    expect(promptHistory([{ role: 'user', content: sent }])).toEqual(['fix it']);
   });
 });
 

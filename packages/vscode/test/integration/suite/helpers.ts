@@ -12,7 +12,10 @@ export function until(
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       listener.dispose();
-      reject(new Error(`timed out waiting for ${what}; state: ${JSON.stringify({ ...source.state, messages: source.state.messages.slice(-3) }).slice(0, 2500)}`));
+      const { running, ownTurn, pendingPrompt, queued, submissions, approvals, busy, harness, providerId, model, route, account } = source.state;
+      // The turn's own fields first: a long note list used to push them past the cut.
+      const turn = JSON.stringify({ harness, providerId, model, route, account, running, ownTurn, pendingPrompt, queued, submissions, approvals: approvals.length, busy, live: source.state.live ? { waitingLabel: source.state.live.waitingLabel, text: source.state.live.text.slice(-200) } : undefined });
+      reject(new Error(`timed out waiting for ${what}; turn: ${turn}; state: ${JSON.stringify({ ...source.state, messages: source.state.messages.slice(-3), notes: source.state.notes.slice(-3).map((note) => ({ ...note, text: note.text.slice(0, 200) })) }).slice(0, 2500)}`));
     }, timeoutMs);
     const listener = source.onDidChange((model) => {
       if (!test(model)) return;
