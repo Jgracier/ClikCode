@@ -16,6 +16,7 @@ import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleS
 import { wrapCodeLine } from './render/wrap.js';
 import { installTerminalRestoreSignals, restoreTerminal, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
+import { stripRepeatedTitles } from '../session/title.js';
 import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
@@ -1482,7 +1483,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // measured the same as everything else. Never at the very top, where
         // there is nothing to separate from.
         if (message.role === 'user' && index > 0) emit(['']);
-        emit(messageRows(message.content, message.role === 'assistant' ? '·' : userMarker));
+        // A title tag never renders, however it got into the saved reply: a
+        // vendor that repeated its first reply's tag, or an older transcript.
+        emit(message.role === 'assistant'
+          ? messageRows(stripRepeatedTitles(message.content), '·')
+          : messageRows(message.content, userMarker));
       }
       if (index === liveAssistant) {
         this.emitted.liveAnswerSettled();

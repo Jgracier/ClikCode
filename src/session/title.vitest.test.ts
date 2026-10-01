@@ -156,7 +156,9 @@ describe('an account switch mid-turn', () => {
   it('never re-asks after the one title request was spent', () => {
     const session = { name: undefined, titleAttempts: 1 };
     expect(shouldRequestTitle(session)).toBe(false);
-    expect(prepareSessionTitle(session, 'continue')).toEqual({ prompt: 'continue' });
+    const later = prepareSessionTitle(session, 'continue');
+    expect(later.prompt).toBe('continue');
+    expect(later.stream.naming).toBe(false);
     expect(session.titleAttempts).toBe(1);
   });
 
@@ -166,9 +168,9 @@ describe('an account switch mid-turn', () => {
     expect(first.prompt).toContain(OPEN);
     expect(first.stream).toBeInstanceOf(StreamingTitle);
     expect(fresh.titleAttempts).toBe(1);
-    expect(prepareSessionTitle(fresh, 'continue')).toEqual({ prompt: 'continue' });
+    expect(prepareSessionTitle(fresh, 'continue').prompt).toBe('continue');
     const named = { name: 'Prod Disk Cleanup', titleAttempts: TITLE_REQUEST_ATTEMPTS };
-    expect(prepareSessionTitle(named, 'continue')).toEqual({ prompt: 'continue' });
+    expect(prepareSessionTitle(named, 'continue').prompt).toBe('continue');
     expect(shouldRequestTitle(named)).toBe(false);
   });
 });
@@ -196,7 +198,7 @@ describe('the title stream for one attempt', () => {
     stream!.push('Looking at the wor', 'append');
     // What the vendor-CLI failover sends instead: carry on with the thread.
     const next = titleStreamForAttempt(stream, 'Continue the interrupted latest request.', state);
-    expect(next).toBeUndefined();
+    expect(next.naming).toBe(false);
     expect(state.titleAttempts).toBe(1);
   });
 
@@ -205,7 +207,7 @@ describe('the title stream for one attempt', () => {
     const stream = titleStreamForAttempt(undefined, withTitleRequest('x'), state);
     let next = titleStreamForAttempt(stream, 'carry on', state);
     next = titleStreamForAttempt(next, 'carry on', state);
-    expect(next).toBeUndefined();
+    expect(next.naming).toBe(false);
     expect(state.titleAttempts).toBe(1);
   });
 
@@ -221,7 +223,35 @@ describe('the title stream for one attempt', () => {
     expect(state.titleAttempts).toBe(1);
   });
 
-  it('never starts one for a prompt that never asked', () => {
-    expect(titleStreamForAttempt(undefined, 'a plain prompt', session(0))).toBeUndefined();
+  it('never names from a prompt that never asked', () => {
+    const stream = titleStreamForAttempt(undefined, 'a plain prompt', session(0));
+    expect(stream.naming).toBe(false);
+  });
+});
+
+/** Reported: every later turn of a Grok chat opened with a fresh
+ * <clikcode-title> line, shown raw in the chat. The vendor keeps its history,
+ * so the model copies its first reply's habit, unasked. */
+describe('a title on a turn that did not ask for one', () => {
+  it('is stripped from the reply and never becomes the name', () => {
+    const named = { name: 'Add mc-brain MCP', titleAttempts: 1 };
+    const { prompt, stream } = prepareSessionTitle(named, 'does that make sense?');
+    expect(prompt).not.toContain(OPEN);
+    let shown = '';
+    for (const delta of ['<clikcode-ti', 'tle>Shared harness', ' features</clikcode-title>\n', 'That matches the goal.']) {
+      const visible = stream.push(delta, 'append');
+      if (visible !== undefined) shown += visible;
+    }
+    expect(shown).toBe('That matches the goal.');
+    expect(stream.title).toBeUndefined();
+  });
+
+  it('leaves a reply without one untouched', () => {
+    const { stream } = prepareSessionTitle({ name: 'X', titleAttempts: 1 }, 'go');
+    expect(stream.push('Yes. The cross-harness part', 'append')).toBe('Yes. The cross-harness part');
+  });
+
+  it('is asked for once, and the request says so', () => {
+    expect(withTitleRequest('fix it')).toMatch(/this reply only/);
   });
 });
