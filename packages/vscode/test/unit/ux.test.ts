@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { applyEvent, emptyModel, type ChatModel } from '../../src/model';
 import { supportsSecondarySidebar } from '../../src/compat';
 import { mentionScore } from '../../src/text';
-import { composeMessage, promptHistory, tokenAtCaret } from '../../src/webview/composer';
+import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../../src/webview/composer';
+import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
 import { inlineStep } from '../../src/webview/sheet';
 import { pathIn, relativeTime, resetIn } from '../../src/webview/format';
@@ -55,7 +56,8 @@ describe('the chat model', () => {
 describe('the composer', () => {
   it('finds the / or @ token under the caret', () => {
     expect(tokenAtCaret('/mod', 4)).toEqual({ kind: '/', query: 'mod', start: 0 });
-    expect(tokenAtCaret('/model x', 8)).toBeUndefined();
+    expect(tokenAtCaret('/model x', 8)).toEqual({ kind: '/', query: 'model x', start: 0 });
+    expect(tokenAtCaret('/model x\nmore', 13)).toBeUndefined();
     expect(tokenAtCaret('look at @src/ma', 15)).toEqual({ kind: '@', query: 'src/ma', start: 8 });
     expect(tokenAtCaret('mail me@example', 15)).toBeUndefined();
   });
@@ -145,5 +147,20 @@ describe('composer history and notice levels', () => {
     expect(noticeLevel('\u001b[1;31mfailed\u001b[0m')).toBe('error');
     expect(noticeLevel('\u001b[2mbackground task done\u001b[22m')).toBe('info');
     expect(noticeLevel('plain')).toBe('info');
+  });
+});
+
+describe('slash menu', () => {
+  const commands = [
+    { command: '/model', description: 'Choose the model', argHint: '<model>', argValues: [{ value: 'claude-opus-5-5', label: 'Opus 5.5' }, { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }] },
+    { command: '/clear', description: 'Start over', aliases: ['/new'] },
+  ].map(paletteEntry);
+
+  it('completes a command\'s values as the terminal does', () => {
+    expect(commandPaletteMatches('/model op', commands).map((row) => [row.value, row.completes])).toEqual([['/model claude-opus-5-5', true]]);
+  });
+
+  it('finds a command by its alias', () => {
+    expect(commandPaletteMatches('/new', commands).map((row) => row.value)).toEqual(['/clear']);
   });
 });

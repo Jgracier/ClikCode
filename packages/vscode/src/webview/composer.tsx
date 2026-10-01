@@ -6,6 +6,7 @@ import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } from '../model';
 import type { IdeSlashCommand } from '../protocol';
+import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import type { Mention } from '../webview-protocol';
 import { selectionBlock } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
@@ -35,7 +36,21 @@ const lineCount = (mention: Mention): number => (mention.endLine ?? 1) - (mentio
 /** The command list, for the conversation on the provider and model it had
  * when read: another provider has other commands (its own skills, its own
  * built-ins). */
-let slashCache: { key: string; commands: IdeSlashCommand[] } | undefined;
+let slashCache: { key: string; at: number; commands: readonly PaletteEntry[] } | undefined;
+/** The vendor lists behind the values (models, efforts) load in the
+ * background; a list read this long ago is read again for what arrived. */
+const SLASH_FRESH_MS = 20_000;
+
+/** A bridge command row as the terminal palette's entry, so the same matcher
+ * (command-palette.ts) ranks and completes it. */
+export function paletteEntry(item: IdeSlashCommand): PaletteEntry {
+  return {
+    label: item.command, value: item.command, detail: item.description,
+    ...(item.argHint ? { argHint: item.argHint } : {}), ...(item.group ? { group: item.group } : {}),
+    ...(item.aliases?.length ? { aliases: item.aliases } : {}),
+    ...(item.argValues?.length ? { argValues: () => item.argValues! } : {}),
+  };
+}
 
 /** The prompts ↑ and ↓ step through: this conversation's own, oldest first,
  * repeats in a row once -- as the terminal recalls what was typed, though
@@ -49,10 +64,11 @@ export function promptHistory(messages: ReadonlyArray<{ role: string; content: s
   return prompts.slice(-200);
 }
 
-/** The @ or / token the caret is in, if any. */
+/** The @ or / token the caret is in, if any. A / command is the whole first
+ * line up to the caret, its argument included, so `/model op` lists models. */
 export function tokenAtCaret(text: string, caret: number): { kind: '@' | '/'; query: string; start: number } | undefined {
   const before = text.slice(0, caret);
-  const slash = /^\/([\w:-]*)$/.exec(before);
+  const slash = /^\/([\w:-]*(?: [^\n]*)?)$/.exec(before);
   if (slash) return { kind: '/', query: slash[1]!, start: 0 };
   const at = /(?:^|\s)@([^\s@]*)$/.exec(before);
   if (at) return { kind: '@', query: at[1]!, start: caret - at[1]!.length - 1 };
@@ -143,25 +159,39 @@ export function Composer(props: {
     };
     if (token.kind === '/') {
       const cacheKey = `${model.sessionId}|${model.providerId}|${model.model}`;
-      const load = slashCache?.key === cacheKey ? Promise.resolve(slashCache.commands)
-        : request<IdeSlashCommand[]>({ method: 'query', query: 'slash-commands' }).then((commands) => { slashCache = { key: cacheKey, commands }; return commands; });
+      const cached = slashCache;
+      const load = cached?.key === cacheKey && Date.now() - cached.at < SLASH_FRESH_MS ? Promise.resolve(cached.commands)
+        : request<IdeSlashCommand[]>({ method: 'query', query: 'slash-commands' }).then((commands) => {
+          const entries = commands.map(paletteEntry);
+          slashCache = { key: cacheKey, at: Date.now(), commands: entries };
+          return entries;
+        });
       load.then((commands) => {
         if (!live) return;
-        const query = token.query.toLowerCase();
-        const matching = commands.filter((item) => item.command.slice(1).toLowerCase().startsWith(query) || (query.length > 1 && item.command.toLowerCase().includes(query)));
+        const line = `/${token.query}`;
         const rows: ListRow[] = [];
         let group: string | undefined;
-        for (const item of matching.slice(0, 60)) {
-          if (!query && item.group && item.group !== group) { group = item.group; const heading = group; rows.push({ key: `h:${heading}`, heading: true, render: () => <>{heading}</> }); }
+        for (const item of commandPaletteMatches(line, commands).slice(0, 80)) {
+          if (!item.completes && item.group && item.group !== group) { group = item.group; const heading = group; rows.push({ key: `h:${heading}`, heading: true, render: () => <>{heading}</> }); }
+          // A value row runs its whole command line; a command that takes
+          // values or a required argument is filled in so they can be chosen.
+          const run = (command: string): void => { setText(''); save({ draft: '' }); setSuggestions([]); post({ type: 'send', text: command, id: uid() }); };
+          const fill = Boolean(!item.completes && ((item.argHint && !/^\[/.test(item.argHint)) || item.argValues));
           rows.push({
-            key: item.command,
+            key: item.value,
             onSelect: () => {
-              if (item.argHint && !/^\[/.test(item.argHint)) replace(`${item.command} `);
-              else { setText(''); save({ draft: '' }); setSuggestions([]); post({ type: 'send', text: item.command, id: uid() }); }
+              if (item.completes) run(item.value);
+              // The command's own free-text argument, as typed.
+              else if (line.includes(' ')) run(line.trim());
+              else if (fill) replace(`${item.value} `);
+              else run(item.value);
             },
             render: () => (
               <div class="row">
-                <span class="row-main"><span class="row-label mono">{item.command}{item.argHint ? <span class="muted"> {item.argHint}</span> : null}</span><span class="row-detail">{item.description}</span></span>
+                <span class="row-main">
+                  <span class={`row-label${item.completes ? '' : ' mono'}`}>{item.completes ? item.label : item.value}{!item.completes && item.argHint ? <span class="muted"> {item.argHint}</span> : null}</span>
+                  {item.detail ? <span class="row-detail">{item.detail}</span> : null}
+                </span>
               </div>
             ),
           });
