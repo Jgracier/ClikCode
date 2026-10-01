@@ -8,7 +8,7 @@ import { cloneData } from '../store/data.js';
 import { atomicWriteFile } from '../store/files.js';
 import { stateDirectory } from '../store/paths.js';
 import { resetSessionStoreCache } from '../store/records.js';
-import { invocationRollups, type Invocation, type InvocationRollup } from './invocations.js';
+import type { Invocation, InvocationRollup } from './invocations.js';
 import type { SessionMeta } from './merge.js';
 import { HARNESS_STATE_VERSION, harnessIndexPath } from './paths.js';
 

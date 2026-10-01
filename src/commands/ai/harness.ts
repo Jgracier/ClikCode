@@ -2,7 +2,6 @@
 
 import { isClikCodeAgent } from '../../session/route.js';
 import { randomUUID } from 'node:crypto';
-import chalk from 'chalk';
 import { ensureNativeHarness } from '../../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';

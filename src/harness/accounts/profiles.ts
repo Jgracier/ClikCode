@@ -2,13 +2,12 @@
  * rules for removing one safely. */
 
 import { existsSync } from 'node:fs';
-import { lstat, readdir, realpath, rm, stat } from 'node:fs/promises';
+import { lstat, realpath, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { homeRedirectEnvironment } from '../../runtime/lazy-bridge.js';
 import { harnessStatePath } from '../../session/state/paths.js';
-import { readState } from '../../session/state/read.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 
 /** The environment a vendor process runs under for this account: its isolated
@@ -69,38 +68,4 @@ export async function purgeAccountProfile(
   if ('refused' in verdict) return undefined;
   await rm(verdict.path, { recursive: true, force: true });
   return verdict.path;
-}
-
-/** Profile directories no account refers to: abandoned logins, accounts removed
- * by a build that did not purge, profiles replaced by a re-login. A directory
- * younger than `minAgeMs` is left alone -- a login in progress has created its
- * directory but not yet saved its account. */
-async function collectOrphanProfiles(options: { dryRun?: boolean; minAgeMs?: number; now?: number } = {}): Promise<{ removed: string[]; kept: string[] }> {
-  const minAgeMs = options.minAgeMs ?? 60 * 60_000;
-  const now = options.now ?? Date.now();
-  const root = clikcodeProfilesRoot();
-  const state = await readState();
-  const referenced = new Set(state.accounts.flatMap((account) => account.nativeProfile?.path ? [resolve(account.nativeProfile.path)] : []));
-  const removed: string[] = [];
-  const kept: string[] = [];
-  const list = async (directory: string): Promise<string[]> => {
-    try { return (await readdir(directory, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch {
-      // fail-open-ok: no profiles directory means there is nothing to collect.
-      return [];
-    }
-  };
-  for (const harnessName of await list(root)) {
-    for (const profileName of await list(join(root, harnessName))) {
-      const candidate = join(root, harnessName, profileName);
-      const verdict = await resolvePurgeableProfile(candidate);
-      const info = 'path' in verdict ? await stat(verdict.path).catch(() => undefined) : undefined;
-      if (referenced.has(resolve(candidate)) || !('path' in verdict) || !info || now - info.mtimeMs < minAgeMs) {
-        kept.push(candidate);
-        continue;
-      }
-      if (!options.dryRun) await rm(verdict.path, { recursive: true, force: true });
-      removed.push(verdict.path);
-    }
-  }
-  return { removed, kept };
 }

@@ -545,7 +545,7 @@ export async function aiAccountRemove(labelOrId: string, options: AccountRemoveO
   }
   state.sessions = state.sessions.map((session) => session.accountId === removed.id ? { ...session, accountId: null } : session);
   // The registry first, the directory second: a crash in between leaves an
-  // orphan for collectOrphanProfiles, never an account pointing at nothing.
+  // orphan directory, never an account pointing at nothing.
   await writeState(state);
   const purged = options.purgeProfile === false ? undefined : await purgeAccountProfile(removed, state.accounts).catch(() => undefined);
   emitHarnessOutput({ panel: 'account-removed', account: removed.label, loggedOut, ...(purged ? { profileRemoved: purged } : {}) });

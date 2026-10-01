@@ -122,12 +122,6 @@ export async function nativeUsageReading(
   return { windows: next.windows ?? [], ...(next.label === undefined ? {} : { label: next.label }) };
 }
 
-async function nativeUsageLabel(
-  session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
-): Promise<string | undefined> {
-  return (await nativeUsageReading(session, state, options))?.label;
-}
-
 function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, harnessCommand: string): HarnessSession {
   const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
   return related ?? {

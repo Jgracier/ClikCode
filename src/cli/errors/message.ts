@@ -124,16 +124,6 @@ export function toCliErrorMessage(error: unknown): string {
 }
 
 /**
- * Shared replacement for the byte-identical local `apiError()` helpers that used
- * to live in individual command files. Delegates to {@link toCliErrorMessage} so
- * every command surfaces the friendly fetch-failed mapping and a `trace <id>` line
- * instead of a raw `fetch failed` / `Request failed with status code 502`.
- */
-function apiErrorMessage(error: unknown): string {
-  return toCliErrorMessage(error);
-}
-
-/**
  * Debug escape-hatch details: HTTP status, response body and stack. Returned as
  * an already-formatted multi-line string (empty when there's nothing extra).
  */
