@@ -86,23 +86,15 @@ export async function runVendorSessionAttempt(input: {
       const acpInput: AcpTurnInput = {
         binary: launch.binary, command: harness.command, prompt: turnText,
         argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
-        ...(harness.acp?.usageTotals ? { usageTotals: harness.acp.usageTotals } : {}),
         extraArgv: [...launch.optionArgv, ...optionArgv],
         ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
-        modelRequiresProtocol: harness.acp?.inheritCliOptions === false,
-        // "medium" is ClikCode's generic initial value. Agents without an
-        // ACP effort control should use their own default instead of sending
-        // every ordinary turn through the CLI fallback.
-        effortRequiresProtocol: harness.acp?.inheritCliOptions === false && effort !== 'medium',
-        effortConfigId: harness.acp?.effortConfigId,
-        providerConfigId: harness.acp?.providerConfigId,
+        acp: harness.acp,
         modelProviderSeparator: harness.modelProviderSeparator,
         allowAgentAuth: Boolean(prompter),
         // Claude Code's quota, carried by the turn itself: published like a
         // stream reading, so the composer and the account picker see it.
         onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
-        permissionModeIds: harness.acp?.permissionModeIds,
         environment, signal, images, onSessionId,
         ...sharedObserver,
       };

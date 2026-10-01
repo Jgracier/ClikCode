@@ -51,7 +51,7 @@ describe('ACP usage reported as session totals', () => {
   it('a declared session total counts each turn by what it grew', async () => {
     const answer = (input: number, output: number) => ({ stopReason: 'end_turn', usage: { inputTokens: input, outputTokens: output, totalTokens: input + output } });
     const [first, second] = await turns([[{ update: chunk('a'), answer: answer(1000, 50) }], [{ update: chunk('b'), answer: answer(2600, 90) }]], {
-      extra: { usageTotals: 'session' },
+      extra: { acp: { usageTotals: 'session' } },
     });
     expect(first).toMatchObject({ input: 1000, output: 50, totalTokens: 1050 });
     expect(second).toMatchObject({ input: 1600, output: 40, totalTokens: 1640 });
@@ -100,7 +100,7 @@ describe('ACP usage reported as session totals', () => {
     const [turn] = await turns([[
       { update: chunk('ok') }, { update: vibeUpdate(15_000, 700, 9_000, 0.42) },
       { answer: { stopReason: 'end_turn', usage: { inputTokens: 15_000, outputTokens: 700, totalTokens: 15_700 } } },
-    ]], { onLoad: [chunk('earlier answer'), vibeUpdate(10_000, 500, 6_000, 0.3)], resume: true, extra: { usageTotals: 'session' } });
+    ]], { onLoad: [chunk('earlier answer'), vibeUpdate(10_000, 500, 6_000, 0.3)], resume: true, extra: { acp: { usageTotals: 'session' } } });
     expect(turn).toMatchObject({ input: 5_000, output: 200, cacheRead: 3_000, totalTokens: 5_200, contextWindow: 256_000 });
     expect(turn!.costUsd).toBeCloseTo(0.12, 6);
   });

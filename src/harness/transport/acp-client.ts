@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import type { AiHarnessPermissionMode } from '../definition.js';
+import type { AiHarnessAcpDefinition, AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { eventDiff } from '../../agent/line-diff.js';
@@ -52,17 +52,13 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   permissionMode: AiHarnessPermissionMode;
   model?: string | null;
   effort?: string | null;
-  /** Require model/effort selection over ACP when CLI launch flags are not
-   * valid for this agent's ACP entry point. */
-  modelRequiresProtocol?: boolean;
-  effortRequiresProtocol?: boolean;
-  effortConfigId?: string;
-  providerConfigId?: string;
+  /** The harness's catalog ACP entry: how model, effort and permission mode
+   * are selected over the protocol, and what its usage readings mean. */
+  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'usageTotals'>;
   modelProviderSeparator?: string;
   /** An interactive client can let a single advertised agent-auth method
    * finish its OAuth flow over ACP when the vendor asks for sign-in. */
   allowAgentAuth?: boolean;
-  permissionModeIds?: Readonly<Partial<Record<AiHarnessPermissionMode, string>>>;
   /** Local image paths, sent as ACP image blocks when the agent advertises
    * `promptCapabilities.image`. Otherwise the turn fails before the prompt
    * with `acpUnsupportedImages` so the caller can use its image-capable CLI. */
@@ -77,9 +73,6 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   /** Per-harness options. With `argv` these are the only options; without it
    * they are appended to the locally derived model/effort/permission flags. */
   extraArgv?: readonly string[];
-  /** The catalog's `acp.usageTotals`: the prompt response's usage is the
-   * session's running total, not the turn's. */
-  usageTotals?: 'session';
   /** Setup request timeout (initialize, session/new|resume|load). */
   setupTimeoutMs?: number;
   /** Override ACP_RATE_LIMIT_GRACE_MS. */
@@ -610,6 +603,14 @@ class AcpSessionImpl implements AcpSession {
     const { peer } = live;
     const setup = { timeoutMs: input.setupTimeoutMs ?? JSONRPC_SETUP_TIMEOUT_MS };
     const stillRunning = (): void => { if (turn.done) throw turnCancelledError(); };
+    const { effortConfigId, providerConfigId, permissionModeIds, usageTotals } = input.acp ?? {};
+    // CLI launch flags are not valid for this agent's ACP entry point: model
+    // and effort can only be selected over the protocol.
+    const modelRequiresProtocol = input.acp?.inheritCliOptions === false;
+    // "medium" is ClikCode's generic initial value. Agents without an ACP
+    // effort control should use their own default instead of sending every
+    // ordinary turn through the CLI fallback.
+    const effortRequiresProtocol = modelRequiresProtocol && input.effort !== 'medium';
     if (!live.capabilities) {
       const initialized = await peer.request('initialize', {
         protocolVersion: 1,
@@ -672,17 +673,17 @@ class AcpSessionImpl implements AcpSession {
     // launch flag is not guaranteed to reach the session (`hermes acp` ignores
     // `--model`, and would silently run its configured default).
     let requestedModel = input.model;
-    if (requestedModel && input.providerConfigId && input.modelProviderSeparator && requestedModel.includes(input.modelProviderSeparator)) {
+    if (requestedModel && providerConfigId && input.modelProviderSeparator && requestedModel.includes(input.modelProviderSeparator)) {
       const boundary = requestedModel.indexOf(input.modelProviderSeparator);
       const providerId = requestedModel.slice(0, boundary);
       requestedModel = requestedModel.slice(boundary + input.modelProviderSeparator.length);
-      const providerOption = live.configOptions?.find((option) => (option.id ?? option.configId) === input.providerConfigId);
+      const providerOption = live.configOptions?.find((option) => (option.id ?? option.configId) === providerConfigId);
       const choices: Json[] = Array.isArray(providerOption?.options) ? providerOption.options : [];
       if (!choices.some((option) => option.value === providerId)) {
         throw Object.assign(new Error(`${input.command} ACP does not offer provider ${providerId}`), { acpUnsupportedModel: true });
       }
       if (providerOption?.currentValue !== providerId) {
-        const updated = await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: input.providerConfigId, value: providerId }, setup);
+        const updated = await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: providerConfigId, value: providerId }, setup);
         stillRunning();
         live.configOptions = Array.isArray(updated?.configOptions)
           ? updated.configOptions
@@ -691,9 +692,9 @@ class AcpSessionImpl implements AcpSession {
       }
     }
     const modelId = requestedModel ? acpModelChoice(live.models, requestedModel)
-      ?? (input.providerConfigId && live.configOptions?.some((option) => (option.id ?? option.configId) === 'model') ? requestedModel : undefined)
+      ?? (providerConfigId && live.configOptions?.some((option) => (option.id ?? option.configId) === 'model') ? requestedModel : undefined)
       : undefined;
-    if (input.model && !modelId && input.modelRequiresProtocol) {
+    if (input.model && !modelId && modelRequiresProtocol) {
       throw Object.assign(new Error(`${input.command} ACP does not list model ${input.model}`), { acpUnsupportedModel: true });
     }
     const modelConfig = live.configOptions?.find((option) => (option.id ?? option.configId) === 'model');
@@ -705,7 +706,7 @@ class AcpSessionImpl implements AcpSession {
       if (modelConfig) live.configOptions = live.configOptions?.map((option) => option === modelConfig ? { ...option, currentValue: modelId } : option);
       else live.models = { ...live.models, currentModelId: modelId };
     }
-    const modeId = input.permissionModeIds?.[input.permissionMode];
+    const modeId = permissionModeIds?.[input.permissionMode];
     if (modeId && live.modes?.currentModeId !== modeId) {
       const available: Json[] = Array.isArray(live.modes?.availableModes) ? live.modes.availableModes : [];
       if (!available.some((mode) => mode.id === modeId)) throw new Error(`${input.command} ACP does not offer permission mode ${modeId}`);
@@ -713,17 +714,17 @@ class AcpSessionImpl implements AcpSession {
       stillRunning();
       live.modes = { ...live.modes, currentModeId: modeId };
     }
-    if (input.effort && input.effortConfigId) {
-      const effortOption = live.configOptions?.find((option) => (option.id ?? option.configId) === input.effortConfigId);
+    if (input.effort && effortConfigId) {
+      const effortOption = live.configOptions?.find((option) => (option.id ?? option.configId) === effortConfigId);
       const choices: Json[] = Array.isArray(effortOption?.options) ? effortOption.options : [];
       if (effortOption && choices.some((option) => option.value === input.effort) && effortOption.currentValue !== input.effort) {
-        await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: input.effortConfigId, value: input.effort }, setup);
+        await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: effortConfigId, value: input.effort }, setup);
         stillRunning();
         live.configOptions = live.configOptions?.map((option) => option === effortOption ? { ...option, currentValue: input.effort } : option);
-      } else if ((!effortOption || !choices.some((option) => option.value === input.effort)) && input.effortRequiresProtocol) {
+      } else if ((!effortOption || !choices.some((option) => option.value === input.effort)) && effortRequiresProtocol) {
         throw Object.assign(new Error(`${input.command} ACP does not offer effort ${input.effort}`), { acpUnsupportedEffort: true });
       }
-    } else if (input.effort && input.effortRequiresProtocol) {
+    } else if (input.effort && effortRequiresProtocol) {
       throw Object.assign(new Error(`${input.command} ACP does not offer effort control`), { acpUnsupportedEffort: true });
     }
     this.sessionId = turn.sessionId;
@@ -757,7 +758,7 @@ class AcpSessionImpl implements AcpSession {
       const window = listed.find((item) => item?.modelId === modelId)?._meta?.totalContextTokens;
       usage = { ...usage, contextUsed: completed._meta.totalTokens, ...(typeof window === 'number' ? { contextWindow: window } : {}) };
     }
-    if (usage && input.usageTotals === 'session') {
+    if (usage && usageTotals === 'session') {
       this.sessionTotals = { ...this.sessionTotals, ...turnShareOf(usage, {}) };
       usage = { ...usage, ...turnShareOf(usage, turn.base) };
     }

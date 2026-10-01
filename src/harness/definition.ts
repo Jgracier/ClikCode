@@ -25,7 +25,7 @@ type AiHarnessParser =
 
 type AiHarnessMemoryFile = 'CLAUDE.md' | 'AGENTS.md' | 'GEMINI.md' | 'QWEN.md' | 'CONVENTIONS.md';
 
-interface AiHarnessAcpDefinition {
+export interface AiHarnessAcpDefinition {
   argv: readonly string[];
   binary?: string;
   npmPackage?: string;
