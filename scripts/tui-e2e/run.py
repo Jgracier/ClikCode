@@ -31,6 +31,8 @@ SCENARIOS = {
         'turns': [TWO_BLOCKS],
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 4)],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
+        # A turn that ran a tool ends on one line saying so, written once.
+        'final_once': ['Worked for'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
@@ -45,6 +47,8 @@ SCENARIOS = {
         ],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.',
                   'and the second question', 'Second answer arrives here.'],
+        # Only the first turn ran a tool; the second, short and tool-free, ends bare.
+        'final_once': ['Worked for'],
     },
     'message-typed-mid-answer': {
         'turns': [TWO_BLOCKS, {'blocks': ['Queued one answered now.']}],
