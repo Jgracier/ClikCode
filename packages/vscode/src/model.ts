@@ -104,6 +104,10 @@ export interface LiveTurn {
   startedAt: number;
   /** When the turn last said anything: text, a tool, a thought, a phase. */
   lastEventAt: number;
+  /** When the model last went back to thinking -- the turn began, its last
+   * open call closed, or its answer last moved: how long it has thought, for
+   * the status line's words ("still thinking"). */
+  thinkingSince: number;
 }
 
 export interface ChatModel {
@@ -347,7 +351,11 @@ function settled(live: LiveTurn): LiveTurn {
 function withToolPhase(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
   if (event.parentId || event.kind === 'thinking') return live;
   const lifecycle = activityLifecyclePhase(new Map(live.openTools), event);
-  return { ...live, openTools: [...lifecycle.activeTools], toolPhase: lifecycle.activeTools.size ? lifecycle.phase : undefined };
+  const closed = live.openTools.length > 0 && !lifecycle.activeTools.size;
+  return {
+    ...live, openTools: [...lifecycle.activeTools], toolPhase: lifecycle.activeTools.size ? lifecycle.phase : undefined,
+    ...(closed ? { thinkingSince: Date.now() } : {}),
+  };
 }
 
 function applyActivity(live: LiveTurn, event: HarnessActivityEvent, offset?: number): LiveTurn {
@@ -355,7 +363,7 @@ function applyActivity(live: LiveTurn, event: HarnessActivityEvent, offset?: num
 }
 
 function freshLive(waitingLabel: string, startedAt = Date.now()): LiveTurn {
-  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, openTools: [], steers: [], startedAt, lastEventAt: Date.now() };
+  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, openTools: [], steers: [], startedAt, lastEventAt: Date.now(), thinkingSince: Date.now() };
 }
 
 /** Text replaced wholesale keeps the rows placed in what it kept; one placed
@@ -429,7 +437,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
         reasoning: rebaseOffsets(after.reasoning, live.text, text),
       } : {};
-      return { ...model, live: { ...after, ...placed, text, lastEventAt: Date.now() } };
+      return { ...model, live: { ...after, ...placed, text, lastEventAt: Date.now(), ...(event.text ? { thinkingSince: Date.now() } : {}) } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
