@@ -52,10 +52,14 @@ export function forgetToolPairingEvidence(): void {
 
 export function createPendingWorkTracker(command: string): PendingWorkTracker {
   const running = new Set<string>();
+  const settled = new Set<string>();
   let anonymous = 0;
   return {
     note(event) {
       if (!event) return;
+      // Late detail for a call already finished is not a new call, and its
+      // completion must not settle some other one still running.
+      if (event.id && settled.has(event.id)) return;
       if (event.kind === 'tool-start') {
         if (event.id) running.add(event.id);
         else anonymous += 1;
@@ -63,6 +67,7 @@ export function createPendingWorkTracker(command: string): PendingWorkTracker {
       }
       if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return;
       settlesTools.add(command);
+      if (event.id) settled.add(event.id);
       // Same pairing rule the idle watchdog uses: a completion whose start was
       // never seen still settles one outstanding tool.
       if (event.id && running.delete(event.id)) return;

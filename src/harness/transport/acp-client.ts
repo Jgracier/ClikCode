@@ -132,6 +132,14 @@ function cappedLines(text: string, cap: number): string[] {
   return lines.length > cap ? [...lines.slice(0, cap), `... ${lines.length - cap} more lines`] : lines;
 }
 
+/** The tool call a sub-agent's update belongs to: claude-agent-acp's
+ * `_meta.claudeCode.parentToolUseId` (stamped on the sub-agent's tool calls,
+ * prose and thinking). */
+export function acpParentToolId(update: Json): string | undefined {
+  const parent = update?._meta?.claudeCode?.parentToolUseId;
+  return typeof parent === 'string' && parent ? parent : undefined;
+}
+
 export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined {
   if (update.sessionUpdate !== 'tool_call' && update.sessionUpdate !== 'tool_call_update') return undefined;
   const status = String(update.status);
@@ -155,6 +163,7 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
     label: acpToolLabel(update, classified),
     ...classified,
     ...(typeof update.toolCallId === 'string' ? { id: update.toolCallId } : {}),
+    ...(acpParentToolId(update) ? { parentId: acpParentToolId(update)! } : {}),
     ...output,
     ...(diff ? { diff } : {}),
     ...(completed ? commandOutcome(rawOutput) : {}),
@@ -367,6 +376,14 @@ interface Stream {
    * screen showed the reply twice, then lost the last block at turn end.
    * The CLI parsers keep the same flag (events/adapters.ts). */
   needsSeparator?: boolean;
+  /** Tool calls this stream has seen settle. An update that arrives after
+   * (Claude's final diff, sent by its PostToolUse hook once the result is in)
+   * carries no status; read as a start it reopened a finished row and left a
+   * running call no completion would ever close. */
+  settledTools?: Set<string>;
+  /** What each sub-agent is saying now, by its parent Agent call: one run
+   * of prose or of thinking, begun again by its next call or a switch. */
+  subagentText?: Map<string, { kind: string; text: string }>;
   /** The thought streaming now: ACP sends fragments with no id, so a thought
    * is a run of `agent_thought_chunk`s that anything else ends. */
   thought?: { id: string; text: string };
@@ -826,6 +843,21 @@ class AcpSessionImpl implements AcpSession {
       clearTimeout(turn.throttled);
       turn.throttled = undefined;
     }
+    // A sub-agent's prose and thinking (claude-agent-acp stamps each with the
+    // Agent call it belongs to). It is not the answer: appended to it, the
+    // sub-agent's words read as Claude's own. It shows under its Agent row.
+    const parentId = acpParentToolId(update);
+    if (parentId && (update.sessionUpdate === 'agent_message_chunk' || update.sessionUpdate === 'agent_thought_chunk')) {
+      const text = typeof update.content?.text === 'string' ? update.content.text : '';
+      if (!text) return;
+      target.subagentText ??= new Map();
+      const prior = target.subagentText.get(parentId);
+      const said = `${prior && prior.kind === update.sessionUpdate ? prior.text : ''}${text}`.slice(-2000);
+      target.subagentText.set(parentId, { kind: String(update.sessionUpdate), text: said });
+      const latest = said.trim().split(/\n+/).pop()?.trim() ?? '';
+      if (latest) input.onActivity?.({ kind: 'thinking', label: latest.slice(-160), parentId });
+      return;
+    }
     const thought = acpThoughtDelta(update);
     // Anything but a thought (or a usage reading) ends the thought in progress.
     if (!thought && update.sessionUpdate !== 'usage_update') target.thought = undefined;
@@ -851,8 +883,20 @@ class AcpSessionImpl implements AcpSession {
       target.thought.text += thought;
       return input.onThought?.(target.thought.text, target.thought.id);
     }
-    const activity = acpActivityEvent(update);
-    if (activity) { target.sawActivity = true; if (target.text) target.needsSeparator = true; input.onActivity?.(activity); return; }
+    let activity = acpActivityEvent(update);
+    if (activity) {
+      target.settledTools ??= new Set();
+      if (activity.id && activity.kind === 'tool-start' && target.settledTools.has(activity.id)) {
+        // Late detail for a finished call: it settles into that row.
+        activity = { ...activity, kind: 'tool-done' };
+      } else if (activity.id && activity.kind !== 'tool-start') target.settledTools.add(activity.id);
+      target.sawActivity = true;
+      // A sub-agent's call ends what it was saying before it.
+      if (activity.parentId) target.subagentText?.delete(activity.parentId);
+      if (target.text && !activity.parentId) target.needsSeparator = true;
+      input.onActivity?.(activity);
+      return;
+    }
     const plan = acpPlanEntries(update);
     if (plan) return input.onPlan?.(plan);
     // `usage_update` {used, size, cost}: the context the session occupies,
