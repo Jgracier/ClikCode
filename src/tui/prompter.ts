@@ -648,7 +648,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (event.parentId) {
       // A sub-agent's own calls stay inside the agent row. They are not
       // separate messages, and they do not move the status line.
-      if (event.kind === 'tool-start') this.childActivity.set(event.parentId, event.label);
+      // What it is doing (a call) or saying (its prose, its thinking) now.
+      if (event.kind === 'tool-start' || event.kind === 'thinking') this.childActivity.set(event.parentId, event.label);
       else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.childActivity.delete(event.parentId);
       this.schedulePaint();
       return;

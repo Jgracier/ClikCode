@@ -42,9 +42,12 @@ export function upsertActivityEvent(
   const matchIndex = (() => {
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index]!;
-      if (entry.anchor !== anchor || entry.event?.kind !== 'tool-start') continue;
-      if (normalized.id ? entry.event.id === normalized.id
-        : entry.event.label === normalized.label) return index;
+      if (entry.anchor !== anchor || !entry.event) continue;
+      // By id, a call's row is found whatever state it is in: detail that
+      // arrives after it finished (a final diff) belongs in that row, not a
+      // new one. Without an id only an open row can be the same call.
+      if (normalized.id) { if (entry.event.id === normalized.id) return index; continue; }
+      if (entry.event.kind === 'tool-start' && entry.event.label === normalized.label) return index;
     }
     return -1;
   })();
@@ -53,6 +56,9 @@ export function upsertActivityEvent(
     const prior = next[matchIndex]!;
     const effective = {
       ...normalized,
+      // A finished call stays finished: a later frame without a status adds
+      // its detail but cannot reopen it.
+      ...(normalized.kind === 'tool-start' && prior.event!.kind !== 'tool-start' ? { kind: prior.event!.kind } : {}),
       ...(normalized.label === 'tool' ? { label: prior.event!.label } : {}),
       // A completion frame routinely carries neither the name nor the input
       // the category was derived from. The row keeps what its start knew.
