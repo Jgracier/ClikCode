@@ -15,6 +15,15 @@ const run = (events: IdeEvent[], start: ChatModel = emptyModel()): ChatModel => 
 const worker = (event: unknown): IdeEvent => ({ type: 'worker', sessionId: 's1', event } as IdeEvent);
 
 describe('chat model', () => {
+  it('says nothing when an idle worker retires, but reports a cut-off turn', () => {
+    const open = run([{ type: 'ready', version: '1', pid: 1 }, { type: 'session', session: session() }]);
+    const retired = run([worker({ type: 'shutdown', reason: 'replaced by a newer ClikCode build' })], open);
+    expect(retired).toBe(open);
+    const cut = run([{ type: 'turn-start', sessionId: 's1', prompt: 'hi' }, worker({ type: 'shutdown', reason: 'killed' })], open);
+    expect(cut.running).toBe(false);
+    expect(cut.notes.at(-1)?.text).toContain('killed');
+  });
+
   it('streams a turn and ends on the worker transcript', () => {
     const during = run([
       { type: 'ready', version: '1', pid: 1 },
@@ -137,7 +146,7 @@ describe('editor context', () => {
 
 describe('usage in the chat bar', () => {
   it('reads as the terminal words it: the figure, the reset once a window is spent', async () => {
-    const { composerUsageLabel } = await import('../../../../src/tui/render/usage-words');
+    const { composerUsageLabel } = await import('../../../../src/tui/render/usage-words.js');
     expect(composerUsageLabel('5h 96% left · Weekly 18% left')).toBe('5h 96% left · Weekly 18% left');
     expect(composerUsageLabel('5h 0% left · Weekly 18% left', 'Resets 1:50PM')).toBe('Resets 1:50PM');
     expect(composerUsageLabel('$0 credits exhausted')).toBe('Out Of Credits');

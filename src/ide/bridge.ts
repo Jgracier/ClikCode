@@ -349,9 +349,18 @@ export class IdeBridge {
     client.on('event', (event: WorkerEvent) => this.onWorkerEvent(sessionId, client, event));
     client.on('close', () => {
       if (this.worker?.client !== client) return;
+      const midTurn = this.workerTurnRunning || Boolean(this.turnWaiter);
       this.worker = undefined;
       this.workerTurnRunning = false;
-      this.failTurn(new Error('session worker connection closed unexpectedly'));
+      if (midTurn) { this.failTurn(new Error('session worker connection closed unexpectedly')); return; }
+      // An idle worker left -- retired for a newer build, or timed out. Not
+      // the user's concern: attach to (or start) its replacement so this
+      // window keeps following the conversation.
+      if (this.closed || this.sessionId !== sessionId) return;
+      this.enqueue(async () => {
+        if (this.closed || this.sessionId !== sessionId || this.worker) return;
+        await this.workerFor(sessionId).catch(() => undefined);
+      });
     });
     return client;
   }
@@ -408,7 +417,8 @@ export class IdeBridge {
         return;
       }
       case 'shutdown':
-        this.failTurn(new Error(`session worker exited mid-turn: ${event.reason}`));
+        // A worker only retires idle; the close that follows reattaches.
+        if (this.workerTurnRunning || this.turnWaiter) this.failTurn(new Error(`session worker exited mid-turn: ${event.reason}`));
         return;
       default:
         return;

@@ -304,6 +304,9 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'submission':
       return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition } : item)) };
     case 'shutdown':
+      // An idle worker retiring (a newer build, an idle timeout) is invisible:
+      // the bridge attaches to its replacement. Only a cut-off turn is news.
+      if (!model.running) return model;
       return { ...endTurn(withNote(model, { kind: 'notice', level: 'warning', text: `The conversation's worker stopped: ${event.reason}` })), approvals: [] };
     default:
       // suspend/resume, sign-in-request (the bridge handles it), restore-draft
