@@ -11,10 +11,10 @@ import type { Mention } from '../webview-protocol';
 import { openFileLine, problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { estimatedTokens, formatTurnUsage, titleCase } from './format';
-import { EffortMenu, effortLabel, knownProviders, ModeMenu, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
+import { AccountMenu, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { Icon, KeyList, type ListRow } from './ui';
 
-type Menu = 'provider' | 'model' | 'effort' | 'mode' | undefined;
+type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefined;
 
 export interface ComposerHandle {
   focus(): void;
@@ -96,7 +96,6 @@ export function Composer(props: {
   model: ChatModel;
   handle: { current: ComposerHandle | null };
   onError: (message: string) => void;
-  onOpenScreen: (screen: 'accounts' | 'settings') => void;
 }): JSX.Element {
   const { model } = props;
   const textarea = useRef<HTMLTextAreaElement>(null);
@@ -389,7 +388,6 @@ export function Composer(props: {
         {menu === 'provider' ? <ProviderModelPicker mode="provider" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'model' ? <ProviderModelPicker key={model.providerId} mode="model" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'effort' ? <EffortMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
-        {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {showSuggestions ? (
           <div class="popover suggestions" role="dialog" aria-label={token?.kind === '/' ? 'Commands' : 'Files'}>
             <KeyList id="suggestions" rows={suggestions} label={token?.kind === '/' ? 'Commands' : 'Files'} inputRef={textarea as unknown as { current: HTMLInputElement | null }} onEscape={() => setDismissedToken(tokenKey)} />
@@ -431,12 +429,13 @@ export function Composer(props: {
         <div class="composer-footer">
           {structured ? footerButton('provider', <><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></>, `Provider: ${providerName}`, 'provider-button')
             : <button type="button" class="chip-button" disabled={!connected} onClick={() => post({ type: 'send', text: '/provider', id: uid() })}><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></button>}
-          {structured && providerChoosesModel(model.providerId) ? footerButton('model', <><span class="chip-text">{modelName ?? 'Default model'}</span><Icon name="chevron-down" /></>, `Model: ${modelName ?? 'default'}`, 'model-button') : null}
-          {structured && effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
-          {structured && model.chatSettings?.permissions ? footerButton('mode', <><Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} /><span class="chip-text">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span></>, `Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`, 'mode-button') : null}
+          {/* Model and effort are one choice, as in Claude Code: `Opus Medium`. */}
+          {structured && providerChoosesModel(model.providerId)
+            ? footerButton('model', <><span class="chip-text">{modelWithEffort(modelName, effort?.current)}</span><Icon name="chevron-down" /></>, `Model and effort: ${modelWithEffort(modelName, effort?.current)}`, 'model-button')
+            : structured && effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
           <span class="spacer" />
           {model.accountUsage ? (
-            <button type="button" class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="Accounts and usage" onClick={() => props.onOpenScreen('accounts')}>{model.accountUsage}</button>
+            <span class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="This account's usage">{model.accountUsage}</span>
           ) : null}
           <button type="button" class="icon-button" aria-label="Mention a file" title="Mention a file (@)" disabled={!connected}
             onClick={() => { const spacer = text && !/\s$/.test(text) ? ' ' : ''; update(`${text}${spacer}@`); }}><Icon name="mention" /></button>
@@ -451,9 +450,20 @@ export function Composer(props: {
         </div>
       </div>
       <div class="composer-status">
-        {account && (account.problem || account.label.toLowerCase() !== providerName.toLowerCase()) ? (
-          <button type="button" class="status-account" title={`${account.label}: accounts and usage`} onClick={() => props.onOpenScreen('accounts')}>
-            <Icon name={account.problem ? 'warning' : 'account'} />{account.label.toLowerCase() !== providerName.toLowerCase() ? <span class="status-label">{account.label}</span> : null}
+        {menu === 'account' ? <AccountMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
+        {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
+        {account ? (
+          <button type="button" id="account-button" class={`status-account${menu === 'account' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'account'}
+            title={`${account.label}: this provider's accounts`} disabled={!connected} onClick={() => setMenu(menu === 'account' ? undefined : 'account')}>
+            <Icon name={account.problem ? 'warning' : 'account'} /><span class="status-label">{account.label}</span><Icon name="chevron-down" />
+          </button>
+        ) : null}
+        {/* Permissions belong to how this chat runs, beside whose account it runs on. */}
+        {structured && model.chatSettings?.permissions ? (
+          <button type="button" id="mode-button" class={`status-account${menu === 'mode' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'mode'}
+            title={`Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`} disabled={!connected} onClick={() => setMenu(menu === 'mode' ? undefined : 'mode')}>
+            <Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} />
+            <span class="status-label">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span><Icon name="chevron-down" />
           </button>
         ) : null}
         <span class="spacer" />

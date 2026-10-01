@@ -33,12 +33,27 @@ export function chatSuite(): void {
       await waitFor(api, '.welcome', 'the welcome screen');
     });
 
+    it('lists only this provider\'s accounts, and sets effort beside the model', async () => {
+      await waitFor(api, '#account-button', 'the account under the message box');
+      await click(api, '#account-button');
+      await waitFor(api, '#account-menu [role="option"], #account-menu .keylist-empty, #account-menu .row', 'the account list', 30_000, (found) => found.count > 0);
+      await screenshot('accounts-menu', 600);
+      await key(api, '#account-menu', 'Escape');
+      if ((await query(api, '#model-button')).count) {
+        await click(api, '#model-button');
+        await waitFor(api, '#model-picker', 'the model picker');
+        await screenshot('model-picker', 1500);
+        await key(api, '#model-picker', 'Escape');
+      }
+    });
+
     it('chooses a harness and a model from the composer menu', async () => {
       await pickProviderModel(api, 'opencode', 'opencode/big-pickle');
       await until(api, (state) => state.harness === 'opencode' && state.model === 'opencode/big-pickle', 'OpenCode big-pickle', 180_000);
       await waitFor(api, '#provider-button', 'the provider button showing OpenCode', 30_000, (found) => /OpenCode/.test(found.text));
       // The provider is on the button beside it, so the model reads without it.
-      await waitFor(api, '#model-button', 'the Model button showing big-pickle', 30_000, (found) => found.text.trim() === 'big-pickle');
+      // The model and its effort read as one choice: `big-pickle`, or `big-pickle Medium`.
+      await waitFor(api, '#model-button', 'the Model button showing big-pickle', 30_000, (found) => /^big-pickle( \w+)?$/.test(found.text.trim()));
       await waitFor(api, '.welcome', 'the welcome line naming big-pickle', 30_000, (found) => /OpenCode · big-pickle/.test(found.text) && !/opencode\//.test(found.text));
     });
 
