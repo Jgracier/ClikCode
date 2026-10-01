@@ -8,7 +8,7 @@ import { applyModelPatch } from '../model-patch';
 import type { IdeConversation, IdePickItem, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
-import { ApprovalCard, Spinner, Transcript } from './chat';
+import { ApprovalCard, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
 import { homeRelative, relativeTime } from './format';
 import { choose } from './picker';
@@ -140,7 +140,6 @@ function Header({ model, onMenu, history, setHistory, onError }: { model: ChatMo
   return (
     <header class="topbar">
       <span class="title-text" title={title}>{title}</span>
-      {model.running ? <span class="running-indicator" title="Working…" role="img" aria-label="Working"><Spinner tone="tone-cyan" /></span> : null}
       <span class="spacer" />
       <IconButton id="new-chat" icon="add" label={`New chat (${shortcut('N')})`} onClick={() => { void request({ method: 'open', mode: 'new' }); }} />
       <span data-popover-anchor><IconButton id="history-button" icon="history" label="Conversations" active={history} onClick={() => { setMore(false); setHistory(!history); }} /></span>

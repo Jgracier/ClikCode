@@ -17,6 +17,7 @@ import { post } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
+import { workingStatus } from './flow';
 import { splitEditorContext } from '../editor-context';
 
 /** Finished messages, rendered once each and kept across a redraw of the
@@ -205,7 +206,6 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const hasMore = Boolean((activity.output?.length && (!preview || preview.hidden > 0))
     || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines));
   const outcome = activityOutcome(activity);
-  const kind = status === 'running' ? liveWaitKind(activity) : undefined;
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
     event.stopPropagation();
@@ -214,9 +214,10 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
+        {/* One thing moves on screen while a turn runs: the working line's
+            spinner. A running call wears its category's icon, still. */}
         <span class={`activity-status ${toneOf(activity)}`} aria-label={status}>
-          {status === 'running' ? <Spinner tone={kind === 'command' ? 'tone-yellow' : kind === 'agent' ? 'tone-cyan' : ''} />
-            : status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
+          {status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
         </span>
         <ActivityLabel label={activity.label} workspace={workspace} />
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
@@ -395,8 +396,9 @@ function Plan({ plan, folded = false, running = false }: { plan: ChatModel['plan
       {rows.map(({ entry, index }) => (
         <div key={index} class={`plan-entry ${entry.status ?? ''}`}>
           {/* The step in progress moves with the turn, as the terminal's does. */}
-          {entry.status === 'in_progress' && running ? <Spinner tone="tone-cyan" />
-            : <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'cancelled' ? 'circle-slash' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />}
+          {/* The step in progress is marked, still: the working line is
+              what moves. */}
+          <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'cancelled' ? 'circle-slash' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />
           <span>{entry.content}</span>
         </div>
       ))}
@@ -419,38 +421,33 @@ function useNow(): number {
 /** Rows of one run of calls shown before the earlier ones fold away. */
 const VISIBLE_ACTIVITIES = 6;
 
-/** The working line, as the terminal's: what the turn is doing (the open
- * call's verb, else the turn's phase), how long it has run, and a stall named
- * as one -- never while a call runs or an approval waits, when silence is
- * expected. Ticks on its own. */
+/** The working line, the one thing on screen that moves while a turn runs:
+ * what the turn is doing (turn-flow's rule: waiting on you, the open call's
+ * verb, the reasoning's own heading, or how long it has thought), in the
+ * colour of that work, a shimmer passing over it (CSS); toward red as
+ * silence goes on. The thought being had is its tooltip, and opens under it.
+ * Ticks on its own. */
 function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; elsewhere: boolean; asking: boolean }): JSX.Element {
   const now = useNow();
-  const label = asking ? 'waiting for approval' : live?.toolPhase ?? live?.phase ?? live?.waitingLabel ?? 'starting';
+  const [open, setOpen] = useState(false);
+  const status = workingStatus(live, asking, now);
   const quiet = live && !asking && !live.openTools.length ? now - (live.lastEventAt ?? live.startedAt) : 0;
   const stalled = quiet >= STALL_MS;
+  const thought = asking ? undefined : live?.thought?.text;
   return (
-    <div class="working" role="status">
-      <Spinner tone={stalled ? 'tone-yellow' : 'tone-cyan'} still={stalled || asking} />
-      <span class="working-label">{titleCase(label.replace(/(…|\.\.\.)$/, ''))}…</span>
-      <span class="muted">{live ? formatElapsed(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
-      {stalled ? <span class="stalled" title="Nothing has arrived from the agent for a while">nothing received for {formatElapsed(quiet)}</span> : null}
-      {asking ? null : <span class="muted working-hint">Esc to stop</span>}
-    </div>
-  );
-}
-
-/** The thought being had, its newest words on one line as in the terminal;
- * open, all of it. Settled, it becomes a "Thought for Xs" row in place. */
-function LiveThought({ live }: { live: LiveTurn }): JSX.Element | null {
-  const [open, setOpen] = useState(false);
-  if (!live.thought) return null;
-  const text = live.thought.text;
-  return (
-    <div class={`thought${open ? ' open' : ''}`}>
-      <button type="button" class="thought-toggle" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} onClick={() => setOpen(!open)}>
-        <Icon name="lightbulb" /><span class="thought-text">{text.length > 200 ? `…${text.slice(-200)}` : text}</span>
-      </button>
-      {open ? <Reasoning text={text} /> : null}
+    <div class="working-wrap">
+      <div class={`working status-${status.tone}`} role="status" style={{ '--stall': String(status.stall) }}>
+        <Spinner tone={status.toneClass} still={asking} />
+        <span class={`working-label ${status.toneClass}`} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
+        {thought ? (
+          <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
+            onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
+        ) : null}
+        <span class="muted">{live ? formatElapsed(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
+        {stalled ? <span class="stalled" title="Nothing has arrived from the agent for a while">nothing received for {formatElapsed(quiet)}</span> : null}
+        {asking ? null : <span class="muted working-hint">Esc to stop</span>}
+      </div>
+      {open && thought ? <Reasoning text={thought} /> : null}
     </div>
   );
 }
@@ -469,11 +466,10 @@ function ActivityRun({ activities, workspace }: { activities: Activity[]; worksp
 
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
- * it, the newest still streaming; then the thought and the working line. */
+ * it, the newest still streaming; then the working line. */
 const LiveTurnView = memo(({ live, workspace, elsewhere, asking }: { live: LiveTurn | undefined; workspace?: string; elsewhere: boolean; asking: boolean }): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
     {live ? <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }} /> : null}
-    {live && !asking ? <LiveThought live={live} /> : null}
     <Working live={live} elsewhere={elsewhere} asking={asking} />
   </div>
 ));

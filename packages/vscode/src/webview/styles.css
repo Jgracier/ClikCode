@@ -66,8 +66,6 @@ button.primary kbd, button.secondary kbd { border-color: currentColor; opacity: 
 }
 /* The chat's name, plain: the conversations list is the history button's. */
 .title-text { min-width: 0; max-width: 70%; padding: 3px 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.running-indicator { display: inline-flex; color: var(--muted); margin-left: 2px; }
-.running-indicator .codicon { font-size: 13px; }
 .chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 14px var(--gap) 8px; scroll-behavior: auto; min-width: 0; }
 .starting { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 100%; color: var(--muted); }
@@ -210,10 +208,6 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .working { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.93em; }
 .working-label { color: var(--vscode-foreground); }
 .working-hint { margin-left: auto; }
-.thought { margin-top: 6px; min-width: 0; }
-.thought-toggle { display: flex; gap: 6px; align-items: center; max-width: 100%; background: none; border: none; padding: 0; color: var(--muted); font-style: italic; font-size: 0.93em; text-align: left; }
-.thought-toggle:hover { color: var(--vscode-foreground); }
-.thought-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .stalled { display: inline-flex; gap: 4px; align-items: center; color: var(--warn); }
 @keyframes pulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -471,16 +465,42 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .approval { container-type: inline-size; }
 @container (max-width: 300px) { .approval-actions kbd { display: none; } }
 
-/* The terminal's spinner and its tool colours, in the theme's own palette. */
+/* The terminal's spinner and its tool colours, in the theme's own palette.
+   Each tone names its colour (--tone) so the working line can mix it. */
 .spinner { display: inline-block; width: 2ch; font-family: var(--vscode-editor-font-family); line-height: 1; color: var(--muted); }
-.tone-cyan { color: var(--vscode-charts-blue, #3794ff); }
-.tone-yellow { color: var(--vscode-charts-yellow, #cca700); }
-.tone-blue { color: var(--vscode-symbolIcon-fileForeground, var(--vscode-charts-blue, #3794ff)); }
-.tone-magenta { color: var(--vscode-charts-purple, #b180d7); }
-.tone-green { color: var(--vscode-charts-green, #89d185); }
+.tone-cyan { --tone: var(--vscode-charts-blue, #3794ff); color: var(--tone); }
+.tone-yellow { --tone: var(--vscode-charts-yellow, #cca700); color: var(--tone); }
+.tone-blue { --tone: var(--vscode-symbolIcon-fileForeground, var(--vscode-charts-blue, #3794ff)); color: var(--tone); }
+.tone-magenta { --tone: var(--vscode-charts-purple, #b180d7); color: var(--tone); }
+.tone-green { --tone: var(--vscode-charts-green, #89d185); color: var(--tone); }
+/* Asking the user: the permission colour, as the approval card's. */
+.tone-permission { --tone: var(--vscode-textLink-foreground, #3794ff); color: var(--tone); }
+.tone-plain { --tone: var(--vscode-foreground); color: var(--tone); }
 .activity.done .activity-status:not(.tone-cyan):not(.tone-yellow):not(.tone-blue):not(.tone-magenta):not(.tone-green) { color: var(--muted); }
 .working .spinner { width: 2.2ch; }
-.plan-entry .spinner { width: 14px; margin-top: 1px; }
+/* The working line: its tone, mixed toward red as silence goes on (--stall,
+   0..1, set on the line), and a highlight sweeping across the words every
+   two seconds -- all CSS, nothing redrawn per frame. Still under reduced
+   motion. */
+.working .spinner, .working .working-label {
+  --tone-now: color-mix(in srgb, var(--err) calc(var(--stall, 0) * 100%), var(--tone, var(--vscode-foreground)));
+  color: var(--tone-now);
+}
+.working .working-label {
+  background: linear-gradient(90deg, var(--tone-now) 0%, var(--tone-now) 38%, color-mix(in srgb, var(--tone-now) 35%, var(--vscode-editor-foreground, #fff)) 50%, var(--tone-now) 62%, var(--tone-now) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2s linear infinite;
+}
+@keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .working .working-label { background: none; -webkit-text-fill-color: currentColor; }
+}
+.working-wrap { margin-top: 6px; }
+.working-wrap .working { margin-top: 0; }
+.working-wrap .reasoning { margin-top: 4px; }
+.working-thought { color: var(--muted); }
 .steer { display: flex; gap: 6px; align-items: baseline; margin: 4px 0; font-size: 0.93em; }
 .steer > span:first-of-type { white-space: pre-wrap; }
 .steer .muted { font-size: 0.9em; }
