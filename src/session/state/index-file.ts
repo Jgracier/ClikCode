@@ -96,7 +96,3 @@ export function resetHarnessStateCaches(): void {
   indexCache = undefined;
   resetSessionStoreCache();
 }
-
-// ---------------------------------------------------------------------------
-// Invocation retention
-// ---------------------------------------------------------------------------

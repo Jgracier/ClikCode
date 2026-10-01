@@ -194,10 +194,6 @@ export function rememberBaseline(state: HarnessState, baseline: StateBaselineDat
   return hidden(state, STATE_BASELINE, baseline);
 }
 
-// ---------------------------------------------------------------------------
-// Migration ladder
-// ---------------------------------------------------------------------------
-
 export function indexFromWorking(state: HarnessState, disk: StateIndex | undefined): StateIndex {
   return {
     version: HARNESS_STATE_VERSION,

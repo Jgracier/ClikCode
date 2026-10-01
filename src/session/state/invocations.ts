@@ -84,10 +84,6 @@ function invocationTotals(
   return totals;
 }
 
-// ---------------------------------------------------------------------------
-// Merge
-// ---------------------------------------------------------------------------
-
 export function totalsOf(invocations: readonly Invocation[], rollups: Record<string, InvocationRollup>): InvocationTotals {
   const state = hidden({ invocations } as unknown as HarnessState, STATE_ROLLUPS, rollups);
   return invocationTotals(state);

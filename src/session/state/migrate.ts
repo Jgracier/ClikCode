@@ -173,7 +173,3 @@ export async function ensureLayoutLocked(): Promise<void> {
   }
   if (!hasIndex) await createFreshLayout();
 }
-
-// ---------------------------------------------------------------------------
-// Read
-// ---------------------------------------------------------------------------
