@@ -24,6 +24,9 @@ import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/pr
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { loadIndex } from '../session/state/index-file.js';
+import { readState } from '../session/state/read.js';
+import { runSwarmDelegation } from '../swarm/run.js';
+import { openSwarmTurn } from '../swarm/store.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
@@ -98,6 +101,13 @@ export async function runGatewayHarnessSessionTurn(
     notice: (message) => { if (prompter) prompter.activity(message); else process.stderr.write(`${message}\n`); },
   });
   const hooks = toolHooksFrom(hookConfig, (message) => prompter?.activity(message));
+  if (session.swarm?.length) await openSwarmTurn(session.id).catch(() => undefined);
+  const publishActivity = (event: GatewayActivityEvent): void => {
+    const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);
+    const classified = category && !event.category ? { ...event, category } : event;
+    input.onActivity?.(classified as never);
+    prompter?.activityEvent(classified as never);
+  };
   return runGatewayHarnessTurn({
     sessionId: session.id,
     cwd: workspace,
@@ -123,18 +133,15 @@ export async function runGatewayHarnessSessionTurn(
       input.onResponseDelta?.(visible, mode);
       prompter?.response(visible, mode);
     },
-    onActivity: (event) => {
-      // The loop reports its own tool names; classify them here so a gateway
-      // row is coloured and animated by what it does exactly as a local
-      // harness's row is. One standard, both routes.
-      // The loop already stamps a category from the tool's class. The label
-      // is often the command itself (`$ git status`), which is not a tool name,
-      // so classifying the label would miss the run — or worse, call `ls` a
-      // search. Only fill in what the loop did not already know.
-      const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);
-      const classified = category && !event.category ? { ...event, category } : event;
-      input.onActivity?.(classified as never);
-      prompter?.activityEvent(classified as never);
+    onActivity: publishActivity,
+    // Re-read the conversation's swarm on each task, so /swarm during a turn
+    // applies to the next call. A one-file question still stays on this host.
+    swarmDelegate: async (request) => {
+      const state = await readState({ transcripts: [] });
+      const live = state.sessions.find((item) => item.id === session.id);
+      const host = live?.swarm?.length ? { ...session, swarm: live.swarm, permissionMode: live.permissionMode ?? session.permissionMode, accountId: live.accountId ?? session.accountId } : session;
+      if (!host.swarm?.length) return null;
+      return runSwarmDelegation({ host, state, request, onActivity: publishActivity });
     },
     onPhase: (phase) => {
       // The loop announces every model step as 'thinking' before calling it.

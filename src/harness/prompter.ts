@@ -59,6 +59,10 @@ export interface HarnessActivityEvent {
   durationMs?: number;
   /** A finished command's exit code, where the vendor reports one. */
   exitCode?: number;
+  /** Set when this row is another provider working inside the host's turn.
+   * The host chat paints that provider's name; the model is not given the
+   * provider's transcript. */
+  swarm?: { provider: string; displayName: string; role: 'explore' | 'implement' | 'review'; step?: string; usageLeft?: number };
 }
 
 export interface HarnessPrompter {

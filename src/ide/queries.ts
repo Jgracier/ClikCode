@@ -149,6 +149,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
  * chat). Generating first, then Active (last 24 hours), then Past. */
 export async function conversationList(state: HarnessState, currentId: string | undefined): Promise<IdeConversation[]> {
   const sessions = state.sessions
+    .filter((session) => !session.clerkOf)
     .filter((session) => session.status !== 'archived' || session.id === currentId)
     .filter((session) => session.id === currentId || !isBlankConversation(session));
   let live = await liveWorkerSessions(sessions);
@@ -269,6 +270,13 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
   }
   const permissions = sessionPermissionModes(session, isClikCodeAgent(session) ? undefined : harness);
   if (permissions.length) settings.permissions = { current: session.permissionMode ?? 'ask', choices: [...permissions] };
+  settings.swarm = {
+    current: [...(session.swarm ?? [])],
+    choices: [
+      { id: 'lean', label: 'Lean', detail: 'Up to two providers that have reported usage left' },
+      { id: 'frugal', label: 'Frugal', detail: 'One provider, the one with the most usage left' },
+    ],
+  };
   if (harness) {
     settings.failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
     if (harness.planMode) settings.plan = session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;

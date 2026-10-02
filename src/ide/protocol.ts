@@ -169,6 +169,8 @@ export interface IdeChatSettings {
   failover?: 'auto' | 'never';
   plan?: boolean;
   fast?: boolean;
+  /** Swarm configurations on this chat, and the presets the picker offers. */
+  swarm?: { current: string[]; choices: Array<{ id: string; label: string; detail: string }> };
 }
 
 export interface IdeGateway {
@@ -189,6 +191,8 @@ export type IdeChoice =
   | { kind: 'plan'; on: boolean }
   /** ClikDeploy Gateway: served by the fastest provider instead of the cheapest. */
   | { kind: 'fast'; on: boolean }
+  /** Replace the chat's swarm configurations. An empty list turns it off. */
+  | { kind: 'swarm'; names: string[] }
   | { kind: 'account'; accountId: string }
   | { kind: 'add-account'; provider: string }
   | { kind: 'account-action'; accountId: string; action: 'reauthenticate' | 'disconnect' | 'remove' | 'verified' }

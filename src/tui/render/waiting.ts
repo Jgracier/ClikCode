@@ -22,9 +22,9 @@ export function rightLabeledRule(width: number, label?: string): string {
  * repainted, not appended, and the status line is a different place. A call
  * running for a second or more shows for how long, the way a native CLI
  * times its own shell commands. */
-export function runningChatLine(label: string, frame: number, kind: 'command' | 'agent' | 'tool', elapsedMs = 0): string {
+export function runningChatLine(label: string, frame: number, kind: 'command' | 'agent' | 'tool' | 'swarm', elapsedMs = 0): string {
   const spinner = kind === 'command' ? chalk.yellow(waitingSpinnerGlyph(frame))
-    : kind === 'agent' ? chalk.cyan(waitingSpinnerGlyph(frame))
+    : kind === 'agent' || kind === 'swarm' ? chalk.cyan(waitingSpinnerGlyph(frame))
       : chalk.dim(waitingSpinnerGlyph(frame));
   const verb = kind === 'command' ? 'running ' : kind === 'agent' ? 'agent ' : '';
   const timer = elapsedMs >= 1000 ? chalk.dim(` (${formatElapsed(elapsedMs)})`) : '';

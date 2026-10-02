@@ -166,6 +166,9 @@ export interface GatewayHarnessTurnInput {
    * prompt, the conversation goes to `transcript` instead of disk, and the
    * turn cannot start sub-agents of its own. */
   subagent?: { system: string; transcript: ConversationItem[] };
+  /** When the conversation has a swarm, a `task` call asks this before the
+   * same-model sub-agent. Null keeps that sub-agent. */
+  swarmDelegate?: (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal }) => Promise<ToolRunResult | null>;
 }
 
 export interface GatewayHarnessTurnResult {

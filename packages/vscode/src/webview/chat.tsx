@@ -119,16 +119,17 @@ export function Spinner({ tone = '', still = false }: { tone?: string; still?: b
 }
 
 /** A tool label with the path in it made a link to the file. */
-function ActivityLabel({ label, workspace }: { label: string; workspace?: string }): JSX.Element {
+function ActivityLabel({ label, workspace, shimmer }: { label: string; workspace?: string; shimmer?: boolean }): JSX.Element {
+  const className = shimmer ? 'activity-text swarm-name' : 'activity-text';
   const found = pathIn(label);
-  if (!found) return <span class="activity-text" title={label}>{relative(label, workspace)}</span>;
+  if (!found) return <span class={className} title={label}>{relative(label, workspace)}</span>;
   const before = relative(label.slice(0, found.index), workspace);
   const written = found.path + (found.line ? `:${found.line}` : '');
   const after = relative(label.slice(found.index + written.length), workspace);
   // Shown relative to the workspace, opened by the path the tool used.
   const shown = relative(found.path, workspace) + (found.line ? `:${found.line}` : '');
   return (
-    <span class="activity-text" title={label}>
+    <span class={className} title={label}>
       {before}
       <a href="#" class="file-link" data-file={found.path} data-line={found.line} title={`Open ${found.path}`}>{shown}</a>
       {after}
@@ -224,6 +225,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const result = activityResult(activity);
   const outcome = activityOutcome(activity);
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
+  const swarmRunning = status === 'running' && Boolean(activity.swarm);
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
     event.stopPropagation();
     post({ type: 'change', action, key: activity.key, ...(userIndex === undefined ? {} : { userIndex }) });
@@ -233,10 +235,10 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
       <div class="activity-line">
         {/* One thing moves on screen while a turn runs: the working line's
             spinner. A running call wears its category's icon, still. */}
-        <span class={`activity-status ${toneOf(activity)}`} aria-label={status}>
-          {status === 'error' ? <Icon name="error" /> : <Icon name={activityIcon(activity)} />}
+        <span class={`activity-status ${activity.swarm ? 'tone-cyan' : toneOf(activity)}`} aria-label={status}>
+          {status === 'error' ? <Icon name="error" /> : swarmRunning ? <Spinner tone="tone-cyan" /> : <Icon name={activityIcon(activity)} />}
         </span>
-        <ActivityLabel label={tensedLabel(activity.label, status === 'running')} workspace={workspace} />
+        <ActivityLabel label={tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={swarmRunning} />
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {result ? <span class="activity-outcome activity-result">{result}</span> : null}

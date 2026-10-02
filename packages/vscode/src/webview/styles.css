@@ -516,8 +516,17 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   animation: shimmer 2s linear infinite;
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
+/* A provider the host delegated to: its name sweeps like the working line
+   while that row is still running. Still when the user asks for less motion. */
+.activity.running .swarm-name {
+  background: linear-gradient(90deg, currentColor 0%, currentColor 38%, color-mix(in srgb, currentColor 35%, var(--vscode-editor-foreground, #fff)) 50%, currentColor 62%, currentColor 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: shimmer 2s linear infinite;
+}
 @media (prefers-reduced-motion: reduce) {
-  .working .working-label { background: none; -webkit-text-fill-color: currentColor; }
+  .working .working-label, .activity.running .swarm-name { background: none; -webkit-text-fill-color: currentColor; animation: none; }
 }
 .working-wrap { margin-top: 6px; }
 .working-wrap .working { margin-top: 0; }
