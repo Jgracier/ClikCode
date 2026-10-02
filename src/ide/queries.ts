@@ -16,7 +16,7 @@ import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspe
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { authEvidencePresent, hasAuthEvidence, harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { accountUsageReading } from '../harness/accounts/account-usage.js';
-import { learnedUsageReading } from '../harness/accounts/usage-learning.js';
+import { learnedUsageNow } from '../harness/accounts/usage-now.js';
 import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
 import { accountQuotaSpent, usageReadingIsCurrent, type UsageWindow } from '../harness/accounts/usage-reading.js';
 import { nativeModelCatalogForPicker } from '../harness/accounts/model-catalog.js';
@@ -224,8 +224,10 @@ export async function accountList(state: HarnessState, session: HarnessSession |
           usage = { ...(shared.label ? { label: shared.label } : {}), windows: windowsOf(shared.windows) };
         }
       }
-      if (!usage && !NATIVE_USAGE_PROBES[harness.command]) {
-        const learned = learnedUsageReading(account.usageLearning, state.invocations, account.id, now);
+      if (!usage) {
+        // A probe that errored, or a harness that publishes nothing, still
+        // has the figure its own turns have taught.
+        const learned = learnedUsageNow(account, state, now);
         if (learned) usage = { ...(learned.label ? { label: learned.label } : {}), windows: windowsOf(learned.windows), learned: true };
       }
     }

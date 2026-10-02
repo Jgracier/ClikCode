@@ -8,6 +8,7 @@ import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES } from './usage-probes.js';
 import { learnedUsageReading } from './usage-learning.js';
+import { learnedUsageNow } from './usage-now.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, quotaMarkExpiresAt, quotaMarkedAt, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 
@@ -69,6 +70,12 @@ export async function nativeUsageReading(
   // A failed probe is held off briefly -- see NATIVE_USAGE_FAILURE_TTL_MS.
   // That is not a cached figure; there is no figure.
   if (entry?.failed && Number.isFinite(entry.at) && Date.now() - entry.at < NATIVE_USAGE_FAILURE_TTL_MS && !options.network) {
+    // The probe errored. Skip that error. A learned amount still answers,
+    // and so does a vendor figure the error carried forward.
+    if (account) {
+      const learned = learnedUsageNow(account, state);
+      if (learned?.windows.length && !(entry.windows?.length)) return learned;
+    }
     return entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   // A turn STARTED on the account since the reading makes it old news.
@@ -104,22 +111,44 @@ export async function nativeUsageReading(
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const reading: UsageReading | undefined = probe ? await probe(session, environment).catch(() => undefined) : undefined;
   // Carry the last known figure through a failure rather than blanking it --
-  // but never past its own reset, when it stops describing anything.
+  // but never past its own reset, when it stops describing anything. When
+  // there is nothing to carry, the learned figure is the amount. The failed
+  // probe itself is not stored as usage.
   const carried = entry && usageReadingIsCurrent(entry) ? entry : undefined;
-  const next: UsageCacheEntry = reading?.label === undefined
-    ? { at: Date.now(), failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) }
-    : { at: Date.now(), label: reading.label, ...(reading.windows.length ? { windows: reading.windows } : {}) };
+  const learned = !reading?.label && !(carried?.windows?.length)
+    ? learnedUsageNow(account, state)
+    : undefined;
+  const probedAt = Date.now();
+  const next: UsageCacheEntry = reading?.label !== undefined
+    ? { at: probedAt, label: reading.label, ...(reading.windows.length ? { windows: reading.windows } : {}) }
+    : learned?.windows.length
+      ? { at: probedAt, failed: true }
+      : { at: probedAt, failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) };
   nativeUsageCache.set(cacheKey, next);
-  if (account) {
+  if (!reading?.label && learned?.windows.length) {
+    // The probe failed. Keep its failure in the cache so it is not asked
+    // again immediately, and store the learned amount as the usage.
+    account.usage = { at: new Date(probedAt - 1).toISOString(), ...(learned.label === undefined ? {} : { label: learned.label }), learned: true, windows: learned.windows } as AiHarnessAccount['usage'];
+  } else if (reading?.label !== undefined) {
     account.usage = accountUsageFrom(next);
     // The moment a reading shows room, the refusal it overtakes is cleared on
     // the record too -- not left for the next failover to notice.
-    if (reading?.label !== undefined) settleQuotaMark(account);
-    // writeState merges per field, so publishing this reading cannot disturb
-    // anything another terminal changed meanwhile.
-    await writeState(state).catch(() => undefined);
+    settleQuotaMark(account);
+  } else if (carried?.windows?.length && account.usage?.failed) {
+    account.usage = {
+      at: new Date(carried.at).toISOString(),
+      ...(carried.label === undefined ? {} : { label: carried.label }),
+      windows: carried.windows,
+    } as AiHarnessAccount['usage'];
+  } else if (!carried?.windows?.length) {
+    account.usage = accountUsageFrom(next);
   }
-  return { windows: next.windows ?? [], ...(next.label === undefined ? {} : { label: next.label }) };
+  // writeState merges per field, so publishing this reading cannot disturb
+  // anything another terminal changed meanwhile.
+  await writeState(state).catch(() => undefined);
+  if (!reading?.label && learned?.windows.length) return learned;
+  const shown = !reading?.label && carried?.windows?.length ? carried : next;
+  return { windows: shown.windows ?? [], ...(shown.label === undefined ? {} : { label: shown.label }) };
 }
 
 function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, harnessCommand: string): HarnessSession {

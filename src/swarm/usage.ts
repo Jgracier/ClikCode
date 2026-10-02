@@ -1,21 +1,24 @@
-/** Who the host may delegate to: a provider that has published a usage window
- * with a numeric amount, and still has some of that amount left. A signed-in
- * account with no reading, or only a learned guess, is not in the pool. */
+/** Who the host may delegate to. The account needs a numeric amount still
+ * left: the vendor's own reading, or the figure learned from its turns.
+ * A failed reading is skipped. No amount means out of usage. */
 
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { accountCanTakeTurn, usageReadingIsCurrent, type AccountUsageReading } from '../harness/accounts/usage-reading.js';
+import { resolvedUsage } from '../harness/accounts/usage-now.js';
+import { accountCanTakeTurn } from '../harness/accounts/usage-reading.js';
+import type { HarnessState } from '../session/model.js';
 
 export interface ClerkUsage {
   /** The tightest remaining percent across the windows that can stop the account. */
   leftPct: number;
 }
 
-export function clerkUsage(account: AiHarnessAccount, now = Date.now()): ClerkUsage | undefined {
-  const reading = account.usage as AccountUsageReading | undefined;
-  if (!reading || reading.failed) return undefined;
-  const windows = (reading.windows ?? []).filter((window) => typeof window.usedPct === 'number' && Number.isFinite(window.usedPct));
-  if (!windows.length || !usageReadingIsCurrent({ windows }, now)) return undefined;
-  if (!accountCanTakeTurn(account, now)) return undefined;
+export function clerkUsage(account: AiHarnessAccount, stateOrNow: HarnessState | number = Date.now(), now = Date.now()): ClerkUsage | undefined {
+  const state = typeof stateOrNow === 'number' ? undefined : stateOrNow;
+  const at = typeof stateOrNow === 'number' ? stateOrNow : now;
+  if (!accountCanTakeTurn(account, at)) return undefined;
+  const reading = resolvedUsage(account, state ?? { invocations: [] } as unknown as HarnessState, at);
+  const windows = reading?.windows ?? [];
+  if (!windows.length) return undefined;
   const binding = windows.filter((window) => !window.advisory);
   const measured = binding.length ? binding : windows;
   const leftPct = Math.min(...measured.map((window) => Math.max(0, 100 - window.usedPct)));
