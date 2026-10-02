@@ -121,9 +121,9 @@ export interface HarnessSession {
   shellNotes?: ShellNote[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;
-  /** Swarm configurations on this conversation (`lean`, `frugal`, or both).
-   * Absent, the host does not delegate. */
-  swarm?: string[];
+  /** Swarm is off until this conversation turns it on. A saved preset list
+   * from before the single switch still means on. */
+  swarm?: boolean | string[];
   /** Last board written for this conversation. The live copy is the swarm
    * board file; this is what a resumed chat still has if that file is gone. */
   swarmBoard?: import('../swarm/board.js').SwarmBoard;

@@ -11,13 +11,11 @@ import {
   type SwarmBoard, type SwarmCard, type SwarmRole,
 } from './board.js';
 import { runProviderPrompt } from './clerk.js';
-import { resolveSwarm, type SwarmPolicy } from './policy.js';
+import { SWARM_POLICY, swarmIsOn, type SwarmPolicy } from './policy.js';
 import { appendSwarmActivity } from './spool.js';
 import { readBoard, writeBoard } from './store.js';
 import { clerkUsage } from './usage.js';
 import type { ToolRunResult } from '../agent/tool-contract.js';
-
-const PREFER = ['cursor', 'codex', 'opencode', 'grok', 'gemini', 'kiro', 'cline', 'goose'];
 
 /** Serializes board updates for one host. Clerk runs happen outside the lock. */
 const tails = new Map<string, Promise<unknown>>();
@@ -40,10 +38,6 @@ export interface SwarmDelegation {
   runClerk?: typeof runProviderPrompt;
 }
 
-function hostCommand(session: HarnessSession): string | undefined {
-  return session.nativeHarness ?? session.provider ?? undefined;
-}
-
 export interface ClerkCandidate {
   account: AiHarnessAccount;
   command: string;
@@ -51,33 +45,29 @@ export interface ClerkCandidate {
   leftPct: number;
 }
 
-/** Other providers the host may use. Each one has published a usage amount
- * and still has some of it left. The one with the most left is first. */
+/** Every other account the host may use. A headless turn (its CLI, or ACP)
+ * and a usage amount with room left are the whole test. The one with the
+ * most left is first. The host's own account is the only one left out. */
 export function clerkAccounts(state: HarnessState, host: HarnessSession, now = Date.now()): ClerkCandidate[] {
-  const own = hostCommand(host);
   const ranked = state.accounts.flatMap((account) => {
     if (account.id === host.accountId) return [];
     const usage = clerkUsage(account, state, now);
     if (!usage) return [];
     const harness = localHarnessForProvider(account.provider) ?? localHarnessForCommand(account.provider);
-    if (!harness || !harnessCanRunTurns(harness) || !harness.turn) return [];
-    if (harness.command === own || harness.provider === own || account.provider === own) return [];
+    if (!harness || !harnessCanRunTurns(harness)) return [];
     return [{ account, command: harness.command, displayName: harness.displayName, leftPct: usage.leftPct }];
   });
-  ranked.sort((left, right) => {
-    if (right.leftPct !== left.leftPct) return right.leftPct - left.leftPct;
-    const rank = (command: string): number => {
-      const index = PREFER.indexOf(command);
-      return index < 0 ? PREFER.length : index;
-    };
-    return rank(left.command) - rank(right.command) || left.displayName.localeCompare(right.displayName);
-  });
+  ranked.sort((left, right) => right.leftPct - left.leftPct || left.displayName.localeCompare(right.displayName) || left.account.label.localeCompare(right.account.label));
   return ranked;
 }
 
-/** The provider with the most reported usage left, or none when nobody has published an amount. */
-export function pickClerkAccount(state: HarnessState, host: HarnessSession, now = Date.now()): ClerkCandidate | undefined {
-  return clerkAccounts(state, host, now)[0];
+/** The account with the most usage left that is not already working. When
+ * every eligible account is busy, the one with the most left is used again. */
+export function pickClerkAccount(
+  state: HarnessState, host: HarnessSession, now = Date.now(), busy: ReadonlySet<string> = new Set(),
+): ClerkCandidate | undefined {
+  const ranked = clerkAccounts(state, host, now);
+  return ranked.find((row) => !busy.has(row.account.id)) ?? ranked[0];
 }
 
 function providerLabel(displayName: string, role: SwarmRole, description: string): string {
@@ -100,18 +90,24 @@ function cardResult(card: SwarmCard, label: string, picked: ClerkCandidate, role
 /** `null` means the host's own sub-agent should do this. A result means a
  * clerk did it, or the swarm refused another worker and said so. */
 export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRunResult | null> {
-  const names = input.host.swarm ?? [];
-  const { policy } = resolveSwarm(names);
-  if (!policy) return null;
+  if (!swarmIsOn(input.host)) return null;
+  const policy = SWARM_POLICY;
   const text = [input.request.description, input.request.prompt].filter(Boolean).join('\n');
   if (keepOnHost(text)) return null;
-  const picked = pickClerkAccount(input.state, input.host);
-  if (!picked) return null;
   const role = swarmRole(text);
   const paths = pathsIn(input.request.prompt);
   const key = goalKey(role, paths, input.request.prompt);
   const description = (input.request.description?.trim() || input.request.prompt.replace(/\s+/g, ' ').trim()).slice(0, 80);
-  const reserved = await lock(input.host.id, async () => reserve(input.host.id, policy, picked.displayName, role, paths, key, input.request.prompt, description));
+  const opened = await lock(input.host.id, async () => {
+    const board = await readBoard(input.host.id);
+    const busy = new Set(board.roster.flatMap((line) => (line.status === 'working' && line.accountId ? [line.accountId] : [])));
+    const picked = pickClerkAccount(input.state, input.host, Date.now(), busy);
+    if (!picked) return undefined;
+    const reserved = await reserve(input.host.id, policy, picked.displayName, role, paths, key, input.request.prompt, description, picked.account.id);
+    return { picked, reserved };
+  });
+  if (!opened) return null;
+  const { picked, reserved } = opened;
   if (reserved.kind === 'attach') return cardResult(reserved.card, `Attached · ${picked.displayName}`, picked, role);
   if (reserved.kind === 'capped') {
     return { output: 'The swarm is already at its parallel cap. Do this with your own tools.', activityLabel: 'Swarm cap' };
@@ -169,7 +165,7 @@ type Reservation =
   | { kind: 'run'; workerId: string; brief: string };
 
 async function reserve(
-  sessionId: string, policy: SwarmPolicy, displayName: string, role: SwarmRole, paths: string[], key: string, task: string, description: string,
+  sessionId: string, policy: SwarmPolicy, displayName: string, role: SwarmRole, paths: string[], key: string, task: string, description: string, accountId: string,
 ): Promise<Reservation> {
   const board = await readBoard(sessionId);
   const existing = board.roster.find((line) => line.key === key && line.status === 'working');
@@ -180,7 +176,7 @@ async function reserve(
   const next: SwarmBoard = {
     ...board,
     goal: board.goal || description,
-    roster: [...board.roster, { id: workerId, provider: displayName, role, paths: paths.join(', '), step: 'starting', key, status: 'working' }],
+    roster: [...board.roster, { id: workerId, provider: displayName, role, paths: paths.join(', '), step: 'starting', key, status: 'working', accountId }],
   };
   await writeBoard(sessionId, next);
   inflight.set(sessionId, running + 1);

@@ -7,7 +7,8 @@ import { parseJsonRecord } from '../harness/protocol/json-lines.js';
 import { nativeTurnResult } from '../harness/protocol/turn-result.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { captureNativeHarnessTurn } from '../harness/transport/native/turn.js';
-import { nativeHarnessTurnArgv } from '../runtime/lazy-bridge.js';
+import { harnessAcpLaunch, nativeHarnessTurnArgv } from '../runtime/lazy-bridge.js';
+import { runAcpTurn } from '../harness/transport/acp-client.js';
 import type { HarnessState } from '../session/model.js';
 import { recordClerkTurn } from '../turn/account-outcome.js';
 import { classifyAccountFailure } from '../turn/failover.js';
@@ -25,7 +26,7 @@ export async function runProviderPrompt(input: {
   state?: HarnessState;
   sessionId?: string;
 }): Promise<string> {
-  if (!input.harness.turn) throw new Error(`${input.harness.displayName} cannot take a headless turn`);
+  if (!input.harness.turn && !input.harness.acp) throw new Error(`${input.harness.displayName} cannot take a headless turn`);
   const startedAt = Date.now();
   let noted = false;
   const note = (outcome: { usage?: TurnUsage; error?: unknown }): void => {
@@ -40,6 +41,7 @@ export async function runProviderPrompt(input: {
       ...(quota ? { quota: true, failure: outcome.error } : {}),
     });
   };
+  if (!input.harness.turn) return runAcpClerk(input, note);
   const asked = input.permissionMode;
   const mode = asked && input.harness.permissionModes?.includes(asked)
     && (input.harness.permissionArgv?.[asked] || input.harness.permissionEnv?.[asked])
@@ -86,4 +88,42 @@ export async function runProviderPrompt(input: {
   }
   note({ ...(result.usage ? { usage: result.usage } : {}) });
   return result.text.trim();
+}
+
+/** A harness with no headless CLI still takes one prompt over ACP. The
+ * session it opens stays the vendor's; ClikCode keeps the card. */
+async function runAcpClerk(
+  input: Parameters<typeof runProviderPrompt>[0],
+  note: (outcome: { usage?: TurnUsage; error?: unknown }) => void,
+): Promise<string> {
+  const permissionMode = input.permissionMode && input.harness.permissionModes?.includes(input.permissionMode)
+    ? input.permissionMode : 'ask';
+  const launch = harnessAcpLaunch(input.harness, { permissionMode });
+  if (!launch) throw new Error(`${input.harness.displayName} cannot take a headless turn`);
+  const environment = turnEnvironment(input.harness, input.account, permissionMode);
+  let usage: TurnUsage | undefined;
+  try {
+    const result = await runAcpTurn({
+      binary: launch.binary,
+      command: input.harness.command,
+      prompt: input.prompt,
+      argv: launch.modeArgv,
+      optionPlacement: launch.optionPlacement,
+      extraArgv: [...launch.optionArgv],
+      cwd: input.workspace ?? process.cwd(),
+      permissionMode,
+      environment,
+      acp: input.harness.acp,
+      ...(input.signal ? { signal: input.signal } : {}),
+      onUsage: (next) => { usage = next; },
+      onActivity: (event) => {
+        if (event.kind === 'tool-start' && event.label) input.onStep?.(event.label);
+      },
+    });
+    note({ ...(usage ? { usage } : {}) });
+    return result.text.trim();
+  } catch (error) {
+    note({ ...(usage ? { usage } : {}), error });
+    throw error;
+  }
 }

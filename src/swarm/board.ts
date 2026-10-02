@@ -19,6 +19,8 @@ export interface SwarmRosterLine {
   /** Role, paths, and goal. A second call with the same key attaches. */
   key: string;
   status: 'working' | 'done';
+  /** Which account is doing this, so the next task prefers another one that still has usage. */
+  accountId?: string;
 }
 
 export interface SwarmBoard {

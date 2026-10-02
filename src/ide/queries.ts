@@ -37,6 +37,7 @@ import { readSessionTranscript } from '../session/store/transcripts.js';
 import { writeState } from '../session/state/write.js';
 import { sessionModelLabel } from '../harness/output.js';
 import { modelRow } from '../tui/pickers/model.js';
+import { swarmIsOn } from '../swarm/policy.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import type {
   IdeAccount, IdeAccounts, IdeChatSettings, IdeConversation, IdeGateway, IdeModel, IdeModels, IdeProvider, IdeUsageWindow,
@@ -272,12 +273,11 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
   }
   const permissions = sessionPermissionModes(session, isClikCodeAgent(session) ? undefined : harness);
   if (permissions.length) settings.permissions = { current: session.permissionMode ?? 'ask', choices: [...permissions] };
+  const swarmOn = swarmIsOn(session);
   settings.swarm = {
-    current: [...(session.swarm ?? [])],
-    choices: [
-      { id: 'lean', label: 'Lean', detail: 'Up to two providers that have reported usage left' },
-      { id: 'frugal', label: 'Frugal', detail: 'One provider, the one with the most usage left' },
-    ],
+    enabled: swarmOn,
+    current: swarmOn ? ['on'] : [],
+    choices: [{ id: 'on', label: 'On', detail: 'Hand work to other accounts that have usage left' }],
   };
   if (harness) {
     settings.failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';

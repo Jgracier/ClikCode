@@ -167,8 +167,8 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       : isGatewayService(session) ? { available: true }
         : needsHarness('setting effort')(session, harness)),
   }),
-  entry('swarm', 'Settings', 'delegate tasks to other signed-in providers', {
-    argHint: '[lean|frugal|off …]', duringTurn: 'apply', availability: always,
+  entry('swarm', 'Settings', 'let this chat delegate to other accounts that have usage left', {
+    argHint: '[on|off]', duringTurn: 'apply', availability: always,
   }),
   entry('fast', 'Settings', 'serve from the fastest provider instead of the cheapest', {
     argHint: '[on|off]', duringTurn: 'apply',

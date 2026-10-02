@@ -4,6 +4,7 @@
 import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
 import { activeSwarmHost } from './store.js';
+import { swarmIsOn } from './policy.js';
 import { runSwarmDelegation } from './run.js';
 
 interface RpcMessage {
@@ -15,7 +16,7 @@ interface RpcMessage {
 
 const TOOL = {
   name: 'swarm',
-  description: 'Delegate one self-contained task to another signed-in provider in this conversation\'s swarm. You get back a short card (summary, paths, blockers), not that provider\'s conversation. Use it for a multi-file look-up, a review, or an edit. A one-file question stays with you; the tool says so.',
+  description: 'Delegate one self-contained task to another signed-in account that has usage left. You get back a short card (summary, paths, blockers), not that account\'s conversation. Use it when the task spans files, is a review, or is an edit worth handing off. A one-file question stays with you; the tool says so.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -35,7 +36,7 @@ async function callTool(args: Record<string, unknown> | undefined): Promise<stri
   if (!sessionId) return 'No host turn is using the swarm right now. Do this yourself.';
   const state = await readState({ transcripts: [] });
   const host = state.sessions.find((session) => session.id === sessionId);
-  if (!host?.swarm?.length) return 'This conversation has no swarm on. Do this yourself.';
+  if (!host || !swarmIsOn(host)) return 'This conversation has no swarm on. Do this yourself.';
   const result = await runSwarmDelegation({
     host, state, request: { prompt, ...(description ? { description } : {}), callId: `swarm-${randomUUID()}` },
   });

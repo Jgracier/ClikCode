@@ -71,6 +71,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   extraArgv?: readonly string[];
   /** Setup request timeout (initialize, session/new|resume|load). */
   setupTimeoutMs?: number;
+  /** Servers this session should start. Empty keeps the previous request. */
+  mcpServers?: readonly Record<string, unknown>[];
   /** Override ACP_RATE_LIMIT_GRACE_MS. */
   rateLimitGraceMs?: number;
   signal?: AbortSignal;
@@ -517,6 +519,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       }
     };
     const capabilities = live.capabilities;
+    const mcpServers = input.mcpServers ?? [];
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });
@@ -529,8 +532,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // timeout is an idle window rather than a wall-clock limit.
         const loading = { ...setup, idleReset: true };
         this.sessionTotals = {};
-        if (capabilities.sessionCapabilities?.resume) loaded = await requestWithAuth('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
-        else if (capabilities.loadSession) loaded = await requestWithAuth('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers: [] }, loading);
+        if (capabilities.sessionCapabilities?.resume) loaded = await requestWithAuth('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
+        else if (capabilities.loadSession) loaded = await requestWithAuth('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
         else throw new Error(`${input.command} ACP cannot load sessions`);
         stillRunning();
         live.sessionId = wanted;
@@ -541,7 +544,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       turn.sessionId = wanted;
     } else {
       this.sessionTotals = {};
-      const started = await requestWithAuth('session/new', { cwd: input.cwd, mcpServers: [] }, setup);
+      const started = await requestWithAuth('session/new', { cwd: input.cwd, mcpServers }, setup);
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);

@@ -6,13 +6,14 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { activityLifecyclePhase } from '../harness/protocol/activity-view.js';
+import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { sessionPickerOptions } from '../session/options.js';
 import { workingDetail } from '../tui/pickers/conversation-activity.js';
 import { boardSlice, cardFromReply, emptyBoard, goalKey, keepOnHost } from './board.js';
-import { resolveSwarm } from './policy.js';
+import { swarmIsOn } from './policy.js';
 import { publishLearnedUsage } from '../harness/accounts/usage-now.js';
-import { clerkAccounts, runSwarmDelegation } from './run.js';
+import { clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
 import { readBoard } from './store.js';
 import { clerkUsage } from './usage.js';
 
@@ -97,19 +98,34 @@ describe('who a host may delegate to', () => {
     expect(clerkUsage(mixed, NOW)?.leftPct).toBe(80);
   });
 
-  it('lists other providers with room, most left first, and leaves the host out', () => {
+  it('lists every other account with room, most left first, and leaves only the host account out', () => {
     const accounts = [
       account({ id: 'claude-acct', provider: 'anthropic', label: 'Claude', usage: windows(1) }),
+      account({ id: 'claude-2', provider: 'anthropic', label: 'Second', usage: windows(10) }),
       account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70) }),
       account({ id: 'codex', provider: 'openai', label: 'Bea', usage: windows(20) }),
+      account({ id: 'devin', provider: 'devin', label: 'Dev', usage: windows(50) }),
       account({ id: 'quiet', provider: 'opencode', label: 'No amount' }),
       account({ id: 'empty', provider: 'gemini', label: 'Spent', usage: windows(100) }),
     ];
     const pool = clerkAccounts(state(accounts), host(), NOW);
     expect(pool.map((row) => [row.command, row.account.label, Math.round(row.leftPct)])).toEqual([
+      ['claude', 'Second', 90],
       ['codex', 'Bea', 80],
+      ['devin', 'Dev', 50],
       ['cursor', 'Ada', 30],
     ]);
+    expect(pickClerkAccount(state(accounts), host(), NOW, new Set(['claude-2']))?.account.id).toBe('codex');
+  });
+
+  it('can use every terminal harness once that harness has usage left', () => {
+    const terminal = allLocalHarnesses().filter((harness) => harness.surface === 'terminal');
+    const accounts = terminal.map((harness) => account({
+      id: `acct-${harness.command}`, provider: harness.provider, label: harness.displayName, usage: windows(10),
+    }));
+    const pool = clerkAccounts(state(accounts), host({ accountId: 'the-host' }), NOW);
+    const commands = new Set(pool.map((row) => row.command));
+    expect(terminal.filter((harness) => !commands.has(harness.command)).map((harness) => harness.command)).toEqual([]);
   });
 });
 
@@ -148,14 +164,33 @@ describe('a delegation', () => {
     });
     expect(result).toBeNull();
   });
+
+  it('stays off until this conversation turns swarm on, and a saved preset list still counts as on', async () => {
+    expect(swarmIsOn({})).toBe(false);
+    expect(swarmIsOn({ swarm: [] })).toBe(false);
+    expect(swarmIsOn({ swarm: true })).toBe(true);
+    expect(swarmIsOn({ swarm: ['lean'] })).toBe(true);
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(38) });
+    const off = await runSwarmDelegation({
+      host: host({ id: 'off', swarm: undefined }),
+      state: state([cursor]),
+      request: { prompt: 'Review src/a.ts and src/b.ts across the tree', callId: 'off' },
+      runClerk: async () => { throw new Error('swarm is off'); },
+    });
+    expect(off).toBeNull();
+    const on = await runSwarmDelegation({
+      host: host({ id: 'on', swarm: true }),
+      state: state([cursor]),
+      request: { prompt: 'Review src/a.ts and src/b.ts across the tree', description: 'review the pair', callId: 'on' },
+      runClerk: async () => '{"summary":"done","facts":[],"paths":["src/a.ts"],"questions":[]}',
+    });
+    expect(on?.swarm?.displayName).toBe('Cursor Agent');
+  });
 });
 
 describe('the board and the status line', () => {
-  it('combines presets by the stricter cap', () => {
-    const { policy, unknown } = resolveSwarm(['Frugal', 'lean', 'nope']);
-    expect(unknown).toEqual(['nope']);
-    expect(policy).toMatchObject({ names: ['frugal', 'lean'], maxWorkers: 1, maxParallel: 1, maxBriefTokens: 6000, maxCardTokens: 200 });
-  });
 
   it('attaches the same role, paths, and goal, and cuts a card to the cap', () => {
     const key = goalKey('review', ['src/b.ts', 'src/a.ts'], 'Review   src/a.ts');

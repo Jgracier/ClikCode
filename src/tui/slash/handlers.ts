@@ -39,7 +39,7 @@ import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, session
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
-import { resolveSwarm } from '../../swarm/policy.js';
+import { swarmIsOn } from '../../swarm/policy.js';
 import { clerkAccounts } from '../../swarm/run.js';
 import { installSwarmTool } from '../../swarm/publish.js';
 import { impliedHarnessCommand } from './infer-provider.js';
@@ -379,25 +379,19 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       const rows = clerkAccounts(state, session);
       const who = rows.length
         ? rows.map((row) => `${row.displayName} (${row.account.label}) ${Math.round(row.leftPct)}% left`).join('\n')
-        : 'No other provider has reported a usage amount with room left.';
-      return `Providers with usage left:\n${who}`;
+        : 'No account has reported a usage amount with room left.';
+      return `Accounts with usage left:\n${who}`;
     };
     if (!asked.length) {
-      emitHarnessOutput({ panel: 'swarm', text: `Swarm: ${session.swarm?.join(', ') || 'off'}\n\n${pool()}` });
+      emitHarnessOutput({ panel: 'swarm', text: `Swarm: ${swarmIsOn(session) ? 'on' : 'off'}\n\n${pool()}` });
       return;
     }
-    if (asked.length === 1 && asked[0] === 'off') {
-      delete session.swarm;
-      await saveSettings(state, session);
-      emitHarnessOutput({ panel: 'swarm', text: `Swarm off.\n\n${pool()}` });
-      return;
-    }
-    const { policy, unknown } = resolveSwarm(asked);
-    if (unknown.length || !policy) throw new Error(`Unknown swarm configuration: ${unknown.join(', ') || asked.join(', ')}. Known: lean, frugal.`);
-    session.swarm = [...policy.names];
+    if (asked.length !== 1 || (asked[0] !== 'on' && asked[0] !== 'off')) throw new Error('usage: /swarm [on|off]');
+    if (asked[0] === 'off') delete session.swarm;
+    else session.swarm = true;
     await saveSettings(state, session);
-    await installSwarmTool(session, state).catch(() => undefined);
-    emitHarnessOutput({ panel: 'swarm', text: `Swarm: ${policy.names.join(', ')}\n\n${pool()}` });
+    if (session.swarm === true) await installSwarmTool(session, state).catch(() => undefined);
+    emitHarnessOutput({ panel: 'swarm', text: `Swarm ${asked[0]}.\n\n${pool()}` });
   },
   sessions: async ({ state, words }) => {
     const action = words.shift()?.toLowerCase();
