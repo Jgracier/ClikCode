@@ -501,9 +501,9 @@ export function Composer(props: {
         {/* Permissions belong to how this chat runs, beside whose account it runs on. */}
         {model.chatSettings?.swarm ? (
           <button type="button" id="swarm-button" class={`status-account${model.chatSettings.swarm.enabled ? ' open' : ''}`} aria-pressed={model.chatSettings.swarm.enabled}
-            title={model.chatSettings.swarm.enabled ? 'Swarm is on. This chat hands work to other accounts that have usage left.' : 'Swarm is off. Turn it on to hand work to other accounts that have usage left.'}
+            title={model.chatSettings.swarm.enabled ? 'Swarm is on. Turn it off and this chat does its own work.' : 'Swarm is off. Turn it on and this chat can hand work to other accounts that have usage left.'}
             disabled={!connected} onClick={() => choose({ kind: 'swarm', enabled: !model.chatSettings?.swarm?.enabled }).catch((failure: Error) => props.onError(failure.message))}>
-            <Icon name="hubot" /><span class="status-label">{model.chatSettings.swarm.enabled ? 'Swarm on' : 'Swarm'}</span>
+            <Icon name="hubot" /><span class="status-label">{model.chatSettings.swarm.enabled ? 'Turn swarm off' : 'Turn swarm on'}</span>
           </button>
         ) : null}
         {model.chatSettings?.permissions ? (
