@@ -558,6 +558,23 @@ const LiveTurnView = memo(({ live, workspace, elsewhere, asking }: { live: LiveT
  * earlier ones on demand, so opening it stays instant. */
 const WINDOW = 120;
 
+/** A clerk the host handed work to. It keeps spinning in this chat after the
+ * host turn has moved on, until the card arrives. */
+function HandoffStrip({ rows, workspace }: { rows: NonNullable<ChatModel['handoffs']>; workspace?: string }): JSX.Element {
+  return (
+    <div class="activities handoffs">
+      {rows.map((row) => (
+        <ActivityRow key={row.event.id ?? row.startedAt} workspace={workspace} activity={{
+          ...row.event,
+          key: row.event.id ?? String(row.startedAt),
+          startedAt: row.startedAt,
+          ...(row.child ? { child: row.child } : {}),
+        }} />
+      ))}
+    </div>
+  );
+}
+
 /** The settled conversation. Memoized on the fields it draws, which keep
  * their objects while a turn streams, so a delta does not redraw it. */
 const History = memo(({ sessionId, messages, traces, notes, workspace }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'>): JSX.Element => {
@@ -598,6 +615,7 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
   // kept with its turn (planStillNeeded, as the terminal decides).
   if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} running={model.running} />);
   if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} asking={model.approvals.length > 0} />);
+  if (model.handoffs?.length) parts.push(<HandoffStrip key="handoffs" rows={model.handoffs} workspace={model.workspace} />);
   // Notes from the running turn (an account switch, "Stopped") follow it.
   model.notes.forEach((note, position) => { if (note.after > model.messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
   const queuedTexts = new Set(model.queued.map((item) => item.text));

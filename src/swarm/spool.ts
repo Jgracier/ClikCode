@@ -28,14 +28,20 @@ export async function readSwarmActivity(sessionId: string, offset: number): Prom
   return { events, offset: text.length };
 }
 
-/** Poll the host's spool until stopped. Quiet when no clerk is writing. */
+/** Poll the host's spool until stopped. Starts at the end of the file, so a
+ * watcher that outlives a turn does not replay clerks that already finished.
+ * Quiet when no clerk is writing. */
 export function watchSwarmActivity(
   sessionId: string, onEvent: (event: HarnessActivityEvent) => void, intervalMs = 200,
 ): () => void {
-  let offset = 0;
+  let offset = -1;
   let stopped = false;
+  void readFile(swarmActivityPath(sessionId), 'utf8').then(
+    (text) => { offset = text.length; },
+    () => { offset = 0; },
+  );
   const poll = (): void => {
-    if (stopped) return;
+    if (stopped || offset < 0) return;
     void readSwarmActivity(sessionId, offset).then(({ events, offset: next }) => {
       offset = next;
       if (stopped) return;

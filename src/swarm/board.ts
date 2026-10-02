@@ -174,8 +174,10 @@ export function applyCard(board: SwarmBoard, workerId: string, card: SwarmCard):
 }
 
 /** A new host turn keeps decisions and facts, and forgets who was working. */
+/** A new host turn drops finished clerks. One still working stays, so the
+ * next task will not take the same account, and its card can still land. */
 export function beginTurn(board: SwarmBoard): SwarmBoard {
-  return { ...board, roster: [] };
+  return { ...board, roster: board.roster.filter((line) => line.status === 'working') };
 }
 
 export function clerkBrief(input: { role: SwarmRole; task: string; slice: string }): string {

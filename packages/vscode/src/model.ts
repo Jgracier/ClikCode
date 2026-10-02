@@ -12,6 +12,7 @@
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { asFileDiffs } from '../../../src/agent/line-diff';
 import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, withChildTool, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
+import { applySwarmHandoff, runningHandoffs, type SwarmHandoffRow } from '../../../src/swarm/handoff';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
@@ -151,6 +152,9 @@ export interface ChatModel {
   /** Where the running turn's prompt lands in `messages`. */
   turnUserIndex?: number;
   traces: TurnTrace[];
+  /** Clerks still working, or just finished, drawn in this chat after the
+   * host turn has moved on. */
+  handoffs: SwarmHandoffRow[];
   plan: Array<{ content: string; status?: string }>;
   turnUsage?: Extract<WorkerEvent, { type: 'usage' }>['usage'];
   /** How much of the live answer had streamed when usage last arrived: what
@@ -180,7 +184,7 @@ export function conversationAttention(id: string, open: ReadonlyArray<{ sessionI
 }
 
 export function emptyModel(): ChatModel {
-  return { connection: 'starting', messages: [], notes: [], queued: [], running: false, plan: [], approvals: [], submissions: [], traces: [] };
+  return { connection: 'starting', messages: [], notes: [], queued: [], running: false, plan: [], approvals: [], submissions: [], traces: [], handoffs: [] };
 }
 
 const MAX_NOTES = 50;
@@ -426,6 +430,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         ...model, running: true, turnUserIndex: model.messages.length,
         live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
         turnUsage: undefined, usageTextAt: undefined,
+        handoffs: runningHandoffs(model.handoffs ?? []),
       };
     case 'waiting-stop':
       return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };
@@ -441,6 +446,8 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return { ...model, live: { ...after, ...placed, text, lastEventAt: Date.now() } };
     }
     case 'activity': {
+      const handoff = applySwarmHandoff(model.handoffs ?? [], event.event);
+      if (handoff.handled) return { ...model, handoffs: handoff.rows };
       const live = model.live ?? freshLive('thinking');
       return { ...model, live: { ...applyActivity(live, event.event), lastEventAt: Date.now() } };
     }

@@ -54,6 +54,11 @@ export class BroadcastObserver implements TurnObserver {
    * draws those too, not only its text. */
   private liveActivities: LiveActivity[] = [];
   private livePlan: readonly PlanEntry[] = [];
+  /** The turn and the session spool can both report one clerk event. */
+  private readonly seenActivity = new Set<string>();
+  /** Clerks still on screen after the turn that started them. A window that
+   * attaches mid-handoff is sent these so the row is already spinning. */
+  private readonly handoffs = new Map<string, HarnessActivityEvent>();
   /** Each open request is kept WITH the event that asked it, so a client
    * attaching later is asked too (reofferPending). They used to go only to
    * whoever was attached at that moment: a turn waiting on an approval with
@@ -98,6 +103,9 @@ export class BroadcastObserver implements TurnObserver {
   snapshotFor(socket: Socket, session: HarnessSession, account?: string): void {
     const live = this.liveSnapshot();
     sendEvent(socket, { type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
+    for (const event of this.handoffs.values()) {
+      if (event.kind === 'tool-start') sendEvent(socket, { type: 'activity', event });
+    }
   }
 
   resolveApproval(id: string, approved: boolean | 'always'): void {
@@ -137,8 +145,16 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   activityEvent(event: HarnessActivityEvent): void {
+    if (event.id) {
+      const key = `${event.id}\0${event.kind}\0${event.parentId ?? ''}\0${event.label}`;
+      if (this.seenActivity.has(key)) return;
+      this.seenActivity.add(key);
+    }
     this.outputStarted = true;
-    if (this.waitingLabel && isTranscriptActivity(event)) this.liveActivities.push({ event, responseOffset: this.liveText.length });
+    // A handoff has its own row, including after this turn ends. Folding it
+    // into the turn's list froze the spinner when the turn settled.
+    if (event.swarm && event.id && !event.parentId) this.handoffs.set(event.id, event);
+    if (this.waitingLabel && isTranscriptActivity(event) && !event.swarm) this.liveActivities.push({ event, responseOffset: this.liveText.length });
     this.broadcast({ type: 'activity', event });
   }
 

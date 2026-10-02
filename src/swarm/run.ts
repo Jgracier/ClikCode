@@ -87,13 +87,27 @@ function cardResult(card: SwarmCard, label: string, picked: ClerkCandidate, role
   };
 }
 
-/** `null` means the host's own sub-agent should do this. A result means a
- * clerk did it, or the swarm refused another worker and said so. */
-export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRunResult | null> {
-  if (!swarmIsOn(input.host)) return null;
+/** What the host is told the moment a clerk starts. The card comes later,
+ * as a message, so this turn can keep going. */
+function handoffAck(picked: ClerkCandidate, role: SwarmRole, description: string): ToolRunResult {
+  const left = Math.round(picked.leftPct);
+  return {
+    output: `Handed to ${picked.displayName} · ${role} (${left}% left). "${description}" is running in this chat. Continue with other work; do not wait or poll. The card arrives as a message when it finishes.`,
+    activityLabel: providerLabel(picked.displayName, role, description),
+  };
+}
+
+type StartedHandoff =
+  | { mode: 'immediate'; result: ToolRunResult | null }
+  | { mode: 'running'; ack: ToolRunResult; finished: Promise<ToolRunResult> };
+
+/** Reserve a clerk and start it. `running` means the clerk is in flight and
+ * the host already has the acknowledgement. */
+async function startHandoff(input: SwarmDelegation): Promise<StartedHandoff> {
+  if (!swarmIsOn(input.host)) return { mode: 'immediate', result: null };
   const policy = SWARM_POLICY;
   const text = [input.request.description, input.request.prompt].filter(Boolean).join('\n');
-  if (keepOnHost(text)) return null;
+  if (keepOnHost(text)) return { mode: 'immediate', result: null };
   const role = swarmRole(text);
   const paths = pathsIn(input.request.prompt);
   const key = goalKey(role, paths, input.request.prompt);
@@ -106,57 +120,81 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
     const reserved = await reserve(input.host.id, policy, picked.displayName, role, paths, key, input.request.prompt, description, picked.account.id);
     return { picked, reserved };
   });
-  if (!opened) return null;
+  if (!opened) return { mode: 'immediate', result: null };
   const { picked, reserved } = opened;
-  if (reserved.kind === 'attach') return cardResult(reserved.card, `Attached · ${picked.displayName}`, picked, role);
+  if (reserved.kind === 'attach') return { mode: 'immediate', result: cardResult(reserved.card, `Attached · ${picked.displayName}`, picked, role) };
   if (reserved.kind === 'capped') {
-    return { output: 'The swarm is already at its parallel cap. Do this with your own tools.', activityLabel: 'Swarm cap' };
+    return { mode: 'immediate', result: { output: 'The swarm is already at its parallel cap. Do this with your own tools.', activityLabel: 'Swarm cap' } };
   }
   const label = providerLabel(picked.displayName, role, description);
   const swarm = { provider: picked.command, displayName: picked.displayName, role, usageLeft: Math.round(picked.leftPct) };
   await emit(input.host.id, { kind: 'tool-start', id: input.request.callId, label, agent: true, swarm }, input.onActivity);
   const steps: string[] = [];
-  try {
-    const harness = localHarnessForCommand(picked.command) ?? localHarnessForProvider(picked.account.provider);
-    if (!harness) throw new Error(`${picked.displayName} is not available`);
-    const reply = await (input.runClerk ?? runProviderPrompt)({
-      harness, account: picked.account, prompt: reserved.brief,
-      state: input.state, sessionId: input.host.id,
-      ...(input.host.workspace ? { workspace: input.host.workspace } : {}),
-      ...(input.host.permissionMode ? { permissionMode: input.host.permissionMode as AiHarnessPermissionMode } : {}),
-      ...(input.request.signal ? { signal: input.request.signal } : {}),
-      onStep: (step) => {
-        steps.push(step);
-        void emit(input.host.id, {
-          kind: 'tool-start', id: `${input.request.callId}/${steps.length}`, parentId: input.request.callId, label: step, swarm,
-        }, input.onActivity);
-      },
-    });
-    const card = cardFromReply(reply, policy.maxCardTokens);
-    await lock(input.host.id, async () => {
-      const board = applyCard(await readBoard(input.host.id), reserved.workerId, card);
-      await writeBoard(input.host.id, board);
-      input.host.swarmBoard = board;
-    });
-    const done = `${picked.displayName} · ${role} · ${card.summary}`;
-    await emit(input.host.id, {
-      kind: 'tool-done', id: input.request.callId, label: done, agent: true, swarm, output: steps.slice(-8),
-    }, input.onActivity);
-    return cardResult(card, done, picked, role);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await lock(input.host.id, async () => {
-      const board = await readBoard(input.host.id);
-      board.roster = board.roster.map((line) => (line.id === reserved.workerId ? { ...line, status: 'done', step: message } : line));
-      await writeBoard(input.host.id, board);
-    });
-    await emit(input.host.id, {
-      kind: 'tool-error', id: input.request.callId, label, agent: true, swarm, output: [message],
-    }, input.onActivity);
-    return { output: `${picked.displayName} failed: ${message}`, isError: true, activityLabel: label, swarm };
-  } finally {
-    await lock(input.host.id, async () => { inflight.set(input.host.id, Math.max(0, (inflight.get(input.host.id) ?? 1) - 1)); });
-  }
+  const finished = (async (): Promise<ToolRunResult> => {
+    try {
+      const harness = localHarnessForCommand(picked.command) ?? localHarnessForProvider(picked.account.provider);
+      if (!harness) throw new Error(`${picked.displayName} is not available`);
+      const reply = await (input.runClerk ?? runProviderPrompt)({
+        harness, account: picked.account, prompt: reserved.brief,
+        state: input.state, sessionId: input.host.id,
+        ...(input.host.workspace ? { workspace: input.host.workspace } : {}),
+        ...(input.host.permissionMode ? { permissionMode: input.host.permissionMode as AiHarnessPermissionMode } : {}),
+        ...(input.request.signal ? { signal: input.request.signal } : {}),
+        onStep: (step) => {
+          steps.push(step);
+          void emit(input.host.id, {
+            kind: 'tool-start', id: `${input.request.callId}/${steps.length}`, parentId: input.request.callId, label: step, swarm,
+          }, input.onActivity);
+        },
+      });
+      const card = cardFromReply(reply, policy.maxCardTokens);
+      await lock(input.host.id, async () => {
+        const board = applyCard(await readBoard(input.host.id), reserved.workerId, card);
+        await writeBoard(input.host.id, board);
+        input.host.swarmBoard = board;
+      });
+      const done = `${picked.displayName} · ${role} · ${card.summary}`;
+      await emit(input.host.id, {
+        kind: 'tool-done', id: input.request.callId, label: done, agent: true, swarm, output: formatCard(card).split('\n'),
+      }, input.onActivity);
+      return cardResult(card, done, picked, role);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await lock(input.host.id, async () => {
+        const board = await readBoard(input.host.id);
+        board.roster = board.roster.map((line) => (line.id === reserved.workerId ? { ...line, status: 'done', step: message } : line));
+        await writeBoard(input.host.id, board);
+      });
+      await emit(input.host.id, {
+        kind: 'tool-error', id: input.request.callId, label, agent: true, swarm, output: [message],
+      }, input.onActivity);
+      return { output: `${picked.displayName} failed: ${message}`, isError: true, activityLabel: label, swarm };
+    } finally {
+      await lock(input.host.id, async () => { inflight.set(input.host.id, Math.max(0, (inflight.get(input.host.id) ?? 1) - 1)); });
+    }
+  })();
+  return { mode: 'running', ack: handoffAck(picked, role, description), finished };
+}
+
+/** `null` means the host's own sub-agent should do this. A result means a
+ * clerk did it, or the swarm refused another worker and said so. Waits for
+ * the card. The host tool uses `beginSwarmHandoff` so the turn can continue. */
+export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRunResult | null> {
+  const started = await startHandoff(input);
+  if (started.mode === 'immediate') return started.result;
+  return started.finished;
+}
+
+/** Start a clerk and return as soon as the host chat is showing it. The
+ * card is written to the activity spool when the clerk finishes. The host's
+ * turn signal is not passed on: ending the turn must not cancel the handoff. */
+export async function beginSwarmHandoff(input: SwarmDelegation): Promise<ToolRunResult | null> {
+  const request = { ...input.request };
+  delete request.signal;
+  const started = await startHandoff({ ...input, request });
+  if (started.mode === 'immediate') return started.result;
+  void started.finished.catch(() => undefined);
+  return started.ack;
 }
 
 type Reservation =

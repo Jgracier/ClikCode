@@ -28,7 +28,8 @@ import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock,
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
-import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
+import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, SPIN_MS, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
+import { applySwarmHandoff, runningHandoffs, type SwarmHandoffRow } from '../swarm/handoff.js';
 import { logProcessWarnings } from './warnings.js';
 import { tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
 import { paintStatus } from './render/status-line.js';
@@ -228,6 +229,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private thought?: Thought;
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
+  /** Clerks handed work while this chat keeps going. Drawn above the
+   * composer, spinning until their card arrives, whether or not a turn is open. */
+  private swarmHandoffs: SwarmHandoffRow[] = [];
+  private swarmTimer: ReturnType<typeof setTimeout> | undefined;
   private streamingBlocks = createStreamingBlockParser();
   /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
   private resumeInput?: () => void;
@@ -761,11 +766,55 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
+  /** A clerk's row, above the composer. The turn's own tick moves it while
+   * a turn is open; afterwards this one does, so the handoff keeps moving
+   * after the host has gone on. */
+  private scheduleSwarmTick(): void {
+    if (this.swarmTimer) clearTimeout(this.swarmTimer);
+    this.swarmTimer = undefined;
+    if (!runningHandoffs(this.swarmHandoffs).length || this.waitingLabel || this.closed || this.reducedMotion) return;
+    this.swarmTimer = setTimeout(() => {
+      this.swarmTimer = undefined;
+      if (!runningHandoffs(this.swarmHandoffs).length || this.closed) return;
+      this.waitingFrame += 1;
+      this.schedulePaint();
+      this.scheduleSwarmTick();
+    }, SPIN_MS);
+    this.swarmTimer.unref?.();
+  }
+
+  private swarmBandRows(inner: number): string[] {
+    if (!this.swarmHandoffs.length || this.selecting) return [];
+    const rows: string[] = [];
+    for (const row of this.swarmHandoffs) {
+      const running = row.event.kind === 'tool-start';
+      if (running) {
+        const line = runningChatLine(
+          tensedLabel(row.event.label, true), this.reducedMotion ? 0 : this.waitingFrame, 'swarm', Date.now() - row.startedAt,
+        ).trim();
+        rows.push(`  ${line}`);
+        if (row.child) rows.push(`    ${chalk.dim(visibleSlice(row.child, Math.max(1, inner - 4)))}`);
+      } else {
+        const mark = row.event.kind === 'tool-error' ? chalk.red('×') : chalk.cyan('✓');
+        rows.push(`  ${mark} ${chalk.dim(visibleSlice(row.event.label, Math.max(1, inner - 4)))}`);
+      }
+    }
+    return rows;
+  }
+
   /** `live`: this is the running turn's activity number `index`, which
    * happened `responseOffset` characters into its answer -- a worker's
    * record of the turn, replayed whole whenever a window (re)joins it. One
    * already shown is skipped, so replaying is safe at any moment. */
   activityEvent(event: HarnessActivityEvent, live?: { index: number; responseOffset: number }): void {
+    const handoff = applySwarmHandoff(this.swarmHandoffs, event);
+    if (handoff.handled) {
+      this.swarmHandoffs = handoff.rows;
+      this.noteData();
+      this.scheduleSwarmTick();
+      this.schedulePaint();
+      return;
+    }
     if (live) {
       if (live.index <= this.liveActivitiesShown) return;
       this.liveActivitiesShown = live.index;
@@ -916,6 +965,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingSubmissions = [];
     this.waitingCancelled = false;
     this.waitingFrame = 0;
+    this.swarmHandoffs = runningHandoffs(this.swarmHandoffs);
     this.clock = startTurnClock(Date.now());
     this.thinkingSince = Date.now();
     this.streamedChars = 0;
@@ -1030,6 +1080,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingSubmitWas = false;
     this.waitingLabel = '';
     this.thought = undefined;
+    this.scheduleSwarmTick();
     // Anything typed during the turn and not submitted is still the user's
     // text. It lives in waitingDraft while the turn runs, and the composer
     // that opens afterwards reads queuedDraft -- so without this handoff a
@@ -1434,6 +1485,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const thoughtRows = this.waitingLabel && this.thought && !approval && liveBandBudget > 0
       ? [`  ${chalk.dim(chalk.italic(`✻ ${visibleTail(this.thought.text, Math.max(1, inner - 2))}`))}`] : [];
     liveBandBudget -= thoughtRows.length;
+    const swarmRows = paletteRows || this.selecting ? [] : this.swarmBandRows(inner).slice(0, Math.max(0, liveBandBudget));
+    liveBandBudget -= swarmRows.length;
     const planGlyph = this.waitingLabel && !this.reducedMotion ? waitingSpinnerGlyph(this.waitingFrame) : undefined;
     const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget, planGlyph);
     liveBandBudget -= planRows.length;
@@ -1445,7 +1498,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       panelRows = shown.rows;
     }
     const maxComposerRows = Math.max(
-      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - planRows.length - panelRows.length,
+      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - swarmRows.length - planRows.length - panelRows.length,
     );
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     // -------------------------------------------------------------------
@@ -1730,7 +1783,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
       }));
     }
-    footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
+    footer.push(...panelRows, ...swarmRows, ...planRows, ...approvalRows, ...thoughtRows);
     if (waitingRows) {
       footer.push('', `  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
     }

@@ -1,11 +1,12 @@
-/** The `swarm` tool a vendor host calls. It runs a clerk and returns the card.
- * Activity is written to the host's spool, which the host turn is already tailing. */
+/** The `swarm` tool a vendor host calls. It starts a clerk and returns at
+ * once, so the host can keep working. The card arrives later, in the chat.
+ * Activity is written to the host's spool, which the session tails. */
 
 import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
 import { activeSwarmHost } from './store.js';
 import { swarmIsOn } from './policy.js';
-import { runSwarmDelegation } from './run.js';
+import { beginSwarmHandoff } from './run.js';
 
 interface RpcMessage {
   jsonrpc?: string;
@@ -16,7 +17,7 @@ interface RpcMessage {
 
 const TOOL = {
   name: 'swarm',
-  description: 'Delegate one self-contained task to another signed-in account that has usage left. You get back a short card (summary, paths, blockers), not that account\'s conversation. Use it when the task spans files, is a review, or is an edit worth handing off. A one-file question stays with you; the tool says so.',
+  description: 'Hand one self-contained task to another signed-in account that has usage left. The call returns as soon as that account is working, and this chat shows it while it runs. Continue with other work; do not wait or poll. A short card (summary, paths, blockers) arrives as a message when it finishes, not that account\'s conversation. Use it when the task spans files, is a review, or is an edit worth handing off. A one-file question stays with you; the tool says so.',
   inputSchema: {
     type: 'object',
     additionalProperties: false,
@@ -37,7 +38,7 @@ async function callTool(args: Record<string, unknown> | undefined): Promise<stri
   const state = await readState({ transcripts: [] });
   const host = state.sessions.find((session) => session.id === sessionId);
   if (!host || !swarmIsOn(host)) return 'This conversation has no swarm on. Do this yourself.';
-  const result = await runSwarmDelegation({
+  const result = await beginSwarmHandoff({
     host, state, request: { prompt, ...(description ? { description } : {}), callId: `swarm-${randomUUID()}` },
   });
   return result?.output ?? 'Keep this task on the host. It is small enough that another provider would cost more than it saves.';
