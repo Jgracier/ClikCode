@@ -12,7 +12,24 @@ interface RpcMessage {
   jsonrpc?: string;
   id?: number | string | null;
   method?: string;
-  params?: { name?: string; arguments?: Record<string, unknown> };
+  params?: {
+    name?: string;
+    arguments?: Record<string, unknown>;
+    _meta?: { progressToken?: string | number };
+  };
+}
+
+/** A clerk step the host shows while the tool is still open. The card is the
+ * tool result, so a finished row is not progress. */
+export function swarmProgressLabel(event: { kind: string; label: string }): string | undefined {
+  if (event.kind === 'tool-done' || event.kind === 'tool-error') return undefined;
+  const label = event.label.trim();
+  return label || undefined;
+}
+
+function progressTokenOf(message: RpcMessage): string | number | undefined {
+  const token = message.params?._meta?.progressToken;
+  return typeof token === 'string' || typeof token === 'number' ? token : undefined;
 }
 
 const TOOL = {
@@ -29,7 +46,7 @@ const TOOL = {
   },
 };
 
-async function callTool(args: Record<string, unknown> | undefined): Promise<string> {
+async function callTool(args: Record<string, unknown> | undefined, onStep?: (label: string) => void): Promise<string> {
   const prompt = typeof args?.prompt === 'string' ? args.prompt.trim() : '';
   if (!prompt) return 'A swarm task needs a prompt.';
   const description = typeof args?.description === 'string' ? args.description.trim() : undefined;
@@ -40,6 +57,10 @@ async function callTool(args: Record<string, unknown> | undefined): Promise<stri
   if (!host || !swarmIsOn(host)) return 'This conversation has no swarm on. Do this yourself.';
   const result = await runSwarmDelegation({
     host, state, request: { prompt, ...(description ? { description } : {}), callId: `swarm-${randomUUID()}` },
+    onActivity: (event) => {
+      const label = swarmProgressLabel(event);
+      if (label) onStep?.(label);
+    },
   });
   return result?.output ?? 'Keep this task on the host. It is small enough that another provider would cost more than it saves.';
 }
@@ -52,7 +73,7 @@ function fail(id: RpcMessage['id'], message: string): string {
   return JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message } });
 }
 
-async function dispatch(message: RpcMessage): Promise<string | undefined> {
+async function dispatch(message: RpcMessage, write: (payload: string) => void): Promise<string | undefined> {
   if (!message.method || message.id === undefined || message.id === null) return undefined;
   if (message.method === 'initialize') {
     return respond(message.id, {
@@ -64,8 +85,13 @@ async function dispatch(message: RpcMessage): Promise<string | undefined> {
   if (message.method === 'tools/list') return respond(message.id, { tools: [TOOL] });
   if (message.method === 'tools/call') {
     try {
+      const token = progressTokenOf(message);
+      let progress = 0;
       const text = message.params?.name === 'swarm'
-        ? await callTool(message.params.arguments)
+        ? await callTool(message.params.arguments, token === undefined ? undefined : (label) => {
+          progress += 1;
+          write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress, message: label } }));
+        })
         : `Unknown tool ${message.params?.name ?? ''}`;
       const isError = text.startsWith('No host') || text.startsWith('A swarm task needs');
       return respond(message.id, { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
@@ -111,7 +137,7 @@ export function serveSwarmMcp(): Promise<void> {
     const deliver = async (body: string): Promise<void> => {
       let message: RpcMessage;
       try { message = JSON.parse(body) as RpcMessage; } catch { return; }
-      const payload = await dispatch(message);
+      const payload = await dispatch(message, write);
       if (payload) write(payload);
     };
     process.stdin.setEncoding('utf8');

@@ -15,6 +15,7 @@ import { swarmIsOn } from './policy.js';
 import { publishLearnedUsage } from '../harness/accounts/usage-now.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { emptySwarmFold, foldSwarmActivity, isSwarmToolLabel } from './fold.js';
+import { swarmProgressLabel } from './mcp.js';
 import { clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
 import { readBoard } from './store.js';
 import { clerkUsage } from './usage.js';
@@ -212,6 +213,14 @@ describe('a delegation', () => {
       { id: 'b', provider: 'Codex', role: 'explore', paths: '', step: 'done', key: 'j', status: 'done' },
     ];
     expect(beginTurn(board).roster.map((line) => line.id)).toEqual(['a']);
+  });
+});
+
+describe('progress on the open tool call', () => {
+  it('sends a clerk step and keeps the card for the tool result', () => {
+    expect(swarmProgressLabel({ kind: 'tool-start', label: 'Read src/swarm/run.ts' })).toBe('Read src/swarm/run.ts');
+    expect(swarmProgressLabel({ kind: 'tool-done', label: 'Antigravity CLI · review · the handoff' })).toBeUndefined();
+    expect(swarmProgressLabel({ kind: 'tool-start', label: '   ' })).toBeUndefined();
   });
 });
 
