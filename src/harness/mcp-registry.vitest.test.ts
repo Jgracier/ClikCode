@@ -21,14 +21,20 @@ const argv = (command: string, entry: Parameters<typeof mcpAddArgv>[1]): string 
   (mcpAddArgv(grammarOf(command), entry) ?? []).join(' ');
 
 describe('spelling "add this MCP server"', () => {
+  it('gives Claude a user-scope server, its local arguments after --', () => {
+    // Without --scope user Claude binds the server to the current folder; without --
+    // an argument such as --browser is refused as one of Claude's own options.
+    expect(argv('claude', { name: 'playwright', target: 'node', args: ['cli.js', '--browser', 'chrome'] }))
+      .toBe('mcp add --scope user playwright -- node cli.js --browser chrome');
+  });
+
   it('passes a local command positionally where the CLI takes it that way', () => {
-    expect(argv('claude', local)).toBe('mcp add figma npx -y figma-mcp');
     expect(argv('gemini', local)).toBe('mcp add figma npx -y figma-mcp');
     expect(argv('grok', local)).toBe('mcp add figma npx -y figma-mcp');
   });
 
   it('states the transport for a URL where the CLI wants one', () => {
-    expect(argv('claude', remote)).toBe('mcp add --transport http sentry https://mcp.sentry.dev/mcp');
+    expect(argv('claude', remote)).toBe('mcp add --scope user --transport http sentry https://mcp.sentry.dev/mcp');
     expect(argv('gemini', remote)).toBe('mcp add --transport http sentry https://mcp.sentry.dev/mcp');
     // Grok infers stdio-vs-URL from the value itself and takes no flag.
     expect(argv('grok', remote)).toBe('mcp add sentry https://mcp.sentry.dev/mcp');

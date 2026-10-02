@@ -100,6 +100,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .argument('<target>', 'Command to launch, or a URL for a remote server')
     .argument('[args...]', 'Arguments for a launched command')
     .description('Record an MCP server. It is installed into a harness when you choose that provider, if the name is not already there')
+    // A server's own flags (`--browser chrome`) are its arguments, not ours.
+    .allowUnknownOption()
     .action((name: string, target: string, args: string[]) => mcpAdd(name, target, args));
   mcp.command('targets')
     .description('Show how each harness would be given a server, when you choose it')

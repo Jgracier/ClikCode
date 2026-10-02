@@ -220,9 +220,12 @@ async function readServerTable(path: string, source: VendorSource): Promise<Reco
 export function vendorConfigCandidates(
   source: VendorSource, home: string, profile?: { env: string; path: string },
 ): string[] {
-  const files = [join(home, ...source.homeRelative)];
-  if (profile?.env === 'HOME') files.push(join(profile.path, ...source.homeRelative));
-  else if (profile) {
+  // An isolated profile is all the harness reads: the user's own file is not
+  // seen there, so a name in it is not a name this profile has.
+  if (!profile) return [join(home, ...source.homeRelative)];
+  const files: string[] = [];
+  if (profile.env === 'HOME') files.push(join(profile.path, ...source.homeRelative));
+  else {
     files.push(join(profile.path, ...source.homeRelative));
     if (source.homeRelative.length > 1) files.push(join(profile.path, ...source.homeRelative.slice(1)));
     if (source.rootRelative) files.push(join(profile.path, ...source.rootRelative));
