@@ -20,6 +20,7 @@ import { harnessModelLabel, modelSettingsDetail, nativeModelCatalog } from '../.
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { harnessSupportsPermissionMode } from '../../runtime/lazy-bridge.js';
 import { isBlankConversation, VALID_PERMISSION_MODES } from '../../session/options.js';
+import { swarmIsOn } from '../../swarm/policy.js';
 import type { PaletteEntry } from '../command-palette.js';
 
 type Values = readonly { value: string; label?: string; detail?: string }[];
@@ -78,12 +79,16 @@ export function withArgValues(
     .filter((item) => item.id !== session.id && !isBlankConversation(item) && item.name)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .map((item) => ({ value: item.name!, detail: new Date(item.updatedAt).toLocaleDateString() }));
+  const swarm: Values = swarmIsOn(session)
+    ? [{ value: 'off', label: 'Turn swarm off' }]
+    : [{ value: 'on', label: 'Turn swarm on' }];
   const sources: Record<string, () => Values> = {
     '/model': () => vendor?.models ?? [],
     '/effort': () => vendor?.efforts ?? [],
     '/permissions': () => permissions,
     '/account': () => accounts,
     '/resume': () => chats,
+    '/swarm': () => swarm,
   };
   return entries.map((entry) => (sources[entry.value] ? { ...entry, argValues: sources[entry.value] } : entry));
 }

@@ -276,8 +276,12 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
   const swarmOn = swarmIsOn(session);
   settings.swarm = {
     enabled: swarmOn,
-    current: swarmOn ? ['on'] : [],
-    choices: [{ id: 'on', label: 'On', detail: 'Hand work to other accounts that have usage left' }],
+    current: [],
+    choices: [{
+      id: swarmOn ? 'off' : 'on',
+      label: swarmOn ? 'Turn swarm off' : 'Turn swarm on',
+      detail: swarmOn ? 'This chat does its own work' : 'Hand work to other accounts that have usage left',
+    }],
   };
   if (harness) {
     settings.failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
