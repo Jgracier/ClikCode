@@ -135,19 +135,21 @@ describe('who a host may delegate to', () => {
 });
 
 describe('the model list', () => {
-  it('shows a scored model once and a provider default when a model has no score', () => {
+  it('lists only model ids accounts with usage actually have', () => {
     const accounts = [
       account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70), models: ['claude-sonnet-4.5'] }),
-      account({ id: 'cursor-2', provider: 'cursor', label: 'Bea', usage: windows(20), models: ['claude-sonnet-4.5'] }),
+      account({ id: 'cursor-2', provider: 'cursor', label: 'Bea', usage: windows(20), models: ['claude-sonnet-4.5', 'haiku'] }),
       account({ id: 'codex', provider: 'openai', label: 'Codex', usage: windows(40), models: [] }),
     ];
     const offers = swarmOffers(clerkAccounts(state(accounts), host(), NOW), {
       fetchedAt: NOW, byKey: { claudesonnet45: { coding: 63, intelligence: 71 } },
     });
-    expect(offers.map((offer) => offer.model)).toEqual(['claude-sonnet-4.5', 'codex']);
+    expect(offers.map((offer) => offer.model)).toEqual(['claude-sonnet-4.5', 'haiku']);
     expect(offers[0]?.seats[0]?.candidate.account.id).toBe('cursor-2');
     expect(formatSwarmOffers(offers)).toContain('claude-sonnet-4.5 · coding 63 · intelligence 71 · 80% left');
-    expect(formatSwarmOffers(offers)).toContain('codex · Codex · 60% left');
+    expect(formatSwarmOffers(offers)).toContain('haiku · Cursor Agent · 80% left');
+    expect(formatSwarmOffers(offers)).not.toContain('codex');
+    expect(swarmChoiceNote(offers)).toContain('Do not invent a model');
   });
 
   it('reads an OpenRouter intelligence index from the catalog body', () => {
@@ -190,20 +192,21 @@ describe('the model list', () => {
     expect(swarmChoiceNote(offers)).toContain('cheaper model');
   });
 
-  it('keeps a cheap model when more than twelve scored models have usage', () => {
+  it('keeps every account model, including a cheap one and one with no score', () => {
     const accounts = [
-      ...Array.from({ length: 12 }, (_, index) => account({
-        id: `high-${index}`, provider: 'cursor', label: `High ${index}`, usage: windows(10), models: [`high-${index}`],
-      })),
-      account({ id: 'low', provider: 'cursor', label: 'Low', usage: windows(10), models: ['cheap-model'] }),
+      account({
+        id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(10),
+        models: ['claude-opus-4.5', 'claude-haiku-4.5', 'composer-2.5'],
+      }),
     ];
-    const byKey: Record<string, { coding: number; promptPerM: number; completionPerM: number }> = {
-      cheapmodel: { coding: 20, promptPerM: 0.25, completionPerM: 1 },
-    };
-    for (let index = 0; index < 12; index += 1) byKey[`high${index}`] = { coding: 90 - index, promptPerM: 15, completionPerM: 75 };
-    const offers = swarmOffers(clerkAccounts(state(accounts), host(), NOW), { fetchedAt: NOW, byKey });
-    expect(offers).toHaveLength(12);
-    expect(offers.map((offer) => offer.model)).toContain('cheap-model');
+    const offers = swarmOffers(clerkAccounts(state(accounts), host(), NOW), {
+      fetchedAt: NOW,
+      byKey: {
+        claudeopus45: { coding: 80, promptPerM: 15, completionPerM: 75 },
+        claudehaiku45: { coding: 40, promptPerM: 1, completionPerM: 5 },
+      },
+    });
+    expect(offers.map((offer) => offer.model)).toEqual(['claude-opus-4.5', 'claude-haiku-4.5', 'composer-2.5']);
   });
 });
 
