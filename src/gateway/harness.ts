@@ -26,7 +26,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { loadIndex } from '../session/state/index-file.js';
 import { readState } from '../session/state/read.js';
 import { swarmIsOn } from '../swarm/policy.js';
-import { beginSwarmHandoff } from '../swarm/run.js';
+import { runSwarmDelegation } from '../swarm/run.js';
 import { openSwarmTurn } from '../swarm/store.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
@@ -142,7 +142,7 @@ export async function runGatewayHarnessSessionTurn(
       const live = state.sessions.find((item) => item.id === session.id);
       const host = live && swarmIsOn(live) ? { ...session, swarm: live.swarm, permissionMode: live.permissionMode ?? session.permissionMode, accountId: live.accountId ?? session.accountId } : session;
       if (!swarmIsOn(host)) return null;
-      return beginSwarmHandoff({ host, state, request, onActivity: publishActivity });
+      return runSwarmDelegation({ host, state, request, onActivity: publishActivity });
     },
     onPhase: (phase) => {
       // The loop announces every model step as 'thinking' before calling it.

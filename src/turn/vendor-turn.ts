@@ -44,6 +44,7 @@ import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
 import { swarmIsOn } from '../swarm/policy.js';
 import { harnessCanInstallLocalMcp, installSwarmTool } from '../swarm/publish.js';
 import { markSwarmHost, openSwarmTurn } from '../swarm/store.js';
+import { emptySwarmFold, foldSwarmActivity, type SwarmFold } from '../swarm/fold.js';
 import { watchSwarmActivity } from '../swarm/spool.js';
 
 /**
@@ -218,11 +219,15 @@ export async function sendVendorTurn(input: {
     // that as the whole answer is what made earlier paragraphs vanish.
     keep: (visible, mode) => mode !== 'replace' || durableAnswer(session.pendingTurn?.response ?? '', visible) === visible,
   });
+  let swarmFold: SwarmFold = emptySwarmFold();
   const onActivity = (event: HarnessActivityEvent): void => {
-    // A handoff keeps running after this turn. Counting it as unfinished
-    // work would hold the turn open until the clerk finished.
+    // The clerk's frames are the row. The host's own swarm tool is the same
+    // call: count that tool so a backgrounded command still pairs, and do
+    // not count the clerk frames as a second piece of unfinished work.
+    const folded = foldSwarmActivity(swarmFold, event);
+    swarmFold = folded.fold;
     if (!event.swarm) pendingWork.note(event);
-    sink.activity(event);
+    if (folded.event) sink.activity(folded.event);
   };
   if (swarmIsOn(session)) {
     await openSwarmTurn(session.id).catch(() => undefined);
@@ -292,6 +297,7 @@ export async function sendVendorTurn(input: {
     let cliOutputStarted = false;
     turnUsage = undefined;
     pendingWork.reset();
+    swarmFold = emptySwarmFold();
     // Naming is for a new chat, and only from a reply that was actually
     // asked for a name -- so nothing about it may cross a retry. This loop
     // has five retry paths and each one either keeps this prompt or replaces
