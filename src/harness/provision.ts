@@ -89,8 +89,14 @@ export function skillRoot(
 }
 
 function specToEntry(spec: McpServerSpec): McpServerEntry {
-  if (spec.transport === 'stdio') return { name: spec.name, target: spec.command, ...(spec.args.length ? { args: spec.args } : {}) };
-  return { name: spec.name, target: spec.url };
+  if (spec.transport === 'stdio') {
+    return {
+      name: spec.name, target: spec.command,
+      ...(spec.args.length ? { args: spec.args } : {}),
+      ...(Object.keys(spec.env).length ? { env: spec.env } : {}),
+    };
+  }
+  return { name: spec.name, target: spec.url, ...(Object.keys(spec.headers).length ? { headers: spec.headers } : {}) };
 }
 
 /** Commands already declared for one event. A repeat of the same command is

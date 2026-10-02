@@ -53,6 +53,10 @@ export interface McpServerEntry {
   target: string;
   /** Arguments for a local server; meaningless for a URL. */
   args?: readonly string[];
+  /** Sent with every request to a remote server (an API key, say). */
+  headers?: Readonly<Record<string, string>>;
+  /** Set for a local server's process. */
+  env?: Readonly<Record<string, string>>;
 }
 
 export function isRemoteTarget(target: string): boolean {
@@ -73,6 +77,8 @@ type McpAddGrammar = {
   localTransport?: string;
   remoteExtraArgv?: readonly string[];
   confirmStdin?: string;
+  headerPrefix?: readonly string[];
+  envPrefix?: readonly string[];
 };
 
 /** Where a harness reads its servers from, for one with no usable add. */
@@ -121,8 +127,16 @@ export function mcpConfigEntry(
     };
   }
   return remote
-    ? { url: entry.target }
-    : { command: entry.target, ...(entry.args?.length ? { args: [...entry.args] } : {}) };
+    ? { url: entry.target, ...(nonEmpty(entry.headers) ? { headers: { ...entry.headers } } : {}) }
+    : {
+      command: entry.target,
+      ...(entry.args?.length ? { args: [...entry.args] } : {}),
+      ...(nonEmpty(entry.env) ? { env: { ...entry.env } } : {}),
+    };
+}
+
+function nonEmpty(record: Readonly<Record<string, string>> | undefined): record is Readonly<Record<string, string>> {
+  return !!record && Object.keys(record).length > 0;
 }
 
 /** Merges one server into the file, preserving everything else in it --
@@ -197,9 +211,15 @@ export function mcpAddArgv(
     // Copilot, Amp and Cline take a URL positionally but insist on `--`
     // before a local command, so its arguments are not read as their own.
     const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
+    const headers = add.headerPrefix
+      ? Object.entries(entry.headers ?? {}).flatMap(([key, value]) => [...add.headerPrefix!, `${key}: ${value}`])
+      : [];
+    const env = add.envPrefix
+      ? Object.entries(entry.env ?? {}).flatMap(([key, value]) => [...add.envPrefix!, `${key}=${value}`])
+      : [];
     return remote
-      ? [...add.argv, ...transport, entry.name, entry.target]
-      : [...add.argv, entry.name, '--', entry.target, ...(entry.args ?? [])];
+      ? [...add.argv, ...transport, entry.name, entry.target, ...headers]
+      : [...add.argv, entry.name, ...env, '--', entry.target, ...(entry.args ?? [])];
   }
   if (add.shape === 'named-flags') {
     // Hermes and Auggie: nothing positional but the name. Hermes documents

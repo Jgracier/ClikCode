@@ -21,6 +21,13 @@ const argv = (command: string, entry: Parameters<typeof mcpAddArgv>[1]): string 
   (mcpAddArgv(grammarOf(command), entry) ?? []).join(' ');
 
 describe('spelling "add this MCP server"', () => {
+  it('carries a server\'s headers and environment to Claude, where its variadic flags cannot swallow the name or URL', () => {
+    expect(argv('claude', { ...remote, headers: { 'X-API-Key': 'k', 'X-Two': '2' } }))
+      .toBe('mcp add --scope user --transport http sentry https://mcp.sentry.dev/mcp --header X-API-Key: k --header X-Two: 2');
+    expect(argv('claude', { ...local, env: { TOKEN: 't' } }))
+      .toBe('mcp add --scope user figma --env TOKEN=t -- npx -y figma-mcp');
+  });
+
   it('gives Claude a user-scope server, its local arguments after --', () => {
     // Without --scope user Claude binds the server to the current folder; without --
     // an argument such as --browser is refused as one of Claude's own options.

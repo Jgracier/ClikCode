@@ -46,6 +46,13 @@ describe('the server entry', () => {
       .toEqual({ url: 'https://mcp.example.com/sse' });
     expect(mcpConfigEntry({ name: 'x', target: 'npx' })).toEqual({ command: 'npx' });
   });
+
+  it('keeps a remote server\'s headers and a local server\'s environment', () => {
+    expect(mcpConfigEntry({ name: 'x', target: 'https://mcp.example.com/mcp', headers: { 'X-API-Key': 'k' } }))
+      .toEqual({ url: 'https://mcp.example.com/mcp', headers: { 'X-API-Key': 'k' } });
+    expect(mcpConfigEntry({ name: 'x', target: 'npx', env: { TOKEN: 't' } }))
+      .toEqual({ command: 'npx', env: { TOKEN: 't' } });
+  });
 });
 
 describe('merging into a file that is the user\'s', () => {
