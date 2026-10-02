@@ -57,7 +57,7 @@ export function clerkAccounts(state: HarnessState, host: HarnessSession, now = D
   const own = hostCommand(host);
   const ranked = state.accounts.flatMap((account) => {
     if (account.id === host.accountId) return [];
-    const usage = clerkUsage(account, now);
+    const usage = clerkUsage(account, state, now);
     if (!usage) return [];
     const harness = localHarnessForProvider(account.provider) ?? localHarnessForCommand(account.provider);
     if (!harness || !harnessCanRunTurns(harness) || !harness.turn) return [];
@@ -125,6 +125,7 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
     if (!harness) throw new Error(`${picked.displayName} is not available`);
     const reply = await (input.runClerk ?? runProviderPrompt)({
       harness, account: picked.account, prompt: reserved.brief,
+      state: input.state, sessionId: input.host.id,
       ...(input.host.workspace ? { workspace: input.host.workspace } : {}),
       ...(input.host.permissionMode ? { permissionMode: input.host.permissionMode as AiHarnessPermissionMode } : {}),
       ...(input.request.signal ? { signal: input.request.signal } : {}),

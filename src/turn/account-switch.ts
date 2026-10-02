@@ -14,11 +14,8 @@
  * no current figure is still tried, and it never outranks one whose figure
  * is still true and shows room left. */
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { learnedUsageReading } from '../harness/accounts/usage-learning.js';
-import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
-import { NATIVE_STREAM_USAGE_READINGS } from '../harness/accounts/stream-usage.js';
+import { learnedUsageNow } from '../harness/accounts/usage-now.js';
 import { accountQuotaSpent, markQuotaExhausted, settleQuotaMark, usageReadingIsCurrent, windowSpent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
-import { localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import type { HarnessState } from '../session/model.js';
 import { usageLabelRemainingPercent } from './failover.js';
 
@@ -35,13 +32,6 @@ function positiveReadingIsStale(account: AiHarnessAccount, state: HarnessState):
     const when = Date.parse(invocation.at);
     return Number.isFinite(when) && when > at;
   });
-}
-
-function publishesLiveUsage(account: AiHarnessAccount): boolean {
-  let command: string | undefined;
-  try { command = localHarnessForProvider(account.provider)?.command; } catch { command = undefined; }
-  if (!command) return false;
-  return NATIVE_USAGE_PROBES[command] !== undefined || NATIVE_STREAM_USAGE_READINGS[command] !== undefined;
 }
 
 /** Remaining percent already known for this account.
@@ -70,20 +60,19 @@ export function noteStoredQuota(account: AiHarnessAccount, state: HarnessState, 
     return Math.min(...current.map((window) => Math.max(0, 100 - window.usedPct)));
   }
 
-  // Learned usage is recomputed from the invocations held right now, so it
-  // is not a saved percent. A positive estimate is still only a lower bound
-  // on the real limit — never something to prefer an account on. Zero is a
-  // refusal the history already explains.
-  if (!publishesLiveUsage(account)) {
-    const reading = learnedUsageReading(account.usageLearning, state.invocations, account.id, now);
-    if (usageLabelRemainingPercent(reading?.label) === 0) {
-      // Recorded as a mark, expiring when the learned window rolls, so every
-      // screen -- which cannot recompute the learned figure -- agrees.
-      const resets = (reading?.windows ?? []).filter((window) => windowSpent(window) && window.resetsAt)
-        .map((window) => window.resetsAt!).sort();
-      markQuotaExhausted(account, now, resets.at(-1));
-      return 0;
-    }
+  // No current vendor amount. The learned figure is the amount, including
+  // for a harness that usually publishes one: a failed or missing probe is
+  // skipped, and what the turns have taught is what remains. Zero is out of
+  // usage. A positive number is room. An error, or a history too thin to
+  // publish, leaves the account unknown so the next turn can still teach it.
+  const reading = learnedUsageNow(account, state, now);
+  const left = usageLabelRemainingPercent(reading?.label);
+  if (left === 0) {
+    const resets = (reading?.windows ?? []).filter((window) => windowSpent(window) && window.resetsAt)
+      .map((window) => window.resetsAt!).sort();
+    markQuotaExhausted(account, now, resets.at(-1));
+    return 0;
   }
+  if (left !== undefined && left > 0) return left;
   return undefined;
 }

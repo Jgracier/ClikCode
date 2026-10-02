@@ -11,6 +11,7 @@ import { sessionPickerOptions } from '../session/options.js';
 import { workingDetail } from '../tui/pickers/conversation-activity.js';
 import { boardSlice, cardFromReply, emptyBoard, goalKey, keepOnHost } from './board.js';
 import { resolveSwarm } from './policy.js';
+import { publishLearnedUsage } from '../harness/accounts/usage-now.js';
 import { clerkAccounts, runSwarmDelegation } from './run.js';
 import { readBoard } from './store.js';
 import { clerkUsage } from './usage.js';
@@ -52,13 +53,40 @@ describe('who a host may delegate to', () => {
     expect(clerkUsage(account({ id: 'fail', provider: 'cursor', label: 'Failed', usage: { at: ISO, failed: true, windows: [{ name: '5h', usedPct: 10 }] } as AiHarnessAccount['usage'] }), NOW)).toBeUndefined();
     expect(clerkUsage(account({ id: 'spent', provider: 'cursor', label: 'Spent', usage: windows(100) }), NOW)).toBeUndefined();
     expect(clerkUsage(account({ id: 'stale', provider: 'cursor', label: 'Stale', usage: windows(10, { resetsAt: '2026-09-01T00:00:00.000Z' }) }), NOW)).toBeUndefined();
-    expect(clerkUsage(account({ id: 'guess', provider: 'cursor', label: 'Guess', usageLearning: { highWater: {}, hits: [] } }), NOW)).toBeUndefined();
+    expect(clerkUsage(account({ id: 'guess', provider: 'cursor', label: 'Guess', usageLearning: { highWater: {}, hits: [] } }), { invocations: [] } as HarnessState, NOW)).toBeUndefined();
     expect(clerkUsage(account({ id: 'out', provider: 'cursor', label: 'Signed out', status: 'needs_login', usage: windows(10) }), NOW)).toBeUndefined();
   });
 
   it('keeps an advisory window when that is the only amount the vendor published', () => {
     const auto = account({ id: 'auto', provider: 'cursor', label: 'Auto', usage: windows(40, { advisory: true }) });
     expect(clerkUsage(auto, NOW)?.leftPct).toBe(60);
+  });
+
+  it('uses a learned amount when the vendor reading failed, and skips a history that cannot be published', () => {
+    const at = NOW - 90 * 60_000;
+    const learned = account({
+      id: 'learned', provider: 'cursor', label: 'Learned',
+      usage: { at: ISO, failed: true, windows: [{ name: '5h', usedPct: 1 }] } as AiHarnessAccount['usage'],
+      usageLearning: {
+        highWater: { '5h': 1000 },
+        hits: [
+          { at: new Date(at).toISOString(), costs: { '5h': 1000 } },
+          { at: new Date(at + 60_000).toISOString(), costs: { '5h': 980 } },
+        ],
+      },
+    });
+    const invocations = [{
+      id: 'spent-some', accountId: 'learned', provider: 'cursor', at: new Date(NOW - 30 * 60_000).toISOString(), totalTokens: 400, latencyMs: 1,
+    }];
+    const held = { accounts: [learned], invocations } as HarnessState;
+    expect(clerkUsage(learned, held, NOW)?.leftPct).toBe(60);
+    publishLearnedUsage(learned, held, NOW);
+    expect(learned.usage?.learned).toBe(true);
+    expect(learned.usage?.failed).toBeUndefined();
+    const vendor = account({ id: 'vendor', provider: 'cursor', label: 'Vendor', usage: windows(20) });
+    publishLearnedUsage(vendor, { accounts: [vendor], invocations: [] } as HarnessState, NOW);
+    expect(vendor.usage?.learned).toBeUndefined();
+    expect((vendor.usage as { windows?: { usedPct: number }[] }).windows?.[0]?.usedPct).toBe(20);
   });
 
   it('uses the tightest binding window and ignores a tighter advisory one', () => {
