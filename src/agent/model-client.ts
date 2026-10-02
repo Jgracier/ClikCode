@@ -168,7 +168,9 @@ export interface GatewayHarnessTurnInput {
   subagent?: { system: string; transcript: ConversationItem[] };
   /** When the conversation has a swarm, a `task` call asks this before the
    * same-model sub-agent. Null keeps that sub-agent. */
-  swarmDelegate?: (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal }) => Promise<ToolRunResult | null>;
+  swarmDelegate?: (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string }) => Promise<ToolRunResult | null>;
+  /** Models with usage left, shown on the task tool while swarm is on. */
+  swarmModelNote?: string;
 }
 
 export interface GatewayHarnessTurnResult {

@@ -15,6 +15,8 @@ import { SWARM_POLICY, swarmIsOn, type SwarmPolicy } from './policy.js';
 import { appendSwarmActivity } from './spool.js';
 import { readBoard, writeBoard } from './store.js';
 import { clerkUsage } from './usage.js';
+import { formatSwarmOffers, matchSwarmOffer, seatFor, swarmChoiceNote, swarmOffers } from './offers.js';
+import { loadScoreCache, type ScoreCache } from './scores.js';
 import type { ToolRunResult } from '../agent/tool-contract.js';
 
 /** Serializes board updates for one host. Clerk runs happen outside the lock. */
@@ -32,7 +34,9 @@ const inflight = new Map<string, number>();
 export interface SwarmDelegation {
   host: HarnessSession;
   state: HarnessState;
-  request: { prompt: string; description?: string; callId: string; signal?: AbortSignal };
+  request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string };
+  /** Tests pass this so a model choice does not fetch OpenRouter. */
+  scores?: ScoreCache;
   onActivity?: (event: HarnessActivityEvent) => void;
   /** Tests replace the vendor process. */
   runClerk?: typeof runProviderPrompt;
@@ -61,6 +65,12 @@ export function clerkAccounts(state: HarnessState, host: HarnessSession, now = D
   return ranked;
 }
 
+/** The model list the host reads before it calls swarm. */
+export async function swarmModelList(host: HarnessSession, state: HarnessState, scores?: ScoreCache): Promise<string> {
+  const cache = scores ?? await loadScoreCache();
+  return swarmChoiceNote(swarmOffers(clerkAccounts(state, host), cache));
+}
+
 /** The account with the most usage left that is not already working. When
  * every eligible account is busy, the one with the most left is used again. */
 export function pickClerkAccount(
@@ -70,8 +80,8 @@ export function pickClerkAccount(
   return ranked.find((row) => !busy.has(row.account.id)) ?? ranked[0];
 }
 
-function providerLabel(displayName: string, role: SwarmRole, description: string): string {
-  return `${displayName} · ${role} · ${description}`;
+function providerLabel(displayName: string, role: SwarmRole, description: string, model?: string): string {
+  return [displayName, model, role, description].filter(Boolean).join(' · ');
 }
 
 async function emit(hostId: string, event: HarnessActivityEvent, onActivity?: (event: HarnessActivityEvent) => void): Promise<void> {
@@ -95,26 +105,34 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
   if (!swarmIsOn(input.host)) return null;
   const policy = SWARM_POLICY;
   const text = [input.request.description, input.request.prompt].filter(Boolean).join('\n');
-  if (keepOnHost(text)) return null;
+  const chosenModel = input.request.model?.trim();
+  if (!chosenModel && keepOnHost(text)) return null;
   const role = swarmRole(text);
   const paths = pathsIn(input.request.prompt);
   const key = goalKey(role, paths, input.request.prompt);
   const description = (input.request.description?.trim() || input.request.prompt.replace(/\s+/g, ' ').trim()).slice(0, 80);
+  const scores = chosenModel ? input.scores ?? await loadScoreCache() : undefined;
+  const offers = chosenModel ? swarmOffers(clerkAccounts(input.state, input.host), scores) : [];
+  const offer = chosenModel ? matchSwarmOffer(offers, chosenModel) : undefined;
+  if (chosenModel && !offer) {
+    return { output: `No model ${chosenModel} has usage left.\n${formatSwarmOffers(offers)}`, isError: true, activityLabel: 'Swarm' };
+  }
   const opened = await lock(input.host.id, async () => {
     const board = await readBoard(input.host.id);
     const busy = new Set(board.roster.flatMap((line) => (line.status === 'working' && line.accountId ? [line.accountId] : [])));
-    const picked = pickClerkAccount(input.state, input.host, Date.now(), busy);
+    const seat = offer ? seatFor(offer, busy) : undefined;
+    const picked = seat?.candidate ?? pickClerkAccount(input.state, input.host, Date.now(), busy);
     if (!picked) return undefined;
     const reserved = await reserve(input.host.id, policy, picked.displayName, role, paths, key, input.request.prompt, description, picked.account.id);
-    return { picked, reserved };
+    return { picked, reserved, modelArg: seat?.modelArg };
   });
   if (!opened) return null;
-  const { picked, reserved } = opened;
+  const { picked, reserved, modelArg } = opened;
   if (reserved.kind === 'attach') return cardResult(reserved.card, `Attached · ${picked.displayName}`, picked, role);
   if (reserved.kind === 'capped') {
     return { output: 'The swarm is already at its parallel cap. Do this with your own tools.', activityLabel: 'Swarm cap' };
   }
-  const label = providerLabel(picked.displayName, role, description);
+  const label = providerLabel(picked.displayName, role, description, modelArg);
   const swarm = { provider: picked.command, displayName: picked.displayName, role, usageLeft: Math.round(picked.leftPct) };
   await emit(input.host.id, { kind: 'tool-start', id: input.request.callId, label, agent: true, swarm }, input.onActivity);
   const steps: string[] = [];
@@ -126,6 +144,7 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
       state: input.state, sessionId: input.host.id,
       ...(input.host.workspace ? { workspace: input.host.workspace } : {}),
       ...(input.host.permissionMode ? { permissionMode: input.host.permissionMode as AiHarnessPermissionMode } : {}),
+      ...(modelArg ? { model: modelArg } : {}),
       ...(input.request.signal ? { signal: input.request.signal } : {}),
       onStep: (step) => {
         steps.push(step);

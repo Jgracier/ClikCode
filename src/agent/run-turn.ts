@@ -147,7 +147,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     session: input.contextProfile,
   });
   const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools), profile.mcpEagerSchemaTokens);
-  const swarmTaskNote = ' If this conversation has a swarm on, the same call may run on another signed-in provider, shown as one subagent in this chat. You get back a short card, not that provider\'s conversation.';
+  const swarmTaskNote = input.swarmModelNote
+    ? ` ${input.swarmModelNote}`
+    : ' If this conversation has a swarm on, pass model from the swarm list. You get one subagent row and a short card, not that model\'s conversation.';
   const tools = input.swarmDelegate
     ? exposure.all.map((tool) => tool.name === TASK_TOOL_NAME ? { ...tool, description: `${tool.description}${swarmTaskNote}` } : tool)
     : exposure.all;
@@ -257,7 +259,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // Swarm, when the conversation has one, runs the task on another provider
   // and returns a card. Null means this host's own sub-agent still does it.
   const runSubagent = innerSubagent && input.swarmDelegate
-    ? async (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal }): Promise<ToolRunResult> => {
+    ? async (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string }): Promise<ToolRunResult> => {
       const delegated = await input.swarmDelegate?.(request);
       if (delegated) return delegated;
       return innerSubagent(request);
@@ -268,7 +270,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
     outputCap: toolOutputCap(contextWindow, profile.toolOutputBytes),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
-    ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
+    ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string; model?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
 
   const executeCall = async (call: ModelToolCall): Promise<ToolRunResult> => {

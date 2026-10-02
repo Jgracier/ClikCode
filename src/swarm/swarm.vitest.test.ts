@@ -16,7 +16,9 @@ import { publishLearnedUsage } from '../harness/accounts/usage-now.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { emptySwarmFold, foldSwarmActivity, isSwarmToolLabel } from './fold.js';
 import { swarmProgressLabel } from './mcp.js';
+import { formatSwarmOffers, swarmOffers } from './offers.js';
 import { clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
+import { lookupScore, scoresFromOpenRouter } from './scores.js';
 import { readBoard } from './store.js';
 import { clerkUsage } from './usage.js';
 
@@ -132,6 +134,33 @@ describe('who a host may delegate to', () => {
   });
 });
 
+describe('the model list', () => {
+  it('shows a scored model once and a provider default when a model has no score', () => {
+    const accounts = [
+      account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70), models: ['claude-sonnet-4.5'] }),
+      account({ id: 'cursor-2', provider: 'cursor', label: 'Bea', usage: windows(20), models: ['claude-sonnet-4.5'] }),
+      account({ id: 'codex', provider: 'openai', label: 'Codex', usage: windows(40), models: [] }),
+    ];
+    const offers = swarmOffers(clerkAccounts(state(accounts), host(), NOW), {
+      fetchedAt: NOW, byKey: { claudesonnet45: { coding: 63, intelligence: 71 } },
+    });
+    expect(offers.map((offer) => offer.model)).toEqual(['claude-sonnet-4.5', 'codex']);
+    expect(offers[0]?.seats[0]?.candidate.account.id).toBe('cursor-2');
+    expect(formatSwarmOffers(offers)).toContain('claude-sonnet-4.5 · coding 63 · intelligence 71 · 80% left');
+    expect(formatSwarmOffers(offers)).toContain('codex · Codex · 60% left');
+  });
+
+  it('reads an OpenRouter intelligence index from the catalog body', () => {
+    const scores = scoresFromOpenRouter(JSON.stringify({
+      data: [{ id: 'anthropic/claude-sonnet-4.5', canonical_slug: 'anthropic/claude-sonnet-4.5-20260928', benchmarks: { artificial_analysis: { intelligence_index: 56, coding_index: null } } }],
+    }));
+    expect(scores.claudesonnet45).toEqual({ intelligence: 56 });
+    const cache = { fetchedAt: NOW, byKey: scores };
+    expect(lookupScore(cache, 'claude-sonnet-4.5')).toEqual({ intelligence: 56 });
+    expect(lookupScore(cache, 'claude-sonnet-4-5')).toEqual({ intelligence: 56 });
+  });
+});
+
 describe('a delegation', () => {
   it('stays on the host for one file, and runs a clerk when the work spans files', async () => {
     expect(keepOnHost('What does src/app.ts export?')).toBe(true);
@@ -168,6 +197,26 @@ describe('a delegation', () => {
     expect(events[2]?.label).toBe(events[0]?.label);
     expect(events[2]?.output?.join('\n')).toContain('both files export a router');
     expect((await readBoard(session.id)).goal).toBe('review the pair');
+  });
+
+  it('runs the named model on the account that has it and the most usage left', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70), models: ['claude-sonnet-4.5'] });
+    const codex = account({ id: 'codex', provider: 'openai', label: 'Bea', usage: windows(20), models: [] });
+    let ran: { accountId?: string; model?: string } = {};
+    const done = await runSwarmDelegation({
+      host: host({ id: 'pick-model' }), state: state([cursor, codex]),
+      scores: { fetchedAt: NOW, byKey: { claudesonnet45: { coding: 63, intelligence: 71 } } },
+      request: { prompt: 'What does src/app.ts export?', description: 'one file', callId: 'named', model: 'claude-sonnet-4.5' },
+      runClerk: async (input) => {
+        ran = { accountId: input.account.id, model: input.model };
+        return '{"summary":"it exports a router"}';
+      },
+    });
+    expect(ran).toEqual({ accountId: 'cursor', model: 'claude-sonnet-4.5' });
+    expect(done?.output).toContain('it exports a router');
+    expect(done?.activityLabel).toContain('claude-sonnet-4.5');
   });
 
   it('says so when nobody has published an amount with room left', async () => {

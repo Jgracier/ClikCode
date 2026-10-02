@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
 import { activeSwarmHost } from './store.js';
 import { swarmIsOn } from './policy.js';
-import { runSwarmDelegation } from './run.js';
+import { runSwarmDelegation, swarmModelList } from './run.js';
 
 interface RpcMessage {
   jsonrpc?: string;
@@ -32,31 +32,40 @@ function progressTokenOf(message: RpcMessage): string | number | undefined {
   return typeof token === 'string' || typeof token === 'number' ? token : undefined;
 }
 
-const TOOL = {
-  name: 'swarm',
-  description: 'Hand one self-contained task to another signed-in account that has usage left. This chat shows that provider as one subagent: its steps appear under the row, and you get back a short card (summary, paths, blockers), not that account\'s conversation. Use it when the task spans files, is a review, or is an edit worth handing off. A one-file question stays with you; the tool says so.',
-  inputSchema: {
-    type: 'object',
-    additionalProperties: false,
-    required: ['prompt'],
-    properties: {
-      prompt: { type: 'string', description: 'The complete task: what to do, where to look, and what the card should answer.' },
-      description: { type: 'string', description: 'A 3-6 word label shown in the host chat, e.g. "Find the refresh handler".' },
-    },
+const TOOL_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['prompt'],
+  properties: {
+    prompt: { type: 'string', description: 'The complete task: what to do, where to look, and what the card should answer.' },
+    description: { type: 'string', description: 'A 3-6 word label shown in the host chat, e.g. "Find the refresh handler".' },
+    model: { type: 'string', description: 'A model from the list in this tool\'s description. A harder task should use a higher coding or intelligence index.' },
   },
 };
+
+async function toolSpec(): Promise<{ name: string; description: string; inputSchema: typeof TOOL_SCHEMA }> {
+  let description = 'Hand one self-contained task to a model that has usage left. This chat shows it as one subagent: its steps appear under the row, and you get back a short card, not that model\'s conversation.';
+  const sessionId = await activeSwarmHost();
+  if (sessionId) {
+    const state = await readState({ transcripts: [] });
+    const host = state.sessions.find((session) => session.id === sessionId);
+    if (host && swarmIsOn(host)) description = await swarmModelList(host, state).catch(() => description);
+  }
+  return { name: 'swarm', description, inputSchema: TOOL_SCHEMA };
+}
 
 async function callTool(args: Record<string, unknown> | undefined, onStep?: (label: string) => void): Promise<string> {
   const prompt = typeof args?.prompt === 'string' ? args.prompt.trim() : '';
   if (!prompt) return 'A swarm task needs a prompt.';
   const description = typeof args?.description === 'string' ? args.description.trim() : undefined;
+  const model = typeof args?.model === 'string' ? args.model.trim() : undefined;
   const sessionId = await activeSwarmHost();
   if (!sessionId) return 'No host turn is using the swarm right now. Do this yourself.';
   const state = await readState({ transcripts: [] });
   const host = state.sessions.find((session) => session.id === sessionId);
   if (!host || !swarmIsOn(host)) return 'This conversation has no swarm on. Do this yourself.';
   const result = await runSwarmDelegation({
-    host, state, request: { prompt, ...(description ? { description } : {}), callId: `swarm-${randomUUID()}` },
+    host, state, request: { prompt, ...(description ? { description } : {}), ...(model ? { model } : {}), callId: `swarm-${randomUUID()}` },
     onActivity: (event) => {
       const label = swarmProgressLabel(event);
       if (label) onStep?.(label);
@@ -82,7 +91,7 @@ async function dispatch(message: RpcMessage, write: (payload: string) => void): 
       serverInfo: { name: 'clikcode-swarm', version: '1' },
     });
   }
-  if (message.method === 'tools/list') return respond(message.id, { tools: [TOOL] });
+  if (message.method === 'tools/list') return respond(message.id, { tools: [await toolSpec()] });
   if (message.method === 'tools/call') {
     try {
       const token = progressTokenOf(message);
