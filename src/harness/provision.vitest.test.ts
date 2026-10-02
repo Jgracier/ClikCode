@@ -115,6 +115,17 @@ describe('where a harness keeps what it was given', () => {
     expect((await vendorMcpServerNames('aider', '/no/such/home')).known).toBe(false);
   });
 
+  it('counts only the profile\'s own file for an isolated profile', async () => {
+    const { home } = await layout();
+    const profile = join(home, 'profiles', 'claude', 'one');
+    await mkdir(profile, { recursive: true });
+    await writeFile(join(home, '.claude.json'), JSON.stringify({ mcpServers: { 'only-home': { command: 'npx' } } }));
+    await writeFile(join(profile, '.claude.json'), JSON.stringify({ mcpServers: { 'in-profile': { command: 'npx' } } }));
+    const names = await vendorMcpServerNames('claude', home, { env: 'CLAUDE_CONFIG_DIR', path: profile });
+    expect([...names.names]).toEqual(['in-profile']);
+    expect([...(await vendorMcpServerNames('claude', home)).names]).toEqual(['only-home']);
+  });
+
   it('does not give Grok an MCP server or skill Claude already provides', async () => {
     const { home, state, workspace } = await layout();
     await mkdir(join(home, '.claude', 'skills', 'from-claude'), { recursive: true });
