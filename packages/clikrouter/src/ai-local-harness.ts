@@ -165,6 +165,13 @@ export interface AiHarnessManagerDefinition {
      *  case -- and saving it, which Hermes then marks disabled and offers to
      *  test, is what the user asked for. */
     confirmStdin?: string;
+    /** doubledash-local only. Flags that carry a remote server's headers
+     *  (`Name: value`, after the URL) and a local server's environment
+     *  (`KEY=value`, before `--`). Both are variadic in Claude, so where they
+     *  sit is what keeps them from swallowing the name or the URL. Absent:
+     *  the harness is given the server without them. */
+    headerPrefix?: readonly string[];
+    envPrefix?: readonly string[];
   };
   /** Where this harness READS its MCP servers from, for one that has no
    *  usable `mcp add`.
@@ -906,7 +913,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     managers: {
       // User scope: Claude's default is the current folder only. `--` keeps a
       // local server's own dash arguments from being read as Claude's options.
-      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add', '--scope', 'user'], shape: 'doubledash-local', transportPrefix: ['--transport'] } },
+      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add', '--scope', 'user'], shape: 'doubledash-local', transportPrefix: ['--transport'], headerPrefix: ['--header'], envPrefix: ['--env'] } },
       plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },
