@@ -19,6 +19,8 @@ export async function runProviderPrompt(input: {
   account: AiHarnessAccount;
   workspace?: string;
   prompt: string;
+  /** A model from the account. Absent uses the harness default. */
+  model?: string;
   permissionMode?: AiHarnessPermissionMode;
   signal?: AbortSignal;
   onStep?: (label: string) => void;
@@ -50,6 +52,7 @@ export async function runProviderPrompt(input: {
     prompt: input.prompt,
     ...(input.workspace ? { workspace: input.workspace } : {}),
     ...(mode ? { permissionMode: mode } : {}),
+    ...(input.model ? { model: input.model } : {}),
   });
   const environment = turnEnvironment(input.harness, input.account, mode);
   let output;
@@ -98,7 +101,7 @@ async function runAcpClerk(
 ): Promise<string> {
   const permissionMode = input.permissionMode && input.harness.permissionModes?.includes(input.permissionMode)
     ? input.permissionMode : 'ask';
-  const launch = harnessAcpLaunch(input.harness, { permissionMode });
+  const launch = harnessAcpLaunch(input.harness, { permissionMode, ...(input.model ? { model: input.model } : {}) });
   if (!launch) throw new Error(`${input.harness.displayName} cannot take a headless turn`);
   const environment = turnEnvironment(input.harness, input.account, permissionMode);
   let usage: TurnUsage | undefined;

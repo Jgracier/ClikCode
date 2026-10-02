@@ -26,7 +26,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { loadIndex } from '../session/state/index-file.js';
 import { readState } from '../session/state/read.js';
 import { swarmIsOn } from '../swarm/policy.js';
-import { runSwarmDelegation } from '../swarm/run.js';
+import { runSwarmDelegation, swarmModelList } from '../swarm/run.js';
 import { openSwarmTurn } from '../swarm/store.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
@@ -135,8 +135,9 @@ export async function runGatewayHarnessSessionTurn(
       prompter?.response(visible, mode);
     },
     onActivity: publishActivity,
+    ...(swarmIsOn(session) ? { swarmModelNote: await swarmModelList(session, await readState({ transcripts: [] })).catch(() => undefined) } : {}),
     // Re-read the conversation's swarm on each task, so /swarm during a turn
-    // applies to the next call. A one-file question still stays on this host.
+    // applies to the next call. Passing model hands that model the task.
     swarmDelegate: async (request) => {
       const state = await readState({ transcripts: [] });
       const live = state.sessions.find((item) => item.id === session.id);

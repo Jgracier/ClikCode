@@ -16,7 +16,7 @@
 import { defineTool } from '../tool-contract.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 
-interface TaskArgs { prompt: string; description?: string }
+interface TaskArgs { prompt: string; description?: string; model?: string }
 
 export const TASK_TOOL_NAME = 'task';
 
@@ -34,12 +34,17 @@ export const taskTool = defineTool<TaskArgs>({
     properties: {
       prompt: { type: 'string', description: 'The complete task for the sub-agent.' },
       description: { type: 'string', description: 'A 3-6 word label shown to the user, e.g. "Find the retry logic".' },
+      model: { type: 'string', description: 'A model from the swarm list, when this conversation has a swarm. A harder task should use a higher coding or intelligence index.' },
     },
   },
   label: (args) => formatToolRow('task', args.description?.trim() || args.prompt),
   async run(args, ctx) {
     // Absent inside a sub-agent: one level of delegation, never a tree.
     if (!ctx.runSubagent) return { output: 'A sub-agent cannot start sub-agents. Do this research yourself with the tools you have.', isError: true };
-    return ctx.runSubagent({ prompt: args.prompt, ...(args.description?.trim() ? { description: args.description.trim() } : {}) });
+    return ctx.runSubagent({
+      prompt: args.prompt,
+      ...(args.description?.trim() ? { description: args.description.trim() } : {}),
+      ...(args.model?.trim() ? { model: args.model.trim() } : {}),
+    });
   },
 });
