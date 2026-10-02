@@ -30,7 +30,6 @@ import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { gatewayModels } from '../gateway/models.js';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { generateWorkerToken, removeWorkerRecord, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold } from './registry.js';
-import { watchSwarmActivity } from '../swarm/spool.js';
 
 /** No attached client and no turn running, for this long: the worker exits
  * on its own rather than living forever the way the process it replaces
@@ -131,9 +130,6 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * model is owed -- because replacing it would lose that work. Clients do
    * not; an idle window simply attaches to the replacement next time. */
   let retireWhenIdle = false;
-  /** Clerks still working. The worker stays up so the chat can keep showing
-   * them after the host turn that started them has finished. */
-  let swarmBusy = 0;
   /** The entry this process loaded. Re-stat'd while idle: a rebuild changes
    * mtime/size, and a worker nobody has reattached to would otherwise keep
    * the old code for its whole IDLE_EXIT_MS lifetime. */
@@ -142,7 +138,6 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (turnRunning || draining) return 'a turn is running';
     if (vendorBackground.busy) return 'vendor background work is running';
     if (runningShellCount(agentSession) > 0) return 'a background shell is running';
-    if (swarmBusy > 0) return 'a swarm handoff is running';
     if (agentSession.notifications.length) return 'a notification is on its way to the model';
     return undefined;
   };
@@ -164,7 +159,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       const live = currentWorkerBuild();
       if (live && live !== spawnedBuild) { void shutdown('replaced by a newer ClikCode build'); return; }
     }
-    if (turnRunning || vendorBackground.busy || swarmBusy > 0 || observer.attachedCount > 0 || agentSession.notifications.length) return;
+    if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
     if (runningShellCount(agentSession) > 0) {
       const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
       idleTimer = setTimeout(stopAbandonedShells, Math.max(0, oldest + ABANDONED_SHELL_MS - Date.now()));
@@ -251,37 +246,6 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     }
   };
   agentSession.onNotification = () => { void deliverNotifications(); };
-
-  /** A clerk's card becomes the next turn, the same way a background shell's
-   * exit does. A turn that is still going keeps going; the card waits. */
-  const deliverSwarmCard = async (text: string): Promise<void> => {
-    const latest = await readState();
-    const found = latest.sessions.find((item) => item.id === sessionId);
-    if (!found) return;
-    const submittedAt = new Date().toISOString();
-    enqueueSessionTurn(found, { id: randomUUID(), text, submittedAt, kind: 'notification' }, submittedAt);
-    await writeState(latest);
-    broadcastQueueChanged();
-    if (!turnRunning) await drainQueue();
-  };
-  const stopSwarmWatch = watchSwarmActivity(sessionId, (event) => {
-    observer.activityEvent(event);
-    if (!event.swarm || event.parentId) return;
-    if (event.kind === 'tool-start') {
-      swarmBusy += 1;
-      scheduleIdleExit();
-      return;
-    }
-    if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return;
-    swarmBusy = Math.max(0, swarmBusy - 1);
-    const body = (event.output ?? []).join('\n').trim();
-    const text = event.kind === 'tool-error'
-      ? `[swarm] ${event.label} failed.${body ? `\n${body}` : ''}`
-      : `[swarm] ${event.label}${body ? `\n${body}` : ''}`;
-    void deliverSwarmCard(text).catch((error: unknown) => {
-      broadcastNotice(`Could not deliver a swarm card: ${error instanceof Error ? error.message : String(error)}`);
-    }).finally(scheduleIdleExit);
-  });
 
   /** Starts a turn unless one is already running. Synchronous from the check
    * to the flag, so nothing can slip a second turn in between. */
@@ -592,7 +556,6 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // What the model was never told -- notifications not yet delivered, and
     // each shell this stops -- is recorded as a queued turn first, so the
     // next worker for the conversation delivers it.
-    stopSwarmWatch();
     const undelivered = disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
     await recordNotifications(undelivered).catch(() => undefined);
     // Codex app-server and ACP children are spawned detached too, and were
