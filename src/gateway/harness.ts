@@ -25,6 +25,7 @@ import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools
 import { stateDirectory } from '../session/store/paths.js';
 import { loadIndex } from '../session/state/index-file.js';
 import { readState } from '../session/state/read.js';
+import { swarmIsOn } from '../swarm/policy.js';
 import { runSwarmDelegation } from '../swarm/run.js';
 import { openSwarmTurn } from '../swarm/store.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
@@ -101,7 +102,7 @@ export async function runGatewayHarnessSessionTurn(
     notice: (message) => { if (prompter) prompter.activity(message); else process.stderr.write(`${message}\n`); },
   });
   const hooks = toolHooksFrom(hookConfig, (message) => prompter?.activity(message));
-  if (session.swarm?.length) await openSwarmTurn(session.id).catch(() => undefined);
+  if (swarmIsOn(session)) await openSwarmTurn(session.id).catch(() => undefined);
   const publishActivity = (event: GatewayActivityEvent): void => {
     const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);
     const classified = category && !event.category ? { ...event, category } : event;
@@ -139,8 +140,8 @@ export async function runGatewayHarnessSessionTurn(
     swarmDelegate: async (request) => {
       const state = await readState({ transcripts: [] });
       const live = state.sessions.find((item) => item.id === session.id);
-      const host = live?.swarm?.length ? { ...session, swarm: live.swarm, permissionMode: live.permissionMode ?? session.permissionMode, accountId: live.accountId ?? session.accountId } : session;
-      if (!host.swarm?.length) return null;
+      const host = live && swarmIsOn(live) ? { ...session, swarm: live.swarm, permissionMode: live.permissionMode ?? session.permissionMode, accountId: live.accountId ?? session.accountId } : session;
+      if (!swarmIsOn(host)) return null;
       return runSwarmDelegation({ host, state, request, onActivity: publishActivity });
     },
     onPhase: (phase) => {

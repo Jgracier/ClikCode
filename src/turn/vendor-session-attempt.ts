@@ -15,6 +15,8 @@ import { readAcpUsageFile } from '../harness/transport/acp-usage-file.js';
 import { turnShareOf } from '../harness/protocol/turn-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
+import { swarmIsOn } from '../swarm/policy.js';
+import { harnessCanInstallLocalMcp, swarmAcpMcpServers } from '../swarm/publish.js';
 import { closePersistentTransport, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 
 export async function runVendorSessionAttempt(input: {
@@ -96,6 +98,7 @@ export async function runVendorSessionAttempt(input: {
         // stream reading, so the composer and the account picker see it.
         onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
         environment, signal, images, onSessionId,
+        ...(swarmIsOn(session) && !harnessCanInstallLocalMcp(harness) ? { mcpServers: swarmAcpMcpServers() } : {}),
         ...sharedObserver,
       };
       // An agent that keeps its usage only in its session file (Cline): the

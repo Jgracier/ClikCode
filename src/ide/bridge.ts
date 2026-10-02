@@ -869,7 +869,12 @@ export class IdeBridge {
         case 'failover': await setting(`/accounts failover ${choice.value}`); done(); return;
         case 'account': await setting(`/settings account ${choice.accountId}`); done(); return;
         case 'fast': await setting(`/fast ${choice.on ? 'on' : 'off'}`); done(); return;
-        case 'swarm': await setting(choice.names.length ? `/swarm ${choice.names.join(' ')}` : '/swarm off'); done(); return;
+        case 'swarm': {
+          const on = typeof choice.enabled === 'boolean' ? choice.enabled : (choice.names?.length ?? 0) > 0;
+          await setting(on ? '/swarm on' : '/swarm off');
+          done();
+          return;
+        }
         case 'plan': {
           const { session } = await this.current();
           const harness = sessionHarnessDefinition(session);

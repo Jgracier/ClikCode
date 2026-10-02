@@ -324,51 +324,6 @@ export function AccountMenu(props: { model: ChatModel; onClose: () => void; onEr
   );
 }
 
-/** The chip's words: the configurations that are on, or Swarm while it is off. */
-export function swarmChipLabel(model: ChatModel): string {
-  const swarm = model.chatSettings?.swarm;
-  if (!swarm?.current.length) return 'Swarm';
-  return swarm.current.map((id) => swarm.choices.find((choice) => choice.id === id)?.label ?? id).join(' · ');
-}
-
-/** Lean and frugal stay open so both can be on. Off clears them. Only
- * providers that have reported a usage amount with room left are in the pool;
- * the menu names the cap, and the host lists who qualifies. */
-export function SwarmMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
-  const swarm = props.model.chatSettings?.swarm;
-  const incoming = (swarm?.current ?? []).join(' ');
-  const [picked, setPicked] = useState<string[]>(swarm?.current ?? []);
-  useEffect(() => { setPicked(swarm?.current ?? []); }, [incoming]);
-  const fail = (failure: Error): void => props.onError(failure.message);
-  const apply = (names: string[]): void => { setPicked(names); choose({ kind: 'swarm', names }).catch(fail); };
-  const rows: ListRow[] = (swarm?.choices ?? []).map((choice) => ({
-    key: choice.id,
-    onSelect: () => apply(picked.includes(choice.id) ? picked.filter((id) => id !== choice.id) : [...picked, choice.id]),
-    render: () => (
-      <div class="row">
-        <span class="row-check">{picked.includes(choice.id) ? <Icon name="check" /> : null}</span>
-        <span class="row-main"><span class="row-label">{choice.label}</span><span class="row-detail">{choice.detail}</span></span>
-      </div>
-    ),
-  }));
-  rows.push({
-    key: 'off',
-    onSelect: () => { apply([]); props.onClose(); },
-    render: () => (
-      <div class="row">
-        <span class="row-check">{picked.length ? null : <Icon name="check" />}</span>
-        <span class="row-main"><span class="row-label">Off</span><span class="row-detail">The host does this chat's work itself</span></span>
-      </div>
-    ),
-  });
-  return (
-    <Popover label="Swarm" onClose={props.onClose} class="menu" id="swarm-menu">
-      <div class="menu-title">Swarm</div>
-      <KeyList rows={rows} label="Swarm" onEscape={props.onClose} />
-    </Popover>
-  );
-}
-
 /** Effort alone, for a provider with no model list: the same choices as
  * beside the model, floated over the chip. */
 export function EffortMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
