@@ -115,7 +115,7 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
   const offers = chosenModel ? swarmOffers(clerkAccounts(input.state, input.host), scores) : [];
   const offer = chosenModel ? matchSwarmOffer(offers, chosenModel) : undefined;
   if (chosenModel && !offer) {
-    return { output: `No model ${chosenModel} has usage left.\n${formatSwarmOffers(offers)}`, isError: true, activityLabel: 'Swarm' };
+    return { output: `No account with usage lists ${chosenModel}. Pass one of these model ids.\n${formatSwarmOffers(offers)}`, isError: true, activityLabel: 'Swarm' };
   }
   const opened = await lock(input.host.id, async () => {
     const board = await readBoard(input.host.id);

@@ -1,6 +1,6 @@
-/** The models a host may hand work to. Each line is a model on an account
- * that still has usage. The host passes that model. Swarm runs it on the
- * account in the line that has the most usage left. */
+/** The models a host may hand work to. Each line is a model id an account
+ * with usage actually lists. The host passes that id and does not invent
+ * one. Swarm runs it on the account that lists it and has the most usage left. */
 
 import { lookupScore, type ModelScore, type ScoreCache, scoreKey } from './scores.js';
 
@@ -34,23 +34,16 @@ function cost(score: ModelScore | undefined): number {
   return (score.promptPerM ?? 0) + (score.completionPerM ?? 0);
 }
 
-/** The strongest models, plus a cheaper one when the account has it.
- * A routine task cannot be matched to a price the list never shows. */
+/** Every model id this account lists. An account with usage but no models
+ * adds nothing: the harness command is not a model the host can name. */
 function linesFor(row: OfferRow, cache: ScoreCache | undefined): Array<{ model: string; modelArg?: string; score?: ModelScore }> {
-  const scored = row.account.models.filter(Boolean).flatMap((model) => {
+  const seen = new Set<string>();
+  return row.account.models.filter(Boolean).flatMap((model) => {
+    if (seen.has(model)) return [];
+    seen.add(model);
     const score = lookupScore(cache, model);
-    return score ? [{ model, modelArg: model, score }] : [];
+    return [{ model, modelArg: model, ...(score ? { score } : {}) }];
   });
-  scored.sort((left, right) => rank(right.score) - rank(left.score) || left.model.localeCompare(right.model));
-  if (!scored.length) return [{ model: row.command }];
-  const cheapest = [...scored].sort((left, right) => cost(left.score) - cost(right.score) || left.model.localeCompare(right.model))[0];
-  const chosen = [scored[0]!];
-  if (cheapest && cheapest !== scored[0] && cost(cheapest.score) < cost(scored[0]!.score)) chosen.push(cheapest);
-  for (const line of scored) {
-    if (chosen.length >= 3) break;
-    if (!chosen.includes(line)) chosen.push(line);
-  }
-  return chosen;
 }
 
 /** One offer per model. Seats are the accounts that can run it, most usage first. */
@@ -58,45 +51,24 @@ export function swarmOffers<T extends OfferRow>(pool: readonly T[], cache?: Scor
   const grouped = new Map<string, SwarmOffer<T>>();
   for (const row of pool) {
     for (const line of linesFor(row, cache)) {
-      const key = scoreKey(line.model);
-      const offer = grouped.get(key) ?? { model: line.model, ...(line.score ? { score: line.score } : {}), seats: [] };
+      const offer = grouped.get(line.model) ?? { model: line.model, ...(line.score ? { score: line.score } : {}), seats: [] };
       offer.seats.push({ candidate: row, ...(line.modelArg ? { modelArg: line.modelArg } : {}) });
       if (!offer.score && line.score) offer.score = line.score;
-      grouped.set(key, offer);
+      grouped.set(line.model, offer);
     }
   }
   const offers = [...grouped.values()];
   for (const offer of offers) offer.seats.sort((left, right) => right.candidate.leftPct - left.candidate.leftPct);
-  offers.sort(byStrength);
-  return mixPrices(offers);
+  return offers.sort(byStrength);
 }
 
 function byStrength<T extends OfferRow>(left: SwarmOffer<T>, right: SwarmOffer<T>): number {
-  return rank(right.score) - rank(left.score) || (right.seats[0]?.candidate.leftPct ?? 0) - (left.seats[0]?.candidate.leftPct ?? 0) || left.model.localeCompare(right.model);
-}
-
-/** Twelve lines. The strongest stay, and so does a cheaper model that would
- * otherwise fall off the end. */
-function mixPrices<T extends OfferRow>(offers: SwarmOffer<T>[]): SwarmOffer<T>[] {
-  if (offers.length <= 12) return offers;
-  const kept: SwarmOffer<T>[] = [];
-  const seen = new Set<string>();
-  const take = (offer: SwarmOffer<T>): void => {
-    const key = scoreKey(offer.model);
-    if (seen.has(key) || kept.length >= 12) return;
-    seen.add(key);
-    kept.push(offer);
-  };
-  const byRank = [...offers].sort(byStrength);
-  const byPrice = [...offers].sort((left, right) => cost(left.score) - cost(right.score) || left.model.localeCompare(right.model));
-  for (const offer of byRank.slice(0, 8)) take(offer);
-  for (const offer of byPrice) take(offer);
-  return kept.sort(byStrength);
+  return rank(right.score) - rank(left.score) || cost(left.score) - cost(right.score) || (right.seats[0]?.candidate.leftPct ?? 0) - (left.seats[0]?.candidate.leftPct ?? 0) || left.model.localeCompare(right.model);
 }
 
 /** The paragraph the host reads on the tool. */
 export function swarmChoiceNote(offers: readonly SwarmOffer[]): string {
-  return `Pass model from this list. Match the task to the index, and use a cheaper model when a lower index is enough. Prices are USD per million tokens, in then out. You get one subagent row and a short card, not that model's conversation.\n${formatSwarmOffers(offers)}`;
+  return `Pass one of these model ids exactly. They are the models on accounts that still have usage. Do not invent a model. Match the task to the index, and use a cheaper model when a lower index is enough. Prices are USD per million tokens, in then out. You get one subagent row and a short card, not that model's conversation.\n${formatSwarmOffers(offers)}`;
 }
 
 function money(amount: number): string {
@@ -127,8 +99,11 @@ export function formatSwarmOffers(offers: readonly SwarmOffer[]): string {
 }
 
 export function matchSwarmOffer<T>(offers: readonly SwarmOffer<T>[], model: string): SwarmOffer<T> | undefined {
+  const exact = offers.find((offer) => offer.model === model);
+  if (exact) return exact;
   const key = scoreKey(model);
-  return offers.find((offer) => scoreKey(offer.model) === key);
+  const hits = offers.filter((offer) => scoreKey(offer.model) === key);
+  return hits.length === 1 ? hits[0] : undefined;
 }
 
 /** The account that has this model and the most usage left, skipping one that is already working when another is free. */
