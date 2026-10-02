@@ -40,7 +40,7 @@ import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, typ
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { swarmIsOn } from '../../swarm/policy.js';
-import { installSwarmTool } from '../../swarm/publish.js';
+
 import { impliedHarnessCommand } from './infer-provider.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
@@ -379,7 +379,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (word === 'off') delete session.swarm;
     else session.swarm = true;
     await saveSettings(state, session);
-    if (session.swarm === true) await installSwarmTool(session, state).catch(() => undefined);
   },
   sessions: async ({ state, words }) => {
     const action = words.shift()?.toLowerCase();
