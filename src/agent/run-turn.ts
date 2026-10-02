@@ -147,7 +147,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     session: input.contextProfile,
   });
   const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools), profile.mcpEagerSchemaTokens);
-  const tools = exposure.all;
+  const swarmTaskNote = ' If this conversation has a swarm on, the same call may run on another signed-in provider. You still write a self-contained prompt. You get back a short card, not that provider\'s conversation.';
+  const tools = input.swarmDelegate
+    ? exposure.all.map((tool) => tool.name === TASK_TOOL_NAME ? { ...tool, description: `${tool.description}${swarmTaskNote}` } : tool)
+    : exposure.all;
   const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
   const [loaded, savedRules, baseSystem] = await abortable(Promise.all([
@@ -240,7 +243,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     return next;
   };
   const onApproval = input.onApproval;
-  const runSubagent = input.subagent ? undefined : createSubagentRunner({
+  const innerSubagent = input.subagent ? undefined : createSubagentRunner({
     // A sub-agent runs under its parent's profile, whatever decided it.
     parent: { ...input, contextProfile: profile.name, permissionRules: turnRules }, tools, runTurn: runGatewayHarnessTurn,
     ...(onApproval ? { approve: (title: string, detail?: string, rule?: string) => queueApproval(() => onApproval(title, detail, rule)) } : {}),
@@ -251,6 +254,15 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       input.onUsage?.({ ...ledger.total, ...lastContext });
     },
   });
+  // Swarm, when the conversation has one, runs the task on another provider
+  // and returns a card. Null means this host's own sub-agent still does it.
+  const runSubagent = innerSubagent && input.swarmDelegate
+    ? async (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal }): Promise<ToolRunResult> => {
+      const delegated = await input.swarmDelegate?.(request);
+      if (delegated) return delegated;
+      return innerSubagent(request);
+    }
+    : innerSubagent;
 
   const toolContext = (callId: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
@@ -269,7 +281,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     const finish = (result: ToolRunResult): ToolRunResult => {
       const output = eventOutputPreview(result.output);
       input.onActivity?.({
-        kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
+        kind: result.isError ? 'tool-error' : 'tool-done', label: result.activityLabel || label, id: call.id, ...category,
+        ...(result.swarm ? { agent: true, swarm: result.swarm } : {}),
         ...output, ...(result.diff ? { diff: result.diff } : {}),
         ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
         ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),

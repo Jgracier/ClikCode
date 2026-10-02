@@ -52,11 +52,14 @@ export function activityGlyph(activity: 'working' | 'idle' | undefined, pace?: T
  * gone quiet, and how many sub-agents it has out. */
 export function workingDetail(pending: NonNullable<HarnessSession['pendingTurn']>, now: number): string {
   const pace = turnPace(pending.updatedAt, now);
-  const agents = pending.subagents?.length ?? 0;
+  const agents = pending.subagents ?? [];
+  const providers = agents.filter((agent) => agent.provider).length;
+  const count = agents.length;
+  const word = providers && providers === count ? 'provider' : 'subagent';
   return [
     `· working ${shortDuration(now - Date.parse(pending.startedAt))}`,
     ...(pace === 'flowing' ? [] : [PACE_COLOR[pace](pace)]),
-    ...(agents ? [`${agents} subagent${agents === 1 ? '' : 's'} ←`] : []),
+    ...(count ? [`${count} ${word}${count === 1 ? '' : 's'} ←`] : []),
   ].join(' · ');
 }
 

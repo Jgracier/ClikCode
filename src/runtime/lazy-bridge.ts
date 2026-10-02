@@ -13,12 +13,22 @@ const require = createRequire(import.meta.url);
 /** A bundle beside this one: `../x` from source (dist/ is the repo's), `./x`
  * from the bundle itself. */
 function sibling<T>(name: string): T {
-  try {
-    return require(`../${name}`) as T;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
-    return require(fileURLToPath(new URL(`./${name}`, import.meta.url))) as T;
+  const attempts = [
+    () => require(`../${name}`) as T,
+    () => require(fileURLToPath(new URL(`./${name}`, import.meta.url))) as T,
+    // Source tests and a source entry load the bundle the build already wrote.
+    () => require(fileURLToPath(new URL(`../../dist/${name}`, import.meta.url))) as T,
+  ];
+  let missing: unknown;
+  for (const attempt of attempts) {
+    try {
+      return attempt();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'MODULE_NOT_FOUND') throw error;
+      missing = error;
+    }
   }
+  throw missing;
 }
 
 /** The direct API-key route's turn (dist/ai-router-runtime.cjs: `ai` and the

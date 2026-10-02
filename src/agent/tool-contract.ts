@@ -35,6 +35,11 @@ export interface ToolRunResult {
   diff?: import('./line-diff.js').FileDiff[];
   /** A finished command's exit code, shown on its row. */
   exitCode?: number;
+  /** Replaces the tool's own label on the activity row once the call ends.
+   * A swarm clerk uses it so the row keeps the provider it ran on. */
+  activityLabel?: string;
+  /** Set when another provider ran the call. The row animates under that name. */
+  swarm?: import('../harness/prompter.js').HarnessActivityEvent['swarm'];
 }
 
 type ToolClass = 'read' | 'write' | 'exec' | 'network' | 'meta';

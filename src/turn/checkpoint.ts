@@ -186,8 +186,15 @@ function trackSubagent(pending: NonNullable<HarnessSession['pendingTurn']>, even
   // The same test the live row uses (tui/render/waiting.ts liveWaitKind): a
   // shell command is never an agent, whatever its text starts with.
   const isAgent = event.agent || (event.category !== 'run' && isAgentToolName(event.label));
-  if (event.kind === 'tool-start' && isAgent && !running.some((agent) => agent.id === event.id)) {
-    pending.subagents = [...running, { id: event.id, label: event.label, startedAt: now }];
+  if (event.kind === 'tool-start' && isAgent) {
+    const existing = running.find((agent) => agent.id === event.id);
+    if (existing) {
+      if (event.swarm) { existing.provider = event.swarm.displayName; existing.label = event.label; existing.stepAt = now; }
+      return;
+    }
+    pending.subagents = [...running, {
+      id: event.id, label: event.label, startedAt: now, ...(event.swarm ? { provider: event.swarm.displayName } : {}),
+    }];
   } else if ((event.kind === 'tool-done' || event.kind === 'tool-error') && running.some((agent) => agent.id === event.id)) {
     const left = running.filter((agent) => agent.id !== event.id);
     if (left.length) pending.subagents = left;

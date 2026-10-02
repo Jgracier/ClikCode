@@ -12,10 +12,10 @@ import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { estimatedTokens, formatTurnUsage, titleCase } from './format';
-import { AccountMenu, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
+import { AccountMenu, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker, SwarmMenu, swarmChipLabel } from './picker';
 import { Icon, KeyList, type ListRow } from './ui';
 
-type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefined;
+type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | 'swarm' | undefined;
 
 export interface ComposerHandle {
   focus(): void;
@@ -491,6 +491,7 @@ export function Composer(props: {
       <div class="composer-status">
         {menu === 'account' ? <AccountMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
+        {menu === 'swarm' ? <SwarmMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {/* The Gateway has no account of its own: its button is for its credit. */}
         {account || model.providerId === 'gateway' ? (
           <button type="button" id="account-button" class={`status-account${menu === 'account' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'account'}
@@ -499,6 +500,12 @@ export function Composer(props: {
           </button>
         ) : null}
         {/* Permissions belong to how this chat runs, beside whose account it runs on. */}
+        {model.chatSettings?.swarm ? (
+          <button type="button" id="swarm-button" class={`status-account${menu === 'swarm' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'swarm'}
+            title="Delegate work to other providers that have reported usage left" disabled={!connected} onClick={() => setMenu(menu === 'swarm' ? undefined : 'swarm')}>
+            <Icon name="hubot" /><span class="status-label">{swarmChipLabel(model)}</span><Icon name="chevron-down" />
+          </button>
+        ) : null}
         {model.chatSettings?.permissions ? (
           <button type="button" id="mode-button" class={`status-account${menu === 'mode' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'mode'}
             title={`Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`} disabled={!connected} onClick={() => setMenu(menu === 'mode' ? undefined : 'mode')}>

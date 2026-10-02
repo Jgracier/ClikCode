@@ -64,6 +64,7 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
     // the category was derived from. The row keeps what its start knew.
     ...(next.category ? {} : prior.category ? { category: prior.category } : {}),
     ...(next.agent ? {} : prior.agent ? { agent: prior.agent } : {}),
+    ...(next.swarm ? {} : prior.swarm ? { swarm: prior.swarm } : {}),
     ...(next.diff ? {} : prior.diff ? { diff: prior.diff } : {}),
     ...(next.childTools !== undefined || prior.childTools === undefined ? {} : { childTools: prior.childTools }),
     ...(next.childTokens !== undefined || prior.childTokens === undefined ? {} : { childTokens: prior.childTokens }),
@@ -194,7 +195,7 @@ export function childActivity(current: string | undefined, event: HarnessActivit
   return current;
 }
 
-export type OpenTool = { label: string; category?: ToolCategory; agent?: boolean };
+export type OpenTool = { label: string; category?: ToolCategory; agent?: boolean; swarmProvider?: string };
 
 /** What the status line says while a call runs: the category's verb, and
  * what it is working on when the label names it -- `Read(src/app.ts)` is
@@ -203,6 +204,7 @@ export type OpenTool = { label: string; category?: ToolCategory; agent?: boolean
  * bare verb rather than a guess. */
 export function toolStatusVerb(tool: OpenTool): string {
   const name = tool.label.split('(')[0]!.trim();
+  if (tool.swarmProvider) return `waiting on ${tool.swarmProvider}`;
   if (tool.agent || (tool.category !== 'run' && isAgentToolName(tool.label))) return 'waiting on agent';
   const argument = /^[^(]*\((.*)\)$/s.exec(tool.label)?.[1]?.trim();
   const subject = (value: string, width = 32): string => visibleSlice(value, width);
@@ -228,6 +230,11 @@ export function toolStatusVerb(tool: OpenTool): string {
   }
 }
 
+function swarmStatusName(swarm: HarnessActivityEvent['swarm']): string | undefined {
+  if (!swarm) return undefined;
+  return swarm.usageLeft === undefined ? swarm.displayName : `${swarm.displayName} (${Math.round(swarm.usageLeft)}% left)`;
+}
+
 /** Derive the status from the whole in-flight tool set rather than the most
  * recent provider event. A reasoning summary or one parallel completion must
  * not claim the agent is merely thinking while another tool is still live. */
@@ -246,6 +253,7 @@ export function activityLifecyclePhase(
       label: event.label === 'tool' && prior ? prior.label : event.label,
       ...(event.category ?? prior?.category ? { category: (event.category ?? prior?.category)! } : {}),
       ...(event.agent || prior?.agent ? { agent: true } : {}),
+      ...(event.swarm?.displayName || prior?.swarmProvider ? { swarmProvider: swarmStatusName(event.swarm) ?? prior?.swarmProvider } : {}),
     });
   }
   else if (event.kind === 'tool-done' || event.kind === 'tool-error') {
@@ -257,9 +265,12 @@ export function activityLifecyclePhase(
   const running = [...next.values()];
   const current = running[running.length - 1];
   if (!current) return { activeTools: next, phase: 'thinking' };
-  // The newest open call is what the status line names.
+  // Providers working inside this turn name the status line together, so
+  // Claude waiting on Cursor and Codex reads as that, not as the newest verb.
+  const providers = [...new Set(running.flatMap((tool) => tool.swarmProvider ? [tool.swarmProvider] : []))];
   return {
-    activeTools: next, phase: toolStatusVerb(current),
+    activeTools: next,
+    phase: providers.length ? `waiting on ${providers.join(', ')}` : toolStatusVerb(current),
     ...(current.category ? { category: current.category } : {}),
   };
 }

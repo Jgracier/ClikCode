@@ -107,7 +107,7 @@ export interface HarnessSession {
     outputStarted: boolean;
     /** Sub-agents this turn has running, so another terminal's conversation
      * list can show them. Part of the journal, so it ends with the turn. */
-    subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string }>;
+    subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string; provider?: string }>;
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */
@@ -121,6 +121,14 @@ export interface HarnessSession {
   shellNotes?: ShellNote[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;
+  /** Swarm configurations on this conversation (`lean`, `frugal`, or both).
+   * Absent, the host does not delegate. */
+  swarm?: string[];
+  /** Last board written for this conversation. The live copy is the swarm
+   * board file; this is what a resumed chat still has if that file is gone. */
+  swarmBoard?: import('../swarm/board.js').SwarmBoard;
+  /** Set on a clerk run that was stored by mistake. Those rows are not chats. */
+  clerkOf?: string;
 }
 
 export interface HarnessDefaultSettings {

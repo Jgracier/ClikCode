@@ -105,7 +105,7 @@ export function relativeTime(iso: string, now = Date.now()): string {
 export function chatNamed(sessions: readonly HarnessSession[], typed: string, currentId: string): string | undefined {
   const query = typed.trim().toLowerCase();
   if (!query) return undefined;
-  const chats = sessions.filter((session) => session.id !== currentId && !isBlankConversation(session));
+  const chats = sessions.filter((session) => session.id !== currentId && !session.clerkOf && !isBlankConversation(session));
   const latest = (list: readonly HarnessSession[]): string => [...list].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!.id;
   // `last`: the most recent chat, whatever it is called.
   if (query === 'last' && chats.length) return latest(chats);
@@ -123,7 +123,7 @@ export function chatNamed(sessions: readonly HarnessSession[], typed: string, cu
 /** The chat `clikcode --continue` reopens: the latest in this folder, else
  * the latest anywhere. */
 export function latestChat(sessions: readonly HarnessSession[], workspace: string): HarnessSession | undefined {
-  const chats = sessions.filter((session) => !isBlankConversation(session)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const chats = sessions.filter((session) => !session.clerkOf && !isBlankConversation(session)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   return chats.find((session) => session.workspace === workspace) ?? chats[0];
 }
 
@@ -144,6 +144,7 @@ export function sessionPickerOptions(
   for (const session of sessions) {
     // A chat nothing happened in is not a conversation to go back to -- only
     // the one open right now, which the user is looking at.
+    if (session.clerkOf) continue;
     if (session.id !== currentId && isBlankConversation(session)) continue;
     const root = conversationIdFor(session);
     const group = groups.get(root) ?? [];

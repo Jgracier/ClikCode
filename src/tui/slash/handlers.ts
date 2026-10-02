@@ -39,6 +39,9 @@ import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, session
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
+import { resolveSwarm } from '../../swarm/policy.js';
+import { clerkAccounts } from '../../swarm/run.js';
+import { installSwarmTool } from '../../swarm/publish.js';
 import { impliedHarnessCommand } from './infer-provider.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
@@ -369,6 +372,32 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (on) session.speed = 'fast';
     else delete session.speed;
     return saveSettings(state, session);
+  },
+  swarm: async ({ state, session, words }) => {
+    const asked = words.map((word) => word.toLowerCase()).filter(Boolean);
+    const pool = (): string => {
+      const rows = clerkAccounts(state, session);
+      const who = rows.length
+        ? rows.map((row) => `${row.displayName} (${row.account.label}) ${Math.round(row.leftPct)}% left`).join('\n')
+        : 'No other provider has reported a usage amount with room left.';
+      return `Providers with usage left:\n${who}`;
+    };
+    if (!asked.length) {
+      emitHarnessOutput({ panel: 'swarm', text: `Swarm: ${session.swarm?.join(', ') || 'off'}\n\n${pool()}` });
+      return;
+    }
+    if (asked.length === 1 && asked[0] === 'off') {
+      delete session.swarm;
+      await saveSettings(state, session);
+      emitHarnessOutput({ panel: 'swarm', text: `Swarm off.\n\n${pool()}` });
+      return;
+    }
+    const { policy, unknown } = resolveSwarm(asked);
+    if (unknown.length || !policy) throw new Error(`Unknown swarm configuration: ${unknown.join(', ') || asked.join(', ')}. Known: lean, frugal.`);
+    session.swarm = [...policy.names];
+    await saveSettings(state, session);
+    await installSwarmTool(session, state).catch(() => undefined);
+    emitHarnessOutput({ panel: 'swarm', text: `Swarm: ${policy.names.join(', ')}\n\n${pool()}` });
   },
   sessions: async ({ state, words }) => {
     const action = words.shift()?.toLowerCase();

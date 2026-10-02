@@ -1518,7 +1518,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           lines: activityRows(entry.lines, entry.event?.category),
         };
       }
-      const kind = liveWaitKind(entry.event!) ?? 'tool';
+      const kind = entry.event?.swarm ? 'swarm' as const : (liveWaitKind(entry.event!) ?? 'tool');
       const child = entry.event?.id ? this.childActivity.get(entry.event.id) : undefined;
       const row = runningChatLine(
         tensedLabel(entry.event?.label ?? '', true), this.reducedMotion ? 0 : this.waitingFrame, kind, entry.startedAt ? Date.now() - entry.startedAt : 0,

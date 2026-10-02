@@ -41,6 +41,8 @@ import { provisionChosenHarness } from '../harness/provision.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
+import { markSwarmHost, openSwarmTurn } from '../swarm/store.js';
+import { watchSwarmActivity } from '../swarm/spool.js';
 
 /**
  * Runs one durable local session turn. Local sessions resolve an env reference
@@ -150,6 +152,7 @@ export async function sendVendorTurn(input: {
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
     beforeSwitch: () => closePersistentTransport(session.id),
   });
+  let stopSwarmWatch = (): void => undefined;
   try {
   // The thread goes with the conversation, as on a switch mid-turn; only
   // one that cannot be carried starts afresh.
@@ -217,6 +220,11 @@ export async function sendVendorTurn(input: {
     pendingWork.note(event);
     sink.activity(event);
   };
+  if (session.swarm?.length) {
+    await openSwarmTurn(session.id).catch(() => undefined);
+    await markSwarmHost(session.id).catch(() => undefined);
+    stopSwarmWatch = watchSwarmActivity(session.id, onActivity);
+  }
   /** A transport's thought is the whole of it so far: one row per id,
    *  replaced as it grows (activity-events.ts thoughtLabel). */
   const onThought = (thought: string, id?: string): void => {
@@ -486,6 +494,8 @@ export async function sendVendorTurn(input: {
     return;
   }
   } finally {
+    stopSwarmWatch();
+    await markSwarmHost(undefined).catch(() => undefined);
     await checkpoint.flush();
   }
 }
