@@ -147,7 +147,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     session: input.contextProfile,
   });
   const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools), profile.mcpEagerSchemaTokens);
-  const swarmTaskNote = ' If this conversation has a swarm on, the same call may run on another signed-in provider. You still write a self-contained prompt. You get back a short card, not that provider\'s conversation.';
+  const swarmTaskNote = ' If this conversation has a swarm on, the same call may run on another signed-in provider. It returns as soon as that provider is working, and this chat shows it. Continue; do not wait. A short card arrives as a later message, not that provider\'s conversation.';
   const tools = input.swarmDelegate
     ? exposure.all.map((tool) => tool.name === TASK_TOOL_NAME ? { ...tool, description: `${tool.description}${swarmTaskNote}` } : tool)
     : exposure.all;

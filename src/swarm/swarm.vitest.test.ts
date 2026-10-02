@@ -10,10 +10,11 @@ import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { sessionPickerOptions } from '../session/options.js';
 import { workingDetail } from '../tui/pickers/conversation-activity.js';
-import { boardSlice, cardFromReply, emptyBoard, goalKey, keepOnHost } from './board.js';
+import { beginTurn, boardSlice, cardFromReply, emptyBoard, goalKey, keepOnHost } from './board.js';
+import { applySwarmHandoff, runningHandoffs } from './handoff.js';
 import { swarmIsOn } from './policy.js';
 import { publishLearnedUsage } from '../harness/accounts/usage-now.js';
-import { clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
+import { beginSwarmHandoff, clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
 import { readBoard } from './store.js';
 import { clerkUsage } from './usage.js';
 
@@ -187,6 +188,50 @@ describe('a delegation', () => {
       runClerk: async () => '{"summary":"done","facts":[],"paths":["src/a.ts"],"questions":[]}',
     });
     expect(on?.swarm?.displayName).toBe('Cursor Agent');
+  });
+
+  it('returns as soon as the clerk is on screen, and finishes the row when the clerk does', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(38) });
+    let release: (value: string) => void = () => undefined;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    const events: string[] = [];
+    const ack = await beginSwarmHandoff({
+      host: host({ id: 'async', swarm: true }),
+      state: state([cursor]),
+      request: { prompt: 'Review src/a.ts and src/b.ts across the tree', description: 'review the pair', callId: 'async' },
+      onActivity: (event) => events.push(event.kind),
+      runClerk: () => gate,
+    });
+    expect(ack?.output).toContain('Handed to Cursor Agent');
+    expect(ack?.output).toContain('Continue with other work');
+    expect(ack?.swarm).toBeUndefined();
+    expect(events).toEqual(['tool-start']);
+    release('{"summary":"both files export a router","facts":[],"paths":["src/a.ts"],"questions":[]}');
+    for (let attempt = 0; attempt < 20 && !events.includes('tool-done'); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(events).toContain('tool-done');
+  });
+});
+
+describe('a handoff row', () => {
+  it('keeps a working clerk across a new host turn, and spins until the card', () => {
+    const board = emptyBoard('ship it');
+    board.roster = [
+      { id: 'a', provider: 'Cursor', role: 'review', paths: '', step: 'reading', key: 'k', status: 'working' },
+      { id: 'b', provider: 'Codex', role: 'explore', paths: '', step: 'done', key: 'j', status: 'done' },
+    ];
+    expect(beginTurn(board).roster.map((line) => line.id)).toEqual(['a']);
+    const swarm = { provider: 'cursor', displayName: 'Cursor', role: 'review' as const, usageLeft: 62 };
+    const started = applySwarmHandoff([], { kind: 'tool-start', id: 'c', label: 'Cursor · review', agent: true, swarm });
+    const stepped = applySwarmHandoff(started.rows, { kind: 'tool-start', id: 'c/1', parentId: 'c', label: 'Read src/a.ts', swarm });
+    expect(stepped.rows[0]?.child).toBe('Read src/a.ts');
+    expect(runningHandoffs(stepped.rows)).toHaveLength(1);
+    const done = applySwarmHandoff(stepped.rows, { kind: 'tool-done', id: 'c', label: 'Cursor · review · ok', agent: true, swarm });
+    expect(runningHandoffs(done.rows)).toHaveLength(0);
+    expect(done.rows[0]?.event.kind).toBe('tool-done');
   });
 });
 

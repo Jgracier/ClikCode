@@ -219,7 +219,9 @@ export async function sendVendorTurn(input: {
     keep: (visible, mode) => mode !== 'replace' || durableAnswer(session.pendingTurn?.response ?? '', visible) === visible,
   });
   const onActivity = (event: HarnessActivityEvent): void => {
-    pendingWork.note(event);
+    // A handoff keeps running after this turn. Counting it as unfinished
+    // work would hold the turn open until the clerk finished.
+    if (!event.swarm) pendingWork.note(event);
     sink.activity(event);
   };
   if (swarmIsOn(session)) {
