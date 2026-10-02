@@ -40,7 +40,6 @@ import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, typ
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { swarmIsOn } from '../../swarm/policy.js';
-import { clerkAccounts } from '../../swarm/run.js';
 import { installSwarmTool } from '../../swarm/publish.js';
 import { impliedHarnessCommand } from './infer-provider.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -375,23 +374,12 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   swarm: async ({ state, session, words }) => {
     const asked = words.map((word) => word.toLowerCase()).filter(Boolean);
-    const pool = (): string => {
-      const rows = clerkAccounts(state, session);
-      const who = rows.length
-        ? rows.map((row) => `${row.displayName} (${row.account.label}) ${Math.round(row.leftPct)}% left`).join('\n')
-        : 'No account has reported a usage amount with room left.';
-      return `Accounts with usage left:\n${who}`;
-    };
-    if (!asked.length) {
-      emitHarnessOutput({ panel: 'swarm', text: `Swarm: ${swarmIsOn(session) ? 'on' : 'off'}\n\n${pool()}` });
-      return;
-    }
-    if (asked.length !== 1 || (asked[0] !== 'on' && asked[0] !== 'off')) throw new Error('usage: /swarm [on|off]');
-    if (asked[0] === 'off') delete session.swarm;
+    const word = asked.length === 0 ? (swarmIsOn(session) ? 'off' : 'on') : asked.length === 1 ? asked[0] : '';
+    if (word !== 'on' && word !== 'off') throw new Error('usage: /swarm [on|off]');
+    if (word === 'off') delete session.swarm;
     else session.swarm = true;
     await saveSettings(state, session);
     if (session.swarm === true) await installSwarmTool(session, state).catch(() => undefined);
-    emitHarnessOutput({ panel: 'swarm', text: `Swarm ${asked[0]}.\n\n${pool()}` });
   },
   sessions: async ({ state, words }) => {
     const action = words.shift()?.toLowerCase();

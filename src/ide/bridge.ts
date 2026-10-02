@@ -68,6 +68,7 @@ import { interactivePermissionPicker } from '../tui/pickers/permissions.js';
 import { interactiveHarnessOptionPicker } from '../tui/pickers/options.js';
 import { interactiveToolsPicker } from '../tui/pickers/tools.js';
 import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
+import { interactiveSwarmPicker } from '../tui/pickers/swarm.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { interactiveResumeInPicker, sameProviderCanTakeTurn } from '../tui/pickers/resume-in.js';
 import { WorkerClient } from '../worker/client.js';
@@ -699,6 +700,7 @@ export class IdeBridge {
       model: async () => args ? viaHeadless(text) : interactiveModelPicker(rl, id),
       effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
       permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
+      swarm: async () => (args ? viaHeadless(text) : interactiveSwarmPicker(rl, id)),
       options: async () => interactiveHarnessOptionPicker(rl, id),
       capabilities: async () => {
         const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');

@@ -20,7 +20,7 @@ import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
 import { sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
-import { swarmIsOn } from '../../swarm/policy.js';
+import { swarmSwitch } from './swarm.js';
 import { readState } from '../../session/state/read.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
@@ -118,9 +118,8 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
         ...inline(permissions.map((value) => ({ label: settingLabel(value), value })), session.permissionMode ?? 'ask', (value) => applyToChat(id, 'permissions', value)),
       }] : []),
       {
-        label: swarmIsOn(session) ? 'Turn swarm off' : 'Turn swarm on',
-        detail: swarmIsOn(session) ? 'this chat does its own work' : 'hand work to other accounts that have usage left',
-        value: 'swarm',
+        label: 'Swarm', detail: 'hand work to other accounts when it makes sense', value: 'swarm',
+        inline: swarmSwitch(session, id),
       },
       ...(harness ? [{
         label: 'Failover', detail: failover === 'auto' ? 'switch accounts when one runs out' : 'stop when an account runs out', value: 'failover',
@@ -164,7 +163,6 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     else if (selected === 'model') await interactiveModelPicker(rl, id);
     else if (selected === 'effort') await interactiveEffortPicker(rl, id);
     else if (selected === 'permissions') await interactivePermissionPicker(rl, id);
-    else if (selected === 'swarm') await aiSessionCommand(id, swarmIsOn(session) ? '/swarm off' : '/swarm on');
     else if (selected === 'options') await interactiveHarnessOptionPicker(rl, id);
     else if (selected === 'tools' && harness) await interactiveToolsPicker(rl, id, harness);
     // Esc in a sub-list leaves Settings; ← or a choice comes back here.
