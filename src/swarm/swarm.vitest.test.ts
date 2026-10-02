@@ -16,7 +16,7 @@ import { publishLearnedUsage } from '../harness/accounts/usage-now.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { emptySwarmFold, foldSwarmActivity, isSwarmToolLabel } from './fold.js';
 import { swarmProgressLabel } from './mcp.js';
-import { formatSwarmOffers, swarmOffers } from './offers.js';
+import { formatSwarmOffers, swarmChoiceNote, swarmOffers } from './offers.js';
 import { clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
 import { lookupScore, scoresFromOpenRouter } from './scores.js';
 import { readBoard } from './store.js';
@@ -152,12 +152,58 @@ describe('the model list', () => {
 
   it('reads an OpenRouter intelligence index from the catalog body', () => {
     const scores = scoresFromOpenRouter(JSON.stringify({
-      data: [{ id: 'anthropic/claude-sonnet-4.5', canonical_slug: 'anthropic/claude-sonnet-4.5-20260928', benchmarks: { artificial_analysis: { intelligence_index: 56, coding_index: null } } }],
+      data: [{ id: 'anthropic/claude-sonnet-4.5', canonical_slug: 'anthropic/claude-sonnet-4.5-20260928', pricing: { prompt: '0.000003', completion: '0.000015' }, benchmarks: { artificial_analysis: { intelligence_index: 56, coding_index: null } } }],
     }));
-    expect(scores.claudesonnet45).toEqual({ intelligence: 56 });
+    expect(scores.claudesonnet45).toEqual({ intelligence: 56, promptPerM: 3, completionPerM: 15 });
     const cache = { fetchedAt: NOW, byKey: scores };
-    expect(lookupScore(cache, 'claude-sonnet-4.5')).toEqual({ intelligence: 56 });
-    expect(lookupScore(cache, 'claude-sonnet-4-5')).toEqual({ intelligence: 56 });
+    expect(lookupScore(cache, 'claude-sonnet-4.5')).toEqual({ intelligence: 56, promptPerM: 3, completionPerM: 15 });
+    expect(lookupScore(cache, 'claude-sonnet-4-5')).toEqual({ intelligence: 56, promptPerM: 3, completionPerM: 15 });
+  });
+
+  it('keeps the harness price when a cheaper batch row shares the name', () => {
+    const scores = scoresFromOpenRouter(JSON.stringify({
+      data: [
+        { id: 'anthropic/claude-sonnet-4.5:batch', canonical_slug: 'anthropic/claude-sonnet-4.5-20260928', pricing: { prompt: '0.000001', completion: '0.000005' }, benchmarks: { artificial_analysis: { intelligence_index: 56 } } },
+        { id: 'anthropic/claude-sonnet-4.5', canonical_slug: 'anthropic/claude-sonnet-4.5-20260928', pricing: { prompt: '0.000003', completion: '0.000015' }, benchmarks: { artificial_analysis: { intelligence_index: 56 } } },
+      ],
+    }));
+    expect(scores.claudesonnet45).toMatchObject({ promptPerM: 3, completionPerM: 15 });
+  });
+
+  it('shows the price and keeps a cheaper model beside the strongest', () => {
+    const accounts = [
+      account({
+        id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(20),
+        models: ['claude-opus-4.5', 'claude-sonnet-4.5', 'claude-haiku-4.5'],
+      }),
+    ];
+    const offers = swarmOffers(clerkAccounts(state(accounts), host(), NOW), {
+      fetchedAt: NOW,
+      byKey: {
+        claudeopus45: { coding: 80, intelligence: 85, promptPerM: 15, completionPerM: 75 },
+        claudesonnet45: { coding: 63, intelligence: 71, promptPerM: 3, completionPerM: 15 },
+        claudehaiku45: { coding: 40, intelligence: 45, promptPerM: 1, completionPerM: 5 },
+      },
+    });
+    expect(offers.map((offer) => offer.model)).toEqual(['claude-opus-4.5', 'claude-sonnet-4.5', 'claude-haiku-4.5']);
+    expect(formatSwarmOffers(offers)).toContain('claude-haiku-4.5 · coding 40 · intelligence 45 · $1 in / $5 out · 80% left');
+    expect(swarmChoiceNote(offers)).toContain('cheaper model');
+  });
+
+  it('keeps a cheap model when more than twelve scored models have usage', () => {
+    const accounts = [
+      ...Array.from({ length: 12 }, (_, index) => account({
+        id: `high-${index}`, provider: 'cursor', label: `High ${index}`, usage: windows(10), models: [`high-${index}`],
+      })),
+      account({ id: 'low', provider: 'cursor', label: 'Low', usage: windows(10), models: ['cheap-model'] }),
+    ];
+    const byKey: Record<string, { coding: number; promptPerM: number; completionPerM: number }> = {
+      cheapmodel: { coding: 20, promptPerM: 0.25, completionPerM: 1 },
+    };
+    for (let index = 0; index < 12; index += 1) byKey[`high${index}`] = { coding: 90 - index, promptPerM: 15, completionPerM: 75 };
+    const offers = swarmOffers(clerkAccounts(state(accounts), host(), NOW), { fetchedAt: NOW, byKey });
+    expect(offers).toHaveLength(12);
+    expect(offers.map((offer) => offer.model)).toContain('cheap-model');
   });
 });
 

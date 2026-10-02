@@ -10,14 +10,21 @@ export interface ModelScore {
   intelligence?: number;
   coding?: number;
   agentic?: number;
+  /** USD per million input tokens. Absent when OpenRouter did not publish one. */
+  promptPerM?: number;
+  /** USD per million output tokens. */
+  completionPerM?: number;
 }
 
 export interface ScoreCache {
   fetchedAt: number;
+  /** Bumped when the cached shape changes, so an older table is refreshed. */
+  version?: number;
   byKey: Record<string, ModelScore>;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+const CACHE_VERSION = 2;
 
 function cachePath(): string {
   return join(stateDirectory(), 'swarm', 'openrouter-scores.json');
@@ -46,10 +53,36 @@ function keep(raw: unknown): ModelScore | undefined {
   return next.intelligence === undefined && next.coding === undefined && next.agentic === undefined ? undefined : next;
 }
 
+function publishedCost(score: ModelScore): number {
+  if (score.promptPerM === undefined && score.completionPerM === undefined) return -1;
+  return (score.promptPerM ?? 0) + (score.completionPerM ?? 0);
+}
+
+/** The first spelling wins, unless a later row publishes a higher price.
+ * A `:batch` twin is cheaper and must not hide what the harness charges. */
 function remember(into: Record<string, ModelScore>, id: string, score: ModelScore): void {
   const key = scoreKey(id);
-  if (key.length < 4 || into[key]) return;
-  into[key] = score;
+  if (key.length < 4) return;
+  const prior = into[key];
+  if (!prior || publishedCost(score) > publishedCost(prior)) into[key] = score;
+}
+
+/** OpenRouter prices are USD per token, as strings. `-1` means the price is not fixed. */
+function perMillion(value: unknown): number | undefined {
+  const amount = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+  if (!Number.isFinite(amount) || amount < 0) return undefined;
+  return Math.round(amount * 1_000_000 * 100) / 100;
+}
+
+function priceOf(raw: unknown): Pick<ModelScore, 'promptPerM' | 'completionPerM'> {
+  if (!raw || typeof raw !== 'object') return {};
+  const row = raw as Record<string, unknown>;
+  const promptPerM = perMillion(row.prompt);
+  const completionPerM = perMillion(row.completion);
+  return {
+    ...(promptPerM !== undefined ? { promptPerM } : {}),
+    ...(completionPerM !== undefined ? { completionPerM } : {}),
+  };
 }
 
 /** Indexes every model that has at least one Artificial Analysis number. */
@@ -64,9 +97,10 @@ export function scoresFromOpenRouter(body: string): Record<string, ModelScore> {
   if (!Array.isArray(rows)) return into;
   for (const row of rows) {
     if (!row || typeof row !== 'object') continue;
-    const record = row as { id?: unknown; canonical_slug?: unknown; benchmarks?: { artificial_analysis?: unknown } };
-    const score = keep(record.benchmarks?.artificial_analysis);
-    if (!score) continue;
+    const record = row as { id?: unknown; canonical_slug?: unknown; pricing?: unknown; benchmarks?: { artificial_analysis?: unknown } };
+    const indexes = keep(record.benchmarks?.artificial_analysis);
+    if (!indexes) continue;
+    const score = { ...indexes, ...priceOf(record.pricing) };
     if (typeof record.id === 'string') {
       remember(into, record.id, score);
       const slash = record.id.lastIndexOf('/');
@@ -101,7 +135,7 @@ async function readCache(): Promise<ScoreCache | undefined> {
  * keeps the previous table, or an empty one when there has never been one. */
 export async function loadScoreCache(now = Date.now(), fetchBody?: () => Promise<string>): Promise<ScoreCache> {
   const cached = await readCache();
-  if (cached && now - cached.fetchedAt < DAY_MS) return cached;
+  if (cached?.version === CACHE_VERSION && now - cached.fetchedAt < DAY_MS) return cached;
   try {
     const body = fetchBody
       ? await fetchBody()
@@ -109,7 +143,7 @@ export async function loadScoreCache(now = Date.now(), fetchBody?: () => Promise
         if (!response.ok) throw new Error(String(response.status));
         return response.text();
       });
-    const next: ScoreCache = { fetchedAt: now, byKey: scoresFromOpenRouter(body) };
+    const next: ScoreCache = { version: CACHE_VERSION, fetchedAt: now, byKey: scoresFromOpenRouter(body) };
     const path = cachePath();
     await mkdir(join(path, '..'), { recursive: true });
     await writeFile(path, JSON.stringify(next), 'utf8');
