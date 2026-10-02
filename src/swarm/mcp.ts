@@ -39,7 +39,7 @@ const TOOL_SCHEMA = {
   properties: {
     prompt: { type: 'string', description: 'The complete task: what to do, where to look, and what the card should answer.' },
     description: { type: 'string', description: 'A 3-6 word label shown in the host chat, e.g. "Find the refresh handler".' },
-    model: { type: 'string', description: 'A model from the list in this tool\'s description. A harder task should use a higher coding or intelligence index.' },
+    model: { type: 'string', description: 'A model from the list in this tool\'s description. Match the index to the task and prefer the cheaper price when a lower index is enough.' },
   },
 };
 
