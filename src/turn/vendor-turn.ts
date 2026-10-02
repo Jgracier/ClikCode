@@ -42,7 +42,6 @@ import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
 import { swarmIsOn } from '../swarm/policy.js';
-import { harnessCanInstallLocalMcp, installSwarmTool } from '../swarm/publish.js';
 import { markSwarmHost, openSwarmTurn } from '../swarm/store.js';
 import { emptySwarmFold, foldSwarmActivity, type SwarmFold } from '../swarm/fold.js';
 import { watchSwarmActivity } from '../swarm/spool.js';
@@ -62,6 +61,9 @@ export function isEffortRefusal(failure: Error): boolean {
 }
 
 const RETRY_EDITS = { clear: ['', 'replace'], 'new-paragraph': ['\n\n', 'append'] } as const;
+
+/** Sessions whose current vendor process was opened with the swarm tool. */
+const swarmAttached = new Set<string>();
 
 export async function sendVendorTurn(input: {
   state: HarnessState;
@@ -233,9 +235,13 @@ export async function sendVendorTurn(input: {
     await openSwarmTurn(session.id).catch(() => undefined);
     await markSwarmHost(session.id).catch(() => undefined);
     stopSwarmWatch = watchSwarmActivity(session.id, onActivity);
-    // An ACP host with nowhere to write a local server gets the tool on the
-    // next session open. A process already up would keep the empty list.
-    if (harness.acp && !harnessCanInstallLocalMcp(harness)) await closePersistentTransport(session.id);
+  }
+  // The tool rides on the ACP session ClikCode opens. A process already up
+  // was opened without it, or still has it after swarm was turned off.
+  if (harness.acp && swarmIsOn(session) !== swarmAttached.has(session.id)) {
+    await closePersistentTransport(session.id);
+    if (swarmIsOn(session)) swarmAttached.add(session.id);
+    else swarmAttached.delete(session.id);
   }
   /** A transport's thought is the whole of it so far: one row per id,
    *  replaced as it grows (activity-events.ts thoughtLabel). */
@@ -278,10 +284,6 @@ export async function sendVendorTurn(input: {
     // hook that is already in the harness is left as it is. A new MCP server
     // is invisible to a process that is already running, so that process is
     // closed and this attempt starts one that can see it.
-    if (swarmIsOn(session) && harnessCanInstallLocalMcp(harness)) {
-      const installed = await installSwarmTool(session, state).catch(() => false);
-      if (installed) await closePersistentTransport(session.id);
-    }
     const provisioned = await provisionChosenHarness({
       harness, account, workspace: session.workspace, stateDir: stateDirectory(),
     });

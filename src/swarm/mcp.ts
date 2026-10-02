@@ -1,5 +1,6 @@
-/** The `swarm` tool a vendor host calls. It is one subagent row: the chat
- * shows that provider working, and the tool result is the card. */
+/** The `swarm` tool on the ACP session this chat opened. ClikCode answers it
+ * in this process. It is one subagent row: the chat shows that provider
+ * working, and the tool result is the card. */
 
 import { randomUUID } from 'node:crypto';
 import { readState } from '../session/state/read.js';
