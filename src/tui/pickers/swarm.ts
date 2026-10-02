@@ -23,5 +23,10 @@ export async function interactiveSwarmPicker(rl: HarnessPrompter, id: string): P
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  await chooseOption(rl, 'Swarm', [{ label: 'Swarm', value: 'swarm', inline: swarmSwitch(session, id) }]);
+  const current = swarmIsOn(session) ? 'on' : 'off';
+  const selected = await chooseOption(rl, 'Swarm', [
+    { label: 'Off', detail: current === 'off' ? 'current' : undefined, value: 'off' },
+    { label: 'On', detail: current === 'on' ? 'current' : undefined, value: 'on' },
+  ]);
+  if (selected && selected !== current) await aiSessionCommand(id, `/swarm ${selected}`);
 }
