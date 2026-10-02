@@ -71,6 +71,7 @@ import { interactivePermissionPicker } from '../../tui/pickers/permissions.js';
 import { interactiveSessionPicker } from '../../tui/pickers/session.js';
 import { interactiveToolsPicker } from '../../tui/pickers/tools.js';
 import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
+import { interactiveSwarmPicker } from '../../tui/pickers/swarm.js';
 import { doctorSummary } from '../../tui/doctor-summary.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from '../../worker/turn-bridge.js';
@@ -836,6 +837,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
               terminal?.notice(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`);
               return outcome;
             },
+            swarm: async () => (args ? viaHeadless(text) : interactiveSwarmPicker(rl, id)),
             options: async () => interactiveHarnessOptionPicker(rl, id),
             capabilities: async () => {
               const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');
