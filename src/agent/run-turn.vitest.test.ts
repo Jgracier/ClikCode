@@ -525,6 +525,21 @@ describe('runGatewayHarnessTurn', () => {
     expect(bash).toMatch(/20000$/);
   });
 
+  it('fails the turn when a tool result cannot be saved, rather than carrying on with disk and memory diverged', async () => {
+    const sessionId = `s${++sessionCounter}`;
+    const transcript = path.join(stateDir, 'sessions', sessionId, 'harness.jsonl');
+    // The tool runs, then makes the transcript unwritable: its result is the
+    // first thing that cannot be appended.
+    const breaker = defineTool({
+      name: 'breaker', description: 'breaks the transcript', parameters: { type: 'object', properties: {} },
+      class: 'read', label: () => 'breaker',
+      run: async () => { await fs.rm(transcript, { force: true }); await fs.mkdir(transcript); return { output: 'ran' }; },
+    });
+    const h = harness([{ toolCalls: [{ id: 'b1', name: 'breaker', args: {} }] }, { text: 'never reached' }], { sessionId, extraTools: [breaker] });
+    await expect(runGatewayHarnessTurn(h.input)).rejects.toThrow(/could not save the results of 1 tool call/);
+    expect(h.client.requests).toHaveLength(1);
+  });
+
   it('resumes a session from its transcript', async () => {
     const first = harness([{ text: 'first answer' }]);
     await runGatewayHarnessTurn(first.input);
