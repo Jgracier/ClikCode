@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { emitResult } from '../cli/structured-output.js';
-import { captureNativeHarnessOutput, runNativeHarnessCommand } from '../harness/transport/native/command.js';
+import { captureNativeHarnessOutput } from '../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
@@ -421,8 +421,7 @@ export async function signOutAccount(labelOrId: string): Promise<AiHarnessAccoun
   const state = await readState();
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
   if (!harnessCanLogout(harness)) throw new Error(`${harness.displayName} has no way to sign out from outside its own session.`);
-  if (harness.logoutArgv) await runNativeHarnessCommand(harness, harness.logoutArgv, environment);
-  else await logoutNativeHarness(harness, environment);
+  await logoutNativeHarness(harness, environment);
   account.status = 'needs_login';
   delete account.signedInAt;
   await writeState(state);

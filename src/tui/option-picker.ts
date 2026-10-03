@@ -80,7 +80,7 @@ export function runOptionPicker<T>(
   settings?: PickerSettings<T>,
 ): Promise<T | undefined> {
   if (!options.length) return Promise.resolve(undefined);
-  return new Promise((resolveSelection) => {
+  return new Promise((resolveSelection, rejectSelection) => {
     host.setSelecting(true);
     let query = '';
     const same = (left: T, right: T): boolean => Object.is(left, right)
@@ -151,7 +151,19 @@ export function runOptionPicker<T>(
       lastPickerExit = exit;
       // Values chosen on inline rows land before whoever opened the picker
       // reads the settings back.
-      void commitAll().then(() => resolveSelection(value));
+      void commitAll().then(() => failure === undefined ? resolveSelection(value) : rejectSelection(failure));
+    };
+    /** A row action that failed (a sign-out the vendor refused) closes the
+     * list and reaches whoever opened it, which says what went wrong --
+     * dropped, the list just reappeared as if the key did nothing. */
+    let failure: unknown;
+    const runAction = async (value: T, action: string): Promise<void> => {
+      try {
+        await onAction?.(value, action);
+      } catch (error) {
+        failure = error;
+      }
+      finish(undefined);
     };
     const openAside = asideOpener({ stopInput: () => stopInput(), listen, finished: () => finished });
     /** A list inside a row (its history, its sub-agents): a value chosen
@@ -178,17 +190,15 @@ export function runOptionPicker<T>(
         return true;
       }
       if (!actionValue) return false;
-      await onAction?.(option.value, actionValue);
       // Let the caller rebuild the parent options from authoritative
       // state (for example, Disconnect changes an account's status).
       // Repainting the captured array here would show stale details.
-      finish(undefined);
+      await runAction(option.value, actionValue);
       return true;
     });
     const confirmDelete = (option: PickerOption<T>, action: { label: string; value: string }): Promise<void> => openAside(async () => {
       if (!await confirmRowDelete(host, option, action)) return false;
-      await onAction?.(option.value, action.value);
-      finish(undefined);
+      await runAction(option.value, action.value);
       return true;
     });
     /** An inline row's choice is shown at once and applied when the cursor
