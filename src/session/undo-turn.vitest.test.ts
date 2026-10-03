@@ -7,6 +7,7 @@ import { runGatewayHarnessTurn } from '../agent/run-turn.js';
 import { disposeSessionState } from '../agent/session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from '../agent/testing.js';
 import { eventDiff } from '../agent/line-diff.js';
+import { toolFacts } from '../harness/protocol/activity-events.js';
 import { BroadcastObserver } from '../worker/broadcast-observer.js';
 import { resolveSlashCommand } from '../tui/slash/registry.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -149,17 +150,64 @@ describe('/undo on a vendor harness (reported diffs)', () => {
       { kind: 'tool-done', id: 'c2', label: 'Edit b.txt', diff: eventDiff('b-old', 'b-new', { path: 'b.txt' }) },
       { kind: 'tool-done', id: 'c3', label: 'Write n.txt', diff: eventDiff('', 'made\n', { path: 'n.txt', numbered: true }) },
     ]);
-    await fs.writeFile(path.join(cwd, 'a.txt'), 'keep\nnew, then mine\nkeep\n');
+    // Over the very text the turn wrote: the turn's change is no longer there to take back.
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'keep\nmine now\nkeep\n');
     await fs.writeFile(path.join(cwd, 'n.txt'), 'made\nand mine\n');
 
     const undone = await undoLastTurn(s, { stateDir, who: 'OpenCode' });
     expect(undone.restored).toEqual([path.join(cwd, 'b.txt')]);
     expect(undone.conflicts.map((item) => item.path).sort()).toEqual([path.join(cwd, 'a.txt'), path.join(cwd, 'n.txt')]);
-    expect(await read('a.txt')).toBe('keep\nnew, then mine\nkeep\n');
+    expect(await read('a.txt')).toBe('keep\nmine now\nkeep\n');
     expect(await read('n.txt')).toBe('made\nand mine\n');
     expect(await read('b.txt')).toBe('b-old\n');
     // What could not be undone stays recorded; what was undone does not.
     expect((await readTurnChanges(stateDir, s.id))[0]?.changes.map((change) => change.path).sort()).toEqual(['a.txt', 'n.txt']);
+  });
+
+  it('never deletes or blanks a file a write tool overwrote without saying what it held', async () => {
+    const s = session('vendor-overwrite', 'local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'ORIGINAL precious content\n');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'new\ncontent\n');
+    // A vendor Write reports its input only: the new content, nothing of what it replaced.
+    await reportTurn(s.id, [
+      { kind: 'tool-done', id: 'w1', label: 'Write a.txt', ...toolFacts('Write', { file_path: 'a.txt', content: 'new\ncontent\n' }, 'claude') },
+    ]);
+    const undone = await undoLastTurn(s, { stateDir, who: 'Claude Code' });
+    expect(undone.removed).toEqual([]);
+    expect(undone.restored).toEqual([]);
+    expect(undone.conflicts).toEqual([{ path: path.join(cwd, 'a.txt'), reason: expect.stringMatching(/not what the file held before/) }]);
+    expect(await read('a.txt')).toBe('new\ncontent\n');
+  });
+
+  it('takes back a replacement inside a line, and leaves other lines that look like it alone', async () => {
+    const s = session('vendor-fragment', 'local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'x = 2\nlist:\n2\n');
+    await reportTurn(s.id, [
+      { kind: 'tool-done', id: 'e1', label: 'Edit a.txt', ...toolFacts('Edit', { file_path: 'a.txt', old_string: 'x = 1', new_string: 'x = 2' }, 'claude') },
+    ]);
+    expect((await undoLastTurn(s, { stateDir, who: 'Claude Code' })).restored).toEqual([path.join(cwd, 'a.txt')]);
+    expect(await read('a.txt')).toBe('x = 1\nlist:\n2\n');
+  });
+
+  it('refuses a replacement whose new text is not found exactly once, rather than guess', async () => {
+    const s = session('vendor-fragment-ambiguous', 'local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'x = 2\nlist:\n2\n');
+    await reportTurn(s.id, [
+      { kind: 'tool-done', id: 'e1', label: 'Edit a.txt', ...toolFacts('Edit', { file_path: 'a.txt', old_string: '1', new_string: '2' }, 'claude') },
+    ]);
+    const undone = await undoLastTurn(s, { stateDir, who: 'Claude Code' });
+    expect(undone.restored).toEqual([]);
+    expect(await read('a.txt')).toBe('x = 2\nlist:\n2\n');
+  });
+
+  it('keeps a hand edit beside the text the turn changed', async () => {
+    const s = session('vendor-beside', 'local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'keep\nnew, then mine\nkeep\n');
+    await reportTurn(s.id, [
+      { kind: 'tool-done', id: 'e1', label: 'Edit a.txt', diff: eventDiff('old', 'new', { path: 'a.txt' }) },
+    ]);
+    await undoLastTurn(s, { stateDir, who: 'OpenCode' });
+    expect(await read('a.txt')).toBe('keep\nold, then mine\nkeep\n');
   });
 
   it('works from the same diffs a real agent turn reports, through the worker observer', async () => {

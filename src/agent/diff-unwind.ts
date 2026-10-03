@@ -44,6 +44,25 @@ export function applyHunks(text: string, hunks: readonly Hunk[]): string | undef
   return out.join(newline);
 }
 
+/** A replacement's text, before and after, when the diff is a fragment of
+ * the file (an edit tool's old and new strings: lines carry no numbers),
+ * undefined for a whole-file or hunk diff. A fragment is not a run of whole
+ * lines -- "1" inside "x = 1" -- so it is found as text, not as lines. */
+function fragmentText(file: FileDiff, newline: string): { before: string; after: string } | undefined {
+  if (!file.lines.length || file.lines.some((line) => line.kind === 'gap' || line.line !== undefined)) return undefined;
+  const side = (skip: string): string => file.lines.filter((line) => line.kind !== skip).map((line) => line.text).join(newline);
+  return { before: side('added'), after: side('removed') };
+}
+
+/** `text` with the one occurrence of `find` replaced, undefined unless it
+ * occurs exactly once. */
+function replaceOnce(text: string, find: string, replacement: string): string | undefined {
+  if (!find) return undefined;
+  const at = text.indexOf(find);
+  if (at < 0 || text.indexOf(find, at + 1) >= 0) return undefined;
+  return text.slice(0, at) + replacement + text.slice(at + find.length);
+}
+
 /** Every change a turn made, by file, in the order made: what "Review
  * changes" and "Undo all" act on. Only calls that finished made a change;
  * a file the harness did not name cannot be found again and is left out. */
@@ -70,7 +89,13 @@ export function unwindChanges(current: string | undefined, changes: readonly Fil
   let text = current;
   for (let index = changes.length - 1; index >= 0; index -= 1) {
     const change = changes[index]!;
-    const undone = change.omitted ? undefined : applyHunks(text, fileHunks(change).map((hunk) => ({ before: hunk.after, after: hunk.before })));
+    // What the write replaced was never reported: nothing to put back, and
+    // deleting the file could take content the turn did not create.
+    if (change.priorUnknown) return { before: text, whole: false, created: false };
+    const fragment = fragmentText(change, text.includes('\r\n') ? '\r\n' : '\n');
+    const undone = change.omitted ? undefined
+      : fragment ? replaceOnce(text, fragment.after, fragment.before)
+        : applyHunks(text, fileHunks(change).map((hunk) => ({ before: hunk.after, after: hunk.before })));
     if (change.change === 'add') {
       return undone !== undefined && !undone.trim() ? { before: '', whole: true, created: true } : { before: text, whole: false, created: false };
     }

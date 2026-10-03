@@ -130,8 +130,12 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
   // Every file the call changed, each its own (a fragment's lines are not
   // numbered: ACP sends the replaced text, not the file). An agent that sends
   // no diff content still says what it is replacing in its input.
-  const fromContent = diffEntries.flatMap((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''),
-    typeof entry.path === 'string' && entry.path ? { path: entry.path } : {}));
+  // A missing oldText is "new file" in the protocol, but agents send it for
+  // every write (claude-agent-acp's Write among them): unknown, not empty.
+  const fromContent = diffEntries.flatMap((entry) => eventDiff(String(entry.oldText ?? ''), String(entry.newText ?? ''), {
+    ...(typeof entry.path === 'string' && entry.path ? { path: entry.path } : {}),
+    ...(typeof entry.oldText === 'string' ? {} : { priorUnknown: true }),
+  }));
   const terminal = update._meta && typeof update._meta === 'object' ? update._meta as Json : undefined;
   // `terminal_output` is `{ terminal_id, data }` (claude-agent-acp 0.84).
   const terminalText = typeof terminal?.terminal_output?.data === 'string' ? terminal.terminal_output.data : undefined;
