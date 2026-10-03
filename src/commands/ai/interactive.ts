@@ -14,7 +14,7 @@ import { ensureLocalModelForTurn, reconcileLocalModelLeases } from './local-mode
 import { backfillListFacts } from '../../session/list-backfill.js';
 import { chatNamed, isBlankConversation, latestChat } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
-import { discardIfBlank, ensureSessionOnDisk } from '../../session/blank.js';
+import { ensureSessionOnDisk } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
 import { isShellCommandLine, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
@@ -46,7 +46,8 @@ import { emitHarnessOutput } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
-import { claimSession, releaseSession, sessionClaimIsLive, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
+import { claimSession, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
+import { claimConversation, leaveConversation, releaseConversationClaim } from '../../session/attach.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
@@ -302,7 +303,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // 30s cache window (which bounds *how often this can update*, not
   // *whether anything ever asks it to*). This is what actually asks.
   const claimInterval = setInterval(() => {
-    void refreshSessionClaim(id).catch(() => undefined);
+    void claimConversation(id).catch(() => undefined);
   }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
   claimInterval.unref();
   // This process's own build, fingerprinted once at startup the same way a
@@ -330,7 +331,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         await reconcileLocalModelLeases(undefined).catch(() => undefined);
         // The chat stays. Discarding a blank one here would make the new
         // process's `sessions resume` miss it.
-        await releaseSessionClaim(sessionId).catch(() => undefined);
+        await releaseConversationClaim(sessionId).catch(() => undefined);
       },
     });
   };
@@ -949,8 +950,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (outcome.exit) break;
         if (outcome.id && outcome.id !== id) {
           // Leaving a chat nothing happened in: it does not stay behind.
-          await discardIfBlank(id).catch(() => undefined);
+          await leaveConversation(id);
           id = outcome.id;
+          await claimConversation(id).catch(() => undefined);
         }
         if (outcome.prompt) await runInteractiveTurn(id, outcome.prompt, { echo: outcome.echo !== false });
       } catch (error) {
@@ -985,32 +987,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     // The terminal is leaving: nothing it showed keeps a local model up,
     // even if this process lives on (the exit hook covers a hard exit).
     await reconcileLocalModelLeases(undefined).catch(() => undefined);
-    // Hand the conversation back so the next terminal can resume it. Best
-    // effort: a failure here only means the claim expires on its own TTL.
-    await releaseSessionClaim(id).catch(() => undefined);
-    // Closed without ever being started: not stored. After the claim release,
-    // which reads the record it is releasing.
-    await discardIfBlank(id).catch(() => undefined);
+    // Hand the conversation back so the next terminal can resume it, and do
+    // not store one closed without ever being started. Best effort: a failed
+    // release only means the claim expires on its own TTL.
+    await leaveConversation(id);
     if (TERMINAL.active === terminal) TERMINAL.active = undefined;
     rl.close();
   }
-}
-
-/** Refreshes this terminal's claim on its conversation. Runs on a timer rather
- * than per turn so a long turn, or a long idle stretch, both keep the claim
- * alive without any traffic of their own. */
-async function refreshSessionClaim(id: string): Promise<void> {
-  const state = await readState({ transcripts: [id] });
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session || sessionClaimIsLive(session)) return;
-  claimSession(session);
-  await writeState(state);
-}
-
-async function releaseSessionClaim(id: string): Promise<void> {
-  const state = await readState({ transcripts: [id] });
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session?.claim) return;
-  releaseSession(session);
-  await writeState(state);
 }
