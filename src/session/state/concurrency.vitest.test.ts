@@ -92,3 +92,39 @@ describe('a chat deleted by one process', () => {
     expect(await listStoredSessionIds()).toEqual(['y']);
   });
 });
+
+describe('two processes appending to one chat', () => {
+  it('keeps every message from both, each side in its own order', async () => {
+    const home = await freshHome();
+    const setup = await readState();
+    setup.sessions.push(chat('s', [message('start')]));
+    await writeState(setup);
+
+    const results = await Promise.all([
+      runChild(home, ['append-held', 's', 'a', '30']),
+      runChild(home, ['append-held', 's', 'b', '30']),
+    ]);
+    for (const result of results) expect(result, result.stderr).toMatchObject({ code: 0 });
+    const contents = (await readState()).sessions.find((item) => item.id === 's')!.messages!.map((item) => item.content);
+    expect(contents[0]).toBe('start');
+    expect(contents.filter((text) => text.startsWith('a '))).toEqual(Array.from({ length: 30 }, (_, step) => `a ${step}`));
+    expect(contents.filter((text) => text.startsWith('b '))).toEqual(Array.from({ length: 30 }, (_, step) => `b ${step}`));
+    expect(contents).toHaveLength(61);
+  }, 120_000);
+
+  it('a rewrite (undo) from a stale copy keeps the messages appended meanwhile', async () => {
+    await freshHome();
+    const setup = await readState();
+    setup.sessions.push(chat('s', [message('q1'), message('a1', 'assistant'), message('q2'), message('a2', 'assistant')]));
+    await writeState(setup);
+    const appender = await readState();
+    const undoer = await readState();
+    const appended = appender.sessions[0]!;
+    appended.messages = [...appended.messages!, message('q3')];
+    await writeState(appender);
+    const undone = undoer.sessions[0]!;
+    undone.messages = undone.messages!.slice(0, 2);
+    await writeState(undoer);
+    expect((await readState()).sessions[0]!.messages!.map((item) => item.content)).toEqual(['q1', 'a1', 'q3']);
+  });
+});

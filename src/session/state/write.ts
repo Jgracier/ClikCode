@@ -113,7 +113,10 @@ export async function writeState(state: HarnessState): Promise<void> {
       // written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
       if (!changed) continue;
-      await writeSessionTranscript(held, session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true });
+      // Merged with what another process stored since this copy agreed with
+      // disk, so neither side's appended messages are lost.
+      const base = before && diskIds.has(session.id) ? before.transcript : draft?.transcript;
+      await writeSessionTranscript(held, session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true, ...(base ? { base } : {}) });
     }
 
     // 2. The index, only when its content really differs.
