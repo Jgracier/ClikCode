@@ -15,6 +15,7 @@ import { runSessionTurn } from '../turn/session-turn.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
+import { consumeQueuedTurn } from './consume-queued.js';
 import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { closePersistentTransport, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
@@ -100,6 +101,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * client draining the same queue entry -- follows it instead of rerunning it. */
   let activeQueuedTurnId: string | undefined;
   let draining = false;
+  /** A queued turn that failed and could not be taken out of the queue:
+   * never started again, so a failing write cannot become a loop. */
+  let stalledQueuedTurnId: string | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
   /** The agent's in-process state for this conversation: its background
    * shells and their exit notifications (agent/session-state.ts). */
@@ -271,13 +275,16 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * needs locally (a TurboFit or ClikCode Local model) before sending it; a
    * slash command only ever runs there. Anything else at the head is left,
    * and the windows are told the queue changed. */
+  const reportDrainFailure = (error: unknown): void => {
+    broadcastNotice(`Could not read the queue: ${error instanceof Error ? error.message : String(error)}`);
+  };
   const drainQueue = async (): Promise<void> => {
     if (turnRunning || draining) return;
     draining = true;
     try {
       const { session: current } = await currentSessionAndAccount();
       const head = current.queuedTurns?.[0];
-      if (!head) return;
+      if (!head || head.id === stalledQueuedTurnId) return;
       if (head.kind !== 'notification') { broadcastQueueChanged(); return; }
       startTurn({ type: 'submit', text: head.text, echo: true, queuedTurnId: head.id });
     } finally {
@@ -299,6 +306,11 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       void currentSessionAndAccount().then(({ session: current, account }) => observer.snapshotFor(socket, current, account), () => undefined);
     };
     if (command.queuedTurnId) {
+      if (command.queuedTurnId === stalledQueuedTurnId) {
+        sendEvent(socket, { type: 'turn-error', message: 'This queued message already failed and could not be taken out of the queue; remove it to continue.' });
+        sendEvent(socket, { type: 'waiting-stop' });
+        return;
+      }
       if (turnRunning && activeQueuedTurnId === command.queuedTurnId) { follow(); return; }
       const { session: current, account } = await currentSessionAndAccount();
       if (turnRunning && activeQueuedTurnId === command.queuedTurnId) { follow(); return; }
@@ -374,11 +386,13 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         observer.broadcast({ type: 'turn-error', message });
         // A queued turn is consumed once its checkpoint starts; one that
         // failed before that is still at the head, and would be run again
-        // straight after this -- and fail the same way, for ever.
+        // straight after this -- and fail the same way, for ever. When it
+        // cannot be taken out, it is not run again by this worker.
         if (command.queuedTurnId) {
-          const latest = await readState().catch(() => undefined);
-          const found = latest?.sessions.find((item) => item.id === sessionId);
-          if (latest && found && consumeSessionTurn(found, command.queuedTurnId)) await writeState(latest).catch(() => undefined);
+          await consumeQueuedTurn(sessionId, command.queuedTurnId).catch((consumeError: unknown) => {
+            stalledQueuedTurnId = command.queuedTurnId;
+            broadcastNotice(`A queued message failed and could not be taken out of the queue (${consumeError instanceof Error ? consumeError.message : String(consumeError)}); it will not be run again until it is removed.`);
+          });
         }
       }
     } finally {
@@ -408,7 +422,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // Shells that finished after the turn's last step, then whatever is
       // queued next; either may start the next turn at once.
       if (agentSession.notifications.length) void deliverNotifications();
-      else void drainQueue().catch(() => undefined).finally(scheduleIdleExit);
+      else void drainQueue().catch(reportDrainFailure).finally(scheduleIdleExit);
       scheduleIdleExit();
     }
   };
@@ -618,5 +632,5 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const buildWatch = setInterval(() => { leaveIfStaleBuild(); }, BUILD_WATCH_MS);
   buildWatch.unref();
   // A notification a previous worker recorded but never ran.
-  void drainQueue().catch(() => undefined);
+  void drainQueue().catch(reportDrainFailure);
 }
