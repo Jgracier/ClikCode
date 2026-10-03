@@ -29,6 +29,7 @@ import { turnBackendForAccount } from '../../turn/account-routing.js';
 import { newConversationSession } from './conversations.js';
 import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
+import { forceStoreSession } from '../../session/ephemeral.js';
 
 const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, effort, failover, and native sessions cannot be set per session (a model can, from ClikCode Local\'s catalog).';
 
@@ -222,6 +223,9 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     if (localModel) session.model = localModel;
   }
   state.sessions.push(session);
+  // Asked for by id and this process then exits: a draft held only in its
+  // memory would print an id no later command could find.
+  forceStoreSession(id);
   await writeState(state);
   // Bound to an account now, as the app binds one, so the next command can
   // send; without it every created chat failed "no account selected".
