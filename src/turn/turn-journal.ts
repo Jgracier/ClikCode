@@ -58,6 +58,17 @@ export async function discardInterruptedTurn(id: string, prompt: string): Promis
   await writeState(state);
 }
 
+const QUEUED_TURN_ALREADY_RUN = 'ERR_QUEUED_TURN_ALREADY_RUN';
+
+function queuedTurnAlreadyRunError(queuedTurnId: string): Error {
+  return Object.assign(new Error(`queued turn ${queuedTurnId} already ran`), { code: QUEUED_TURN_ALREADY_RUN });
+}
+
+/** A queued turn that another submit had already taken off the queue. */
+export function isQueuedTurnAlreadyRun(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === QUEUED_TURN_ALREADY_RUN;
+}
+
 /** Serializes bounded checkpoint writes for one in-flight turn. Deltas update
  * memory immediately and coalesce into a disk write, while start, provider
  * identity changes, completion, and error unwinding force a durable flush. */
@@ -74,8 +85,11 @@ export class DurableTurnCheckpoint {
   static async start(
     state: HarnessState, session: HarnessSession, prompt: string, queuedTurnId?: string,
   ): Promise<DurableTurnCheckpoint> {
+    // Taking a queued turn off the queue is what claims it. One already gone
+    // was run by another submit of the same entry (a second window whose
+    // read of the queue predates that run): running it again is the double.
+    if (queuedTurnId && !consumeSessionTurn(session, queuedTurnId)) throw queuedTurnAlreadyRunError(queuedTurnId);
     const checkpoint = new DurableTurnCheckpoint(state, session);
-    if (queuedTurnId) consumeSessionTurn(session, queuedTurnId);
     beginPendingTurn(session, prompt, new Date().toISOString());
     await checkpoint.enqueue();
     return checkpoint;
