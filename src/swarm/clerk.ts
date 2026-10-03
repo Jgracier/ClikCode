@@ -7,10 +7,12 @@ import { parseJsonRecord } from '../harness/protocol/json-lines.js';
 import { nativeTurnResult } from '../harness/protocol/turn-result.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { captureNativeHarnessTurn } from '../harness/transport/native/turn.js';
+import { streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
 import { harnessAcpLaunch, nativeHarnessTurnArgv } from '../runtime/lazy-bridge.js';
 import { runAcpTurn } from '../harness/transport/acp-client.js';
 import type { HarnessState } from '../session/model.js';
 import { recordClerkTurn } from '../turn/account-outcome.js';
+import { writeState } from '../session/state/write.js';
 import { classifyAccountFailure } from '../turn/failover.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
 
@@ -31,7 +33,7 @@ export async function runProviderPrompt(input: {
   if (!input.harness.turn && !input.harness.acp) throw new Error(`${input.harness.displayName} cannot take a headless turn`);
   const startedAt = Date.now();
   let noted = false;
-  const note = (outcome: { usage?: TurnUsage; error?: unknown }): void => {
+  const note = async (outcome: { usage?: TurnUsage; error?: unknown }): Promise<void> => {
     if (noted || !input.state || !input.sessionId) return;
     const quota = outcome.error !== undefined && classifyAccountFailure(outcome.error, { isResultError: true }) === 'quota-exhausted';
     // A crash with no usage and no quota refusal teaches nothing.
@@ -42,8 +44,11 @@ export async function runProviderPrompt(input: {
       ...(outcome.usage ? { usage: outcome.usage } : {}),
       ...(quota ? { quota: true, failure: outcome.error } : {}),
     });
+    await writeState(input.state);
   };
-  if (!input.harness.turn) return runAcpClerk(input, note);
+  // Kiro's print stream exposes partial answer chunks as separate `text`
+  // records. Its ACP reply is the assembled final message.
+  if (!input.harness.turn || (input.harness.command === 'kiro' && input.harness.acp)) return runAcpClerk(input, note);
   const asked = input.permissionMode;
   const mode = asked && input.harness.permissionModes?.includes(asked)
     && (input.harness.permissionArgv?.[asked] || input.harness.permissionEnv?.[asked])
@@ -60,7 +65,7 @@ export async function runProviderPrompt(input: {
     output = await captureNativeHarnessTurn(input.harness, argv, environment, {
       ...(input.workspace ? { cwd: input.workspace } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
-      ...(input.harness.turn.promptInput === 'stdin' ? { stdinText: input.prompt } : {}),
+      ...(input.harness.turn.promptInput === 'stdin' ? { stdinText: input.harness.turn.stdinFormat === 'stream-json' ? streamJsonUserMessage(input.prompt) : input.prompt } : {}),
       onStdoutLine: (line) => {
         const record = parseJsonRecord(line);
         if (!record || !input.onStep) return;
@@ -69,14 +74,14 @@ export async function runProviderPrompt(input: {
       },
     });
   } catch (error) {
-    note({ error });
+    await note({ error });
     throw error;
   }
   let result;
   try {
     result = nativeTurnResult(input.harness, output.stdout, { exitCode: output.exitCode, stderr: output.stderr });
   } catch (error) {
-    note({ error });
+    await note({ error });
     throw error;
   }
   if (result.isError) {
@@ -86,10 +91,10 @@ export async function runProviderPrompt(input: {
       ...(result.rateLimitStatus ? { rateLimitStatus: result.rateLimitStatus } : {}),
       ...(output.stderr?.trim() ? { stderrTail: output.stderr.trim().slice(-4000) } : {}),
     });
-    note({ ...(result.usage ? { usage: result.usage } : {}), error });
+    await note({ ...(result.usage ? { usage: result.usage } : {}), error });
     throw error;
   }
-  note({ ...(result.usage ? { usage: result.usage } : {}) });
+  await note({ ...(result.usage ? { usage: result.usage } : {}) });
   return result.text.trim();
 }
 
@@ -97,7 +102,7 @@ export async function runProviderPrompt(input: {
  * session it opens stays the vendor's; ClikCode keeps the card. */
 async function runAcpClerk(
   input: Parameters<typeof runProviderPrompt>[0],
-  note: (outcome: { usage?: TurnUsage; error?: unknown }) => void,
+  note: (outcome: { usage?: TurnUsage; error?: unknown }) => Promise<void>,
 ): Promise<string> {
   const permissionMode = input.permissionMode && input.harness.permissionModes?.includes(input.permissionMode)
     ? input.permissionMode : 'ask';
@@ -123,10 +128,10 @@ async function runAcpClerk(
         if (event.kind === 'tool-start' && event.label) input.onStep?.(event.label);
       },
     });
-    note({ ...(usage ? { usage } : {}) });
+    await note({ ...(usage ? { usage } : {}) });
     return result.text.trim();
   } catch (error) {
-    note({ ...(usage ? { usage } : {}), error });
+    await note({ ...(usage ? { usage } : {}), error });
     throw error;
   }
 }

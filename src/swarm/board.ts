@@ -131,12 +131,14 @@ function asStrings(value: unknown, limit: number): string[] {
 /** A clerk's reply becomes a card. JSON is used when the reply contains an
  * object; otherwise the reply itself is the summary, cut to the cap. */
 export function cardFromReply(reply: string, capTokens: number): SwarmCard {
+  if (!reply.trim()) throw new Error('The clerk returned no answer');
   const start = reply.indexOf('{');
   const end = reply.lastIndexOf('}');
   if (start >= 0 && end > start) {
     try {
       const parsed = JSON.parse(reply.slice(start, end + 1)) as Record<string, unknown>;
-      const summary = clip(typeof parsed.summary === 'string' ? parsed.summary : reply, capTokens);
+      if (typeof parsed.summary !== 'string' || !parsed.summary.trim()) throw new Error('missing summary');
+      const summary = clip(parsed.summary, capTokens);
       const card: SwarmCard = {
         summary,
         facts: asStrings(parsed.facts, 6).map((fact) => clip(fact, 40)),
@@ -146,7 +148,10 @@ export function cardFromReply(reply: string, capTokens: number): SwarmCard {
       };
       if (typeof parsed.diffstat === 'string' && parsed.diffstat.trim()) card.diffstat = clip(parsed.diffstat, 20);
       return card;
-    } catch { /* the prose is the summary */ }
+    } catch { /* a malformed object is rejected below */ }
+  }
+  if (/^[\s`]*[\[{"}:]/.test(reply) || (start >= 0 && end > start)) {
+    throw new Error('The clerk returned an incomplete card');
   }
   return { summary: clip(reply, capTokens), facts: [], paths: [], blockers: [], questions: [] };
 }
