@@ -1962,18 +1962,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Nothing changed: nothing is written. A clock that ticks every second
     // used to send a cursor hide, a park and a show each time regardless.
     if (!updates.length && !mouseReset && park === this.lastPark && showCursor === this.cursorShown) return;
-    // A frame that redraws everything clears first, and homes, which is what
-    // Claude Code does after a resize on this user's phone:
-    //
-    //     ?1000h ?1002h ?1003h ?1006h  ?25l ESC[2J ESC[H  ...redraw...
-    //
-    // Addressed rows would overwrite every cell anyway; the clear costs seven
-    // bytes and leaves nothing of the old size behind on a screen that just
-    // changed shape. Autowrap goes off with every frame that draws: a vendor
-    // CLI or a teardown may have turned it back on, and a row that reaches
-    // the last column must not become two.
-    const clear = full ? '\u001b[2J\u001b[H' : '';
-    const draw = updates.length ? `\u001b[?25l\u001b[?7l${clear}${updates.join('')}` : '';
+    // A full frame already addresses and erases every row. Clearing the
+    // screen first exposes an empty frame on terminals that do not implement
+    // synchronized updates, especially when a reply settles or the phone
+    // changes height. Autowrap goes off before any row is drawn.
+    const draw = updates.length ? `\u001b[?25l\u001b[?7l${updates.join('')}` : '';
     const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
       : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
     // One synchronized update (DEC 2026): a terminal that supports it shows

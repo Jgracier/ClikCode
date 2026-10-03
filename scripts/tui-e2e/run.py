@@ -35,6 +35,7 @@ SCENARIOS = {
         'final_once': ['Worked for'],
         # Never looked away from: no notification.
         'raw_never': ['the turn has finished'],
+        'no_clear_after_type': True,
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
@@ -431,9 +432,11 @@ def run(name, spec, entry, keep):
     problems = []
     pump(spec.get('startup', 5))
     typed_at = None
+    typed_raw_at = None
     marked_at = None
     for step in spec['steps']:
         if step[0] == 'type':
+            if typed_raw_at is None: typed_raw_at = len(raw)
             for ch in step[1]: os.write(fd, ch.encode()); pump(0.02)
             os.write(fd, b'\r')
             if typed_at is None: typed_at = time.time() - start
@@ -557,6 +560,8 @@ def run(name, spec, entry, keep):
         else: at = found + len(sequence)
     for sequence in spec.get('raw_never', []):
         if sequence.encode() in bytes(raw): problems.append(f'written, and never should be: {sequence!r}')
+    if spec.get('no_clear_after_type') and typed_raw_at is not None and b'\x1b[2J' in raw[typed_raw_at:]:
+        problems.append('screen cleared after the turn started')
     if 'clipboard' in spec:
         import base64, re as regex
         copies = [base64.b64decode(m).decode('utf-8', 'replace') for m in regex.findall(rb'\x1b\]52;c;([A-Za-z0-9+/=]*)\x07', bytes(raw))]
