@@ -56,6 +56,13 @@ export function chatSuite(): void {
       await click(api, '#account-button');
       await waitFor(api, '#account-menu [role="option"], #account-menu .keylist-empty, #account-menu .row', 'the account list', 30_000, (found) => found.count > 0);
       await screenshot('accounts-menu', 600);
+      // Title and Add account name the same provider: the chat's, as the
+      // bridge reads it. Built from two sources, the menu once titled itself
+      // Copilot and added a Grok account.
+      const shownName = (await query(api, '#provider-button')).text.trim();
+      const title = (await waitFor(api, '#account-menu .menu-title', 'the account menu title', 30_000, (found) => found.count > 0 && found.text.trim() !== 'Accounts')).text.trim();
+      if (shownName && !shownName.toLowerCase().includes(title.toLowerCase())) throw new Error(`account menu titled "${title}" on a chat showing "${shownName}"`);
+      await waitFor(api, '#account-menu [data-key="add"]', 'Add account for the chat\'s provider');
       await key(api, '#account-menu', 'Escape');
       if ((await query(api, '#model-button')).count) {
         await click(api, '#model-button');
