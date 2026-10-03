@@ -4,8 +4,13 @@
  */
 import { spawnSync } from 'node:child_process';
 import { stdout } from 'node:process';
-import { fileLocksIdle } from '../../session/store/locks.js';
+import { fileLocksIdleWithin } from '../../session/store/locks.js';
 import { REEXEC_TERMINAL_ENV } from '../../tui/restore.js';
+
+/** How long the relaunch waits for in-flight locks to clear before giving up
+ * on the quiet moment it was hoping for. A stuck lock must never leave the
+ * user unable to pick up a build that might be the very fix for it. */
+const RELAUNCH_LOCK_WAIT_MS = 5_000;
 
 /** argv after the node binary: this CLI, and the chat to reopen. */
 export function relaunchArgv(entry: string, sessionId?: string): string[] {
@@ -42,17 +47,24 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
       await new Promise<void>((resolve) => stdout.write('', () => resolve()));
       // A background state write may still hold a lock. Exec keeps this pid,
       // so a lock taken now would never be released and would read as live.
-      // Nothing may await between this and the exec.
-      await fileLocksIdle();
-      try {
-        process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
-          { ...process.env, [REEXEC_TERMINAL_ENV]: '1' });
-      } catch { /* The existing child path restores the terminal on failure. */ }
+      // Nothing may await between a *confirmed* idle and the exec -- so a
+      // lock that is still held when the wait times out must skip the exec
+      // entirely, not proceed anyway, and fall through to the spawnSync path
+      // below instead.
+      if (await fileLocksIdleWithin(RELAUNCH_LOCK_WAIT_MS)) {
+        try {
+          process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
+            { ...process.env, [REEXEC_TERMINAL_ENV]: '1' });
+        } catch { /* The existing child path restores the terminal on failure. */ }
+      }
     }
     try { input.closeUi(); } catch { /* the terminal is still handed over */ }
     // spawnSync blocks this process for the child's whole life; a lock held
-    // across it would stall every other ClikCode the same way.
-    await fileLocksIdle();
+    // across it would stall every other ClikCode the same way. Best-effort
+    // only here -- unlike the exec above, proceeding with a lock still held
+    // is merely the same unnecessary-block cost spawnSync already carried
+    // the first time this file's rule was written, not a new hazard.
+    await fileLocksIdleWithin(RELAUNCH_LOCK_WAIT_MS);
     let status = 1;
     try {
       const result = spawnSync(process.execPath, relaunchArgv(entry, sessionId), { stdio: 'inherit' });

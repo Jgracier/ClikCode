@@ -194,3 +194,22 @@ describe('ensureHarnessInstalled', () => {
       .rejects.toThrow(/`clikcode-no-such-binary` command is on PATH\. Then retry \/nope\./);
   });
 });
+
+describe('withInstallLock deadline', () => {
+  it('gives up with a clear error when a live holder outlasts the maximum wait', async () => {
+    const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { withInstallLock } = await import('./install.js');
+    const directory = await mkdtemp(join(tmpdir(), 'clikcode-install-lock-'));
+    try {
+      const lock = join(directory, 'hung.lock');
+      await mkdir(lock);
+      await writeFile(join(lock, 'owner.json'), JSON.stringify({ pid: process.pid, at: Date.now() }));
+      await expect(withInstallLock('hung', async () => 'ran', undefined, { directory, pollMs: 5, maxWaitMs: 50 }))
+        .rejects.toThrow(/still running/);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+});

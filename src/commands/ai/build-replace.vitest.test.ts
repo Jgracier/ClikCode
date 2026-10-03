@@ -36,4 +36,40 @@ describe('file locks before a re-exec', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('fileLocksIdleWithin reports false and returns promptly when a lock outlives the timeout', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { fileLocksIdleWithin, withFileLock } = await import('../../session/store/locks');
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-lock-idle-'));
+    const lock = join(dir, 'state.lock');
+    try {
+      let release!: () => void;
+      const held = withFileLock(lock, () => new Promise<void>((resolve) => { release = resolve; }));
+      const started = Date.now();
+      expect(await fileLocksIdleWithin(50)).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1000);
+      release();
+      await held;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fileLocksIdleWithin reports true once the lock clears before the timeout', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { fileLocksIdleWithin, withFileLock } = await import('../../session/store/locks');
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-lock-idle-'));
+    const lock = join(dir, 'state.lock');
+    try {
+      const held = withFileLock(lock, async () => undefined);
+      await held;
+      expect(await fileLocksIdleWithin(5_000)).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
