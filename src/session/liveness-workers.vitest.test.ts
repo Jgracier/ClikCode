@@ -38,10 +38,7 @@ describe('liveWorkerSessions reads the worker directory once', () => {
       build: 'test',
       startedAt: new Date().toISOString(),
     });
-    // Hundreds of chats in the argument must not change the answer: the
-    // directory is what is scanned, not each conversation id.
-    const many = Array.from({ length: 200 }, (_, index) => ({ id: `chat-${index}` }));
-    const live = await liveWorkerSessions(many as never);
+    const live = await liveWorkerSessions();
     expect(live('alive')).toBe(true);
     expect(live('dead')).toBe(false);
     expect(live('chat-0')).toBe(false);

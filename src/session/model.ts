@@ -86,13 +86,6 @@ export interface HarnessSession {
   /** Set once the transcript has been summarized onto this row. Distinguishes
    * "not looked at yet" from "looked at, and it was empty". */
   listChecked?: boolean;
-  /** The in-flight turn, without its response text. The response stays in the
-   * transcript file, which is rewritten many times a second; this is not. */
-  listTurn?: {
-    startedAt: string;
-    prompt: string;
-    subagents?: NonNullable<HarnessSession['pendingTurn']>['subagents'];
-  };
   /** Crash-safe turn journal. It remains separate until completion so a
    * provider retry cannot accidentally submit the same user prompt twice. */
   pendingTurn?: {

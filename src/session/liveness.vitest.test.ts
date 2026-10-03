@@ -76,8 +76,13 @@ describe('what a live session is doing', () => {
     expect(sessionActivity(session({ pendingTurn: turn }), workerFor('session-1'), NOW, HOST)).toBe('working');
   });
 
-  it('is working while the index still carries a live turn', () => {
-    expect(sessionActivity(session({ listTurn: { startedAt: turn.startedAt, prompt: turn.prompt } }), workerFor('session-1'), NOW, HOST)).toBe('working');
+  it('is working on the transcript turn a list read for it', () => {
+    expect(sessionActivity(session(), workerFor('session-1'), NOW, HOST, turn)).toBe('working');
+  });
+
+  it('is never working on a claim alone: generating needs the worker', () => {
+    const held = session({ claim: { pid: 1, host: HOST, startedAt: ago(1_000), heartbeatAt: ago(1_000) } });
+    expect(sessionActivity(held, noWorkers, NOW, HOST, turn)).toBe('idle');
   });
 
   it('is idle while a live session sits between turns', () => {
@@ -86,7 +91,6 @@ describe('what a live session is doing', () => {
 
   it('is nothing for a crashed turn, whose journal outlives its process on purpose', () => {
     expect(sessionActivity(session({ pendingTurn: turn }), noWorkers, NOW, HOST)).toBeUndefined();
-    expect(sessionActivity(session({ listTurn: { startedAt: turn.startedAt, prompt: turn.prompt } }), noWorkers, NOW, HOST)).toBeUndefined();
   });
 
   it('is nothing for a chat the user closed, even with a worker still exiting', () => {

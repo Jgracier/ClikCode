@@ -3,7 +3,6 @@
 
 import { compactPath } from '../../harness/protocol/labels.js';
 import { newConversation } from '../../commands/ai/conversations.js';
-import { stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import { discoverNativeSessions, lastSeenNativeSessions } from '../../session/discovery/cli-listing.js';
@@ -17,16 +16,13 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { backfillListFacts } from '../../session/list-backfill.js';
-import { listedPending, reconcileListTurns } from '../../session/list-facts.js';
 
-import { sessionFilePath } from '../../session/store/paths.js';
-import { readSessionTranscript } from '../../session/store/transcripts.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { sessionClaimIsLive } from '../../session/claim.js';
-import { liveWorkerSessions, sessionActivity } from '../../session/liveness.js';
+import { livePendingTurns, liveWorkerSessions, sessionActivity } from '../../session/liveness.js';
 import { activityGlyph, subagentOptions, turnPace, workingDetail } from './conversation-activity.js';
 import { conversationIdFor, isBlankConversation, sessionPickerOptions } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -240,42 +236,26 @@ export async function interactiveSessionPicker(
   const workspace = current?.workspace ?? process.cwd();
   // Whether a worker is behind each chat. Re-checked while the board stays
   // open, so a turn that finishes mid-list drops out of Working.
-  let workerIsLive = await liveWorkerSessions(sessions);
+  let workerIsLive = await liveWorkerSessions();
+  // The turn each live-worker chat is generating, from its transcript -- the
+  // one record of a turn in flight. Its `updatedAt` is the spinner's pace.
+  let pendingById = await livePendingTurns(sessions, workerIsLive);
   // Per conversation, not per chat: a provider handoff leaves the older
   // chat's worker running for a while, and it is still this conversation.
   const openedAt = Date.now();
-  const readPending = async (id: string) => (await readSessionTranscript(id))?.pendingTurn;
-  // Index `listTurn` outlives a finished turn when the clear was missed, and
-  // an idle worker keeps the process live -- the board then spins forever.
-  // Confirm against the journal before anything is drawn as generating.
-  if (await reconcileListTurns(sessions, workerIsLive, readPending)) {
-    await writeState(state).catch(() => undefined);
-  }
   const activityByRoot = new Map<string, { activity: 'working' | 'idle'; pending?: NonNullable<HarnessSession['pendingTurn']> }>();
-  // The index turn has no `updatedAt` (that changes on every token). The
-  // transcript file's mtime is the same clock the live journal uses.
-  const paceAt = new Map<string, string>();
-  const notePace = async (list: readonly HarnessSession[]): Promise<void> => {
-    await Promise.all(list.filter((session) => session.listTurn && !session.pendingTurn && !paceAt.has(session.id)).map(async (session) => {
-      try {
-        const info = await stat(sessionFilePath(session.id));
-        paceAt.set(session.id, info.mtime.toISOString());
-      } catch { /* the journal's own start time is enough */ }
-    }));
-  };
   const fillActivity = (): void => {
     activityByRoot.clear();
     for (const session of sessions) {
       const root = conversationIdFor(session);
       // The chat open here is active by definition; a claim only says whether
       // someone ELSE holds it, so it would not show up by liveness alone.
-      const activity = sessionActivity(session, workerIsLive, Date.now()) ?? (session.id === currentId ? 'idle' : undefined);
+      const pending = pendingById.get(session.id);
+      const activity = sessionActivity(session, workerIsLive, Date.now(), undefined, pending) ?? (session.id === currentId ? 'idle' : undefined);
       if (!activity || activityByRoot.get(root)?.activity === 'working') continue;
-      const pending = listedPending(session, paceAt.get(session.id));
       activityByRoot.set(root, activity === 'working' ? { activity, ...(pending ? { pending } : {}) } : { activity });
     }
   };
-  await notePace(sessions);
   fillActivity();
 
   // ClikCode's own conversations are already in hand and are what /resume is
@@ -302,18 +282,15 @@ export async function interactiveSessionPicker(
   const refreshes = [early, discovery, slow];
   let listRevision = 0;
   let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;
-  /** Re-check workers and drop finished turns. The board redraws while any
-   * row still has `working`, so the next frame picks this up and the spinner
-   * stops when the turn is over. */
+  /** Re-check workers and the turns they are generating. The board redraws
+   * while any row still has `working`, so the next frame picks this up and
+   * the spinner stops when the turn is over. */
   let activityRefresh: Promise<void> | undefined;
   const refreshActivity = (): void => {
     if (activityRefresh) return;
     activityRefresh = (async () => {
-      workerIsLive = await liveWorkerSessions(sessions);
-      if (await reconcileListTurns(sessions, workerIsLive, readPending)) {
-        await writeState(state).catch(() => undefined);
-      }
-      await notePace(sessions);
+      workerIsLive = await liveWorkerSessions();
+      pendingById = await livePendingTurns(sessions, workerIsLive);
       fillActivity();
       listRevision += 1;
       built = undefined;
@@ -329,8 +306,6 @@ export async function interactiveSessionPicker(
       if (!next) continue;
       if (next.listPreview) session.listPreview = next.listPreview;
       else delete session.listPreview;
-      if (next.listTurn) session.listTurn = next.listTurn;
-      else delete session.listTurn;
       if (next.listMessageCount !== undefined) session.listMessageCount = next.listMessageCount;
       else delete session.listMessageCount;
       if (next.listChecked) session.listChecked = true;
@@ -340,11 +315,6 @@ export async function interactiveSessionPicker(
       const session = sessions[index]!;
       if ((session.id !== currentId || onBoard) && isBlankConversation(session)) sessions.splice(index, 1);
     }
-    // Backfill can put a stale index turn back; scrub against the journal.
-    if (await reconcileListTurns(sessions, workerIsLive, readPending)) {
-      await writeState(state).catch(() => undefined);
-    }
-    await notePace(sessions);
     fillActivity();
     listRevision += 1;
     built = undefined;

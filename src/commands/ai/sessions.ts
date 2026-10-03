@@ -236,7 +236,7 @@ export async function aiSessionsList(): Promise<void> {
   // expire on their own. This replaced a `status` the worker wrote and a sweep
   // that corrected it -- see session/liveness.ts for why caching it was the
   // bug rather than the sweep being in the wrong place.
-  const workerIsLive = await liveWorkerSessions(state.sessions);
+  const workerIsLive = await liveWorkerSessions();
   // Blank chats are not listed: a launch that was closed without typing is
   // not a conversation anyone can go back to (session/blank.ts).
   const sessions = state.sessions.filter((session) => !isBlankConversation(session))

@@ -70,7 +70,7 @@ export function isBlankConversation(session: HarnessSession): boolean {
   // summary may still be on the way). A draft that was never stored is not.
   if (!transcriptWasLoaded(session) && session.messages === undefined && session.pendingTurn === undefined) {
     if (session.listChecked) {
-      return !(session.listMessageCount || session.listPreview || session.listTurn || session.nativeSessionId
+      return !(session.listMessageCount || session.listPreview || session.nativeSessionId
         || session.queuedTurns?.length || session.attachments?.length || session.shellNotes?.length || session.nameSource === 'user');
     }
     if (sessionFromIndex(session)) return false;

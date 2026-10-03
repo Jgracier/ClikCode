@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { listedPending, markTranscriptLoaded, reconcileListTurns, stampListFacts } from './list-facts';
+import { markTranscriptLoaded, stampListFacts } from './list-facts';
 import type { HarnessSession } from './model';
 
 function session(overrides: Partial<HarnessSession> = {}): HarnessSession {
@@ -11,51 +11,18 @@ function session(overrides: Partial<HarnessSession> = {}): HarnessSession {
   } as HarnessSession;
 }
 
-describe('reconcileListTurns', () => {
-  const turn = { startedAt: '2026-09-01T00:00:00.000Z', prompt: 'go' };
-
-  it('drops an index turn when no worker is alive', async () => {
-    const row = session({ listTurn: turn });
-    expect(await reconcileListTurns([row], () => false, async () => undefined)).toBe(true);
-    expect(row.listTurn).toBeUndefined();
-  });
-
-  it('drops an index turn when the worker is idle and the journal has no turn', async () => {
-    const row = session({ listTurn: turn });
-    expect(await reconcileListTurns([row], () => true, async () => undefined)).toBe(true);
-    expect(row.listTurn).toBeUndefined();
-  });
-
-  it('keeps an index turn while the journal still has one', async () => {
-    const row = session({ listTurn: turn });
-    const pending = { prompt: 'go', startedAt: turn.startedAt, updatedAt: turn.startedAt, outputStarted: true };
-    expect(await reconcileListTurns([row], () => true, async () => pending)).toBe(false);
-    expect(row.listTurn).toEqual(turn);
-  });
-
-  it('leaves a live pendingTurn alone', async () => {
-    const pending = { prompt: 'go', startedAt: turn.startedAt, updatedAt: turn.startedAt, outputStarted: true };
-    const row = session({ pendingTurn: pending, listTurn: turn });
-    expect(await reconcileListTurns([row], () => true, async () => undefined)).toBe(false);
-    expect(row.listTurn).toEqual(turn);
-  });
-});
-
-describe('listedPending', () => {
-  it('prefers the live journal, then the index copy', () => {
-    const pending = { prompt: 'live', startedAt: 'a', updatedAt: 'b', outputStarted: true };
-    expect(listedPending(session({ pendingTurn: pending }))).toEqual(pending);
-    expect(listedPending(session({ listTurn: { startedAt: 'a', prompt: 'index' } }), 'mtime'))
-      .toMatchObject({ prompt: 'index', updatedAt: 'mtime' });
-  });
-});
-
 describe('stampListFacts', () => {
-  it('clears listTurn when the transcript has no pending turn', () => {
-    const row = session({ listTurn: { startedAt: 'a', prompt: 'go' }, messages: [{ role: 'user', content: 'go' }] });
+  it('drops a turn copy an older build stored on the row, and never writes one', () => {
+    const row = session({ messages: [{ role: 'user', content: 'go' }] });
+    (row as { listTurn?: unknown }).listTurn = { startedAt: 'a', prompt: 'go' };
     markTranscriptLoaded(row);
     expect(stampListFacts(row)).toBe(true);
-    expect(row.listTurn).toBeUndefined();
+    expect((row as { listTurn?: unknown }).listTurn).toBeUndefined();
     expect(row.listPreview).toBe('go');
+
+    const running = session({ pendingTurn: { prompt: 'next', startedAt: 'a', updatedAt: 'b', outputStarted: true } });
+    markTranscriptLoaded(running);
+    stampListFacts(running);
+    expect((running as { listTurn?: unknown }).listTurn).toBeUndefined();
   });
 });
