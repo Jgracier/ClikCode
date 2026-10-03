@@ -179,9 +179,28 @@ describe('the model list', () => {
     });
     expect(offers.map((offer) => offer.model)).toEqual(['claude-opus-4.5', 'claude-haiku-4.5', 'composer-2.5']);
   });
+
+  it('omits unverified Copilot ids and Cursor named models after their allowance is spent', () => {
+    const accounts = [
+      account({ id: 'copilot', provider: 'github-copilot', label: 'Copilot', usage: windows(10), models: ['gpt-6-luna'] }),
+      account({
+        id: 'cursor', provider: 'cursor', label: 'Cursor', models: ['default[]', 'claude-sonnet-4.5[effort=low]', 'claude-sonnet-4.5[effort=high]'],
+        usage: { at: ISO, windows: [{ name: 'monthly', usedPct: 20 }, { name: 'API', usedPct: 100, advisory: true }] } as AiHarnessAccount['usage'],
+      }),
+    ];
+    expect(swarmOffers(clerkAccounts(state(accounts), host(), NOW)).map((offer) => offer.model)).toEqual(['default[]']);
+    accounts[1]!.usage = { at: ISO, windows: [{ name: 'monthly', usedPct: 20 }, { name: 'API', usedPct: 10, advisory: true }] } as AiHarnessAccount['usage'];
+    expect(swarmOffers(clerkAccounts(state(accounts), host(), NOW)).map((offer) => offer.model)).toEqual(['claude-sonnet-4.5[effort=low]', 'default[]']);
+  });
 });
 
 describe('a delegation', () => {
+  it('rejects a cut-off structured reply instead of showing it as a card', () => {
+    expect(() => cardFromReply('[]}', 300)).toThrow('incomplete card');
+    expect(() => cardFromReply('\": [] } ``` 7', 300)).toThrow('incomplete card');
+    expect(cardFromReply('5', 300).summary).toBe('5');
+  });
+
   it('stays on the host for one file, and runs a clerk when the work spans files', async () => {
     expect(keepOnHost('What does src/app.ts export?')).toBe(true);
     expect(keepOnHost('Review src/a.ts and src/b.ts across the tree')).toBe(false);
