@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { claimConversation, leaveConversation, openConversation, releaseConversationClaim } from './attach';
+import { afterTurnFailure, claimConversation, leaveConversation, openConversation, releaseConversationClaim } from './attach';
 import { readState } from './state/read';
 import { writeState } from './state/write';
 import { acquireSessionClaim } from './claims';
@@ -79,5 +79,23 @@ describe('a client attached to a conversation', () => {
     await writeState(stateWith(session({ id: 'abcdef', conversationId: 'abcdef' })));
     expect(await openConversation('/work', 'resume', 'abcd')).toBe('abcdef');
     await expect(openConversation('/work', 'resume', 'zzz')).rejects.toThrow(/no chat matches "zzz" -- use its name/);
+  });
+
+  it('releases a queued turn that failed and hands it back, but not one the user stopped', async () => {
+    const queuedTurns = [{ id: 'q1', text: 'queued words', submittedAt: '2026-01-01T00:00:00.000Z' }];
+    await writeState(stateWith(session({ queuedTurns })));
+    const failed = await afterTurnFailure(undefined, 's1', new Error('model unavailable'), { line: 'queued words', queuedTurnId: 'q1', guard: {} });
+    expect(failed).toEqual({ cancelled: false, back: ['queued words'] });
+    expect((await stored())?.queuedTurns ?? []).toEqual([]);
+
+    await writeState(stateWith(session({ queuedTurns })));
+    const stopped = Object.assign(new Error('stopped'), { code: 'ERR_TURN_CANCELLED' });
+    expect(await afterTurnFailure(undefined, 's1', stopped, { line: 'queued words', queuedTurnId: 'q1', guard: {} })).toEqual({ cancelled: true, back: [] });
+    expect((await stored())?.queuedTurns?.map((item) => item.id)).toEqual(['q1']);
+  });
+
+  it('asks nothing about running out where there is no one to ask', async () => {
+    await writeState(stateWith(session()));
+    expect(await afterTurnFailure(undefined, 's1', new Error('All accounts exhausted'), { line: 'hi', guard: {} })).toEqual({ cancelled: false, back: [] });
   });
 });
