@@ -26,9 +26,9 @@ import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
-import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
+import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, openToolsStatus, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
-import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
+import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
 import { paintStatus } from './render/status-line.js';
@@ -123,11 +123,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private activityEntries: ActivityEntry[] = [];
   /** collapseToolRuns over activityEntries, redone only when they change. */
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
-  /** The calls still open, and what the status line says about the newest. */
-  private activeTools = new Map<string, { label: string; category?: ToolCategory; agent?: boolean }>();
-  private toolPhase = '';
-  /** The newest open call's kind of work: the status line wears its colour. */
-  private toolCategory?: ToolCategory;
+  /** The calls still open: the status line names the newest (toolStatus). */
+  private activeTools = new Map<string, OpenTool>();
   /** When the current stretch of thinking began -- the turn's start, or the
    * last call finishing or answer text arriving -- for turnStatus's words. */
   private thinkingSince = 0;
@@ -822,8 +819,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The last open call finishing starts a new stretch of thinking.
     if (this.activeTools.size && !lifecycle.activeTools.size) this.thinkingSince = Date.now();
     this.activeTools = lifecycle.activeTools;
-    this.toolPhase = lifecycle.activeTools.size ? lifecycle.phase : '';
-    this.toolCategory = lifecycle.activeTools.size ? lifecycle.category : undefined;
     this.schedulePaint();
   }
 
@@ -935,8 +930,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // starts owing everything it produces, and nothing from before it.
     if (!rejoined) {
       this.activeTools = new Map();
-      this.toolPhase = '';
-      this.toolCategory = undefined;
       this.childActivity.clear();
       this.exploreGrouping.reset();
       this.liveActivitiesShown = -1;
@@ -955,6 +948,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.paint('', [], 0, '› ', 0);
     this.scheduleWaitingTick();
+  }
+
+  /** What the status line says about the newest open call, if any is open. */
+  private toolStatus(): { phase: string; category?: ToolCategory } | undefined {
+    return this.activeTools.size ? openToolsStatus(this.activeTools) : undefined;
   }
 
   /** What the turn waits on besides the model, for the clock's decisions. */
@@ -1079,7 +1077,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const running = Boolean(this.waitingLabel);
     const title = windowTitle({
       running, glyph: waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame),
-      activity: this.pendingApproval ? 'waiting for you' : (this.toolPhase || this.waitingLabel).replace(/(…|\.\.\.)$/, ''),
+      activity: this.pendingApproval ? 'waiting for you' : (this.toolStatus()?.phase || this.waitingLabel).replace(/(…|\.\.\.)$/, ''),
       ...(this.currentSession?.name ? { name: this.currentSession.name } : {}),
     });
     let sequence = '';
@@ -1224,9 +1222,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // What it says and how it looks, by the shared rules (turn-flow.ts):
     // waiting on the user, the open call, the reasoning's heading, the
     // thinking in words; and a tone that fades toward red with silence.
+    const tool = this.toolStatus();
     const status = turnStatus({
       phase: this.waitingLabel,
-      ...(!this.waitingCancelled && this.toolPhase ? { toolPhase: this.toolPhase } : {}),
+      ...(!this.waitingCancelled && tool ? { toolPhase: tool.phase } : {}),
       ...(this.thought && !this.waitingCancelled ? { thought: this.thought.text } : {}),
       thinkingMs: now - this.thinkingSince,
       asking: Boolean(this.pendingApproval),
@@ -1247,7 +1246,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const glyph = waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
     const painted = paintStatus({
       glyph, label: label.slice(0, split), tone: status.tone, stall: status.stall,
-      ...(status.tone === 'tool' && this.toolCategory ? { category: this.toolCategory } : {}),
+      ...(status.tone === 'tool' && tool?.category ? { category: tool.category } : {}),
       frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
     });
     return `${painted.spinner}  ${painted.label}${chalk.dim(label.slice(split))}`;
