@@ -250,9 +250,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private terminalTitle?: string;
   /** Long pastes held as placeholders so far, for the next one's number. */
   private pasteCount = 0;
-  /** Whether the turn being stopped took messages: a real turn, not a wait
-   * on a download or a shell command. */
-  private waitingSubmitWas = false;
   /** The line a turn ended on, owed to the transcript once. */
   private pendingTurnSummary?: string;
   /** "Tell it instead" is being typed; the draft the composer held before. */
@@ -1025,7 +1022,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaitingInput = undefined;
     if (this.waitingLabel) this.resumeInput = undefined;
     this.cancelWaiting = undefined;
-    this.waitingSubmitWas = Boolean(this.waitingSubmit);
+    // Whether the turn being stopped took messages: a real turn, not a wait
+    // on a download or a shell command.
+    const tookMessages = Boolean(this.waitingSubmit);
     this.waitingSubmit = undefined;
     this.waitingCommand = undefined;
     this.leaveWaiting = undefined;
@@ -1034,11 +1033,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // A turn that did real work ends on a line saying how long it took and
     // what it changed (Codex). Only a real turn -- one that took messages --
     // and only its end: stepping out of it is not.
-    if (this.waitingLabel && this.waitingSubmitWas && !this.steppedOut) {
+    if (this.waitingLabel && tookMessages && !this.steppedOut) {
       this.pendingTurnSummary = this.endOfTurnSummary();
       this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
     }
-    this.waitingSubmitWas = false;
     this.waitingLabel = '';
     this.thought = undefined;
     // Anything typed during the turn and not submitted is still the user's
