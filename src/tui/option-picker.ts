@@ -263,7 +263,7 @@ export function runOptionPicker<T>(
         else if (option?.actions?.length) void openActions(option);
         return;
       }
-      else if (pickerDeletesSelection(key)) { const action = visible[selected]?.deleteAction; if (action) void confirmDelete(visible[selected]!, action); return; }
+      else if (pickerDeletesSelection(key, query)) { const action = visible[selected]?.deleteAction; if (action) void confirmDelete(visible[selected]!, action); return; }
       else if (key === '\u0003') return finish(undefined, 'escape');
       else if (key === '\u001b') { settings?.onEscape?.(); return finish(undefined, 'escape'); }
       else if (key === '\u007f' || key === '\b') { if (!query) return; query = query.slice(0, -1); selected = 0; }

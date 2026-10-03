@@ -92,6 +92,11 @@ describe('the conversation board', () => {
     expect(press(state, '\u001b[3~')).toEqual({ kind: 'none' });
     expect(press(state, DOWN, '\u001b[3~')).toEqual({ kind: 'delete', option: conversations[1] });
   });
+
+  it('deletes on Backspace with no draft, since Mac and iPhone keyboards have no forward Delete', () => {
+    const state = fresh();
+    expect(press(state, DOWN, DOWN, '\u007f')).toEqual({ kind: 'delete', option: conversations[1] });
+  });
 });
 
 describe('where the board opens', () => {

@@ -12,6 +12,8 @@ describe('command palette layout', () => {
     expect(['\r', '\n', '\u001b[C'].every(pickerConfirmsSelection)).toBe(true);
     expect(pickerConfirmsSelection('\u001b[3~')).toBe(false);
     expect(pickerDeletesSelection('\u001b[3~')).toBe(true);
+    expect(pickerDeletesSelection('\u007f')).toBe(true);
+    expect(pickerDeletesSelection('\u007f', 'gro')).toBe(false);
   });
 
   it('reserves confirmation for Enter so Left Arrow can consistently navigate back', () => {

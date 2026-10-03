@@ -135,7 +135,7 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
       return { kind: 'none' };
     }
     if (key === '\t') return row?.actions?.length ? { kind: 'actions', option: row } : { kind: 'none' };
-    if (pickerDeletesSelection(key)) return row?.deleteAction ? { kind: 'delete', option: row } : { kind: 'none' };
+    if (pickerDeletesSelection(key, state.draft)) return row?.deleteAction ? { kind: 'delete', option: row } : { kind: 'none' };
   }
   if (key === '\u007f' || key === '\b') {
     if (!state.draft) return { kind: 'none' };

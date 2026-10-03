@@ -170,6 +170,10 @@ export function pickerConfirmsSelection(key: string): boolean {
   return key === '\r' || key === '\n' || key === '\u001b[C';
 }
 
-export function pickerDeletesSelection(key: string): boolean {
-  return key === '\u001b[3~';
+/** Del, or Backspace when nothing is typed: Mac and iPhone keyboards have
+ * no forward Delete, and their "delete" key sends Backspace -- which, with no
+ * filter or draft to shorten, did nothing, so a row's Del action was
+ * unreachable from them. */
+export function pickerDeletesSelection(key: string, typed = ''): boolean {
+  return key === '\u001b[3~' || (!typed && (key === '\u007f' || key === '\b'));
 }
