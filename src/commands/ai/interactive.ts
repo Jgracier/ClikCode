@@ -60,7 +60,7 @@ import { exportTranscript } from '../../tui/slash/export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
-import { interactiveResumeInPicker, interruptedTurnResumePrompt, sameProviderCanTakeTurn } from '../../tui/pickers/resume-in.js';
+import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from '../../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
@@ -373,9 +373,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   /** Left was pressed during a turn: the board opens next, with the turn
    * still running behind it (see startWaiting's onLeave). */
   let openBoard = false;
-  /** The message last re-sent because its own provider had an account back;
-   * never twice, so a record that keeps flipping cannot loop. */
-  let autoResent: string | undefined;
+  /** The same-provider retry after running out, at most once per
+   * interrupted turn, so a record that keeps flipping cannot loop. */
+  const exhaustionGuard: ExhaustionRetryGuard = {};
   let synchronizedSessionId = '';
   let transportSessionId = id;
   /** `<session id> <route>` this terminal last prepared a worker for. */
@@ -387,29 +387,21 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
    * out of quota is an outcome, not a fault, so it is not shown behind an
    * "Error:". With prompt text worth resending, out of usage offers the
    * harnesses that still have some and carries on there with the same
-   * message. */
-  const handleTurnFailure = async (error: unknown, promptText: string | undefined): Promise<void> => {
+   * message. Returns the messages queued behind it that come back to the
+   * composer, or undefined once the turn is being carried on. */
+  const handleTurnFailure = async (error: unknown, promptText: string | undefined): Promise<string[] | undefined> => {
     const message = error instanceof Error ? error.message : String(error);
-    if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return; }
+    if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return []; }
     notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
-    if (!promptText || !isUsageExhaustedMessage(message)) return;
-    // An account of this provider got its quota back after failover looked
-    // (a re-read landed meanwhile): send it again here, once, rather than
-    // offering to leave the provider.
-    const again = promptText !== autoResent && await sameProviderCanTakeTurn(id);
-    if (again) {
-      const continuation = await interruptedTurnResumePrompt(id, promptText);
-      autoResent = promptText;
-      resend = continuation;
-      notice = undefined;
-    } else {
-      const moved = await interactiveResumeInPicker(terminal, id, promptText);
-      if (moved) {
-        id = moved.id;
-        resend = moved.prompt;
-        notice = undefined;
-      }
-    }
+    if (!promptText || !isUsageExhaustedMessage(message)) return [];
+    const next = await carryOnAfterExhaustion(terminal, id, promptText, exhaustionGuard);
+    if ('stayed' in next) return next.stayed;
+    if ('moved' in next) {
+      id = next.moved.id;
+      resend = next.moved.prompt;
+    } else resend = next.retry;
+    notice = undefined;
+    return undefined;
   };
   try {
     while (true) {
@@ -463,7 +455,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             if (followed.notice) notice = followed.notice;
             if (followed.left) openBoard = true;
           } catch (error) {
-            await handleTurnFailure(error, resendText);
+            const back = await handleTurnFailure(error, resendText);
+            if (back?.length) terminal.restoreDraft(back.join('\n\n'));
           }
         };
         // The turn the conversation's worker is running, if any -- the
@@ -497,7 +490,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // end rather than the message sent into it only to be queued again.
         const runningTurn = queued && queued.kind !== 'command' ? running : undefined;
         if (runningTurn && terminal) {
-          await followRunning(terminal, runningTurn.prompt, queued?.text);
+          // Running out offers to carry on THAT turn (its prompt), and the
+          // message queued behind it goes with the conversation -- offering
+          // the queued text instead ran it on the branch while it also stayed
+          // queued here.
+          await followRunning(terminal, runningTurn.prompt, runningTurn.prompt ?? latest.pendingTurn?.prompt);
           continue;
         }
         // Ctrl+S during the turn that just stopped: this message, now, ahead
@@ -505,6 +502,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const sendNow = terminal?.takeSendNow();
         if (sendNow) {
           line = sendNow;
+        } else if (resend) {
+          // The turn that ran out, carried on: it came before anything
+          // queued behind it, which "Resume in" moved here with it.
+          line = resend;
+          resend = undefined;
         } else if (queued?.kind === 'command') {
           fromQueuedCommand = true;
           // A slash command typed while the turn was running. It runs as the
@@ -520,9 +522,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // not already say.
           line = queued.text;
           queuedTurnId = queued.id;
-        } else if (resend) {
-          line = resend;
-          resend = undefined;
         } else if (terminal) {
           // A turn just ended, or the prompt is coming back. Do not wait out
           // the usage tick to pick up a build that landed during the turn.
@@ -966,12 +965,19 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // identically: a hot loop that never returns a prompt and can only be
         // cleared by hand-editing harness-state.json. Release it and hand the
         // text back so the failure is visible and recoverable.
-        if (queuedTurnId && !cancelled) {
-          await releaseQueuedTurn(id, queuedTurnId).catch(() => undefined);
-          terminal?.restoreDraft(line);
-        }
+        if (queuedTurnId && !cancelled) await releaseQueuedTurn(id, queuedTurnId).catch(() => undefined);
         if (cancelled && terminal) notice = 'Stopped';
-        else await handleTurnFailure(error, queuedTurnId ? undefined : line);
+        else {
+          // A queued message that ran out of usage is offered "Resume in" as
+          // a typed one is. Carried on, it is not handed back as well (it
+          // would then be sent twice); otherwise it returns to the composer
+          // with any messages queued behind it that could not run either.
+          const back = await handleTurnFailure(error, line);
+          if (back) {
+            const draft = [...(queuedTurnId ? [line] : []), ...back].join('\n\n');
+            if (draft) terminal?.restoreDraft(draft);
+          }
+        }
       }
     }
   } finally {
