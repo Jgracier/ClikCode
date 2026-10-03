@@ -99,3 +99,27 @@ describe('harness state normalization', () => {
     }
   });
 });
+
+describe('single-file state migration', () => {
+  it('keeps one legacy copy however often an older build rewrites the file', async () => {
+    const { readdir } = await import('node:fs/promises');
+    const { resetHarnessStateCaches } = await import('./index-file.js');
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-legacy-'));
+    process.env.CLIKCODE_HOME = root;
+    const legacy = (installationId: string) => `${JSON.stringify({
+      version: 1, installationId, accounts: [], sessions: [], invocations: [],
+      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+    })}\n`;
+    try {
+      for (const id of ['first', 'second', 'third']) {
+        await writeFile(join(root, 'harness-state.json'), legacy(id));
+        resetHarnessStateCaches();
+        await readState();
+      }
+      const names = await readdir(root);
+      expect(names.filter((name) => name.startsWith('harness-state.'))).toEqual(['harness-state.legacy.json']);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
