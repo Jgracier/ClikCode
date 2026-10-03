@@ -44,11 +44,11 @@ import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
 import { SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
-import { activateSession, claimConversation, leaveConversation, openConversation, prepareTurn, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
+import { activateSession, afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { newConversation, newProviderConversation, releaseQueuedTurn } from './conversations.js';
+import { newConversation, newProviderConversation } from './conversations.js';
 import { aiSessionLeave } from './sessions.js';
 import { aiSessionCommand, runShellLine, slashRouteTurn } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
@@ -58,7 +58,7 @@ import { exportTranscript } from '../../tui/slash/export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
-import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from '../../tui/pickers/resume-in.js';
+import { type ExhaustionRetryGuard } from '../../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
@@ -328,30 +328,21 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let transportSessionId = id;
   /** `<session id> <route>` this terminal last prepared a worker for. */
   let preparedRoute: string | undefined;
-  /** A turn failed: one this window submitted, or one it was only following
-   * (started earlier, by another window, or by the queue -- most often "All
-   * accounts exhausted" from a worker this window did not drive; left
-   * uncaught that crashed the loop merely for reopening the chat). Running
-   * out of quota is an outcome, not a fault, so it is not shown behind an
-   * "Error:". With prompt text worth resending, out of usage offers the
-   * harnesses that still have some and carries on there with the same
-   * message. Returns the messages queued behind it that come back to the
-   * composer, or undefined once the turn is being carried on. */
-  const handleTurnFailure = async (error: unknown, promptText: string | undefined, sent = promptText): Promise<string[] | undefined> => {
+  /** A turn failed (see afterTurnFailure): one this window submitted, or one
+   * it was only following -- most often "All accounts exhausted" from a
+   * worker this window did not drive; left uncaught that crashed the loop
+   * merely for reopening the chat. Running out is not shown behind an
+   * "Error:". Carried on, the next pass sends `resend` (or, with none, follows
+   * the turn another window carried on). */
+  const handleTurnFailure = async (error: unknown, failed: { line?: string; sent?: string; queuedTurnId?: string }): Promise<void> => {
     const message = error instanceof Error ? error.message : String(error);
-    if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return []; }
+    const next = await afterTurnFailure(terminal, id, error, { ...failed, guard: exhaustionGuard });
+    if (next.cancelled && terminal) { notice = 'Stopped'; return; }
+    if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return; }
+    if ('retry' in next) { resend = next.retry; return; }
+    if ('moved' in next) { id = next.moved.id; resend = next.moved.prompt; return; }
     notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
-    if (!promptText || !isUsageExhaustedMessage(message)) return [];
-    const next = await carryOnAfterExhaustion(terminal, id, promptText, exhaustionGuard, sent);
-    if ('stayed' in next) return next.stayed;
-    if ('moved' in next) {
-      id = next.moved.id;
-      // No prompt when another window already carried the turn on in that
-      // branch: the loop then follows its running turn instead of resending.
-      resend = next.moved.prompt;
-    } else resend = next.retry;
-    notice = undefined;
-    return undefined;
+    if (next.back.length) terminal.restoreDraft(next.back.join('\n\n'));
   };
   try {
     while (true) {
@@ -408,8 +399,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             if (followed.notice) notice = followed.notice;
             if (followed.left) openBoard = true;
           } catch (error) {
-            const back = await handleTurnFailure(error, resendText);
-            if (back?.length) terminal.restoreDraft(back.join('\n\n'));
+            await handleTurnFailure(error, { line: resendText });
           }
         };
         // The turn the conversation's worker is running, if any -- the
@@ -892,27 +882,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         }
         if (outcome.prompt) await runInteractiveTurn(id, outcome.prompt, { echo: outcome.echo !== false });
       } catch (error) {
-        const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
-        // A queued turn is only consumed once its checkpoint starts. Anything
-        // that throws before that -- a removed account, an unavailable model, an
-        // attachment deleted since it was queued -- leaves the same message at
-        // the head of the queue, so the next iteration picks it up and fails
-        // identically: a hot loop that never returns a prompt and can only be
-        // cleared by hand-editing harness-state.json. Release it and hand the
-        // text back so the failure is visible and recoverable.
-        if (queuedTurnId && !cancelled) await releaseQueuedTurn(id, queuedTurnId).catch(() => undefined);
-        if (cancelled && terminal) notice = 'Stopped';
-        else {
-          // A queued message that ran out of usage is offered "Resume in" as
-          // a typed one is. Carried on, it is not handed back as well (it
-          // would then be sent twice); otherwise it returns to the composer
-          // with any messages queued behind it that could not run either.
-          const back = await handleTurnFailure(error, line, sentPrompt ?? line);
-          if (back) {
-            const draft = [...(queuedTurnId ? [line] : []), ...back].join('\n\n');
-            if (draft) terminal?.restoreDraft(draft);
-          }
-        }
+        // A queued message is handed back, and one that ran out of usage is
+        // offered "Resume in" as a typed one is.
+        await handleTurnFailure(error, { line, sent: sentPrompt ?? line, ...(queuedTurnId ? { queuedTurnId } : {}) });
       }
     }
   } finally {

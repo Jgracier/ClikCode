@@ -21,6 +21,10 @@ import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { ensureLocalModelForTurn } from '../commands/ai/local-model.js';
+import { releaseQueuedTurn } from '../commands/ai/conversations.js';
+import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
+import { carryOnAfterExhaustion, type ExhaustionRetryGuard, type ResumedIn } from '../tui/pickers/resume-in.js';
+import type { HarnessPrompter } from '../harness/prompter.js';
 
 /** Reopened, a closed or archived chat is active again. */
 export function activateSession(session: HarnessSession): boolean {
@@ -140,4 +144,37 @@ export async function prepareTurn(
     try { await ensureLocalModelForTurn(active); } finally { busy?.(); }
   }
   return { state, active };
+}
+
+export function turnWasCancelled(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === 'ERR_TURN_CANCELLED' || (error as Error)?.name === 'AbortError';
+}
+
+/** What follows a turn that failed: send it again here, carry it on in the
+ * chat "Resume in" moved it to, or hand text back to the composer. */
+export type TurnFailureNext = { cancelled: boolean } & ({ retry: string } | { moved: ResumedIn } | { back: string[] });
+
+/** A turn failed -- one this client sent (`line`, and `sent` when a slash
+ * command expanded it), one it took from the queue (`queuedTurnId`), or one
+ * it was only following.
+ *
+ * A queued turn that cannot start would stay at the head of the queue and
+ * fail identically on every pass, so it is released and its text handed
+ * back. Running out of usage is an outcome, not a fault: with a `prompter`
+ * to ask, it retries once on this provider if an account came back, and
+ * otherwise offers the harnesses that still have some. Carried on, the
+ * message is not handed back as well (it would then be sent twice). */
+export async function afterTurnFailure(
+  prompter: HarnessPrompter | undefined, id: string, error: unknown,
+  turn: { line?: string; sent?: string; queuedTurnId?: string; guard: ExhaustionRetryGuard },
+): Promise<TurnFailureNext> {
+  const cancelled = turnWasCancelled(error);
+  const queued = Boolean(turn.queuedTurnId && !cancelled);
+  if (queued) await releaseQueuedTurn(id, turn.queuedTurnId!).catch(() => undefined);
+  const back = queued && turn.line ? [turn.line] : [];
+  const message = error instanceof Error ? error.message : String(error);
+  if (cancelled || !prompter || !turn.line || !isUsageExhaustedMessage(message)) return { cancelled, back };
+  const next = await carryOnAfterExhaustion(prompter, id, turn.line, turn.guard, turn.sent ?? turn.line);
+  if ('stayed' in next) return { cancelled, back: [...back, ...next.stayed] };
+  return { cancelled, ...next };
 }

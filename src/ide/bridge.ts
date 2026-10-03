@@ -24,19 +24,18 @@ import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { chatNamed } from '../session/options.js';
 import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
-import { claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
+import { afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
 import { compactPath } from '../harness/protocol/labels.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
-import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading } from '../harness/accounts/account-usage.js';
 import { usageResetLabel } from '../harness/accounts/usage-reading.js';
 import { setVendorSignInRunner, type VendorSignInRequest } from '../harness/transport/native/login.js';
 import { aiSessionLeave } from '../commands/ai/sessions.js';
-import { newConversation, newProviderConversation, releaseQueuedTurn } from '../commands/ai/conversations.js';
+import { newConversation, newProviderConversation } from '../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../commands/ai/harness.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
@@ -67,7 +66,7 @@ import { interactiveToolsPicker } from '../tui/pickers/tools.js';
 import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
 import { interactiveSwarmPicker } from '../tui/pickers/swarm.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
-import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
+import { type ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
@@ -495,32 +494,20 @@ export class IdeBridge {
         await this.runTurn(this.requireSession(), outcome.prompt, { echo: outcome.echo !== false });
       }
     } catch (error) {
-      const message = messageOf(error);
-      const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
-      // A queued turn that cannot start would otherwise stay at the head of
-      // the queue and fail identically forever.
-      if (options.queuedTurnId && !cancelled) await releaseQueuedTurn(id, options.queuedTurnId).catch(() => undefined);
-      /** What goes back to the composer: a queued message that was not
-       * carried on, and any queued behind it that could not run either. */
-      let back = options.queuedTurnId && !cancelled ? [line] : [];
-      if (!cancelled && isUsageExhaustedMessage(message)) {
-        // Out of usage on every account here, a queued message as much as a
-        // typed one: once more on this provider if an account came back,
-        // otherwise the harnesses that still have some.
-        const next = await carryOnAfterExhaustion(this.prompter, id, line, this.exhaustionGuard, this.sentPrompt ?? line);
-        if ('retry' in next) {
-          await this.execute(next.retry, {});
-          return;
-        }
-        if ('moved' in next) {
-          await this.switchTo(next.moved.id);
-          // No prompt: another window already carried this turn on there.
-          if (next.moved.prompt !== undefined) await this.execute(next.moved.prompt, {});
-          return;
-        }
-        back = [...back, ...next.stayed];
+      const next = await afterTurnFailure(this.prompter, id, error, {
+        line, sent: this.sentPrompt ?? line, guard: this.exhaustionGuard, ...(options.queuedTurnId ? { queuedTurnId: options.queuedTurnId } : {}),
+      });
+      if ('retry' in next) {
+        await this.execute(next.retry, {});
+        return;
       }
-      if (back.length) this.channel.send({ type: 'restore-draft', text: back.join('\n\n') });
+      if ('moved' in next) {
+        await this.switchTo(next.moved.id);
+        // No prompt: another window already carried this turn on there.
+        if (next.moved.prompt !== undefined) await this.execute(next.moved.prompt, {});
+        return;
+      }
+      if (next.back.length) this.channel.send({ type: 'restore-draft', text: next.back.join('\n\n') });
       this.report(error);
     } finally {
       await this.emitSession().catch(() => undefined);
