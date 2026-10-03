@@ -21,6 +21,7 @@ import { chooseOption } from './choose.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
 import type { HarnessSession } from '../../session/model.js';
+import { withSessionLock } from '../../session/store/locks.js';
 
 /** An account that can take a turn now -- the one rule failover uses too. */
 export function accountHasUsage(account: AiHarnessAccount): boolean {
@@ -56,7 +57,7 @@ export function resumeInCandidates(
  * go or the user backs out (the chat then stays as it was). */
 export async function interactiveResumeInPicker(
   rl: HarnessPrompter, id: string, prompt: string, sent = prompt,
-): Promise<{ id: string; prompt: string } | undefined> {
+): Promise<ResumedIn | undefined> {
   // Index for every chat's last model; this chat's transcript is not needed
   // to list other harnesses with usage left.
   const state = await readState({ transcripts: [] });
@@ -85,19 +86,34 @@ export async function interactiveResumeInPicker(
       .filter((item) => item.nativeHarness === chosen.harness.command && item.model)
       .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
     const model = lastUsedModel ?? state.providerSettings[chosen.harness.provider]?.model ?? catalog.configured ?? null;
-    return continueIn(id, chosen.harness, account.id, model, prompt, sent);
+    return resumeInBranch(id, chosen.harness, account.id, model, prompt, sent);
   }
 }
 
-async function continueIn(
+/** Where "Resume in" took the conversation. `prompt` is what to send there;
+ * absent when another window already carried this turn on in that branch,
+ * which is then only followed. */
+export type ResumedIn = { id: string; prompt?: string };
+
+export async function resumeInBranch(
   id: string, harness: AiLocalHarnessDefinition, accountId: string, model: string | null, prompt: string, sent: string,
-): Promise<{ id: string; prompt: string }> {
-  // The branch carries the interrupted request and all progress recorded for
-  // it. Asking the new provider to continue avoids running that request a
-  // second time and preserves the partial answer and tool activity.
-  const nextPrompt = await interruptedTurnResumePrompt(id, prompt, sent);
-  const nextId = await newProviderConversation(id, harness.command, { accountId, model });
-  return { id: nextId, prompt: nextPrompt };
+): Promise<ResumedIn> {
+  // Under the source's lock: two windows following one turn that ran out
+  // both offer "Resume in", and each used to make its own branch and send
+  // the request again there.
+  return withSessionLock(id, async () => {
+    const state = await readState({ transcripts: [id] });
+    const pending = state.sessions.find((item) => item.id === id)?.pendingTurn;
+    const turn = pending?.startedAt;
+    const joined = turn ? state.sessions.find((item) => item.handoff?.fromSessionId === id && item.handoff.turn === turn) : undefined;
+    if (joined) return { id: joined.id };
+    // The branch carries the interrupted request and all progress recorded for
+    // it. Asking the new provider to continue avoids running that request a
+    // second time and preserves the partial answer and tool activity.
+    const nextPrompt = resumePromptForPendingTurn(pending, prompt, sent);
+    const nextId = await newProviderConversation(id, harness.command, { accountId, model, ...(turn ? { turn } : {}) });
+    return { id: nextId, prompt: nextPrompt };
+  });
 }
 
 /** `prompt` is what was typed, `sent` what the turn actually ran when that
@@ -130,7 +146,7 @@ export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'
  *    run them (each would fail the same way and offer this again). */
 export type ExhaustedTurnNext =
   | { retry: string }
-  | { moved: { id: string; prompt: string } }
+  | { moved: ResumedIn }
   | { stayed: string[] };
 
 /** The same-provider retry is at most once per interrupted turn. It is keyed

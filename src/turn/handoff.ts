@@ -20,13 +20,15 @@ export function createHandoffBranch(input: {
   now: string;
   id?: string;
   sourceDisplayName?: string;
+  /** The interrupted turn this branch carries on (see handoff.turn). */
+  turn?: string;
 }): HarnessSession {
   const sourceCommand = input.source.nativeHarness ?? input.source.route;
   const id = input.id ?? randomUUID();
   const base = input.source.name?.replace(/\s+\(from [^)]+\)$/i, '').trim();
   return {
     id, conversationId: conversationIdFor(input.source), parentSessionId: input.source.id,
-    handoff: { fromSessionId: input.source.id, fromHarness: sourceCommand, at: input.now },
+    handoff: { fromSessionId: input.source.id, fromHarness: sourceCommand, at: input.now, ...(input.turn ? { turn: input.turn } : {}) },
     route: 'local', accountId: input.accountId, provider: input.target.provider, model: input.model,
     effort: input.defaults.effort, permissionMode: input.defaults.permissionMode, accountFailover: input.defaults.accountFailover,
     workspace: input.source.workspace ?? process.cwd(), nativeHarness: input.target.command,

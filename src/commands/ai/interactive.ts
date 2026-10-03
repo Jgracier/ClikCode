@@ -398,6 +398,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     if ('stayed' in next) return next.stayed;
     if ('moved' in next) {
       id = next.moved.id;
+      // No prompt when another window already carried the turn on in that
+      // branch: the loop then follows its running turn instead of resending.
       resend = next.moved.prompt;
     } else resend = next.retry;
     notice = undefined;

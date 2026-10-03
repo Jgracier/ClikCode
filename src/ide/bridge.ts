@@ -572,7 +572,8 @@ export class IdeBridge {
         }
         if ('moved' in next) {
           await this.switchTo(next.moved.id);
-          await this.execute(next.moved.prompt, {});
+          // No prompt: another window already carried this turn on there.
+          if (next.moved.prompt !== undefined) await this.execute(next.moved.prompt, {});
           return;
         }
         back = [...back, ...next.stayed];
