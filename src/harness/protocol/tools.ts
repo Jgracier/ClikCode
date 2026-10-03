@@ -175,7 +175,7 @@ export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>>
   junie: { stream: 'structured', note: 'ACP tool updates carry the operation and input; vendor-specific names have not been verified live.' },
   mcode: { stream: 'structured', note: 'ACP tool updates carry the operation and input; vendor-specific names have not been verified live.' },
   auggie: { stream: 'structured', note: 'JSON turn; ACP tool events classify by name.' },
-  copilot: { stream: 'text', note: 'text-only turn output. ACP is declared for session identity, not for a tool stream, so no tool row is reachable.' },
+  copilot: { stream: 'structured', note: 'ACP agent_message_chunk and tool_call updates use the same response and tool rows as other ACP agents. The one-shot CLI fallback is text-only.' },
   aider: { stream: 'text', note: 'text-only turn output; the vendor CLI publishes no machine-readable tool events.' },
   hermes: { stream: 'structured', note: 'the turn is `hermes acp`, which emits tool_call updates (terminal is execute, delegate_task is the sub-agent). `chat --quiet` is the text fallback and has no tool events.' },
   openclaw: { stream: 'text', note: 'agent --local --json is one envelope (`final`) after the turn. Tool streaming exists only on `openclaw acp`, which requires a running Gateway and is not this turn.' },

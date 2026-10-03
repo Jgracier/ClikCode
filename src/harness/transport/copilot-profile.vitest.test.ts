@@ -39,5 +39,6 @@ describe.skipIf(process.platform === 'win32')('a Copilot account profile', () =>
 it('names a Copilot account by the GitHub login it signed in as', () => {
   const config = '// User settings belong in settings.json.\n{"firstLaunchAt":"x","lastLoggedInUser":{"host":"https://github.com","login":"octocat"},"loggedInUsers":[]}';
   expect(parseCopilotConfig(config)).toBe('octocat');
+  expect(parseCopilotConfig('{"lastLoggedInUser":{"host":"https://github.enterprise.example","login":"octocat"}}')).toBe('octocat@github.enterprise.example');
   expect(parseCopilotConfig('{"firstLaunchAt":"x"}')).toBeUndefined();
 });

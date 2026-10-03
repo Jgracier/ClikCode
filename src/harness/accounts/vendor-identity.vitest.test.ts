@@ -1,11 +1,71 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { AiLocalHarnessDefinition } from '../definition.js';
+import { matchingVendorAccount } from './labels.js';
 import {
   codexIdTokenEmail, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
-  parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser,
+  parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser, vendorAccountEmail,
 } from './vendor-identity.js';
 
 // Shapes copied from each vendor's real output on 2026-09-30, emails replaced.
 describe('vendor account email', () => {
+  it('uses the email Grok saves after browser consent for the account title', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'clikcode-grok-identity-'));
+    try {
+      mkdirSync(join(profile, '.grok'));
+      writeFileSync(join(profile, '.grok', 'auth.json'), JSON.stringify({
+        'https://auth.x.ai::user-id': { email: 'grok@example.com', accessToken: 'redacted' },
+      }));
+      expect(await vendorAccountEmail({ command: 'grok' } as AiLocalHarnessDefinition, profile)).toBe('grok@example.com');
+      expect(await vendorAccountEmail({ command: 'grok' } as AiLocalHarnessDefinition, join(profile, '.grok'))).toBeUndefined();
+      writeFileSync(join(profile, '.grok', 'auth.json'), JSON.stringify({
+        first: { email: 'grok@example.com' }, second: { email: 'other@example.com' },
+      }));
+      expect(await vendorAccountEmail({ command: 'grok' } as AiLocalHarnessDefinition, profile)).toBeUndefined();
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+  it('recognizes a Grok account whose older label hid its email, without merging an API key', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'clikcode-grok-match-'));
+    try {
+      mkdirSync(join(profile, '.grok'));
+      writeFileSync(join(profile, '.grok', 'auth.json'), JSON.stringify({ user: { email: 'grok@example.com' } }));
+      const harness = { command: 'grok', provider: 'xai' } as AiLocalHarnessDefinition;
+      const accounts = [
+        { id: 'key', provider: 'xai', label: 'grok@example.com', authKind: 'api-key' },
+        { id: 'older', provider: 'xai', label: 'Grok Build 2', authKind: 'vendor-cli', nativeProfile: { env: 'HOME', path: profile } },
+      ] as never;
+      expect((await matchingVendorAccount(accounts, harness, 'GROK@example.com'))?.id).toBe('older');
+      expect(await matchingVendorAccount(accounts, harness, 'different@example.com')).toBeUndefined();
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+  it('reads file-backed identities from each provider\'s actual profile root', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'clikcode-identities-'));
+    try {
+      const payload = Buffer.from(JSON.stringify({ email: 'codex@example.com' })).toString('base64url');
+      const files = [
+        ['codex', 'auth.json', { tokens: { id_token: `h.${payload}.s` } }, 'codex@example.com'],
+        ['gemini', '.gemini/google_accounts.json', { active: 'gemini@example.com' }, 'gemini@example.com'],
+        ['copilot', 'config.json', { lastLoggedInUser: { login: 'github-user' } }, 'github-user'],
+        ['cline', '.cline/data/settings/providers.json', { providers: { cline: { settings: { auth: { metadata: { userInfo: { email: 'cline@example.com' } } } } } } }, 'cline@example.com'],
+        ['junie', '.junie/secure_credentials.json', { secrets: [{ key: 'jb-account-stored', secret: JSON.stringify({ jbAccount: { email: 'junie@example.com' } }) }] }, 'junie@example.com'],
+      ] as const;
+      for (const [command, relative, data, expected] of files) {
+        const root = join(profile, command);
+        const file = join(root, relative);
+        mkdirSync(join(file, '..'), { recursive: true });
+        writeFileSync(file, JSON.stringify(data));
+        expect(await vendorAccountEmail({ command } as AiLocalHarnessDefinition, root), command).toBe(expected);
+      }
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
   it('reads Kiro whoami JSON', () => {
     expect(parseKiroWhoami('{"accountType":"SocialGoogle","email":"a@example.com"}')).toBe('a@example.com');
     expect(parseKiroWhoami('{"accountType":"BuilderId"}')).toBeUndefined();

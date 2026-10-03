@@ -41,10 +41,10 @@ function json(text: string): unknown {
   try { return JSON.parse(text); } catch { return undefined; }
 }
 
-/** Any non-empty string: the fields read this way hold the email and only
- * the email. */
+/** The email field of a vendor record. Reject malformed values instead of
+ * making them account names or deduplication keys. */
 function text(value: unknown): string | undefined {
-  return typeof value === 'string' && value ? value : undefined;
+  return email(value);
 }
 
 /** `kiro-cli whoami --format json` -> {"accountType":"SocialGoogle","email":...}.
@@ -95,9 +95,15 @@ export function parseJunieCredentials(text: string): string | undefined {
  * in the system keyring -- so the account is named by its GitHub login, which
  * still tells two accounts apart and merges a repeat sign-in of the same one. */
 export function parseCopilotConfig(text: string): string | undefined {
-  const parsed = json(text.replace(/^\s*\/\/.*$/gm, '')) as { lastLoggedInUser?: { login?: unknown } } | undefined;
+  const parsed = json(text.replace(/^\s*\/\/.*$/gm, '')) as { lastLoggedInUser?: { login?: unknown; host?: unknown } } | undefined;
   const login = parsed?.lastLoggedInUser?.login;
-  return typeof login === 'string' && login.trim() ? login.trim() : undefined;
+  if (typeof login !== 'string' || !login.trim()) return undefined;
+  const host = parsed?.lastLoggedInUser?.host;
+  if (typeof host !== 'string' || !host.trim()) return login.trim();
+  try {
+    const name = new URL(host).hostname.toLowerCase();
+    return name === 'github.com' ? login.trim() : `${login.trim()}@${name}`;
+  } catch { return undefined; }
 }
 
 /** OpenHands Cloud `GET /api/v1/users/me` -- the endpoint openhands_cli's own
@@ -193,12 +199,13 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   devin: ask(['auth', 'status'], parseDevinAuthStatus),
   codex: read((profilePath) => [join(under(profilePath, '.codex'), 'auth.json')], codexIdTokenEmail),
   // google_accounts.json names the signed-in Google account in `active`.
-  gemini: read((profilePath) => [join(under(profilePath, '.gemini'), 'google_accounts.json')],
+  gemini: read((profilePath) => [join(profilePath ?? homedir(), '.gemini', 'google_accounts.json')],
     (contents) => text((json(contents) as { active?: unknown } | undefined)?.active)),
   // auth.json is keyed by issuer::uuid; each entry carries a plain `email`.
-  grok: read((profilePath) => [join(under(profilePath, '.grok'), 'auth.json')], (contents) => {
+  grok: read((profilePath) => [join(profilePath ?? homedir(), '.grok', 'auth.json')], (contents) => {
     const entries = Object.values((json(contents) ?? {}) as Record<string, { email?: unknown } | null>);
-    return entries.map((entry) => text(entry?.email)).find(Boolean);
+    const emails = [...new Set(entries.map((entry) => text(entry?.email)?.toLowerCase()).filter((value): value is string => Boolean(value)))];
+    return emails.length === 1 ? emails[0] : undefined;
   }),
   // cli-config.json's authInfo.email, under XDG_CONFIG_HOME when that is set
   // -- which every ClikCode account profile sets -- and in ~/.cursor otherwise.
