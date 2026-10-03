@@ -8,12 +8,14 @@ import { disposeSessionState } from '../agent/session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from '../agent/testing.js';
 import { eventDiff } from '../agent/line-diff.js';
 import { toolFacts } from '../harness/protocol/activity-events.js';
-import { BroadcastObserver } from '../worker/broadcast-observer.js';
+import { FileCheckpointStore } from '../agent/file-checkpoints.js';
 import { resolveSlashCommand } from '../tui/slash/registry.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from './model.js';
-import { appendTurnChanges, readTurnChanges } from './turn-changes.js';
-import { undoLastTurn } from './undo-turn.js';
+import { appendTurnChanges, readTurnChanges, TurnRecorder } from './turn-changes.js';
+import { undoLastTurn as undoTurn } from './undo-turn.js';
+
+const undoLastTurn = (s: HarnessSession, options: { stateDir: string; who: string }) => undoTurn(s, { ...options, turnIsRunning: async () => false });
 
 let root: string;
 let cwd: string;
@@ -38,15 +40,28 @@ function session(id: string, route: HarnessSession['route']): HarnessSession {
 }
 
 /** One real turn of ClikCode's agent: its file tools write `cwd` and
- * snapshot what they overwrite. Returns the activity events it reported. */
-async function agentTurn(id: string, script: ScriptEntry[]): Promise<HarnessActivityEvent[]> {
+ * snapshot what they overwrite, recorded as runSessionTurn records it.
+ * Returns the activity events it reported. */
+async function agentTurn(id: string, script: ScriptEntry[], prompt = 'edit'): Promise<HarnessActivityEvent[]> {
   const events: HarnessActivityEvent[] = [];
+  const recorder = new TurnRecorder(prompt, 'agent');
+  recorder.start();
   await runGatewayHarnessTurn({
     sessionId: id, cwd, stateDir, homeDir: path.join(root, 'home'), userConfigDir: path.join(root, 'config'),
-    prompt: 'edit', permissionMode: 'bypass', modelClient: new ScriptedModelClient([...script, { text: 'Done.' }]),
-    onActivity: (event) => events.push(event),
+    prompt, permissionMode: 'bypass', modelClient: new ScriptedModelClient([...script, { text: 'Done.' }]),
+    onActivity: (event) => { events.push(event); recorder.add(event); },
   });
+  await recorder.finish(stateDir, id);
   return events;
+}
+
+/** A vendor turn as the turn journal sees it: every activity is fed to the
+ * turn's recorder, written when the turn ends. */
+async function reportTurn(id: string, events: HarnessActivityEvent[], prompt = 'edit'): Promise<void> {
+  const recorder = new TurnRecorder(prompt, 'reported');
+  recorder.start();
+  for (const event of events) recorder.add(event);
+  await recorder.finish(stateDir, id);
 }
 
 const read = (name: string): Promise<string> => fs.readFile(path.join(cwd, name), 'utf8');
@@ -102,17 +117,6 @@ describe("/undo on ClikCode's agent (file snapshots)", () => {
 });
 
 describe('/undo on a vendor harness (reported diffs)', () => {
-  /** A vendor turn as the worker sees it: the observer collects the diffs
-   * the calls reported and hands them over when the turn ends. */
-  async function reportTurn(id: string, events: HarnessActivityEvent[]): Promise<void> {
-    const recorded: Promise<void>[] = [];
-    const observer = new BroadcastObserver({ onTurnChanges: (changes) => { recorded.push(appendTurnChanges(stateDir, id, changes)); } });
-    observer.startTurn('working', 'edit');
-    for (const event of events) observer.activityEvent(event);
-    observer.endTurn();
-    await Promise.all(recorded);
-  }
-
   it("reverses the turn's edits newest first and removes a file it created", async () => {
     const s = session('vendor-1', 'local');
     await fs.writeFile(path.join(cwd, 'a.txt'), 'one\ntwo\nthree\n');
@@ -210,7 +214,7 @@ describe('/undo on a vendor harness (reported diffs)', () => {
     expect(await read('a.txt')).toBe('keep\nold, then mine\nkeep\n');
   });
 
-  it('works from the same diffs a real agent turn reports, through the worker observer', async () => {
+  it('works from the same diffs a real agent turn reports', async () => {
     const s = session('vendor-3', 'local');
     await fs.writeFile(path.join(cwd, 'a.txt'), 'hello\nworld\n');
     const events = await agentTurn('vendor-3-run', [
@@ -226,7 +230,114 @@ describe('/undo on a vendor harness (reported diffs)', () => {
 
   it('says why when the harness reported no edits', async () => {
     const s = session('vendor-4', 'local');
-    expect((await undoLastTurn(s, { stateDir, who: 'OpenCode' })).text).toMatch(/OpenCode has reported no file edits/);
+    expect((await undoLastTurn(s, { stateDir, who: 'OpenCode' })).text).toMatch(/^Nothing to undo: no turn in this conversation has recorded file edits/);
+  });
+});
+
+describe('/undo acts on the actual last turn', () => {
+  const edit = (name: string, from: string, to: string): HarnessActivityEvent => (
+    { kind: 'tool-done', id: `e-${name}-${to}`, label: `Edit ${name}`, diff: eventDiff(from, to, { path: name }) });
+
+  it('says the last turn made no edits instead of reaching back to an older one, then walks back naming it', async () => {
+    const s = session('walk-1', 'local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'new\n');
+    await reportTurn(s.id, [edit('a.txt', 'old', 'new')], 'change a to new');
+    await reportTurn(s.id, [], 'what does a.txt say');
+
+    const first = await undoLastTurn(s, { stateDir, who: 'OpenCode' });
+    expect(first.text).toMatch(/^Nothing undone: the turn "what does a\.txt say" made no edits ClikCode saw/);
+    expect(first.text).toMatch(/\/undo again undoes the turn "change a to new"/);
+    expect(await read('a.txt')).toBe('new\n');
+
+    const second = await undoLastTurn(s, { stateDir, who: 'OpenCode' });
+    expect(second.text).toMatch(/^Undid the turn "change a to new": its changes to 1 file/);
+    expect(await read('a.txt')).toBe('old\n');
+  });
+
+  it("does not undo an older agent turn's snapshots when the last agent turn made no edits", async () => {
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'A\n');
+    const s = session('walk-agent', 'clikcode-local');
+    await agentTurn(s.id, [
+      { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'write_file', args: { path: 'a.txt', content: 'A2\n' } }] },
+    ], 'rewrite a');
+    await agentTurn(s.id, [], 'just talk');
+    expect((await undoLastTurn(s, { stateDir, who: 'ClikCode Local' })).text).toMatch(/the turn "just talk" made no edits ClikCode saw/);
+    expect(await read('a.txt')).toBe('A2\n');
+    expect((await undoLastTurn(s, { stateDir, who: 'ClikCode Local' })).restored).toEqual([path.join(cwd, 'a.txt')]);
+    expect(await read('a.txt')).toBe('A\n');
+  });
+
+  it('undoes each turn with the store that recorded it, whatever route the conversation is on now', async () => {
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'A\n');
+    // An agent turn, then the conversation moves to a vendor harness.
+    await agentTurn('switch', [
+      { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+      { toolCalls: [{ name: 'write_file', args: { path: 'a.txt', content: 'A2\n' } }] },
+    ], 'agent edit');
+    await fs.writeFile(path.join(cwd, 'b.txt'), 'b-new\n');
+    await reportTurn('switch', [edit('b.txt', 'b-old', 'b-new')], 'vendor edit');
+    const onVendor = session('switch', 'local');
+    expect((await undoLastTurn(onVendor, { stateDir, who: 'OpenCode' })).restored).toEqual([path.join(cwd, 'b.txt')]);
+    expect(await read('b.txt')).toBe('b-old\n');
+    expect(await read('a.txt')).toBe('A2\n');
+    // Still on the vendor route: the agent turn is undone from its snapshots.
+    expect((await undoLastTurn(onVendor, { stateDir, who: 'OpenCode' })).restored).toEqual([path.join(cwd, 'a.txt')]);
+    expect(await read('a.txt')).toBe('A\n');
+  });
+
+  it('refuses while a turn is running in the conversation', async () => {
+    const s = session('running', 'local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'new\n');
+    await reportTurn(s.id, [edit('a.txt', 'old', 'new')]);
+    const refused = await undoTurn(s, { stateDir, who: 'OpenCode', turnIsRunning: async () => true });
+    expect(refused.text).toMatch(/^Not undone: a turn is running/);
+    expect(await read('a.txt')).toBe('new\n');
+    expect(await readTurnChanges(stateDir, s.id)).toHaveLength(1);
+  });
+
+  it('keeps every record when turns in several processes end together', async () => {
+    await Promise.all(Array.from({ length: 8 }, (_, index) => appendTurnChanges(stateDir, 'many', { at: new Date().toISOString(), prompt: `t${index}`, changes: [] })));
+    expect((await readTurnChanges(stateDir, 'many')).map((record) => record.prompt).sort()).toEqual(['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7']);
+  });
+});
+
+describe('/undo stays inside the workspace', () => {
+  it('refuses a reported path outside the workspace, through a symlink too', async () => {
+    const s = session('outside-1', 'local');
+    const elsewhere = path.join(root, 'elsewhere');
+    await fs.mkdir(elsewhere);
+    await fs.writeFile(path.join(elsewhere, 'x.txt'), 'new\n');
+    await fs.symlink(elsewhere, path.join(cwd, 'link'));
+    await reportTurn(s.id, [
+      { kind: 'tool-done', id: 'o1', label: 'Edit', diff: eventDiff('old', 'new', { path: path.join(elsewhere, 'x.txt') }) },
+      { kind: 'tool-done', id: 'o2', label: 'Edit', diff: eventDiff('new', 'newer', { path: 'link/x.txt' }) },
+      { kind: 'tool-done', id: 'o3', label: 'Edit', diff: eventDiff('old', 'new', { path: '../elsewhere/x.txt' }) },
+    ]);
+    const undone = await undoLastTurn(s, { stateDir, who: 'OpenCode' });
+    expect(undone.restored).toEqual([]);
+    expect(undone.conflicts).toHaveLength(3);
+    for (const conflict of undone.conflicts) expect(conflict.reason).toMatch(/outside this conversation's workspace/);
+    expect(await fs.readFile(path.join(elsewhere, 'x.txt'), 'utf8')).toBe('new\n');
+    // Never possible here: not kept to block the turns before it.
+    expect(await readTurnChanges(stateDir, s.id)).toEqual([]);
+  });
+
+  it("refuses an agent snapshot outside the workspace", async () => {
+    const s = session('outside-agent', 'gateway');
+    const elsewhere = path.join(root, 'elsewhere.txt');
+    await fs.writeFile(elsewhere, 'before\n');
+    const store = new FileCheckpointStore(stateDir);
+    const recorder = new TurnRecorder('write elsewhere', 'agent');
+    recorder.start();
+    await store.snapshot(s.id, 'turn-1', elsewhere);
+    await fs.writeFile(elsewhere, 'after\n');
+    await store.seal(s.id, 'turn-1');
+    await recorder.finish(stateDir, s.id);
+    const undone = await undoLastTurn(s, { stateDir, who: 'Gateway' });
+    expect(undone.restored).toEqual([]);
+    expect(undone.conflicts[0]?.reason).toMatch(/outside this conversation's workspace/);
+    expect(await fs.readFile(elsewhere, 'utf8')).toBe('after\n');
   });
 });
 

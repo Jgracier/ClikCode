@@ -43,11 +43,17 @@ export interface UndoResult {
 
 interface UndoOptions {
   roots?: readonly string[];
+  /** Exactly these turns (newest first), instead of the last `count`. */
+  turnIds?: readonly string[];
   /** Restore even files changed since the turn (the user said so). */
   force?: boolean;
 }
 
 const BASH_UNDO_CAVEAT = 'Only changes made through the file tools were reverted. Anything a shell command changed (generated files, installs, git operations) was NOT tracked and is unchanged.';
+
+class OutsideRootsError extends Error {
+  constructor() { super('outside the allowed roots (the conversation\'s workspace); not touched'); }
+}
 
 const RETAIN_TURNS = 50;
 const RETAIN_BYTES = 200 * 1024 * 1024;
@@ -175,7 +181,10 @@ export class FileCheckpointStore {
   undo(sessionId: string, count = 1, options: UndoOptions = {}): Promise<UndoResult> {
     return this.serial(async () => {
       const result: UndoResult = { turnIds: [], restored: [], deleted: [], failed: [], text: '' };
-      const turns = (await this.listTurns(sessionId)).reverse().slice(0, Math.max(1, Math.floor(count)));
+      const listed = (await this.listTurns(sessionId)).reverse();
+      const turns = options.turnIds
+        ? listed.filter((turn) => options.turnIds!.includes(turn.turnId))
+        : listed.slice(0, Math.max(1, Math.floor(count)));
       for (const turn of turns) {
         const manifest = await this.readManifest(sessionId, turn.turnId);
         if (!manifest) continue;
@@ -186,7 +195,9 @@ export class FileCheckpointStore {
             await this.restoreEntry(dir, entry, options);
             (entry.existed ? result.restored : result.deleted).push(entry.path);
           } catch (error) {
-            kept.unshift(entry);
+            // Outside the roots can never be restored here: dropped, or the
+            // turn would stay first in line for every /undo after it.
+            if (!(error instanceof OutsideRootsError)) kept.unshift(entry);
             result.failed.push({ path: String(entry.path), reason: error instanceof Error ? error.message : String(error) });
           }
         }
@@ -225,7 +236,7 @@ export class FileCheckpointStore {
       const rel = path.relative(realpathNearest(path.resolve(root)), target);
       return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
     })) {
-      throw new Error('refusing to restore outside the allowed roots');
+      throw new OutsideRootsError();
     }
     if (!options.force) {
       if (!entry.after) throw new Error('the turn did not finish recording its changes; restore it only if you are sure');

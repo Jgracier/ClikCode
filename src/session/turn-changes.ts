@@ -1,21 +1,36 @@
-/** The file changes each turn's tool calls REPORTED, kept on disk per
- * conversation, so `/undo` can reverse a vendor harness's edits from any
- * window -- the turn ran in the worker, `/undo` runs wherever it is typed.
+/** One record per turn that ran, kept on disk per conversation, so `/undo`
+ * acts on the conversation's actual last turn from any window -- the turn ran
+ * in a worker or a script, `/undo` runs wherever it is typed.
  *
- * ClikCode's own agent has real pre-image snapshots (agent/file-checkpoints.ts)
- * and /undo uses those for it; this log is what there is for a vendor, whose
- * edits ClikCode only sees as the diffs in its event stream. */
+ * Every turn is recorded where every turn path goes through (the turn
+ * journal, turn/turn-journal.ts), a turn with no edits too: otherwise /undo
+ * after a turn that changed nothing reached back to an older one while saying
+ * "the last turn". Each record names the store that owns its edits, fixed when
+ * the turn ran, so a conversation that switched harness undoes each turn with
+ * the store that recorded it:
+ *  - `agent`: ClikCode's own agent; real pre-image snapshots
+ *    (agent/file-checkpoints.ts) taken between `startedAt` and `at`.
+ *  - `reported`: a vendor harness; only the diffs its event stream reported
+ *    (`changes`). A record without `store` predates this and is `reported`. */
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { FileDiff } from '../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import { withFileLock } from './store/locks.js';
 import { safeRecordFileName } from './store/paths.js';
 
+export type TurnChangeStore = 'agent' | 'reported';
+
 export interface TurnChangeRecord {
+  /** When the turn ended. */
   at: string;
-  /** Every finished call's diffs, in the order made. */
+  startedAt?: string;
+  /** What the user sent, to name the turn /undo acts on. */
+  prompt?: string;
+  store?: TurnChangeStore;
+  /** Every finished call's reported diffs, in the order made. */
   changes: FileDiff[];
 }
 
@@ -24,6 +39,14 @@ const KEEP_TURNS = 20;
 
 function logPath(stateDir: string, sessionId: string): string {
   return path.join(stateDir, 'turn-changes', `${safeRecordFileName(sessionId)}.json`);
+}
+
+/** The log's own cross-process lock: a turn recording itself and an /undo's
+ * read-modify-write never interleave, whichever processes they run in. Not
+ * the session or state lock -- neither is needed, and an /undo must not wait
+ * on a turn's transcript writes. */
+export function withTurnChangesLock<T>(stateDir: string, sessionId: string, run: () => Promise<T>): Promise<T> {
+  return withFileLock(`${logPath(stateDir, sessionId)}.lock`, run);
 }
 
 export async function readTurnChanges(stateDir: string, sessionId: string): Promise<TurnChangeRecord[]> {
@@ -36,6 +59,7 @@ export async function readTurnChanges(stateDir: string, sessionId: string): Prom
   }
 }
 
+/** Replace the log. Call inside withTurnChangesLock. */
 export async function writeTurnChanges(stateDir: string, sessionId: string, records: readonly TurnChangeRecord[]): Promise<void> {
   const file = logPath(stateDir, sessionId);
   if (!records.length) { await fs.rm(file, { force: true }); return; }
@@ -45,19 +69,36 @@ export async function writeTurnChanges(stateDir: string, sessionId: string, reco
   await fs.rename(temporary, file);
 }
 
-/** One read-modify-write at a time in this process: two turns ending close
- * together must not drop one another's record. */
-let appending: Promise<unknown> = Promise.resolve();
-
-export function appendTurnChanges(stateDir: string, sessionId: string, changes: readonly FileDiff[]): Promise<void> {
-  if (!changes.length) return Promise.resolve();
-  const record = { at: new Date().toISOString(), changes: [...changes] };
-  const next = appending.then(async () => {
+/** Add one turn's record, under the log's lock. */
+export function appendTurnChanges(stateDir: string, sessionId: string, record: TurnChangeRecord): Promise<void> {
+  return withTurnChangesLock(stateDir, sessionId, async () => {
     const records = await readTurnChanges(stateDir, sessionId);
-    await writeTurnChanges(stateDir, sessionId, [...records, record]);
+    await writeTurnChanges(stateDir, sessionId, [...records, { ...record, changes: [...record.changes] }]);
   });
-  appending = next.catch(() => undefined);
-  return next;
+}
+
+/** One turn being recorded: fed the turn's activity, written when it ends. */
+export class TurnRecorder {
+  private readonly collector = new TurnChangeCollector();
+  private startedAt: string | undefined;
+
+  constructor(private readonly prompt: string, private readonly store: TurnChangeStore) {}
+
+  /** The turn really started (its journal opened): from here it is a turn
+   * of the conversation, and is recorded however it ends. */
+  start(): void { this.startedAt ??= new Date().toISOString(); }
+
+  add(event: HarnessActivityEvent): void { this.collector.add(event); }
+
+  /** Write the record; nothing for a turn that never started. */
+  async finish(stateDir: string, sessionId: string): Promise<void> {
+    if (!this.startedAt) return;
+    const startedAt = this.startedAt;
+    this.startedAt = undefined;
+    await appendTurnChanges(stateDir, sessionId, {
+      at: new Date().toISOString(), startedAt, prompt: this.prompt, store: this.store, changes: this.collector.take(),
+    });
+  }
 }
 
 /** Collects one turn's reported changes from its activity events. A call
