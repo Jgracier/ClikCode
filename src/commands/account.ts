@@ -341,9 +341,10 @@ export interface SignInSurface {
   suspend(): Promise<void>;
   resume(): void;
   activity?(message: string): void;
-  /** Wait on a link sign-in on screen, Esc cancelling it -- inside a running
-   * turn too, which startWaiting would reset. Returns the undo. */
-  linkWait?(label: string, cancel: () => void): () => void;
+  /** Wait on a link sign-in on screen, its link and code shown, Esc
+   * cancelling it -- inside a running turn too, which startWaiting would
+   * reset. */
+  linkWait?(label: string, cancel: () => void): { show(lines: readonly string[]): void; stop(): void };
 }
 
 /** Runs `work` -- a vendor's own sign-in -- with the terminal handed to it.
@@ -368,17 +369,23 @@ export async function withVendorTerminal<T>(
   if (harness.loginLink) {
     // The vendor runs in the background; its link and code are shown here.
     const controller = new AbortController();
-    const label = `waiting for you to sign in to ${name} in your browser · esc cancels`;
-    const stop = surface.linkWait?.(label, () => controller.abort()) ?? (() => surface.stopWaiting());
-    if (!surface.linkWait) surface.startWaiting(label);
+    const label = `waiting for you to sign in to ${name} in your browser`;
+    const wait = surface.linkWait?.(label, () => controller.abort());
+    if (!wait) surface.startWaiting(label);
     const local = hasLocalDisplay();
     let opened = false;
     const show = (link: LoginLink): void => {
       if (local && !opened) { opened = true; openLoginUrl(link.url); }
       if (!local) process.stdout.write(loginUrlNotice(link.url).clipboard);
-      surface.activity?.(`${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · code ${chalk.bold(link.code)}` : ''}`);
-      surface.activity?.(`${link.url} ${chalk.dim(local ? '· opened in your browser' : '· copied: open it on this device')}`);
+      const lines = [
+        `${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · confirm the code ${chalk.bold(link.code)}` : ''}`,
+        link.url,
+        chalk.dim(local ? 'opened in your browser' : 'link copied: open it on this device'),
+      ];
+      if (wait) wait.show(lines);
+      else for (const line of lines) surface.activity?.(line);
     };
+    const stop = (): void => { if (wait) wait.stop(); else surface.stopWaiting(); };
     try {
       const result = await withLinkSignInSurface({ show, signal: controller.signal }, work);
       stop();

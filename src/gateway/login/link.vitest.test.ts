@@ -12,6 +12,10 @@ describe('reading a link sign-in', () => {
     expect(extractLoginCode('To authenticate, visit https://github.com/login/device and enter code 3513-924C')).toBe('3513-924C');
     expect(extractLoginCode('', 'https://app.all-hands.dev/oauth/device/verify?user_code=3EQTT6UN')).toBe('3EQTT6UN');
     expect(extractLoginCode('Opening your browser to authenticate...')).toBeUndefined();
+    // Cursor: the UUID in its link is not a code.
+    expect(extractLoginCode('If your browser didn\'t open, use this link:\nhttps://cursor.com/loginDeepControl?challenge=Yb5&uuid=7002a169-0d5d-4763-9591-2632ba4782e7&mode=login',
+      'https://cursor.com/loginDeepControl?challenge=Yb5&uuid=7002a169-0d5d-4763-9591-2632ba4782e7&mode=login')).toBeUndefined();
+    expect(extractLoginCode('id 7002A169-0D5D-4763-9591-2632BA4782E7')).toBeUndefined();
   });
 
   it('finds sign-in links whose path names no auth word on a boundary', () => {
