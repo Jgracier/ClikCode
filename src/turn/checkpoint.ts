@@ -5,7 +5,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
 import type { HarnessSession } from '../session/model.js';
-import { normalizeImportedTranscript } from './failover-prompt.js';
+import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
 import type { LiveTurnSubmission } from './live-input.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
@@ -110,7 +110,9 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   const messages = normalizeImportedTranscript(session.messages ?? []);
   const pending = session.pendingTurn;
   if (!pending) return messages;
-  messages.push({ role: 'user', content: pending.prompt });
+  // A continuation's prompt is ClikCode's, not the user's: its answer
+  // follows the interrupted one directly.
+  if (pending.prompt !== INTERRUPTED_TURN_REQUEST) messages.push({ role: 'user', content: pending.prompt });
   const response = pending.response ?? '';
   let responseOffset = 0;
   for (const steer of [...(pending.steers ?? [])].sort((left, right) => (left.responseOffset ?? 0) - (right.responseOffset ?? 0))) {
