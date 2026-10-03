@@ -90,6 +90,8 @@ export type FromWebview =
   | { type: 'openLink'; href: string }
   /** Stop the link sign-in the card shows. */
   | { type: 'signInCancel'; id: string }
+  /** Open the sign-in card's link again. */
+  | { type: 'signInOpen'; url: string }
   | { type: 'openFile'; path: string; line?: number }
   | { type: 'request'; id: string; request: WebviewRequest }
   | { type: 'ui-response'; id: string; result: IdeUiResult }

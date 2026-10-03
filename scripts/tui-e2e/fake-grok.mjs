@@ -39,7 +39,12 @@ if (argv[0] === 'models' || argv.includes('--list-models')) { console.log('grok-
 if (argv[0] === 'login') {
   if (!process.stdin.isTTY || !process.stdout.isTTY) { console.log('not a tty'); process.exit(9); }
   console.log('To sign in, open this URL in your browser:\n  https://accounts.x.ai/oauth2/device?user_code=AB12-CD34\nConfirm this code in your browser:\n  AB12-CD34\nWaiting for authorization...');
-  setTimeout(() => process.exit(0), 2000);
+  // FAKE_LOGIN_HOLD: while that file exists (up to 30s) the browser has not
+  // answered yet, so a test can cancel the wait.
+  const started = Date.now();
+  const hold = process.env.FAKE_LOGIN_HOLD;
+  const tick = () => (hold && existsSync(hold) && Date.now() - started < 30_000 ? setTimeout(tick, 100) : process.exit(0));
+  setTimeout(tick, 2000);
 } else if (['logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
 
 // `grok agent stdio`: the ACP agent ClikCode starts for Grok since it moved

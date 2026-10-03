@@ -1,5 +1,6 @@
 /** Approval diffs as diff editors; sign-ins in terminals. The bridge's
  * questions (the terminal pickers) are drawn in the chat (webview/sheet.tsx). */
+import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
 
 /** Before/after documents for approval diffs, served from memory. */
@@ -90,4 +91,23 @@ export function runInTerminal(options: { name: string; node: string; args: strin
       else reject(new Error(code === undefined ? `${options.name} was closed before it finished` : `${options.name} ended with exit code ${code}`));
     });
   });
+}
+
+/** Open a sign-in link in this computer's browser without VS Code's "open
+ * the external website?" prompt, which is one more step than the CLI asks
+ * for. Only where the extension host IS this computer: over Remote-SSH it
+ * runs on the server, and openExternal is what reaches the user's browser
+ * (asking once per domain). Falls back to openExternal if no opener runs. */
+export function openSignInLink(url: string): void {
+  const viaVsCode = (): void => { void vscode.env.openExternal(vscode.Uri.parse(url)); };
+  if (vscode.env.remoteName || !/^https?:\/\//.test(url)) { viaVsCode(); return; }
+  // rundll32, not `cmd /c start`: cmd would split the URL at each `&`.
+  const [command, args] = process.platform === 'darwin' ? ['open', [url]]
+    : process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]]
+      : ['xdg-open', [url]];
+  try {
+    const child = spawn(command as string, args as string[], { stdio: 'ignore', detached: true });
+    child.on('error', viaVsCode);
+    child.unref();
+  } catch { viaVsCode(); }
 }
