@@ -523,6 +523,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const columns = output.columns || 0;
     if (columns === this.transcriptColumns) return;
     this.transcriptColumns = columns;
+    this.emitted.requestReseed();
+  }
+
+  /** Empty the transcript before the conversation is written again. What is
+   * above the live region is only ever the conversation being shown: another
+   * one, or this one at an old width, is dropped -- not pushed up behind a
+   * screenful of blank rows, where scrolling up found it. */
+  private clearTranscript(): void {
     // Line numbers stay unique across the rewrite, so nothing that holds one
     // can land on a row it did not mean.
     this.alternateTrimmed += this.alternateTranscript.length;
@@ -533,7 +541,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.alternateScrollback = 0;
     this.stopSelectionScroll();
     this.selection = undefined;
-    this.emitted.requestReseed(false);
   }
 
   /** Rows retired out of the viewport, kept so the conversation above the
@@ -666,8 +673,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.activityEntries = [];
       this.planEntries = [];
       this.panelState = undefined;
-      // The previous conversation is scrolled up into scrollback -- preserved,
-      // not erased -- so the new one starts on a clean viewport.
+      // The conversation opened is the only one in the transcript.
       this.emitted.requestReseed();
       // Rewritten whole, a turn still running included, once it is followed.
       this.steppedOut = undefined;
@@ -1585,11 +1591,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
     let reseeding = Boolean(this.emitted.pendingReseed());
     const applyReseed = (): void => {
-      if (this.emitted.pendingReseed() === 'scroll-away') {
-        finished.push(...Array.from({ length: targetHeight }, () => ''));
-        this.lastFinishedRow = '';
-      }
       if (this.emitted.pendingReseed()) {
+        finished.length = 0;
+        this.clearTranscript();
         // The first frame of the process, of a newly opened session, or at a
         // new width writes a recent window of the conversation -- enough to
         // fill the viewport and scroll a little. A full-history rewrite made
@@ -1618,8 +1622,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // alternateTranscript (same trade-off as its row cap). The first frame
     // then costs O(viewport), not O(history).
     if (reseeding && firstUnwritten === 0 && persistedMessages.length > 0) {
-      const budget = Math.max(targetHeight * 3, 96);
-      const from = reseedStartIndex(persistedMessages, budget);
+      const from = reseedStartIndex(persistedMessages, ALTERNATE_TRANSCRIPT_ROWS, conversationInner);
       if (from > 0) {
         for (let index = 0; index < from; index += 1) this.emitted.wrote(persistedMessages[index]!);
         this.emitted.settle(from);

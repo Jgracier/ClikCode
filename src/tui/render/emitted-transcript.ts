@@ -14,10 +14,6 @@
 
 import { firstUnwritten, liveAssistantAt, materializedPendingTurn, messageKey, type TranscriptMessage } from './transcript-seam.js';
 
-/** Why the whole conversation is about to be written again. `first` is the
- *  first frame of a process or a newly opened session; `scroll-away` is a
- *  return from scrollback, which needs a blank screen pushed first. */
-export type ReseedReason = false | 'first' | 'scroll-away';
 
 export type ResumePoint = {
   /** Index in the given list to start writing at. */
@@ -37,7 +33,7 @@ export class EmittedTranscript {
   private lastMessage?: string;
   private readonly activity = new Set<number>();
   private readonly retired = new Set<string>();
-  private reseed: ReseedReason = 'first';
+  private reseed = true;
   /** Where the live answer sits in the list, while it is still streaming. */
   liveAssistantIndex?: number;
   /** Activity older than this belongs to a previous turn. */
@@ -48,7 +44,7 @@ export class EmittedTranscript {
     if (this.lastMessage !== undefined && !persisted.some((message) => messageKey(message) === this.lastMessage)) {
       // The last row painted is not in the journal. Continuing from a count
       // would skip or repeat it. The list is the source: rewrite it.
-      this.requestReseed(this.messages > 0);
+      this.requestReseed();
       return { firstUnwritten: 0, materializedPendingTurn: false, diverged: true };
     }
     const seam = firstUnwritten(persisted, this.messages, this.lastMessage);
@@ -59,14 +55,15 @@ export class EmittedTranscript {
     };
   }
 
-  pendingReseed(): ReseedReason {
+  /** Whether the whole conversation is about to be written again: the first
+   *  frame, a newly opened session, a new width, or a list that no longer
+   *  holds what is on screen. The caller starts from an empty transcript. */
+  pendingReseed(): boolean {
     return this.reseed;
   }
 
-  /** A return from scrollback rewrites everything; the very first frame does
-   *  too, but has nothing above it to clear. */
-  requestReseed(everWritten = this.messages > 0): void {
-    this.reseed = everWritten ? 'scroll-away' : 'first';
+  requestReseed(): void {
+    this.reseed = true;
   }
 
   /** Forget everything written, because it is all about to be written again.
