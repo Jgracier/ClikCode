@@ -101,6 +101,49 @@ interface TranscriptWriteOptions {
    * it is stored as it is instead of copied again. Its unchanged history is
    * then recognised by identity on the next write (commonPrefixLength). */
   frozen?: boolean;
+  /** The transcript the writer last agreed with on disk. Given, `next` is
+   * merged with whatever another process stored since (mergeTranscripts)
+   * instead of replacing it. */
+  base?: SessionTranscript;
+}
+
+/** Each file this process stored, and the transcript it stored verbatim. A
+ * file on disk that is still the one written from the writer's base needs no
+ * merge -- the common case, a checkpoint following its own last write. */
+const storedFrom = new WeakMap<SessionFile, SessionTranscript>();
+
+/** Three-way merge of a transcript: `base` the writer last agreed with,
+ * `next` the writer's copy, `disk` what is stored now.
+ *
+ * - Disk still holds `base`: `next`.
+ * - The writer only appended to `base`: disk as it is, then the writer's
+ *   appended messages (any it shares with disk's own appends are not
+ *   repeated). Two processes appending to one chat both keep theirs.
+ * - The writer rewrote history (undo, clear) and disk only appended: the
+ *   writer's history, then disk's appends -- messages the writer never saw
+ *   are never silently dropped.
+ * - Both rewrote: the writer's, the newer write, wins.
+ *
+ * The pending turn is the writer's if it changed it, otherwise disk's. */
+export function mergeTranscripts(base: SessionTranscript, next: SessionTranscript, disk: SessionTranscript): SessionTranscript {
+  const before = base.messages ?? [];
+  const mine = next.messages ?? [];
+  const theirs = disk.messages ?? [];
+  const iAppended = commonPrefixLength(before, mine) === before.length;
+  const theyAppended = commonPrefixLength(before, theirs) === before.length;
+  let messages: TranscriptMessage[] | undefined;
+  if (theyAppended && theirs.length === before.length) messages = next.messages;
+  else if (iAppended) {
+    const ours = mine.slice(before.length);
+    const theirAppends = theyAppended ? theirs.slice(before.length) : [];
+    messages = [...theirs, ...ours.slice(commonPrefixLength(theirAppends, ours))];
+  } else if (theyAppended) messages = [...mine, ...theirs.slice(before.length)];
+  else messages = next.messages;
+  const pendingTurn = sameData(base.pendingTurn, next.pendingTurn) ? disk.pendingTurn : next.pendingTurn;
+  return {
+    ...(messages !== undefined ? { messages } : {}),
+    ...(pendingTurn !== undefined ? { pendingTurn } : {}),
+  };
 }
 
 /** Below this, a reference saves nothing worth the indirection. */
@@ -116,14 +159,25 @@ const MIN_SHARED_MESSAGES = 2;
 export async function writeSessionTranscript(_held: StateLockHeld, id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
   const previous = await loadSessionFile(id);
   const previousMessages = previous ? await materializedMessages(previous, new Set([id])) : undefined;
+  const verbatim = next;
+  if (options.base && previous && storedFrom.get(previous) !== options.base) {
+    next = mergeTranscripts(options.base, next, {
+      ...(previousMessages !== undefined ? { messages: previousMessages } : {}),
+      ...(previous.pendingTurn !== undefined ? { pendingTurn: previous.pendingTurn } : {}),
+    });
+  }
   if (previous && !keepsHistory(previousMessages, next.messages)) await materializeChildrenOf(id);
   if (transcriptIsEmpty(next)) {
     await removeSessionFile(id);
     return;
   }
   const parentId = options.parentSessionId ?? previous?.transcriptRef?.sessionId;
-  const file: SessionFile = (parentId && await referenceInto(parentId, id, next)) || { v: 1 as const, id, ...next };
-  await storeSessionFile(id, options.frozen ? file : cloneData(file));
+  const built: SessionFile = (parentId && await referenceInto(parentId, id, next)) || { v: 1 as const, id, ...next };
+  const file = options.frozen ? built : cloneData(built);
+  await storeSessionFile(id, file);
+  // A merged write stored something other than the writer's copy: the next
+  // write from that copy must merge again, not take the fast path.
+  if (next === verbatim) storedFrom.set(file, verbatim);
 }
 
 /** `next` stored as a reference into `parentId`'s history, when that shares
