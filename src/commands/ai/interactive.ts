@@ -9,11 +9,9 @@
  */
 import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent } from '../../session/route.js';
-import { ensureTurboFitForTurn } from './turbofit.js';
-import { ensureLocalModelForTurn, reconcileLocalModelLeases } from './local-model.js';
+import { reconcileLocalModelLeases } from './local-model.js';
 import { chatNamed } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
-import { ensureSessionOnDisk } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
 import { isShellCommandLine, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
@@ -46,7 +44,7 @@ import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
 import { SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
-import { activateSession, claimConversation, leaveConversation, openConversation, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
+import { activateSession, claimConversation, leaveConversation, openConversation, prepareTurn, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
@@ -510,21 +508,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
        * prompts (/review, /init, /compact) are not shown as if typed. */
       const runInteractiveTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> => {
         sentPrompt = promptText;
-        // The worker is another process. A draft is written now, because this
-        // message is what makes the chat a conversation.
-        if (terminal) await ensureSessionOnDisk(targetId);
-        const activeState = await readState({ transcripts: [targetId] });
-        const active = activeState.sessions.find((item) => item.id === targetId);
+        // A draft is written now, because this message is what makes the chat
+        // a conversation; the waiting line says what a local model is doing.
+        const { state: activeState, active } = await prepareTurn(targetId);
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
-        // Held from this process, not the turn's worker: the worker outlives
-        // the terminal, and a TurboFit model stops when the terminal closes.
-        const activeHarness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;
-        if (active && activeHarness) {
-          await ensureTurboFitForTurn(activeHarness, activeState.accounts.find((item) => item.id === active.accountId), targetId, active.model);
-        }
-        // Likewise a ClikCode Local model: loaded here, with its progress on
-        // the waiting line, and held by this terminal rather than the worker.
-        await ensureLocalModelForTurn(active);
         if (active && terminal) {
           // The submitted prompt is the prompter's for the whole turn, not a
           // message and not part of this snapshot: it is not a message yet, and
