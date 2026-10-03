@@ -48,3 +48,29 @@ describe('a row action that fails', () => {
     expect(done).toEqual(['acct:disconnect']);
   });
 });
+
+describe('Del from a keyboard without forward Delete', () => {
+  const row = { label: 'Grok Build 2', value: 'acct', deleteAction: { label: 'Disconnect', value: 'disconnect' } };
+
+  it('asks to delete on Backspace when nothing is typed (the Mac and iPhone "delete" key)', async () => {
+    const asked: string[] = [];
+    const host = { paint: () => {}, clearFrame: () => {}, setSelecting: () => {}, select: async (title: string) => { asked.push(title); return true as never; } };
+    const done: string[] = [];
+    const picked = runOptionPicker(host, 'Accounts', [row], async (value, action) => { done.push(`${value}:${action}`); });
+    pressKey('\u007f');
+    await expect(picked).resolves.toBeUndefined();
+    expect(asked).toEqual(['Disconnect Grok Build 2?']);
+    expect(done).toEqual(['acct:disconnect']);
+  });
+
+  it('still shortens a typed filter with Backspace instead of asking', async () => {
+    const asked: string[] = [];
+    const host = { paint: () => {}, clearFrame: () => {}, setSelecting: () => {}, select: async (title: string) => { asked.push(title); return true as never; } };
+    const picked = runOptionPicker(host, 'Accounts', [row]);
+    pressKey('G');
+    pressKey('\u007f');
+    expect(asked).toEqual([]);
+    pressKey('\r');
+    await expect(picked).resolves.toBe('acct');
+  });
+});

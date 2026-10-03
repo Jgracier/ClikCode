@@ -245,7 +245,8 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
       // user's message. "Scrolling does nothing" or "the key does nothing"
       // has causes that look identical from here (nothing sent, an encoding
       // we do not decode, a key decoded and dropped); the log tells them apart.
-      if (key.startsWith('\u001b') || key.charCodeAt(0) < 0x20) {
+      // Backspace too: it is what a Mac or iPhone "delete" key sends.
+      if (key.startsWith('\u001b') || key.charCodeAt(0) < 0x20 || key === '\u007f') {
         logCursorEvent(`input ${JSON.stringify(key)} screen=${output.columns ?? '?'}x${output.rows ?? '?'}`);
       }
       // A DSR reply is the terminal talking back, not the user typing.
