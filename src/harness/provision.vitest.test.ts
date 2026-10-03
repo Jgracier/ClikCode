@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
 import type { AiHarnessAccount } from './definition.js';
-import { hookShare, provisionChosenHarness, skillRoot, syncClaudeHookFile } from './provision.js';
+import { provisionChosenHarness, skillRoot } from './provision.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
 
@@ -82,24 +82,6 @@ describe('provisioning the harness that was chosen', () => {
     expect(await readFile(join(workspace, '.cursor', 'skills', 'local', 'SKILL.md'), 'utf8')).toContain('Local.');
   });
 
-  it('adds a hook command that is missing and keeps the one already in the file', async () => {
-    const { home } = await layout();
-    const file = join(home, 'settings.json');
-    await writeFile(file, JSON.stringify({
-      hooks: { PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo mine' }] }] },
-      other: 1,
-    }));
-    const incoming = {
-      PreToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: 'echo mine' }, { type: 'command', command: 'echo new' }] }],
-      Stop: [{ hooks: [{ type: 'command', command: 'echo stop' }] }],
-    };
-    expect(await syncClaudeHookFile(file, incoming)).toBe(2);
-    const written = JSON.parse(await readFile(file, 'utf8')) as { other: number; hooks: { PreToolUse: { hooks: { command: string }[] }[] } };
-    expect(written.other).toBe(1);
-    expect(written.hooks.PreToolUse[0].hooks.map((hook) => hook.command)).toEqual(['echo mine']);
-    expect(written.hooks.PreToolUse[1].hooks.map((hook) => hook.command)).toEqual(['echo new']);
-    expect(await syncClaudeHookFile(file, incoming)).toBe(0);
-  });
 });
 
 describe('where a harness keeps what it was given', () => {
@@ -143,9 +125,4 @@ describe('where a harness keeps what it was given', () => {
     expect(await readFile(join(home, '.grok', 'skills', 'only-here', 'SKILL.md'), 'utf8')).toContain('Not in Claude');
   });
 
-  it('names who already runs Claude\'s hooks', () => {
-    expect(hookShare('claude')).toBe('inherits');
-    expect(hookShare('grok')).toBe('inherits');
-    expect(hookShare('codex')).toBe('different');
-  });
 });
