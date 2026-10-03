@@ -13,7 +13,7 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
-import { newProviderConversation } from '../../commands/ai/conversations.js';
+import { moveQueuedTurns, newProviderConversation, takeQueuedMessages } from '../../commands/ai/conversations.js';
 import { preferredAccountId } from '../../commands/ai/preferred-account.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
@@ -99,11 +99,50 @@ async function continueIn(
 }
 
 export async function interruptedTurnResumePrompt(id: string, prompt: string): Promise<string> {
-  const state = await readState({ transcripts: [] });
+  // The interrupted turn is kept in the conversation's transcript file: read
+  // without it there was never a pending turn, the original words were sent
+  // again, and the branch -- which carries that turn -- ran the request twice.
+  const state = await readState({ transcripts: [id] });
   const pending = state.sessions.find((item) => item.id === id)?.pendingTurn;
   return resumePromptForPendingTurn(pending, prompt);
 }
 
 export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'], prompt: string): string {
   return pending?.prompt === prompt ? INTERRUPTED_TURN_REQUEST : prompt;
+}
+
+/** What carries a turn on after it ran out of usage on every account:
+ *  - `retry`: an account of this provider got its quota back after failover
+ *    looked, so the turn goes again here, once;
+ *  - `moved`: "Resume in" branched the conversation to another provider,
+ *    with what was queued behind the turn;
+ *  - `stayed`: nothing carried it on; `queued` are the messages that were
+ *    typed behind it, taken back for the composer when nothing here could
+ *    run them (each would fail the same way and offer this again). */
+export type ExhaustedTurnNext =
+  | { retry: string }
+  | { moved: { id: string; prompt: string } }
+  | { stayed: string[] };
+
+/** The same-provider retry is at most once per interrupted turn. It is keyed
+ * on what was SENT, in the conversation it was sent in: the retry sends the
+ * continuation, not the original words, so keying on the original let the
+ * continuation's own exhaustion retry a second time. */
+export interface ExhaustionRetryGuard { autoResent?: string }
+
+export async function carryOnAfterExhaustion(
+  rl: HarnessPrompter, id: string, prompt: string, guard: ExhaustionRetryGuard,
+): Promise<ExhaustedTurnNext> {
+  const sent = (text: string): string => `${id}\n${text}`;
+  if (guard.autoResent !== sent(prompt) && await sameProviderCanTakeTurn(id)) {
+    const continuation = await interruptedTurnResumePrompt(id, prompt);
+    guard.autoResent = sent(continuation);
+    return { retry: continuation };
+  }
+  const moved = await interactiveResumeInPicker(rl, id, prompt);
+  if (moved) {
+    await moveQueuedTurns(id, moved.id);
+    return { moved };
+  }
+  return { stayed: await sameProviderCanTakeTurn(id) ? [] : await takeQueuedMessages(id) };
 }
