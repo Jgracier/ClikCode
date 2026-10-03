@@ -679,7 +679,26 @@ async function resolveLocalModelFor(
   return resolveNativeModel(harness, state.accounts.find((item) => item.id === account.id) as never);
 }
 
-export async function aiSessionCommand(id: string, input: string, inferred = false): Promise<string> {
+/** `!<command>`: run exactly what was typed in the chat's workspace, and
+ * record its output as a transcript message (so the model sees it next turn)
+ * and a shell note (so a resumed native-harness thread, which never replays
+ * ClikCode's transcript, still does; see shellContextBlock in
+ * turn/session-turn.ts). `signal` kills the command's process tree. */
+export async function runShellLine(id: string, command: string, signal?: AbortSignal): Promise<ShellNote> {
+  const workspace = (await readState()).sessions.find((item) => item.id === id)?.workspace ?? process.cwd();
+  const result = await runShellCommand(command, workspace, signal);
+  const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
+  const state = await readState();
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  session.messages = [...(session.messages ?? []), { role: 'user', content: shellMessageContent(note) }];
+  session.shellNotes = [...(session.shellNotes ?? []), note];
+  session.updatedAt = new Date().toISOString();
+  await writeState(state);
+  return note;
+}
+
+export async function aiSessionCommand(id: string, input: string, options: { inferred?: boolean; signal?: AbortSignal } = {}): Promise<string> {
   const state = await readState();
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
@@ -691,12 +710,7 @@ export async function aiSessionCommand(id: string, input: string, inferred = fal
   if (isShellCommandLine(text)) {
     const command = text.slice(1).trim();
     if (!command) throw new Error('Type `!<command>` to run it, e.g. `!git status`.');
-    const result = await runShellCommand(command, session.workspace ?? process.cwd());
-    const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
-    session.messages = [...(session.messages ?? []), { role: 'user', content: shellMessageContent(note) }];
-    session.shellNotes = [...(session.shellNotes ?? []), note];
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
+    const note = await runShellLine(id, command, options.signal);
     emitHarnessOutput({ panel: 'shell', text: shellMessageContent(note) });
     return id;
   }
@@ -708,11 +722,11 @@ export async function aiSessionCommand(id: string, input: string, inferred = fal
     // `/model claude-opus-5` when only one account publishes that model --
     // selects it and runs, instead of refusing. Once only: a selection that
     // still leaves the command unavailable is a real refusal.
-    if (!availability.available && availability.needs === 'provider' && !inferred) {
+    if (!availability.available && availability.needs === 'provider' && !options.inferred) {
       const implied = impliedHarnessCommand(route, state.accounts, localHarnessForProvider);
       if (implied) {
         await aiHarnessSelect(implied, id);
-        return aiSessionCommand(id, input, true);
+        return aiSessionCommand(id, input, { ...options, inferred: true });
       }
     }
     if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
