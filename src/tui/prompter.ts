@@ -139,6 +139,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
+  private clearNextFrame = false;
   private queuedDraft?: string;
   private waitingDraft = '';
   private waitingCursor = 0;
@@ -262,6 +263,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Rebuild the whole viewport from our retained state, including the live
     // answer and any approval, without changing the turn or the draft.
     if (key === '\u000c') {
+      this.clearNextFrame = true;
       this.forgetScreenPosition();
       this.paintWaiting();
       return;
@@ -1966,7 +1968,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // screen first exposes an empty frame on terminals that do not implement
     // synchronized updates, especially when a reply settles or the phone
     // changes height. Autowrap goes off before any row is drawn.
-    const draw = updates.length ? `\u001b[?25l\u001b[?7l${updates.join('')}` : '';
+    const clear = this.clearNextFrame ? '\u001b[2J\u001b[H' : '';
+    this.clearNextFrame = false;
+    const draw = updates.length ? `\u001b[?25l\u001b[?7l${clear}${updates.join('')}` : '';
     const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
       : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
     // One synchronized update (DEC 2026): a terminal that supports it shows
@@ -2457,6 +2461,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       settings?.signal?.addEventListener('abort', interrupt, { once: true });
       const handleKey = (key: string): void => {
         if (key === '\u000c') {
+          this.clearNextFrame = true;
           this.forgetScreenPosition();
           return draw();
         }
