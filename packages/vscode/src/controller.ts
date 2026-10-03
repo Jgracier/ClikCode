@@ -15,7 +15,7 @@ import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type R
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { applyHunks, fileHunks, turnChanges, unwindChanges } from './text';
 import { readFile } from 'node:fs/promises';
-import { DiffDocuments, fileNameIn, runInTerminal } from './ui';
+import { DiffDocuments, fileNameIn, openSignInLink, runInTerminal } from './ui';
 import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
 import { mentionFromUri, pastedReference, searchWorkspaceFiles } from './mentions';
 import type { Mention } from './webview-protocol';
@@ -326,7 +326,13 @@ export class ClikCodeController implements vscode.Disposable {
       if (this.bridge !== bridge) return;
       const resume = sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
       const mode = resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue';
-      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}) });
+      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}) }).catch(async (error: unknown) => {
+        // A new chat nothing was sent in was never stored: reconnecting (a
+        // rebuild, clikcode.restart) has nothing to resume, and failing here
+        // left the panel dead. It is still a new chat.
+        if (!resume || !/no chat matches/.test(error instanceof Error ? error.message : String(error))) throw error;
+        await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode: 'new' });
+      });
     } catch (error) {
       if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
       const message = error instanceof Error ? error.message : String(error);
@@ -404,11 +410,11 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       }
       case 'sign-in-link':
-        // Opened once, on this machine: VS Code is always on a computer, and
-        // over Remote-SSH openExternal still opens the browser here.
+        // Opened once, in this computer's browser: VS Code is always on a
+        // computer, and over Remote-SSH openExternal still opens it here.
         if (event.url && !event.done && !this.openedSignIns.has(event.id)) {
           this.openedSignIns.add(event.id);
-          void vscode.env.openExternal(vscode.Uri.parse(event.url));
+          openSignInLink(event.url);
         }
         if (event.done) this.openedSignIns.delete(event.id);
         return;
@@ -813,6 +819,9 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       case 'openLink':
         if (/^(https?:|mailto:)/i.test(message.href)) void vscode.env.openExternal(vscode.Uri.parse(message.href));
+        return;
+      case 'signInOpen':
+        openSignInLink(message.url);
         return;
       case 'signInCancel':
         this.bridge?.send({ type: 'sign-in-cancel', id: message.id });

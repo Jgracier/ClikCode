@@ -3,7 +3,7 @@
  * free model) and back, driven through the page the way a user drives it. */
 import * as assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
@@ -87,6 +87,39 @@ export function chatSuite(): void {
       await screenshot('settings', 1000);
       await key(api, '.sheet', 'Escape');
       await waitFor(api, '#composer-input', 'back to the chat');
+    });
+
+    it('signs in to a link provider inside the panel: a card with the code, the link opened once, no terminal', async () => {
+      const opened = (): string[] => (existsSync(process.env.CLIKCODE_IT_OPENED!) ? readFileSync(process.env.CLIKCODE_IT_OPENED!, 'utf8').trim().split('\n').filter(Boolean) : []);
+      const path = process.env.PATH;
+      process.env.PATH = `${process.env.CLIKCODE_IT_FAKE_BIN}:${path ?? ''}`;
+      await vscode.commands.executeCommand('clikcode.restart');
+      await api.ready();
+      try {
+      const terminals = vscode.window.terminals.length;
+      await api.send('/accounts add grok');
+      const code = await waitFor(api, '#sign-in-link [data-code]', 'the sign-in card with its code', 30_000);
+      if (code.text.trim() !== 'AB12-CD34') throw new Error(`the card shows code "${code.text}"`);
+      await screenshot('sign-in-card', 300);
+      await waitFor(api, '#sign-in-link', 'the card gone once signed in', 30_000, (found) => found.count === 0);
+      if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');
+      const links = opened();
+      if (links.length !== 1 || links[0] !== 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34') throw new Error(`opened: ${JSON.stringify(links)}`);
+
+      // Cancel ends it: the vendor is held waiting, the card's Cancel stops it.
+      writeFileSync(process.env.CLIKCODE_IT_HOLD!, '');
+      try {
+        await api.send('/accounts add grok');
+        await waitFor(api, '#sign-in-link [data-cancel]', 'the second sign-in card', 30_000);
+        await click(api, '#sign-in-link [data-cancel]');
+        await waitFor(api, '#sign-in-link', 'the card gone once cancelled', 15_000, (found) => found.count === 0);
+      } finally { rmSync(process.env.CLIKCODE_IT_HOLD!, { force: true }); }
+      if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');
+      } finally {
+        process.env.PATH = path;
+        await vscode.commands.executeCommand('clikcode.restart');
+        await api.ready();
+      }
     });
 
     it('chooses a harness and a model from the composer menu', async () => {

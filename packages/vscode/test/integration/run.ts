@@ -14,7 +14,7 @@
  * CLIKCODE_IT_SUITE=screens runs the screenshot tour instead (README and
  * walkthrough images), in CLIKCODE_IT_THEME (dark|light|hc|hc-light), with demo accounts
  * and conversations seeded into the temporary ClikCode home. */
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { runTests } from '@vscode/test-electron';
@@ -54,6 +54,17 @@ async function main(): Promise<void> {
     'window.commandCenter': false,
     'workbench.layoutControl.enabled': false,
   }, null, 2));
+  // The TUI suite's stand-in Grok (a link sign-in that needs no account),
+  // and an xdg-open that records what VS Code opens instead of starting a
+  // browser. VS Code resets the extension host's PATH, so the test that
+  // needs them puts this directory first itself and restarts its bridge.
+  const fakeBin = join(root, 'fake-bin');
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, 'grok'), `#!/bin/sh\nexec "${process.execPath}" "${resolve(packageRoot, '../../scripts/tui-e2e/fake-grok.mjs')}" "$@"\n`);
+  writeFileSync(join(fakeBin, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$1" >> "${join(root, 'opened')}"\n`);
+  chmodSync(join(fakeBin, 'grok'), 0o755);
+  chmodSync(join(fakeBin, 'xdg-open'), 0o755);
+  process.env.FAKE_LOGIN_HOLD = join(root, 'hold-login');
   const local = process.env.CLIKCODE_TEST_VSCODE ?? '/usr/share/code/code';
   // On the X display the runner was given (xvfb-run), never a Wayland
   // session the machine happens to have: the window would open on the
@@ -66,7 +77,7 @@ async function main(): Promise<void> {
     ...(existsSync(local) ? { vscodeExecutablePath: local } : {}),
     extensionDevelopmentPath,
     extensionTestsPath,
-    extensionTestsEnv: { CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
+    extensionTestsEnv: { CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_OPENED: join(root, 'opened'), CLIKCODE_IT_HOLD: join(root, 'hold-login'), CLIKCODE_IT_FAKE_BIN: fakeBin, FAKE_LOGIN_HOLD: process.env.FAKE_LOGIN_HOLD ?? '', CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
     launchArgs: [
       workspace,
       '--user-data-dir', join(root, 'user-data'),

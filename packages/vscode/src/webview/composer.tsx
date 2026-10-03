@@ -515,7 +515,7 @@ export function Composer(props: {
           </button>
         ) : null}
         <span class="spacer" />
-        {busy && !installing ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
+        {busy && !installing && !model.signIn ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
         {/* One figure under the box: the context ring, the turn's tokens on
             hover; the tokens themselves only where no ring is reported. */}
         {model.context ? <ContextMeter context={model.context} tokens={tokens} />
@@ -565,7 +565,7 @@ function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): J
         </div>
       ) : null}
       <div class="banner-actions">
-        {signIn.url ? <button type="button" class="secondary" data-open onClick={() => post({ type: 'openLink', href: signIn.url! })}>Open the page again</button> : null}
+        {signIn.url ? <button type="button" class="secondary" data-open onClick={() => post({ type: 'signInOpen', url: signIn.url! })}>Open the page again</button> : null}
         <button type="button" class="secondary" data-cancel onClick={() => post({ type: 'signInCancel', id: signIn.id })}>Cancel</button>
       </div>
       <div class="progress indeterminate"><div /></div>
