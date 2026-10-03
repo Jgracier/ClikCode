@@ -23,8 +23,9 @@ import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { latestChat, chatNamed } from '../session/options.js';
-import { claimSession, releaseSession, SESSION_CLAIM_TTL_MS } from '../session/claim.js';
-import { discardIfBlank, ensureSessionOnDisk } from '../session/blank.js';
+import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
+import { claimConversation, leaveConversation } from '../session/attach.js';
+import { ensureSessionOnDisk } from '../session/blank.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
 import { compactPath } from '../harness/protocol/labels.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
@@ -122,7 +123,7 @@ export class IdeBridge {
 
   start(): void {
     setVendorSignInRunner((request) => this.runInTerminal({ command: request.command, mode: 'login', argv: request.argv }, request));
-    const claim = setInterval(() => { void this.refreshClaim().catch(() => undefined); }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
+    const claim = setInterval(() => { if (this.sessionId) void claimConversation(this.sessionId).catch(() => undefined); }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
     const usage = setInterval(() => { void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
     claim.unref();
     usage.unref();
@@ -209,7 +210,7 @@ export class IdeBridge {
     setVendorSignInRunner(undefined);
     this.detachWorker();
     await reconcileLocalModelLeases(undefined).catch(() => undefined);
-    if (this.sessionId) await this.leave(this.sessionId).catch(() => undefined);
+    if (this.sessionId) await leaveConversation(this.sessionId);
   }
 
   private enqueue(job: () => Promise<void>): void {
@@ -304,11 +305,11 @@ export class IdeBridge {
     if (previous && previous !== id) {
       if (this.worker?.sessionId === previous) this.worker.client.send({ type: 'release' });
       this.detachWorker();
-      await this.leave(previous);
+      await leaveConversation(previous);
     }
     this.sessionId = id;
     this.preparedRoute = undefined;
-    await this.refreshClaim();
+    await claimConversation(id);
     await this.emitSession();
     // Follow a turn another client has running here, and have a worker that
     // is already up paint what it has streamed; nothing is started for a
@@ -317,27 +318,6 @@ export class IdeBridge {
     if (record && await workerIsReachable(record.socketPath)) await this.workerFor(id).catch(() => undefined);
     await this.prepareRoute();
     void this.refreshUsage().catch(() => undefined);
-  }
-
-  /** This client stops showing a conversation: its claim goes, and one that
-   * was never started is not kept. */
-  private async leave(id: string): Promise<void> {
-    const state = await readState({ transcripts: [id] });
-    const session = state.sessions.find((item) => item.id === id);
-    if (session?.claim?.pid === process.pid) {
-      releaseSession(session);
-      await writeState(state);
-    }
-    await discardIfBlank(id).catch(() => undefined);
-  }
-
-  private async refreshClaim(): Promise<void> {
-    if (!this.sessionId) return;
-    const state = await readState({ transcripts: [this.sessionId] });
-    const session = state.sessions.find((item) => item.id === this.sessionId);
-    if (!session) return;
-    claimSession(session);
-    await writeState(state);
   }
 
   private async refreshUsage(): Promise<void> {
