@@ -69,7 +69,7 @@ import { interactiveToolsPicker } from '../tui/pickers/tools.js';
 import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
 import { interactiveSwarmPicker } from '../tui/pickers/swarm.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
-import { interactiveResumeInPicker, interruptedTurnResumePrompt, sameProviderCanTakeTurn } from '../tui/pickers/resume-in.js';
+import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
@@ -98,7 +98,8 @@ export class IdeBridge {
   private workerTurnRunning = false;
   private turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
   private preparedRoute: string | undefined;
-  private autoResent: string | undefined;
+  /** The same-provider retry after running out: once per interrupted turn. */
+  private readonly exhaustionGuard: ExhaustionRetryGuard = {};
   private drainScheduled = false;
   private work: Promise<void> = Promise.resolve();
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
@@ -505,7 +506,7 @@ export class IdeBridge {
     }
   }
 
-  private async execute(line: string, options: { queuedTurnId?: string; fromQueuedCommand?: boolean; resent?: boolean }): Promise<void> {
+  private async execute(line: string, options: { queuedTurnId?: string; fromQueuedCommand?: boolean }): Promise<void> {
     const id = this.requireSession();
     try {
       if (options.queuedTurnId) {
@@ -527,28 +528,28 @@ export class IdeBridge {
       const message = messageOf(error);
       const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
       // A queued turn that cannot start would otherwise stay at the head of
-      // the queue and fail identically forever; it goes back to the composer.
-      if (options.queuedTurnId && !cancelled) {
-        await releaseQueuedTurn(id, options.queuedTurnId).catch(() => undefined);
-        this.channel.send({ type: 'restore-draft', text: line });
-      }
-      if (!cancelled && !options.queuedTurnId && !options.resent && isUsageExhaustedMessage(message)) {
-        // Out of usage on every account here: once more on this provider if
-        // an account came back, otherwise the harnesses that still have some.
-        const again = line !== this.autoResent && await sameProviderCanTakeTurn(id);
-        if (again) {
-          const continuation = await interruptedTurnResumePrompt(id, line);
-          this.autoResent = line;
-          await this.execute(continuation, { resent: true });
+      // the queue and fail identically forever.
+      if (options.queuedTurnId && !cancelled) await releaseQueuedTurn(id, options.queuedTurnId).catch(() => undefined);
+      /** What goes back to the composer: a queued message that was not
+       * carried on, and any queued behind it that could not run either. */
+      let back = options.queuedTurnId && !cancelled ? [line] : [];
+      if (!cancelled && isUsageExhaustedMessage(message)) {
+        // Out of usage on every account here, a queued message as much as a
+        // typed one: once more on this provider if an account came back,
+        // otherwise the harnesses that still have some.
+        const next = await carryOnAfterExhaustion(this.prompter, id, line, this.exhaustionGuard);
+        if ('retry' in next) {
+          await this.execute(next.retry, {});
           return;
         }
-        const moved = await interactiveResumeInPicker(this.prompter, id, line);
-        if (moved) {
-          await this.switchTo(moved.id);
-          await this.execute(moved.prompt, { resent: true });
+        if ('moved' in next) {
+          await this.switchTo(next.moved.id);
+          await this.execute(next.moved.prompt, {});
           return;
         }
+        back = [...back, ...next.stayed];
       }
+      if (back.length) this.channel.send({ type: 'restore-draft', text: back.join('\n\n') });
       this.report(error);
     } finally {
       await this.emitSession().catch(() => undefined);
