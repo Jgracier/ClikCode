@@ -13,7 +13,9 @@ import { emitResult } from '../cli/structured-output.js';
 import { captureNativeHarnessOutput } from '../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
-import { loginNativeHarness } from '../harness/transport/native/login.js';
+import { loginNativeHarness, withLinkSignInSurface } from '../harness/transport/native/login.js';
+import type { LoginLink } from '../gateway/login/link.js';
+import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import { accountVerification, verificationNotice } from '../turn/failover.js';
 import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
@@ -339,16 +341,19 @@ export interface SignInSurface {
   suspend(): Promise<void>;
   resume(): void;
   activity?(message: string): void;
+  /** Wait on a link sign-in on screen, Esc cancelling it -- inside a running
+   * turn too, which startWaiting would reset. Returns the undo. */
+  linkWait?(label: string, cancel: () => void): () => void;
 }
 
 /** Runs `work` -- a vendor's own sign-in -- with the terminal handed to it.
- * The one copy of what four call sites each did their own way: a sign-in
- * that needs no terminal (Antigravity's) keeps ClikCode on screen behind a
- * spinner; every other one gets the real terminal, told first what to type
+ * The one copy of what four call sites each did their own way: a link
+ * sign-in keeps ClikCode on screen, showing the link and code; every other
+ * one gets the real terminal, told first what to type
  * where the vendor signs in only from inside its own session. */
 export async function withVendorTerminal<T>(
   surface: SignInSurface | undefined,
-  harness: Pick<AiLocalHarnessDefinition, 'displayName' | 'loginArgv' | 'loginHint' | 'loginCapturable'>,
+  harness: Pick<AiLocalHarnessDefinition, 'displayName' | 'loginArgv' | 'loginHint' | 'loginLink'>,
   work: () => Promise<T>,
   name = harness.displayName,
 ): Promise<T> {
@@ -360,15 +365,27 @@ export async function withVendorTerminal<T>(
   const outcome = (error: unknown): void => surface.activity?.(error === undefined
     ? `${chalk.green('signed in to')} ${chalk.dim(name)}`
     : `${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
-  if (harness.loginCapturable) {
-    surface.startWaiting(`signing in to ${name}…`);
+  if (harness.loginLink) {
+    // The vendor runs in the background; its link and code are shown here.
+    const controller = new AbortController();
+    const label = `waiting for you to sign in to ${name} in your browser · esc cancels`;
+    const stop = surface.linkWait?.(label, () => controller.abort()) ?? (() => surface.stopWaiting());
+    if (!surface.linkWait) surface.startWaiting(label);
+    const local = hasLocalDisplay();
+    let opened = false;
+    const show = (link: LoginLink): void => {
+      if (local && !opened) { opened = true; openLoginUrl(link.url); }
+      if (!local) process.stdout.write(loginUrlNotice(link.url).clipboard);
+      surface.activity?.(`${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · code ${chalk.bold(link.code)}` : ''}`);
+      surface.activity?.(`${link.url} ${chalk.dim(local ? '· opened in your browser' : '· copied: open it on this device')}`);
+    };
     try {
-      const result = await work();
-      surface.stopWaiting();
+      const result = await withLinkSignInSurface({ show, signal: controller.signal }, work);
+      stop();
       outcome(undefined);
       return result;
     } catch (error) {
-      surface.stopWaiting();
+      stop();
       outcome(error);
       throw error;
     }

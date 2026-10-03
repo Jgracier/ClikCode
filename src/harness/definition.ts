@@ -199,7 +199,7 @@ export interface AiLocalHarnessDefinition {
   npmPackage?: string;
   installer?: AiHarnessInstaller;
   loginArgv?: readonly string[];
-  loginCapturable?: boolean;
+  loginLink?: { remoteArgv?: readonly string[] };
   /** See the catalog (packages/clikrouter/src/ai-local-harness.ts). */
   titleSource?: 'vendor' | 'none';
   defaultModel?: string;

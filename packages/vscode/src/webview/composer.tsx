@@ -407,6 +407,7 @@ export function Composer(props: {
 
   return (
     <div class="composer-wrap">
+      {model.signIn ? <SignInCard signIn={model.signIn} /> : null}
       {installing ? (
         <div class="install-card" role="status">
           <div class="install-text"><Icon name="cloud-download" /> {titleCase(busy!.replace(/…$/, ''))}…</div>
@@ -545,3 +546,29 @@ function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['con
 }
 
 const compact = (count: number): string => (count < 1000 ? String(count) : count < 1_000_000 ? `${Math.round(count / 1000)}k` : `${(count / 1_000_000).toFixed(1)}M`);
+
+/** A link sign-in in progress: its link opened in the browser, its code to
+ * confirm there, and the way out. Nothing is typed into a terminal. */
+function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div class="install-card signin-link" role="status" id="sign-in-link">
+      <div class="install-text"><Icon name="key" /> Sign in to {signIn.name} in your browser</div>
+      {signIn.code ? (
+        <div class="signin-code">
+          <span class="muted">Confirm this code there</span>
+          <code data-code>{signIn.code}</code>
+          <button type="button" class="icon-button tiny" title={copied ? 'Copied' : 'Copy code'} aria-label={copied ? 'Copied' : 'Copy code'}
+            onClick={() => { void navigator.clipboard?.writeText(signIn.code ?? '').then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}>
+            <Icon name={copied ? 'check' : 'copy'} />
+          </button>
+        </div>
+      ) : null}
+      <div class="banner-actions">
+        {signIn.url ? <button type="button" class="secondary" data-open onClick={() => post({ type: 'openLink', href: signIn.url! })}>Open the page again</button> : null}
+        <button type="button" class="secondary" data-cancel onClick={() => post({ type: 'signInCancel', id: signIn.id })}>Cancel</button>
+      </div>
+      <div class="progress indeterminate"><div /></div>
+    </div>
+  );
+}

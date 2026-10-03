@@ -68,6 +68,8 @@ export async function runTeedLogin(input: {
    * what is written here reaches the vendor. That is what lets ClikCode put
    * its own field in front of a vendor's prompt. */
   onStdin?: (write: (text: string) => void) => void;
+  /** Ends the login (SIGTERM to script, which hangs up the vendor). */
+  signal?: AbortSignal;
 }): Promise<TeedLoginResult> {
   const argv = scriptArgv(input.binary, input.args, input.platform);
   if (!argv) return { teed: false, exitCode: null };
@@ -94,6 +96,8 @@ export async function runTeedLogin(input: {
     // raw mode and forwards the byte to the pty, where the child's own line
     // discipline raises SIGINT.
     const forward = (signal: NodeJS.Signals) => () => { terminatePortable(child, signal); };
+    const onAbort = forward('SIGTERM');
+    input.signal?.addEventListener('abort', onAbort, { once: true });
     const onInterrupt = forward('SIGINT');
     const onTerminate = forward('SIGTERM');
     const onHangup = forward('SIGHUP');
@@ -101,6 +105,7 @@ export async function runTeedLogin(input: {
     process.once('SIGTERM', onTerminate);
     if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
     const cleanup = (): void => {
+      input.signal?.removeEventListener('abort', onAbort);
       process.off('SIGINT', onInterrupt);
       process.off('SIGTERM', onTerminate);
       if (process.platform !== 'win32') process.off('SIGHUP', onHangup);

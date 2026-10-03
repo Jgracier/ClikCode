@@ -890,6 +890,30 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
+  /** A link sign-in on screen: Esc cancels it. Inside a running turn (a
+   * sign-in the turn asked for) it borrows the turn's band and Esc rather
+   * than starting a wait, which would reset the turn; the undo gives them
+   * back. Outside one it is a wait of its own. */
+  linkWait(label: string, cancel: () => void): () => void {
+    const turn = this.turn;
+    if (!turn) {
+      this.startWaiting(label, () => cancel());
+      return () => this.stopWaiting();
+    }
+    const saved = { label: turn.label, cancel: turn.cancel, cancelled: turn.cancelled };
+    turn.label = label;
+    turn.cancel = () => cancel();
+    turn.cancelled = false;
+    this.updateWaiting();
+    return () => {
+      if (this.turn !== turn) return;
+      turn.label = saved.label;
+      turn.cancel = saved.cancel;
+      turn.cancelled = saved.cancelled;
+      this.updateWaiting();
+    };
+  }
+
   startWaiting(
     message: string,
     onCancel?: (restoreDraft: boolean) => void,
