@@ -25,6 +25,7 @@ import { FrameDecoder, type ClientCommand } from './protocol.js';
 import { disposeSessionState, formatShellNotifications, runningShellCount, sessionState, takeShellNotifications, type ShellNotification } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { appendTurnChanges } from '../session/turn-changes.js';
 import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { gatewayModels } from '../gateway/models.js';
@@ -88,7 +89,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // over from a worker that is gone, and binding over it is safe.
   if (await workerIsReachable(socketPath)) { await hold.release(); return; }
   await unlink(socketPath).catch(() => undefined);
-  const observer = new BroadcastObserver();
+  const observer = new BroadcastObserver({ onTurnChanges: (changes) => { void appendTurnChanges(stateDirectory(), sessionId, changes).catch(() => undefined); } });
   const token = generateWorkerToken();
 
   /** Set the moment a turn is decided on (startTurn), synchronously, and

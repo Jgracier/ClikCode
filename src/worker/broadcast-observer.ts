@@ -20,6 +20,8 @@ import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInRequest, TurnObserver } from '../turn/observer.js';
 import { encodeFrame, isTranscriptActivity, type LiveActivity, type LiveTurn, type WorkerEvent } from './protocol.js';
+import type { FileDiff } from '../agent/line-diff.js';
+import { TurnChangeCollector } from '../session/turn-changes.js';
 
 /** How far a window may fall behind before it is let go. A window that stops
  * reading -- a suspended terminal, a hung process -- would otherwise have
@@ -37,6 +39,12 @@ export function sendEvent(socket: Socket, event: WorkerEvent): void {
 
 export class BroadcastObserver implements TurnObserver {
   private readonly clients = new Set<Socket>();
+  /** The file changes the running turn's calls reported, handed over when
+   * it ends: what /undo reverses for a vendor harness (session/turn-changes.ts). */
+  private readonly changes = new TurnChangeCollector();
+
+  constructor(private readonly options: { onTurnChanges?: (changes: FileDiff[]) => void } = {}) {}
+
   /** Mirrors exactly what a client would have painted, so `snapshot()` can
    * hand a late attacher the same thing an already-attached client already
    * sees -- not a re-derivation, a read of the one copy this class owns. */
@@ -146,6 +154,7 @@ export class BroadcastObserver implements TurnObserver {
       this.seenActivity.set(key, value);
     }
     this.outputStarted = true;
+    this.changes.add(event);
     if (this.waitingLabel && isTranscriptActivity(event)) this.liveActivities.push({ event, responseOffset: this.liveText.length });
     this.broadcast({ type: 'activity', event });
   }
@@ -195,6 +204,7 @@ export class BroadcastObserver implements TurnObserver {
   /** startWaiting, naming the prompt the turn runs, for clients following it. */
   startTurn(message: string, prompt?: string): void {
     this.generation++;
+    this.flushChanges();
     this.seenActivity.clear();
     this.liveText = '';
     this.waitingLabel = message;
@@ -205,7 +215,13 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'waiting-start', message, ...(prompt !== undefined ? { prompt } : {}) });
   }
 
+  private flushChanges(): void {
+    const changes = this.changes.take();
+    if (changes.length) this.options.onTurnChanges?.(changes);
+  }
+
   stopWaiting(): void {
+    this.flushChanges();
     this.waitingLabel = '';
     this.livePrompt = undefined;
     this.liveActivities = [];

@@ -109,6 +109,17 @@ const bothRoutes = (what: string) => (
   ? { available: true }
   : harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.`, needs: 'provider' });
 
+/** /undo reverses ClikCode's agent's own snapshots, or the edits a vendor
+ * harness reports with their diffs. A plain-text CLI reports none: its
+ * output is prose, so there is nothing for ClikCode to reverse. */
+const undoAvailability = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
+  if (isClikCodeAgent(session) || harness?.transport !== 'text-cli') return { available: true };
+  return {
+    available: false,
+    reason: `${harness.displayName} runs as a plain-text CLI: its output reports no file edits ClikCode could reverse, and it exposes no undo of its own to ClikCode. Use /diff to see what changed and git to revert it.`,
+  };
+};
+
 function entry(
   name: string, group: SlashGroup, description: string,
   extra: Partial<Pick<SlashCommandEntry, 'aliases' | 'argHint' | 'availability' | 'handlerKey' | 'duringTurn'>> = {},
@@ -126,7 +137,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('history', 'Conversation', 'show this conversation'),
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
-  entry('undo', 'Conversation', 'revert the last turn (only where the vendor exposes it)'),
+  entry('undo', 'Conversation', "revert the last turn's file edits (refuses files changed since)", { availability: undoAvailability }),
   entry('native', 'Conversation', 'send text to the harness verbatim (also: //text)', { argHint: '<text>', availability: needsHarness('sending native commands') }),
   entry('select', 'Conversation', "hand the mouse to the terminal's own selection (drag-to-copy works without it)"),
   entry('redraw', 'Conversation', 'repaint the screen'),

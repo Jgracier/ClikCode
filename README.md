@@ -302,7 +302,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/history` | show this conversation |
 | `/copy` | copy the last answer |
 | `/export [path]` | write the transcript as markdown |
-| `/undo` | revert the last turn (only where the vendor exposes it) |
+| `/undo` | revert the last turn's file edits and list them; a file changed since the turn is left alone and named. ClikCode's agent restores its own snapshots; a vendor harness's edits are reversed from the diffs it reported (not available on the plain-text CLIs, Aider and Continue). Shell-command changes are not tracked. |
 | `/native <text>` (also `//text`) | send text straight to the tool, unchanged |
 | `/select` | release the mouse so you can select and copy text |
 | `/redraw` | repaint the screen |

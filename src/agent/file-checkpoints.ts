@@ -33,7 +33,7 @@ interface CheckpointTurnSummary {
   bytes: number;
 }
 
-interface UndoResult {
+export interface UndoResult {
   turnIds: string[];
   restored: string[];
   deleted: string[];
@@ -180,19 +180,26 @@ export class FileCheckpointStore {
         const manifest = await this.readManifest(sessionId, turn.turnId);
         if (!manifest) continue;
         const dir = this.turnDir(sessionId, turn.turnId);
-        let clean = true;
+        const kept: CheckpointEntry[] = [];
         for (const entry of [...manifest.entries].reverse()) {
           try {
             await this.restoreEntry(dir, entry, options);
             (entry.existed ? result.restored : result.deleted).push(entry.path);
           } catch (error) {
-            clean = false;
+            kept.unshift(entry);
             result.failed.push({ path: String(entry.path), reason: error instanceof Error ? error.message : String(error) });
           }
         }
         result.turnIds.push(turn.turnId);
-        // A turn that could not be fully restored keeps its snapshots.
-        if (clean) await fs.rm(dir, { recursive: true, force: true });
+        // A turn that could not be fully restored keeps the snapshots of the
+        // files it could not: those that were restored are done, and must
+        // not read as "changed since" on the next try.
+        if (!kept.length) await fs.rm(dir, { recursive: true, force: true });
+        else if (kept.length < manifest.entries.length) {
+          const manifestPath = path.join(dir, 'manifest.json');
+          await fs.writeFile(`${manifestPath}.tmp`, JSON.stringify({ ...manifest, entries: kept }, null, 2), { mode: 0o600 });
+          await fs.rename(`${manifestPath}.tmp`, manifestPath);
+        }
       }
       const parts = result.turnIds.length
         ? [`Undid ${result.turnIds.length} turn${result.turnIds.length === 1 ? '' : 's'}: ${result.restored.length} file(s) restored, ${result.deleted.length} created file(s) removed.`]
