@@ -13,7 +13,7 @@ import { closeOpenHyperlink } from './render/hyperlinks.js';
 import { createStreamingBlockParser, splitIntoBlocks } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
 import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
-import { installTerminalRestoreSignals, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
+import { installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
 import { FOCUS_REPORTING_ON, PUSH_TITLE, notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle, type FocusState } from './terminal-signals.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
 import { stripRepeatedTitles } from '../session/title.js';
@@ -571,6 +571,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!output.isTTY) {
       throw new Error('TerminalHarnessPrompter requires a TTY on stdout; construct it behind terminalUiSupported()');
     }
+    const inheritedScreen = process.env[REEXEC_TERMINAL_ENV] === '1';
+    delete process.env[REEXEC_TERMINAL_ENV];
     terminalModes.uiStarted = true;
     // Stdin is kept flowing for the whole session.
     //
@@ -604,7 +606,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // makes SGR reporting a transition rather than a no-op, and a client
       // deciding how to route touches has something to notice.
       logProcessWarnings();
-      output.write(ENTER_ALTERNATE_SCREEN);
+      if (!inheritedScreen) output.write(ENTER_ALTERNATE_SCREEN);
       terminalModes.alternateScreen = true;
       // Asked for: bracketed paste, because pasted text must not be read as
       // keystrokes; the mouse, because that is how the transcript is read
@@ -622,7 +624,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     // The shell's own title is saved, to be put back on the way out; this
     // UI sets its own while it runs (syncTerminalSignals).
-    this.takeTerminalTitle();
+    if (inheritedScreen) terminalModes.titlePushed = true;
+    else this.takeTerminalTitle();
     this.stopFocusReports = onTerminalFocus((focused) => { this.focus = { focused, since: Date.now() }; });
     output.write('\u001b[?25h');
     process.on('SIGWINCH', this.onResize);
