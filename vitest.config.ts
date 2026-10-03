@@ -12,5 +12,7 @@ export default defineConfig({
     // forks, not threads: several suites drive raw-mode terminal state and spawn
     // child processes, which a shared worker thread cannot isolate.
     pool: 'forks',
+    // Its own empty home per test file: see vitest.setup.ts.
+    setupFiles: ['./vitest.setup.ts'],
   },
 });
