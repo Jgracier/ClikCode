@@ -1,21 +1,39 @@
 /** A narrow recovery for an agent that answers an explicit work order with
  * an offer to do that same work later. Not a success judge: a status report,
- * a blocker or an audit answer is a real reply and is never re-driven. */
+ * a blocker or an audit answer is a real reply and is never re-driven, and a
+ * reply that did the work and then offers optional extras is finished. */
+
+/** A request answered by being told something, not by work: a question, or a
+ * request for an audit, review, explanation or report. */
+const REPORT_REQUEST = /\b(?:tell me|explain|audit|review|summari[sz]e|report|status|how|what|why|whether|describe|show me|list)\b/i;
+
+const WORK_ORDER = /^(?:ok(?:ay)?[, ]+)?(?:(?:i said|now)\s+)?(?:please\s+)?(?:fully\s+)?(?:complete|finish|implement|build|fix|do)\b/i;
+const WORK_ORDER_ANYWHERE = /\b(?:complete it|get it done|finish it|do the work|do it)\b/i;
+
+/** The reply says the work happened. Negated or future forms ("not done",
+ * "to be done", "isn't fixed yet") do not count. */
+const NOT_NEGATED = String.raw`(?<!\bnot\s|\bnot yet\s|\bnot been\s|\bbe\s|n't\s|n't been\s|\bnever\s)`;
+const COMPLETED = new RegExp(
+  String.raw`(?:^|[\s(*_\-])${NOT_NEGATED}(?:done|fixed|implemented|pushed|committed|completed|resolved|merged|shipped|landed|applied)\b`
+  + String.raw`|\b(?:all\s+)?(?:\d+\s+)?(?:tests?|specs?|checks?)\s+(?:now\s+)?(?:pass(?:es|ed|ing)?|green)\b`,
+  'i',
+);
+
+/** An explicit offer to start the requested work later. */
+const OFFERS = [
+  /\bif you(?:'d)? (?:want|like)(?:,?\s+i can)?\b[^.!?\n]{0,100}\b(?:do|build|implement|fix|finish|complete|continue|next)\b/i,
+  /\b(?:i|we) can\s+(?:now\s+)?(?:fix|implement|build|do|finish|complete|continue|start|proceed|keep going|take the next step|apply|make)\b[^.!?\n]{0,80}\b(?:next|now|right away|if you(?:'d)? (?:want|like)|in order|once you confirm)\b/i,
+  /\bi(?:'ll| will) proceed from\b/i,
+];
+
 export function deferredWorkReply(request: string, reply: string): boolean {
   const ask = request.trim();
-  // A question, or a request for a report, is answered by a report.
-  if (ask.includes('?')) return false;
-  if (/\b(?:tell me|explain|audit|review|summari[sz]e|report|status|how (?:much|many|far|close)|what|why|whether)\b/i.test(ask)) {
-    return false;
-  }
-  const ordersWork = /^(?:ok(?:ay)?[, ]+)?(?:please\s+)?(?:fully\s+)?(?:complete|finish|implement|build|fix)\b/i.test(ask)
-    || /\b(?:complete it|get it done|finish it|do the work|do it)\b/i.test(ask);
-  if (!ordersWork) return false;
-  // Only an explicit offer to start later counts; "not complete" or a list
-  // of remaining work is how an honest finished answer often reads.
-  return /\bif you want(?:,?\s+i can)?\b[^.!?\n]{0,100}\b(?:do|build|implement|finish|complete|continue|next)\b/i.test(reply)
-    || /\b(?:i can|we can)\s+(?:keep going|do (?:that|this|it|the next)|take the next step|proceed)\b[^.!?\n]{0,60}\b(?:next|now|right away|if you want|in order)\b/i.test(reply)
-    || /\bi(?:'ll| will) proceed from\b/i.test(reply);
+  if (ask.includes('?') || REPORT_REQUEST.test(ask)) return false;
+  if (!WORK_ORDER.test(ask) && !WORK_ORDER_ANYWHERE.test(ask)) return false;
+  // A reply that reports the work done and offers more is finished; the
+  // offer is an optional extra, not the requested work put off.
+  if (COMPLETED.test(reply)) return false;
+  return OFFERS.some((offer) => offer.test(reply));
 }
 
 export const DEFERRED_WORK_CONTINUATION =

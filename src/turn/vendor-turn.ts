@@ -500,17 +500,20 @@ export async function sendVendorTurn(input: {
     session.nativeStartedAt ??= new Date().toISOString();
     delete session.nativeSessionPreallocated;
     const planModeActive = harness.planMode && session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
-    // Only into a session that remembers the turn: a stateless route would
-    // receive the continuation with no idea what work it refers to. After two
-    // tries the reply stands as the answer; discarding it loses real text.
-    const deferred = !planModeActive && !!session.nativeSessionId && deferredWorkReply(text, result.text);
+    // After two tries the reply stands as the answer; discarding it loses
+    // real text. A route that keeps no history (its thread was forgotten
+    // above) gets the conversation and this turn's reply retold with the
+    // continuation, or it would not know what work it refers to.
+    const deferred = !planModeActive && deferredWorkReply(text, result.text);
     if (deferred && deferredContinuations >= 2) {
       prompter?.activity(chalk.yellow(`${harness.displayName} offered to do the work later instead of doing it`));
     } else if (deferred) {
       deferredContinuations += 1;
       carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
+      turnText = session.nativeSessionId
+        ? DEFERRED_WORK_CONTINUATION
+        : interruptedTurnFailoverPrompt(session, { requestContext, request: DEFERRED_WORK_CONTINUATION, touchedFiles: [] });
       editAnswer('new-paragraph');
-      turnText = DEFERRED_WORK_CONTINUATION;
       continue;
     }
     // The harness ended the turn with a tool it never settled -- it
