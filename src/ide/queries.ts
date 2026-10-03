@@ -227,7 +227,11 @@ export async function accountList(state: HarnessState, session: HarnessSession |
     .filter((harness) => harnessCanRunTurns(harness) && (harness.localAuth.includes('api-key') || Boolean(harness.loginArgv)))
     .sort((left, right) => compareProviders({ harness: left }, { harness: right }))
     .map((harness) => ({ provider: harness.command, name: harness.displayName }));
-  return { accounts, addable, failover: (session?.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto' };
+  const chatHarness = session?.route === 'local' && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+  return {
+    accounts, addable, failover: (session?.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto',
+    ...(chatHarness ? { chat: { provider: chatHarness.command, name: chatHarness.displayName } } : {}),
+  };
 }
 
 /** The choices the composer footer offers for this chat: what /effort and

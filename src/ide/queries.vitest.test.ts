@@ -143,6 +143,19 @@ describe('the account list', () => {
     expect(list.failover).toBe('auto');
     expect(list.addable.some((item) => item.provider === 'codex')).toBe(true);
   });
+
+  it('names the provider the chat runs on, which the menu titles, lists and adds to', async () => {
+    // The account still points at another provider's account: the chat's own
+    // harness decides, so Add account cannot target a provider the title
+    // does not name.
+    await home({
+      accounts: [{ id: 'g', provider: 'xai', label: 'me@example.com', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:grok' }],
+      sessions: [session('s1', { accountId: 'g' }), session('s2', { route: 'gateway', nativeHarness: undefined })],
+    });
+    const state = await readState();
+    expect((await accountList(state, state.sessions.find((item) => item.id === 's1'), false)).chat).toEqual({ provider: 'codex', name: 'Codex' });
+    expect((await accountList(state, state.sessions.find((item) => item.id === 's2'), false)).chat).toBeUndefined();
+  });
 });
 
 describe('the Gateway credit', () => {

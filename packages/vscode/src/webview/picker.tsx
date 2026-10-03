@@ -273,7 +273,11 @@ function creditText(gateway: IdeGateway): { label: string; detail: string } {
 export function AccountMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const [data, setData] = useState<IdeAccounts>();
   const [gateway, setGateway] = useState<IdeGateway>();
-  const providerId = props.model.providerId;
+  // The bridge's reading of the chat's provider, once it has answered: the
+  // title, the list and Add account all come from it, so they cannot name
+  // two different providers.
+  // The Gateway and ClikCode Local have no harness; the panel's id says which.
+  const providerId = data ? data.chat?.provider ?? (props.model.providerId === 'gateway' ? 'gateway' : undefined) : props.model.providerId;
   const onGateway = providerId === 'gateway';
   const fail = (failure: Error): void => props.onError(failure.message);
   const load = (): void => { request<IdeAccounts>({ method: 'query', query: 'accounts' }).then(setData, fail); };
@@ -281,8 +285,7 @@ export function AccountMenu(props: { model: ChatModel; onClose: () => void; onEr
     load();
     if (onGateway) request<IdeGateway>({ method: 'query', query: 'gateway' }).then(setGateway, fail);
   }, []);
-  const currentProvider = data?.accounts.find((item) => item.current)?.provider;
-  const mine = (data?.accounts ?? []).filter((item) => (item.harness ? item.harness === providerId : item.provider === currentProvider));
+  const mine = (data?.accounts ?? []).filter((item) => item.harness === providerId);
   const addable = data?.addable.find((item) => item.provider === providerId);
   const row = (key: string, icon: string | undefined, label: string, detail: string, run: () => void): ListRow => ({
     key, onSelect: () => { props.onClose(); run(); },
@@ -312,7 +315,7 @@ export function AccountMenu(props: { model: ChatModel; onClose: () => void; onEr
   const failover = data && props.model.chatSettings?.failover !== undefined ? data.failover : undefined;
   return (
     <Popover label="Accounts" onClose={props.onClose} class="menu" id="account-menu">
-      <div class="menu-title">{onGateway ? 'ClikDeploy Gateway' : data?.accounts.find((item) => item.current)?.providerName ?? 'Accounts'}</div>
+      <div class="menu-title">{onGateway ? 'ClikDeploy Gateway' : data?.chat?.name ?? 'Accounts'}</div>
       {!data ? <div class="picker-loading"><Icon name="loading" spin /> Loading accounts…</div>
         : <KeyList rows={rows} label="Accounts" onEscape={props.onClose} />}
       {failover ? (
