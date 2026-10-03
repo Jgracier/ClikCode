@@ -3,7 +3,7 @@
 
 import type { HarnessSession } from '../model.js';
 import { cloneData, sameData } from './data.js';
-import { withSessionLock } from './locks.js';
+import { withSessionLock, withStateLock } from './locks.js';
 import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, type SessionFile } from './records.js';
 
 type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
@@ -74,8 +74,14 @@ function keepsHistory(before: readonly TranscriptMessage[] | undefined, after: r
 
 /** Gives every child that points into `parentId` its own full copy. Called
  * before the parent's existing history is rewritten or removed, so a child can
- * never silently change or lose messages. Requires the state lock: that is what
- * guarantees no new reference is being created while this scans. */
+ * never silently change or lose messages. Requires the state lock -- that is
+ * what guarantees no new reference is being created elsewhere while this
+ * scans -- already held by the caller (writeSessionTranscript, below). Never
+ * takes it itself: a callee taking a lock its caller could also need, in some
+ * other order on another call chain, is exactly how two chains deadlock on
+ * each other. One consistent order, enforced by having exactly one place
+ * (writeSessionTranscript's own entry) take the state lock before any session
+ * lock, is what rules that out. */
 async function materializeChildrenOf(parentId: string): Promise<string[]> {
   const rewritten: string[] = [];
   for (const id of await listStoredSessionIds()) {
@@ -110,10 +116,19 @@ interface TranscriptWriteOptions {
 /** Below this, a reference saves nothing worth the indirection. */
 const MIN_SHARED_MESSAGES = 2;
 
-/** Persists one conversation's transcript. The caller must hold the state lock
- * (it may materialize children and create parent references). */
+/** Persists one conversation's transcript. Takes the state lock itself, first
+ * -- before any session lock -- so there is exactly one order a call chain
+ * ever acquires these two locks in, no matter which of the cases below it
+ * turns out to need. (A callee reaching for the state lock only after already
+ * holding a session lock, as an earlier version of this function did, lets
+ * two call chains each hold the session lock the other wants and wait on each
+ * other for the state lock: a deadlock, not just contention.) The state lock
+ * is reentrant for a caller that already holds it (write.ts, migrate.ts), and
+ * held only briefly either way -- one session's file write, not a caller's
+ * whole batch -- so this is not the wide lock span that made write.ts slow;
+ * it is the same single lock, just taken for less time per acquisition. */
 export async function writeSessionTranscript(id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
-  await withSessionLock(id, async () => {
+  await withStateLock(() => withSessionLock(id, async () => {
     const previous = await loadSessionFile(id);
     const previousMessages = previous ? await materializedMessages(previous, new Set([id])) : undefined;
     if (previous && !keepsHistory(previousMessages, next.messages)) await materializeChildrenOf(id);
@@ -146,13 +161,16 @@ export async function writeSessionTranscript(id: string, next: SessionTranscript
     }
     const file: SessionFile = { v: 1 as const, id, ...next };
     await storeSessionFile(id, options.frozen ? file : cloneData(file));
-  });
+  }));
 }
 
-/** Removes a conversation's transcript, first giving its children their own copy. */
+/** Removes a conversation's transcript, first giving its children their own
+ * copy. Same lock order as writeSessionTranscript: state lock first, then
+ * this session's own lock, so the two functions can never deadlock against
+ * each other either. */
 export async function deleteSessionTranscript(id: string): Promise<void> {
-  await withSessionLock(id, async () => {
+  await withStateLock(() => withSessionLock(id, async () => {
     await materializeChildrenOf(id);
     await removeSessionFile(id);
-  });
+  }));
 }

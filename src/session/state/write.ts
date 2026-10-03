@@ -53,66 +53,88 @@ async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData
  * records are left alone on disk, a changed transcript rewrites that one
  * session file, and the index is rewritten only if its merged content differs
  * from what is already there. A streamed checkpoint is therefore one small
- * file write regardless of how much history exists. */
+ * file write regardless of how much history exists.
+ *
+ * Only the index merge below takes the state lock. Transcript writes do not:
+ * writeSessionTranscript holds its own per-session lock and only reaches for
+ * the state lock itself, briefly, on the rare cross-session path (see
+ * transcripts.ts). A terminal streaming session A no longer waits on a
+ * terminal streaming session B's transcript write -- they were never
+ * contending over the same data, only over a lock scoped wider than it needed
+ * to be. */
 export async function writeState(state: HarnessState): Promise<void> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
+
+  // What this write stores is taken here, in one synchronous step, and is
+  // exactly what it then remembers as stored. The caller may keep changing
+  // `state` while the files below are written -- a turn checkpoint does: a
+  // message queued mid-write. Remembering the object as it was at the END
+  // recorded that change as already on disk, so the write made for it
+  // found nothing to store, and the queued message was lost.
+  // Summarize onto the index before the snapshot, and only for a transcript
+  // this caller actually opened. A light read leaves the summary alone.
+  for (const session of state.sessions ?? []) stampListFacts(session);
+  const taken = baselineOf(state, baseline);
+  const sessions = [...(state.sessions ?? [])];
+
+  // A legacy file that appeared (or was never migrated) is folded in first, and
+  // before anything below reads or writes a transcript: migration imports each
+  // legacy session's transcript too, and must not be allowed to run after (and
+  // so overwrite with the pre-migration copy) a transcript this call just wrote
+  // with this process's live edits.
+  if (await exists(harnessStatePath())) await withStateLock(() => ensureLayoutLocked());
+
+  // A plain, unlocked read used only to decide which transcripts this call
+  // must (re)write and which sessions are new. It may be a step stale under
+  // concurrent writers; that is fine here, because it governs a diff heuristic
+  // (write this file or don't), not the index merge itself, which re-reads
+  // fresh under lock below. Writing a transcript nothing ended up needing, or
+  // writing one a fresher read would also have written, is harmless.
+  const peek = await loadIndex();
+  const peekIds = new Set((peek?.sessions ?? []).map((session) => session.id));
+
+  // A draft is not a conversation. It stays off disk until it is used, or
+  // until a worker in another process has to read it (force). One already
+  // on disk stays until this process drops it from its working copy, which
+  // is how an empty chat an older build stored gets removed.
+  const writing = new Set(sessions.map((session) => session.id));
+  for (const session of ephemeralSessions()) {
+    if (!writing.has(session.id)) dropEphemeral(session.id);
+  }
+  for (const session of sessions) {
+    if (isBlankConversation(session) && !peekIds.has(session.id) && !sessionForceStored(session.id)) holdEphemeral(session);
+    else dropEphemeral(session.id);
+  }
+  const persisted = sessions.filter((session) => !isBlankConversation(session) || peekIds.has(session.id) || sessionForceStored(session.id));
+  const persistedState = { ...state, sessions: persisted };
+  const drafts = (state as BaselinedState)[DRAFT_BASELINE];
+
+  // 1. Transcripts first: a session must never be listed before it is readable.
+  for (const session of persisted) {
+    const transcript = taken.sessions.get(session.id)!.transcript;
+    const before = baseline?.sessions.get(session.id);
+    const draft = peekIds.has(session.id) ? drafts?.get(session.id) : undefined;
+    let changed: boolean;
+    // baselineOf shares an unchanged transcript with the baseline.
+    if (before && peekIds.has(session.id)) changed = before.transcript !== transcript;
+    // A draft stored elsewhere since this copy read it: only a transcript
+    // this process changed is its to write; the stored one is newer.
+    else if (draft) changed = !sameData(draft.transcript, transcript);
+    // New here, or removed elsewhere and re-added by this change: compare
+    // with what is actually stored so nothing is written needlessly or lost.
+    else changed = !sameData(await readSessionTranscript(session.id), transcript);
+    if (!changed) continue;
+    await writeSessionTranscript(session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true });
+  }
+
   let written: StateBaselineData | undefined;
   await withStateLock(async () => {
-    // A legacy file that appeared (or was never migrated) is folded in first so
-    // this write merges against everything that exists.
-    if (await exists(harnessStatePath())) await ensureLayoutLocked();
     const disk = await loadIndex();
     if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
 
-    // What this write stores is taken here, in one synchronous step, and is
-    // exactly what it then remembers as stored. The caller may keep changing
-    // `state` while the files below are written -- a turn checkpoint does: a
-    // message queued mid-write. Remembering the object as it was at the END
-    // recorded that change as already on disk, so the write made for it
-    // found nothing to store, and the queued message was lost.
-    // Summarize onto the index before the snapshot, and only for a transcript
-    // this caller actually opened. A light read leaves the summary alone.
-    for (const session of state.sessions ?? []) stampListFacts(session);
-    const taken = baselineOf(state, baseline);
-    const sessions = [...(state.sessions ?? [])];
-    const diskIds = new Set((disk?.sessions ?? []).map((session) => session.id));
-    // A draft is not a conversation. It stays off disk until it is used, or
-    // until a worker in another process has to read it (force). One already
-    // on disk stays until this process drops it from its working copy, which
-    // is how an empty chat an older build stored gets removed.
-    const writing = new Set(sessions.map((session) => session.id));
-    for (const session of ephemeralSessions()) {
-      if (!writing.has(session.id)) dropEphemeral(session.id);
-    }
-    for (const session of sessions) {
-      if (isBlankConversation(session) && !diskIds.has(session.id) && !sessionForceStored(session.id)) holdEphemeral(session);
-      else dropEphemeral(session.id);
-    }
-    const persisted = sessions.filter((session) => !isBlankConversation(session) || diskIds.has(session.id) || sessionForceStored(session.id));
-    const persistedState = { ...state, sessions: persisted };
-    const drafts = (state as BaselinedState)[DRAFT_BASELINE];
     const next = baseline && disk ? mergedIndex(baseline, persistedState, disk, drafts) : indexFromWorking(persistedState, disk);
     next.version = HARNESS_STATE_VERSION;
     capInvocations(next);
-
-    // 1. Transcripts first: a session must never be listed before it is readable.
-    const diskSessionIds = new Set((disk?.sessions ?? []).map((session) => session.id));
-    for (const session of persisted) {
-      const transcript = taken.sessions.get(session.id)!.transcript;
-      const before = baseline?.sessions.get(session.id);
-      const draft = diskSessionIds.has(session.id) ? drafts?.get(session.id) : undefined;
-      let changed: boolean;
-      // baselineOf shares an unchanged transcript with the baseline.
-      if (before && diskSessionIds.has(session.id)) changed = before.transcript !== transcript;
-      // A draft stored elsewhere since this copy read it: only a transcript
-      // this process changed is its to write; the stored one is newer.
-      else if (draft) changed = !sameData(draft.transcript, transcript);
-      // New here, or removed elsewhere and re-added by this change: compare
-      // with what is actually stored so nothing is written needlessly or lost.
-      else changed = !sameData(await readSessionTranscript(session.id), transcript);
-      if (!changed) continue;
-      await writeSessionTranscript(session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true });
-    }
 
     // 2. The index, only when its content really differs.
     if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: true });

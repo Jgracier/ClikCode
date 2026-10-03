@@ -1,6 +1,7 @@
 /** Lock files that survive a killed process. A lock records its owner, and a
  * lock whose owner is gone is broken rather than waited on forever. */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomBytes } from 'node:crypto';
 import { link, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
@@ -39,6 +40,13 @@ const LOCK_TUNING = {
 };
 
 const lockQueues = new Map<string, Promise<unknown>>();
+
+/** Paths this async call chain already holds, so a lock a callee needs for its
+ * own correctness (e.g. transcripts.ts guarding a cross-session reference)
+ * never deadlocks just because a caller higher up already holds the same
+ * lock. Scoped to one chain: a sibling task, or another call chain entirely,
+ * still queues normally. */
+const heldLocks = new AsyncLocalStorage<ReadonlySet<string>>();
 
 function parseLockOwner(raw: string): LockOwner | undefined {
   try {
@@ -82,10 +90,17 @@ export async function breakStaleLock(lockPath: string, observedRaw: string): Pro
 }
 
 /** Cross-process mutual exclusion on `lockPath`, serialized in-process first so
- * one process never contends with itself. Not re-entrant. */
+ * one process never contends with itself. Re-entrant only within the async
+ * chain that already holds `lockPath` -- a nested call just runs; a different
+ * chain (even concurrently, even for the same logical operation on another
+ * session) still queues and takes the file lock for real. */
 export async function withFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
+  const held = heldLocks.getStore();
+  if (held?.has(lockPath)) return run();
   const previous = lockQueues.get(lockPath) ?? Promise.resolve();
-  const result = previous.then(() => holdFileLock(lockPath, run));
+  const nested = new Set(held);
+  nested.add(lockPath);
+  const result = previous.then(() => holdFileLock(lockPath, () => heldLocks.run(nested, run)));
   const settled = result.catch(() => undefined);
   lockQueues.set(lockPath, settled);
   void settled.then(() => { if (lockQueues.get(lockPath) === settled) lockQueues.delete(lockPath); });
@@ -98,6 +113,23 @@ export async function withFileLock<T>(lockPath: string, run: () => Promise<T>): 
  * every other ClikCode. */
 export async function fileLocksIdle(): Promise<void> {
   while (lockQueues.size) await Promise.all([...lockQueues.values()]);
+}
+
+/** Same, but gives up waiting after `timeoutMs` and reports whether it
+ * actually went idle. A caller with a hard correctness requirement (execve:
+ * see fileLocksIdle's own doc) must treat `false` as "do not proceed" --
+ * this exists so such a caller can fall back to a safer path instead of
+ * hanging forever on a lock that is itself stuck, rather than to let anyone
+ * skip the requirement. A caller that only wants to avoid an unnecessarily
+ * long wait (not a correctness requirement) may ignore the return value. */
+export async function fileLocksIdleWithin(timeoutMs: number): Promise<boolean> {
+  let timedOut = false;
+  const timer = new Promise<void>((resolve) => {
+    const handle = setTimeout(() => { timedOut = true; resolve(); }, timeoutMs);
+    handle.unref?.();
+  });
+  await Promise.race([fileLocksIdle(), timer]);
+  return !timedOut;
 }
 
 async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {

@@ -13,6 +13,9 @@ import { emitHarnessOutput } from '../harness/output.js';
 import type { StreamingTitle } from '../session/title.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 
+/** Longest the gateway may go without sending anything before the turn gives up. */
+const PLATFORM_STREAM_SILENCE_MS = 120_000;
+
 /** What the Gateway's final `result` event says that the text did not. */
 function gatewayResultNotice(data: unknown): string | undefined {
   if (!data || typeof data !== 'object') return undefined;
@@ -45,10 +48,23 @@ export async function runPlatformAssistantTurn(input: {
   // Only a Gateway session reaches here, and it is the same connection the
   // model client was built from.
   const { baseUrl, apiKey } = gatewayConnection(config);
+  // A gateway that accepts the request and then goes silent must not hang the
+  // turn: any stretch with no bytes at all is a dead stream, cancelled here.
+  const silence = new AbortController();
+  const abortOnCaller = (): void => silence.abort(signal?.reason);
+  if (signal?.aborted) abortOnCaller();
+  signal?.addEventListener('abort', abortOnCaller, { once: true });
+  let silenceTimer: NodeJS.Timeout | undefined;
+  const armSilence = (): void => {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    silenceTimer = setTimeout(() => silence.abort(new Error(`gateway AI stream silent for ${PLATFORM_STREAM_SILENCE_MS / 1000}s`)), PLATFORM_STREAM_SILENCE_MS);
+    silenceTimer.unref?.();
+  };
   try {
+  armSilence();
   const response = await fetch(`${baseUrl}/api/assistant/chat`, {
     method: 'POST',
-    signal,
+    signal: silence.signal,
     headers: { authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
     body: JSON.stringify({ message: turnText, messages: baseMessages, mode: 'plan' }),
   });
@@ -62,6 +78,7 @@ export async function runPlatformAssistantTurn(input: {
   let wroteDelta = false;
   for (;;) {
     const { done, value } = await reader.read();
+    armSilence();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
     let boundary = buffer.indexOf('\n\n');
@@ -117,6 +134,8 @@ export async function runPlatformAssistantTurn(input: {
   if (wroteDelta) output.write('\n\n');
   else if (!prompter) emitHarnessOutput({ session, text: completedText, usage: { attributedBy: 'gateway' }, invocation, ...(gatewayNotice ? { notice: gatewayNotice } : {}) });
   } finally {
+    if (silenceTimer) clearTimeout(silenceTimer);
+    signal?.removeEventListener('abort', abortOnCaller);
     await checkpoint.flush();
   }
 }
