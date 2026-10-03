@@ -9,6 +9,9 @@ import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
 import { POP_TITLE, progressSequence } from './terminal-signals.js';
 
+/** An in-place build reload inherits the current terminal screen and title. */
+export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
+
 export const terminalModes: {
   bracketedPaste: boolean;
   kittyKeyboard: boolean;

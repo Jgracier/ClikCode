@@ -3,6 +3,8 @@
  * it re-execs onto the same chat: one redraw, the conversation unchanged.
  */
 import { spawnSync } from 'node:child_process';
+import { stdout } from 'node:process';
+import { REEXEC_TERMINAL_ENV } from '../../tui/restore.js';
 
 /** argv after the node binary: this CLI, and the chat to reopen. */
 export function relaunchArgv(entry: string, sessionId?: string): string[] {
@@ -32,6 +34,16 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
   const sessionId = input.sessionId || undefined;
   replacing = (async () => {
     try { await input.release(); } catch { /* the new process is the point */ }
+    // On POSIX, replace this process itself. The terminal keeps its current
+    // frame until the new build paints, and repeated builds do not leave a
+    // chain of blocked parent processes behind. Flush the last answer first.
+    if (typeof process.execve === 'function') {
+      await new Promise<void>((resolve) => stdout.write('', () => resolve()));
+      try {
+        process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
+          { ...process.env, [REEXEC_TERMINAL_ENV]: '1' });
+      } catch { /* The existing child path restores the terminal on failure. */ }
+    }
     try { input.closeUi(); } catch { /* the terminal is still handed over */ }
     let status = 1;
     try {

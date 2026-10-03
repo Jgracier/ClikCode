@@ -37,6 +37,16 @@ SCENARIOS = {
         'raw_never': ['the turn has finished'],
         'no_clear_after_type': True,
     },
+    'rebuild-after-turn-keeps-answer': {
+        'rebuild_entry': True,
+        'turns': [{'blocks': ['Answer stays visible after the tool.', 'The final answer is ready.']}],
+        'steps': [
+            ('type', 'check'), ('wait_for', 'Answer stays visible after the tool.', 30),
+            ('touch_entry',), ('wait_for', 'The final answer is ready.', 30), ('settle', 20),
+        ],
+        'watch': ['The final answer is ready.'],
+        'no_clear_after_type': True,
+    },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 4)],
@@ -381,6 +391,11 @@ SCENARIOS = {
 
 def run(name, spec, entry, keep):
     root = tempfile.mkdtemp(prefix=f'clikcode-e2e-{name}-')
+    if spec.get('rebuild_entry'):
+        installed = os.path.join(root, 'installed')
+        shutil.copytree(os.path.dirname(entry), installed)
+        os.symlink(os.path.join(REPO, 'node_modules'), os.path.join(root, 'node_modules'))
+        entry = os.path.join(installed, os.path.basename(entry))
     home, state, fakebin, workspace = (os.path.join(root, part) for part in ('home', 'state', 'bin', 'work'))
     for path in (home, state, fakebin, workspace): os.makedirs(path)
     binary = spec.get('harness', 'grok')
@@ -450,6 +465,8 @@ def run(name, spec, entry, keep):
         elif step[0] == 'mark':
             # Where 'never_after_mark' starts looking.
             marked_at = len(frames)
+        elif step[0] == 'touch_entry':
+            os.utime(entry, None)
         elif step[0] == 'damage_and_redraw':
             # Simulate cells lost by the client: the app's cached frame is still
             # intact, but the emulated display is blank. Ctrl+L must rebuild it.
