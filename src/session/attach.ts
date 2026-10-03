@@ -11,7 +11,8 @@
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 import { claimSession, releaseSession, sessionClaimIsLive } from './claim.js';
-import { discardIfBlank, ensureSessionOnDisk } from './blank.js';
+import { blankChatSweepable, discardIfBlank, ensureSessionOnDisk } from './blank.js';
+import { liveWorkerSessions } from './liveness.js';
 import { backfillListFacts } from './list-backfill.js';
 import { chatNamed, isBlankConversation, latestChat } from './options.js';
 import type { HarnessSession, HarnessState } from './model.js';
@@ -67,8 +68,10 @@ export async function openConversation(
     return session.id;
   }
   // Empty chats are not conversations: the one this opens is not stored
-  // until something happens in it, and earlier ones left behind go now.
-  state.sessions = state.sessions.filter((item) => !isBlankConversation(item));
+  // until something happens in it, and earlier ones left behind go now --
+  // but not one another process stored and is about to use.
+  const workerIsLive = await liveWorkerSessions();
+  state.sessions = state.sessions.filter((item) => !blankChatSweepable(item, workerIsLive));
   const fresh = launchSession(state, workspace);
   state.sessions.push(fresh);
   await writeState(state);

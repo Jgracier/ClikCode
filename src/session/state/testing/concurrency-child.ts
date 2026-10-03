@@ -1,6 +1,8 @@
 /** A separate ClikCode process for the concurrency tests: bundled and run by
  * concurrency.ts against the CLIKCODE_HOME it is given. Not shipped. */
 
+import { forceStoreSession, unforceStoreSession } from '../../ephemeral.js';
+import type { HarnessSession } from '../../model.js';
 import { readState } from '../read.js';
 import { writeState } from '../write.js';
 
@@ -33,6 +35,17 @@ async function main(): Promise<void> {
       session.messages = [...(session.messages ?? []), { role: 'user', content: `${tag} ${step}` }];
       await writeState(state);
     }
+  } else if (scenario === 'store-blank') {
+    // Stores an empty chat for another process to use, as a window does for
+    // its turn's worker (ensureSessionOnDisk).
+    const state = await readState();
+    const at = new Date().toISOString();
+    state.sessions.push({
+      id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      accountFailover: 'never', createdAt: at, updatedAt: at, status: 'active',
+    } as HarnessSession);
+    forceStoreSession(id);
+    try { await writeState(state); } finally { unforceStoreSession(id); }
   } else throw new Error(`unknown scenario ${scenario}`);
 }
 
