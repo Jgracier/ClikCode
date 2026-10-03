@@ -34,6 +34,23 @@ export function chatSuite(): void {
       await screenshot('welcome', 1500);
     });
 
+    it('updates the open conversation list when another ClikCode process changes a chat', async () => {
+      await click(api, '#history-button');
+      // Loaded, so a later change can only arrive by being told of it.
+      await waitFor(api, '#history-list [data-key], #history-list .keylist-empty', 'the conversation list, loaded');
+      await sleep(500);
+      // Another process: the CLI this extension runs, against the same home.
+      const entry = vscode.workspace.getConfiguration('clikcode').get<string>('path')!;
+      const clikcode = (...args: string[]): string => execFileSync('node', [entry, ...args], { encoding: 'utf8', env: process.env });
+      const id = (JSON.parse(clikcode('sessions', 'create', '--route', 'gateway')) as { session: { id: string } }).session.id;
+      clikcode('sessions', 'command', id, '/rename', 'Named in another window');
+      // Well inside the 10s fallback poll, and nothing is generating: only the
+      // file watch can bring it in this fast.
+      await waitFor(api, `#history-list [data-key="${id}"]`, 'the chat named elsewhere, without reopening the list', 5_000, (found) => /Named in another window/.test(found.text));
+      await click(api, '#history-button');
+      await waitFor(api, '#composer-input', 'the chat screen again');
+    });
+
     it('lists only this provider\'s accounts, and sets effort beside the model', async () => {
       await waitFor(api, '#account-button', 'the account under the message box');
       await click(api, '#account-button');
