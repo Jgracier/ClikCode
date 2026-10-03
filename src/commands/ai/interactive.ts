@@ -16,7 +16,7 @@ import { chatNamed, isBlankConversation, latestChat } from '../../session/option
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { discardIfBlank, ensureSessionOnDisk } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
-import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from './shell-run.js';
+import { isShellCommandLine, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
@@ -52,7 +52,7 @@ import { routeSlashInput, slashControls, slashHelpText, slashPalette, type Slash
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from './conversations.js';
 import { aiSessionLeave, launchSession } from './sessions.js';
-import { aiSessionCommand, slashRouteTurn } from '../../tui/slash/handlers.js';
+import { aiSessionCommand, runShellLine, slashRouteTurn } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
 import { capabilitiesText } from '../../tui/slash/capabilities-text.js';
 import { compactConversation } from '../../tui/slash/compact.js';
@@ -647,20 +647,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           }
           const controller = new AbortController();
           terminal?.startWaiting(`! ${command}`, () => controller.abort());
-          let result: Awaited<ReturnType<typeof runShellCommand>>;
+          let result: ShellNote;
           try {
-            result = await runShellCommand(command, activeWorkspace, controller.signal);
+            result = await runShellLine(id, command, controller.signal);
           } finally {
             terminal?.stopWaiting();
-          }
-          const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
-          const shellState = await readState();
-          const shellSession = shellState.sessions.find((item) => item.id === id);
-          if (shellSession) {
-            shellSession.messages = [...(shellSession.messages ?? []), { role: 'user' as const, content: shellMessageContent(note) }];
-            shellSession.shellNotes = [...(shellSession.shellNotes ?? []), note];
-            shellSession.updatedAt = new Date().toISOString();
-            await writeState(shellState);
           }
           notice = result.exitCode === 0
             ? `Ran \`!${command}\` (exit 0) — its output rides into the next request`
