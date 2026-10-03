@@ -123,9 +123,6 @@ export interface HarnessSession {
   /** Swarm is off until this conversation turns it on. A saved preset list
    * from before the single switch still means on. */
   swarm?: boolean | string[];
-  /** Last board written for this conversation. The live copy is the swarm
-   * board file; this is what a resumed chat still has if that file is gone. */
-  swarmBoard?: import('../swarm/board.js').SwarmBoard;
   /** Set on a clerk run that was stored by mistake. Those rows are not chats. */
   clerkOf?: string;
 }

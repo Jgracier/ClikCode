@@ -1,6 +1,6 @@
 /** A host may delegate only to a provider that published a usage amount and
  * still has some of it left. The clerk is not a conversation. */
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -18,7 +18,8 @@ import { swarmProgressLabel } from './mcp.js';
 import { formatSwarmOffers, swarmChoiceNote, swarmOffers } from './offers.js';
 import { clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
 import { lookupScore, scoresFromOpenRouter } from './scores.js';
-import { readBoard } from './store.js';
+import { readBoard, writeBoard } from './store.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { clerkUsage } from './usage.js';
 
 const NOW = Date.parse('2026-10-01T12:00:00.000Z');
@@ -394,5 +395,26 @@ describe('the board and the status line', () => {
       ],
     };
     expect(workingDetail(pending, NOW).replace(/\u001b\[[0-9;]*m/g, '')).toContain('2 providers ←');
+  });
+});
+
+describe('the board file', () => {
+  it('starts empty when missing, round-trips atomically, and keeps a corrupt board aside instead of wiping it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    expect(await readBoard('b1')).toEqual(emptyBoard());
+    const board = { ...emptyBoard(), goal: 'kept' };
+    await writeBoard('b1', board);
+    expect((await readBoard('b1')).goal).toBe('kept');
+    const swarmDir = join(stateDirectory(), 'swarm');
+    expect((await readdir(swarmDir)).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+
+    await writeFile(join(swarmDir, 'board-b1.json'), '{"facts": [', 'utf8');
+    const warned = new Promise<Error>((resolve) => process.once('warning', resolve));
+    expect(await readBoard('b1')).toEqual(emptyBoard());
+    expect((await warned).message).toContain('swarm board for b1 was unreadable');
+    const kept = (await readdir(swarmDir)).filter((name) => name.startsWith('board-b1.json.corrupt-'));
+    expect(kept).toHaveLength(1);
+    expect(await readFile(join(swarmDir, kept[0]!), 'utf8')).toBe('{"facts": [');
   });
 });
