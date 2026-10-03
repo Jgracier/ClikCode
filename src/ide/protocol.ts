@@ -170,6 +170,11 @@ export interface IdeAccounts {
   addable: Array<{ provider: string; name: string }>;
   /** This chat's: switch accounts automatically when one runs out. */
   failover: 'auto' | 'never';
+  /** The provider this chat runs on, as the bridge reads it now: what the
+   * account menu titles, lists and adds to. The panel's own copy can lag a
+   * switch, and a menu built from both once added a Grok account under a
+   * Copilot title. Absent on the Gateway and ClikCode Local. */
+  chat?: { provider: string; name: string };
 }
 
 export interface IdeChatSettings {
