@@ -17,6 +17,7 @@ import { turnBackendForAccount } from './account-routing.js';
 import { runAgentTurn } from './agent-turn.js';
 import { sendDirectApiTurn } from './direct-turn.js';
 import { sendVendorTurn } from './vendor-turn.js';
+import { isQueuedTurnAlreadyRun } from './turn-journal.js';
 
 /** Options supplied by any caller of a turn. */
 export interface TurnRunOptions {
@@ -43,8 +44,15 @@ export async function runSessionTurn(
   // A session that left ClikCode Local lets go of the model this process
   // held for it (a worker that ran its earlier turns, say).
   if (session.route !== 'clikcode-local') await releaseHeldLocalModel(session.id);
-  if (isClikCodeAgent(session)) return runAgentTurn({ config, state, session, prompt, signal, run });
-  return runAccountTurn(state, session, prompt, signal, run);
+  try {
+    if (isClikCodeAgent(session)) return await runAgentTurn({ config, state, session, prompt, signal, run });
+    return await runAccountTurn(state, session, prompt, signal, run);
+  } catch (error) {
+    // Already run by another submit of the same queued entry: nothing to do,
+    // and nothing went wrong.
+    if (isQueuedTurnAlreadyRun(error)) return;
+    throw error;
+  }
 }
 
 /** A turn through the session's account: its harness, or a model API. */
