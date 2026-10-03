@@ -21,8 +21,7 @@ import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
 import { acpDiscoverySession, acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
-import { atomicWriteFile } from '../../session/store/files.js';
-import { stateDirectory } from '../../session/store/paths.js';
+import { jsonMemo } from '../../session/store/json-memo.js';
 
 /** Provider-specific model naming belongs to account metadata, not generic
  * session pickers or terminal renderers. Unknown models always pass through. */
@@ -120,37 +119,13 @@ interface ModelCatalogMemoFile {
   entries: Record<string, CatalogMemoEntry>;
 }
 
-let memo: { path: string; data: ModelCatalogMemoFile; dirty: boolean } | undefined;
-
-function memoPath(): string | undefined {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
-  const directory = stateDirectory();
-  return directory ? join(directory, 'model-catalog.json') : undefined;
-}
-
-async function loadMemo(): Promise<ModelCatalogMemoFile> {
-  const path = memoPath();
-  if (memo && memo.path === (path ?? '')) return memo.data;
-  let data: ModelCatalogMemoFile = { v: 1, entries: {} };
-  if (path) {
-    try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as ModelCatalogMemoFile;
-      if (parsed?.v === 1 && parsed.entries && typeof parsed.entries === 'object') data = parsed;
-    } catch { /* fail-open-ok */ }
-  }
-  memo = { path: path ?? '', data, dirty: false };
-  return data;
-}
-
-async function saveMemo(): Promise<void> {
-  const path = memoPath();
-  if (!path || !memo?.dirty || memo.path !== path) return;
-  memo.dirty = false;
-  await atomicWriteFile(path, JSON.stringify(memo.data)).catch(() => undefined);
-}
+const memo = jsonMemo<ModelCatalogMemoFile>('model-catalog.json', () => ({ v: 1, entries: {} }), (parsed) => {
+  const file = parsed as ModelCatalogMemoFile;
+  return file.v === 1 && file.entries && typeof file.entries === 'object' ? file : undefined;
+});
 
 export function resetModelCatalogMemo(): void {
-  memo = undefined;
+  memo.reset();
 }
 
 /** How long a server-sourced CLI or ACP model list is trusted. */
@@ -237,7 +212,7 @@ async function cachedCatalog(
   account?: AiHarnessAccount,
   options?: { allowStale?: boolean },
 ): Promise<ModelCatalogResult | undefined> {
-  const cached = (await loadMemo()).entries[cacheKey(harness, account)];
+  const cached = (await memo.load()).entries[cacheKey(harness, account)];
   if (!cached) return undefined;
   if (cached.fingerprint !== await catalogFingerprint(harness, account)) return undefined;
   if (harness.acp && cached.result.models.length === 0) return undefined;
@@ -382,10 +357,9 @@ export async function nativeModelCatalog(
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead.
   if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider' || harness.acp)) return result;
-  const memoData = await loadMemo();
-  memoData.entries[cacheKey(harness, account)] = { at: Date.now(), fingerprint, result };
-  if (memo) memo.dirty = true;
-  await saveMemo().catch(() => undefined);
+  (await memo.load()).entries[cacheKey(harness, account)] = { at: Date.now(), fingerprint, result };
+  memo.changed();
+  await memo.save();
   if (account?.id && result.models.length) {
     syncAccountModels(account.id, result.models).catch(() => undefined);
   }

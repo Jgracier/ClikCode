@@ -17,10 +17,7 @@
  * version for the whole window on one where something did.
  */
 import { stat } from 'node:fs/promises';
-import { join } from 'node:path';
-import { atomicWriteFile } from '../../../session/store/files.js';
-import { stateDirectory } from '../../../session/store/paths.js';
-import { readFile } from 'node:fs/promises';
+import { jsonMemo } from '../../../session/store/json-memo.js';
 import { resolveBinaryPath } from './binary.js';
 
 /** One harness's last inspection, tied to the file it described. */
@@ -34,32 +31,21 @@ export interface MemoizedVersion {
 
 interface VersionMemoFile { v: 1; harnesses: Record<string, MemoizedVersion> }
 
-let memo: { path: string; data: VersionMemoFile; dirty: boolean } | undefined;
+const memo = jsonMemo<VersionMemoFile>('harness-versions.json', () => ({ v: 1, harnesses: {} }), (parsed) => {
+  const file = parsed as VersionMemoFile;
+  return file.v === 1 && file.harnesses && typeof file.harnesses === 'object' ? file : undefined;
+});
 
-function memoPath(): string | undefined {
-  // Tests that never relocated ClikCode's state must not touch the real one.
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
-  const directory = stateDirectory();
-  return directory ? join(directory, 'harness-versions.json') : undefined;
-}
+export type BinaryFingerprint = { path: string; mtimeMs: number; size: number };
 
-async function load(): Promise<VersionMemoFile> {
-  const path = memoPath();
-  if (memo && memo.path === (path ?? '')) return memo.data;
-  let data: VersionMemoFile = { v: 1, harnesses: {} };
-  if (path) {
-    try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as VersionMemoFile;
-      if (parsed?.v === 1 && parsed.harnesses && typeof parsed.harnesses === 'object') data = parsed;
-    } catch { /* fail-open-ok: a missing or damaged memo costs one round of spawns. */ }
-  }
-  memo = { path: path ?? '', data, dirty: false };
-  return data;
+/** Both describe the same file, unchanged. */
+export function sameFingerprint(left: BinaryFingerprint | undefined, right: BinaryFingerprint | undefined): boolean {
+  return Boolean(left && right && left.path === right.path && left.mtimeMs === right.mtimeMs && left.size === right.size);
 }
 
 /** The identity of the file a binary currently resolves to, or undefined when
  * it is not there. */
-export async function binaryFingerprint(path: string | undefined): Promise<{ path: string; mtimeMs: number; size: number } | undefined> {
+export async function binaryFingerprint(path: string | undefined): Promise<BinaryFingerprint | undefined> {
   if (!path) return undefined;
   try {
     const info = await stat(path);
@@ -81,32 +67,23 @@ export async function harnessBinaryIdentity(binary: string): Promise<string | un
 /** The remembered inspection for this harness, if it still describes the file
  * on disk. */
 export async function rememberedVersion(
-  command: string, fingerprint: { path: string; mtimeMs: number; size: number } | undefined,
+  command: string, fingerprint: BinaryFingerprint | undefined,
 ): Promise<MemoizedVersion | undefined> {
   if (!fingerprint) return undefined;
-  const entry = (await load()).harnesses[command];
-  if (!entry) return undefined;
-  const same = entry.path === fingerprint.path
-    && entry.mtimeMs === fingerprint.mtimeMs
-    && entry.size === fingerprint.size;
-  return same ? entry : undefined;
+  const entry = (await memo.load()).harnesses[command];
+  return sameFingerprint(entry, fingerprint) ? entry : undefined;
 }
 
 export async function rememberVersion(
-  command: string, fingerprint: { path: string; mtimeMs: number; size: number },
+  command: string, fingerprint: BinaryFingerprint,
   result: { version?: string; error?: string },
 ): Promise<void> {
-  const data = await load();
+  const data = await memo.load();
   data.harnesses[command] = { ...fingerprint, ...(result.version ? { version: result.version } : {}), ...(result.error ? { error: result.error } : {}) };
-  memo!.dirty = true;
+  memo.changed();
 }
 
-export async function saveVersionMemo(): Promise<void> {
-  const path = memoPath();
-  if (!path || !memo?.dirty || memo.path !== path) return;
-  memo.dirty = false;
-  await atomicWriteFile(path, JSON.stringify(memo.data)).catch(() => undefined);
-}
+export async function saveVersionMemo(): Promise<void> { await memo.save(); }
 
 /** Forget everything, e.g. right after installing a harness. */
-export function resetVersionMemo(): void { memo = undefined; }
+export function resetVersionMemo(): void { memo.reset(); }

@@ -1,10 +1,8 @@
 /** Discovery is a lot of stat calls, and /resume has to open now. This is
  * the on-disk record of what was found last time, per directory. */
 
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
-import { atomicWriteFile } from '../store/files.js';
-import { stateDirectory } from '../store/paths.js';
+import { readdir, stat } from 'node:fs/promises';
+import { jsonMemo } from '../store/json-memo.js';
 import type { DiscoveredNativeSession } from './discovered-session.js';
 
 /** What discovery learned about one vendor file. Everything here comes from
@@ -56,46 +54,33 @@ export const SEEN_LISTING_TTL_MS = 2 * 60_000;
 
 const DISCOVERY_CACHE_MAX_DIRECTORIES = 400;
 
-export let discoveryCache: { path: string; data: DiscoveryCacheFile; dirty: boolean } | undefined;
+const memo = jsonMemo<DiscoveryCacheFile>('cache/native-discovery.json', () => ({ v: 1, directories: {} }), (parsed) => {
+  const file = parsed as DiscoveryCacheFile;
+  if (file.v !== 1 || !file.directories || typeof file.directories !== 'object') return undefined;
+  return { v: 1, directories: file.directories, ...(file.seen ? { seen: file.seen } : {}) };
+});
 
 /** Codex session id -> rollout file, filled by discovery so reading a transcript
  * is a lookup instead of a second walk of the whole tree. */
 export const codexPathById = new Map<string, string>();
 
-function discoveryCachePath(): string | undefined {
-  // Tests that never relocated ClikCode's state must not touch the real one.
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
-  return join(stateDirectory(), 'cache', 'native-discovery.json');
-}
+export function loadDiscoveryCache(): Promise<DiscoveryCacheFile> { return memo.load(); }
 
-export async function loadDiscoveryCache(): Promise<DiscoveryCacheFile> {
-  const path = discoveryCachePath();
-  if (discoveryCache && discoveryCache.path === (path ?? '')) return discoveryCache.data;
-  let data: DiscoveryCacheFile = { v: 1, directories: {} };
-  if (path) {
-    try {
-      const parsed = JSON.parse(await readFile(path, 'utf8')) as DiscoveryCacheFile;
-      if (parsed?.v === 1 && parsed.directories && typeof parsed.directories === 'object') {
-        data = { v: 1, directories: parsed.directories, ...(parsed.seen ? { seen: parsed.seen } : {}) };
-      }
-    } catch { /* fail-open-ok: a missing or damaged cache only costs one full scan. */ }
-  }
-  discoveryCache = { path: path ?? '', data, dirty: false };
-  return data;
-}
+/** Marks what discovery learned as worth writing at the next save. */
+export function discoveryCacheChanged(): void { memo.changed(); }
 
 export async function saveDiscoveryCache(): Promise<void> {
-  const path = discoveryCachePath();
-  if (!path || !discoveryCache?.dirty || discoveryCache.path !== path) return;
-  const entries = Object.entries(discoveryCache.data.directories);
+  if (!memo.dirty) return;
+  const data = await memo.load();
+  const entries = Object.entries(data.directories);
   if (entries.length > DISCOVERY_CACHE_MAX_DIRECTORIES) {
     // Date-named vendor directories sort oldest first; drop those.
-    discoveryCache.data.directories = Object.fromEntries(entries.sort(([left], [right]) => right.localeCompare(left)).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
+    data.directories = Object.fromEntries(entries.sort(([left], [right]) => right.localeCompare(left)).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
   }
   // Expired answers are dropped rather than accumulating one key per
   // workspace per account for the life of the install. An expired entry is
   // already ignored on read, so this only keeps the file honest about its size.
-  const seen = discoveryCache.data.seen;
+  const seen = data.seen;
   if (seen) {
     const now = Date.now();
     for (const [key, entry] of Object.entries(seen)) {
@@ -103,14 +88,13 @@ export async function saveDiscoveryCache(): Promise<void> {
     }
   }
   if (seen && Object.keys(seen).length > DISCOVERY_CACHE_MAX_SEEN) {
-    discoveryCache.data.seen = Object.fromEntries(Object.entries(seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN));
+    data.seen = Object.fromEntries(Object.entries(seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN));
   }
-  discoveryCache.dirty = false;
-  await atomicWriteFile(path, JSON.stringify(discoveryCache.data)).catch(() => undefined);
+  await memo.save();
 }
 
 export function resetNativeSessionDiscoveryCache(): void {
-  discoveryCache = undefined;
+  memo.reset();
   codexPathById.clear();
 }
 
@@ -120,7 +104,7 @@ export async function cachedDirectory(directory: string, suffix: string): Promis
   const cache = await loadDiscoveryCache();
   const info = await stat(directory).catch(() => undefined);
   if (!info?.isDirectory()) {
-    if (cache.directories[directory]) { delete cache.directories[directory]; discoveryCache!.dirty = true; }
+    if (cache.directories[directory]) { delete cache.directories[directory]; memo.changed(); }
     return undefined;
   }
   const known = cache.directories[directory];
@@ -132,7 +116,7 @@ export async function cachedDirectory(directory: string, suffix: string): Promis
   }
   const next: CachedDirectory = { mtimeMs: info.mtimeMs, files: Object.fromEntries(names.map((name) => [name, known?.files[name] ?? {}])) };
   cache.directories[directory] = next;
-  discoveryCache!.dirty = true;
+  memo.changed();
   return next;
 }
 
@@ -155,7 +139,7 @@ export async function rememberListing(
   const cache = await loadDiscoveryCache();
   cache.seen ??= {};
   cache.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
-  discoveryCache!.dirty = true;
+  memo.changed();
 }
 
 /** The last answer, when it is recent enough to skip the CLI and came from

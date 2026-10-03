@@ -4,7 +4,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, join } from 'node:path';
-import { cachedDirectory, discoveryCache, saveDiscoveryCache } from '../cache.js';
+import { cachedDirectory, discoveryCacheChanged, saveDiscoveryCache } from '../cache.js';
 import { newestFiles, readFilePrefix, readFileSuffix } from '../files.js';
 import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { conversationTitle } from '../conversation-title.js';
@@ -93,7 +93,7 @@ export async function discoverClaudeFsSessions(workspace: string, environment: N
         const read = await claudeSessionTitle(file.path);
         const cwd = everywhere ? await claudeSessionCwd(file.path) : facts.cwd;
         listing.files[name] = { title: read.title, generated: read.generated, mtimeMs: file.mtimeMs, ...(cwd ? { cwd } : {}) };
-        discoveryCache!.dirty = true;
+        discoveryCacheChanged();
       }
       const known = listing.files[name]!;
       sessions.push({
