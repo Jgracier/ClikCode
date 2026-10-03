@@ -122,4 +122,27 @@ describe('single-file state migration', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('a legacy file written after the split is folded in by the next read, not by writes', async () => {
+    const { resetHarnessStateCaches } = await import('./index-file.js');
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-legacy-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    try {
+      const state = await readState();
+      await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
+        version: 1, installationId: 'old', accounts: [], invocations: [],
+        sessions: [{ id: 'from-old-build', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content: 'hi' }] }],
+        globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+      })}\n`);
+      state.globalSettings.effort = 'high';
+      await writeState(state);
+      resetHarnessStateCaches();
+      const after = await readState();
+      expect(after.globalSettings.effort).toBe('high');
+      expect(after.sessions.find((session) => session.id === 'from-old-build')?.messages).toEqual([{ role: 'user', content: 'hi' }]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });

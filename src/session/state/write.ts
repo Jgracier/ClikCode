@@ -13,8 +13,7 @@ import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from 
 import { HarnessStateVersionError, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
-import { ensureLayoutLocked } from './migrate.js';
-import { HARNESS_STATE_VERSION, exists, harnessStatePath } from './paths.js';
+import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from './secrets.js';
 
 /** Claims are owned by session-claims.ts. A caller that still expresses one by
@@ -58,9 +57,8 @@ export async function writeState(state: HarnessState): Promise<void> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   let written: StateBaselineData | undefined;
   await withStateLock(async (held) => {
-    // A legacy file that appeared (or was never migrated) is folded in first so
-    // this write merges against everything that exists.
-    if (await exists(harnessStatePath())) await ensureLayoutLocked(held);
+    // No legacy single-file check here: readState migrates it (ensureLayout),
+    // and only builds from before 2026-09-19 ever wrote that file.
     const disk = await loadIndex();
     if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
 
