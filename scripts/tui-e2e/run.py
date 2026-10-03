@@ -271,6 +271,14 @@ SCENARIOS = {
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
         'watch': [], 'ever': ['Del disconnect', 'Cancel'], 'final_contains': ['reauth'],
     },
+    # The same from a Mac or iPhone, whose "delete" key sends Backspace.
+    'account-backspace-disconnects': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x7f'), ('wait_for', 'Cancel', 10), ('settle', 0.5),
+                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
+        'watch': [], 'ever': ['Del disconnect', 'Cancel'], 'final_contains': ['reauth'],
+    },
     # Back from a sub-menu lands on the row it was opened from, with no
     # spinner or empty composer flashed on the way into the list.
     'settings-back-lands-on-row': {
