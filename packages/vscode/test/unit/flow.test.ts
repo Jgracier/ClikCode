@@ -52,7 +52,13 @@ describe("a turn's changes, together", () => {
 
   it('undoes every change to a file, newest first, back to how the turn found it', () => {
     expect(unwindChanges('top\nz\nend', [edit('a.ts', 'x', 'y'), edit('a.ts', 'y', 'z')])).toEqual({ before: 'top\nx\nend', whole: true, created: false });
-    expect(unwindChanges('top\nz', [{ path: 'n.ts', change: 'add', additions: 2, removals: 0, lines: [] }, edit('n.ts', 'y', 'z')])).toEqual({ before: '', whole: true, created: true });
+    const created: FileDiff = { path: 'n.ts', change: 'add', additions: 2, removals: 0, lines: [{ kind: 'added', text: 'top' }, { kind: 'added', text: 'y' }] };
+    expect(unwindChanges('top\nz\n', [created, edit('n.ts', 'y', 'z')])).toEqual({ before: '', whole: true, created: true });
+  });
+
+  it('does not delete a file the turn created once it was edited by hand', () => {
+    const created: FileDiff = { path: 'n.ts', change: 'add', additions: 2, removals: 0, lines: [{ kind: 'added', text: 'top' }, { kind: 'added', text: 'y' }] };
+    expect(unwindChanges('top\ny\nmine\n', [created]).whole).toBe(false);
   });
 
   it('is not whole when the file changed since, or is gone', () => {
