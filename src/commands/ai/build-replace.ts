@@ -4,7 +4,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { stdout } from 'node:process';
-import { fileLocksIdle } from '../../session/store/locks.js';
+import { fileLocksIdle, fileLocksHeld } from '../../session/store/locks.js';
 import { REEXEC_TERMINAL_ENV } from '../../tui/restore.js';
 
 /** argv after the node binary: this CLI, and the chat to reopen. */
@@ -27,22 +27,27 @@ export interface BuildReplace {
 let replacing: Promise<void> | undefined;
 
 /** Re-exec this CLI. The promise ends in process.exit. A second call joins
- * the same exit. Undefined when there is no script to exec. */
+ * the same exit. Undefined when there is no script to exec, or when this
+ * process holds or awaits a file lock right now: exec keeps this pid and
+ * spawnSync blocks this event loop for the child's whole life, so a lock held
+ * across either is never released and reads as live to every other
+ * ClikCode. Such a process carries on, still whole, and the next quiet
+ * moment asks again. */
 export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | undefined {
   if (replacing) return replacing;
   const entry = input.entry ?? process.argv[1];
-  if (!entry) return undefined;
+  if (!entry || fileLocksHeld()) return undefined;
   const sessionId = input.sessionId || undefined;
   replacing = (async () => {
     try { await input.release(); } catch { /* the new process is the point */ }
+    // Released now, so there is no going back. Locks release() took end on
+    // their own: every lock wait is bounded (locks.ts).
     // On POSIX, replace this process itself. The terminal keeps its current
     // frame until the new build paints, and repeated builds do not leave a
     // chain of blocked parent processes behind. Flush the last answer first.
     if (typeof process.execve === 'function') {
       await new Promise<void>((resolve) => stdout.write('', () => resolve()));
-      // A background state write may still hold a lock. Exec keeps this pid,
-      // so a lock taken now would never be released and would read as live.
-      // Nothing may await between this and the exec.
+      // Nothing may await between the idle check and the exec.
       await fileLocksIdle();
       try {
         process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
@@ -50,8 +55,7 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
       } catch { /* The existing child path restores the terminal on failure. */ }
     }
     try { input.closeUi(); } catch { /* the terminal is still handed over */ }
-    // spawnSync blocks this process for the child's whole life; a lock held
-    // across it would stall every other ClikCode the same way.
+    // Nothing may await between this and the spawnSync.
     await fileLocksIdle();
     let status = 1;
     try {

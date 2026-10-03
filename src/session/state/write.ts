@@ -57,10 +57,10 @@ async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData
 export async function writeState(state: HarnessState): Promise<void> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   let written: StateBaselineData | undefined;
-  await withStateLock(async () => {
+  await withStateLock(async (held) => {
     // A legacy file that appeared (or was never migrated) is folded in first so
     // this write merges against everything that exists.
-    if (await exists(harnessStatePath())) await ensureLayoutLocked();
+    if (await exists(harnessStatePath())) await ensureLayoutLocked(held);
     const disk = await loadIndex();
     if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
 
@@ -111,7 +111,7 @@ export async function writeState(state: HarnessState): Promise<void> {
       // with what is actually stored so nothing is written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
       if (!changed) continue;
-      await writeSessionTranscript(session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true });
+      await writeSessionTranscript(held, session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true });
     }
 
     // 2. The index, only when its content really differs.
@@ -120,7 +120,7 @@ export async function writeState(state: HarnessState): Promise<void> {
     // 3. Deliberate deletions last, children materialized before the parent goes.
     const remaining = new Set(next.sessions.map((session) => session.id));
     for (const id of baseline?.sessions.keys() ?? []) {
-      if (!remaining.has(id)) await deleteSessionTranscript(id);
+      if (!remaining.has(id)) await deleteSessionTranscript(held, id);
     }
 
     // 4. Secrets, only when this caller changed them.

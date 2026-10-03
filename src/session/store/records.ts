@@ -4,7 +4,7 @@
 import { readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWriteFile } from './files.js';
-import { sessionFilePath, sessionsDirectory } from './paths.js';
+import { safeRecordFileName, sessionFilePath, sessionsDirectory } from './paths.js';
 import type { SessionTranscript, TranscriptRef } from './transcripts.js';
 
 export interface SessionFile extends SessionTranscript {
@@ -98,14 +98,30 @@ export async function removeSessionFile(id: string): Promise<void> {
   });
 }
 
+/** safeRecordFileName's digest fallback, `h-<sha256 hex>`, is the only shape
+ * it ever produces for an id it had to encode. A stem that does not match
+ * this shape could therefore only have come from the identity branch (the id
+ * itself, already filename-safe), so it IS that id -- recovering it costs
+ * nothing. A stem that does match is ambiguous (it may be a digest, or it may
+ * coincidentally be a safe id that already looked like one) and must be read
+ * to be sure, exactly as before. */
+const DIGEST_STEM = /^h-[0-9a-f]{64}$/;
+
+/** Every stored session's id. Reads only what it must: for the common case
+ * (a filename-safe id) the filename already is the id, so this previously
+ * opened and parsed every session file on disk -- on every call -- purely to
+ * learn something the name already said. Kept exact for the rare ids that
+ * needed digest encoding, which still requires the file. */
 export async function listStoredSessionIds(): Promise<string[]> {
   const names = await readdir(sessionsDirectory()).catch(() => [] as string[]);
   const ids: string[] = [];
   for (const name of names) {
     if (!name.endsWith('.json')) continue;
+    const stem = name.slice(0, -'.json'.length);
     const path = join(sessionsDirectory(), name);
     const cached = fileCache.get(path);
     if (cached) { ids.push(cached.file.id); continue; }
+    if (!DIGEST_STEM.test(stem) && safeRecordFileName(stem) === stem) { ids.push(stem); continue; }
     try {
       const parsed = JSON.parse(await readFile(path, 'utf8')) as SessionFile;
       if (typeof parsed.id === 'string') ids.push(parsed.id);

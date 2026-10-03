@@ -36,4 +36,28 @@ describe('file locks before a re-exec', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('does not replace at all while this process holds a lock', async () => {
+    const { mkdtemp, rm } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    const { withFileLock } = await import('../../session/store/locks');
+    const { replaceCliWithNewBuild } = await import('./build-replace');
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-lock-idle-'));
+    try {
+      let release!: () => void;
+      let entered!: () => void;
+      const inside = new Promise<void>((resolve) => { entered = resolve; });
+      const held = withFileLock(join(dir, 'state.lock'), () => { entered(); return new Promise<void>((resolve) => { release = resolve; }); });
+      await inside;
+      let released = false;
+      const attempt = replaceCliWithNewBuild({ entry: '/nonexistent/clikcode', closeUi: () => undefined, release: async () => { released = true; } });
+      expect(attempt).toBeUndefined();
+      expect(released).toBe(false);
+      release();
+      await held;
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

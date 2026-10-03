@@ -6,7 +6,7 @@ import { chmod, readFile, rename, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { HarnessSession, HarnessState } from '../model.js';
 import { cloneData, sameData } from '../store/data.js';
-import { withStateLock } from '../store/locks.js';
+import { withStateLock, type StateLockHeld } from '../store/locks.js';
 import { stateDirectory } from '../store/paths.js';
 import { readSessionTranscript, writeSessionTranscript } from '../store/transcripts.js';
 import { acquireSessionClaim, claimIsHeld } from '../claims.js';
@@ -45,7 +45,7 @@ async function readLegacyFile(): Promise<HarnessState> {
  * point, or because an older build still running in another terminal wrote a
  * new legacy file -- imports only what the split layout does not already have
  * newer, so it is idempotent. Caller holds the state lock. */
-async function migrateSingleFileToSplitLayout(): Promise<void> {
+async function migrateSingleFileToSplitLayout(held: StateLockHeld): Promise<void> {
   const legacy = await readLegacyFile();
   const existing = await loadIndex();
   if (existing && existing.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(existing.version);
@@ -65,7 +65,7 @@ async function migrateSingleFileToSplitLayout(): Promise<void> {
     const present = knownSessions.get(session.id);
     if (present && !(String(session.updatedAt) > String(present.updatedAt))) continue;
     const { meta, transcript } = splitSession(session);
-    await writeSessionTranscript(session.id, transcript);
+    await writeSessionTranscript(held, session.id, transcript);
     if (present) index.sessions[index.sessions.indexOf(present)] = meta;
     else index.sessions.push(meta);
     imported.push(session);
@@ -140,7 +140,7 @@ async function migrateSingleFileToSplitLayout(): Promise<void> {
 }
 
 /** One function per step, keyed by the version it upgrades FROM. */
-const MIGRATIONS: Record<number, () => Promise<void>> = {
+const MIGRATIONS: Record<number, (held: StateLockHeld) => Promise<void>> = {
   1: migrateSingleFileToSplitLayout,
 };
 
@@ -160,16 +160,16 @@ async function createFreshLayout(): Promise<void> {
 export async function ensureLayout(): Promise<void> {
   const [hasIndex, hasLegacy] = await Promise.all([exists(harnessIndexPath()), exists(harnessStatePath())]);
   if (hasIndex && !hasLegacy) return;
-  await withStateLock(() => ensureLayoutLocked());
+  await withStateLock((held) => ensureLayoutLocked(held));
 }
 
-export async function ensureLayoutLocked(): Promise<void> {
+export async function ensureLayoutLocked(held: StateLockHeld): Promise<void> {
   const [hasIndex, hasLegacy] = await Promise.all([exists(harnessIndexPath()), exists(harnessStatePath())]);
   if (hasLegacy) {
     const index = hasIndex ? await loadIndex() : undefined;
     // A newer layout owns this directory; do not fold anything into it.
     if (index && index.version > HARNESS_STATE_VERSION) return;
-    await MIGRATIONS[1]!();
+    await MIGRATIONS[1]!(held);
     return;
   }
   if (!hasIndex) await createFreshLayout();
