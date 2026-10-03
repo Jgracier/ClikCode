@@ -17,7 +17,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { WorkerClient } from './client.js';
-import { readWorkerRecord, writeWorkerRecord } from './registry.js';
+import { listWorkerRecords, readWorkerRecord, writeWorkerRecord } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from './turn-bridge.js';
@@ -47,7 +47,15 @@ afterAll(() => {
 afterEach(async () => {
   await closeAllWorkerClients();
   for (const client of clients.splice(0)) client.close();
-  for (const pid of workerPids.splice(0)) { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } }
+  // Waited out before the directory goes: a worker shutting down still
+  // writes there (its record, the conversation's state), and removing the
+  // tree under it failed with ENOTEMPTY whenever the machine was slow.
+  // Every worker this test's home has, not only those attach() noted: the
+  // turn bridge spawns its own.
+  const recorded = root ? (await listWorkerRecords().catch(() => [])).map((record) => record.pid) : [];
+  const stopping = [...new Set([...workerPids.splice(0), ...recorded])];
+  for (const pid of stopping) { try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ } }
+  await Promise.all(stopping.map((pid) => processExit(pid)));
   await gateway?.close();
   gateway = undefined;
   if (root) await rm(root, { recursive: true, force: true });
