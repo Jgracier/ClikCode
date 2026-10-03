@@ -65,6 +65,8 @@ import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.j
 import { forgetNativeThread } from '../../session/native-thread.js';
 import { carryNativeSession } from '../../session/carry.js';
 import { turnEnvironment } from '../../turn/turn-environment.js';
+import { undoLastTurn } from '../../session/undo-turn.js';
+import { stateDirectory } from '../../session/store/paths.js';
 
 /** A setting changed: stamp the session, store the state, and show the
  * settings panel -- in the terminal, the status line it re-renders. */
@@ -74,11 +76,6 @@ async function saveSettings(state: HarnessState, session: HarnessSession): Promi
   return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
 }
 
-function undoUnavailableMessage(session: HarnessSession): string {
-  const harness = sessionHarness(session);
-  const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : harness?.displayName ?? 'This provider';
-  return `${who} does not expose an undo/rewind operation to ClikCode, so /undo is not available here. ClikCode will not fake it: use /diff to see what changed and git to revert it${harness?.nativeSlashPassthrough ? `, or send the vendor's own command with //rewind` : ''}.`;
-}
 
 /** `/model` on ClikCode Local. With no name, fitting local and Hub models;
  * with one, download consent is required before it is loaded and answering, and
@@ -645,7 +642,11 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!account) throw new Error('This conversation has no account to sign out.');
     await aiAccountLogout(account.id);
   },
-  undo: async ({ session }) => { throw new Error(undoUnavailableMessage(session)); },
+  undo: async ({ session }) => {
+    const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'This provider';
+    const undone = await undoLastTurn(session, { stateDir: stateDirectory(), who });
+    return emitHarnessOutput({ panel: 'undo', text: undone.text, restored: undone.restored, removed: undone.removed, conflicts: undone.conflicts });
+  },
 };
 
 /** Moving to a model that does not accept the session's effort level adjusts
