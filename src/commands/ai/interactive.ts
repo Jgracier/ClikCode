@@ -61,6 +61,7 @@ import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
 import { interactiveResumeInPicker, interruptedTurnResumePrompt, sameProviderCanTakeTurn } from '../../tui/pickers/resume-in.js';
+import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
@@ -578,7 +579,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // put in `messages` it lived somewhere the worker's next snapshot
           // overwrote -- which is what made the message the user had just sent
           // appear and then vanish. See tui/render/pending-prompt.ts.
-          terminal.submitted(turn.echo ? promptText : undefined);
+          terminal.submitted(turn.echo && promptText !== INTERRUPTED_TURN_REQUEST ? promptText : undefined);
           const pending: HarnessSession = {
             ...active,
             messages: sessionTranscriptMessages(active),

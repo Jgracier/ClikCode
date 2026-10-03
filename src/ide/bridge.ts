@@ -70,6 +70,7 @@ import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
 import { interactiveSwarmPicker } from '../tui/pickers/swarm.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { interactiveResumeInPicker, interruptedTurnResumePrompt, sameProviderCanTakeTurn } from '../tui/pickers/resume-in.js';
+import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import type { WorkerEvent } from '../worker/protocol.js';
@@ -558,6 +559,8 @@ export class IdeBridge {
    * around it: a TurboFit or ClikCode Local model is up first, held by this
    * client rather than the worker. */
   private async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
+    // Carrying on an interrupted turn is not something the user typed.
+    if (prompt === INTERRUPTED_TURN_REQUEST) turn = { ...turn, echo: false };
     const state = await readState({ transcripts: [targetId] });
     const active = state.sessions.find((item) => item.id === targetId);
     const harness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;

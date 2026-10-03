@@ -107,3 +107,14 @@ describe('a retry on a fresh thread retells the whole request', () => {
     expect(failoverPromptRequest(prompt)).toBe(INTERRUPTED_TURN_REQUEST);
   });
 });
+
+describe('a stored or imported continuation request', () => {
+  it('is dropped, wherever it was recorded', () => {
+    expect(normalizeImportedTranscript([
+      { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' },
+      { role: 'user', content: INTERRUPTED_TURN_REQUEST }, { role: 'assistant', content: 'The other half' },
+    ])).toEqual([
+      { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half' },
+    ]);
+  });
+});

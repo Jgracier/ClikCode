@@ -43,15 +43,22 @@ export function failoverPromptRequest(text: string): string | undefined {
   return unescapeFailoverContent(request ?? '').trim();
 }
 
+/** What ClikCode sends to carry on an interrupted turn. It is plumbing like
+ * the preamble: the user's request is the interrupted turn's own prompt, so
+ * this is never stored, shown or replayed as something they typed. */
+export const INTERRUPTED_TURN_REQUEST = 'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.';
+
 /** Replace any rehydration prompt in an imported transcript with the request
- * it carried. Idempotent: the result no longer begins with the preamble.
- * A prompt with nothing recoverable is dropped rather than left blank. */
+ * it carried, and drop a bare INTERRUPTED_TURN_REQUEST. Idempotent: the
+ * result no longer begins with the preamble. A prompt with nothing
+ * recoverable is dropped rather than left blank. */
 export function normalizeImportedTranscript<T extends { role: string; content: string }>(
   messages: readonly T[],
 ): T[] {
   const normalized: T[] = [];
   for (const message of messages) {
     if (message.role !== 'user') { normalized.push(message); continue; }
+    if (message.content.trim() === INTERRUPTED_TURN_REQUEST) continue;
     const request = failoverPromptRequest(message.content);
     if (request === undefined) normalized.push(message);
     else if (request) normalized.push({ ...message, content: request });
@@ -147,4 +154,3 @@ export function failoverPrompt(
   return `${preamble}\n\n<conversation>${note}\n${kept.join('\n')}\n</conversation>${touchedBlock}\n\n<current_request>\n${request}\n</current_request>`;
 }
 
-export const INTERRUPTED_TURN_REQUEST = 'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.';
