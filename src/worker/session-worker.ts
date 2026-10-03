@@ -470,11 +470,22 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     }
     if (command.type === 'detach') { socket.end(); return; }
     if (command.type === 'unqueue') {
-      if (activeQueuedTurnId === command.id) return;
-      const state = await readState();
-      const found = state.sessions.find((item) => item.id === sessionId);
-      if (!found || !consumeSessionTurn(found, command.id)) return;
-      await writeState(state);
+      // Always answered: the window waits on this to know whether it may stop
+      // the running turn for its "send now".
+      const answer = (outcome: 'removed' | 'running' | 'gone' | 'error', message?: string): void => {
+        sendEvent(socket, { type: 'unqueued', id: command.id, outcome, ...(message ? { message } : {}) });
+      };
+      if (activeQueuedTurnId === command.id) { answer('running'); return; }
+      try {
+        const state = await readState();
+        const found = state.sessions.find((item) => item.id === sessionId);
+        if (!found || !consumeSessionTurn(found, command.id)) { answer('gone'); return; }
+        await writeState(state);
+      } catch (error) {
+        answer('error', error instanceof Error ? error.message : String(error));
+        return;
+      }
+      answer('removed');
       observer.broadcast({ type: 'queue-changed' });
       // Every window drops it now, a turn running or not.
       void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);

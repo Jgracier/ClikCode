@@ -55,7 +55,6 @@ export class ClikCodeController implements vscode.Disposable {
    * then the turn is stopped, and it is sent once the worker says the turn
    * has stopped. */
   private sendingNow: { id: string; text: string; sessionId?: string; stage: 'unqueuing' | 'stopping' } | undefined;
-  private sendNowTimer: NodeJS.Timeout | undefined;
   /** Pasted images: path -> sent in a message yet. */
   private readonly images = new Map<string, boolean>();
   private imageDir: Promise<string> | undefined;
@@ -445,6 +444,7 @@ export class ClikCodeController implements vscode.Disposable {
       }
       return;
     }
+    if (event.type === 'unqueued') { this.unqueued(event); return; }
     if (event.type === 'restore-draft') this.post({ type: 'setDraft', text: event.text });
     // A message typed during the turn that could not be sent comes back to
     // the composer, as the terminal restores it for editing.
@@ -473,16 +473,24 @@ export class ClikCodeController implements vscode.Disposable {
     if (plan === 'stop') { this.cancel(false); return; }
     this.bridge?.send({ type: 'unqueue', id });
     if (plan === 'send') { void this.send(item.text); return; }
+    // The worker answers `unqueued` (onWorkerEvent): only once the message
+    // has left the queue is the turn stopped.
     this.sendingNow = { id, text: item.text, sessionId: this.model.sessionId, stage: 'unqueuing' };
-    // A worker that never says the queue changed still has the turn stopped.
-    this.sendNowTimer = setTimeout(() => this.stopForSendNow(), 3_000);
+  }
+
+  private unqueued(event: Extract<WorkerEvent, { type: 'unqueued' }>): void {
+    const pending = this.sendingNow;
+    if (!pending || pending.id !== event.id || pending.stage !== 'unqueuing') return;
+    if (event.outcome === 'removed') { this.stopForSendNow(); return; }
+    // `running`: it is the turn now. `gone`: it already ran or was taken
+    // back. Either way sending it again would run it twice.
+    this.dropSendNow();
+    if (event.outcome === 'error') void vscode.window.showErrorMessage(`ClikCode could not take the message out of the queue: ${event.message ?? 'unknown error'}`);
   }
 
   private stopForSendNow(): void {
     const pending = this.sendingNow;
     if (!pending || pending.stage !== 'unqueuing') return;
-    if (this.sendNowTimer) clearTimeout(this.sendNowTimer);
-    this.sendNowTimer = undefined;
     if (!this.model.running) {
       // The turn ended on its own meanwhile: nothing to stop.
       this.dropSendNow();
@@ -494,8 +502,6 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   private dropSendNow(): void {
-    if (this.sendNowTimer) clearTimeout(this.sendNowTimer);
-    this.sendNowTimer = undefined;
     this.sendingNow = undefined;
   }
 

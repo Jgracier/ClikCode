@@ -135,7 +135,12 @@ export type WorkerEvent =
   /** Answer to a `submit` that arrived while another turn was running, sent
    * to the submitting client only: nothing runs two turns at once, so the
    * message was queued (`queuedTurnId`) and runs after the current one. */
-  | { type: 'submit-queued'; queuedTurnId: string };
+  | { type: 'submit-queued'; queuedTurnId: string }
+  /** Answer to `unqueue`, sent to the asking client only. `removed`: it left
+   * the queue; `running`: it is the turn running now; `gone`: it was no
+   * longer queued (already run or taken back); `error`: the state could not
+   * be read or written, and it is still queued. */
+  | { type: 'unqueued'; id: string; outcome: 'removed' | 'running' | 'gone' | 'error'; message?: string };
 
 const FRAME_SEPARATOR = '\n';
 
