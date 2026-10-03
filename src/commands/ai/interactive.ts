@@ -222,12 +222,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     }).catch(() => { /* Usage is optional provider metadata. */ });
   };
   refreshUsage(session, state);
-  // Without this, usage only ever refreshed at session-open and right after
-  // each submitted message -- fine for a quick back-and-forth, but a long
-  // turn or an idle stretch between messages left the number sitting there
-  // stale for however long that gap was, well past nativeUsageReading's own
-  // 30s cache window (which bounds *how often this can update*, not
-  // *whether anything ever asks it to*). This is what actually asks.
+  // The claim's heartbeat: this terminal holds the conversation while it is
+  // open; a killed one stops renewing and frees it (session/claims.ts).
   const claimInterval = setInterval(() => {
     void claimConversation(id).catch(() => undefined);
   }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
@@ -280,6 +276,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       if (!notice) notice = 'A newer ClikCode build will load when nothing is running.';
     }
   };
+  // Without this tick, usage only ever refreshed at session-open and right after
+  // each submitted message -- fine for a quick back-and-forth, but a long
+  // turn or an idle stretch between messages left the number sitting there
+  // stale for however long that gap was, well past nativeUsageReading's own
+  // 30s cache window (which bounds *how often this can update*, not
+  // *whether anything ever asks it to*). This is what actually asks.
+  // It also notices a newer build.
   usageInterval = terminal ? setInterval(() => {
     noteNewerBuild();
     void readState({ transcripts: [] }).then((latestState) => {
