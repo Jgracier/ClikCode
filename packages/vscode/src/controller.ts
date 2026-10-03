@@ -410,6 +410,9 @@ export class ClikCodeController implements vscode.Disposable {
       case 'usage':
         this.refreshStructured(true);
         return;
+      case 'conversations-changed':
+        for (const surface of this.surfaces) surface.post({ type: 'conversations-changed' });
+        return;
       case 'worker':
         this.onWorkerEvent(event.event);
         return;
@@ -672,6 +675,10 @@ export class ClikCodeController implements vscode.Disposable {
 
   private async handle(request: WebviewRequest): Promise<unknown> {
     switch (request.method) {
+      case 'watchConversations':
+        // No bridge yet: the list's slow poll covers it until one answers.
+        this.bridge?.send({ type: 'watch-conversations', on: request.on });
+        return undefined;
       case 'files':
         return searchWorkspaceFiles(request.text);
       case 'paste':

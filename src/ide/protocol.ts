@@ -69,6 +69,10 @@ export type IdeRequest =
   /** A choice made in the editor's own widgets, applied as the terminal's
    * picker would apply it (revision 2). Answered by a `result`. */
   | { type: 'choose'; requestId: string; choice: IdeChoice }
+  /** The conversations list is open (`on`) or closed in the editor: while
+   * one is open the bridge sends `conversations-changed`. Counted, so two
+   * open lists need two closes. An older bridge ignores it. */
+  | { type: 'watch-conversations'; on: boolean }
   | { type: 'close' };
 
 export interface IdeSlashCommand {
@@ -238,7 +242,10 @@ export type IdeEvent =
   | { type: 'usage'; label?: string; reset?: string }
   | { type: 'result'; requestId: string; ok: boolean; error?: string; data?: unknown }
   /** The conversation was left (/exit, /archive, /delete). */
-  | { type: 'closed'; sessionId: string };
+  | { type: 'closed'; sessionId: string }
+  /** Something a conversations list shows may have changed (a turn started
+   * or ended, a worker exited): query it again. Sent while a list is open. */
+  | { type: 'conversations-changed' };
 
 /** What `ide-terminal` runs: a vendor's sign-in, or one of its own commands,
  * with a real terminal. Base64 JSON on the command line, so no shell ever

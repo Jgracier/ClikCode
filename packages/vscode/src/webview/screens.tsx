@@ -3,7 +3,7 @@ import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { ListedConversation } from '../webview-protocol';
-import { request } from './bus';
+import { listen, request } from './bus';
 import { relativeTime } from './format';
 import { choose } from './picker';
 import { Icon, IconButton, KeyList, Popover, type ListRow } from './ui';
@@ -12,6 +12,8 @@ type Section = NonNullable<ListedConversation['section']>;
 /** The terminal board's sections, in its order (session/conversation-rows.ts). */
 const SECTIONS: ReadonlyArray<[Section, string]> = [['working', 'Working'], ['active', 'Active'], ['past', 'Past']];
 const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
+/** Re-query while generating when ClikCode has not reported a change. */
+const FALLBACK_POLL_MS = 10_000;
 
 /** The row's section as ClikCode decided it; a bridge from before `section`
  * gets the same rule here (generating, else the last 24 hours, else Past). */
@@ -35,10 +37,26 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     request<ListedConversation[]>({ method: 'query', query: 'conversations' }).then(setRows, (failure: Error) => props.onError(failure.message));
   };
   useEffect(() => { load(); input.current?.focus(); }, []);
-  // While a chat is generating, re-query so its pulse stops when it finishes.
+  // ClikCode watches its state and says when a turn starts or ends, so a
+  // pulse stops when its chat finishes. A slow poll covers a ClikCode that
+  // does not say (older, or no watch possible): only while a chat is
+  // generating and nothing has been heard for a while.
+  const heardAt = useRef(0);
+  useEffect(() => {
+    const stop = listen((message) => {
+      if (message.type !== 'conversations-changed') return;
+      heardAt.current = Date.now();
+      load();
+    });
+    void request({ method: 'watchConversations', on: true }).catch(() => undefined);
+    return () => {
+      stop();
+      void request({ method: 'watchConversations', on: false }).catch(() => undefined);
+    };
+  }, []);
   useEffect(() => {
     if (!rows?.some((row) => row.activity === 'working')) return;
-    const timer = setInterval(load, 2_000);
+    const timer = setInterval(() => { if (Date.now() - heardAt.current >= FALLBACK_POLL_MS) load(); }, FALLBACK_POLL_MS);
     return () => clearInterval(timer);
   }, [rows]);
 
