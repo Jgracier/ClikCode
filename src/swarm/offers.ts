@@ -3,9 +3,11 @@
  * one. Swarm runs it on the account that lists it and has the most usage left. */
 
 import { lookupScore, type ModelScore, type ScoreCache, scoreKey } from './scores.js';
+import { vendorWindows } from '../harness/accounts/usage-reading.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 
 interface OfferRow {
-  account: { id: string; models: readonly string[] };
+  account: Pick<AiHarnessAccount, 'id' | 'models' | 'usage'>;
   command: string;
   displayName: string;
   leftPct: number;
@@ -38,10 +40,22 @@ function cost(score: ModelScore | undefined): number {
  * adds nothing: the harness command is not a model the host can name. */
 function linesFor(row: OfferRow, cache: ScoreCache | undefined): Array<{ model: string; modelArg?: string; score?: ModelScore }> {
   const seen = new Set<string>();
-  return row.account.models.filter(Boolean).flatMap((model) => {
-    if (seen.has(model)) return [];
-    seen.add(model);
-    const score = lookupScore(cache, model);
+  // Copilot has no scriptable account model list. Its stored models come from
+  // a public catalog, which includes ids the installed CLI rejects.
+  if (row.command === 'copilot') return [];
+  const cursorNamedSpent = row.command === 'cursor' && vendorWindows(row.account as AiHarnessAccount)
+    .some((window) => window.advisory && /api/i.test(window.name) && window.usedPct >= 100);
+  return row.account.models.flatMap((raw) => {
+    const model = raw.trim();
+    if (!model || !/^[a-z0-9][a-z0-9._:/\[\],=-]*$/i.test(model)) return [];
+    // Some human `models` commands have section headers that the generic
+    // catalog parser once stored as ids. They are not valid model choices.
+    if (/^(?:Anthropic|OpenAI|Stealth)$/i.test(model)) return [];
+    if (cursorNamedSpent && !/^(?:auto|default\[\])$/i.test(model)) return [];
+    const identity = scoreKey(model.replace(/\[[^\]]*\]$/, ''));
+    if (seen.has(identity)) return [];
+    seen.add(identity);
+    const score = lookupScore(cache, model.replace(/\[[^\]]*\]$/, ''));
     return [{ model, modelArg: model, ...(score ? { score } : {}) }];
   });
 }
@@ -51,10 +65,11 @@ export function swarmOffers<T extends OfferRow>(pool: readonly T[], cache?: Scor
   const grouped = new Map<string, SwarmOffer<T>>();
   for (const row of pool) {
     for (const line of linesFor(row, cache)) {
-      const offer = grouped.get(line.model) ?? { model: line.model, ...(line.score ? { score: line.score } : {}), seats: [] };
+      const key = scoreKey(line.model.replace(/\[[^\]]*\]$/, ''));
+      const offer = grouped.get(key) ?? { model: line.model, ...(line.score ? { score: line.score } : {}), seats: [] };
       offer.seats.push({ candidate: row, ...(line.modelArg ? { modelArg: line.modelArg } : {}) });
       if (!offer.score && line.score) offer.score = line.score;
-      grouped.set(line.model, offer);
+      grouped.set(key, offer);
     }
   }
   const offers = [...grouped.values()];
@@ -68,7 +83,7 @@ function byStrength<T extends OfferRow>(left: SwarmOffer<T>, right: SwarmOffer<T
 
 /** The paragraph the host reads on the tool. */
 export function swarmChoiceNote(offers: readonly SwarmOffer[]): string {
-  return `Pass one of these model ids exactly. They are the models on accounts that still have usage. Do not invent a model. Match the task to the index, and use a cheaper model when a lower index is enough. Prices are USD per million tokens, in then out. You get one subagent row and a short card, not that model's conversation.\n${formatSwarmOffers(offers)}`;
+  return `Pass one of these model ids exactly. They are the models on accounts that still have usage. Do not invent a model. Match the task to the index, and use a cheaper model when a lower index is enough. Prices are OpenRouter list rates in USD per million tokens, in then out; subscription charges may differ. You get one subagent row and a short card, not that model's conversation.\n${formatSwarmOffers(offers)}`;
 }
 
 function money(amount: number): string {

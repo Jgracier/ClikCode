@@ -35,7 +35,7 @@ function progressTokenOf(message: RpcMessage): string | number | undefined {
 const TOOL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['prompt'],
+  required: ['prompt', 'model'],
   properties: {
     prompt: { type: 'string', description: 'The complete task: what to do, where to look, and what the card should answer.' },
     description: { type: 'string', description: 'A 3-6 word label shown in the host chat, e.g. "Find the refresh handler".' },
@@ -59,6 +59,7 @@ async function callTool(args: Record<string, unknown> | undefined, onStep?: (lab
   if (!prompt) return 'A swarm task needs a prompt.';
   const description = typeof args?.description === 'string' ? args.description.trim() : undefined;
   const model = typeof args?.model === 'string' ? args.model.trim() : undefined;
+  if (!model) return 'Choose a model id from the swarm tool list.';
   const sessionId = await activeSwarmHost();
   if (!sessionId) return 'No host turn is using the swarm right now. Do this yourself.';
   const state = await readState({ transcripts: [] });
@@ -102,7 +103,7 @@ async function dispatch(message: RpcMessage, write: (payload: string) => void): 
           write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress, message: label } }));
         })
         : `Unknown tool ${message.params?.name ?? ''}`;
-      const isError = text.startsWith('No host') || text.startsWith('A swarm task needs');
+      const isError = text.startsWith('No host') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage');
       return respond(message.id, { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
     } catch (error) {
       return fail(message.id, error instanceof Error ? error.message : String(error));
@@ -115,32 +116,40 @@ async function dispatch(message: RpcMessage, write: (payload: string) => void): 
  * also newline-delimited JSON for a manual check. */
 export function serveSwarmMcp(): Promise<void> {
   return new Promise((resolve) => {
-    let buffer = '';
+    let buffer = Buffer.alloc(0);
+    let draining = false;
     const write = (payload: string): void => {
       const body = Buffer.from(payload, 'utf8');
       process.stdout.write(`Content-Length: ${body.length}\r\n\r\n${payload}`);
     };
     const take = async (): Promise<void> => {
+      if (draining) return;
+      draining = true;
+      try {
       for (;;) {
         const headerEnd = buffer.indexOf('\r\n\r\n');
         const lineEnd = buffer.indexOf('\n');
-        if (headerEnd >= 0 && (lineEnd < 0 || headerEnd < lineEnd)) {
-          const header = buffer.slice(0, headerEnd);
+        if (buffer.subarray(0, Math.min(buffer.length, 15)).toString('utf8').toLowerCase().startsWith('content-length:')) {
+          if (headerEnd < 0) return;
+          const header = buffer.subarray(0, headerEnd).toString('utf8');
           const match = /Content-Length:\s*(\d+)/i.exec(header);
-          if (!match) { buffer = buffer.slice(headerEnd + 4); continue; }
+          if (!match) { buffer = buffer.subarray(headerEnd + 4); continue; }
           const length = Number(match[1]);
           const start = headerEnd + 4;
           if (buffer.length < start + length) return;
-          const body = buffer.slice(start, start + length);
-          buffer = buffer.slice(start + length);
+          const body = buffer.subarray(start, start + length).toString('utf8');
+          buffer = buffer.subarray(start + length);
           await deliver(body);
           continue;
         }
         if (lineEnd < 0) return;
-        const line = buffer.slice(0, lineEnd).trim();
-        buffer = buffer.slice(lineEnd + 1);
+        const line = buffer.subarray(0, lineEnd).toString('utf8').trim();
+        buffer = buffer.subarray(lineEnd + 1);
         if (!line || line.startsWith('Content-Length')) continue;
         await deliver(line);
+      }
+      } finally {
+        draining = false;
       }
     };
     const deliver = async (body: string): Promise<void> => {
@@ -149,8 +158,7 @@ export function serveSwarmMcp(): Promise<void> {
       const payload = await dispatch(message, write);
       if (payload) write(payload);
     };
-    process.stdin.setEncoding('utf8');
-    process.stdin.on('data', (chunk: string) => { buffer += chunk; void take(); });
+    process.stdin.on('data', (chunk: Buffer) => { buffer = Buffer.concat([buffer, chunk]); void take(); });
     process.stdin.on('end', () => resolve());
   });
 }
