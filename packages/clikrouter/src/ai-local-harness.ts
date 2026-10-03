@@ -490,6 +490,9 @@ export const HOME_REDIRECT_ENV_DEFAULTS: Readonly<Record<string, string | null>>
   NPM_CONFIG_USERCONFIG: '~/.npmrc',
   // npx keeps every MCP server it runs here; one per profile was 2.5 GB.
   NPM_CONFIG_CACHE: '~/.npm',
+  // pnpm's own cache and store, the same duplication for pnpm installs.
+  NPM_CONFIG_CACHE_DIR: '~/.cache/pnpm',
+  NPM_CONFIG_STORE_DIR: '~/.local/share/pnpm/store',
   GH_CONFIG_DIR: '~/.config/gh',
   DOCKER_CONFIG: '~/.docker',
   GNUPGHOME: '~/.gnupg',
