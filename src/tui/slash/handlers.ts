@@ -63,6 +63,8 @@ import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNot
 import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
+import { carryNativeSession } from '../../session/carry.js';
+import { turnEnvironment } from '../../turn/turn-environment.js';
 
 /** A setting changed: stamp the session, store the state, and show the
  * settings panel -- in the terminal, the status line it re-renders. */
@@ -528,17 +530,19 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         session.nativeHarness = accountHarness.command;
         forgetNativeThread(session);
       } else if (session.accountId !== account.id) {
-        // A native thread id is only valid within the specific account's
-        // own isolated profile it was created under -- switching to a
-        // DIFFERENT account of the SAME provider left it untouched here,
-        // even though it's now meaningless (points at a rollout file that
-        // exists only under the old account's profile, not this one).
-        // Confirmed live: this produced exactly "no rollout found for
-        // thread id ..." on the next resume. Clearing it here means the
-        // existing failoverPrompt rehydration path (which already handles
-        // "no native thread yet, but real prior messages exist") takes
-        // over on the next turn instead of failing outright.
-        forgetNativeThread(session);
+        // A native thread lives in the profile of the account that wrote it,
+        // so `--resume` under another account's profile finds nothing ("no
+        // rollout found for thread id ..."). The switch carries it there
+        // first, as an automatic failover does (vendor-turn.ts carryThread);
+        // only a thread that cannot be carried is forgotten, and the next
+        // turn then re-seeds a fresh one from ClikCode's own transcript.
+        const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
+        const previous = state.accounts.find((item) => item.id === session.accountId);
+        const carried = harness && previous && session.nativeSessionId ? await carryNativeSession({
+          harness, nativeId: session.nativeSessionId, workspace: session.workspace,
+          from: turnEnvironment(harness, previous), to: turnEnvironment(harness, account),
+        }).catch(() => undefined) : undefined;
+        if (!carried) forgetNativeThread(session);
       }
       session.accountId = account.id;
       // Explicit selection is the user's retry signal for an account previously
