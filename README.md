@@ -243,8 +243,9 @@ clikcode mcp add postgres -- npx -y pg-mcp  # record it; install on choose
 
 ClikCode does not host or proxy these servers. Each tool talks to them
 directly, exactly as it would if you had configured it by hand. Skills follow
-the same rule. Hooks are copied only when that harness reads the same hook
-file Claude does; Claude and Grok already do.
+the same rule. Hooks are never copied: Claude Code and Grok already run
+Claude's hook files themselves, and every other harness uses its own hook
+format, so ClikCode leaves those alone.
 
 ## Everyday commands
 

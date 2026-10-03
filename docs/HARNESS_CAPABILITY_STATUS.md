@@ -16,14 +16,14 @@ Checked against the ClikCode catalog on 2026-09-30. A listed control is a ClikCo
 | Antigravity | Vendor CLI | No declared control | Ask, bypass | Learned after refusals |
 | Pi | Vendor CLI | Yes | No declared modes | Learned after refusals |
 | Droid | ACP when available | Yes | Ask, bypass, auto | Learned after refusals |
-| Kiro | ACP when available | Yes | Ask, bypass | Learned after refusals |
+| Kiro | ACP when available | Yes | Ask, bypass | Direct probe |
 | Qwen Code | ACP when available | No declared control | Ask, bypass, auto | Learned after refusals |
 | Cline | ACP when available | Yes | Ask, bypass | Learned after refusals |
 | Kilo | Vendor CLI | Yes | Ask, auto | Direct probe |
-| Cursor Agent | ACP when available | No declared control | Ask, bypass, auto | Learned after refusals |
+| Cursor Agent | ACP when available | No declared control | Ask, bypass, auto | Direct probe |
 | Hermes | Provider inventory and cache | Yes | Ask, bypass | Learned after refusals |
 | OpenClaw | Vendor configuration and provider inventory | Yes | No declared modes | Learned after refusals |
-| Command Code | Vendor CLI | Yes | Ask, bypass, auto | Learned after refusals |
+| Command Code | Vendor CLI | Yes | Ask, bypass, auto | Direct probe |
 | Kimi CLI | ACP when available | No declared control | Ask, bypass, auto | Direct probe |
 | Auggie | Vendor CLI | Yes | No declared modes | Direct probe |
 | Mistral Vibe | ACP when available | No declared control | Ask, bypass, auto | Learned after refusals |
