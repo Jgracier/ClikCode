@@ -12,9 +12,8 @@ import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { TERMINAL } from '../active-terminal.js';
-import { TerminalHarnessPrompter } from '../prompter.js';
 import { aiSessionCommand } from '../slash/handlers.js';
-import { withVendorTerminal } from '../../commands/account.js';
+import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
 
@@ -157,7 +156,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     // The vendor asks its own questions (browser code, pasted key), so it
     // gets the real terminal, exactly like an account sign-in.
-    await withVendorTerminal(rl instanceof TerminalHarnessPrompter ? rl : undefined, signIn, () => loginNativeHarness(signIn, environment), `${harness.displayName} › ${connect.label}`);
+    await withSignIn(rl, `${harness.displayName} › ${connect.label}`, () => loginNativeHarness(signIn, environment));
     // Signing in rewrites the files the catalog is fingerprinted on, so the
     // reopened picker reads the new provider's models.
     return interactiveModelPicker(rl, id);

@@ -30,7 +30,8 @@ import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading } from '../harness/accounts/account-usage.js';
 import { usageResetLabel } from '../harness/accounts/usage-reading.js';
-import { loginNativeHarness, setLinkSignInSurface, setVendorSignInRunner, type LinkSignInSurface, type VendorSignInRequest } from '../harness/transport/native/login.js';
+import { loginNativeHarness } from '../harness/transport/native/login.js';
+import { withSignIn } from '../commands/account.js';
 import { newConversation } from '../commands/ai/conversations.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
@@ -86,8 +87,7 @@ export class IdeBridge {
   private drainScheduled = false;
   private work: Promise<void> = Promise.resolve();
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
-  /** Link sign-ins the panel is showing, by event id: its Cancel aborts one. */
-  private readonly linkSignIns = new Map<string, AbortController>();
+
   private readonly timers: NodeJS.Timeout[] = [];
   private closed = false;
   /** Open conversations lists in the editor, and the watch behind them. */
@@ -105,8 +105,6 @@ export class IdeBridge {
   }
 
   start(): void {
-    setVendorSignInRunner((request) => this.runInTerminal({ command: request.command, mode: 'login', argv: request.argv }, request));
-    setLinkSignInSurface((name) => this.linkSignInSurface(name));
     const claim = setInterval(() => { if (this.sessionId) void claimConversation(this.sessionId).catch(() => undefined); }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
     const usage = setInterval(() => { void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
     claim.unref();
@@ -145,7 +143,7 @@ export class IdeBridge {
         this.prompter.answer(request.id, request.result);
         return;
       case 'sign-in-cancel':
-        this.linkSignIns.get(request.id)?.abort();
+        this.prompter.cancelSignIn(request.id);
         return;
       case 'sign-in-result': {
         const pending = this.signIns.get(request.id);
@@ -194,10 +192,6 @@ export class IdeBridge {
     this.prompter.cancelAll();
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));
     this.signIns.clear();
-    setVendorSignInRunner(undefined);
-    setLinkSignInSurface(undefined);
-    for (const controller of this.linkSignIns.values()) controller.abort();
-    this.linkSignIns.clear();
     this.detachWorker();
     await reconcileLocalModelLeases(undefined).catch(() => undefined);
     if (this.sessionId) await leaveConversation(this.sessionId);
@@ -349,11 +343,12 @@ export class IdeBridge {
       case 'sign-in-request':
         // The worker has no terminal; the editor has one. The worker retries
         // the turn once this answers.
-        // A link sign-in runs here and shows in the panel; any other needs
-        // the editor's terminal.
-        void (localHarnessForCommand(event.command)?.loginLink
-          ? loginNativeHarness({ ...localHarnessForCommand(event.command)!, loginArgv: event.argv }, event.environment)
-          : this.runInTerminal({ command: event.command, mode: 'login', argv: event.argv }, { environment: event.environment, name: event.name }))
+        // The sign-in runs here and shows in the panel, like every other.
+        void withSignIn(this.prompter, event.name, async () => {
+          const harness = localHarnessForCommand(event.command);
+          if (!harness) throw new Error(`unknown harness ${event.command}`);
+          await loginNativeHarness({ ...harness, loginArgv: event.argv }, event.environment);
+        })
           .then(() => client.send({ type: 'sign-in-response', id: event.id }),
             (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: messageOf(error) }));
         return;
@@ -416,26 +411,7 @@ export class IdeBridge {
     waiter?.reject(error);
   }
 
-  /** Where a link sign-in shows: a card in the panel, which opens the link
-   * on the editor's own machine. `busy` says it too, for an extension from
-   * before the card. */
-  private linkSignInSurface(name: string): LinkSignInSurface {
-    const id = randomUUID();
-    const controller = new AbortController();
-    this.linkSignIns.set(id, controller);
-    this.channel.send({ type: 'busy', label: `signing in to ${name} in your browser…` });
-    return {
-      signal: controller.signal,
-      show: (link) => this.channel.send({ type: 'sign-in-link', id, name, url: link.url, ...(link.code ? { code: link.code } : {}) }),
-      done: () => {
-        this.linkSignIns.delete(id);
-        this.channel.send({ type: 'sign-in-link', id, name, done: true });
-        this.channel.send({ type: 'busy' });
-      },
-    };
-  }
-
-  private runInTerminal(spec: IdeTerminalSpec, request: Pick<VendorSignInRequest, 'environment' | 'name'>): Promise<void> {
+  private runInTerminal(spec: IdeTerminalSpec, request: { environment: Readonly<Record<string, string>>; name: string }): Promise<void> {
     if (this.closed) return Promise.reject(new Error('the editor closed'));
     const id = randomUUID();
     return new Promise((resolve, reject) => {

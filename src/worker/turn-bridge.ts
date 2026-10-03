@@ -17,7 +17,7 @@ import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { WorkerClient } from './client.js';
 import { isTranscriptActivity, type LiveActivity, type WorkerEvent } from './protocol.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
-import { withVendorTerminal } from '../commands/account.js';
+import { withSignIn } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 
@@ -323,7 +323,7 @@ async function driveWorkerTurn(
             const harness = localHarnessForCommand(event.command);
             const signIn = harness ? { ...harness, loginArgv: event.argv } : undefined;
             void (signIn
-              ? withVendorTerminal(rl, signIn, () => loginNativeHarness(signIn, event.environment), event.name)
+              ? withSignIn(rl, event.name, () => loginNativeHarness(signIn, event.environment))
               : Promise.reject(new Error(`unknown harness ${event.command}`)))
               .then(() => client.send({ type: 'sign-in-response', id: event.id }),
                 (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: error instanceof Error ? error.message : String(error) }));

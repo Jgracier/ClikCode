@@ -7,6 +7,7 @@
  * copy of that logic that could drift from it.
  */
 import { randomUUID } from 'node:crypto';
+import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/prompter.js';
 import type { HarnessSession } from '../session/model.js';
 import type { IdeEvent, IdePickItem, IdeUiRequest, IdeUiResult } from './protocol.js';
@@ -31,7 +32,43 @@ export function pickItems<T>(options: readonly PickerOption<T>[]): IdePickItem[]
 export class IdePrompter implements HarnessPrompter {
   private readonly pending = new Map<string, (result: IdeUiResult) => void>();
 
+  /** Sign-ins whose card the panel shows, by id: its Cancel aborts one. */
+  private readonly signIns = new Map<string, AbortController>();
+
   constructor(private readonly channel: IdeChannel) {}
+
+  /** A vendor sign-in in the panel: a card with its link and code (which
+   * the extension opens on the editor's machine) and Cancel; a code or key
+   * asked in an input sheet; a choice in a pick list. `busy` says it too,
+   * for an extension from before the card. */
+  signInScreen(name: string): SignInScreen {
+    const id = randomUUID();
+    const controller = new AbortController();
+    this.signIns.set(id, controller);
+    this.channel.send({ type: 'busy', label: `signing in to ${name}…` });
+    this.channel.send({ type: 'sign-in-link', id, name });
+    return {
+      signal: controller.signal,
+      show: (link) => this.channel.send({ type: 'sign-in-link', id, name, url: link.url, ...(link.code ? { code: link.code } : {}) }),
+      ask: async (prompt, secret) => {
+        const result = await this.ask({ kind: 'input', prompt, ...(secret ? { secret: true } : {}) });
+        if ('text' in result) return result.text;
+        controller.abort();
+        return '';
+      },
+      choose: (title, choices) => this.select(title, choices.map((choice, index) => ({ label: choice, value: index }))),
+      stop: () => {
+        if (!this.signIns.delete(id)) return;
+        this.channel.send({ type: 'sign-in-link', id, name, done: true });
+        this.channel.send({ type: 'busy' });
+      },
+    };
+  }
+
+  /** The card's Cancel. */
+  cancelSignIn(id: string): void {
+    this.signIns.get(id)?.abort();
+  }
 
   /** An answer from the editor. Unknown ids are ignored: a request the
    * bridge already gave up on is simply late. */
@@ -57,8 +94,8 @@ export class IdePrompter implements HarnessPrompter {
     });
   }
 
-  async question(prompt: string): Promise<string> {
-    const result = await this.ask({ kind: 'input', prompt: prompt.replace(/\s*›\s*$/, '') });
+  async question(prompt: string, _commands?: unknown, settings?: { secret?: boolean }): Promise<string> {
+    const result = await this.ask({ kind: 'input', prompt: prompt.replace(/\s*›\s*$/, ''), ...(settings?.secret ? { secret: true } : {}) });
     return 'text' in result ? result.text : '';
   }
 

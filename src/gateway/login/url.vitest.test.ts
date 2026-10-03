@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   extractLoginUrl, hasLocalDisplay, loginUrlNotice, shortenLoginUrl, stripAnsi,
 } from './url.js';
-import { scriptArgv, shellQuote } from './tee.js';
+import { scriptArgv, shellQuote } from './pty.js';
 
 /** Verbatim from a pty capture of `claude login`, the flow this models. */
 const CLAUDE_LOGIN = [
@@ -81,7 +81,7 @@ describe('loginUrlNotice', () => {
 
 describe('scriptArgv', () => {
   it('uses the util-linux form on Linux, with live flushing', () => {
-    expect(scriptArgv('claude', ['login'], 'linux')).toEqual(['-q', '-e', '-f', '-c', "'claude' 'login'", '/dev/null']);
+    expect(scriptArgv('claude', ['login'], 'linux')).toEqual(['-q', '-e', '-f', '-c', "stty rows 40 cols 100 2>/dev/null; exec 'claude' 'login'", '/dev/null']);
   });
 
   it('asks util-linux for the child exit status, which it does not report by default', () => {
@@ -90,7 +90,11 @@ describe('scriptArgv', () => {
   });
 
   it('uses the BSD form on macOS, which takes argv rather than a shell string', () => {
-    expect(scriptArgv('claude', ['login'], 'darwin')).toEqual(['-q', '/dev/null', 'claude', 'login']);
+    expect(scriptArgv('claude', ['login'], 'darwin')).toEqual(['-q', '/dev/null', '/bin/sh', '-c', 'stty rows 40 cols 100 2>/dev/null; exec "$0" "$@"', 'claude', 'login']);
+  });
+
+  it('gives the pty a real size: its input is a pipe, which has none', () => {
+    expect(scriptArgv('gemini', [], 'linux')?.[4]).toMatch(/^stty rows 40 cols 100/);
   });
 
   it('has no answer on Windows, so the caller falls back', () => {
@@ -104,6 +108,6 @@ describe('scriptArgv', () => {
 
   it('passes Antigravity\'s real login argv through intact', () => {
     expect(scriptArgv('agy', ['-p', 'hi', '--output-format', 'json'], 'linux')?.[4])
-      .toBe("'agy' '-p' 'hi' '--output-format' 'json'");
+      .toBe("stty rows 40 cols 100 2>/dev/null; exec 'agy' '-p' 'hi' '--output-format' 'json'");
   });
 });

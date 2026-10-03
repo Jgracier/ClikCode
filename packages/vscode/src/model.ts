@@ -161,7 +161,7 @@ export interface ChatModel {
   context?: { used?: number; window?: number; percent: number };
   approvals: Approval[];
   busy?: string;
-  /** A link sign-in the bridge is running: its card shows the link and code. */
+  /** A sign-in the bridge is running: its card shows the link and code. */
   signIn?: { id: string; name: string; url?: string; code?: string };
   /** A message typed during the turn and what became of it. */
   submissions: Array<{ id: string; text: string; disposition?: string }>;

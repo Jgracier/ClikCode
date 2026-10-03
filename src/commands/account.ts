@@ -7,15 +7,13 @@ import { randomUUID } from 'node:crypto';
 import { saveVersionMemo } from '../harness/transport/native/version-memo.js';
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { emitResult } from '../cli/structured-output.js';
+import type { HarnessPrompter } from '../harness/prompter.js';
 import { captureNativeHarnessOutput } from '../harness/transport/native/command.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
-import { loginNativeHarness, withLinkSignInSurface } from '../harness/transport/native/login.js';
-import type { LoginLink } from '../gateway/login/link.js';
-import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
+import { loginNativeHarness, withSignInScreen } from '../harness/transport/native/login.js';
 import { accountVerification, verificationNotice } from '../turn/failover.js';
 import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
@@ -323,89 +321,24 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
  * other harness's loginArgv actually targets a real login flow that
  * returns control on its own once finished, so this notice would be noise
  * for those. */
-export function announceBareInteractiveLogin(harness: Pick<AiLocalHarnessDefinition, 'displayName' | 'loginArgv' | 'loginHint'>): void {
-  // A vendor that signs in only from inside its own session (Pi's /login)
-  // says what to type; the rest open straight into their sign-in.
-  const hint = harness.loginHint ? ` ${harness.loginHint}, then` : '';
-  if (harness.loginArgv?.length === 0 || harness.loginHint) {
-    output.write(`\n${chalk.dim(`Opening ${harness.displayName}'s own interactive session to sign in --${hint} exit it (its own quit/Ctrl+C) once done to return here.`)}\n\n`);
-  }
-}
-
-/** What a vendor sign-in needs from whatever is on screen. A terminal
- * prompter has all of it; headless callers pass nothing and the vendor just
- * runs. */
-export interface SignInSurface {
-  startWaiting(message: string): void;
-  stopWaiting(): void;
-  suspend(): Promise<void>;
-  resume(): void;
-  activity?(message: string): void;
-  /** Wait on a link sign-in on screen, its link and code shown, Esc
-   * cancelling it -- inside a running turn too, which startWaiting would
-   * reset. */
-  linkWait?(label: string, cancel: () => void): { show(lines: readonly string[]): void; stop(): void };
-}
-
-/** Runs `work` -- a vendor's own sign-in -- with the terminal handed to it.
- * The one copy of what four call sites each did their own way: a link
- * sign-in keeps ClikCode on screen, showing the link and code; every other
- * one gets the real terminal, told first what to type
- * where the vendor signs in only from inside its own session. */
-export async function withVendorTerminal<T>(
-  surface: SignInSurface | undefined,
-  harness: Pick<AiLocalHarnessDefinition, 'displayName' | 'loginArgv' | 'loginHint' | 'loginLink'>,
-  work: () => Promise<T>,
-  name = harness.displayName,
-): Promise<T> {
-  if (!surface) return work();
-  // One line in the conversation, written once the sign-in is over and
-  // saying how it went. A "signing in to" line written before it stayed
-  // there for good, whatever happened, and the vendor's own screen covered
-  // it while the sign-in ran anyway.
-  const outcome = (error: unknown): void => surface.activity?.(error === undefined
+/** Runs `work` -- a vendor's sign-in -- on the prompter's own sign-in
+ * screen: the CLI's band, the VS Code panel's card. Every vendor, the same
+ * way (gateway/login/vendor-sign-in.ts). Without one (a shell, a worker) the
+ * sign-in falls back to plain stdin/stdout. One line in the conversation,
+ * written once it is over, says how it went. */
+export async function withSignIn<T>(prompter: Pick<HarnessPrompter, 'signInScreen' | 'activity'> | undefined, name: string, work: () => Promise<T>): Promise<T> {
+  const screen = prompter?.signInScreen?.(name);
+  if (!screen) return work();
+  const outcome = (error: unknown): void => prompter?.activity?.(error === undefined
     ? `${chalk.green('signed in to')} ${chalk.dim(name)}`
     : `${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
-  if (harness.loginLink) {
-    // The vendor runs in the background; its link and code are shown here.
-    const controller = new AbortController();
-    const label = `waiting for you to sign in to ${name} in your browser`;
-    const wait = surface.linkWait?.(label, () => controller.abort());
-    if (!wait) surface.startWaiting(label);
-    const local = hasLocalDisplay();
-    let opened = false;
-    const show = (link: LoginLink): void => {
-      if (local && !opened) { opened = true; openLoginUrl(link.url); }
-      if (!local) process.stdout.write(loginUrlNotice(link.url).clipboard);
-      const lines = [
-        `${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · confirm the code ${chalk.bold(link.code)}` : ''}`,
-        link.url,
-        chalk.dim(local ? 'opened in your browser' : 'link copied: open it on this device'),
-      ];
-      if (wait) wait.show(lines);
-      else for (const line of lines) surface.activity?.(line);
-    };
-    const stop = (): void => { if (wait) wait.stop(); else surface.stopWaiting(); };
-    try {
-      const result = await withLinkSignInSurface({ show, signal: controller.signal }, work);
-      stop();
-      outcome(undefined);
-      return result;
-    } catch (error) {
-      stop();
-      outcome(error);
-      throw error;
-    }
-  }
-  await surface.suspend();
   try {
-    announceBareInteractiveLogin({ ...harness, displayName: name });
-    const result = await work();
-    surface.resume();
+    const result = await withSignInScreen(screen, work);
+    screen.stop();
     outcome(undefined);
     return result;
   } catch (error) {
-    surface.resume();
+    screen.stop();
     outcome(error);
     throw error;
   }

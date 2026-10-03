@@ -106,8 +106,10 @@ describe('captureStdout', () => {
 
 describe('terminal spec', () => {
   it('round-trips and rejects anything else', () => {
-    const spec = { command: 'claude', mode: 'login' as const, argv: ['auth', 'login', '--x=a b'] };
+    const spec = { command: 'hermes', mode: 'run' as const, argv: ['model', '--x=a b'] };
     expect(decodeTerminalSpec(encodeTerminalSpec(spec))).toEqual(spec);
     expect(() => decodeTerminalSpec(Buffer.from('{"command":1}').toString('base64url'))).toThrow();
+    // Sign-ins never run in an editor terminal any more.
+    expect(() => decodeTerminalSpec(Buffer.from('{"command":"claude","mode":"login","argv":[]}').toString('base64url'))).toThrow();
   });
 });

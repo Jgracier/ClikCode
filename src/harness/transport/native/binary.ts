@@ -15,7 +15,12 @@ export interface NativeHarnessSpec {
   /** A separate ACP executable, which an install must also provide. */
   acp?: { binary?: string };
   loginArgv?: readonly string[];
-  loginLink?: { remoteArgv?: readonly string[] };
+  /** Screens the readers do not know, answered in order (vendor-sign-in.ts). */
+  loginSteps?: readonly { when: string; send?: string; ask?: { prompt: string; secret?: boolean } }[];
+  /** loginArgv where no browser is local (SSH from a phone): the vendor's
+   * device-code login, because its default returns to a localhost callback a
+   * phone cannot reach. */
+  loginRemoteArgv?: readonly string[];
   versionArgv?: readonly string[];
 }
 

@@ -37,7 +37,7 @@ export interface IdePickItem {
 
 export type IdeUiRequest =
   | { kind: 'pick'; title: string; items: readonly IdePickItem[]; canGoBack: boolean }
-  | { kind: 'input'; prompt: string };
+  | { kind: 'input'; prompt: string; secret?: boolean };
 
 /** `index` is into the items last sent for this request (an update replaces
  * them); `action` is one of that row's action values, or its deleteAction's;
@@ -258,10 +258,10 @@ export type IdeEvent =
    * or ended, a worker exited): query it again. Sent while a list is open. */
   | { type: 'conversations-changed' };
 
-/** What `ide-terminal` runs: a vendor's sign-in, or one of its own commands,
+/** What `ide-terminal` runs: one of a vendor's own interactive commands,
  * with a real terminal. Base64 JSON on the command line, so no shell ever
  * re-parses an argv the vendor published. */
-export interface IdeTerminalSpec { command: string; mode: 'login' | 'run'; argv: readonly string[] }
+export interface IdeTerminalSpec { command: string; mode: 'run'; argv: readonly string[] }
 
 export function encodeTerminalSpec(spec: IdeTerminalSpec): string {
   return Buffer.from(JSON.stringify(spec), 'utf8').toString('base64url');
@@ -269,7 +269,7 @@ export function encodeTerminalSpec(spec: IdeTerminalSpec): string {
 
 export function decodeTerminalSpec(encoded: string): IdeTerminalSpec {
   const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as Partial<IdeTerminalSpec>;
-  if (typeof parsed.command !== 'string' || (parsed.mode !== 'login' && parsed.mode !== 'run') || !Array.isArray(parsed.argv)) {
+  if (typeof parsed.command !== 'string' || parsed.mode !== 'run' || !Array.isArray(parsed.argv)) {
     throw new Error('not an ide-terminal spec');
   }
   return { command: parsed.command, mode: parsed.mode, argv: parsed.argv.map(String) };

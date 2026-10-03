@@ -40,18 +40,18 @@ export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickI
     <div class="sheet-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.answer({ cancelled: true }); }}>
       <div ref={panelRef} class="sheet" role="dialog" aria-modal="true" aria-label={request.kind === 'pick' ? request.title : request.prompt}>
         {request.kind === 'input'
-          ? <InputSheet prompt={request.prompt} answer={props.answer} />
+          ? <InputSheet prompt={request.prompt} secret={request.secret} answer={props.answer} />
           : <PickSheet title={request.title} items={props.items ?? request.items} canGoBack={request.canGoBack} answer={props.answer} />}
       </div>
     </div>
   );
 }
 
-function InputSheet(props: { prompt: string; answer: (result: IdeUiResult) => void }): JSX.Element {
+function InputSheet(props: { prompt: string; secret?: boolean; answer: (result: IdeUiResult) => void }): JSX.Element {
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => { input.current?.focus(); }, []);
-  const secret = /key|token|secret|password/i.test(props.prompt);
+  const secret = props.secret ?? /key|token|secret|password/i.test(props.prompt);
   return (
     <form class="input-sheet" onSubmit={(event) => { event.preventDefault(); props.answer({ text }); }}>
       <label class="sheet-title" for="sheet-input">{props.prompt.replace(/\s*[›:]\s*$/, '')}</label>
