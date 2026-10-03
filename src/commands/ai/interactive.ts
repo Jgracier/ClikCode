@@ -339,6 +339,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     if (!newerBuild()) return;
     if (!updateSeen) {
       updateSeen = true;
+      // Unattached workers notice the rebuild themselves. A worker a window
+      // keeps attached -- one never idle enough to re-exec (a draft, a
+      // picker) -- is reached only by this ask.
       void retireStaleWorkers().catch(() => undefined);
     }
     if (terminal?.idleForBuildReplace()) {
@@ -547,13 +550,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       if (!line) continue;
       // Left on an empty prompt: the board, through the handler /resume has.
       const viaBoard = line === BOARD_LINE;
-      if (viaBoard) {
-        line = '/resume';
-        // Chats left behind on an older build would otherwise keep that code
-        // until reopened or the idle timeout. Sweep now, while the board is
-        // opening, so picking any row starts a worker on this build.
-        void retireStaleWorkers().catch(() => undefined);
-      }
+      if (viaBoard) line = '/resume';
       /** One turn with the normal waiting / cancel / live-input UI. `echo`
        * paints the submitted text as the pending user message; synthetic
        * prompts (/review, /init, /compact) are not shown as if typed. */
