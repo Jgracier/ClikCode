@@ -102,6 +102,36 @@ describe('shared ACP adapter contract', () => {
     ]);
   });
 
+  it('waits for an agent still starting up, rather than timing out a model change at the handshake limit', async () => {
+    // claude-agent-acp answers session/new at once but set_config_option only
+    // once Claude Code has started -- after it has connected every MCP
+    // server, which took longer than the 20s handshake limit and failed the
+    // turn with "session/set_config_option timed out".
+    const agent = `
+      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+      let buf = '';
+      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1',
+          configOptions: [{ id: 'model', currentValue: 'default', options: [{ value: 'default' }, { value: 'opus' }] }] } });
+        else if (m.method === 'session/set_config_option') setTimeout(() => send({ id: m.id, result: {} }), 1200);
+        else if (m.method === 'session/prompt') {
+          send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ready' } } } });
+          send({ id: m.id, result: { stopReason: 'end_turn' } });
+        }
+      } });
+    `;
+    const phases: string[] = [];
+    const result = await runAcpTurn({
+      binary: process.execPath, command: 'claude', argv: ['-e', agent], cwd: process.cwd(),
+      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'opus', setupTimeoutMs: 200,
+      acp: { inheritCliOptions: false }, onPhase: (phase) => phases.push(phase),
+    });
+    expect(result.text).toBe('ready');
+    expect(phases).toContain('waiting for claude to start');
+  });
+
   it('normalizes agent prose and tool lifecycle events', () => {
     expect(acpResponseDelta({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'hello' } })).toBe('hello');
     expect(acpActivityEvent({ sessionUpdate: 'tool_call', toolCallId: 'call-1', title: 'Read config', status: 'pending' }))

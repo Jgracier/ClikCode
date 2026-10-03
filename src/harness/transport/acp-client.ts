@@ -17,7 +17,7 @@ import { classifyAccountFailure } from '../../turn/failover.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
-import { turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
+import { configuredIdleMs, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 
 type Json = Record<string, any>;
@@ -31,6 +31,8 @@ const DETAIL_LINE_CAP = 12;
  * minutes after one `_session/retrying`, with nothing on the wire meanwhile;
  * handing the turn to the next account beats waiting that out. */
 export const ACP_RATE_LIMIT_GRACE_MS = 30_000;
+/** How long an agent may take to answer before the wait is named. */
+const START_NOTICE_MS = 1_000;
 
 /** What this client can show. `terminal_output`: a command's output and exit
  * code as `_meta.terminal_output` / `_meta.terminal_exit` (claude-agent-acp's
@@ -69,7 +71,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   /** Per-harness options. With `argv` these are the only options; without it
    * they are appended to the locally derived model/effort/permission flags. */
   extraArgv?: readonly string[];
-  /** Setup request timeout (initialize, session/new|resume|load). */
+  /** The adapter handshake's timeout (initialize). Requests that wait on the
+   *  agent starting up are bounded by the idle budget instead. */
   setupTimeoutMs?: number;
   /** Servers this session should start. Empty keeps the previous request. */
   mcpServers?: readonly Record<string, unknown>[];
@@ -486,6 +489,22 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const live = this.ensureLive(input, argv);
     const { peer } = live;
     const setup = { timeoutMs: input.setupTimeoutMs ?? JSONRPC_SETUP_TIMEOUT_MS };
+    // Past the handshake, a request waits on the agent's backend, which is
+    // still starting: Claude Code connects every MCP server before it takes a
+    // control request, and its adapter answers set_config_option only once
+    // Claude Code has. That can take far longer than a handshake, and is not a
+    // fault. Bounded like a silent turn instead; Esc still cancels it.
+    const control = { timeoutMs: configuredIdleMs() };
+    // Said once, only for an agent this turn started (one already running
+    // answers at once), and only when it is slow to: not a flash every turn.
+    let announced = Boolean(live.capabilities);
+    const waitOnStart = async <T>(pending: Promise<T>): Promise<T> => {
+      if (announced) return pending;
+      const notice = setTimeout(() => { announced = true; input.onPhase?.(`waiting for ${input.command} to start`); }, START_NOTICE_MS);
+      notice.unref?.();
+      try { return await pending; } finally { clearTimeout(notice); }
+    };
+    const startingRequest = (method: string, params: Json): Promise<Json> => waitOnStart(peer.request(method, params, control));
     const stillRunning = (): void => { if (turn.done) throw turnCancelledError(); };
     const { effortConfigId, providerConfigId, permissionModeIds, usageTotals } = input.acp ?? {};
     // CLI launch flags are not valid for this agent's ACP entry point: model
@@ -530,7 +549,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       if (live.sessionId !== wanted) {
         // session/load streams the whole history before it answers, so its
         // timeout is an idle window rather than a wall-clock limit.
-        const loading = { ...setup, idleReset: true };
+        // Nothing streams while the agent is still starting, so the window
+        // is the startup budget, not the handshake's.
+        const loading = { ...control, idleReset: true };
         this.sessionTotals = {};
         if (capabilities.sessionCapabilities?.resume) loaded = await requestWithAuth('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
         else if (capabilities.loadSession) loaded = await requestWithAuth('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
@@ -544,7 +565,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       turn.sessionId = wanted;
     } else {
       this.sessionTotals = {};
-      const started = await requestWithAuth('session/new', { cwd: input.cwd, mcpServers }, setup);
+      const started = await waitOnStart(requestWithAuth('session/new', { cwd: input.cwd, mcpServers }, control));
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
@@ -568,7 +589,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         throw Object.assign(new Error(`${input.command} ACP does not offer provider ${providerId}`), { acpUnsupportedModel: true });
       }
       if (providerOption?.currentValue !== providerId) {
-        const updated = await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: providerConfigId, value: providerId }, setup);
+        const updated = await startingRequest('session/set_config_option', { sessionId: turn.sessionId, configId: providerConfigId, value: providerId });
         stillRunning();
         live.configOptions = Array.isArray(updated?.configOptions)
           ? updated.configOptions
@@ -585,8 +606,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const modelConfig = live.configOptions?.find((option) => (option.id ?? option.configId) === 'model');
     const currentModel = live.models?.currentModelId ?? modelConfig?.currentValue;
     if (modelId && modelId !== currentModel) {
-      if (modelConfig) await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: 'model', value: modelId }, setup);
-      else await peer.request('session/set_model', { sessionId: turn.sessionId, modelId }, setup);
+      if (modelConfig) await startingRequest('session/set_config_option', { sessionId: turn.sessionId, configId: 'model', value: modelId });
+      else await startingRequest('session/set_model', { sessionId: turn.sessionId, modelId });
       stillRunning();
       if (modelConfig) live.configOptions = live.configOptions?.map((option) => option === modelConfig ? { ...option, currentValue: modelId } : option);
       else live.models = { ...live.models, currentModelId: modelId };
@@ -595,7 +616,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (modeId && live.modes?.currentModeId !== modeId) {
       const available: Json[] = Array.isArray(live.modes?.availableModes) ? live.modes.availableModes : [];
       if (!available.some((mode) => mode.id === modeId)) throw new Error(`${input.command} ACP does not offer permission mode ${modeId}`);
-      await peer.request('session/set_mode', { sessionId: turn.sessionId, modeId }, setup);
+      await startingRequest('session/set_mode', { sessionId: turn.sessionId, modeId });
       stillRunning();
       live.modes = { ...live.modes, currentModeId: modeId };
     }
@@ -603,7 +624,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const effortOption = live.configOptions?.find((option) => (option.id ?? option.configId) === effortConfigId);
       const choices: Json[] = Array.isArray(effortOption?.options) ? effortOption.options : [];
       if (effortOption && choices.some((option) => option.value === input.effort) && effortOption.currentValue !== input.effort) {
-        await peer.request('session/set_config_option', { sessionId: turn.sessionId, configId: effortConfigId, value: input.effort }, setup);
+        await startingRequest('session/set_config_option', { sessionId: turn.sessionId, configId: effortConfigId, value: input.effort });
         stillRunning();
         live.configOptions = live.configOptions?.map((option) => option === effortOption ? { ...option, currentValue: input.effort } : option);
       } else if ((!effortOption || !choices.some((option) => option.value === input.effort)) && effortRequiresProtocol) {
