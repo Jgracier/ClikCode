@@ -14,6 +14,27 @@ export function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePat
   return vendorAccountEmail(harness, profilePath);
 }
 
+/** Find the same signed-in vendor identity even when an older account still
+ * has a placeholder or a user-supplied label. An API key is a separate
+ * credential and must never be replaced by a vendor login. */
+export async function matchingVendorAccount(
+  accounts: readonly AiHarnessAccount[], harness: AiLocalHarnessDefinition, identity: string, exceptId?: string,
+): Promise<AiHarnessAccount | undefined> {
+  const candidates = accounts.filter((account) => account.id !== exceptId
+    && account.provider === harness.provider && account.authKind === 'vendor-cli');
+  const wanted = identity.toLowerCase();
+  // Verify plausible matches first; the label is only an ordering hint, not
+  // proof, because it may have been supplied by the user before sign-in.
+  candidates.sort((left, right) => Number(right.label.toLowerCase() === wanted) - Number(left.label.toLowerCase() === wanted));
+  for (const account of candidates) {
+    // A label can be user-supplied or stale after a login in the vendor CLI.
+    // The credential's current identity, not its label, proves equality.
+    const actual = await deriveAccountLabel(harness, account.nativeProfile?.path);
+    if (actual?.toLowerCase() === wanted) return account;
+  }
+  return undefined;
+}
+
 /** The one naming rule, applied only when an account signs in or is
  * created: a label is unique among one provider's accounts, ignoring case
  * (the same person's email on two harnesses is two real accounts).
