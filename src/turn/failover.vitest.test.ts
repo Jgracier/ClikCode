@@ -8,6 +8,11 @@ describe('ClikCode account failover', () => {
     expect(classifyAccountFailure(new Error('weekly usage limit reached'))).toBe('quota-exhausted');
     expect(classifyAccountFailure(new Error("You've hit your limit · resets tomorrow"))).toBe('quota-exhausted');
     expect(classifyAccountFailure(Object.assign(new Error('payment required'), { statusCode: 402 }))).toBe('quota-exhausted');
+    expect(classifyAccountFailure(new Error('Rate limited: API error (status 429 Too Many Requests): subscription:free-usage-exhausted'), { isResultError: true }))
+      .toBe('quota-exhausted');
+    expect(classifyAccountFailure(new Error('Rate limited: API error (status 429 Too Many Requests): subscription:free-usage-exhausted'), {
+      isResultError: true, errorKind: 'rate_limit_error',
+    })).toBe('quota-exhausted');
   });
 
   it('classifies authentication separately', () => {

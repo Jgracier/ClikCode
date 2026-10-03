@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition';
-import { accountHasUsage, resumeInCandidates, sessionProviderHasUsage } from './resume-in';
+import { accountHasUsage, resumeInCandidates, resumePromptForPendingTurn, sessionProviderHasUsage } from './resume-in';
+import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
+import { createHandoffBranch } from '../../turn/handoff.js';
 
 vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../../runtime/lazy-bridge.js')>(),
@@ -15,6 +17,22 @@ const account = (id: string, provider: string, fields: Partial<AiHarnessAccount>
 } as AiHarnessAccount);
 
 describe('resume in', () => {
+  it('continues an interrupted request carried in the branch instead of submitting it twice', () => {
+    expect(resumePromptForPendingTurn({ prompt: 'finish the edit', response: 'changed a.ts', startedAt: '', updatedAt: '', outputStarted: true }, 'finish the edit'))
+      .toBe(INTERRUPTED_TURN_REQUEST);
+    expect(resumePromptForPendingTurn(undefined, 'finish the edit')).toBe('finish the edit');
+    const branch = createHandoffBranch({
+      source: {
+        id: 'original', route: 'local', accountId: 'old', provider: 'old', model: null,
+        effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted',
+        createdAt: '', updatedAt: '', status: 'active', messages: [{ role: 'user', content: 'earlier request' }],
+        pendingTurn: { prompt: 'finish the edit', response: 'changed a.ts', startedAt: '', updatedAt: '', outputStarted: true },
+      } as never,
+      target: harness('codex', 'openai', 0), accountId: 'new', model: null,
+      defaults: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, now: '',
+    });
+    expect(branch.messages?.map(({ content }) => content)).toEqual(['earlier request', 'finish the edit', 'changed a.ts']);
+  });
   it('offers other harnesses with an account that has usage, best tier first', () => {
     const harnesses = [harness('claude', 'anthropic', 0), harness('codex', 'openai', 0), harness('gemini', 'google', 1), harness('hermes', 'nous', 2)];
     const accounts = [

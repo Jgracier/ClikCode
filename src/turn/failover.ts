@@ -225,6 +225,9 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
     ? [signals.stderrText, typeof carried.stderrTail === 'string' ? carried.stderrTail : undefined].filter(Boolean).join('\n')
     : signals.isResultError === false ? '' : message;
 
+  // A generic HTTP 429/rate-limit kind also wraps spent subscriptions. The
+  // subscription's explicit refusal is more specific than that envelope.
+  if (/subscription:[\w-]*usage-exhausted/i.test(text)) return 'quota-exhausted';
   const fromKind = errorKind ? kindFromErrorKind(errorKind) : undefined;
   if (fromKind) return fromKind;
   const effectiveStatus = status ?? embeddedStatus(text || message);
