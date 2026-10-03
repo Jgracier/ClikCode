@@ -2,6 +2,7 @@
  * lands in the terminal's own scrollback once and is never addressed again. */
 
 import chalk from 'chalk';
+import { closeOpenHyperlink } from './hyperlinks.js';
 import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock } from './markdown.js';
 import { terminalCellWidth } from './width.js';
 import { wrapCodeLine, wrapWords } from './wrap.js';
@@ -77,9 +78,12 @@ export function renderMessageBlocks(
     const budget = Math.max(1, width - terminalCellWidth(structural));
     for (const [lineIndex, line] of wrapWords(styled, budget).entries()) {
       const indentation = lineIndex === 0 ? structural : hangIndent;
-      rows.push(`${linePrefix()}${indentation}${block.kind === 'heading'
+      // wrapWords can hard-break a long underlined link label mid-span; close
+      // underline (and OSC 8) here so later chat rows do not stay underlined.
+      const cell = closeOpenHyperlink(block.kind === 'heading'
         ? block.level <= 2 ? chalk.cyanBright(chalk.bold(line)) : chalk.bold(line)
-        : line}`);
+        : line);
+      rows.push(`${linePrefix()}${indentation}${cell}`);
     }
   }
   return rows;
