@@ -112,7 +112,7 @@ export async function newConversation(
 export async function newProviderConversation(
   currentId: string,
   harnessCommandName: string,
-  selection: { accountId?: string | null; model?: string | null } = {},
+  selection: { accountId?: string | null; model?: string | null; turn?: string } = {},
 ): Promise<string> {
   const state = await readState();
   const current = state.sessions.find((item) => item.id === currentId);
@@ -136,7 +136,7 @@ export async function newProviderConversation(
     accountId: selection.accountId ?? preferredAccountId(state, harness.provider),
     model: selection.model ?? (current.nativeHarness === harness.command ? current.model : undefined)
       ?? lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null,
-    defaults, now, sourceDisplayName,
+    defaults, now, sourceDisplayName, ...(selection.turn ? { turn: selection.turn } : {}),
   });
   state.sessions.push(session);
   await writeState(state);

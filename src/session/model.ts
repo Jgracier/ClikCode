@@ -18,7 +18,13 @@ export interface HarnessSession {
    * idle one and never attach to the same conversation twice. */
   claim?: { pid: number; host: string; startedAt: string; heartbeatAt: string };
   /** Describes a portable handoff; the source native session remains intact. */
-  handoff?: { fromSessionId: string; fromHarness: string; at: string };
+  handoff?: {
+    fromSessionId: string; fromHarness: string; at: string;
+    /** `startedAt` of the source's interrupted turn this branch carries on,
+     * when "Resume in" made it: a second window resuming the same turn joins
+     * this branch instead of making another. */
+    turn?: string;
+  };
   route: AiHarnessRoute;
   accountId: string | null;
   provider: string | null;
