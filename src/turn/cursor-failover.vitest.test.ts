@@ -23,6 +23,25 @@ describe('a refused Cursor turn', () => {
     }
     expect(classifyAccountFailure(new Error('Internal error'))).toBe('other');
   });
+
+  // Confirmed in cursor-agent 2026.09.26: ActionRequiredError with action
+  // `upgrade` / `payment` is written into the chat as an agent_message_chunk
+  // ("Upgrade your plan to continue"), then the turn ends successfully.
+  it('treats the upgrade and payment banners as a spent plan', () => {
+    for (const text of [
+      'Upgrade your plan to continue',
+      'Upgrade your account to continue',
+      'Here is the fix so far.\n\nUpgrade your plan to continue',
+      'Add a payment method to continue',
+    ]) {
+      expect(classifyAccountFailure(new Error(text), { isResultError: true }), text).toBe('quota-exhausted');
+    }
+  });
+
+  it('treats the sign-in banner as needing authentication', () => {
+    expect(classifyAccountFailure(new Error('Please sign in to continue'), { isResultError: true }))
+      .toBe('authentication-required');
+  });
 });
 
 describe("Cursor's plan windows", () => {

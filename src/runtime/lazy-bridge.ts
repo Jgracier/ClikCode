@@ -99,7 +99,7 @@ export const modelDisplayId = (harness: AiLocalHarnessDefinition, model: string)
   localCatalog().modelDisplayId(harness, model);
 export const modelIdFromDisplay = (harness: AiLocalHarnessDefinition, typed: string): string =>
   localCatalog().modelIdFromDisplay(harness, typed);
-export const harnessReplyError = (harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined =>
+export const harnessReplyError = (harness: AiLocalHarnessDefinition, text: string): { statusCode?: number; withoutNotice?: string } | undefined =>
   localCatalog().harnessReplyError(harness, text);
 export const maxPromptArgvBytes = (): number => localCatalog().maxPromptArgvBytes;
 export const promptExceedsArgvLimit = (harness: AiLocalHarnessDefinition, prompt: string): boolean => localCatalog().promptExceedsArgvLimit(harness, prompt);

@@ -546,6 +546,19 @@ const AUGGIE_REPLY_ERRORS: readonly AiHarnessReplyErrorPattern[] = [
   { pattern: '^\\s*(?:⚠️\\s*)?\\*{0,2}You have run out of usage for\\b', status: 402 },
 ];
 
+/** Cursor's ActionRequiredError is written into the chat as an ordinary
+ * agent_message_chunk, then the turn ends successfully. Confirmed in
+ * cursor-agent 2026.09.26: action `upgrade` → "Upgrade your plan to continue",
+ * `payment` → "Add a payment method to continue", `login` → "Please sign in
+ * to continue". Without these, ClikCode treated the notice as the answer and
+ * never switched accounts. The trailing form is deliberate: Cursor appends
+ * the notice after any real progress already streamed. */
+const CURSOR_REPLY_ERRORS: readonly AiHarnessReplyErrorPattern[] = [
+  { pattern: '(?:^|\\n\\n)Upgrade your (?:plan|account) to continue\\.?\\s*$', status: 402 },
+  { pattern: '(?:^|\\n\\n)Add a payment method to continue\\.?\\s*$', status: 402 },
+  { pattern: '(?:^|\\n\\n)Please sign in to continue\\.?\\s*$', status: 401 },
+];
+
 /** Vendor installers for the CLIs that are not npm packages. Each URL was
  * fetched and read before it was written here (and each one's Windows
  * counterpart is the one the vendor's own install page gives), and each
@@ -760,7 +773,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'qwen', provider: 'qwen', displayName: 'Qwen Code', surface: 'terminal', tier: 'more', npmPackage: '@qwen-code/qwen-code', transport: 'acp', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'QWEN.md', nativeSlashPassthrough: false, customCommandDirs: ['.qwen/commands', '~/.qwen/commands'], acp: { argv: ['--acp'], legacyCliSessions: true }, normalizedPermissionOptionIds: ['approval-mode'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'qwen', loginArgv: [], loginHint: 'choose a sign-in method (type /auth if it does not ask)', authFiles: [{ path: '${QWEN_HOME:-~/.qwen}/oauth_creds.json' }, { path: '${QWEN_HOME:-~/.qwen}/settings.json', contains: '"selectedType"' }], authEnv: ['QWEN_OAUTH'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--approval-mode', 'default'] }, bypass: { argv: ['--approval-mode', 'yolo'] }, auto: { argv: ['--approval-mode', 'auto'] } }, profileEnv: 'QWEN_HOME', turn: { startArgv: ['-p', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--json'], discoverFormat: 'json-lines' } },
   { command: 'cline', provider: 'cline', displayName: 'Cline CLI', planMode: { option: 'plan', value: true }, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'cline-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp'], permissionArgv: { auto: ['--auto-approve', 'true'] }, listsModels: true, usageFile: { path: '~/.cline/data/sessions/{id}/{id}.json', field: ['metadata', 'usage'] } }, effortValues: ['none', 'low', 'medium', 'high', 'xhigh'], normalizedPermissionOptionIds: ['auto-approve'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', authFiles: [{ path: '~/.cline/data/settings/providers.json', contains: '"auth"' }, { path: '~/.cline/data/settings/providers.json', contains: '"apiKey"' }], loginArgv: ['auth'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['--id'] } },
   { ...OPENCODE_FORK_BASE, command: 'kilo', provider: 'kilo', displayName: 'Kilo Code CLI', tier: 'more', binary: 'kilo', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }], npmPackage: '@kilocode/cli', permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } } },
-  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', planMode: { option: 'mode', value: 'plan' }, surface: 'terminal', tier: 'primary', transport: 'acp', acp: { argv: ['acp'], inheritCliOptions: false, listsModels: true, legacyCliSessions: true }, integration: 'structured', parser: 'cursor-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.cursor/commands', '~/.cursor/commands'], normalizedPermissionOptionIds: ['auto-review', 'force'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cursor-agent', installer: HARNESS_INSTALLERS.cursor, loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { promptGuard: 'double-dash', startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', planMode: { option: 'mode', value: 'plan' }, surface: 'terminal', tier: 'primary', transport: 'acp', acp: { argv: ['acp'], inheritCliOptions: false, listsModels: true, legacyCliSessions: true }, integration: 'structured', parser: 'cursor-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.cursor/commands', '~/.cursor/commands'], normalizedPermissionOptionIds: ['auto-review', 'force'], replyErrorPatterns: CURSOR_REPLY_ERRORS, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cursor-agent', installer: HARNESS_INSTALLERS.cursor, loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { promptGuard: 'double-dash', startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Checked against the installed CLI. `hermes model` is an interactive picker
   // and there is no `models list`; the configured model is `hermes config get
   // model --json` (`default`). ACP (`hermes acp`) is the turn that streams
@@ -1456,14 +1469,22 @@ export interface AiHarnessAuthFile { path: string; contains?: string; removeLine
  * trimmed reply; the status is the first capture group, else `status`. */
 export interface AiHarnessReplyErrorPattern { pattern: string; status?: number }
 
-export function harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number } | undefined {
+export function harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number; withoutNotice?: string } | undefined {
   const reply = text.trim();
   for (const entry of harness.replyErrorPatterns ?? []) {
     const match = new RegExp(entry.pattern).exec(reply);
     if (!match) continue;
     const captured = match[1] ? Number(match[1]) : undefined;
     const statusCode = captured !== undefined && Number.isFinite(captured) ? captured : entry.status;
-    return statusCode !== undefined ? { statusCode } : {};
+    // Everything before the matched notice is real progress. Cursor appends
+    // its upgrade banner after the answer; keeping that banner in the
+    // checkpoint made failover look like the model had only written the
+    // refusal. Only set when there is something to keep.
+    const withoutNotice = match.index > 0 ? reply.slice(0, match.index).trimEnd() : undefined;
+    return {
+      ...(statusCode !== undefined ? { statusCode } : {}),
+      ...(withoutNotice !== undefined ? { withoutNotice } : {}),
+    };
   }
   return undefined;
 }

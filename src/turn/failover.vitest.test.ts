@@ -189,6 +189,9 @@ describe('classifying what a vendor actually says when it runs out', () => {
     // Confirmed from command-code@1.62.1's own installed dist: the status
     // label constant SPEND_LIMIT_REACHED is literally "Spend limit reached".
     ['command', 'Spend limit reached'],
+    // Confirmed in cursor-agent 2026.09.26 ActionRequiredError action map.
+    ['cursor', 'Upgrade your plan to continue'],
+    ['cursor-account', 'Upgrade your account to continue'],
   ] as const;
 
   it.each(quota)('reads %s running out as usage exhausted', (_vendor, text) => {
