@@ -7,6 +7,9 @@ import { readState } from './read.js';
 import { writeState } from './write.js';
 import { runChild } from './testing/concurrency.js';
 import { listStoredSessionIds } from '../store/records.js';
+import { STORED_BLANK_GRACE_MS, discardIfBlank } from '../blank.js';
+import { backfillListFacts } from '../list-backfill.js';
+import { openConversation } from '../attach.js';
 
 const now = () => new Date().toISOString();
 const message = (content: string, role: 'user' | 'assistant' = 'user') => ({ role, content });
@@ -127,4 +130,29 @@ describe('two processes appending to one chat', () => {
     await writeState(undoer);
     expect((await readState()).sessions[0]!.messages!.map((item) => item.content)).toEqual(['q1', 'a1', 'q3']);
   });
+});
+
+describe('an empty chat another process stored for its worker', () => {
+  it('survives every blank-chat sweep here; an old leftover does not', async () => {
+    const home = await freshHome();
+    const setup = await readState();
+    setup.sessions.push(chat('kept', [message('hi')]));
+    await writeState(setup);
+    const old = await runChild(home, ['store-blank', 'leftover']);
+    expect(old, old.stderr).toMatchObject({ code: 0 });
+    // Age the leftover past the grace period, as an older build's would be.
+    const aging = await readState();
+    aging.sessions.find((item) => item.id === 'leftover')!.updatedAt = new Date(Date.now() - STORED_BLANK_GRACE_MS - 60_000).toISOString();
+    await writeState(aging);
+    const fresh = await runChild(home, ['store-blank', 'for-worker']);
+    expect(fresh, fresh.stderr).toMatchObject({ code: 0 });
+
+    await backfillListFacts();
+    await openConversation('/work', 'new');
+    await discardIfBlank('for-worker');
+    const ids = (await readState({ transcripts: [] })).sessions.map((item) => item.id);
+    expect(ids).toContain('for-worker');
+    expect(ids).toContain('kept');
+    expect(ids).not.toContain('leftover');
+  }, 60_000);
 });

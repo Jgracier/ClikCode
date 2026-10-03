@@ -2,8 +2,9 @@
  * on screen; this only catches conversations written before the summary
  * existed. One flight at a time. */
 
-import { sessionForceStored } from './ephemeral.js';
+import { blankChatSweepable } from './blank.js';
 import { sessionFromIndex, stampListFacts } from './list-facts.js';
+import { liveWorkerSessions } from './liveness.js';
 import { isBlankConversation } from './options.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
@@ -21,10 +22,10 @@ export function backfillListFacts(): Promise<void> {
       const state = await readState();
       let changed = false;
       for (const session of state.sessions) if (stampListFacts(session)) changed = true;
-      const kept = state.sessions.filter((session) => {
-        if (!sessionFromIndex(session) || sessionForceStored(session.id)) return true;
-        return !isBlankConversation(session);
-      });
+      // Only stored empty chats nothing could be about to use: the one
+      // another process just stored for its worker is not this pass's to drop.
+      const workerIsLive = await liveWorkerSessions();
+      const kept = state.sessions.filter((session) => !sessionFromIndex(session) || !blankChatSweepable(session, workerIsLive));
       if (kept.length !== state.sessions.length) {
         state.sessions = kept;
         changed = true;
