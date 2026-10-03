@@ -96,6 +96,14 @@ const SELECTION_SCROLL_MS = 60;
 /** Lines of a running tool's newest output shown under its spinner. */
 const LIVE_OUTPUT_LINES = 3;
 
+/** One paint's composer: its text and cursor, the prompt, and the options
+ * (a picker's list or the slash palette) under it. */
+type ComposerFrame = {
+  text: string; options: readonly PickerOption<string>[]; selected: number; prompt: string; cursor: number;
+  palette?: { capacity?: number; hint?: string; hideCursor?: boolean };
+};
+const EMPTY_COMPOSER: ComposerFrame = { text: '', options: [], selected: 0, prompt: '› ', cursor: 0 };
+
 /** Everything that exists only while a turn (or another wait: a download, a
  * shell command) is in flight. startWaiting creates it whole and stopWaiting
  * drops it whole, so no piece of one turn's state can outlive it into the
@@ -129,12 +137,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private history: string[] = [];
   private currentSession?: HarnessSession;
   private currentNotice?: string;
-  private draft = '';
-  private draftOptions: readonly PickerOption<string>[] = [];
-  private draftSelected = 0;
-  private draftPrompt = '› ';
-  private draftCursor = 0;
-  private draftPalette?: { capacity?: number; hint?: string; hideCursor?: boolean };
+  /** The composer as the last paint drew it, for repaint() to draw again. */
+  private composer: ComposerFrame = EMPTY_COMPOSER;
   /** The turn (or other wait) in flight: see WaitingTurn. */
   private turn?: WaitingTurn;
   private waitingFrame = 0;
@@ -203,7 +207,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * footer band open. usage()/activity() are called from fire-and-forget async
    * work (a background usage refresh, a turn's tool-call log) that has no idea
    * the palette owns a specific row layout right now; an unguarded repaint from
-   * either recomputes capacity from whatever draftOptions happens to be, which
+   * either recomputes capacity from whatever composer.options happens to be, which
    * doesn't match the palette's own fixed capacity — the two disagree on where
    * the footer starts, and the status line gets drawn at both rows. Guarded the
    * same way `selecting` already guards this for select() pickers. */
@@ -1326,11 +1330,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    *    is a new one. In all three the palette belongs to a command that has
    *    already run. */
   private repaint(options: { keepPalette: boolean } = { keepPalette: true }): void {
-    if (options.keepPalette) {
-      this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor, this.draftPalette);
-      return;
-    }
-    this.paint(this.draft, this.draftOptions, this.draftSelected, this.draftPrompt, this.draftCursor);
+    const { text, options: listed, selected, prompt, cursor, palette } = this.composer;
+    this.paint(text, listed, selected, prompt, cursor, options.keepPalette ? palette : undefined);
   }
 
   private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; hint?: string; hideCursor?: boolean; headings?: boolean }): void {
@@ -1338,12 +1339,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!session || this.suspended) return;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
-    this.draft = composer;
-    this.draftOptions = options;
-    this.draftSelected = selected;
-    this.draftPrompt = prompt;
-    this.draftCursor = cursor;
-    this.draftPalette = palette ? { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } : undefined;
+    this.composer = {
+      text: composer, options, selected, prompt, cursor,
+      ...(palette ? { palette: { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } } : {}),
+    };
     // The last column is never printed in. DEC autowrap is off (every frame
     // that draws re-sends `\u001b[?7l`), which makes filling it safe on a
     // terminal that honours that -- but several mobile SSH clients, and
@@ -2443,7 +2442,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (answer) this.panelState = undefined;
         // The submitted line is the conversation's now. Leaving it in the
         // composer made the next idle check look like a draft still in progress.
-        this.draft = '';
+        this.composer = { ...this.composer, text: '' };
         if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
         resolveQuestion(answer);
       };
@@ -2674,7 +2673,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // palette's hint under it) before the next frame replaced it.
       setSelecting: (selecting) => {
         this.selecting = selecting;
-        if (!selecting) { this.draft = ''; this.draftOptions = []; this.draftSelected = 0; this.draftCursor = 0; this.draftPrompt = '› '; this.draftPalette = undefined; }
+        if (!selecting) this.composer = EMPTY_COMPOSER;
       },
       select: (subTitle, subOptions, subAction, subSettings) => this.select(subTitle, subOptions, subAction, subSettings),
     };
@@ -2684,7 +2683,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * typed or queued draft. A newer build may replace the process here. */
   idleForBuildReplace(): boolean {
     return !this.closed && !this.suspended && !this.selecting && !this.paletteActive
-      && !this.turn && !this.draft && !this.queuedDraft;
+      && !this.turn && !this.composer.text && !this.queuedDraft;
   }
 
   close(): void {
