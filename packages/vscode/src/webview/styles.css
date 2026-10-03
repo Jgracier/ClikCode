@@ -365,6 +365,8 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .queued-item .queued-text { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .install-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--subtle); display: flex; flex-direction: column; gap: 6px; }
 .install-text { display: flex; align-items: center; gap: 8px; }
+.signin-code { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.signin-code code { font-size: 1.25em; letter-spacing: 0.08em; font-weight: 600; user-select: all; }
 .progress { height: 3px; border-radius: 2px; background: var(--vscode-progressBar-background); opacity: 0.25; position: relative; overflow: hidden; }
 .progress.indeterminate { opacity: 1; background: color-mix(in srgb, var(--vscode-progressBar-background) 25%, transparent); }
 .progress.indeterminate div { position: absolute; top: 0; bottom: 0; width: 35%; background: var(--vscode-progressBar-background); animation: slide 1.3s ease-in-out infinite; }

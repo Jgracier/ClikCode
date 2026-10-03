@@ -62,6 +62,8 @@ export type IdeRequest =
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
   | { type: 'ui-response'; id: string; result: IdeUiResult }
   | { type: 'sign-in-result'; id: string; error?: string }
+  /** Stop the link sign-in a `sign-in-link` event is showing. */
+  | { type: 'sign-in-cancel'; id: string }
   /** Data for the editor's own screens. Only `slash-commands` before
    * revision 2 (a bridge from then answers every query with the command list,
    * so an editor checks `ready.revision` before asking for anything else). */
@@ -243,6 +245,10 @@ export type IdeEvent =
   /** Run `clikcode ide-terminal <spec>` in a terminal; answer sign-in-result
    * when it exits. */
   | { type: 'sign-in'; id: string; name: string; spec: string; environment: Record<string, string> }
+  /** A link sign-in running in the bridge: show the link and code, open the
+   * link, and offer `sign-in-cancel`. Sent again if the code arrives later;
+   * `done` when it is over, however it ended. */
+  | { type: 'sign-in-link'; id: string; name: string; url?: string; code?: string; done?: boolean }
   | { type: 'open-file'; path: string }
   | { type: 'usage'; label?: string; reset?: string }
   | { type: 'result'; requestId: string; ok: boolean; error?: string; data?: unknown }

@@ -69,7 +69,7 @@ function Welcome({ model, onPrompt, onMenu }: { model: ChatModel; onPrompt: (tex
       {needsSignIn || needsGateway ? (
         <div class="card signin-card">
           <div class="card-head"><Icon name="key" /><span class="card-title">Sign in to {provider!.name}</span></div>
-          <p class="muted">{provider!.name} needs an account before it can answer. Its own sign-in opens in a terminal.</p>
+          <p class="muted">{provider!.name} needs an account before it can answer.</p>
           <div class="banner-actions">
             <button type="button" class="primary" onClick={() => (needsGateway ? choose({ kind: 'provider', provider: 'gateway' }) : choose({ kind: 'add-account', provider: provider!.id })).catch(() => undefined)}>Sign in</button>
             <button type="button" class="secondary" onClick={() => onMenu('accounts')}>Accounts</button>

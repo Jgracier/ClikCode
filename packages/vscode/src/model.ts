@@ -161,6 +161,8 @@ export interface ChatModel {
   context?: { used?: number; window?: number; percent: number };
   approvals: Approval[];
   busy?: string;
+  /** A link sign-in the bridge is running: its card shows the link and code. */
+  signIn?: { id: string; name: string; url?: string; code?: string };
   /** A message typed during the turn and what became of it. */
   submissions: Array<{ id: string; text: string; disposition?: string }>;
   /** Read by the extension after each change of conversation. */
@@ -521,6 +523,9 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
       return { ...model, running: true, ownTurn: true, pendingPrompt: event.prompt, queued: model.queued.filter((item) => item.id !== event.queuedTurnId) };
     case 'busy':
       return { ...model, busy: event.label };
+    case 'sign-in-link':
+      if (event.done) return model.signIn?.id === event.id ? { ...model, signIn: undefined } : model;
+      return { ...model, signIn: { id: event.id, name: event.name, ...(event.url ? { url: event.url } : {}), ...(event.code ? { code: event.code } : {}) } };
     case 'notice':
       return withNote(model, { kind: 'notice', level: event.level, text: stripAnsi(event.message) });
     case 'panel':
