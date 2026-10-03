@@ -136,6 +136,9 @@ export interface IdeConversation {
   /** First words of the last message, for the list. */
   preview?: string;
   activity?: 'working' | 'idle';
+  /** Where the terminal board lists it: Working (generating), Active (last
+   * 24 hours), Past. Absent from a bridge before this field. */
+  section?: 'working' | 'active' | 'past';
   current: boolean;
 }
 

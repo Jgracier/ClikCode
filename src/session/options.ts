@@ -27,6 +27,7 @@ import { harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { forgetNativeThread } from './native-thread.js';
+import { conversationRows, type ConversationRow } from './conversation-rows.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */
@@ -54,9 +55,7 @@ export type ProviderAccountChoice =
   | { kind: 'account'; harness: string; accountId: string }
   | { kind: 'add-account'; harness: string };
 
-export function conversationIdFor(session: HarnessSession): string {
-  return session.conversationId ?? session.id;
-}
+export { conversationIdFor } from './conversation-rows.js';
 
 export function hasConversationContent(session: HarnessSession): boolean {
   return Boolean(session.nativeSessionId || session.pendingTurn || (session.messages ?? []).length > 0);
@@ -131,26 +130,30 @@ export function requiresProviderHandoff(session: HarnessSession, targetHarness: 
   return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
 }
 
-/** One row per ClikCode conversation. Provider-native hops stay available via
- * the row's Provider history action instead of appearing as duplicate rows. */
+/** One row per ClikCode conversation, newest first. Provider-native hops stay
+ * available via the row's Provider history action instead of appearing as
+ * duplicate rows. (The /resume board builds its rows with liveness: see
+ * conversationRows and conversationOption.) */
 export function sessionPickerOptions(
   sessions: readonly HarnessSession[],
   currentId: string,
   providerLabel: ((session: HarnessSession) => string) | undefined = sessionProviderLabel,
   now = Date.now(),
 ): PickerOption<string>[] {
+  // A chat nothing happened in is not a conversation to go back to -- only
+  // the one open right now, which the user is looking at.
+  const listed = sessions.filter((session) => session.id === currentId || !isBlankConversation(session));
+  return conversationRows(listed, { currentId, now }).map((row) => conversationOption(row, providerLabel, now));
+}
+
+/** A conversation row as a picker option: title, who answered, how long ago,
+ * the last thing asked; its chats under Provider history. */
+export function conversationOption(
+  row: ConversationRow,
+  providerLabel: ((session: HarnessSession) => string) | undefined = sessionProviderLabel,
+  now = Date.now(),
+): PickerOption<string> {
   const labelFor = providerLabel ?? sessionProviderLabel;
-  const groups = new Map<string, HarnessSession[]>();
-  for (const session of sessions) {
-    // A chat nothing happened in is not a conversation to go back to -- only
-    // the one open right now, which the user is looking at.
-    if (session.clerkOf) continue;
-    if (session.id !== currentId && isBlankConversation(session)) continue;
-    const root = conversationIdFor(session);
-    const group = groups.get(root) ?? [];
-    group.push(session);
-    groups.set(root, group);
-  }
   const timestamp = (session: HarnessSession): number => {
     const value = Date.parse(session.updatedAt);
     return Number.isNaN(value) ? -Infinity : value;
@@ -159,45 +162,39 @@ export function sessionPickerOptions(
     const value = Date.parse(session.createdAt);
     return Number.isNaN(value) ? timestamp(session) : value;
   };
-  const orderedGroups = [...groups.values()].sort((left, right) =>
-    Math.max(...right.map(timestamp)) - Math.max(...left.map(timestamp)));
-
-  return orderedGroups.map((group) => {
-    const history = [...group].sort((left, right) => createdTimestamp(left) - createdTimestamp(right));
-    const byId = new Map(history.map((session) => [session.id, session]));
-    const depthFor = (session: HarnessSession): number => {
-      let depth = 0;
-      let parentId = session.parentSessionId;
-      const seen = new Set<string>();
-      while (parentId && byId.has(parentId) && !seen.has(parentId)) {
-        seen.add(parentId);
-        depth += 1;
-        parentId = byId.get(parentId)?.parentSessionId;
-      }
-      return depth;
-    };
-    const active = group.filter((session) => session.status === 'active');
-    const latest = [...(active.length ? active : group)].sort((left, right) => timestamp(right) - timestamp(left))[0]!;
-    const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
-    const model = nativeModelLabel(latest.nativeHarness, latest.model);
-    const preview = conversationPreview(latest);
-    return {
-      label: title,
-      // The model segment is dropped entirely when there is no real one,
-      // rather than printed as "default" -- see resolveNativeModel.
-      // Provider history stays on Tab. The row is the conversation: who
-      // answered, how long ago, and the last thing that was asked.
-      detail: [
-        `· ${labelFor(latest)}${group.some((session) => session.id === currentId) ? ' · current' : ''}`,
-        model, relativeTime(latest.updatedAt, now), preview,
-      ].filter(Boolean).join(' · '),
-      value: latest.id,
-      alternates: history.length > 1 ? history.map((session) => ({
-        label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,
-        value: session.id,
-      })) : undefined,
-    };
-  });
+  const history = [...row.chats].sort((left, right) => createdTimestamp(left) - createdTimestamp(right));
+  const byId = new Map(history.map((session) => [session.id, session]));
+  const depthFor = (session: HarnessSession): number => {
+    let depth = 0;
+    let parentId = session.parentSessionId;
+    const seen = new Set<string>();
+    while (parentId && byId.has(parentId) && !seen.has(parentId)) {
+      seen.add(parentId);
+      depth += 1;
+      parentId = byId.get(parentId)?.parentSessionId;
+    }
+    return depth;
+  };
+  const latest = row.latest;
+  const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
+  const model = nativeModelLabel(latest.nativeHarness, latest.model);
+  const preview = conversationPreview(latest);
+  return {
+    label: title,
+    // The model segment is dropped entirely when there is no real one,
+    // rather than printed as "default" -- see resolveNativeModel.
+    // Provider history stays on Tab. The row is the conversation: who
+    // answered, how long ago, and the last thing that was asked.
+    detail: [
+      `· ${labelFor(latest)}${row.current ? ' · current' : ''}`,
+      model, relativeTime(latest.updatedAt, now), preview,
+    ].filter(Boolean).join(' · '),
+    value: latest.id,
+    alternates: history.length > 1 ? history.map((session) => ({
+      label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,
+      value: session.id,
+    })) : undefined,
+  };
 }
 
 /** An option by id, falling back to the other spellings of whatever control

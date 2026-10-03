@@ -30,8 +30,9 @@ import { localModelChoices } from '../local-models/index.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
-import { compareProviders, conversationIdFor, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
-import { livePendingTurns, liveWorkerSessions, sessionActivity } from '../session/liveness.js';
+import { compareProviders, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
+import { livePendingTurns, liveWorkerSessions } from '../session/liveness.js';
+import { conversationRows } from '../session/conversation-rows.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { sessionModelLabel } from '../harness/output.js';
 import { modelRow } from '../tui/pickers/model.js';
@@ -45,8 +46,6 @@ export const GATEWAY_ID = 'gateway';
 export const LOCAL_ID = 'clikcode-local';
 /** How long the editor's model menu waits for a harness to list its models. */
 const IDE_MODEL_DISCOVERY_WAIT_MS = 45_000;
-/** Same cutoff the terminal board uses for Active vs Past. */
-const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
 
 function harnessOf(session: HarnessSession | undefined): AiLocalHarnessDefinition | undefined {
   if (!session || isClikCodeAgent(session)) return undefined;
@@ -145,7 +144,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
 }
 
 /** The conversations /resume lists: one row per conversation (its latest
- * chat). Generating first, then Active (last 24 hours), then Past. */
+ * chat), in the terminal board's sections and order (conversationRows). */
 export async function conversationList(state: HarnessState, currentId: string | undefined): Promise<IdeConversation[]> {
   const sessions = state.sessions
     .filter((session) => !session.clerkOf)
@@ -153,17 +152,8 @@ export async function conversationList(state: HarnessState, currentId: string | 
     .filter((session) => session.id === currentId || !isBlankConversation(session));
   const live = await liveWorkerSessions();
   const pending = await livePendingTurns(sessions, live);
-  const now = Date.now();
-  const byRoot = new Map<string, HarnessSession[]>();
-  for (const session of sessions) {
-    const root = conversationIdFor(session);
-    byRoot.set(root, [...(byRoot.get(root) ?? []), session]);
-  }
-  const rows: IdeConversation[] = [];
-  for (const group of byRoot.values()) {
-    const latest = [...group].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!;
-    const activities = group.map((session) => sessionActivity(session, live, now, undefined, pending.get(session.id)));
-    const activity = activities.find((value) => value === 'working') ?? activities.find(Boolean);
+  return conversationRows(sessions, { workerIsLive: live, pending, ...(currentId ? { currentId } : {}) }).map((row): IdeConversation => {
+    const latest = row.latest;
     const opened = transcriptWasLoaded(latest) || latest.messages !== undefined || latest.pendingTurn !== undefined;
     const messages = opened ? sessionTranscriptMessages(latest) : [];
     const last = opened ? messages.at(-1)?.content.replace(/\s+/g, ' ').trim() : conversationPreview(latest, 140);
@@ -171,8 +161,7 @@ export async function conversationList(state: HarnessState, currentId: string | 
       || (opened ? messages.find((message) => message.role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) : latest.listPreview)
       || 'Untitled chat';
     const harness = latest.nativeHarness ? localHarnessForCommand(latest.nativeHarness) : undefined;
-    const isCurrent = group.some((session) => session.id === currentId);
-    rows.push({
+    return {
       id: latest.id,
       title: titled,
       ...(latest.route === 'gateway' ? { provider: 'ClikDeploy Gateway' } : latest.route === 'clikcode-local' ? { provider: CLIKCODE_LOCAL_LABEL } : harness ? { provider: harness.displayName } : {}),
@@ -182,17 +171,11 @@ export async function conversationList(state: HarnessState, currentId: string | 
       ...(last ? { preview: last.slice(0, 140) } : {}),
       // Only a live generating turn is `working` (animated). An idle worker
       // still marks the row, but Active vs Past is by recency, not liveness.
-      ...(activity ?? (isCurrent ? 'idle' : undefined) ? { activity: activity ?? 'idle' } : {}),
-      current: isCurrent,
-    });
-  }
-  const sectionRank = (row: IdeConversation): number => {
-    if (row.activity === 'working') return 0;
-    const at = Date.parse(row.updatedAt);
-    if (!Number.isNaN(at) && now - at < ACTIVE_WITHIN_MS) return 1;
-    return 2;
-  };
-  return rows.sort((left, right) => sectionRank(left) - sectionRank(right) || right.updatedAt.localeCompare(left.updatedAt));
+      ...(row.activity ? { activity: row.activity } : {}),
+      section: row.section,
+      current: row.current,
+    };
+  });
 }
 
 function windowsOf(windows: readonly UsageWindow[] | undefined): IdeUsageWindow[] {
