@@ -35,6 +35,7 @@ const { accountList, conversationList, creditOf } = await import('./queries.js')
 const { readState } = await import('../session/state/read.js');
 const { IdeBridge } = await import('./bridge.js');
 const { IDE_PROTOCOL } = await import('./protocol.js');
+const { ensureWorkersDirectory, writeWorkerRecord } = await import('../worker/registry.js');
 
 const previousHome = process.env.CLIKCODE_HOME;
 afterEach(() => {
@@ -97,24 +98,28 @@ describe('the conversation list', () => {
     expect(rows.map((row) => row.id)).toEqual(['active', 'past']);
   });
 
-  it('scrubs a stale index turn so a finished chat is not marked generating', async () => {
+  it('marks generating only from the transcript turn of a chat with a live worker', async () => {
+    const now = new Date().toISOString();
+    const turn = { prompt: 'go', startedAt: now, updatedAt: now, outputStarted: true };
+    const text = { messages: [{ role: 'user', content: 'go' }] };
     await home({
       sessions: [
-        session('done', {
-          status: 'active',
-          updatedAt: new Date().toISOString(),
-          listTurn: { startedAt: '2026-09-01T00:00:00.000Z', prompt: 'go' },
-          listPreview: 'go',
-          listMessageCount: 1,
-          listChecked: true,
-          messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }],
-        }),
+        session('running', { conversationId: 'r', status: 'active', updatedAt: now, ...text, pendingTurn: turn }),
+        session('crashed', { conversationId: 'c', status: 'active', updatedAt: now, ...text, pendingTurn: turn }),
+        // An older build's index copy of a finished turn: ignored, not scrubbed.
+        session('stale', { conversationId: 's', status: 'active', updatedAt: now, ...text, listTurn: { startedAt: now, prompt: 'go' } }),
       ],
     });
-    const state = await readState();
-    const rows = await conversationList(state, 'done');
-    expect(rows[0]?.activity).not.toBe('working');
-    expect(state.sessions[0]?.listTurn).toBeUndefined();
+    await ensureWorkersDirectory();
+    for (const id of ['running', 'stale']) {
+      await writeWorkerRecord({ sessionId: id, pid: process.pid, socketPath: join(process.env.CLIKCODE_HOME!, `${id}.sock`), token: 't', installationId: 'install', build: 'test', startedAt: now });
+    }
+    const rows = await conversationList(await readState({ transcripts: [] }), undefined);
+    const by = new Map(rows.map((row) => [row.id, row.activity]));
+    expect(by.get('running')).toBe('working');
+    expect(by.get('stale')).toBe('idle');
+    expect(by.get('crashed')).toBeUndefined();
+    expect(rows[0]?.id).toBe('running');
   });
 });
 

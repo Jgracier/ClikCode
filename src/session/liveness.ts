@@ -33,6 +33,9 @@ import { hostname } from 'node:os';
 import type { HarnessSession } from './model.js';
 import { sessionClaimIsLive } from './claim.js';
 import { listWorkerRecords } from '../worker/registry.js';
+import { loadSessionFile } from './store/records.js';
+
+type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
 
 /** Whether a worker process exists for a session id. Supplied by the caller so
  *  one filesystem pass answers for a whole list. */
@@ -59,12 +62,8 @@ export function sessionIsLive(
  *
  * Reads the worker directory once and checks those PIDs. Passing every chat
  * and opening each chat's record was O(conversations) for a handful of live
- * workers; the directory is O(workers). `sessions` is kept so callers that
- * already hold a list need not change; it is not used to decide which records
- * to open. */
-export async function liveWorkerSessions(
-  _sessions?: readonly HarnessSession[],
-): Promise<(sessionId: string) => boolean> {
+ * workers; the directory is O(workers). */
+export async function liveWorkerSessions(): Promise<(sessionId: string) => boolean> {
   const live = new Set<string>();
   const records = await listWorkerRecords().catch(() => []);
   await Promise.all(records.map(async (record) => {
@@ -79,21 +78,39 @@ export async function liveWorkerSessions(
   return (sessionId: string) => live.has(sessionId);
 }
 
+/** The turn each live-worker session is generating, read from its transcript.
+ *
+ * The transcript's `pendingTurn` is the one record of a turn in flight; the
+ * worker writes it and clears it. Only sessions with a live worker are read
+ * (O(workers), not O(conversations)): a journal behind no process is a crash
+ * left for recovery, not a turn running. Its `updatedAt` is the pace. */
+export async function livePendingTurns(
+  sessions: readonly HarnessSession[],
+  workerIsLive: WorkerLiveness,
+): Promise<Map<string, PendingTurn>> {
+  const pending = new Map<string, PendingTurn>();
+  await Promise.all(sessions.filter((session) => session.status === 'active' && workerIsLive(session.id)).map(async (session) => {
+    const turn = (await loadSessionFile(session.id).catch(() => undefined))?.pendingTurn;
+    if (turn) pending.set(session.id, turn);
+  }));
+  return pending;
+}
+
 /** What a live session is doing: `working` while a turn is in flight
  * (generating), `idle` when something holds it open between turns, undefined
  * when nothing does.
  *
- * A turn in flight is the turn journal -- `pendingTurn` on a loaded
- * transcript, or `listTurn` on the index. Either is only trusted behind a
- * live process: a crash leaves the journal behind on purpose (recovery), so
- * on its own it would animate a dead chat. Stale `listTurn` behind an idle
- * worker is scrubbed when the list opens (see reconcileListTurns). */
+ * A turn in flight is the transcript's `pendingTurn` (`pending`; by default
+ * the loaded one, a list passes what livePendingTurns read). It is only
+ * trusted behind a live worker: a crash leaves the journal behind on purpose
+ * (recovery), so on its own it would animate a dead chat. */
 export function sessionActivity(
   session: HarnessSession,
   workerIsLive: WorkerLiveness,
   now = Date.now(),
   host = hostname(),
+  pending: HarnessSession['pendingTurn'] = session.pendingTurn,
 ): 'working' | 'idle' | undefined {
   if (!sessionIsLive(session, workerIsLive, now, host)) return undefined;
-  return session.pendingTurn || session.listTurn ? 'working' : 'idle';
+  return pending && workerIsLive(session.id) ? 'working' : 'idle';
 }

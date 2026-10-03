@@ -128,7 +128,7 @@ describe('a list that does not open every transcript', () => {
     expect(full.sessions.find((session) => session.id === 'b')).toMatchObject({ name: 'Renamed', messages: [{ role: 'user', content: 'hello from b' }] });
   });
 
-  it('records a turn in flight without its response, and a growing response leaves that record alone', async () => {
+  it('keeps a turn in flight in the transcript only: the index row carries no copy of it', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-list-turn-'));
     process.env.CLIKCODE_HOME = root;
     const state = await readState();
@@ -145,7 +145,8 @@ describe('a list that does not open every transcript', () => {
     await writeState(loaded);
     resetSessionStoreCache();
     const light = await readState({ transcripts: [] });
-    expect(light.sessions[0]?.listTurn).toEqual({ startedAt: now, prompt: 'go' });
+    expect((light.sessions[0] as { listTurn?: unknown }).listTurn).toBeUndefined();
+    expect(light.sessions[0]?.pendingTurn).toBeUndefined();
     expect(light.sessions[0]?.listPreview).toBe('hello');
     const again = await readState();
     again.sessions[0]!.pendingTurn!.response += ' more';
@@ -153,8 +154,8 @@ describe('a list that does not open every transcript', () => {
     await writeState(again);
     resetSessionStoreCache();
     const after = await readState({ transcripts: [] });
-    expect(after.sessions[0]?.listTurn).toEqual({ startedAt: now, prompt: 'go' });
-    expect(JSON.stringify(after.sessions[0]?.listTurn)).not.toContain('partial');
+    expect(JSON.stringify(after.sessions[0])).not.toContain('partial');
+    expect((await readState()).sessions[0]?.pendingTurn?.response).toBe('partial more');
   });
 });
 

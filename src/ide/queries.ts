@@ -29,12 +29,10 @@ import {
 import { localModelChoices } from '../local-models/index.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
-import { conversationPreview, reconcileListTurns, transcriptWasLoaded } from '../session/list-facts.js';
+import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
 import { compareProviders, conversationIdFor, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
-import { liveWorkerSessions, sessionActivity } from '../session/liveness.js';
+import { livePendingTurns, liveWorkerSessions, sessionActivity } from '../session/liveness.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
-import { readSessionTranscript } from '../session/store/transcripts.js';
-import { writeState } from '../session/state/write.js';
 import { sessionModelLabel } from '../harness/output.js';
 import { modelRow } from '../tui/pickers/model.js';
 import { swarmIsOn } from '../swarm/policy.js';
@@ -153,13 +151,8 @@ export async function conversationList(state: HarnessState, currentId: string | 
     .filter((session) => !session.clerkOf)
     .filter((session) => session.status !== 'archived' || session.id === currentId)
     .filter((session) => session.id === currentId || !isBlankConversation(session));
-  let live = await liveWorkerSessions(sessions);
-  // Same scrub as the terminal board: a stale index turn behind an idle
-  // worker must not keep the row pulsing.
-  if (await reconcileListTurns(sessions, live, async (id) => (await readSessionTranscript(id))?.pendingTurn)) {
-    await writeState(state).catch(() => undefined);
-    live = await liveWorkerSessions(sessions);
-  }
+  const live = await liveWorkerSessions();
+  const pending = await livePendingTurns(sessions, live);
   const now = Date.now();
   const byRoot = new Map<string, HarnessSession[]>();
   for (const session of sessions) {
@@ -169,8 +162,8 @@ export async function conversationList(state: HarnessState, currentId: string | 
   const rows: IdeConversation[] = [];
   for (const group of byRoot.values()) {
     const latest = [...group].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!;
-    const activity = group.map((session) => sessionActivity(session, live, now)).find((value) => value === 'working')
-      ?? group.map((session) => sessionActivity(session, live, now)).find(Boolean);
+    const activities = group.map((session) => sessionActivity(session, live, now, undefined, pending.get(session.id)));
+    const activity = activities.find((value) => value === 'working') ?? activities.find(Boolean);
     const opened = transcriptWasLoaded(latest) || latest.messages !== undefined || latest.pendingTurn !== undefined;
     const messages = opened ? sessionTranscriptMessages(latest) : [];
     const last = opened ? messages.at(-1)?.content.replace(/\s+/g, ' ').trim() : conversationPreview(latest, 140);
