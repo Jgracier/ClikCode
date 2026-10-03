@@ -1,5 +1,6 @@
 /** Select a usable account for a turn or a failover. */
 import { accountCanTakeTurn, accountQuotaSpent, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
+import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -31,13 +32,14 @@ export function providerHasAccountForTurn(
   return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now));
 }
 
-/** Room the vendor last reported on this account, in percent: the tightest
- * window that can stop it, from a reading still current. Undefined when it
- * reported none. Ranking only -- whether the account may be tried at all is
- * accountQuotaSpent, and a turn since the reading does not change either:
- * the figure is old, not wrong, and only the vendor says an account is out. */
-export function reportedRoom(account: AiHarnessAccount, now: number = Date.now()): number | undefined {
-  const windows = vendorWindows(account).filter((window) => !window.advisory);
+/** Room left on this account, in percent: the tightest window that can stop
+ * it, from the vendor's reading while it is current -- or, for a harness that
+ * reports none, from what its refusals have taught. Undefined when neither
+ * says. Ranking only: whether the account may be tried at all is
+ * accountQuotaSpent, and a learned figure never decides that. */
+export function reportedRoom(state: HarnessState, account: AiHarnessAccount, now: number = Date.now()): number | undefined {
+  const vendor = vendorWindows(account).filter((window) => !window.advisory);
+  const windows = vendor.length ? vendor : learnedReading(state, account, now)?.windows ?? [];
   if (!windows.length || !usageReadingIsCurrent({ windows }, now)) return undefined;
   return Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPct)));
 }
@@ -54,7 +56,7 @@ export function nextUsableFailoverAccount(
   attempted: ReadonlySet<string>,
   now: number = Date.now(),
 ): AiHarnessAccount | undefined {
-  const room = (account: AiHarnessAccount): number => reportedRoom(account, now) ?? -1;
+  const room = (account: AiHarnessAccount): number => reportedRoom(state, account, now) ?? -1;
   return state.accounts
     .filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
       && candidate.provider === current.provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now))
@@ -152,7 +154,7 @@ export async function accountAfterFailure(input: {
     throw failure;
   }
   if (kind === 'quota-exhausted') {
-    recordQuotaRefusal(account, failure);
+    recordQuotaRefusal(state, account, failure);
     tally.exhaustedAny = true;
   } else tally.lastOtherFailure = failure;
   tally.attempted.add(account.id);

@@ -151,7 +151,9 @@ export interface IdeAccount {
   status: 'ready' | 'needs_login' | 'offline';
   problem?: 'verify' | 'reauth' | 'out-of-usage';
   current: boolean;
-  usage?: { label?: string; windows: IdeUsageWindow[] };
+  /** `learned`: estimated from the account's own refusals, for a harness
+   *  that reports no usage. */
+  usage?: { label?: string; windows: IdeUsageWindow[]; learned?: boolean };
   actions: Array<'reauthenticate' | 'disconnect' | 'remove' | 'verified'>;
 }
 

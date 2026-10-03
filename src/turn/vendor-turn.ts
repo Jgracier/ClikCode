@@ -512,7 +512,7 @@ export async function sendVendorTurn(input: {
     // recording one per pass counted every earlier pass again each time.
     const usage = addTurnUsage(carriedPendingUsage, turnUsage);
     const invocation = recordInvocation(state, { sessionId: session.id, accountId: account.id, provider: harness.provider, model, startedAt, usage });
-    recordSuccessfulAccountTurn(account);
+    recordSuccessfulAccountTurn(state, account, invocation);
     showStopReason(prompter, usage?.stopReason);
     // Completion always extracts the title, including when the stream that
     // filtered an earlier attempt was replaced during a retry.

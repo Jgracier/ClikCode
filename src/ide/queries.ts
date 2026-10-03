@@ -18,6 +18,7 @@ import { authEvidencePresent, hasAuthEvidence, harnessCanLogout } from '../harne
 import { accountUsageReading } from '../harness/accounts/account-usage.js';
 import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
 import { accountQuotaSpent, usageReadingIsCurrent, vendorWindows, type UsageWindow } from '../harness/accounts/usage-reading.js';
+import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { nativeModelCatalogForPicker } from '../harness/accounts/model-catalog.js';
 import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -224,6 +225,11 @@ export async function accountList(state: HarnessState, session: HarnessSession |
           usage = { ...(account.usage?.label ? { label: account.usage.label } : {}), windows: windowsOf(windows) };
         }
       }
+    }
+    if (!usage) {
+      // A harness that reports nothing: what its refusals have taught.
+      const learned = learnedReading(state, account, now);
+      if (learned) usage = { ...(learned.label ? { label: learned.label } : {}), windows: windowsOf(learned.windows), learned: true };
     }
     const problem: IdeAccount['problem'] = account.verification ? 'verify'
       : account.status === 'needs_login' ? 'reauth'

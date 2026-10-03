@@ -2,6 +2,7 @@
  * and the router runtime that reads it. One canonical definition, so a
  * per-vendor fact is always a field here and never a name in a branch. */
 
+import type { UsageLearning } from './accounts/usage-learning.js';
 import type { HarnessSession } from '../session/model.js';
 
 export type AiHarnessRoute = 'local' | 'gateway' | 'clikcode-local';
@@ -155,6 +156,9 @@ export interface AiHarnessAccount {
    * terminals -- which is what rate-limited the account out of reading its
    * own usage. */
   usage?: { at: string; label?: string; failed?: boolean };
+  /** What this account's vendor has shown about its limit, for a harness
+   *  that reports no usage of its own -- see usage-learning.ts. */
+  usageLearning?: UsageLearning;
   nativeProfile?: {
     env: string;
     path: string;

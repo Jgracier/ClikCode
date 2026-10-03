@@ -9,6 +9,7 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES } from './usage-probes.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, accountQuotaSpent, nativeUsageCache, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
+import { learnedReading, learnsUsage } from './learned-usage.js';
 
 /** How long a windowless balance reading is reused before its harness is
  * asked again (a turn on the account asks sooner). */
@@ -25,7 +26,9 @@ export async function nativeUsageReading(
   // probe also made every reading that harness had already given unreadable.
   const reportsOnStream = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  if (!probe && !reportsOnStream) return undefined;
+  // Nothing to ask and nothing on the stream: what its refusals have taught,
+  // if anything yet.
+  if (!probe && !reportsOnStream) return account ? learnedReading(state, account) : undefined;
   const cacheKey = usageCacheKey(session.nativeHarness, account?.id, session.nativeSessionId);
   const cached = nativeUsageCache.get(cacheKey);
   // The account's own record is the shared reading: every terminal sees it, so
@@ -157,10 +160,10 @@ export async function accountUsageReading(
  * other ClikCode processes. Windows expire at their reset; balances have a
  * short TTL because the vendor gives no reset time. */
 export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
+  if (learnsUsage(account)) return learnedReading(state, account)?.label;
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
   if (!harness) return undefined;
-  void state;
   const reported = nativeUsageCache.get(usageCacheKey(harness.command, account.id));
   const shared = account.usage as AccountUsageReading | undefined;
   const sharedAt = Date.parse(shared?.at ?? '');
