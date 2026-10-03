@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { codexActivityForItem, codexPermissionSettings, codexSteerParams, completedAgentMessageUpdate } from './codex-app-server';
+import { codexActivityForItem, codexErrorKind, codexPermissionSettings, codexSteerParams, completedAgentMessageUpdate } from './codex-app-server';
 
 describe('Codex app-server protocol mapping', () => {
+  it('distinguishes a spent subscription from a transient HTTP 429', () => {
+    expect(codexErrorKind({ message: 'Rate limited: subscription:free-usage-exhausted', http_status_code: 429 }).errorKind).toBe('quota');
+    expect(codexErrorKind({ message: 'HTTP 429 Too Many Requests', http_status_code: 429 }).errorKind).toBe('other');
+  });
   it('preserves native ids so tool completion updates the start row', () => {
     const item = { type: 'commandExecution', id: 'tool-1', command: 'git status' };
     expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: '$ git status', category: 'run', id: 'tool-1' });

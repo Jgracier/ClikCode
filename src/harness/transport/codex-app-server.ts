@@ -179,13 +179,17 @@ export function codexPermissionSettings(mode: AiHarnessPermissionMode): {
 /** Classify a Codex failure from its structured error (`codexErrorInfo`,
  * JSON-RPC data) and message. Tolerant by design: the info member is a string
  * in some versions and a tagged object carrying an HTTP status in others. */
-function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; statusCode?: number } {
+export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; statusCode?: number } {
   const source = error && typeof error === 'object' ? error as JsonObject : { message: String(error ?? '') };
   const info = source.codexErrorInfo ?? source.codex_error_info ?? source.data ?? '';
   const text = `${typeof info === 'string' ? info : JSON.stringify(info ?? '')} ${String(source.message ?? '')}`;
   const status = /"?http_?status_?code"?\s*[:=]\s*(\d{3})/i.exec(text)?.[1];
   const statusCode = status ? Number(status) : undefined;
-  if (statusCode === 429 || /usage.?limit|rate.?limit|quota|too many requests|\b429\b/i.test(text)) return { errorKind: 'quota', statusCode: statusCode ?? 429 };
+  // HTTP 429 covers both a spent subscription and short-lived throttling.
+  // Only the vendor's explicit quota wording may mark an account spent.
+  if (/subscription:[\w-]*usage-exhausted|usage.?limit|quota (?:exceeded|exhausted|reached)|insufficient.?quota/i.test(text)) {
+    return { errorKind: 'quota', ...(statusCode ? { statusCode } : {}) };
+  }
   if (statusCode === 401 || statusCode === 403 || /unauthori[sz]ed|authenticat|not logged in|log ?in required|api.?key|\b401\b|\b403\b/i.test(text)) return { errorKind: 'auth', statusCode: statusCode ?? 401 };
   return { errorKind: 'other', ...(statusCode ? { statusCode } : {}) };
 }
