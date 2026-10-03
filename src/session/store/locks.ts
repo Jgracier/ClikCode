@@ -92,6 +92,14 @@ export async function withFileLock<T>(lockPath: string, run: () => Promise<T>): 
   return result;
 }
 
+/** Resolves at a moment this process holds and awaits no file lock. A caller
+ * that then replaces the process synchronously (execve) leaves no lock behind
+ * under a pid that stays alive -- such a lock is trusted for minutes and stalls
+ * every other ClikCode. */
+export async function fileLocksIdle(): Promise<void> {
+  while (lockQueues.size) await Promise.all([...lockQueues.values()]);
+}
+
 async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
   await ensurePrivateDirectory(dirname(lockPath));
   const owner: LockOwner = { pid: process.pid, host: hostname(), nonce: randomBytes(12).toString('hex'), at: new Date().toISOString() };
