@@ -34,7 +34,11 @@ export interface TurnWatchdog {
   stop(): void;
 }
 
-function configuredIdleMs(environment: NodeJS.ProcessEnv = process.env): number {
+/** The silence budget in force: CLIKCODE_TURN_IDLE_TIMEOUT_MS, else
+ * PERSISTENT_TURN_IDLE_MS. Also how long an agent may take to start: a
+ * request that waits on the agent's own startup is bounded by this, not by
+ * the adapter handshake's few seconds. */
+export function configuredIdleMs(environment: NodeJS.ProcessEnv = process.env): number {
   const raw = environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS;
   const configured = Number(raw);
   return raw !== undefined && raw !== '' && Number.isFinite(configured) ? configured : PERSISTENT_TURN_IDLE_MS;
