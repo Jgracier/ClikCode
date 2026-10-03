@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { learnedResetAt, learnedUsageReading, learnedWindows, recordAllowedTurn, recordRefusal, type UsageLearning } from './usage-learning.js';
+import { learnedResetAt, learnedUsageReading, learnedWindows, mergeLearning, recordAllowedTurn, recordRefusal, type UsageLearning } from './usage-learning.js';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -171,5 +171,25 @@ describe('learning a limit the vendor never states', () => {
     expect(windows[0]!.limit).toBeLessThan(3150);
     expect(windows[1]!.limit).toBeGreaterThanOrEqual(12000);
     expect(windows[1]!.limit).toBeLessThan(12150);
+  });
+
+  it('keeps what two processes each recorded when their copies are merged', () => {
+    const base = recordAllowedTurn(undefined, T0, 100, T0);
+    // One window's process saw a turn and then a refusal; another's, a different turn.
+    const one = recordRefusal(recordAllowedTurn(base, T0 + MINUTE, 100, T0 + MINUTE), T0 + 2 * MINUTE);
+    const two = recordAllowedTurn(base, T0 + 3 * MINUTE, 100, T0 + 3 * MINUTE);
+    const merged = mergeLearning(one, two, T0 + 4 * MINUTE);
+    expect(merged.turns.map(([start]) => start)).toEqual([T0, T0 + MINUTE, T0 + 3 * MINUTE]);
+    expect(merged.hits.map((hit) => hit.at)).toEqual([new Date(T0 + 2 * MINUTE).toISOString()]);
+  });
+
+  it('keeps the latest refusal of an episode when two processes recorded it', () => {
+    const base = recordAllowedTurn(undefined, T0, 100, T0);
+    const one = recordRefusal(base, T0 + MINUTE);
+    const two = recordRefusal(base, T0 + 2 * MINUTE);
+    expect(mergeLearning(one, two, T0 + 3 * MINUTE).hits.map((hit) => hit.at)).toEqual([new Date(T0 + 2 * MINUTE).toISOString()]);
+    // A turn allowed between them makes them two episodes.
+    const apart = recordRefusal(recordAllowedTurn(one, T0 + 90_000, 100, T0 + 90_000), T0 + 2 * MINUTE);
+    expect(mergeLearning(one, apart, T0 + 3 * MINUTE).hits).toHaveLength(2);
   });
 });

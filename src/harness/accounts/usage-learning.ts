@@ -185,6 +185,56 @@ export function recordRefusal(learning: UsageLearning | undefined, at: number, r
   return next;
 }
 
+/** Learning as stored, in whatever shape wrote it. Older builds kept a
+ * "highWater" limit -- the most ever allowed, counting the allowed turn
+ * itself, which is wrong and is dropped -- and named the one-day window
+ * "24h"; their refusal snapshots were taken the right way and are kept. */
+export function normalizeLearning(value: unknown): UsageLearning | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const stored = value as { turns?: unknown; hits?: unknown; since?: unknown };
+  const turns = Array.isArray(stored.turns)
+    ? stored.turns.filter((turn): turn is [number, number] => Array.isArray(turn) && Number.isFinite(turn[0]) && Number.isFinite(turn[1]))
+    : [];
+  const hits = (Array.isArray(stored.hits) ? stored.hits : []).flatMap((hit: Partial<QuotaRefusal> & { costs?: Record<string, number> }) => {
+    if (typeof hit?.at !== 'string') return [];
+    const { '24h': daily, ...costs } = hit.costs ?? {};
+    return [{
+      at: hit.at, costs: daily === undefined ? costs : { ...costs, daily },
+      ...(typeof hit.retryAt === 'string' ? { retryAt: hit.retryAt } : {}),
+      ...(typeof hit.cleared === 'string' ? { cleared: hit.cleared } : {}),
+    }];
+  });
+  return { turns, hits, ...(typeof stored.since === 'number' && Number.isFinite(stored.since) ? { since: stored.since } : {}) };
+}
+
+/** Two copies of one account's learning, from two ClikCode processes, as
+ * one. Turns and refusals are observations, each true whoever recorded it,
+ * so the result holds both sides' -- a write from a process holding an older
+ * copy must not erase what another recorded meanwhile. Refusals with no
+ * allowed turn between them are one episode, and the latest stands for it. */
+export function mergeLearning(leftValue: unknown, rightValue: unknown, now: number = Date.now()): UsageLearning {
+  const left = normalizeLearning(leftValue) ?? { turns: [], hits: [] };
+  const right = normalizeLearning(rightValue) ?? { turns: [], hits: [] };
+  const turns = new Map<string, [number, number]>();
+  for (const turn of [...left.turns, ...right.turns]) turns.set(`${turn[0]}:${turn[1]}`, turn);
+  let merged: UsageLearning = { turns: [], hits: [] };
+  for (const [start, cost] of [...turns.values()].sort((a, b) => a[0] - b[0])) merged = recordAllowedTurn(merged, start, cost, now);
+  const since = Math.max(left.since ?? Number.NEGATIVE_INFINITY, right.since ?? Number.NEGATIVE_INFINITY, merged.since ?? Number.NEGATIVE_INFINITY);
+  const hits = new Map<string, QuotaRefusal>();
+  for (const hit of [...left.hits, ...right.hits]) {
+    const known = hits.get(hit.at);
+    hits.set(hit.at, { ...known, ...hit, ...(known?.cleared && !hit.cleared ? { cleared: known.cleared } : {}) });
+  }
+  const ordered = [...hits.values()].sort((a, b) => a.at.localeCompare(b.at));
+  const allowedBetween = (from: string, to: string): boolean =>
+    merged.turns.some(([start]) => start > Date.parse(from) && start < Date.parse(to));
+  const episodes = ordered.filter((hit, index) => {
+    const next = ordered[index + 1];
+    return !next || allowedBetween(hit.at, next.at) || Boolean(hit.cleared && Date.parse(hit.cleared) < Date.parse(next.at));
+  });
+  return { turns: merged.turns, hits: episodes.slice(-KEEP_REFUSALS), ...(Number.isFinite(since) ? { since } : {}) };
+}
+
 /** A ledger from turns already on record, for an account that has none. */
 export function seedLedger(turns: readonly { start: number; cost: number }[], now: number): UsageLearning {
   let learning: UsageLearning = { turns: [], hits: [] };

@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../model.js';
 import { cloneData, hidden, sameData } from '../store/data.js';
+import { mergeLearning } from '../../harness/accounts/usage-learning.js';
 import { transcriptOf, type SessionTranscript } from '../store/transcripts.js';
 import type { StateIndex } from './index-file.js';
 import type { Invocation } from './invocations.js';
@@ -42,6 +43,10 @@ function mergeAccount(baseline: AiHarnessAccount | undefined, working: AiHarness
   // no matter which terminal happened to write last.
   if (working.usage && disk.usage) {
     merged.usage = (Date.parse(working.usage.at) || 0) >= (Date.parse(disk.usage.at) || 0) ? working.usage : disk.usage;
+  }
+  // Learned usage is observations, not a value: both sides' are kept.
+  if (working.usageLearning && disk.usageLearning && !sameData(working.usageLearning, disk.usageLearning)) {
+    merged.usageLearning = mergeLearning(working.usageLearning, disk.usageLearning);
   }
   return merged;
 }
