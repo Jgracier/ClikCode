@@ -8,8 +8,22 @@ import { relativeTime } from './format';
 import { choose } from './picker';
 import { Icon, IconButton, KeyList, Popover, type ListRow } from './ui';
 
+type Section = NonNullable<ListedConversation['section']>;
+/** The terminal board's sections, in its order (session/conversation-rows.ts). */
+const SECTIONS: ReadonlyArray<[Section, string]> = [['working', 'Working'], ['active', 'Active'], ['past', 'Past']];
+const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
+
+/** The row's section as ClikCode decided it; a bridge from before `section`
+ * gets the same rule here (generating, else the last 24 hours, else Past). */
+export function conversationSection(row: ListedConversation, now = Date.now()): Section {
+  if (row.section) return row.section;
+  if (row.activity === 'working') return 'working';
+  const at = Date.parse(row.updatedAt);
+  return !Number.isNaN(at) && now - at < ACTIVE_WITHIN_MS ? 'active' : 'past';
+}
+
 /** The conversations, as a list dropped from the header's history button:
- * search, then this chat's recent ones by day. Rename, open in a tab and
+ * search, then Working, Active and Past, as the terminal's board lists them. Rename, open in a tab and
  * delete are on each row; the rest (fork, archive) are slash commands. */
 export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const [rows, setRows] = useState<ListedConversation[]>();
@@ -42,15 +56,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     // The chat on screen is listed once it is a conversation, not while empty.
     const matching = (rows ?? []).filter((row) => !(row.current && !row.messages))
       .filter((row) => !query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
-    const startOfToday = new Date().setHours(0, 0, 0, 0);
-    const day = 24 * 60 * 60 * 1000;
-    const at = (row: ListedConversation): number => Date.parse(row.updatedAt) || 0;
-    const sections: Array<[string, ListedConversation[]]> = [
-      ['Working', matching.filter((row) => row.activity === 'working')],
-      ['Today', matching.filter((row) => row.activity !== 'working' && at(row) >= startOfToday)],
-      ['Previous 7 days', matching.filter((row) => row.activity !== 'working' && at(row) < startOfToday && at(row) >= startOfToday - 7 * day)],
-      ['Older', matching.filter((row) => row.activity !== 'working' && at(row) < startOfToday - 7 * day)],
-    ];
+    const sections: Array<[string, ListedConversation[]]> = SECTIONS.map(([section, title]) => [title, matching.filter((row) => conversationSection(row) === section)]);
     const result: ListRow[] = [];
     for (const [title, items] of sections) {
       if (!items.length) continue;

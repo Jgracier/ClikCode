@@ -22,9 +22,10 @@ import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { sessionClaimIsLive } from '../../session/claim.js';
-import { livePendingTurns, liveWorkerSessions, sessionActivity } from '../../session/liveness.js';
+import { livePendingTurns, liveWorkerSessions } from '../../session/liveness.js';
+import { conversationRows, recencySection, sectionRank, SECTION_TITLES, type ConversationRow, type ConversationSection } from '../../session/conversation-rows.js';
 import { activityGlyph, subagentOptions, turnPace, workingDetail } from './conversation-activity.js';
-import { conversationIdFor, isBlankConversation, sessionPickerOptions } from '../../session/options.js';
+import { conversationIdFor, conversationOption, isBlankConversation } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 
@@ -158,30 +159,12 @@ function nativeValue(command: string, nativeId: string, accountId: string | unde
 
 /** Selected while discovery is still running: wait for it, then reopen. */
 const PENDING_DISCOVERY_VALUE = '__discovering__';
-const WORKING_GROUP = 'Working';
-const ACTIVE_GROUP = 'Active';
-const PAST_GROUP = 'Past';
-/** A chat counts as Active when something happened on it in this window. */
-const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
 const NEW_CONVERSATION_VALUE = '__new__';
 const MANAGE_ACTIONS = [
   { label: 'Rename', value: 'rename' },
   { label: 'Fork', value: 'fork' },
   { label: 'Archive', value: 'archive' },
 ] as const;
-
-/** Generating first, then Active (last 24 hours), then Past. */
-function sectionRank(section: string): number {
-  if (section === WORKING_GROUP) return 0;
-  if (section === ACTIVE_GROUP) return 1;
-  return 2;
-}
-
-function recencySection(updatedAt: string, now: number): typeof ACTIVE_GROUP | typeof PAST_GROUP {
-  const at = Date.parse(updatedAt);
-  if (!Number.isNaN(at) && now - at < ACTIVE_WITHIN_MS) return ACTIVE_GROUP;
-  return PAST_GROUP;
-}
 
 /** One list for finding a conversation and managing it.
  *
@@ -240,21 +223,12 @@ export async function interactiveSessionPicker(
   // The turn each live-worker chat is generating, from its transcript -- the
   // one record of a turn in flight. Its `updatedAt` is the spinner's pace.
   let pendingById = await livePendingTurns(sessions, workerIsLive);
-  // Per conversation, not per chat: a provider handoff leaves the older
-  // chat's worker running for a while, and it is still this conversation.
   const openedAt = Date.now();
-  const activityByRoot = new Map<string, { activity: 'working' | 'idle'; pending?: NonNullable<HarnessSession['pendingTurn']> }>();
+  // One row per conversation, in its section (session/conversation-rows.ts,
+  // the same rows the editor's history menu draws).
+  let rows: ConversationRow[] = [];
   const fillActivity = (): void => {
-    activityByRoot.clear();
-    for (const session of sessions) {
-      const root = conversationIdFor(session);
-      // The chat open here is active by definition; a claim only says whether
-      // someone ELSE holds it, so it would not show up by liveness alone.
-      const pending = pendingById.get(session.id);
-      const activity = sessionActivity(session, workerIsLive, Date.now(), undefined, pending) ?? (session.id === currentId ? 'idle' : undefined);
-      if (!activity || activityByRoot.get(root)?.activity === 'working') continue;
-      activityByRoot.set(root, activity === 'working' ? { activity, ...(pending ? { pending } : {}) } : { activity });
-    }
+    rows = conversationRows(sessions, { workerIsLive, pending: pendingById, currentId });
   };
   fillActivity();
 
@@ -330,16 +304,11 @@ export async function interactiveSessionPicker(
     // internally but the groups themselves were never interleaved. A source
     // with no real timestamp (an unparsed vendor display string) sorts last
     // rather than claiming a false position.
-    const groupedOptions = sessionPickerOptions(sessions, currentId, undefined, openedAt);
     histories.clear();
-    const sessionsById = new Map(sessions.map((session) => [session.id, session]));
-    type OptionBlock = { sortKey: number; options: PickerOption<string>[]; section: string };
-    const trackedBlocks = new Map<string, OptionBlock>();
-    for (const option of groupedOptions) {
-      const session = sessionsById.get(option.value)!;
-      const root = conversationIdFor(session);
-      const activity = activityByRoot.get(root);
-      const pending = activity?.pending;
+    type OptionBlock = { sortKey: number; options: PickerOption<string>[]; section: ConversationSection };
+    const trackedBlocks = rows.map((row): OptionBlock => {
+      const option = conversationOption(row, undefined, openedAt);
+      const pending = row.pending;
       // Three cells in front of every title, so they line up: a running turn's
       // spinner (the board animates it) or its dot, otherwise blank.
       if (pending) option.working = turnPace(pending.updatedAt, openedAt);
@@ -348,24 +317,16 @@ export async function interactiveSessionPicker(
         option.detail = `${workingDetail(pending, openedAt)} ${option.detail ?? ''}`;
         if (pending.subagents?.length) option.inner = { title: 'Subagents', options: subagentOptions(pending, option.value, openedAt) };
       }
-      if (session.id !== currentId && sessionClaimIsLive(session)) {
+      if (row.latest.id !== currentId && sessionClaimIsLive(row.latest)) {
         option.detail = `${option.detail ?? ''} · active in another terminal`;
       }
-      const updatedAt = Date.parse(session.updatedAt);
-      const section = pending ? WORKING_GROUP : recencySection(session.updatedAt, openedAt);
-      const block = trackedBlocks.get(root) ?? { sortKey: -Infinity, options: [], section };
-      block.sortKey = Math.max(block.sortKey, Number.isNaN(updatedAt) ? -Infinity : updatedAt);
-      if (section === WORKING_GROUP) block.section = WORKING_GROUP;
-      block.options.push(option);
-      trackedBlocks.set(root, block);
-    }
+      return { sortKey: row.updatedAtMs, options: [option], section: row.section };
+    });
     const optionBlocks: OptionBlock[] = [
-      ...trackedBlocks.values(),
+      ...trackedBlocks,
       ...discovered.map(({ harness, item, accountId }) => ({
         sortKey: item.updatedAtMs ?? -Infinity,
-        section: item.updatedAtMs !== undefined && openedAt - item.updatedAtMs < ACTIVE_WITHIN_MS
-          ? ACTIVE_GROUP
-          : PAST_GROUP,
+        section: recencySection(item.updatedAtMs, openedAt),
         options: [{
           label: `   ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
           detail: `· not yet in ClikCode${ADOPTED_TRANSCRIPT_READERS[harness.command] ? '' : ' · opens without earlier messages'}${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
@@ -377,10 +338,10 @@ export async function interactiveSessionPicker(
     ];
     optionBlocks.sort((left, right) => sectionRank(left.section) - sectionRank(right.section) || right.sortKey - left.sortKey);
     // Working (generating) first, then Active (last 24 hours), then Past.
-    const sizes = new Map<string, number>();
+    const sizes = new Map<ConversationSection, number>();
     for (const block of optionBlocks) sizes.set(block.section, (sizes.get(block.section) ?? 0) + block.options.length);
     const options: PickerOption<string>[] = optionBlocks.flatMap((block) => block.options.map((option) => ({
-      ...option, group: `${block.section} ${sizes.get(block.section)}`,
+      ...option, group: `${SECTION_TITLES[block.section]} ${sizes.get(block.section)}`,
     })));
     for (const option of options) {
       if (option.value.startsWith('native:')) continue;

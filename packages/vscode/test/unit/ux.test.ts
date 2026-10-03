@@ -6,6 +6,7 @@ import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../..
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
 import { modelWithEffort } from '../../src/webview/picker';
+import { conversationSection } from '../../src/webview/screens';
 import { splitEditorContext } from '../../src/editor-context';
 import { pathIn, relativeTime } from '../../src/webview/format';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
@@ -191,5 +192,18 @@ describe('model and effort chip', () => {
     expect(modelWithEffort('gpt-5.5', 'high')).toBe('gpt-5.5 High');
     expect(modelWithEffort('opus', 'default')).toBe('Opus');
     expect(modelWithEffort(undefined, undefined)).toBe('Default model');
+  });
+});
+
+describe('the history menu lists the terminal board\'s sections', () => {
+  it('uses the section ClikCode decided, and the same rule for a bridge that sends none', () => {
+    const now = Date.parse('2026-10-03T12:00:00.000Z');
+    const row = { id: 'a', title: 't', updatedAt: '2026-09-01T00:00:00.000Z', messages: 1, current: false };
+    expect(conversationSection({ ...row, section: 'active' }, now)).toBe('active');
+    expect(conversationSection({ ...row, activity: 'working' }, now)).toBe('working');
+    expect(conversationSection({ ...row, updatedAt: '2026-10-03T01:00:00.000Z' }, now)).toBe('active');
+    // Yesterday is Active by the 24-hour rule, not "Previous 7 days".
+    expect(conversationSection({ ...row, updatedAt: '2026-10-02T13:00:00.000Z' }, now)).toBe('active');
+    expect(conversationSection(row, now)).toBe('past');
   });
 });
