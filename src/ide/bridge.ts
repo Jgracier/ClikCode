@@ -24,8 +24,7 @@ import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { chatNamed } from '../session/options.js';
 import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
-import { claimConversation, leaveConversation, openConversation, resolveSessionModel } from '../session/attach.js';
-import { ensureSessionOnDisk } from '../session/blank.js';
+import { claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
 import { compactPath } from '../harness/protocol/labels.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
@@ -40,8 +39,7 @@ import { aiSessionLeave } from '../commands/ai/sessions.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from '../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../commands/ai/harness.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
-import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
-import { ensureLocalModelForTurn, reconcileLocalModelLeases } from '../commands/ai/local-model.js';
+import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
 import { isShellCommandLine } from '../commands/ai/shell-run.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { routeSlashInput, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../tui/slash/registry.js';
@@ -529,28 +527,12 @@ export class IdeBridge {
     }
   }
 
-  /** One turn through the conversation's worker, with what the terminal does
-   * around it: a TurboFit or ClikCode Local model is up first, held by this
-   * client rather than the worker. */
+  /** One turn through the conversation's worker, after what the terminal
+   * does before one (prepareTurn). */
   private async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
     // Carrying on an interrupted turn is not something the user typed.
     if (prompt === INTERRUPTED_TURN_REQUEST) turn = { ...turn, echo: false };
-    const state = await readState({ transcripts: [targetId] });
-    const active = state.sessions.find((item) => item.id === targetId);
-    const harness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;
-    if (active && harness) {
-      this.channel.send({ type: 'busy', label: 'preparing…' });
-      try {
-        await ensureTurboFitForTurn(harness, state.accounts.find((item) => item.id === active.accountId), targetId, active.model);
-      } finally { this.channel.send({ type: 'busy' }); }
-    }
-    if (active?.route === 'clikcode-local') {
-      this.channel.send({ type: 'busy', label: 'loading the local model…' });
-      try { await ensureLocalModelForTurn(active); } finally { this.channel.send({ type: 'busy' }); }
-    }
-    // Blank chats live only in this process. The worker is a separate process
-    // and must be able to read the chat before it can accept the first turn.
-    await ensureSessionOnDisk(targetId);
+    await prepareTurn(targetId, (label) => this.channel.send({ type: 'busy', ...(label ? { label } : {}) }));
     await this.prepareRoute();
     const client = await this.workerFor(targetId);
     this.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });

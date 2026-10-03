@@ -11,13 +11,16 @@
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 import { claimSession, releaseSession, sessionClaimIsLive } from './claim.js';
-import { discardIfBlank } from './blank.js';
+import { discardIfBlank, ensureSessionOnDisk } from './blank.js';
 import { backfillListFacts } from './list-backfill.js';
 import { chatNamed, isBlankConversation, latestChat } from './options.js';
-import type { HarnessSession } from './model.js';
+import type { HarnessSession, HarnessState } from './model.js';
 import { launchSession } from '../commands/ai/sessions.js';
 import { sessionOrProviderHarness } from '../tui/slash/context.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
+import { ensureLocalModelForTurn } from '../commands/ai/local-model.js';
 
 /** Reopened, a closed or archived chat is active again. */
 export function activateSession(session: HarnessSession): boolean {
@@ -112,4 +115,29 @@ export async function releaseConversationClaim(id: string): Promise<void> {
 export async function leaveConversation(id: string): Promise<void> {
   await releaseConversationClaim(id).catch(() => undefined);
   await discardIfBlank(id).catch(() => undefined);
+}
+
+/** What a turn needs before the worker is handed it, done by the client:
+ * the chat is on disk (a draft lives only in this process, and the worker is
+ * another one that must read it), and a TurboFit or ClikCode Local model is up
+ * -- held by this client, which outlives nothing it shows, not by the worker.
+ * `busy` labels the wait, where the client has a line for it. */
+export async function prepareTurn(
+  targetId: string, busy?: (label?: string) => void,
+): Promise<{ state: HarnessState; active: HarnessSession | undefined }> {
+  await ensureSessionOnDisk(targetId);
+  const state = await readState({ transcripts: [targetId] });
+  const active = state.sessions.find((item) => item.id === targetId);
+  const harness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;
+  if (active && harness) {
+    busy?.('preparing…');
+    try {
+      await ensureTurboFitForTurn(harness, state.accounts.find((item) => item.id === active.accountId), targetId, active.model);
+    } finally { busy?.(); }
+  }
+  if (active?.route === 'clikcode-local') {
+    busy?.('loading the local model…');
+    try { await ensureLocalModelForTurn(active); } finally { busy?.(); }
+  }
+  return { state, active };
 }
