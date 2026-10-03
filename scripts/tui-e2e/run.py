@@ -279,6 +279,16 @@ SCENARIOS = {
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
         'watch': [], 'ever': ['Del disconnect', 'Cancel'], 'final_contains': ['reauth'],
     },
+    # Adding a Grok account: its sign-in is a link and a code, shown on
+    # ClikCode's own screen -- the vendor's own text never takes it over.
+    'account-add-link-sign-in': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15),
+                  ('wait_for', 'signed in to', 15), ('settle', 1)],
+        'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'esc to interrupt'],
+        'final_contains': ['signed in to'], 'never': ['Confirm this code in your browser', 'Waiting for authorization', 'not a tty'],
+    },
     # Back from a sub-menu lands on the row it was opened from, with no
     # spinner or empty composer flashed on the way into the list.
     'settings-back-lands-on-row': {

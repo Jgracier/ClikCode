@@ -149,6 +149,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private streamedChars = 0;
   private usageCharsCounted = 0;
   private activityEntries: ActivityEntry[] = [];
+  /** A link sign-in's link and code, drawn above the waiting band while it
+   * runs (linkWait). */
+  private signInLines: string[] = [];
   /** collapseToolRuns over activityEntries, redone only when they change. */
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
   /** The calls still open: the status line names the newest (toolStatus). */
@@ -890,27 +893,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
-  /** A link sign-in on screen: Esc cancels it. Inside a running turn (a
-   * sign-in the turn asked for) it borrows the turn's band and Esc rather
-   * than starting a wait, which would reset the turn; the undo gives them
-   * back. Outside one it is a wait of its own. */
-  linkWait(label: string, cancel: () => void): () => void {
+  /** A link sign-in on screen: its link and code above the waiting band,
+   * Esc cancelling it. Inside a running turn (a sign-in the turn asked for)
+   * it borrows the turn's band and Esc rather than starting a wait, which
+   * would reset the turn; stop() gives them back. */
+  linkWait(label: string, cancel: () => void): { show(lines: readonly string[]): void; stop(): void } {
+    const show = (lines: readonly string[]): void => { this.signInLines = [...lines]; this.updateWaiting(); };
     const turn = this.turn;
     if (!turn) {
       this.startWaiting(label, () => cancel());
-      return () => this.stopWaiting();
+      return { show, stop: () => { this.signInLines = []; this.stopWaiting(); } };
     }
     const saved = { label: turn.label, cancel: turn.cancel, cancelled: turn.cancelled };
     turn.label = label;
     turn.cancel = () => cancel();
     turn.cancelled = false;
     this.updateWaiting();
-    return () => {
-      if (this.turn !== turn) return;
-      turn.label = saved.label;
-      turn.cancel = saved.cancel;
-      turn.cancelled = saved.cancelled;
-      this.updateWaiting();
+    return {
+      show,
+      stop: () => {
+        this.signInLines = [];
+        if (this.turn !== turn) { this.schedulePaint(); return; }
+        turn.label = saved.label;
+        turn.cancel = saved.cancel;
+        turn.cancelled = saved.cancelled;
+        this.updateWaiting();
+      },
     };
   }
 
@@ -1482,6 +1490,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const thoughtRows = this.turn && this.thought && !approval && liveBandBudget > 0
       ? [`  ${chalk.dim(chalk.italic(`✻ ${visibleTail(this.thought.text, Math.max(1, inner - 2))}`))}`] : [];
     liveBandBudget -= thoughtRows.length;
+    // A link sign-in's link is wrapped, never cut: on a phone it is read (and
+    // its code typed) from here.
+    const signInWrapped = this.turn ? this.signInLines.flatMap((line) => {
+      // The link arrives as its own plain line (account.ts).
+      const room = Math.max(8, inner - 2);
+      if (!/^https?:\/\/\S+$/.test(line)) return [`  ${visibleSlice(line, room)}`];
+      const rows: string[] = [];
+      for (let at = 0; at < line.length; at += room) rows.push(`  ${chalk.underline(line.slice(at, at + room))}`);
+      return rows;
+    }) : [];
+    const signInRows = signInWrapped.length <= liveBandBudget ? signInWrapped : signInWrapped.slice(0, Math.max(0, liveBandBudget));
+    liveBandBudget -= signInRows.length;
     const planGlyph = this.turn && !this.reducedMotion ? waitingSpinnerGlyph(this.waitingFrame) : undefined;
     const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget, planGlyph);
     liveBandBudget -= planRows.length;
@@ -1493,7 +1513,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       panelRows = shown.rows;
     }
     const maxComposerRows = Math.max(
-      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - planRows.length - panelRows.length,
+      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length,
     );
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     // -------------------------------------------------------------------
@@ -1775,7 +1795,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
       }));
     }
-    footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
+    footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : []));
     if (waitingRows && this.turn) {
       footer.push('', `  ${visibleSlice(this.waitingLine(this.turn), Math.max(1, inner))}`);
     }

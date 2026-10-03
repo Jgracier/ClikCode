@@ -34,7 +34,10 @@ export function extractLoginCode(text: string, url?: string): string | undefined
       if (fromUrl) return fromUrl;
     } catch { /* fail-open-ok: not a parseable URL, read the text instead */ }
   }
-  return stripAnsi(text).match(/\b[A-Z0-9]{4,5}-[A-Z0-9]{4,5}\b/)?.[0];
+  // Never from inside a link (Cursor's carries a UUID whose middle looks
+  // like one), and never a piece of a longer dashed token.
+  const prose = stripAnsi(text).replace(/https?:\/\/\S+/g, ' ');
+  return prose.match(/(?<![\w-])[A-Z0-9]{4,5}-[A-Z0-9]{4,5}(?![\w-])/)?.[0];
 }
 
 /** Which link to show: the one the vendor tried to open where a browser is

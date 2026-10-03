@@ -33,7 +33,14 @@ const nextTurn = () => {
 if (argv.includes('--version')) { console.log('grok 9.9.9 (fake)'); process.exit(0); }
 if (argv.includes('--help')) { console.log('Usage: grok [options]\n  --reasoning-effort <EFFORT>  Reasoning effort'); process.exit(0); }
 if (argv[0] === 'models' || argv.includes('--list-models')) { console.log('grok-4\ngrok-4-fast'); process.exit(0); }
-if (['login', 'logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
+// Sign-in as the real `grok login` does it: a device link and code, then a
+// wait for the browser (here, two seconds), then success. Like the real one
+// it insists on a TTY.
+if (argv[0] === 'login') {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) { console.log('not a tty'); process.exit(9); }
+  console.log('To sign in, open this URL in your browser:\n  https://accounts.x.ai/oauth2/device?user_code=AB12-CD34\nConfirm this code in your browser:\n  AB12-CD34\nWaiting for authorization...');
+  setTimeout(() => process.exit(0), 2000);
+} else if (['logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
 
 // `grok agent stdio`: the ACP agent ClikCode starts for Grok since it moved
 // to ACP. Same recorded turns, as session/update notifications.

@@ -28,7 +28,14 @@ describe.skipIf(process.platform === 'win32')('a link sign-in in the CLI', () =>
       suspend: async () => { calls.push('suspend'); },
       resume: () => { calls.push('resume'); },
       activity: (message) => { calls.push(`activity ${message.replace(/\u001b\[[0-9;]*m/g, '')}`); },
-      linkWait: (label, onCancel) => { calls.push(`linkWait ${label}`); cancel = onCancel; return () => { calls.push('undo'); }; },
+      linkWait: (label, onCancel) => {
+        calls.push(`linkWait ${label}`);
+        cancel = onCancel;
+        return {
+          show: (lines) => { for (const line of lines) calls.push(`show ${line.replace(/\u001b\[[0-9;]*m/g, '')}`); },
+          stop: () => { calls.push('undo'); },
+        };
+      },
     };
     return { value, calls, cancel: () => cancel?.() };
   };
@@ -50,8 +57,8 @@ describe.skipIf(process.platform === 'win32')('a link sign-in in the CLI', () =>
     } finally { stdout.mockRestore(); }
     expect(calls).not.toContain('suspend');
     expect(calls[0]).toMatch(/^linkWait waiting for you to sign in to Grok Build/);
-    expect(calls).toContain('activity Sign in to Grok Build · code 5FCB-TTXG');
-    expect(calls.some((call) => call.startsWith('activity https://accounts.x.ai/oauth2/device?user_code=5FCB-TTXG'))).toBe(true);
+    expect(calls).toContain('show Sign in to Grok Build · confirm the code 5FCB-TTXG');
+    expect(calls).toContain('show https://accounts.x.ai/oauth2/device?user_code=5FCB-TTXG');
     expect(calls).toContain('undo');
     expect(calls.at(-1)).toBe('activity signed in to Grok Build');
   });
