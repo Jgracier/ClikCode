@@ -33,6 +33,13 @@ describe('resume in', () => {
     });
     expect(branch.messages?.map(({ content }) => content)).toEqual(['earlier request', 'finish the edit', 'changed a.ts']);
   });
+  it('compares what the turn recorded, not the typed line, so an expanded /review is continued rather than run again', () => {
+    const review = { prompt: 'Review the uncommitted changes for bugs.', response: 'Looked at a.ts', startedAt: '', updatedAt: '', outputStarted: true };
+    expect(resumePromptForPendingTurn(review, '/review', 'Review the uncommitted changes for bugs.\n')).toBe(INTERRUPTED_TURN_REQUEST);
+    // The recorded turn is an older one: this request never started, and the
+    // typed line is what goes.
+    expect(resumePromptForPendingTurn(review, '/init', 'Write an AGENTS.md for this repository.')).toBe('/init');
+  });
   it('offers other harnesses with an account that has usage, best tier first', () => {
     const harnesses = [harness('claude', 'anthropic', 0), harness('codex', 'openai', 0), harness('gemini', 'google', 1), harness('hermes', 'nous', 2)];
     const accounts = [

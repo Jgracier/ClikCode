@@ -53,7 +53,7 @@ afterEach(async () => {
 });
 
 /** A Claude Code chat that ran out mid-turn, handed to Continue. */
-async function handedOff(pendingTurn?: HarnessSession['pendingTurn']): Promise<string> {
+async function handedOff(pendingTurn?: HarnessSession['pendingTurn'], fields: Partial<HarnessSession> = {}): Promise<string> {
   const state = await readState();
   const now = new Date().toISOString();
   const account = { id: 'cn-1', provider: 'continue', label: 'cn', authKind: 'vendor-cli', models: [], status: 'ready' } as unknown as AiHarnessAccount;
@@ -63,7 +63,7 @@ async function handedOff(pendingTurn?: HarnessSession['pendingTurn']): Promise<s
     nativeHarness: 'claude', nativeSessionId: randomUUID(), workspace: root,
     effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
     messages: [{ role: 'user', content: 'rename the parser' }, { role: 'assistant', content: 'renamed it to Reader' }],
-    ...(pendingTurn ? { pendingTurn } : {}),
+    ...(pendingTurn ? { pendingTurn } : {}), ...fields,
   };
   const branch = createHandoffBranch({
     source, target: localHarnessForCommand('cn')!, accountId: account.id, model: null,
@@ -98,5 +98,15 @@ describe("a handoff branch's first vendor turn", () => {
     for (const part of ['rename the parser', 'renamed it to Reader', 'finish the edit', 'changed a.ts', INTERRUPTED_TURN_REQUEST]) {
       expect(wire).toContain(part);
     }
+  }, 30_000);
+
+  it('carries the files the interrupted request had attached, not only its words', async () => {
+    const notes = join(root, 'notes.txt');
+    await writeFile(notes, 'the parser lives in src/read.ts');
+    const pending = { prompt: 'finish the edit', response: 'changed a.ts', startedAt: '', updatedAt: '', outputStarted: true };
+    const id = await handedOff(pending, { attachments: [notes] });
+    await runSessionTurn({} as never, id, resumePromptForPendingTurn(pending, 'finish the edit'));
+    const [wire] = await sentPrompts();
+    expect(wire).toContain('the parser lives in src/read.ts');
   }, 30_000);
 });

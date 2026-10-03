@@ -47,7 +47,7 @@ describe('a queued message that runs out of usage in the editor', () => {
     const { inner, sent, turns } = setup();
     carry.next.mockResolvedValue({ moved: { id: 's2', prompt: 'continue it' } });
     await inner.execute('queued words', { queuedTurnId: 'q1' });
-    expect(carry.next).toHaveBeenCalledWith(expect.anything(), 's1', 'queued words', expect.anything());
+    expect(carry.next).toHaveBeenCalledWith(expect.anything(), 's1', 'queued words', expect.anything(), 'queued words');
     expect(inner.switchTo).toHaveBeenCalledWith('s2');
     expect(turns).toEqual(['queued words', 'continue it']);
     expect(sent.filter((message) => message.type === 'restore-draft')).toEqual([]);
@@ -59,5 +59,13 @@ describe('a queued message that runs out of usage in the editor', () => {
     await inner.execute('queued words', { queuedTurnId: 'q1' });
     expect(turns).toEqual(['queued words']);
     expect(sent.filter((message) => message.type === 'restore-draft')).toEqual([{ type: 'restore-draft', text: 'queued words\n\nand then this' }]);
+  });
+
+  it('names the prompt a slash command expanded to, so its interrupted turn is continued, not re-run', async () => {
+    const { inner } = setup();
+    inner.dispatch = async (line: string) => ({ prompt: line === '/review' ? 'Review the uncommitted changes.' : line });
+    carry.next.mockResolvedValue({ stayed: [] });
+    await inner.execute('/review', {});
+    expect(carry.next).toHaveBeenCalledWith(expect.anything(), 's1', '/review', expect.anything(), 'Review the uncommitted changes.');
   });
 });

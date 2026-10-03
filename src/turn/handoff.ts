@@ -34,6 +34,11 @@ export function createHandoffBranch(input: {
     ...(sessionTranscriptMessages(input.source).length
       ? { messages: sessionTranscriptMessages(input.source).map((message) => ({ ...message })) }
       : {}),
+    // Files attached for a request that has not finished (one that ran out
+    // mid-turn keeps them) or for the next one. The transcript keeps only the
+    // typed words, so without these the new provider's first turn retold the
+    // request without what it was about.
+    ...(input.source.attachments?.length ? { attachments: [...input.source.attachments] } : {}),
     createdAt: input.now, updatedAt: input.now, status: 'active',
   };
 }
