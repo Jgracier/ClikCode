@@ -373,6 +373,9 @@ export class ClikCodeController implements vscode.Disposable {
     } finally { this.restartingForBuild = false; }
   }
 
+  /** Link sign-ins whose link this chat already opened. */
+  private readonly openedSignIns = new Set<string>();
+
   private dropQuestions(): void {
     for (const [id, surface] of this.panelQuestions) surface.post({ type: 'ui-cancel', id });
     this.panelQuestions.clear();
@@ -400,6 +403,15 @@ export class ClikCodeController implements vscode.Disposable {
           (error: unknown) => bridge.send({ type: 'sign-in-result', id: event.id, error: error instanceof Error ? error.message : String(error) }));
         return;
       }
+      case 'sign-in-link':
+        // Opened once, on this machine: VS Code is always on a computer, and
+        // over Remote-SSH openExternal still opens the browser here.
+        if (event.url && !event.done && !this.openedSignIns.has(event.id)) {
+          this.openedSignIns.add(event.id);
+          void vscode.env.openExternal(vscode.Uri.parse(event.url));
+        }
+        if (event.done) this.openedSignIns.delete(event.id);
+        return;
       case 'open-file':
         void vscode.window.showTextDocument(vscode.Uri.file(event.path), { preview: false });
         return;
@@ -801,6 +813,9 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       case 'openLink':
         if (/^(https?:|mailto:)/i.test(message.href)) void vscode.env.openExternal(vscode.Uri.parse(message.href));
+        return;
+      case 'signInCancel':
+        this.bridge?.send({ type: 'sign-in-cancel', id: message.id });
         return;
       case 'log':
         this.host.log.appendLine(`[${this.label} page] ${message.text}`);

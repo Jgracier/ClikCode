@@ -88,6 +88,8 @@ export type FromWebview =
   | { type: 'turnChanges'; action: 'view' | 'revert'; userIndex: number }
   | { type: 'command'; command: string; args?: unknown[] }
   | { type: 'openLink'; href: string }
+  /** Stop the link sign-in the card shows. */
+  | { type: 'signInCancel'; id: string }
   | { type: 'openFile'; path: string; line?: number }
   | { type: 'request'; id: string; request: WebviewRequest }
   | { type: 'ui-response'; id: string; result: IdeUiResult }
