@@ -40,7 +40,7 @@ export function stripAnsi(text: string): string {
 export function extractLoginUrl(text: string): string | undefined {
   const urls = stripAnsi(text).match(/https:\/\/[^\s"'<>)\]]+/g) ?? [];
   const isAuth = (url: string): boolean =>
-    /\b(?:oauth|auth|authorize|authorise|login|sign-?in|device|activate)\b/i.test(url);
+    /\b(?:oauth2?|auth|authorize|authorise|login|sign-?in|device|activate)\b|user_code=|_device\b/i.test(url);
   // The longest match wins among equals: an authorisation URL carries its
   // query string, and a truncated prefix of one is not a working link.
   return urls.filter(isAuth).sort((left, right) => right.length - left.length)[0];

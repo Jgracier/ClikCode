@@ -15,7 +15,7 @@ export interface NativeHarnessSpec {
   /** A separate ACP executable, which an install must also provide. */
   acp?: { binary?: string };
   loginArgv?: readonly string[];
-  loginCapturable?: boolean;
+  loginLink?: { remoteArgv?: readonly string[] };
   versionArgv?: readonly string[];
 }
 
