@@ -10,7 +10,6 @@
 import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { reconcileLocalModelLeases } from './local-model.js';
-import { chatNamed } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
 import { isShellCommandLine, type ShellNote } from './shell-run.js';
@@ -22,56 +21,35 @@ import { runNativeHarnessCommand } from '../../harness/transport/native/command.
 import { spawnPortable as spawn } from '../../harness/transport/spawn.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels.js';
-import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
-import { enqueueCommandLine } from '../../tui/slash/queue.js';
-import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
-import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
-import { harnessModelLabel, warmNativeModelCatalog } from '../../harness/accounts/model-catalog.js';
-import { settingLabel } from '../../tui/pickers/setting-scope.js';
+import { warmNativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, nativeAvailableCommands } from '../../turn/vendor-process.js';
 import { synchronizeNativeTranscript } from '../../turn/handoff.js';
-import { turnEnvironment } from '../../turn/turn-environment.js';
 import { runSessionTurn } from '../../turn/session-turn.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
-import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
 import { SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
 import { activateSession, afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
-import { existsSync } from 'node:fs';
-import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
+import { slashControls, slashHelpText, slashPalette } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { newConversation, newProviderConversation } from './conversations.js';
-import { aiSessionLeave } from './sessions.js';
-import { aiSessionCommand, runShellLine, slashRouteTurn } from '../../tui/slash/handlers.js';
-import { sessionHarness, sessionOrProviderHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
-import { capabilitiesText } from '../../tui/slash/capabilities-text.js';
-import { compactConversation } from '../../tui/slash/compact.js';
-import { exportTranscript } from '../../tui/slash/export-transcript.js';
-import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
-import { nativeManagerListing } from '../../tui/slash/native-manager.js';
-import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
+import { newConversation } from './conversations.js';
+import { runShellLine } from '../../tui/slash/handlers.js';
+import { sessionHarness, sessionOrProviderHarness, slashExtrasFor } from '../../tui/slash/context.js';
+import { dispatchLine, type SlashHost } from '../../tui/slash/dispatch.js';
 import { type ExhaustionRetryGuard } from '../../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
-import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
-import { interactiveHarnessOptionPicker } from '../../tui/pickers/options.js';
 import { interactiveModelPicker } from '../../tui/pickers/model.js';
-import { interactivePermissionPicker } from '../../tui/pickers/permissions.js';
 import { interactiveSessionPicker } from '../../tui/pickers/session.js';
-import { interactiveToolsPicker } from '../../tui/pickers/tools.js';
-import { interactiveSettingsPicker } from '../../tui/pickers/settings.js';
-import { interactiveSwarmPicker } from '../../tui/pickers/swarm.js';
-import { doctorSummary } from '../../tui/doctor-summary.js';
-import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
+import type { InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
 import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from '../../worker/turn-bridge.js';
 import { retireStaleWorkers } from '../../worker/client.js';
 import { replaceCliWithNewBuild } from './build-replace.js';
@@ -354,7 +332,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       /** What this pass's turn actually sent, when a slash command expanded
        * the line (/review): what an interrupted turn recorded is compared to. */
       let sentPrompt: string | undefined;
-      let activeWorkspace = process.cwd();
       // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
       // handoff, resume) closes the child it had.
       if (transportSessionId !== id) {
@@ -384,7 +361,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           preparedRoute = routeKey;
           void prepareSessionWorker(latest.id, { spawn: isClikCodeAgent(latest) }).catch(() => undefined);
         }
-        activeWorkspace = latest.workspace ?? process.cwd();
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
         /** The turn the worker is running, followed to its end and shown as
@@ -538,16 +514,39 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         terminal.startWaiting(label);
         try { return await work(); } finally { terminal.stopWaiting(); }
       };
-      /** The headless handler, with its output in a panel.
-       *
-       * No "Press Enter to return" any more. A panel is part of the frame the
-       * composer is drawn in (see paint()'s panel rows) and survives every
-       * repaint until the next message is sent, so the keypress bought
-       * nothing: the panel was already staying, and the prompt was one more
-       * thing to dismiss before the user could type. */
-      const viaHeadless = async (text: string): Promise<InteractiveSlashOutcome> => {
-        const resulting = await aiSessionCommand(id, text);
-        return resulting !== id ? { id: resulting } : {};
+      const showSession = async (target: string): Promise<void> => {
+        const shown = await readState({ transcripts: [target] });
+        const session = shown.sessions.find((item) => item.id === target);
+        if (session) terminal?.render(session, session.accountId ? shown.accounts.find((item) => item.id === session.accountId)?.label : undefined);
+      };
+      const openConversationPicker = async (): Promise<InteractiveSlashOutcome> => {
+        // The board's `/` sets up the NEXT conversation. A fresh one is
+        // made the first time it is used, so choosing its provider never
+        // hands off the chat that was open; if nothing is sent it stays
+        // blank, and blank chats are not listed or kept.
+        let fresh: string | undefined;
+        for (;;) {
+          const picked = await interactiveSessionPicker(rl, fresh ?? id, BOARD_COMMANDS, {
+            // Running rows were on screen and have finished, and the
+            // composer is empty. Leave only when a newer build is waiting.
+            onSessionsSettled: () => Boolean(beginBuildReplace()),
+          });
+          if (picked && 'command' in picked) {
+            fresh ??= await newConversation(id, { sameModel: true });
+            if (picked.command === '/provider') fresh = await interactiveEnginePicker(config, rl, fresh) ?? fresh;
+            else if (picked.command === '/model') await interactiveModelPicker(rl, fresh);
+            else if (picked.command === '/effort') await interactiveEffortPicker(rl, fresh);
+            await showSession(fresh);
+            continue;
+          }
+          if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }), prompt: picked.compose, echo: true };
+          if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }) };
+          if (picked) return { id: picked.id };
+          // Closed: back where it was, including the line that names the
+          // provider, which showed the fresh chat's while it was set up.
+          if (fresh) await showSession(id);
+          return { id };
+        }
       };
       try {
         // A queued live-composer submission is always conversation text. A
@@ -585,293 +584,47 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             : `\`!${command}\` ended with ${result.exitCode === null ? 'no exit code (killed or cancelled)' : `exit ${result.exitCode}`}`;
           continue;
         }
-        const standaloneAttachment = await resolveStandaloneAttachment(line, activeWorkspace);
-        if (standaloneAttachment) {
-          const attachmentState = await readState();
-          const attachmentSession = attachmentState.sessions.find((item) => item.id === id);
-          if (!attachmentSession) throw new Error(`AI session "${id}" was not found`);
-          await queueAttachment(attachmentSession, standaloneAttachment);
-          attachmentSession.updatedAt = new Date().toISOString();
-          await writeState(attachmentState);
-          notice = `Attached ${compactPath(standaloneAttachment)} for the next request`;
-          if (!terminal) emitHarnessOutput({ panel: 'attachments', attachments: attachmentSession.attachments ?? [] });
-          continue;
-        }
-        const commandState = await readState();
-        const commandSession = commandState.sessions.find((item) => item.id === id);
-        if (!commandSession) break;
-        const commandHarness = sessionHarness(commandSession);
-        // `/etc/hosts explain this` is a request about a file, not a command.
-        const route = routeSlashInput(line, slashRouteContextFor(commandSession, commandHarness, (path) => existsSync(expandHomePath(path))));
-        let outcome: InteractiveSlashOutcome = {};
-        if (route.kind === 'prompt') {
-          // An image named in the message goes with the message.
-          const images = await embeddedImagePaths(route.prompt, activeWorkspace);
-          if (images.length) {
-            for (const image of images) await queueAttachment(commandSession, image).catch(() => undefined);
-            await writeState(commandState);
-          }
-          outcome = { prompt: route.prompt, echo: true };
-        }
-        else if (route.kind === 'native' || route.kind === 'custom' || route.kind === 'unknown') {
-          outcome = slashRouteTurn(route, commandSession, commandHarness) ?? {};
-        }
-        else if (route.kind === 'harness') {
-          // `/<harness> [request]`: hand off, ADOPT the resulting session, and
-          // run the request here with the normal waiting UI -- it used to run
-          // headless on a branch this loop never switched to.
-          const selected = await newProviderConversation(id, route.command);
-          outcome = { id: selected, ...(route.args ? { prompt: route.args, echo: true } : {}) };
-        }
-        else if (route.kind === 'manager') {
-          const manager = commandHarness ? (localHarnessCapabilityManifest(commandHarness).managers as Record<string, { label: string; listArgv?: readonly string[]; manageArgv?: readonly string[] } | undefined> | undefined)?.[route.name] : undefined;
-          if (!commandHarness || !manager) throw new Error('Choose a provider first.');
-          if (manager.listArgv) {
-            const listing = await withWaiting(`loading ${manager.label}…`, () => nativeManagerListing(commandState, commandSession, route.name));
-            if (terminal) terminal.panel(listing.label, listing.text);
-            else emitHarnessOutput({ panel: route.name, text: `${listing.label}\n\n${listing.text}` });
-          } else if (manager.manageArgv && terminal) {
-            const selectedAccount = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
-            await terminal.suspend();
-            try { await runNativeHarnessCommand(commandHarness, manager.manageArgv, turnEnvironment(commandHarness, selectedAccount)); }
-            finally { terminal.resume(); }
-          } else throw new Error(`${commandHarness.displayName} requires an interactive terminal for ${manager.label}.`);
-        }
-        else if (BOARD_REPLACES.has(route.entry.name) && !viaBoard) {
-          notice = BOARD_REPLACES_NOTICE;
-        }
-        else if (route.entry.name === 'help') {
-          // The terminal's own list: without the commands the board replaced.
-          const extras = { ...slashExtrasFor(commandSession, commandHarness), omit: BOARD_REPLACES };
-          emitHarnessOutput({ panel: 'help', helpText: slashHelpText(commandSession, commandHarness, extras), controls: slashControls().filter((item) => !BOARD_REPLACES.has(item.command.slice(1))) });
-        }
-        else {
-          // Availability is decided BEFORE any picker opens, so `/model` on a
-          // harness without a model selector says so instead of offering a list.
-          const availability = route.entry.availability(commandSession, commandHarness);
-          // The one refusal worth turning into a question: the command needs a
-          // provider and none is chosen. The user typed `/model`, so wanting
-          // to choose a model is not in doubt -- offering the provider picker
-          // and then carrying on with what they typed is a better answer than
-          // "Choose a provider before choosing a model." Handed back to the
-          // loop rather than run here, so it runs against the session the
-          // picker actually produced (choosing a provider can branch the
-          // conversation) instead of the stale copy read above.
-          if (!availability.available && availability.needs === 'provider' && !fromQueuedCommand) {
-            const commandLine = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
-            // Derived before asked: `/model claude-opus-5` has already named
-            // its provider if exactly one configured account publishes that
-            // model, and `/account work` always has. A picker there would ask
-            // a question whose answer was in the question.
-            const impliedHarness = impliedHarnessCommand(route, commandState.accounts, localHarnessForProvider);
-            if (impliedHarness) {
-              await aiHarnessSelect(impliedHarness, id);
-              await enqueueCommandLine(id, commandLine);
-              continue;
-            }
-            if (!terminal) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
-            const chosen = await interactiveEnginePicker(config, rl, id) ?? id;
-            const chosenState = await readState({ transcripts: [chosen] });
-            if (sessionHarness(chosenState.sessions.find((item) => item.id === chosen))) {
-              await enqueueCommandLine(chosen, commandLine);
-            }
-            if (chosen !== id) id = chosen;
-            continue;
-          }
-          if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
-          const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
-          const { args } = route;
-          const showSession = async (target: string): Promise<void> => {
-            const shown = await readState({ transcripts: [target] });
-            const session = shown.sessions.find((item) => item.id === target);
-            if (session) terminal?.render(session, session.accountId ? shown.accounts.find((item) => item.id === session.accountId)?.label : undefined);
-          };
-          const openConversationPicker = async (): Promise<InteractiveSlashOutcome> => {
-            // The board's `/` sets up the NEXT conversation. A fresh one is
-            // made the first time it is used, so choosing its provider never
-            // hands off the chat that was open; if nothing is sent it stays
-            // blank, and blank chats are not listed or kept.
-            let fresh: string | undefined;
-            for (;;) {
-              const picked = await interactiveSessionPicker(rl, fresh ?? id, BOARD_COMMANDS, {
-                // Running rows were on screen and have finished, and the
-                // composer is empty. Leave only when a newer build is waiting.
-                onSessionsSettled: () => Boolean(beginBuildReplace()),
+        const host: SlashHost = {
+          config, prompter: rl, canPick: Boolean(terminal),
+          panel: (kind, title, body, plain) => {
+            if (terminal) terminal.panel(title, body);
+            else emitHarnessOutput({ panel: kind, text: plain });
+          },
+          withBusy: withWaiting,
+          ask: (label) => rl.question(`${label} › `),
+          redraw: showSession,
+          runTurn: (targetId, promptText) => runInteractiveTurn(targetId, promptText, { echo: false }),
+          openConversationPicker,
+          editFile: async (path, cwd) => {
+            const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === 'win32' ? 'notepad' : 'vi');
+            const [editorBinary = 'vi', ...editorArgs] = editor.split(/\s+/).filter(Boolean);
+            await terminal?.suspend();
+            try {
+              await new Promise<void>((resolveEdit, rejectEdit) => {
+                const child = spawn(editorBinary, [...editorArgs, path], { stdio: 'inherit', cwd });
+                child.once('error', rejectEdit);
+                child.once('exit', () => resolveEdit());
               });
-              if (picked && 'command' in picked) {
-                fresh ??= await newConversation(id, { sameModel: true });
-                if (picked.command === '/provider') fresh = await interactiveEnginePicker(config, rl, fresh) ?? fresh;
-                else if (picked.command === '/model') await interactiveModelPicker(rl, fresh);
-                else if (picked.command === '/effort') await interactiveEffortPicker(rl, fresh);
-                await showSession(fresh);
-                continue;
-              }
-              if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }), prompt: picked.compose, echo: true };
-              if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }) };
-              if (picked) return { id: picked.id };
-              // Closed: back where it was, including the line that names the
-              // provider, which showed the fresh chat's while it was set up.
-              if (fresh) await showSession(id);
-              return { id };
-            }
-          };
-          const interactive: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
-            exit: async () => { await aiSessionLeave(id); return { exit: true }; },
-            new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
-            redraw: async () => { terminal?.render(commandSession, commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId)?.label : undefined); },
-            provider: async () => ({ id: await interactiveEnginePicker(config, rl, id) ?? id }),
-            accounts: async () => {
-              // `/accounts login <harness>` and `/accounts add <harness>` sign in
-              // here, with the terminal handed over, the same as + Add
-              // account -- run headless, the vendor's login fought ClikCode's
-              // own screen for the terminal.
-              const [action, name] = args.split(/\s+/);
-              const target = (action === 'login' || action === 'add') && name ? localHarnessForCommand(name.toLowerCase()) : undefined;
-              if (target?.surface === 'terminal') {
-                const added = await addAccountForHarness(rl, target);
-                if (added && target.provider === commandSession.provider) await useAddedAccount(id, target, added);
-                return {};
-              }
-              return args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id };
+            } finally { terminal?.resume(); }
+          },
+          ...(terminal ? {
+            runManager: async (harness, _label, argv, environment) => {
+              await terminal.suspend();
+              try { await runNativeHarnessCommand(harness, argv, environment); } finally { terminal.resume(); }
             },
-            // A value typed or chosen from the palette says what it set, the
-            // way the pickers do.
-            model: async () => {
-              if (!args) return interactiveModelPicker(rl, id);
-              const outcome = await viaHeadless(text);
-              const model = (await readState({ transcripts: [outcome.id ?? id] })).sessions.find((item) => item.id === (outcome.id ?? id))?.model;
-              if (model) terminal?.notice(`Model set to ${commandHarness ? harnessModelLabel(commandHarness, model) : model}`);
-              return outcome;
-            },
-            effort: async () => {
-              if (!args) return interactiveEffortPicker(rl, id);
-              const outcome = await viaHeadless(text);
-              terminal?.notice(`Effort set to ${settingLabel(args.trim().toLowerCase() === 'default' ? '' : args.trim().toLowerCase())}`);
-              return outcome;
-            },
-            permissions: async () => {
-              if (!args) return interactivePermissionPicker(rl, id);
-              const outcome = await viaHeadless(text);
-              terminal?.notice(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`);
-              return outcome;
-            },
-            swarm: async () => (args ? viaHeadless(text) : interactiveSwarmPicker(rl, id)),
-            options: async () => interactiveHarnessOptionPicker(rl, id),
-            capabilities: async () => {
-              const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');
-              if (terminal) terminal.panel(title, rest.join('\n'));
-              else emitHarnessOutput({ panel: 'capabilities', text: [title, ...rest].join('\n') });
-            },
-            settings: async () => {
-              // `/settings tools`: straight to Tools & integrations (MCP servers, skills, agents).
-              if (args.trim().toLowerCase() === 'tools') {
-                if (!commandHarness) throw new Error('Choose a provider first: tools and MCP servers belong to a harness.');
-                await interactiveToolsPicker(rl, id, commandHarness);
-                return {};
-              }
-              return args ? viaHeadless(text) : { id: await interactiveSettingsPicker(config, rl, id) ?? id };
-            },
-            sessions: async () => {
-              if (args) return viaHeadless(text);
-              return openConversationPicker();
-            },
-            // Resume means reopening the selected conversation at its source:
-            // retain its account, harness, and exact native session identity.
-            // Moving a transcript to another provider remains an explicit
-            // /provider action, never a side effect of choosing history.
-            // `/resume <name>` goes straight there when the name picks out one
-            // conversation -- the palette offers the names -- and opens the
-            // list only when it does not.
-            resume: async () => {
-              const named = args ? chatNamed(commandState.sessions, args, id) : undefined;
-              if (named) return { id: named };
-              return openConversationPicker();
-            },
-            rename: async () => {
-              const name = args || (await rl.question('Conversation name › ')).trim();
-              if (name) await aiSessionCommand(id, `/rename ${name}`);
-            },
-            // No "[y/N]": archiving is undone by resuming it, which is where
-            // an archived chat still is. A confirmation earns its keypress
-            // only for what cannot be taken back -- /delete keeps its own.
-            archive: async () => {
-              await aiSessionCommand(id, '/archive');
-              return { exit: true };
-            },
-            delete: async () => {
-              // The same confirmation every delete uses: Cancel first.
-              const confirmed = await chooseOption(rl, 'Delete this conversation?', [
-                { label: 'Cancel', value: false }, { label: 'Delete this conversation', value: true },
-              ]);
-              if (!confirmed) return {};
-              await aiSessionCommand(id, '/delete confirm');
-              return { exit: true };
-            },
-            mention: async () => {
-              const path = args || (await rl.question('File to attach › ')).trim();
-              return path ? viaHeadless(`/mention ${path}`) : {};
-            },
-            review: async () => ({ prompt: reviewPrompt(args), echo: false }),
-            init: async () => ({ prompt: initPrompt(commandSession), echo: false }),
-            native: async () => {
-              if (!args) throw new Error('usage: /native <text>  (or //text)');
-              return { prompt: args, echo: true };
-            },
-            compact: async () => {
-              const compacted = await compactConversation(id, commandSession, args, (targetId, promptText) => runInteractiveTurn(targetId, promptText, { echo: false }));
-              // No confirmation line: the compacted conversation is what is on
-              // screen now, and that is the confirmation.
-              return typeof compacted === 'string' ? { id: compacted } : {};
-            },
-            export: async () => {
-              const path = await exportTranscript(commandSession, args, async (existing) =>
-                ['y', 'yes'].includes((await rl.question(`${compactPath(existing)} exists. Overwrite? [y/N] › `)).trim().toLowerCase()));
-              return { notice: `Transcript written to ${compactPath(path)}` };
-            },
-            memory: async () => {
-              if (route.words[0]?.toLowerCase() !== 'edit') return viaHeadless(text);
-              const memory = await readMemoryFile(commandSession);
-              const editor = process.env.VISUAL || process.env.EDITOR || (process.platform === 'win32' ? 'notepad' : 'vi');
-              const [editorBinary = 'vi', ...editorArgs] = editor.split(/\s+/).filter(Boolean);
-              await terminal?.suspend();
-              try {
-                await new Promise<void>((resolveEdit, rejectEdit) => {
-                  const child = spawn(editorBinary, [...editorArgs, memory.path], { stdio: 'inherit', cwd: commandSession.workspace ?? process.cwd() });
-                  child.once('error', rejectEdit);
-                  child.once('exit', () => resolveEdit());
-                });
-              } finally { terminal?.resume(); }
-              return {};
-            },
-            doctor: async () => {
-              const report = await withWaiting('checking harnesses…', () => doctorSummary(commandState));
-              if (terminal) terminal.panel('ClikCode doctor', report);
-              else emitHarnessOutput({ panel: 'doctor', text: report });
-            },
-            login: async () => {
-              if (!commandHarness) throw new Error('Choose a provider before signing in.');
-              // Sign the current account in again only when it needs it;
-              // otherwise /login means another account, which becomes this
-              // chat's. Re-running the sign-in of a working account did
-              // nothing useful, and an API-key account did nothing at all.
-              const current = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
-              if (current?.authKind === 'vendor-cli' && (current.status !== 'ready' || current.verification)) {
-                await manageAccountAction(rl, current.id, 'reauthenticate');
-                return {};
-              }
-              const added = await addAccountForHarness(rl, commandHarness);
-              if (added) await useAddedAccount(id, commandHarness, added);
-              return {};
-            },
-            logout: async () => {
-              if (!commandSession.accountId) throw new Error('This conversation has no account to sign out.');
-              await withWaiting('signing out…', () => manageAccountAction(rl, commandSession.accountId!, 'disconnect'));
-              return {};
-            },
-          };
-          const handler = (interactive as Partial<Record<SlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>>>)[route.entry.handlerKey];
-          outcome = (handler ? await handler() : await viaHeadless(text)) ?? {};
-        }
+          } satisfies Pick<SlashHost, 'runManager'> : {
+            attached: (attachments) => emitHarnessOutput({ panel: 'attachments', attachments }),
+          } satisfies Pick<SlashHost, 'attached'>),
+          intercept: (route, commandSession, commandHarness) => {
+            if (BOARD_REPLACES.has(route.entry.name) && !viaBoard) return { notice: BOARD_REPLACES_NOTICE };
+            if (route.entry.name !== 'help') return undefined;
+            // The terminal's own list: without the commands the board replaced.
+            const extras = { ...slashExtrasFor(commandSession, commandHarness), omit: BOARD_REPLACES };
+            emitHarnessOutput({ panel: 'help', helpText: slashHelpText(commandSession, commandHarness, extras), controls: slashControls().filter((item) => !BOARD_REPLACES.has(item.command.slice(1))) });
+            return {};
+          },
+        };
+        const outcome = await dispatchLine(host, id, line, { fromQueuedCommand });
         if (outcome.notice) notice = outcome.notice;
         if (outcome.exit) break;
         if (outcome.id && outcome.id !== id) {

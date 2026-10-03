@@ -22,49 +22,29 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
-import { chatNamed } from '../session/options.js';
 import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
 import { afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
-import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
-import { compactPath } from '../harness/protocol/labels.js';
+import { expandHomePath } from '../session/attachments.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
-import { turnEnvironment } from '../turn/turn-environment.js';
-import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading } from '../harness/accounts/account-usage.js';
 import { usageResetLabel } from '../harness/accounts/usage-reading.js';
 import { setVendorSignInRunner, type VendorSignInRequest } from '../harness/transport/native/login.js';
-import { aiSessionLeave } from '../commands/ai/sessions.js';
-import { newConversation, newProviderConversation } from '../commands/ai/conversations.js';
-import { aiHarnessSelect } from '../commands/ai/harness.js';
+import { newConversation } from '../commands/ai/conversations.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
 import { isShellCommandLine } from '../commands/ai/shell-run.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
-import { routeSlashInput, slashPalette, unknownSlashMessage, type SlashHandlerKey } from '../tui/slash/registry.js';
-import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
-import { commandDuringTurn, enqueueCommandLine, slashLineIsCommand } from '../tui/slash/queue.js';
+import { dispatchLine, type SlashHost } from '../tui/slash/dispatch.js';
+import { slashPalette } from '../tui/slash/registry.js';
+import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
+import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
 import { withArgValues } from '../tui/slash/arg-values.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
-import { impliedHarnessCommand } from '../tui/slash/infer-provider.js';
-import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
-import { customCommandPrompt } from '../session/custom-commands.js';
-import { capabilitiesText } from '../tui/slash/capabilities-text.js';
-import { compactConversation } from '../tui/slash/compact.js';
-import { exportTranscript } from '../tui/slash/export-transcript.js';
-import { initPrompt, readMemoryFile, reviewPrompt } from '../tui/slash/memory.js';
-import { nativeManagerListing } from '../tui/slash/native-manager.js';
-import { doctorSummary } from '../tui/doctor-summary.js';
-import { chooseOption } from '../tui/pickers/choose.js';
-import { autoSelectSessionHarness, interactiveEnginePicker } from '../tui/pickers/engine.js';
-import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../tui/pickers/account.js';
-import { interactiveModelPicker } from '../tui/pickers/model.js';
-import { interactiveEffortPicker } from '../tui/pickers/effort.js';
-import { interactivePermissionPicker } from '../tui/pickers/permissions.js';
-import { interactiveHarnessOptionPicker } from '../tui/pickers/options.js';
-import { interactiveToolsPicker } from '../tui/pickers/tools.js';
-import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
-import { interactiveSwarmPicker } from '../tui/pickers/swarm.js';
+import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
+import { autoSelectSessionHarness } from '../tui/pickers/engine.js';
+import { addAccountForHarness, manageAccountAction, useAddedAccount } from '../tui/pickers/account.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { type ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
@@ -113,8 +93,11 @@ export class IdeBridge {
    * its "Model set to …" confirmation is not said again in the chat. */
   quietOutput = 0;
 
+  private readonly slashHost: SlashHost;
+
   constructor(private readonly config: Conf, private readonly channel: IdeChannel) {
     this.prompter = new IdePrompter(channel);
+    this.slashHost = this.createSlashHost();
   }
 
   start(): void {
@@ -533,210 +516,53 @@ export class IdeBridge {
     }
   }
 
-  /** A line typed between turns: the interactive loop's routing, with the
-   * editor's pickers where the terminal draws its own. */
+  /** A line typed between turns: the terminal's routing (dispatchLine), with
+   * the editor's widgets where the terminal draws its own. */
   private async dispatch(line: string, fromQueuedCommand: boolean): Promise<InteractiveSlashOutcome> {
     const id = this.requireSession();
-    const rl = this.prompter;
-    const viaHeadless = async (text: string): Promise<InteractiveSlashOutcome> => {
-      const resulting = await aiSessionCommand(id, text);
-      return resulting !== id ? { id: resulting } : {};
-    };
-    const { session } = await this.current(id);
-    const workspace = session.workspace ?? process.cwd();
     // `!<command>`: run here, its output a transcript message for next turn.
     if (isShellCommandLine(line)) {
-      this.channel.send({ type: 'busy', label: line });
-      try { return await viaHeadless(line); } finally { this.channel.send({ type: 'busy' }); }
+      return this.withBusy(line, async () => {
+        const resulting = await aiSessionCommand(id, line);
+        return resulting !== id ? { id: resulting } : {};
+      });
     }
-    const attachment = await resolveStandaloneAttachment(line, workspace);
-    if (attachment) {
-      const state = await readState({ transcripts: [id] });
-      const target = state.sessions.find((item) => item.id === id);
-      if (!target) throw new Error(`AI session "${id}" was not found`);
-      await queueAttachment(target, attachment);
-      target.updatedAt = new Date().toISOString();
-      await writeState(state);
-      return { notice: `Attached ${compactPath(attachment)} for the next request` };
-    }
-    const commandState = await readState();
-    const commandSession = commandState.sessions.find((item) => item.id === id);
-    if (!commandSession) throw new Error(`AI session "${id}" was not found`);
-    const harness = sessionHarness(commandSession);
-    const route = routeSlashInput(line, slashRouteContextFor(commandSession, harness, (path) => existsSync(expandHomePath(path))));
-    if (route.kind === 'prompt') {
-      const images = await embeddedImagePaths(route.prompt, workspace);
-      if (images.length) {
-        for (const image of images) await queueAttachment(commandSession, image).catch(() => undefined);
-        await writeState(commandState);
-      }
-      if (!commandSession.nativeHarness && !isClikCodeAgent(commandSession)) {
-        // Nothing chosen yet: choosing is the first step of sending.
-        const chosen = await interactiveEnginePicker(this.config, rl, id) ?? id;
-        return { id: chosen, ...(await this.hasHarness(chosen) ? { prompt: route.prompt, echo: true } : { notice: 'Choose a provider to send this.' }) };
-      }
-      return { prompt: route.prompt, echo: true };
-    }
-    if (route.kind === 'native') {
-      if (isClikCodeAgent(commandSession)) throw new Error('Native harness commands apply only to local harnesses.');
-      return { prompt: route.prompt, echo: true };
-    }
-    if (route.kind === 'unknown') throw new Error(unknownSlashMessage(route));
-    if (route.kind === 'custom') {
-      const custom = customCommandsFor(commandSession, harness).find((item) => item.name === route.name);
-      if (!custom) throw new Error(`custom command /${route.name} is no longer available`);
-      return { prompt: customCommandPrompt(custom, route.args, harness), echo: false };
-    }
-    if (route.kind === 'harness') {
-      const selected = await newProviderConversation(id, route.command);
-      return { id: selected, ...(route.args ? { prompt: route.args, echo: true } : {}) };
-    }
-    if (route.kind === 'manager') {
-      const manager = harness ? (localHarnessCapabilityManifest(harness).managers as Record<string, { label: string; listArgv?: readonly string[]; manageArgv?: readonly string[] } | undefined> | undefined)?.[route.name] : undefined;
-      if (!harness || !manager) throw new Error('Choose a provider first.');
-      if (manager.listArgv) {
-        this.channel.send({ type: 'busy', label: `loading ${manager.label}…` });
-        try {
-          const listing = await nativeManagerListing(commandState, commandSession, route.name);
-          rl.panel(listing.label, listing.text);
-        } finally { this.channel.send({ type: 'busy' }); }
-      } else if (manager.manageArgv) {
-        const account = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
-        await this.runInTerminal({ command: harness.command, mode: 'run', argv: manager.manageArgv }, { environment: turnEnvironment(harness, account), name: `${harness.displayName} ${manager.label}` });
-      }
-      return {};
-    }
-    const availability = route.entry.availability(commandSession, harness);
-    if (!availability.available && availability.needs === 'provider' && !fromQueuedCommand) {
-      const commandLine = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
-      const implied = impliedHarnessCommand(route, commandState.accounts, localHarnessForProvider);
-      if (implied) {
-        await aiHarnessSelect(implied, id);
-        await enqueueCommandLine(id, commandLine);
-        return {};
-      }
-      const chosen = await interactiveEnginePicker(this.config, rl, id) ?? id;
-      if (await this.hasHarness(chosen)) await enqueueCommandLine(chosen, commandLine);
-      return { id: chosen };
-    }
-    if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
-    const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
-    const { args } = route;
-    const openConversationPicker = async (): Promise<InteractiveSlashOutcome> => {
-      const picked = await interactiveSessionPicker(rl, id);
-      if (picked && 'new' in picked) return { id: await newConversation(id) };
-      return { id: picked?.id ?? id };
-    };
-    const interactive: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
-      exit: async () => { await aiSessionLeave(id); return { exit: true }; },
-      new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
-      redraw: async () => { await this.emitSession(); },
-      provider: async () => ({ id: await interactiveEnginePicker(this.config, rl, id) ?? id }),
-      accounts: async () => {
-        const [action, name] = args.split(/\s+/);
-        const target = (action === 'login' || action === 'add') && name ? localHarnessForCommand(name.toLowerCase()) : undefined;
-        if (target?.surface === 'terminal') {
-          const added = await addAccountForHarness(rl, target);
-          if (added && target.provider === commandSession.provider) await useAddedAccount(id, target, added);
-          return {};
-        }
-        return args ? viaHeadless(text) : { id: await interactiveAccountPicker(rl, id) ?? id };
-      },
-      model: async () => args ? viaHeadless(text) : interactiveModelPicker(rl, id),
-      effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
-      permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
-      swarm: async () => (args ? viaHeadless(text) : interactiveSwarmPicker(rl, id)),
-      options: async () => interactiveHarnessOptionPicker(rl, id),
-      capabilities: async () => {
-        const [title = 'Capabilities', ...rest] = capabilitiesText(commandSession).split('\n');
-        rl.panel(title, rest.join('\n'));
-      },
-      settings: async () => {
-        // `/settings tools`: straight to Tools & integrations (MCP servers, skills, agents).
-        if (args.trim().toLowerCase() === 'tools') {
-          if (!harness) throw new Error('Choose a provider first: tools and MCP servers belong to a harness.');
-          await interactiveToolsPicker(rl, id, harness);
-          return {};
-        }
-        return args ? viaHeadless(text) : { id: await interactiveSettingsPicker(this.config, rl, id) ?? id };
-      },
-      sessions: async () => (args ? viaHeadless(text) : openConversationPicker()),
-      resume: async () => {
-        const named = args ? chatNamed(commandState.sessions, args, id) : undefined;
-        return named ? { id: named } : openConversationPicker();
-      },
-      rename: async () => {
-        const name = args || (await rl.question('Conversation name')).trim();
-        if (name) await aiSessionCommand(id, `/rename ${name}`);
-      },
-      archive: async () => { await aiSessionCommand(id, '/archive'); return { exit: true }; },
-      delete: async () => {
-        const confirmed = await chooseOption(rl, 'Delete this conversation?', [
-          { label: 'Cancel', value: false }, { label: 'Delete this conversation', value: true },
-        ]);
-        if (!confirmed) return {};
-        await aiSessionCommand(id, '/delete confirm');
-        return { exit: true };
-      },
-      mention: async () => {
-        const path = args || (await rl.question('File to attach')).trim();
-        return path ? viaHeadless(`/mention ${path}`) : {};
-      },
-      review: async () => ({ prompt: reviewPrompt(args), echo: false }),
-      init: async () => ({ prompt: initPrompt(commandSession), echo: false }),
-      native: async () => {
-        if (!args) throw new Error('usage: /native <text>  (or //text)');
-        return { prompt: args, echo: true };
-      },
-      compact: async () => {
-        const compacted = await compactConversation(id, commandSession, args, (targetId, promptText) => this.runTurn(targetId, promptText, { echo: false }));
-        return typeof compacted === 'string' ? { id: compacted } : {};
-      },
-      export: async () => {
-        const path = await exportTranscript(commandSession, args, async (existing) =>
-          ['y', 'yes'].includes((await rl.question(`${compactPath(existing)} exists. Overwrite? [y/N]`)).trim().toLowerCase()));
-        this.channel.send({ type: 'open-file', path });
-        return { notice: `Transcript written to ${compactPath(path)}` };
-      },
-      memory: async () => {
-        if (route.words[0]?.toLowerCase() !== 'edit') return viaHeadless(text);
-        const memory = await readMemoryFile(commandSession);
-        if (!existsSync(memory.path)) {
-          await mkdir(dirname(memory.path), { recursive: true });
-          await writeFile(memory.path, '', { flag: 'a' });
-        }
-        this.channel.send({ type: 'open-file', path: memory.path });
-        return {};
-      },
-      doctor: async () => {
-        this.channel.send({ type: 'busy', label: 'checking harnesses…' });
-        try { rl.panel('ClikCode doctor', await doctorSummary(commandState)); } finally { this.channel.send({ type: 'busy' }); }
-      },
-      login: async () => {
-        if (!harness) throw new Error('Choose a provider before signing in.');
-        const account = commandSession.accountId ? commandState.accounts.find((item) => item.id === commandSession.accountId) : undefined;
-        if (account?.authKind === 'vendor-cli' && (account.status !== 'ready' || account.verification)) {
-          await manageAccountAction(rl, account.id, 'reauthenticate');
-          return {};
-        }
-        const added = await addAccountForHarness(rl, harness);
-        if (added) await useAddedAccount(id, harness, added);
-        return {};
-      },
-      logout: async () => {
-        if (!commandSession.accountId) throw new Error('This conversation has no account to sign out.');
-        await manageAccountAction(rl, commandSession.accountId, 'disconnect');
-        return {};
-      },
-    };
-    const handler = (interactive as Partial<Record<SlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>>>)[route.entry.handlerKey];
-    return (handler ? await handler() : await viaHeadless(text)) ?? {};
+    return dispatchLine(this.slashHost, id, line, { fromQueuedCommand });
   }
 
-  private async hasHarness(id: string): Promise<boolean> {
-    const state = await readState({ transcripts: [] });
-    const session = state.sessions.find((item) => item.id === id);
-    return Boolean(session && (session.nativeHarness || isClikCodeAgent(session)));
+  private async withBusy<T>(label: string, work: () => Promise<T>): Promise<T> {
+    this.channel.send({ type: 'busy', label });
+    try { return await work(); } finally { this.channel.send({ type: 'busy' }); }
+  }
+
+  /** The editor as the screen a slash command runs for. */
+  private createSlashHost(): SlashHost {
+    return {
+      config: this.config,
+      prompter: this.prompter,
+      canPick: true,
+      pickProviderBeforeSending: true,
+      panel: (_kind, title, body) => this.prompter.panel(title, body),
+      withBusy: (label, work) => this.withBusy(label, work),
+      ask: (label) => this.prompter.question(label),
+      redraw: () => this.emitSession(),
+      runTurn: (targetId, prompt) => this.runTurn(targetId, prompt, { echo: false }),
+      openConversationPicker: async (id) => {
+        const picked = await interactiveSessionPicker(this.prompter, id);
+        if (picked && 'new' in picked) return { id: await newConversation(id) };
+        return { id: picked?.id ?? id };
+      },
+      editFile: async (path) => {
+        if (!existsSync(path)) {
+          await mkdir(dirname(path), { recursive: true });
+          await writeFile(path, '', { flag: 'a' });
+        }
+        this.channel.send({ type: 'open-file', path });
+      },
+      runManager: (harness, label, argv, environment) =>
+        this.runInTerminal({ command: harness.command, mode: 'run', argv }, { environment, name: `${harness.displayName} ${label}` }),
+      exported: (path) => this.channel.send({ type: 'open-file', path }),
+    };
   }
 
   /** The editor's screens as data (queries.ts). Answered straight away, not
