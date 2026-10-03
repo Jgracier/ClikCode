@@ -121,7 +121,8 @@ body.vscode-high-contrast .badge.ok, body.vscode-high-contrast .badge.warn { bac
   white-space: pre-wrap; word-break: break-word; max-width: 88%; padding: 8px 12px; border-radius: 12px 12px 4px 12px;
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--border));
 }
-.markdown { line-height: 1.6; word-break: break-word; }
+.markdown { line-height: 1.6; word-break: break-word; text-decoration: none; }
+.message { text-decoration: none; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown > .md-part { display: contents; }
@@ -132,7 +133,8 @@ body.vscode-high-contrast .badge.ok, body.vscode-high-contrast .badge.warn { bac
 .markdown ul, .markdown ol { padding-left: 1.4em; margin: 0 0 0.75em; }
 .markdown li + li { margin-top: 0.2em; }
 .markdown code { background: var(--vscode-textCodeBlock-background); padding: 1px 4px; border-radius: 4px; font-size: 0.92em; }
-.markdown a { color: var(--vscode-textLink-foreground); }
+.markdown a { color: var(--vscode-textLink-foreground); text-decoration: none !important; }
+.markdown a:hover { text-decoration: underline !important; }
 .markdown table { border-collapse: collapse; margin: 0 0 0.75em; display: block; overflow-x: auto; }
 .markdown th, .markdown td { border: 1px solid var(--border); padding: 3px 8px; }
 .markdown blockquote { margin: 0 0 0.75em; padding-left: 10px; border-left: 3px solid var(--vscode-textBlockQuote-border); color: var(--muted); }

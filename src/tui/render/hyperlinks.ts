@@ -29,8 +29,19 @@ let hyperlinksEnabled: boolean | undefined;
 export const linksOn = (): boolean => hyperlinksEnabled ?? (hyperlinksEnabled = hyperlinksSupported());
 
 /** A hard-wrapped link can leave its hyperlink open at the end of a row. Rows
- * are repainted independently, so the attribute must never outlive its row. */
+ * are repainted independently, so the attribute must never outlive its row.
+ * The same is true of chalk's underline SGR: wrapWords hard-breaks a long
+ * link label mid-span, and without a close here every later row in the chat
+ * stayed underlined. */
 export function closeOpenHyperlink(row: string): string {
   const last = row.lastIndexOf('\u001b]8;');
-  return last === -1 || row.startsWith(HYPERLINK_CLOSE, last) ? row : `${row}${HYPERLINK_CLOSE}`;
+  const closedLink = last === -1 || row.startsWith(HYPERLINK_CLOSE, last) ? row : `${row}${HYPERLINK_CLOSE}`;
+  let underline = false;
+  for (const match of closedLink.matchAll(/\u001b\[([0-9;]*)m/g)) {
+    const params = match[1]!.split(';').filter(Boolean).map(Number);
+    if (params.length === 0 || params.includes(0)) { underline = false; continue; }
+    if (params.includes(4)) underline = true;
+    if (params.includes(24)) underline = false;
+  }
+  return underline ? `${closedLink}\u001b[24m` : closedLink;
 }
