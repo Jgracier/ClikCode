@@ -106,3 +106,28 @@ describe('the editor bridge handshake', () => {
     expect(IDE_PROTOCOL.oldestSupported).toBeLessThanOrEqual(IDE_PROTOCOL.version);
   });
 });
+
+describe('the editor bridge draining a stuck queue', () => {
+  it('sends a queued message that stays at the head once, not again and again', async () => {
+    const { readState } = await import('../session/state/read.js');
+    const { writeState } = await import('../session/state/write.js');
+    const state = await readState();
+    const now = new Date().toISOString();
+    state.sessions.push({
+      id: 'stuck', conversationId: 'stuck', route: 'local', accountId: null, provider: 'anthropic', model: null, nativeHarness: 'claude',
+      effort: 'medium', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+      messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'done' }],
+      queuedTurns: [{ id: 'q1', text: 'send me', submittedAt: now }],
+    } as never);
+    await writeState(state);
+    const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+    const inner = bridge as unknown as Internals & { execute: (line: string, options: unknown) => Promise<void> };
+    inner.sessionId = 'stuck';
+    // Its run fails and the queue cannot be changed: q1 stays first.
+    const execute = vi.fn(async () => undefined);
+    inner.execute = execute;
+    await inner.drainQueue();
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+});
+

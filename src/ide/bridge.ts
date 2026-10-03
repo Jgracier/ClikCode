@@ -455,11 +455,17 @@ export class IdeBridge {
    * and commands that waited for the turn to end: sent in order, as the
    * interactive loop does at the top of every pass. */
   private async drainQueue(): Promise<void> {
-    for (let guard = 0; guard < 100 && !this.closed && this.sessionId; guard += 1) {
+    let previous: string | undefined;
+    while (!this.closed && this.sessionId) {
       const state = await readState({ transcripts: [this.sessionId!] });
       const session = state.sessions.find((item) => item.id === this.sessionId);
       const queued = session?.queuedTurns?.[0];
       if (!session || !queued) return;
+      // Still at the head after its run: it failed and could not be taken
+      // out (the worker refuses it from then on). Sending it again would
+      // only fail the same way; it waits for the user to remove it.
+      if (queued.id === previous) return;
+      previous = queued.id;
       if (queued.kind === 'command') {
         if (consumeSessionTurn(session, queued.id)) await writeState(state);
         await this.execute(queued.text, { fromQueuedCommand: true });
