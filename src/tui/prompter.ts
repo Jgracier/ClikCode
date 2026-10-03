@@ -96,6 +96,34 @@ const SELECTION_SCROLL_MS = 60;
 /** Lines of a running tool's newest output shown under its spinner. */
 const LIVE_OUTPUT_LINES = 3;
 
+/** Everything that exists only while a turn (or another wait: a download, a
+ * shell command) is in flight. startWaiting creates it whole and stopWaiting
+ * drops it whole, so no piece of one turn's state can outlive it into the
+ * next. Its presence is what "running" means to the rest of the prompter. */
+type WaitingTurn = {
+  /** What the band says the turn is doing. */
+  label: string;
+  /** Elapsed less approvals, and the last delta or event, which is what
+   * "stalled" means (see activity-view.ts). */
+  clock: TurnClock;
+  /** When the current stretch of thinking began -- the turn's start, or the
+   * last call finishing or answer text arriving -- for turnStatus's words. */
+  thinkingSince: number;
+  /** The composer typed into while the turn runs. */
+  draft: string;
+  cursor: number;
+  /** Esc or Ctrl+S has asked the turn to stop. */
+  cancelled: boolean;
+  cancel?: (restoreDraft: boolean) => void;
+  /** Absent for a wait that takes no messages. */
+  submit?: (text: string) => Promise<LiveTurnInputResult>;
+  command?: (text: string) => Promise<LiveTurnInputResult>;
+  /** Stop showing the running turn without stopping it (Left, empty draft). */
+  leave?: () => void;
+  timer?: NodeJS.Timeout;
+  stopInput?: () => void;
+};
+
 export class TerminalHarnessPrompter implements HarnessPrompter {
   private closed = false;
   private history: string[] = [];
@@ -107,13 +135,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private draftPrompt = '› ';
   private draftCursor = 0;
   private draftPalette?: { capacity?: number; hint?: string; hideCursor?: boolean };
-  private waitingTimer?: NodeJS.Timeout;
-  private stopWaitingInput?: () => void;
+  /** The turn (or other wait) in flight: see WaitingTurn. */
+  private turn?: WaitingTurn;
   private waitingFrame = 0;
-  private waitingLabel = '';
-  /** The turn in flight's clock: elapsed less approvals, and the last delta
-   * or event, which is what "stalled" means (see activity-view.ts). */
-  private clock: TurnClock = startTurnClock(0);
   /** Whether the pending tick is the spinner's (true) or the clock's. */
   private waitingTickFast = false;
   /** Characters of answer and reasoning streamed this turn, and how many of
@@ -125,9 +149,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
   /** The calls still open: the status line names the newest (toolStatus). */
   private activeTools = new Map<string, OpenTool>();
-  /** When the current stretch of thinking began -- the turn's start, or the
-   * last call finishing or answer text arriving -- for turnStatus's words. */
-  private thinkingSince = 0;
   /** The latest call inside a running sub-agent, keyed by the parent tool id.
    * Shown as one line under that agent, never as its own row. */
   private childActivity = new Map<string, string>();
@@ -138,11 +159,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private frameInFlight = false;
   private clearNextFrame = false;
   private queuedDraft?: string;
-  private waitingDraft = '';
-  private waitingCursor = 0;
-  private waitingSubmit?: (text: string) => Promise<LiveTurnInputResult>;
-  /** Stop showing the running turn without stopping it (Left, empty draft). */
-  private leaveWaiting?: () => void;
   /** The turn this window stepped out of (leaveTurn), still running in its
    * worker. What it already wrote to scrollback is remembered here, nothing
    * more of it is drawn while away, and following the same turn again
@@ -210,13 +226,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */
   private paletteCommands: readonly PaletteEntry[] = [];
-  private waitingCommand?: (text: string) => Promise<LiveTurnInputResult>;
   /** The prompt this client submitted, held from Enter until the turn ends.
    * See render/pending-prompt.ts: the snapshot alone cannot draw it for the
    * whole turn, so the client keeps its own copy of what it sent. */
   private submittedPrompt?: string;
-  private cancelWaiting?: (restoreDraft: boolean) => void;
-  private waitingCancelled = false;
   private pendingApproval?: ApprovalRequest & { shownAt: number; needsFocus: boolean; focused: boolean };
   private approvalGuardTimer?: NodeJS.Timeout;
   /** A short-lived hint (the Ctrl+C exit warning) that takes the notice row. */
@@ -253,13 +266,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private tellingInstead?: { draft: string; cursor: number };
   private approvalRestoreLabel?: string;
   private readonly onWaitingKey = (key: string): void => {
+    const turn = this.turn;
+    if (!turn) return;
     // The terminal can lose cells during a mobile resize or a remote redraw.
     // Rebuild the whole viewport from our retained state, including the live
     // answer and any approval, without changing the turn or the draft.
     if (key === '\u000c') {
       this.clearNextFrame = true;
       this.forgetScreenPosition();
-      this.paintWaiting();
+      this.paintWaiting(turn);
       return;
     }
     // Before approvals and before the draft: a turn running is when someone
@@ -287,7 +302,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const telling = this.tellingInstead;
       if (telling) {
         if (key === '\r') {
-          const text = this.waitingDraft.trim();
+          const text = turn.draft.trim();
           if (!text) return;
           this.answerApproval(pending, false);
           // After the denial is on its way: the answer's own send is queued
@@ -301,24 +316,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           else this.updateWaiting();
           return;
         }
-        const edited = editWaitingComposer(this.waitingDraft, this.waitingCursor, key);
+        const edited = editWaitingComposer(turn.draft, turn.cursor, key);
         if (edited.changed) {
-          this.waitingDraft = edited.value;
-          this.waitingCursor = edited.cursor;
+          turn.draft = edited.value;
+          turn.cursor = edited.cursor;
           this.updateWaiting();
         }
         return;
       }
       // Otherwise the draft is never edited from here: every key is either an
       // answer or dropped, so the composer is exactly as the user left it.
-      const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused, Boolean(pending.rule), Boolean(this.waitingSubmit));
+      const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused, Boolean(pending.rule), Boolean(turn.submit));
       if (action === 'focus') {
         pending.focused = true;
         this.updateWaiting();
       } else if (action === 'tell') {
-        this.tellingInstead = { draft: this.waitingDraft, cursor: this.waitingCursor };
-        this.waitingDraft = '';
-        this.waitingCursor = 0;
+        this.tellingInstead = { draft: turn.draft, cursor: turn.cursor };
+        turn.draft = '';
+        turn.cursor = 0;
         this.updateWaiting();
       } else if (action === 'allow' || action === 'always' || action === 'deny') {
         this.answerApproval(pending, action === 'deny' ? false : action === 'always' ? 'always' : true);
@@ -327,55 +342,55 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     // Left with nothing typed steps away from the turn -- to the conversation
     // board -- and leaves it running: the worker owns it, not this window.
-    if (key === '\u001b[D' && !this.waitingDraft && this.leaveWaiting) {
-      this.leaveWaiting();
+    if (key === '\u001b[D' && !turn.draft && turn.leave) {
+      turn.leave();
       return;
     }
     // Ctrl+S: send now. What is typed (or, with nothing typed, the message
     // already queued) becomes the next turn at once: this one is stopped.
-    if (key === SEND_NOW_KEY && this.cancelWaiting && this.waitingSubmit && !this.waitingCancelled) {
-      const text = this.waitingDraft.trim();
+    if (key === SEND_NOW_KEY && turn.cancel && turn.submit && !turn.cancelled) {
+      const text = turn.draft.trim();
       const queued = Boolean(this.currentSession?.queuedTurns?.some((item) => item.kind !== 'command'))
         || this.waitingSubmissions.some((item) => item.state === 'queued' || item.state === 'sending');
       if (!text && !queued) return;
       if (text) {
         this.sendNow = { text, taken: false };
-        this.waitingDraft = '';
-        this.waitingCursor = 0;
+        turn.draft = '';
+        turn.cursor = 0;
       }
-      this.waitingCancelled = true;
-      this.waitingLabel = 'stopping…';
+      turn.cancelled = true;
+      turn.label = 'stopping…';
       this.updateWaiting();
-      this.cancelWaiting(false);
+      turn.cancel(false);
       return;
     }
     const action = waitingInputAction(key);
     if (action === 'cancel-edit' || action === 'cancel-stop') {
-      if (this.waitingCancelled) return;
-      this.waitingCancelled = true;
-      this.waitingLabel = 'stopping…';
+      if (turn.cancelled) return;
+      turn.cancelled = true;
+      turn.label = 'stopping…';
       this.updateWaiting();
-      this.cancelWaiting?.(action === 'cancel-edit');
+      turn.cancel?.(action === 'cancel-edit');
     } else if (key === '\u001a') {
       this.suspendToShell();
     } else if (key === '\r') {
-      const continued = this.waitingSubmit ? backslashNewline(this.waitingDraft, this.waitingCursor) : undefined;
+      const continued = turn.submit ? backslashNewline(turn.draft, turn.cursor) : undefined;
       if (continued) {
-        this.waitingDraft = continued.value;
-        this.waitingCursor = continued.cursor;
+        turn.draft = continued.value;
+        turn.cursor = continued.cursor;
         this.updateWaiting();
         return;
       }
-      const text = this.waitingDraft.trim();
-      if (!text || !this.waitingSubmit) return;
-      this.waitingDraft = '';
-      this.waitingCursor = 0;
+      const text = turn.draft.trim();
+      if (!text || !turn.submit) return;
+      turn.draft = '';
+      turn.cursor = 0;
       this.submitWaiting(text);
-    } else if (this.waitingSubmit) {
-      const edited = editWaitingComposer(this.waitingDraft, this.waitingCursor, key);
+    } else if (turn.submit) {
+      const edited = editWaitingComposer(turn.draft, turn.cursor, key);
       if (edited.changed) {
-        this.waitingDraft = edited.value;
-        this.waitingCursor = edited.cursor;
+        turn.draft = edited.value;
+        turn.cursor = edited.cursor;
         this.updateWaiting();
       }
     }
@@ -385,15 +400,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * behind it (the harness decides; its row says which), or a slash line,
    * which is ClikCode's own command. */
   private submitWaiting(text: string, allowCommand = true): void {
-    if (!this.waitingSubmit) {
+    const turn = this.turn;
+    if (!turn?.submit) {
       this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
       return;
     }
     // A slash line is ClikCode's own command and never text for the model.
     // Handed to the caller to route (see waiting-slash.ts and slash/queue.ts);
     // a line the router decides is really conversation comes back 'queued'.
-    const asCommand = allowCommand && Boolean(commandLineTypedDuringTurn(text)) && Boolean(this.waitingCommand);
-    const submit = asCommand ? this.waitingCommand! : this.waitingSubmit;
+    const asCommand = allowCommand && Boolean(commandLineTypedDuringTurn(text)) && Boolean(turn.command);
+    const submit = asCommand ? turn.command! : turn.submit;
     // No selection mid-turn -- the arrows scroll the answer -- so a partly
     // typed value means the best match: `/model op` applies opus.
     const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
@@ -418,9 +434,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }).catch(() => {
       const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
       if (item) item.state = 'error';
-      if (!this.waitingDraft) {
-        this.waitingDraft = text;
-        this.waitingCursor = text.length;
+      if (this.turn && !this.turn.draft) {
+        this.turn.draft = text;
+        this.turn.cursor = text.length;
       }
       this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
       this.updateWaiting();
@@ -436,7 +452,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.approvalsAnswered += 1;
     pending.resolve(answer);
     if (!this.presentNextApproval()) {
-      this.waitingLabel = this.approvalRestoreLabel || 'thinking';
+      if (this.turn) this.turn.label = this.approvalRestoreLabel || 'thinking';
       this.approvalRestoreLabel = undefined;
       this.resumeClock();
       this.updateWaiting();
@@ -448,8 +464,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const telling = this.tellingInstead;
     if (!telling) return;
     this.tellingInstead = undefined;
-    this.waitingDraft = telling.draft;
-    this.waitingCursor = telling.cursor;
+    if (this.turn) {
+      this.turn.draft = telling.draft;
+      this.turn.cursor = telling.cursor;
+    }
   }
   private readonly onResize = (): void => {
     if (!this.closed) {
@@ -693,11 +711,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // screen twice (saved and live); dropping the live copy without retiring
     // it made the last block vanish. Both were seen, in that order, across
     // two fixes that each chose one arrival order. See scripts/tui-e2e.
-    if (this.waitingLabel && this.currentSession?.id === session.id && !session.pendingTurn
+    if (this.turn && this.currentSession?.id === session.id && !session.pendingTurn
       && (session.messages?.length ?? 0) > this.activityAnchor) {
       this.stopWaiting(false);
     }
-    if (!this.waitingLabel) this.waitingSubmissions = [];
+    if (!this.turn) this.waitingSubmissions = [];
     this.currentSession = session;
     this.currentNotice = notice;
     // A render receives authoritative persisted state. Drop the transient
@@ -707,7 +725,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // line (see harness/output.ts), and clearing here would take the
     // half-written answer off the screen with it. Nor while stepped out of a
     // turn: that answer is carried on from when the turn is followed again.
-    if (!this.waitingLabel && !this.steppedOut) {
+    if (!this.turn && !this.steppedOut) {
       if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
       this.responsePaintTimer = undefined;
       this.liveResponse = '';
@@ -726,7 +744,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text; once the answer is arriving it is stale.
-    if (text) { this.thought = undefined; this.thinkingSince = Date.now(); }
+    if (text) { this.thought = undefined; if (this.turn) this.turn.thinkingSince = Date.now(); }
     // A replacement is usually the same answer again, so only its growth counts.
     this.streamedChars += mode === 'replace' ? Math.max(0, text.length - this.liveResponse.length) : text.length;
     if (text) this.noteData();
@@ -735,7 +753,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // move. After it, a replacement (a snapshot's copy of the finished
       // answer) would rebase them against an empty stream -- to offset zero,
       // above the prose they followed.
-      if (this.waitingLabel) this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
+      if (this.turn) this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
       this.liveResponse = text;
     } else this.liveResponse += text;
     this.schedulePaint();
@@ -747,8 +765,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.noteData();
     this.activityEntries = [...this.activityEntries, {
-      anchor: this.waitingLabel ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0,
-      ...(this.waitingLabel ? { responseOffset: this.liveResponse.length } : {}),
+      anchor: this.turn ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0,
+      ...(this.turn ? { responseOffset: this.liveResponse.length } : {}),
       // Every entry gets one, waiting or not: it is this row's identity for
       // "already retired", and two rows that happen to say the same thing are
       // still two rows.
@@ -809,15 +827,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     if (event.kind === 'tool-start') this.thought = undefined;
-    const anchor = this.waitingLabel ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0;
-    const responseOffset = this.waitingLabel ? live?.responseOffset ?? this.liveResponse.length : undefined;
+    const anchor = this.turn ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0;
+    const responseOffset = this.turn ? live?.responseOffset ?? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
     // The status line follows the work: "running tests", "editing app.ts"
     // while a call is open, the turn's own phase otherwise. The call itself
     // is also one row in the live transcript, below.
     const lifecycle = activityLifecyclePhase(this.activeTools, event);
     // The last open call finishing starts a new stretch of thinking.
-    if (this.activeTools.size && !lifecycle.activeTools.size) this.thinkingSince = Date.now();
+    if (this.turn && this.activeTools.size && !lifecycle.activeTools.size) this.turn.thinkingSince = Date.now();
     this.activeTools = lifecycle.activeTools;
     this.schedulePaint();
   }
@@ -854,17 +872,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Progress on a wait already showing ("downloading… 42%"), without
    * restarting it the way startWaiting does. */
   updateWaitingLabel(message: string): void {
-    if (!this.waitingLabel) return;
-    this.waitingLabel = message;
+    if (!this.turn) return;
+    this.turn.label = message;
     this.updateWaiting();
   }
 
   /** A turn this window joined mid-way: count from when it really started,
    * and say what it is running, instead of "thinking (0s)". */
   joinedWaiting(startedAt?: number, activity?: string): void {
-    if (!this.waitingLabel) return;
-    if (startedAt !== undefined) this.clock = joinTurnClock(this.clock, startedAt);
-    if (activity) this.waitingLabel = activity;
+    if (!this.turn) return;
+    if (startedAt !== undefined) this.turn.clock = joinTurnClock(this.turn.clock, startedAt);
+    if (activity) this.turn.label = activity;
     this.updateWaiting();
   }
 
@@ -909,18 +927,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Internal commands that do not display their synthetic prompt also append
     // the transient assistant at this same index.
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
-    this.waitingLabel = message;
-    this.cancelWaiting = onCancel;
-    this.waitingSubmit = onSubmit;
-    this.waitingCommand = onCommand;
-    this.leaveWaiting = onLeave;
-    this.waitingDraft = '';
-    this.waitingCursor = 0;
+    const turn: WaitingTurn = {
+      label: message, clock: startTurnClock(Date.now()), thinkingSince: Date.now(), draft: '', cursor: 0, cancelled: false,
+      ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
+      ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
+    };
+    this.turn = turn;
     this.waitingSubmissions = [];
-    this.waitingCancelled = false;
     this.waitingFrame = 0;
-    this.clock = startTurnClock(Date.now());
-    this.thinkingSince = Date.now();
     this.streamedChars = 0;
     this.usageCharsCounted = 0;
     this.turnUsage = undefined;
@@ -940,11 +954,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     if (input.isTTY) {
       const listen = (): void => {
-        this.stopWaitingInput = takeTerminalKeys(this.onWaitingKey);
+        turn.stopInput = takeTerminalKeys(this.onWaitingKey);
         output.write(enterInputModes());
       };
       listen();
-      this.resumeInput = () => { this.stopWaitingInput?.(); listen(); };
+      this.resumeInput = () => { turn.stopInput?.(); listen(); };
     }
     this.paint('', [], 0, '› ', 0);
     this.scheduleWaitingTick();
@@ -961,37 +975,41 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   private scheduleWaitingTick(): void {
-    if (this.waitingTimer) clearTimeout(this.waitingTimer);
-    this.waitingTimer = undefined;
-    if (!this.waitingLabel || this.closed) return;
+    const turn = this.turn;
+    if (!turn) return;
+    if (turn.timer) clearTimeout(turn.timer);
+    turn.timer = undefined;
+    if (this.closed) return;
     const now = Date.now();
     // Reduced motion never animates: the band ticks for the clock alone.
-    this.waitingTickFast = !this.reducedMotion && turnAnimating(this.clock, now, this.turnWaits());
-    const delay = nextTurnTickMs(this.clock, now, this.waitingTickFast);
-    this.waitingTimer = setTimeout(() => {
-      this.waitingTimer = undefined;
-      if (!this.waitingLabel || this.closed) return;
+    this.waitingTickFast = !this.reducedMotion && turnAnimating(turn.clock, now, this.turnWaits());
+    const delay = nextTurnTickMs(turn.clock, now, this.waitingTickFast);
+    turn.timer = setTimeout(() => {
+      turn.timer = undefined;
+      if (this.turn !== turn || this.closed) return;
       if (this.waitingTickFast) this.waitingFrame++;
       // A tick that changes only the clock costs that one row: the frame
       // writes only the rows that differ from the last.
       this.updateWaiting();
       this.scheduleWaitingTick();
     }, delay);
-    this.waitingTimer.unref();
+    turn.timer.unref();
   }
 
   /** A delta or an event arrived: the turn is not stalled, and if the band
    * had slowed to the clock it picks the spinner back up at once. */
   private noteData(): void {
-    this.clock = { ...this.clock, lastDataAt: Date.now() };
-    if (this.waitingLabel && !this.waitingTickFast) this.scheduleWaitingTick();
+    if (!this.turn) return;
+    this.turn.clock = { ...this.turn.clock, lastDataAt: Date.now() };
+    if (!this.waitingTickFast) this.scheduleWaitingTick();
   }
 
   /** An approval has been answered (or the turn ended under one). */
   private resumeClock(): void {
-    if (this.clock.pausedAt === undefined) return;
-    this.clock = resumeTurnClock(this.clock, Date.now());
-    if (this.waitingTimer) this.scheduleWaitingTick();
+    const turn = this.turn;
+    if (turn?.clock.pausedAt === undefined) return;
+    turn.clock = resumeTurnClock(turn.clock, Date.now());
+    if (turn.timer) this.scheduleWaitingTick();
   }
 
   /** What the next prompt's composer opens with: a message that never
@@ -1007,47 +1025,42 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * cut mid-word, and following the turn again drew it all a second time
    * beneath. See steppedOut. */
   leaveTurn(): void {
-    if (this.waitingLabel && this.currentSession) {
+    if (this.turn && this.currentSession) {
       this.steppedOut = { sessionId: this.currentSession.id, ...(this.submittedPrompt !== undefined ? { prompt: this.submittedPrompt } : {}), anchor: this.activityAnchor };
     }
     this.stopWaiting();
   }
 
   stopWaiting(refresh = true): void {
-    if (this.waitingTimer) clearTimeout(this.waitingTimer);
-    this.waitingTimer = undefined;
-    this.stopWaitingInput?.();
-    this.stopWaitingInput = undefined;
-    if (this.waitingLabel) this.resumeInput = undefined;
-    this.cancelWaiting = undefined;
-    // Whether the turn being stopped took messages: a real turn, not a wait
-    // on a download or a shell command.
-    const tookMessages = Boolean(this.waitingSubmit);
-    this.waitingSubmit = undefined;
-    this.waitingCommand = undefined;
-    this.leaveWaiting = undefined;
-    this.waitingCancelled = false;
+    const turn = this.turn;
+    if (turn) {
+      if (turn.timer) clearTimeout(turn.timer);
+      turn.timer = undefined;
+      turn.stopInput?.();
+      this.resumeInput = undefined;
+    }
+    // Settled while the turn is still the current one: a "tell it instead"
+    // draft goes back into its composer, handed off below.
     this.settleApprovals();
     // A turn that did real work ends on a line saying how long it took and
-    // what it changed (Codex). Only a real turn -- one that took messages --
-    // and only its end: stepping out of it is not.
-    if (this.waitingLabel && tookMessages && !this.steppedOut) {
-      this.pendingTurnSummary = this.endOfTurnSummary();
+    // what it changed (Codex). Only a real turn -- one that took messages,
+    // not a wait on a download or a shell command -- and only its end:
+    // stepping out of it is not.
+    if (turn?.submit && !this.steppedOut) {
+      this.pendingTurnSummary = this.endOfTurnSummary(turn);
       this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
     }
-    this.waitingLabel = '';
+    this.turn = undefined;
     this.thought = undefined;
     // Anything typed during the turn and not submitted is still the user's
-    // text. It lives in waitingDraft while the turn runs, and the composer
+    // text. It lives in the turn's draft while the turn runs, and the composer
     // that opens afterwards reads queuedDraft -- so without this handoff a
     // message typed while the answer streamed was simply gone the moment the
     // turn finished. Appended rather than assigned: a queued submission may
     // already be waiting there, and neither should overwrite the other.
-    if (this.waitingDraft.trim()) {
-      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${this.waitingDraft}` : this.waitingDraft;
+    if (turn?.draft.trim()) {
+      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${turn.draft}` : turn.draft;
     }
-    this.waitingDraft = '';
-    this.waitingCursor = 0;
     // The turn is over: its prompt is a real message now, and holding the
     // client's copy any longer would draw it twice.
     this.submittedPrompt = undefined;
@@ -1074,10 +1087,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * when idle. Written only when they change, and never off a TTY. */
   private syncTerminalSignals(): void {
     if (!output.isTTY || this.suspended || this.closed || !terminalModes.titlePushed) return;
-    const running = Boolean(this.waitingLabel);
+    const running = Boolean(this.turn);
     const title = windowTitle({
       running, glyph: waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame),
-      activity: this.pendingApproval ? 'waiting for you' : (this.toolStatus()?.phase || this.waitingLabel).replace(/(…|\.\.\.)$/, ''),
+      activity: this.pendingApproval ? 'waiting for you' : (this.toolStatus()?.phase || this.turn?.label || '').replace(/(…|\.\.\.)$/, ''),
       ...(this.currentSession?.name ? { name: this.currentSession.name } : {}),
     });
     let sequence = '';
@@ -1096,8 +1109,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** The end-of-turn line, or nothing for a turn that ran no tools and took
    * under END_SUMMARY_MS. */
-  private endOfTurnSummary(): string | undefined {
-    const ms = turnElapsedMs(this.clock, Date.now());
+  private endOfTurnSummary(turn: WaitingTurn): string | undefined {
+    const ms = turnElapsedMs(turn.clock, Date.now());
     const calls = this.activityEntries.filter((entry) => entry.event && entry.anchor >= this.activityAnchor
       && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor);
     if (!endsWithSummary(ms, calls.length)) return undefined;
@@ -1105,18 +1118,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   phase(message: string): void {
-    if (!this.waitingLabel || this.waitingCancelled || this.waitingLabel === message) return;
+    const turn = this.turn;
+    if (!turn || turn.cancelled || turn.label === message) return;
     this.noteData();
     // The band says "waiting for approval" while one is up; remember the phase
     // for when it is answered instead of replacing that.
     if (this.pendingApproval) { this.approvalRestoreLabel = message; return; }
-    this.waitingLabel = message;
+    turn.label = message;
     this.updateWaiting();
   }
 
   approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'> {
     return new Promise<boolean | 'always'>((resolveApproval) => {
-      if (!this.pendingApproval) this.approvalRestoreLabel = this.waitingLabel;
+      if (!this.pendingApproval) this.approvalRestoreLabel = this.turn?.label ?? '';
       this.approvalQueue.push({
         title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }),
         ...(rule === undefined ? {} : { rule }), resolve: resolveApproval,
@@ -1134,10 +1148,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Each approval gets its own guard window and its own focus requirement:
     // answering the first of two must not let the same keypress, or the next
     // character of a sentence, answer the second.
-    this.pendingApproval = { ...next, shownAt: Date.now(), needsFocus: this.waitingDraft.length > 0, focused: false };
-    this.waitingLabel = 'waiting for approval';
-    // The clock stops while the turn waits on the user, not on the agent.
-    this.clock = pauseTurnClock(this.clock, Date.now());
+    this.pendingApproval = { ...next, shownAt: Date.now(), needsFocus: Boolean(this.turn?.draft), focused: false };
+    if (this.turn) {
+      this.turn.label = 'waiting for approval';
+      // The clock stops while the turn waits on the user, not on the agent.
+      this.turn.clock = pauseTurnClock(this.turn.clock, Date.now());
+    }
     if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
     // Repaint when the guard lifts so the answer row visibly becomes live.
     this.approvalGuardTimer = setTimeout(() => { this.approvalGuardTimer = undefined; this.updateWaiting(); }, APPROVAL_GUARD_MS);
@@ -1214,29 +1230,29 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * actually arrives: the open call names the verb, the clock stops for an
    * approval, the token count is estimated from the stream until the vendor
    * reports its own, and a turn that has sent nothing for a while says so. */
-  private waitingLine(): string {
+  private waitingLine(turn: WaitingTurn): string {
     const now = Date.now();
-    const elapsed = formatElapsed(turnElapsedMs(this.clock, now));
+    const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
     const tokens = formatTurnUsage(this.turnUsage, estimatedTokens(this.streamedChars - this.usageCharsCounted));
-    const stalled = turnStalledMs(this.clock, now, this.turnWaits());
+    const stalled = turnStalledMs(turn.clock, now, this.turnWaits());
     // What it says and how it looks, by the shared rules (turn-flow.ts):
     // waiting on the user, the open call, the reasoning's heading, the
     // thinking in words; and a tone that fades toward red with silence.
     const tool = this.toolStatus();
     const status = turnStatus({
-      phase: this.waitingLabel,
-      ...(!this.waitingCancelled && tool ? { toolPhase: tool.phase } : {}),
-      ...(this.thought && !this.waitingCancelled ? { thought: this.thought.text } : {}),
-      thinkingMs: now - this.thinkingSince,
+      phase: turn.label,
+      ...(!turn.cancelled && tool ? { toolPhase: tool.phase } : {}),
+      ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
+      thinkingMs: now - turn.thinkingSince,
       asking: Boolean(this.pendingApproval),
-      quietMs: this.pendingApproval ? 0 : now - this.clock.lastDataAt,
+      quietMs: this.pendingApproval ? 0 : now - turn.clock.lastDataAt,
     });
     // "send", not "steer or queue": which of the two happens depends on the
     // harness, and each submission's own row says which it was.
     const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''}${stalled ? ` · nothing received for ${formatElapsed(stalled)}` : ''})`
-      + `${this.cancelWaiting && !this.pendingApproval ? ' · esc to interrupt' : ''}`
-      + `${this.leaveWaiting && !this.pendingApproval && !this.waitingDraft ? ' · ← conversations' : ''}`
-      + `${this.waitingSubmit ? (this.waitingDraft.trim() && this.cancelWaiting && !this.pendingApproval ? ' · enter to send · ctrl+s to send now' : ' · type and press Enter to send') : ''}`;
+      + `${turn.cancel && !this.pendingApproval ? ' · esc to interrupt' : ''}`
+      + `${turn.leave && !this.pendingApproval && !turn.draft ? ' · ← conversations' : ''}`
+      + `${turn.submit ? (turn.draft.trim() && turn.cancel && !this.pendingApproval ? ' · enter to send · ctrl+s to send now' : ' · type and press Enter to send') : ''}`;
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
     const split = status.label.length;
@@ -1253,7 +1269,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   private updateWaiting(): void {
-    if (!this.waitingLabel || this.closed || this.selecting || this.paletteActive) return;
+    if (!this.turn || this.closed || this.selecting || this.paletteActive) return;
     this.schedulePaint();
   }
 
@@ -1266,7 +1282,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = setTimeout(() => {
       this.responsePaintTimer = undefined;
       if (!this.closed && !this.selecting && !this.paletteActive) {
-        if (this.waitingLabel) this.paintWaiting();
+        if (this.turn) this.paintWaiting(this.turn);
         else this.repaint();
       }
     }, delay);
@@ -1280,16 +1296,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * there), so there is no selection to move and Enter runs what was typed.
    * Without this a command was invisible AND unavailable while an answer
    * streamed; `/model` went to the model as the word "/model". */
-  private paintWaiting(): void {
-    const found = this.waitingCommand ? commandPaletteMatches(this.waitingDraft, this.paletteCommands) : [];
+  private paintWaiting(turn: WaitingTurn): void {
+    const found = turn.command ? commandPaletteMatches(turn.draft, this.paletteCommands) : [];
     // Commands while nothing has been typed past the name; the argument's
     // own values once it has. A bare hint row is not worth the space mid-turn.
-    const matches = !this.waitingDraft.includes(' ') || found[0]?.completes ? found : [];
+    const matches = !turn.draft.includes(' ') || found[0]?.completes ? found : [];
     if (!matches.length) {
-      this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
+      this.paint(turn.draft, [], 0, '› ', turn.cursor);
       return;
     }
-    this.paint(this.waitingDraft, matches, 0, '› ', this.waitingCursor, {
+    this.paint(turn.draft, matches, 0, '› ', turn.cursor, {
       capacity: Math.min(matches.length, 8) + 2,
       hint: '↵ apply · esc interrupts',
     });
@@ -1349,7 +1365,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // share it) are unaffected.
     const conversationInner = rowWidth - 2;
     const stableMessages = session.messages ?? [];
-    const pending = this.waitingLabel ? session.pendingTurn : undefined;
+    const pending = this.turn ? session.pendingTurn : undefined;
     const pendingPrompt = pendingPromptText({
       ...(pending?.prompt ? { durable: pending.prompt } : {}),
       ...(this.submittedPrompt ? { sticky: this.submittedPrompt } : {}),
@@ -1370,7 +1386,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the prompt (a window attached to a worker): every tool stayed invisible
     // until the first word of the answer, then all appeared at once.
     const hasTransientAssistant = !this.steppedOut && (transientAssistantRequired(
-      this.liveResponse, Boolean(this.waitingLabel), this.waitingLabel ? this.activityAnchor : persistedMessages.length, this.activityEntries,
+      this.liveResponse, Boolean(this.turn), this.turn ? this.activityAnchor : persistedMessages.length, this.activityEntries,
       settledMessage?.role === 'assistant' ? settledMessage.content : undefined,
     ) || Boolean(pending?.steers?.length));
     const storedQueued = session.queuedTurns ?? [];
@@ -1397,7 +1413,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ...(this.sendNow ? [{ role: 'user' as const, content: this.sendNow.text, queueState: 'now' as const }] : []),
     ];
     // While a turn runs a queued message can be sent at once (Ctrl+S).
-    const sendNowHint = this.cancelWaiting && this.waitingSubmit && !this.waitingCancelled ? ' · ctrl+s sends now' : '';
+    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled ? ' · ctrl+s sends now' : '';
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
@@ -1420,7 +1436,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // rewritten under the eye is the thing that made reading impossible.
     const notice = this.transientNotice ?? this.currentNotice;
     const budget = frameRowBudget({
-      targetHeight, waiting: Boolean(this.waitingLabel), notice: Boolean(notice), requestedPaletteCapacity,
+      targetHeight, waiting: Boolean(this.turn), notice: Boolean(notice), requestedPaletteCapacity,
     });
     const { waitingRows, noticeRows, paletteRows } = budget;
     const paletteCapacity = paletteRows;
@@ -1435,15 +1451,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS,
         needsFocus: approval.needsFocus, focused: approval.focused,
         position: this.approvalsAnswered + 1, total: this.approvalsAnswered + 1 + this.approvalQueue.length,
-        canTell: Boolean(this.waitingSubmit), telling: Boolean(this.tellingInstead),
+        canTell: Boolean(this.turn?.submit), telling: Boolean(this.tellingInstead),
       })
       : [];
     let liveBandBudget = Math.max(0, optionalRows - paletteRows - approvalRows.length - 2);
     // The newest words of the reasoning: it is read as it is written.
-    const thoughtRows = this.waitingLabel && this.thought && !approval && liveBandBudget > 0
+    const thoughtRows = this.turn && this.thought && !approval && liveBandBudget > 0
       ? [`  ${chalk.dim(chalk.italic(`✻ ${visibleTail(this.thought.text, Math.max(1, inner - 2))}`))}`] : [];
     liveBandBudget -= thoughtRows.length;
-    const planGlyph = this.waitingLabel && !this.reducedMotion ? waitingSpinnerGlyph(this.waitingFrame) : undefined;
+    const planGlyph = this.turn && !this.reducedMotion ? waitingSpinnerGlyph(this.waitingFrame) : undefined;
     const planRows = paletteRows || this.selecting ? [] : planBlockRows(this.planEntries, width, liveBandBudget, planGlyph);
     liveBandBudget -= planRows.length;
     let panelRows: string[] = [];
@@ -1691,8 +1707,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // The live answer is lexed from its last blank-line boundary rather
         // than re-parsed from the top on every delta.
         blocks: this.streamingBlocks(content),
-        tools: turnTools(!this.waitingLabel),
-        turnEnded: !this.waitingLabel,
+        tools: turnTools(!this.turn),
+        turnEnded: !this.turn,
         renderBlocks,
         renderLive,
       });
@@ -1702,7 +1718,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The turn's last line, once its answer has settled above it. Retired
     // like every other row, exactly once: it is dropped as it is written.
     const answered = persistedMessages.length > this.activityAnchor && persistedMessages[persistedMessages.length - 1]?.role === 'assistant';
-    if (this.pendingTurnSummary && !this.waitingLabel && (hasTransientAssistant || answered)) {
+    if (this.pendingTurnSummary && !this.turn && (hasTransientAssistant || answered)) {
       emit(['', `  ${chalk.dim(`─ ${this.pendingTurnSummary} ─`)}`, '']);
       this.pendingTurnSummary = undefined;
     }
@@ -1729,7 +1745,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // on the last line of the answer. While a turn runs the generating band
     // already carries its own blank, budgeted into the height -- adding a
     // second one there would double the gap and push an answer row off.
-    if (!this.waitingLabel) footer.push('');
+    if (!this.turn) footer.push('');
     if (noticeRows && notice) footer.push(`  ${chalk.yellow(visibleSlice(notice, inner))}`);
     if (paletteCapacity) {
       footer.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
@@ -1737,8 +1753,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }));
     }
     footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows);
-    if (waitingRows) {
-      footer.push('', `  ${visibleSlice(this.waitingLine(), Math.max(1, inner))}`);
+    if (waitingRows && this.turn) {
+      footer.push('', `  ${visibleSlice(this.waitingLine(this.turn), Math.max(1, inner))}`);
     }
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. A spent window replaces the percentage with the reset
@@ -2225,7 +2241,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The current frame again, so the highlight follows the pointer. */
   private redrawSelection(): void {
     if (this.closed || this.suspended || this.selecting) return;
-    if (this.waitingLabel) this.paintWaiting();
+    if (this.turn) this.paintWaiting(this.turn);
     else this.repaint();
   }
 
@@ -2313,7 +2329,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.forgetScreenPosition();
     this.retakeTerminalSignals();
     this.resumeInput?.();
-    if (this.waitingLabel) this.paint(this.waitingDraft, [], 0, '› ', this.waitingCursor);
+    if (this.turn) this.paint(this.turn.draft, [], 0, '› ', this.turn.cursor);
     else this.repaint();
   };
 
@@ -2668,7 +2684,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * typed or queued draft. A newer build may replace the process here. */
   idleForBuildReplace(): boolean {
     return !this.closed && !this.suspended && !this.selecting && !this.paletteActive
-      && !this.waitingLabel && !this.draft && !this.queuedDraft;
+      && !this.turn && !this.draft && !this.queuedDraft;
   }
 
   close(): void {

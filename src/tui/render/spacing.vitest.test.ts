@@ -36,7 +36,7 @@ describe('the composer has room to breathe', () => {
     // The generating band already carries a blank, budgeted into the height.
     // A second one there doubles the gap and pushes an answer row off screen.
     const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
-    expect(source).toContain("if (!this.waitingLabel) footer.push('')");
+    expect(source).toContain("if (!this.turn) footer.push('')");
   });
 });
 
