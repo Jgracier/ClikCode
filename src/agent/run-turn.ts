@@ -530,7 +530,17 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
           const outcome = done.get(call.id);
           return outcome ? [{ type: 'tool_result', id: call.id, name: call.name, output: outcome.result.output, ...(outcome.result.isError ? { isError: true } : {}) }] : [];
         });
-        if (resultItems.length) await append(...resultItems).catch(() => undefined);
+        // A result that is not on disk reads, on resume, as a call that never
+        // finished (repairDanglingCalls), though it ran. One retry covers a
+        // transient write error; past that the turn fails rather than carry
+        // on with memory and disk disagreeing. This replaces a cancel's error
+        // too: the lost results are the more important thing to report.
+        if (resultItems.length) {
+          items.push(...resultItems);
+          await store.append(...resultItems).catch(() => store.append(...resultItems)).catch((error: unknown) => {
+            throw new Error(`could not save the results of ${resultItems.length} tool call(s) to the conversation: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+          });
+        }
       }
 
       // ask_user put a question to the user: the turn ends on it, and their
