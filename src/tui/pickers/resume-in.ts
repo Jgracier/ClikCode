@@ -8,6 +8,7 @@
  * models; choosing a model hands the conversation over (the same branch
  * `/<harness>` makes) and the caller resends the message that ran out. */
 
+import { join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
@@ -21,7 +22,8 @@ import { chooseOption } from './choose.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
 import type { HarnessSession } from '../../session/model.js';
-import { withSessionLock } from '../../session/store/locks.js';
+import { withFileLock } from '../../session/store/locks.js';
+import { safeRecordFileName, sessionsDirectory } from '../../session/store/paths.js';
 
 /** An account that can take a turn now -- the one rule failover uses too. */
 export function accountHasUsage(account: AiHarnessAccount): boolean {
@@ -98,10 +100,12 @@ export type ResumedIn = { id: string; prompt?: string };
 export async function resumeInBranch(
   id: string, harness: AiLocalHarnessDefinition, accountId: string, model: string | null, prompt: string, sent: string,
 ): Promise<ResumedIn> {
-  // Under the source's lock: two windows following one turn that ran out
+  // Under a lock of its own: two windows following one turn that ran out
   // both offer "Resume in", and each used to make its own branch and send
-  // the request again there.
-  return withSessionLock(id, async () => {
+  // the request again there. Not the source's session lock -- writing the
+  // branch shares the source's transcript and takes that lock itself, so
+  // holding it here waited on itself forever.
+  return withFileLock(join(sessionsDirectory(), `${safeRecordFileName(id)}.resume-in.lock`), async () => {
     const state = await readState({ transcripts: [id] });
     const pending = state.sessions.find((item) => item.id === id)?.pendingTurn;
     const turn = pending?.startedAt;
