@@ -101,6 +101,9 @@ export class IdeBridge {
   private preparedRoute: string | undefined;
   /** The same-provider retry after running out: once per interrupted turn. */
   private readonly exhaustionGuard: ExhaustionRetryGuard = {};
+  /** What the last turn actually sent, when a slash command expanded the
+   * line (/review): what an interrupted turn recorded is compared to. */
+  private sentPrompt: string | undefined;
   private drainScheduled = false;
   private work: Promise<void> = Promise.resolve();
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
@@ -529,6 +532,7 @@ export class IdeBridge {
 
   private async execute(line: string, options: { queuedTurnId?: string; fromQueuedCommand?: boolean }): Promise<void> {
     const id = this.requireSession();
+    this.sentPrompt = undefined;
     try {
       if (options.queuedTurnId) {
         await this.runTurn(id, line, { echo: true, queuedTurnId: options.queuedTurnId });
@@ -544,7 +548,10 @@ export class IdeBridge {
       }
       if (outcome.id && outcome.id !== this.sessionId) await this.switchTo(outcome.id);
       else await this.emitSession();
-      if (outcome.prompt) await this.runTurn(this.requireSession(), outcome.prompt, { echo: outcome.echo !== false });
+      if (outcome.prompt) {
+        this.sentPrompt = outcome.prompt;
+        await this.runTurn(this.requireSession(), outcome.prompt, { echo: outcome.echo !== false });
+      }
     } catch (error) {
       const message = messageOf(error);
       const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
@@ -558,7 +565,7 @@ export class IdeBridge {
         // Out of usage on every account here, a queued message as much as a
         // typed one: once more on this provider if an account came back,
         // otherwise the harnesses that still have some.
-        const next = await carryOnAfterExhaustion(this.prompter, id, line, this.exhaustionGuard);
+        const next = await carryOnAfterExhaustion(this.prompter, id, line, this.exhaustionGuard, this.sentPrompt ?? line);
         if ('retry' in next) {
           await this.execute(next.retry, {});
           return;

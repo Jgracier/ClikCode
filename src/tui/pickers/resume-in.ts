@@ -54,7 +54,9 @@ export function resumeInCandidates(
 
 /** Returns the new conversation's id, or undefined when there is nowhere to
  * go or the user backs out (the chat then stays as it was). */
-export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string, prompt: string): Promise<{ id: string; prompt: string } | undefined> {
+export async function interactiveResumeInPicker(
+  rl: HarnessPrompter, id: string, prompt: string, sent = prompt,
+): Promise<{ id: string; prompt: string } | undefined> {
   // Index for every chat's last model; this chat's transcript is not needed
   // to list other harnesses with usage left.
   const state = await readState({ transcripts: [] });
@@ -83,32 +85,39 @@ export async function interactiveResumeInPicker(rl: HarnessPrompter, id: string,
       .filter((item) => item.nativeHarness === chosen.harness.command && item.model)
       .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
     const model = lastUsedModel ?? state.providerSettings[chosen.harness.provider]?.model ?? catalog.configured ?? null;
-    return continueIn(id, chosen.harness, account.id, model, prompt);
+    return continueIn(id, chosen.harness, account.id, model, prompt, sent);
   }
 }
 
 async function continueIn(
-  id: string, harness: AiLocalHarnessDefinition, accountId: string, model: string | null, prompt: string,
+  id: string, harness: AiLocalHarnessDefinition, accountId: string, model: string | null, prompt: string, sent: string,
 ): Promise<{ id: string; prompt: string }> {
   // The branch carries the interrupted request and all progress recorded for
   // it. Asking the new provider to continue avoids running that request a
   // second time and preserves the partial answer and tool activity.
-  const nextPrompt = await interruptedTurnResumePrompt(id, prompt);
+  const nextPrompt = await interruptedTurnResumePrompt(id, prompt, sent);
   const nextId = await newProviderConversation(id, harness.command, { accountId, model });
   return { id: nextId, prompt: nextPrompt };
 }
 
-export async function interruptedTurnResumePrompt(id: string, prompt: string): Promise<string> {
+/** `prompt` is what was typed, `sent` what the turn actually ran when that
+ * differs (a slash command such as /review expands to its own prompt). */
+export async function interruptedTurnResumePrompt(id: string, prompt: string, sent = prompt): Promise<string> {
   // The interrupted turn is kept in the conversation's transcript file: read
   // without it there was never a pending turn, the original words were sent
   // again, and the branch -- which carries that turn -- ran the request twice.
   const state = await readState({ transcripts: [id] });
   const pending = state.sessions.find((item) => item.id === id)?.pendingTurn;
-  return resumePromptForPendingTurn(pending, prompt);
+  return resumePromptForPendingTurn(pending, prompt, sent);
 }
 
-export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'], prompt: string): string {
-  return pending?.prompt === prompt ? INTERRUPTED_TURN_REQUEST : prompt;
+/** The continuation when the interrupted turn on record is the one that was
+ * sent -- compared with what the turn recorded, which is the sent prompt,
+ * trimmed: comparing the typed line re-sent an expanded /review whole, and
+ * the request ran twice. Otherwise the turn never started, and the typed line
+ * is what to send. */
+export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'], prompt: string, sent = prompt): string {
+  return pending && pending.prompt.trim() === sent.trim() ? INTERRUPTED_TURN_REQUEST : prompt;
 }
 
 /** What carries a turn on after it ran out of usage on every account:
@@ -131,15 +140,15 @@ export type ExhaustedTurnNext =
 export interface ExhaustionRetryGuard { autoResent?: string }
 
 export async function carryOnAfterExhaustion(
-  rl: HarnessPrompter, id: string, prompt: string, guard: ExhaustionRetryGuard,
+  rl: HarnessPrompter, id: string, prompt: string, guard: ExhaustionRetryGuard, sent = prompt,
 ): Promise<ExhaustedTurnNext> {
-  const sent = (text: string): string => `${id}\n${text}`;
-  if (guard.autoResent !== sent(prompt) && await sameProviderCanTakeTurn(id)) {
-    const continuation = await interruptedTurnResumePrompt(id, prompt);
-    guard.autoResent = sent(continuation);
+  const key = (text: string): string => `${id}\n${text}`;
+  if (guard.autoResent !== key(prompt) && await sameProviderCanTakeTurn(id)) {
+    const continuation = await interruptedTurnResumePrompt(id, prompt, sent);
+    guard.autoResent = key(continuation);
     return { retry: continuation };
   }
-  const moved = await interactiveResumeInPicker(rl, id, prompt);
+  const moved = await interactiveResumeInPicker(rl, id, prompt, sent);
   if (moved) {
     await moveQueuedTurns(id, moved.id);
     return { moved };

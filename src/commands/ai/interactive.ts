@@ -389,12 +389,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
    * harnesses that still have some and carries on there with the same
    * message. Returns the messages queued behind it that come back to the
    * composer, or undefined once the turn is being carried on. */
-  const handleTurnFailure = async (error: unknown, promptText: string | undefined): Promise<string[] | undefined> => {
+  const handleTurnFailure = async (error: unknown, promptText: string | undefined, sent = promptText): Promise<string[] | undefined> => {
     const message = error instanceof Error ? error.message : String(error);
     if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return []; }
     notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
     if (!promptText || !isUsageExhaustedMessage(message)) return [];
-    const next = await carryOnAfterExhaustion(terminal, id, promptText, exhaustionGuard);
+    const next = await carryOnAfterExhaustion(terminal, id, promptText, exhaustionGuard, sent);
     if ('stayed' in next) return next.stayed;
     if ('moved' in next) {
       id = next.moved.id;
@@ -410,6 +410,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       /** This line was already handed to the loop once. Anything below that
        * would hand it back must not, or a cancelled picker loops forever. */
       let fromQueuedCommand = false;
+      /** What this pass's turn actually sent, when a slash command expanded
+       * the line (/review): what an interrupted turn recorded is compared to. */
+      let sentPrompt: string | undefined;
       let activeWorkspace = process.cwd();
       // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
       // handoff, resume) closes the child it had.
@@ -554,6 +557,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
        * paints the submitted text as the pending user message; synthetic
        * prompts (/review, /init, /compact) are not shown as if typed. */
       const runInteractiveTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> => {
+        sentPrompt = promptText;
         // The worker is another process. A draft is written now, because this
         // message is what makes the chat a conversation.
         if (terminal) await ensureSessionOnDisk(targetId);
@@ -972,7 +976,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           // a typed one is. Carried on, it is not handed back as well (it
           // would then be sent twice); otherwise it returns to the composer
           // with any messages queued behind it that could not run either.
-          const back = await handleTurnFailure(error, line);
+          const back = await handleTurnFailure(error, line, sentPrompt ?? line);
           if (back) {
             const draft = [...(queuedTurnId ? [line] : []), ...back].join('\n\n');
             if (draft) terminal?.restoreDraft(draft);
