@@ -11,8 +11,7 @@ import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { ensureTurboFitForTurn } from './turbofit.js';
 import { ensureLocalModelForTurn, reconcileLocalModelLeases } from './local-model.js';
-import { backfillListFacts } from '../../session/list-backfill.js';
-import { chatNamed, isBlankConversation, latestChat } from '../../session/options.js';
+import { chatNamed } from '../../session/options.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { ensureSessionOnDisk } from '../../session/blank.js';
 import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
@@ -34,7 +33,7 @@ import { enqueueCommandLine } from '../../tui/slash/queue.js';
 import { impliedHarnessCommand } from '../../tui/slash/infer-provider.js';
 import { aiHarnessSelect } from './harness.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
-import { harnessModelLabel, resolveNativeModel, warmNativeModelCatalog } from '../../harness/accounts/model-catalog.js';
+import { harnessModelLabel, warmNativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { settingLabel } from '../../tui/pickers/setting-scope.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, nativeAvailableCommands } from '../../turn/vendor-process.js';
@@ -46,13 +45,13 @@ import { emitHarnessOutput } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../../session/attachments.js';
-import { claimSession, SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
-import { claimConversation, leaveConversation, releaseConversationClaim } from '../../session/attach.js';
+import { SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
+import { activateSession, claimConversation, leaveConversation, openConversation, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
 import { existsSync } from 'node:fs';
 import { routeSlashInput, slashControls, slashHelpText, slashPalette, type SlashHandlerKey } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from './conversations.js';
-import { aiSessionLeave, launchSession } from './sessions.js';
+import { aiSessionLeave } from './sessions.js';
 import { aiSessionCommand, runShellLine, slashRouteTurn } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor, slashRouteContextFor } from '../../tui/slash/context.js';
 import { capabilitiesText } from '../../tui/slash/capabilities-text.js';
@@ -119,48 +118,13 @@ const BOARD_COMMANDS: readonly PickerOption<string>[] = [
 // the terminal restore handler tears down the UI and exits the client, while
 // its detached worker can finish an in-flight turn and serve a reconnect.
 
-/** The index for launch / resume. Chats that predate the row summary are
- * summarized in the background; the board already does the same. Waiting here
- * made the first open after an upgrade pay for every transcript before the
- * composer appeared. */
-async function stateForNavigation(): Promise<HarnessState> {
-  const state = await readState({ transcripts: [] });
-  if (state.sessions.some((session) => !session.listChecked && !isBlankConversation(session))) {
-    void backfillListFacts().catch(() => undefined);
-  }
-  return state;
-}
-
 export async function aiSessionOpenDefault(config: Conf, options: { continue?: boolean } = {}): Promise<void> {
-  const state = await stateForNavigation();
-  if (options.continue) {
-    const latest = latestChat(state.sessions, process.cwd());
-    if (latest) return aiSessionResume(config, latest.id);
-  }
-  // Empty chats are not conversations. Do not store the one this launch
-  // opens until something happens in it.
-  state.sessions = state.sessions.filter((session) => !isBlankConversation(session));
-  const session = launchSession(state, process.cwd());
-  state.sessions.push(session);
-  await writeState(state);
-  await aiSessionInteractive(config, session.id);
+  await aiSessionInteractive(config, await openConversation(process.cwd(), options.continue ? 'continue' : 'new'));
 }
 
 export async function aiSessionResume(config: Conf, ref: string): Promise<void> {
-  const state = await stateForNavigation();
-  // An id, the start of one, a chat's name, or `last`.
-  const id = state.sessions.some((item) => item.id === ref) ? ref : chatNamed(state.sessions, ref, '');
-  const session = id ? state.sessions.find((item) => item.id === id) : undefined;
-  if (!session) throw new Error(`no chat matches "${ref}" -- use its name, the start of its id, or last`);
-  if (session.status !== 'active') {
-    session.status = 'active';
-    session.closedAt = undefined;
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
-  }
-  await aiSessionInteractive(config, session.id);
+  await aiSessionInteractive(config, await openConversation(process.cwd(), 'resume', ref));
 }
-
 
 export async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
   // Fetched while the app starts, so Copilot's model list is there the first
@@ -248,33 +212,18 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     if (!next) return;
     session = next;
   }
-  let stateChanged = false;
   // Any number of shells can have this same chat open; the shared worker
   // (worker/turn-bridge.ts) is what actually serializes turns, steering into
   // one already running rather than racing it. The claim below is informational
   // bookkeeping only -- which shell most recently opened this chat -- never a
   // lock that keeps another shell from typing.
-  if (session.status !== 'active') {
-    session.status = 'active';
-    session.closedAt = undefined;
-    session.updatedAt = new Date().toISOString();
-    stateChanged = true;
-  }
-  if (!session.model) {
-    const harness = sessionOrProviderHarness(session);
-    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-    if (harness) {
-      const resolved = await resolveNativeModel(harness, account);
-      if (resolved) {
-        session.model = resolved;
-        session.updatedAt = new Date().toISOString();
-        stateChanged = true;
-      }
-    }
-  }
-  claimSession(session);
-  stateChanged = true;
-  if (stateChanged) await writeState(state);
+  if (activateSession(session)) await writeState(state);
+  await resolveSessionModel(id);
+  await claimConversation(id);
+  state = await readState({ transcripts: [id] });
+  const opened = state.sessions.find((item) => item.id === id);
+  if (!opened) return;
+  session = opened;
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
   // Warm `/model` while the composer is up, so the first open is not a wait.
   // Re-warmed when the chat's provider or account changes (see the loop).

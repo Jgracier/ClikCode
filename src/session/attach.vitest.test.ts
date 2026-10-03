@@ -2,7 +2,7 @@ import { mkdtempSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { claimConversation, leaveConversation, releaseConversationClaim } from './attach';
+import { claimConversation, leaveConversation, openConversation, releaseConversationClaim } from './attach';
 import { readState } from './state/read';
 import { writeState } from './state/write';
 import { acquireSessionClaim } from './claims';
@@ -56,5 +56,28 @@ describe('a client attached to a conversation', () => {
     const left = await stored();
     expect(left).toBeDefined();
     expect(left?.claim).toBeUndefined();
+  });
+
+  it('opens a fresh chat, and does not keep blank ones left behind', async () => {
+    const leftover = session({ id: 'blank', conversationId: 'blank', messages: [] });
+    await writeState(stateWith(session(), leftover));
+    const id = await openConversation('/work', 'new');
+    const state = await readState({ transcripts: [] });
+    expect(id).not.toBe('s1');
+    expect(state.sessions.map((item) => item.id)).toContain('s1');
+    expect(state.sessions.map((item) => item.id)).not.toContain('blank');
+  });
+
+  it('continues the latest chat, in this workspace only when asked', async () => {
+    await writeState(stateWith(session({ workspace: '/elsewhere', status: 'closed' })));
+    expect(await openConversation('/work', 'continue')).toBe('s1');
+    expect((await stored())?.status).toBe('active');
+    expect(await openConversation('/work', 'continue', undefined, { sameWorkspace: true })).not.toBe('s1');
+  });
+
+  it('resumes a chat by the start of its id, and says what it accepts when nothing matches', async () => {
+    await writeState(stateWith(session({ id: 'abcdef', conversationId: 'abcdef' })));
+    expect(await openConversation('/work', 'resume', 'abcd')).toBe('abcdef');
+    await expect(openConversation('/work', 'resume', 'zzz')).rejects.toThrow(/no chat matches "zzz" -- use its name/);
   });
 });

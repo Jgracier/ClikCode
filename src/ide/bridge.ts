@@ -22,9 +22,9 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
-import { latestChat, chatNamed } from '../session/options.js';
+import { chatNamed } from '../session/options.js';
 import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
-import { claimConversation, leaveConversation } from '../session/attach.js';
+import { claimConversation, leaveConversation, openConversation, resolveSessionModel } from '../session/attach.js';
 import { ensureSessionOnDisk } from '../session/blank.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
 import { compactPath } from '../harness/protocol/labels.js';
@@ -33,11 +33,10 @@ import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
-import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { nativeUsageReading } from '../harness/accounts/account-usage.js';
 import { usageResetLabel } from '../harness/accounts/usage-reading.js';
 import { setVendorSignInRunner, type VendorSignInRequest } from '../harness/transport/native/login.js';
-import { launchSession, aiSessionLeave } from '../commands/ai/sessions.js';
+import { aiSessionLeave } from '../commands/ai/sessions.js';
 import { newConversation, newProviderConversation, releaseQueuedTurn } from '../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../commands/ai/harness.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
@@ -244,33 +243,13 @@ export class IdeBridge {
   // ---- conversations -------------------------------------------------------
 
   private async open(workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string): Promise<void> {
-    const state = await readState({ transcripts: ref ? [ref] : [] });
-    let session: HarnessSession | undefined;
-    if (mode === 'resume') {
-      if (!ref) throw new Error('resume needs a conversation id');
-      const id = state.sessions.some((item) => item.id === ref) ? ref : chatNamed(state.sessions, ref, '');
-      session = id ? state.sessions.find((item) => item.id === id) : undefined;
-      if (!session) throw new Error(`no chat matches "${ref}"`);
-    } else if (mode === 'continue') {
-      session = latestChat(state.sessions.filter((item) => item.status !== 'archived'), workspace);
-      if (session && session.workspace !== workspace) session = undefined;
-    }
-    if (!session) {
-      session = launchSession(state, workspace);
-      state.sessions.push(session);
-    }
-    if (session.status !== 'active') {
-      session.status = 'active';
-      session.closedAt = undefined;
-      session.updatedAt = new Date().toISOString();
-    }
-    await writeState(state);
-    const id = session.id;
+    const id = await openConversation(workspace, mode, ref, { sameWorkspace: true });
+    const { session } = await this.current(id);
     // As a terminal does on open: a conversation with no provider gets the one
     // the user is signed in to, without asking; with none, the first message
     // or /provider asks.
     if (!session.nativeHarness && !isClikCodeAgent(session)) await autoSelectSessionHarness(id).catch(() => false);
-    await this.resolveModel(id);
+    await resolveSessionModel(id);
     await this.switchTo(id);
     void this.synchronizeOpened(id);
   }
@@ -283,21 +262,6 @@ export class IdeBridge {
     if (!syncing || !await synchronizeNativeTranscript(synced, syncing)) return;
     await writeState(synced);
     if (this.sessionId === id) await this.emitSession();
-  }
-
-  private async resolveModel(id: string): Promise<void> {
-    const state = await readState({ transcripts: [id] });
-    const session = state.sessions.find((item) => item.id === id);
-    if (!session || session.model) return;
-    const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
-      : session.provider ? localHarnessForProvider(session.provider) : undefined;
-    if (!harness) return;
-    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-    const resolved = await resolveNativeModel(harness, account).catch(() => undefined);
-    if (!resolved) return;
-    session.model = resolved;
-    session.updatedAt = new Date().toISOString();
-    await writeState(state);
   }
 
   private async switchTo(id: string): Promise<void> {
@@ -910,7 +874,7 @@ export class IdeBridge {
               if (choice.model) {
                 const { session } = await this.current();
                 await aiSessionCommand(session.id, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
-              } else await this.resolveModel(this.requireSession());
+              } else await resolveSessionModel(this.requireSession());
             } finally { this.quietOutput -= 1; }
             await this.prepareRoute().catch(() => undefined);
             await this.emitSession();
