@@ -96,19 +96,21 @@ export async function writeState(state: HarnessState): Promise<void> {
     capInvocations(next);
 
     // 1. Transcripts first: a session must never be listed before it is readable.
-    const diskSessionIds = new Set((disk?.sessions ?? []).map((session) => session.id));
     for (const session of persisted) {
       const transcript = taken.sessions.get(session.id)!.transcript;
       const before = baseline?.sessions.get(session.id);
-      const draft = diskSessionIds.has(session.id) ? drafts?.get(session.id) : undefined;
+      // Stored when this copy read it and gone now: deleted elsewhere. The
+      // index merge drops it (mergeById); its transcript stays gone too.
+      if (before && disk && !diskIds.has(session.id)) continue;
+      const draft = diskIds.has(session.id) ? drafts?.get(session.id) : undefined;
       let changed: boolean;
       // baselineOf shares an unchanged transcript with the baseline.
-      if (before && diskSessionIds.has(session.id)) changed = before.transcript !== transcript;
+      if (before && diskIds.has(session.id)) changed = before.transcript !== transcript;
       // A draft stored elsewhere since this copy read it: only a transcript
       // this process changed is its to write; the stored one is newer.
       else if (draft) changed = !sameData(draft.transcript, transcript);
-      // New here, or removed elsewhere and re-added by this change: compare
-      // with what is actually stored so nothing is written needlessly or lost.
+      // New here: compare with what is actually stored so nothing is
+      // written needlessly or lost.
       else changed = !sameData(await readSessionTranscript(session.id), transcript);
       if (!changed) continue;
       await writeSessionTranscript(held, session.id, transcript, { parentSessionId: session.parentSessionId, frozen: true });

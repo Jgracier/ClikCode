@@ -54,7 +54,8 @@ function mergeAccount(baseline: AiHarnessAccount | undefined, working: AiHarness
 /** Entity-level three-way merge. Records this process did not touch are taken
  * from disk, so a stale snapshot can never erase another terminal's work.
  * Removing a record is still expressed: present in the baseline and absent
- * from the working copy means a deliberate delete. */
+ * from the working copy means a deliberate delete -- and present in the
+ * baseline but absent from disk means someone else deleted it, which stands. */
 function mergeById<T extends Identified>(
   baseline: readonly T[], working: readonly T[], disk: readonly T[],
   mergeRecordFields: (baseline: T | undefined, working: T, disk: T | undefined) => T = (_before, after) => after,
@@ -68,6 +69,9 @@ function mergeById<T extends Identified>(
   const merged = new Map(disk.map((item) => [item.id, item]));
   for (const id of before.keys()) if (!workingIds.has(id)) merged.delete(id);
   for (const item of working) {
+    // Present in the baseline and gone from disk: deleted elsewhere. A stale
+    // copy changing a field of it must not bring it back.
+    if (before.has(item.id) && !merged.has(item.id)) continue;
     const previous = before.get(item.id) ?? (merged.has(item.id) ? drafts?.get(item.id) : undefined);
     if (previous === undefined) merged.set(item.id, item);
     else if (!sameData(previous, item)) merged.set(item.id, mergeRecordFields(previous, item, merged.get(item.id)));

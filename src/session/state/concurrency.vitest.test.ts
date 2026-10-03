@@ -6,6 +6,7 @@ import type { HarnessSession } from '../model.js';
 import { readState } from './read.js';
 import { writeState } from './write.js';
 import { runChild } from './testing/concurrency.js';
+import { listStoredSessionIds } from '../store/records.js';
 
 const now = () => new Date().toISOString();
 const message = (content: string, role: 'user' | 'assistant' = 'user') => ({ role, content });
@@ -62,4 +63,32 @@ describe('one process writing the same state twice at once', () => {
     }
     expect(wrong).toBe(0);
   }, 120_000);
+});
+
+describe('a chat deleted by one process', () => {
+  it('stays deleted when another process with an older snapshot changes it', async () => {
+    await freshHome();
+    const setup = await readState();
+    setup.sessions.push(chat('x', [message('hello'), message('hi', 'assistant')]), chat('y', [message('other')]));
+    await writeState(setup);
+
+    const deleter = await readState();
+    const stale = await readState();
+    deleter.sessions = deleter.sessions.filter((item) => item.id !== 'x');
+    await writeState(deleter);
+
+    const kept = stale.sessions.find((item) => item.id === 'x')!;
+    kept.title = 'renamed in the stale window';
+    kept.messages = [...kept.messages!, message('late')];
+    stale.sessions.find((item) => item.id === 'y')!.title = 'still applied';
+    await writeState(stale);
+    // And again: the stale copy keeps writing, it still stays deleted.
+    kept.title = 'again';
+    await writeState(stale);
+
+    const after = await readState();
+    expect(after.sessions.map((item) => item.id)).toEqual(['y']);
+    expect(after.sessions[0]!.title).toBe('still applied');
+    expect(await listStoredSessionIds()).toEqual(['y']);
+  });
 });
