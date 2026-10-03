@@ -202,6 +202,10 @@ export interface AiLocalHarnessDefinition {
   loginCapturable?: boolean;
   /** See the catalog (packages/clikrouter/src/ai-local-harness.ts). */
   titleSource?: 'vendor' | 'none';
+  defaultModel?: string;
+  profileExtraEnv?: Readonly<Record<string, string>>;
+  loginVerifiedByIdentity?: boolean;
+  apiKeySettings?: { path: string; set: Readonly<Record<string, string>> };
   turboFit?: boolean;
   statusArgv?: readonly string[];
   logoutArgv?: readonly string[];

@@ -27,7 +27,8 @@ import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harness/accounts/labels.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
 import { authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
-import { captureMistralVibeCredential } from '../harness/accounts/mistral-vibe-identity.js';
+import { vendorCredentialCapture } from '../harness/accounts/vendor-identity.js';
+import { profileExtraEnvironment } from '../harness/transport/profile-environment.js';
 
 // emitHarnessOutput is defined in ai.ts (the HTTP-server-adjacent JSON/panel
 // output helper) -- passed in rather than imported to avoid a circular
@@ -133,9 +134,10 @@ export async function syncAccountIdentityAfterLogin(
   // remember to do either around this call.
   account.status = 'ready';
   account.signedInAt = new Date().toISOString();
-  if (harness.command === 'vibe' && account.nativeProfile?.path) {
-    if (!await captureMistralVibeCredential(account.nativeProfile.path)) {
-      throw new Error('Mistral Vibe login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not updated.');
+  const captureCredential = vendorCredentialCapture(harness);
+  if (captureCredential && account.nativeProfile?.path) {
+    if (!await captureCredential(account.nativeProfile.path)) {
+      throw new Error(`${harness.displayName} login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not updated.`);
     }
   }
   const derived = await deriveAccountLabel(harness, account.nativeProfile?.path);
@@ -236,20 +238,18 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   // both vars set, agy printed its own real OAuth URL under its own
   // dedicated client id -- not gcloud's -- instead of silently succeeding
   // via the shared keyring.
-  const extraEnv: Record<string, string> = {};
-  if (harness.command === 'antigravity' && profilePath) {
-    extraEnv.DBUS_SESSION_BUS_ADDRESS = 'unix:path=/nonexistent';
-    extraEnv.XDG_RUNTIME_DIR = join(profilePath, 'runtime');
-  }
+  // The catalog declares these (profileExtraEnv); Antigravity is the case.
+  const extraEnv = profilePath ? profileExtraEnvironment(harness, profilePath) : undefined;
   const nativeProfile = profilePath && harness.profileEnv
-    ? { env: harness.profileEnv, path: profilePath, ...(Object.keys(extraEnv).length ? { extraEnv } : {}) }
+    ? { env: harness.profileEnv, path: profilePath, ...(extraEnv ? { extraEnv } : {}) }
     : undefined;
-  if (harness.command === 'vibe' && profilePath) {
+  const captureCredential = vendorCredentialCapture(harness);
+  if (captureCredential && profilePath && harness.profileEnv) {
     for (const previous of state.accounts.filter((account) => account.provider === harness.provider && !account.nativeProfile)) {
       const previousPath = join(harnessStatePath(), '..', 'profiles', harness.command, previous.id);
       touched.add(previousPath);
       await mkdir(previousPath, { recursive: true, mode: 0o700 });
-      if (await captureMistralVibeCredential(previousPath)) previous.nativeProfile = { env: 'VIBE_HOME', path: previousPath };
+      if (await captureCredential(previousPath)) previous.nativeProfile = { env: harness.profileEnv, path: previousPath };
     }
     await writeState(state);
   }
@@ -267,11 +267,11 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
     // error and check independently, via the log Antigravity itself writes
     // on successful auth, whether authentication actually succeeded despite
     // the verification turn failing -- only surface the error if it didn't.
-    if (harness.command !== 'antigravity' || !profilePath) throw error;
+    if (!harness.loginVerifiedByIdentity || !profilePath) throw error;
     loginError = error;
   }
-  if (harness.command === 'vibe' && profilePath && !await captureMistralVibeCredential(profilePath)) {
-    throw new Error('Mistral Vibe login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not added.');
+  if (captureCredential && profilePath && !await captureCredential(profilePath)) {
+    throw new Error(`${harness.displayName} login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not added.`);
   }
   // The vendor's identity decides the account even when the caller supplied
   // a label. Skipping this for explicit labels created duplicate sign-ins of

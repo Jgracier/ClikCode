@@ -32,6 +32,15 @@ function copilotGhShimDirectory(): string | undefined {
   } catch { return undefined; } // fail-open-ok: no shim leaves Copilot as it was, not broken
 }
 
+/** What a new account profile adds to its environment beyond the profile
+ * root (the catalog's profileExtraEnv), with `{profile}/...` resolved under
+ * that profile's path. Undefined when the harness declares nothing. */
+export function profileExtraEnvironment(harness: AiLocalHarnessDefinition, profilePath: string): Record<string, string> | undefined {
+  const declared = Object.entries(harness.profileExtraEnv ?? {});
+  if (!declared.length) return undefined;
+  return Object.fromEntries(declared.map(([name, value]) => [name, value.startsWith('{profile}/') ? join(profilePath, value.slice('{profile}/'.length)) : value]));
+}
+
 /** The one place that turns an account's nativeProfile into an actual
  * environment object -- every call site used to build `{ [env]: path }`
  * directly, nine of them, which meant nativeProfile.extraEnv (needed only

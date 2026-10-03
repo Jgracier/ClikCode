@@ -35,7 +35,7 @@ export function newConversationSession(
     accountId: isClikCodeAgent(source) ? null : source.accountId ?? null,
     provider: source.provider,
     model: source.provider
-      ? state.providerSettings[source.provider]?.model ?? (source.nativeHarness === 'claude' ? 'opus' : null)
+      ? state.providerSettings[source.provider]?.model ?? (source.nativeHarness ? localHarnessForCommand(source.nativeHarness)?.defaultModel ?? null : null)
       : null,
     ...(!isClikCodeAgent(source) && source.nativeHarness ? { nativeHarness: source.nativeHarness } : {}),
     ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),

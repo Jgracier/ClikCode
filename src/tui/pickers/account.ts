@@ -163,21 +163,21 @@ async function addApiKeyAccount(rl: HarnessPrompter, harness: AiLocalHarnessDefi
   const envName = (entered || suggested).toUpperCase();
   if (!/^[A-Z][A-Z0-9_]*$/.test(envName)) throw new Error('environment variable name must be letters, numbers, and underscores only');
   if (!process.env[envName]) throw new Error(`${envName} is not set in this shell -- export it first, then try again. ClikCode never asks for or stores the raw key itself, only this reference.`);
-  // Antigravity CLI needs one more thing beyond the env var itself: its
-  // own settings.json must set modelProvider to "gemini", or it ignores
-  // GEMINI_API_KEY entirely and falls back to OAuth (confirmed directly:
-  // a maintainer's exact recipe on the now-closed antigravity-cli#632, plus
-  // real user reports on #78 of the env var alone having no effect without
-  // it). No isolated profile exists for this harness (confirmed: no
-  // profileEnv), so this is always the one real, global settings file --
-  // merged in, not overwritten, so any of the user's other settings
-  // (colorScheme, permissions, trustedWorkspaces, etc.) survive untouched.
-  if (harness.command === 'antigravity') {
-    const settingsPath = join(homedir(), '.gemini', 'antigravity-cli', 'settings.json');
+  // Some vendors ignore the key's variable until their own settings file
+  // says to use it (the catalog's apiKeySettings): Antigravity CLI falls back
+  // to OAuth unless modelProvider is "gemini" (a maintainer's exact recipe on
+  // the now-closed antigravity-cli#632, plus real user reports on #78 of the
+  // env var alone having no effect without it). An API-key account has no
+  // isolated profile, so this is the one real, global settings file -- merged
+  // in, not overwritten, so the user's other settings (colorScheme,
+  // permissions, trustedWorkspaces, etc.) survive untouched.
+  if (harness.apiKeySettings) {
+    const settingsPath = join(homedir(), harness.apiKeySettings.path.replace(/^~\//, ''));
     let settings: Record<string, unknown> = {};
     try { settings = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>; } catch { /* no existing settings file yet */ }
-    if (settings.modelProvider !== 'gemini') {
-      settings.modelProvider = 'gemini';
+    const missing = Object.entries(harness.apiKeySettings.set).filter(([key, value]) => settings[key] !== value);
+    if (missing.length) {
+      for (const [key, value] of missing) settings[key] = value;
       await mkdir(join(settingsPath, '..'), { recursive: true });
       await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
     }

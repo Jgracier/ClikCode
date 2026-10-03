@@ -369,6 +369,25 @@ export interface AiLocalHarnessDefinition {
    * with a bare title line that cannot be told from the answer). Absent: the
    * first turn asks the model for one. */
   titleSource?: 'vendor' | 'none';
+  /** The model a new chat and an unset session start on, when the harness
+   * offers it, instead of the first one its discovery lists (Claude Code:
+   * `opus`). */
+  defaultModel?: string;
+  /** Environment a new account profile carries beyond its root, on every
+   * spawn under it; `{profile}/...` is a path inside that profile. Antigravity
+   * checks the OS keyring (tied to the D-Bus login session, not $HOME) before
+   * its own sign-in, so without these every profile resolved to one shared
+   * identity; making the keyring unreachable for that one child process makes
+   * it fall through to its native browser sign-in (see commands/account.ts). */
+  profileExtraEnv?: Readonly<Record<string, string>>;
+  /** The login command can exit non-zero after a successful sign-in (its
+   * "login" is a real turn, which can hit a quota), so a failed exit is only
+   * a failed login when the account's identity cannot be read afterwards. */
+  loginVerifiedByIdentity?: boolean;
+  /** Settings an API-key account needs written into the vendor's own
+   * settings file (`~/`-relative), merged into whatever is there: Antigravity
+   * ignores GEMINI_API_KEY unless `modelProvider` is `gemini`. */
+  apiKeySettings?: { path: string; set: Readonly<Record<string, string>> };
   /** Serves TurboFit local models through its own provider plugin
    * (src/harness/accounts/hermes-discovery.ts): the model picker offers them,
    * and a turn on one starts its runtime first. */
@@ -651,7 +670,7 @@ const HARNESS_INSTALLERS = {
 } as const satisfies Readonly<Record<string, AiHarnessInstaller>>;
 
 const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
-  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', titleSource: 'vendor', surface: 'terminal', tier: 'primary', transport: 'acp', acp: { binary: 'claude-agent-acp', npmPackage: '@agentclientprotocol/claude-agent-acp@0.84.0', argv: [], inheritCliOptions: false, listsModels: false, effortConfigId: 'effort', permissionModeIds: { ask: 'default', auto: 'auto', bypass: 'bypassPermissions' }, legacyCliSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', authFiles: [{ path: '${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json' }], authEnv: ['ANTHROPIC_API_KEY'], npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'] }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'] } }, turnEnv: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinFormat: 'stream-json', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'claude', provider: 'anthropic', displayName: 'Claude Code', titleSource: 'vendor', defaultModel: 'opus', surface: 'terminal', tier: 'primary', transport: 'acp', acp: { binary: 'claude-agent-acp', npmPackage: '@agentclientprotocol/claude-agent-acp@0.84.0', argv: [], inheritCliOptions: false, listsModels: false, effortConfigId: 'effort', permissionModeIds: { ask: 'default', auto: 'auto', bypass: 'bypassPermissions' }, legacyCliSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'CLAUDE.md', nativeSlashPassthrough: true, customCommandDirs: ['.claude/commands', '~/.claude/commands'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'claude', authFiles: [{ path: '${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json' }], authEnv: ['ANTHROPIC_API_KEY'], npmPackage: '@anthropic-ai/claude-code', loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'manual', '--permission-prompts', 'none'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions', '--permission-prompts', 'none', '--allow-dangerously-skip-permissions'] }, auto: { argv: ['--permission-mode', 'auto', '--permission-prompts', 'none'] } }, turnEnv: { CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' }, profileEnv: 'CLAUDE_CONFIG_DIR', turn: { startArgv: ['-p', '--verbose', '--input-format', 'stream-json', '--output-format', 'stream-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptInput: 'stdin', stdinFormat: 'stream-json', stdinArgv: [], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Grok Build speaks Claude Code's stream-json shape exactly -- verified live
   // against `grok -p --output-format streaming-messages-json`, whose first
   // line is {"type":"system","subtype":"init","session_id":…} and whose last
@@ -761,7 +780,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // stdio: 'inherit' via suspend/resume, same as Claude Code/Codex --
   // real output on screen, including the actual prompt a fresh user needs
   // to complete it, at the cost of the raw JSON dump this doesn't hide.
-  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', planMode: { option: 'mode', value: 'plan' }, surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'antigravity', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'agy', installer: HARNESS_INSTALLERS.antigravity, loginArgv: ['-p', '/help', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
+  { command: 'antigravity', provider: 'antigravity', displayName: 'Antigravity CLI', planMode: { option: 'mode', value: 'plan' }, surface: 'terminal', tier: 'primary', transport: 'structured-cli', integration: 'structured', parser: 'antigravity', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, profileExtraEnv: { DBUS_SESSION_BUS_ADDRESS: 'unix:path=/nonexistent', XDG_RUNTIME_DIR: '{profile}/runtime' }, loginVerifiedByIdentity: true, apiKeySettings: { path: '~/.gemini/antigravity-cli/settings.json', set: { modelProvider: 'gemini' } }, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'agy', installer: HARNESS_INSTALLERS.antigravity, loginArgv: ['-p', '/help', '--output-format', 'json'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--dangerously-skip-permissions'] } }, profileEnv: 'HOME', turn: { startArgv: ['--output-format', 'stream-json'], promptArgvPrefix: ['-p'], resumeIdPrefix: ['--conversation'], output: 'json-lines', responseFields: ['text', 'result', 'response'] }, session: { resumeIdPrefix: ['--conversation'], continueArgv: ['--continue'] } },
   // Pi signs in only inside its own session (`/login`, OAuth or a key); `pi
   // auth` just prints or checks credentials. So its sign-in opens Pi itself.
   { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginHint: 'type /login and pick a provider', authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
@@ -845,7 +864,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // text-only stub: --output streaming is documented as "newline-delimited
   // JSON per message", and its agents (ask / smart-approve / auto-approve)
   // map onto the three permission modes without inventing anything.
-  { command: 'vibe', provider: 'mistral-vibe', displayName: 'Mistral Vibe', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { binary: 'vibe-acp', argv: [], listsModels: true, usageTotals: 'session', cumulativeChunks: true }, experimental: true, localAuth: ['api-key', 'vendor-cli'], binary: 'vibe', installer: HARNESS_INSTALLERS.vibe, loginArgv: ['--setup'], authFiles: [{ path: '${VIBE_HOME:-~/.vibe}/.env', contains: 'MISTRAL_API_KEY=', removeLine: true }], authEnv: ['MISTRAL_API_KEY'], modelArgvPrefix: [], workspaceArgvPrefix: ['--workdir'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--agent', 'ask'] }, bypass: { argv: ['--auto-approve'] }, auto: { argv: ['--smart-approve'] } }, turn: { startArgv: ['--output', 'streaming'], promptArgvPrefix: ['--prompt'], output: 'json-lines', responseFields: ['text', 'content', 'response', 'result'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['-c'] } },
+  { command: 'vibe', provider: 'mistral-vibe', displayName: 'Mistral Vibe', surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { binary: 'vibe-acp', argv: [], listsModels: true, usageTotals: 'session', cumulativeChunks: true }, experimental: true, localAuth: ['api-key', 'vendor-cli'], binary: 'vibe', installer: HARNESS_INSTALLERS.vibe, loginArgv: ['--setup'], authFiles: [{ path: '${VIBE_HOME:-~/.vibe}/.env', contains: 'MISTRAL_API_KEY=', removeLine: true }], authEnv: ['MISTRAL_API_KEY'], profileEnv: 'VIBE_HOME', modelArgvPrefix: [], workspaceArgvPrefix: ['--workdir'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--agent', 'ask'] }, bypass: { argv: ['--auto-approve'] }, auto: { argv: ['--smart-approve'] } }, turn: { startArgv: ['--output', 'streaming'], promptArgvPrefix: ['--prompt'], output: 'json-lines', responseFields: ['text', 'content', 'response', 'result'] }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['-c'] } },
   // OpenHands CLI: `openhands acp` is documented; headless is `--headless`
   // with the task in `-t`. Its JSON event mode is left undeclared.
   // Checked against the real CLI (OpenHands SDK v1.21.0, `uv tool install
@@ -879,11 +898,10 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
 ];
 
 /** Every native-login account gets its own vendor configuration root by
- * default. Harnesses with a documented root keep it; the remaining CLIs use
- * an isolated HOME, with Mistral Vibe's dedicated VIBE_HOME. */
+ * default. Harnesses with a documented root declare it; the remaining CLIs
+ * use an isolated HOME. */
 export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = CATALOG_HARNESSES.map((harness) => {
   if (harness.profileEnv) return harness;
-  if (harness.command === 'vibe') return { ...harness, profileEnv: 'VIBE_HOME' };
   return { ...harness, profileEnv: 'HOME', profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH };
 });
 

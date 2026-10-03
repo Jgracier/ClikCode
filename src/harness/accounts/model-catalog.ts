@@ -313,7 +313,7 @@ export async function resolveNativeModel(
   account?: AiHarnessAccount,
 ): Promise<string | undefined> {
   const catalog = await nativeModelCatalog(harness, account);
-  if (harness.command === 'claude' && catalog.models.includes('opus')) return 'opus';
+  if (harness.defaultModel && catalog.models.includes(harness.defaultModel)) return harness.defaultModel;
   const configured = catalog.configured?.trim();
   if (configured) return configured;
   return catalog.models.find((model) => model.trim().length > 0);

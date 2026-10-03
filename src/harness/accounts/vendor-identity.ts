@@ -18,7 +18,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
-import { mistralVibeAccountEmail } from './mistral-vibe-identity.js';
+import { captureMistralVibeCredential, mistralVibeAccountEmail } from './mistral-vibe-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -222,7 +222,19 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   antigravity: (_harness, profilePath) => antigravityEmail(profilePath),
 };
 
-/** The signed-in email for one of the harnesses above, or undefined. */
+/** Harnesses whose login can leave the API key outside the account's own
+ * profile: this copies it in, true when it did. Mistral Vibe's `--setup` may
+ * keep it in the OS keyring, shared by every profile; it is written into the
+ * profile's own .env instead. */
+const CREDENTIAL_CAPTURE: Readonly<Partial<Record<string, (profilePath: string) => Promise<boolean>>>> = {
+  vibe: captureMistralVibeCredential,
+};
+
+export function vendorCredentialCapture(harness: AiLocalHarnessDefinition): ((profilePath: string) => Promise<boolean>) | undefined {
+  return CREDENTIAL_CAPTURE[harness.command];
+}
+
+/** The signed-in email for one of the harnesses in IDENTITY, or undefined. */
 export async function vendorAccountEmail(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
   try {
     return await IDENTITY[harness.command]?.(harness, profilePath);
