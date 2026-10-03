@@ -61,7 +61,8 @@ async function undoAgentTurn(stateDir: string, session: HarnessSession, workspac
   return { ...result, text: describe(result, workspace, 'Nothing to undo: ClikCode\'s agent has recorded no file edits in this conversation.') };
 }
 
-function conflictReason(current: string | undefined, changes: ReadonlyArray<{ change?: string; omitted?: number }>): string {
+function conflictReason(current: string | undefined, changes: ReadonlyArray<{ change?: string; omitted?: number; priorUnknown?: boolean }>): string {
+  if (changes.some((change) => change.priorUnknown)) return 'the harness reported only what it wrote here, not what the file held before, so it cannot be put back';
   if (changes.some((change) => change.omitted)) return 'the harness reported this change only in part, so it cannot be reversed exactly';
   if (current === undefined) return changes.some((change) => change.change === 'delete') ? 'the turn deleted it and the harness did not report its content' : 'it no longer exists';
   return 'changed since that turn; not overwritten';

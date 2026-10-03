@@ -16,6 +16,10 @@ export interface FileDiff {
   removals: number;
   /** Diff lines left out to bound `lines`. */
   omitted?: number;
+  /** The harness reported only what it wrote, not what was there before (a
+   * vendor's write tool): the file may have been new or overwritten, and
+   * what it held cannot be put back. */
+  priorUnknown?: boolean;
 }
 
 /** A diff as an event carries it, from any build: a list of files now, the
@@ -158,8 +162,12 @@ export function diffLines(before: string, after: string): DiffOp[] {
 
 /** An edit as the files it changed -- one here -- which is what an activity
  * event carries. `numbered` when before/after are the whole file. */
-export function eventDiff(before: string, after: string, options: { path?: string; numbered?: boolean } = {}): FileDiff[] {
-  return [fileDiff(before, after, { ...options, ...(before ? {} : { change: 'add' as const }) })];
+export function eventDiff(before: string, after: string, options: { path?: string; numbered?: boolean; priorUnknown?: boolean } = {}): FileDiff[] {
+  const { priorUnknown, ...rest } = options;
+  // Shown as new either way; a write whose prior content was never reported
+  // also says so, and is never undone by deleting it.
+  const diff = fileDiff(before, after, { ...rest, ...(before ? {} : { change: 'add' as const }) });
+  return [priorUnknown ? { ...diff, priorUnknown: true } : diff];
 }
 
 /** The same from a unified diff a vendor already computed (Codex's file

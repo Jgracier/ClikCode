@@ -125,7 +125,9 @@ export function editDiffFromInput(input: JsonRecord | undefined): HarnessActivit
   const diff = [...replace(input), ...edits];
   if (diff.length) return diff;
   const content = first(input, ['content', 'file_text', 'contents']);
-  return content !== undefined && path ? eventDiff('', content, { ...at, numbered: true }) : undefined;
+  // A write's input is the new file only: whether it replaced something, and
+  // what, the vendor does not say.
+  return content !== undefined && path ? eventDiff('', content, { ...at, numbered: true, priorUnknown: true }) : undefined;
 }
 
 /** What every parser says about a tool call from its name and input: its
