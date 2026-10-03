@@ -4,6 +4,8 @@
  * written at an address, and a frame writes only the rows that changed. */
 
 import chalk from 'chalk';
+import type { LoginLink, SignInScreen } from '../gateway/login/vendor-sign-in.js';
+import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import { pastedText } from './keys.js';
 import { backslashNewline, composerVerticalMove, editComposer, editWaitingComposer } from './composer-edit.js';
 import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, type PaletteEntry } from './command-palette.js';
@@ -152,6 +154,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** A link sign-in's link and code, drawn above the waiting band while it
    * runs (linkWait). */
   private signInLines: string[] = [];
+  /** What the waiting composer is for while a sign-in asks for a code or a
+   * key: Enter hands the draft here instead of to the turn. */
+  private signInInput?: { secret: boolean; submit: (text: string) => void };
   /** collapseToolRuns over activityEntries, redone only when they change. */
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
   /** The calls still open: the status line names the newest (toolStatus). */
@@ -380,6 +385,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.cancel?.(action === 'cancel-edit');
     } else if (key === '\u001a') {
       this.suspendToShell();
+    } else if (key === '\r' && this.signInInput) {
+      const text = turn.draft.trim();
+      if (!text) return;
+      turn.draft = '';
+      turn.cursor = 0;
+      this.signInInput.submit(text);
+      this.updateWaiting();
     } else if (key === '\r') {
       const continued = turn.submit ? backslashNewline(turn.draft, turn.cursor) : undefined;
       if (continued) {
@@ -393,7 +405,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.draft = '';
       turn.cursor = 0;
       this.submitWaiting(text);
-    } else if (turn.submit) {
+    } else if (turn.submit || this.signInInput) {
       const edited = editWaitingComposer(turn.draft, turn.cursor, key);
       if (edited.changed) {
         turn.draft = edited.value;
@@ -893,30 +905,74 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
-  /** A link sign-in on screen: its link and code above the waiting band,
-   * Esc cancelling it. Inside a running turn (a sign-in the turn asked for)
-   * it borrows the turn's band and Esc rather than starting a wait, which
-   * would reset the turn; stop() gives them back. */
-  linkWait(label: string, cancel: () => void): { show(lines: readonly string[]): void; stop(): void } {
-    const show = (lines: readonly string[]): void => { this.signInLines = [...lines]; this.updateWaiting(); };
+  /** A vendor sign-in on screen (commands/account.ts withSignIn): its link
+   * and code above the waiting band, a code or key typed into the waiting
+   * composer, a choice in the picker, Esc cancelling it. Inside a running
+   * turn (a sign-in the turn asked for) it borrows the turn's band and Esc
+   * rather than starting a wait, which would reset the turn; stop() gives
+   * them back. */
+  signInScreen(name: string): SignInScreen {
+    const controller = new AbortController();
+    const label = `waiting for you to sign in to ${name} in your browser`;
+    const cancel = (): void => controller.abort();
+    const local = hasLocalDisplay();
+    let opened = false;
+    const show = (link: LoginLink): void => {
+      if (local && !opened) { opened = true; openLoginUrl(link.url); }
+      if (!local) output.write(loginUrlNotice(link.url).clipboard);
+      this.signInLines = [
+        `${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · confirm the code ${chalk.bold(link.code)}` : ''}`,
+        // Its own plain line: the band wraps a link rather than cutting it.
+        link.url,
+        chalk.dim(local ? 'opened in your browser' : 'link copied: open it on this device'),
+      ];
+      this.updateWaiting();
+    };
+    // A code or key typed under the link: the waiting composer takes it, and
+    // the band says what it is for.
+    const ask = (prompt: string, secret: boolean): Promise<string> => new Promise((resolve) => {
+      const live = this.turn;
+      if (live) { live.draft = ''; live.cursor = 0; live.label = `${prompt} · type it and press Enter`; }
+      this.signInInput = {
+        secret,
+        submit: (text) => {
+          this.signInInput = undefined;
+          if (this.turn) this.turn.label = label;
+          resolve(text);
+        },
+      };
+      this.updateWaiting();
+    });
     const turn = this.turn;
-    if (!turn) {
-      this.startWaiting(label, () => cancel());
-      return { show, stop: () => { this.signInLines = []; this.stopWaiting(); } };
-    }
-    const saved = { label: turn.label, cancel: turn.cancel, cancelled: turn.cancelled };
-    turn.label = label;
-    turn.cancel = () => cancel();
-    turn.cancelled = false;
-    this.updateWaiting();
+    const saved = turn ? { label: turn.label, cancel: turn.cancel, cancelled: turn.cancelled } : undefined;
+    // A choice is the picker. Outside a turn the wait is this sign-in's own,
+    // so it steps aside for the picker and comes back after.
+    const choose = async (title: string, choices: readonly string[]): Promise<number | undefined> => {
+      if (!turn) this.stopWaiting(false);
+      try {
+        return await this.select(title, choices.map((choice, index) => ({ label: choice, value: index })));
+      } finally {
+        if (!turn && !controller.signal.aborted) this.startWaiting(label, cancel);
+      }
+    };
+    if (turn) {
+      turn.label = label;
+      turn.cancel = cancel;
+      turn.cancelled = false;
+      this.updateWaiting();
+    } else this.startWaiting(label, cancel);
     return {
-      show,
+      signal: controller.signal, show, ask, choose,
       stop: () => {
         this.signInLines = [];
+        this.signInInput = undefined;
+        if (!turn) { if (this.turn) this.stopWaiting(); return; }
         if (this.turn !== turn) { this.schedulePaint(); return; }
-        turn.label = saved.label;
-        turn.cancel = saved.cancel;
-        turn.cancelled = saved.cancelled;
+        turn.label = saved!.label;
+        turn.cancel = saved!.cancel;
+        turn.cancelled = saved!.cancelled;
+        turn.draft = '';
+        turn.cursor = 0;
         this.updateWaiting();
       },
     };
@@ -1333,6 +1389,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * Without this a command was invisible AND unavailable while an answer
    * streamed; `/model` went to the model as the word "/model". */
   private paintWaiting(turn: WaitingTurn): void {
+    if (this.signInInput) {
+      this.paint(this.signInInput.secret ? '•'.repeat(turn.draft.length) : turn.draft, [], 0, '› ', turn.cursor);
+      return;
+    }
     const found = turn.command ? commandPaletteMatches(turn.draft, this.paletteCommands) : [];
     // Commands while nothing has been typed past the name; the argument's
     // own values once it has. A bare hint row is not worth the space mid-turn.
@@ -2386,7 +2446,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   async question(
     prompt: string,
     commands: readonly PaletteEntry[] = [],
-    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; signal?: AbortSignal },
+    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; signal?: AbortSignal; secret?: boolean },
   ): Promise<string> {
     // Kept for the turn this prompt's answer starts: a turn in flight offers
     // the same commands, and this is where they are known.
@@ -2454,7 +2514,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.paletteActive = false;
         // Palette closure and ordinary typing are both complete frames, so
         // the transcript immediately reclaims any previously reserved rows.
-        this.paint(value, [], 0, prompt, cursor);
+        // A secret (an API key typed into a sign-in) is drawn as dots.
+        this.paint(settings?.secret ? '•'.repeat(value.length) : value, [], 0, prompt, cursor);
       };
       let finished = false;
       /** The prompt is over, however it ended: the keyboard and the read
@@ -2476,7 +2537,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // The submitted line is the conversation's now. Leaving it in the
         // composer made the next idle check look like a draft still in progress.
         this.composer = { ...this.composer, text: '' };
-        if (answer && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
+        if (answer && !settings?.secret && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
         resolveQuestion(answer);
       };
       // Opt-in, not a default: this same question() drives the persistent

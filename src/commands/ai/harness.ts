@@ -14,7 +14,7 @@ import { readState } from '../../session/state/read.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
 import { modelIdFromLabel, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
-import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withVendorTerminal } from '../account.js';
+import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withSignIn } from '../account.js';
 import { deriveAccountLabel, nameAccount } from '../../harness/accounts/labels.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
@@ -122,7 +122,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
         || (!harness.statusArgv && !hasAuthEvidence(harness))
         || await harnessNeedsLogin(harness, environment)));
     if (shouldCheckLogin) {
-      await withVendorTerminal(TERMINAL.active, harness, () => loginNativeHarness(harness, environment));
+      await withSignIn(TERMINAL.active, harness.displayName, () => loginNativeHarness(harness, environment));
       // Same identity check /account's "add another account" flow uses --
       // a plain /provider login deserves the real dedup-by-identity logic,
       // not a weaker "only rename if it still looks like a placeholder"

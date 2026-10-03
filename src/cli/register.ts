@@ -12,7 +12,7 @@ import { sendScriptedTurn } from '../worker/scripted-send.js';
 import { aiPermissions } from '../tui/pickers/permissions.js';
 import { aiSessionResume } from '../commands/ai/interactive.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
-import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor, announceBareInteractiveLogin } from '../commands/account.js';
+import { aiAccountAdd, aiAccountLogin, aiAccountLogout, aiAccountProviders, aiAccountRemove, aiAccountStatus, aiAccountsList, aiDoctor } from '../commands/account.js';
 import { localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { startOrResumeChat } from '../commands/ai/harness.js';
 import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList } from '../commands/ai/sessions.js';
@@ -48,8 +48,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   accounts.command('login <harness>').description('Install if necessary, then run the harness’s official local login flow')
     .option('--label <label>', 'Local account label')
     .action(async (harness, options) => {
-      const definition = localHarnessForCommand(harness);
-      if (definition) announceBareInteractiveLogin(definition);
       await aiAccountLogin(harness, options.label);
     });
   accounts.command('status <labelOrId>').description('Run the vendor’s declared account-status check').action(aiAccountStatus);

@@ -69,7 +69,8 @@ export interface HarnessPrompter {
   question(
     prompt: string,
     commands?: readonly PickerOption<string>[],
-    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string },
+    /** `secret`: drawn as dots and kept out of history (an API key). */
+    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; secret?: boolean },
   ): Promise<string>;
   select?<T>(
     title: string,
@@ -91,6 +92,11 @@ export interface HarnessPrompter {
   approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'>;
   activityEvent?(event: HarnessActivityEvent): void;
   panel?(title: string, body: string): void;
+  /** A line in the conversation outside any turn's own output. */
+  activity?(message: string): void;
+  /** Where a vendor sign-in shows its link, code and questions
+   * (commands/account.ts withSignIn): the CLI's band, the VS Code card. */
+  signInScreen?(name: string): import('../gateway/login/vendor-sign-in.js').SignInScreen;
   /** A one-line confirmation under the composer that clears itself:
    * "Effort set to High". Where nothing can show one, nothing is said. */
   notice?(text: string): void;

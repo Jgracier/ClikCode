@@ -20,7 +20,7 @@ import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } f
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { writeState } from '../session/state/write.js';
-import { syncAccountIdentityAfterLogin, withVendorTerminal } from '../commands/account.js';
+import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { closePersistentTransport, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
@@ -424,7 +424,7 @@ export async function sendVendorTurn(input: {
           // detached process, and could never finish.
           const signedIn = await (prompter.signIn
             ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName })
-            : withVendorTerminal(prompter, signIn, () => loginNativeHarness(signIn, environment), signInName))
+            : withSignIn(prompter, signInName, () => loginNativeHarness(signIn, environment)))
             .then(() => true, (error: unknown) => {
               // The turn then ends on its own authentication error, which
               // says what to do; this says why the sign-in did not fix it.

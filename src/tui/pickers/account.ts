@@ -15,7 +15,7 @@ import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accounts/account-usage.js';
 import { NATIVE_USAGE_PROBES } from '../../harness/accounts/usage-probes.js';
-import { aiAccountAdd, aiAccountLogin, aiAccountRemove, signOutAccount, syncAccountIdentityAfterLogin, withVendorTerminal } from '../../commands/account.js';
+import { aiAccountAdd, aiAccountLogin, aiAccountRemove, signOutAccount, syncAccountIdentityAfterLogin, withSignIn } from '../../commands/account.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
 import { accountPickerOptions, type ProviderAccountChoice } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -245,7 +245,7 @@ export async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocal
   // opens /dev/tty directly) has no business running while ClikCode's own
   // raw-mode/alt-screen state is still active competing for the same
   // terminal.
-  return withVendorTerminal(rl instanceof TerminalHarnessPrompter ? rl : undefined, harness, () => aiAccountLogin(harness.command));
+  return withSignIn(rl, harness.displayName, () => aiAccountLogin(harness.command));
 }
 
 /** Maintenance actions are deliberately narrow label/value pairs rather than
@@ -273,7 +273,7 @@ export async function manageAccountAction(rl: HarnessPrompter, accountId: string
   if (action === 'disconnect') {
     await signOutAccount(account.id);
   } else if (action === 'reauthenticate' && harness.loginArgv) {
-    await withVendorTerminal(rl instanceof TerminalHarnessPrompter ? rl : undefined, harness, () => loginNativeHarness(harness, environment));
+    await withSignIn(rl, harness.displayName, () => loginNativeHarness(harness, environment));
     await syncAccountIdentityAfterLogin(harness, account, state);
   }
 }

@@ -547,13 +547,14 @@ function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['con
 
 const compact = (count: number): string => (count < 1000 ? String(count) : count < 1_000_000 ? `${Math.round(count / 1000)}k` : `${(count / 1_000_000).toFixed(1)}M`);
 
-/** A link sign-in in progress: its link opened in the browser, its code to
- * confirm there, and the way out. Nothing is typed into a terminal. */
+/** A sign-in in progress: its link opened in the browser and its code to
+ * confirm there, once the vendor gives one; questions it asks come up as
+ * sheets over it. Cancel ends it. Nothing is typed into a terminal. */
 function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): JSX.Element {
   const [copied, setCopied] = useState(false);
   return (
     <div class="install-card signin-link" role="status" id="sign-in-link">
-      <div class="install-text"><Icon name="key" /> Sign in to {signIn.name} in your browser</div>
+      <div class="install-text"><Icon name="key" /> {signIn.url ? `Sign in to ${signIn.name} in your browser` : `Signing in to ${signIn.name}…`}</div>
       {signIn.code ? (
         <div class="signin-code">
           <span class="muted">Confirm this code there</span>

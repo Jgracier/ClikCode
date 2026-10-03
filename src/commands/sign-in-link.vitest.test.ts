@@ -1,15 +1,16 @@
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { withVendorTerminal, type SignInSurface } from './account.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { withSignIn } from './account.js';
+import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 
-describe.skipIf(process.platform === 'win32')('a link sign-in in the CLI', () => {
+describe.skipIf(process.platform === 'win32')('a sign-in on the prompter\'s own screen', () => {
   let dir: string;
   const display = { DISPLAY: process.env.DISPLAY, WAYLAND_DISPLAY: process.env.WAYLAND_DISPLAY };
   beforeEach(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'clikcode-link-cli-'));
+    dir = await mkdtemp(join(tmpdir(), 'clikcode-sign-in-cli-'));
     // No local browser: nothing may open on the machine running the tests.
     delete process.env.DISPLAY;
     delete process.env.WAYLAND_DISPLAY;
@@ -19,25 +20,24 @@ describe.skipIf(process.platform === 'win32')('a link sign-in in the CLI', () =>
     await rm(dir, { recursive: true, force: true });
   });
 
-  const surface = () => {
+  const prompter = () => {
     const calls: string[] = [];
-    let cancel: (() => void) | undefined;
-    const value: SignInSurface = {
-      startWaiting: (message) => { calls.push(`wait ${message}`); },
-      stopWaiting: () => { calls.push('stop'); },
-      suspend: async () => { calls.push('suspend'); },
-      resume: () => { calls.push('resume'); },
-      activity: (message) => { calls.push(`activity ${message.replace(/\u001b\[[0-9;]*m/g, '')}`); },
-      linkWait: (label, onCancel) => {
-        calls.push(`linkWait ${label}`);
-        cancel = onCancel;
-        return {
-          show: (lines) => { for (const line of lines) calls.push(`show ${line.replace(/\u001b\[[0-9;]*m/g, '')}`); },
-          stop: () => { calls.push('undo'); },
-        };
-      },
+    const controller = new AbortController();
+    const screen: SignInScreen = {
+      signal: controller.signal,
+      show: (link) => { calls.push(`show ${link.url} ${link.code ?? ''}`.trim()); },
+      ask: async (prompt) => { calls.push(`ask ${prompt}`); return ''; },
+      choose: async () => undefined,
+      stop: () => { calls.push('stop'); },
     };
-    return { value, calls, cancel: () => cancel?.() };
+    return {
+      value: {
+        signInScreen: (name: string) => { calls.push(`screen ${name}`); return screen; },
+        activity: (message: string) => { calls.push(`activity ${message.replace(/\u001b\[[0-9;]*m/g, '')}`); },
+      },
+      calls,
+      cancel: () => controller.abort(),
+    };
   };
 
   const vendor = async (wait: number): Promise<string> => {
@@ -47,32 +47,25 @@ describe.skipIf(process.platform === 'win32')('a link sign-in in the CLI', () =>
     return path;
   };
 
-  it('keeps ClikCode on screen and shows the link and code, never handing over the terminal', async () => {
-    const binary = await vendor(0.5);
-    const spec = { command: 'grok', binary, displayName: 'Grok Build', loginArgv: [], loginLink: {} };
-    const { value, calls } = surface();
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    try {
-      await withVendorTerminal(value, spec, () => loginNativeHarness(spec, {}));
-    } finally { stdout.mockRestore(); }
-    expect(calls).not.toContain('suspend');
-    expect(calls[0]).toMatch(/^linkWait waiting for you to sign in to Grok Build/);
-    expect(calls).toContain('show Sign in to Grok Build · confirm the code 5FCB-TTXG');
-    expect(calls).toContain('show https://accounts.x.ai/oauth2/device?user_code=5FCB-TTXG');
-    expect(calls).toContain('undo');
-    expect(calls.at(-1)).toBe('activity signed in to Grok Build');
+  it('shows the link and code on that screen, takes it down, and says how it went', async () => {
+    const spec = { command: 'grok', binary: await vendor(0.5), displayName: 'Grok Build', loginArgv: [] };
+    const { value, calls } = prompter();
+    await withSignIn(value, 'Grok Build', () => loginNativeHarness(spec, {}));
+    expect(calls).toEqual([
+      'screen Grok Build',
+      'show https://accounts.x.ai/oauth2/device?user_code=5FCB-TTXG 5FCB-TTXG',
+      'stop',
+      'activity signed in to Grok Build',
+    ]);
   });
 
-  it('cancels on Esc and says the sign-in did not finish', async () => {
-    const binary = await vendor(30);
-    const spec = { command: 'grok', binary, displayName: 'Grok Build', loginArgv: [], loginLink: {} };
-    const { value, calls, cancel } = surface();
-    const stdout = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    const login = withVendorTerminal(value, spec, () => loginNativeHarness(spec, {}));
+  it('cancels from the screen and says the sign-in did not finish', async () => {
+    const spec = { command: 'grok', binary: await vendor(30), displayName: 'Grok Build', loginArgv: [] };
+    const { value, calls, cancel } = prompter();
+    const login = withSignIn(value, 'Grok Build', () => loginNativeHarness(spec, {}));
     setTimeout(cancel, 1_000);
-    try {
-      await expect(login).rejects.toThrow(/cancelled/);
-    } finally { stdout.mockRestore(); }
+    await expect(login).rejects.toThrow(/cancelled/);
+    expect(calls.at(-2)).toBe('stop');
     expect(calls.at(-1)).toMatch(/sign-in to Grok Build did not finish/);
   });
 });
