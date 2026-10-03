@@ -543,7 +543,7 @@ describe('local harness catalog', () => {
     const redirected = AI_LOCAL_HARNESSES.filter((item) => item.profileEnv === 'HOME');
     expect(redirected.length).toBeGreaterThan(2);
     for (const harness of redirected) {
-      expect(harness.profileEnvPassthrough, harness.command).toEqual(expect.arrayContaining(['GIT_CONFIG_GLOBAL', 'SSH_AUTH_SOCK', 'NPM_CONFIG_USERCONFIG']));
+      expect(harness.profileEnvPassthrough, harness.command).toEqual(expect.arrayContaining(['GIT_CONFIG_GLOBAL', 'SSH_AUTH_SOCK', 'NPM_CONFIG_USERCONFIG', 'NPM_CONFIG_CACHE']));
       for (const name of harness.profileEnvPassthrough!) expect(name in HOME_REDIRECT_ENV_DEFAULTS, name).toBe(true);
     }
     for (const harness of AI_LOCAL_HARNESSES.filter((item) => item.profileEnv !== 'HOME')) expect(harness.profileEnvPassthrough, harness.command).toBeUndefined();
