@@ -7,8 +7,9 @@ import { locateNativeSessionFile } from './registry.js';
 
 /** The title the harness itself gave this thread, or nothing.
  *
- * Claude Code names a chat a turn or two in and writes the name into its own
- * transcript as an `ai-title` record. That is a real title -- what the
+ * For a harness whose catalog entry says `titleSource: 'vendor'`. Claude
+ * Code, the one that does, names a chat a turn or two in and writes the name
+ * into its own transcript as an `ai-title` record. That is a real title -- what the
  * conversation is about -- so ClikCode uses it rather than inventing one. The
  * first-message fallback used for the /resume list deliberately does not apply
  * here: a chat with no vendor title stays unnamed and gets asked for one.
@@ -17,7 +18,7 @@ export async function nativeGeneratedTitle(
   harness: AiLocalHarnessDefinition, nativeId: string | undefined, workspace: string | undefined,
   environment: NativeSessionEnvironment = {},
 ): Promise<string | undefined> {
-  if (harness.command !== 'claude' || !nativeId || !workspace) return undefined;
+  if (harness.titleSource !== 'vendor' || !nativeId || !workspace) return undefined;
   const file = await locateNativeSessionFile(harness, nativeId, workspace, environment);
   if (!file) return undefined;
   // Read the END, not the beginning. Claude writes this record a turn or two
