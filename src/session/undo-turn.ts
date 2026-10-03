@@ -9,15 +9,24 @@
  *    the same code VS Code's "Undo all" uses (agent/diff-unwind.ts).
  *
  * Either way a file is only written when it is still as the turn left it:
- * one changed since is named and left alone, never overwritten. */
+ * one changed since is named and left alone, never overwritten; and only
+ * inside the conversation's workspace, symlinks resolved.
+ *
+ * It acts on the conversation's actual last turn (every turn is recorded,
+ * session/turn-changes.ts), with the store that turn recorded its edits in,
+ * names that turn by its prompt, and says so when it made no edits rather
+ * than reaching back. A repeated /undo walks back one turn at a time. It is
+ * refused while a turn is running in the conversation. */
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { FileCheckpointStore } from '../agent/file-checkpoints.js';
 import { turnChanges, unwindChanges } from '../agent/diff-unwind.js';
+import { realpathNearest } from '../agent/security.js';
 import type { HarnessSession } from './model.js';
-import { isClikCodeAgent } from './route.js';
-import { readTurnChanges, writeTurnChanges } from './turn-changes.js';
+import { loadSessionFile } from './store/records.js';
+import { conversationHolder } from '../worker/registry.js';
+import { readTurnChanges, withTurnChangesLock, writeTurnChanges, type TurnChangeRecord } from './turn-changes.js';
 
 export interface TurnUndo {
   /** Files put back as they were before the turn. */
@@ -30,18 +39,25 @@ export interface TurnUndo {
 }
 
 const SHELL_CAVEAT = 'Only edits made through file-editing tools are tracked: anything a shell command changed (generated files, installs, git operations) is not undone.';
+const OUTSIDE_WORKSPACE = 'outside this conversation\'s workspace; not touched';
 
 function shown(file: string, workspace: string): string {
   const relative = path.relative(workspace, file);
   return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : file;
 }
 
-function describe(result: Omit<TurnUndo, 'text'>, workspace: string, emptyText: string): string {
+/** The turn as the user knows it: what they sent, on one short line. */
+function turnName(record: TurnChangeRecord | undefined): string {
+  const prompt = record?.prompt?.replace(/\s+/g, ' ').trim();
+  if (!prompt) return 'the last turn';
+  return `the turn "${prompt.length > 60 ? `${prompt.slice(0, 59)}\u2026` : prompt}"`;
+}
+
+function describe(result: Omit<TurnUndo, 'text'>, workspace: string, name: string): string {
   const done = result.restored.length + result.removed.length;
-  if (!done && !result.conflicts.length) return emptyText;
   const lines = [done
-    ? `Undid the last turn's changes to ${done} file${done === 1 ? '' : 's'}.`
-    : `Could not undo the last turn: every file it changed has changed since.`];
+    ? `Undid ${name}: its changes to ${done} file${done === 1 ? '' : 's'}.`
+    : `Could not undo ${name}: no file it changed could be put back.`];
   for (const file of result.restored) lines.push(`  restored  ${shown(file, workspace)}`);
   for (const file of result.removed) lines.push(`  removed   ${shown(file, workspace)} (the turn created it)`);
   for (const item of result.conflicts) lines.push(`  kept      ${shown(item.path, workspace)}: ${item.reason}`);
@@ -50,40 +66,58 @@ function describe(result: Omit<TurnUndo, 'text'>, workspace: string, emptyText: 
   return lines.join('\n');
 }
 
-/** ClikCode's own agent: restore the pre-image snapshots. */
-async function undoAgentTurn(stateDir: string, session: HarnessSession, workspace: string): Promise<TurnUndo> {
+/** Inside the workspace, as the write would land now (symlinks resolved). */
+function inside(target: string, workspace: string): boolean {
+  const relative = path.relative(realpathNearest(path.resolve(workspace)), realpathNearest(path.resolve(target)));
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+/** ClikCode's own agent: restore the pre-image snapshots its tools took
+ * during that turn. True when nothing of the turn is left to undo. */
+async function undoAgentTurn(stateDir: string, sessionId: string, record: TurnChangeRecord, workspace: string, result: Omit<TurnUndo, 'text'>): Promise<boolean | undefined> {
   const store = new FileCheckpointStore(stateDir);
-  const outcome = await store.undoTurn(session.id);
-  const result = {
-    restored: outcome.restored, removed: outcome.deleted,
-    conflicts: outcome.failed.map((item) => ({ path: item.path, reason: item.reason })),
-  };
-  return { ...result, text: describe(result, workspace, 'Nothing to undo: ClikCode\'s agent has recorded no file edits in this conversation.') };
+  const from = record.startedAt ?? record.at;
+  const turnIds = (await store.listTurns(sessionId))
+    .filter((turn) => turn.createdAt >= from && turn.createdAt <= record.at)
+    .map((turn) => turn.turnId);
+  if (!turnIds.length) return undefined;
+  const outcome = await store.undo(sessionId, 1, { turnIds, roots: [workspace] });
+  result.restored.push(...outcome.restored);
+  result.removed.push(...outcome.deleted);
+  result.conflicts.push(...outcome.failed.map((item) => ({ path: item.path, reason: /outside the allowed roots/.test(item.reason) ? OUTSIDE_WORKSPACE : item.reason })));
+  const left = new Set((await store.listTurns(sessionId)).map((turn) => turn.turnId));
+  return !turnIds.some((id) => left.has(id));
 }
 
-function conflictReason(current: string | undefined, changes: ReadonlyArray<{ change?: string; omitted?: number; priorUnknown?: boolean }>): string {
-  if (changes.some((change) => change.priorUnknown)) return 'the harness reported only what it wrote here, not what the file held before, so it cannot be put back';
-  if (changes.some((change) => change.omitted)) return 'the harness reported this change only in part, so it cannot be reversed exactly';
-  if (current === undefined) return changes.some((change) => change.change === 'delete') ? 'the turn deleted it and the harness did not report its content' : 'it no longer exists';
-  return 'changed since that turn; not overwritten';
-}
-
-/** A vendor harness: reverse the diffs its calls reported, newest first. */
-async function undoReportedTurn(stateDir: string, session: HarnessSession, workspace: string, who: string): Promise<TurnUndo> {
-  const records = await readTurnChanges(stateDir, session.id);
-  const last = records.at(-1);
-  const result: Omit<TurnUndo, 'text'> = { restored: [], removed: [], conflicts: [] };
-  if (!last) {
-    return { ...result, text: `Nothing to undo: ${who} has reported no file edits in this conversation. /undo reverses the edits a harness reports with their content; ${who}'s edits made any other way (a shell command, a tool that reports no diff) are not seen by ClikCode -- use /diff and git for those.` };
+/** Why a reported change was not reversed, and whether trying again later
+ * could ever succeed. */
+function conflictReason(current: string | undefined, changes: ReadonlyArray<{ change?: string; omitted?: number; priorUnknown?: boolean }>): { reason: string; retry: boolean } {
+  if (changes.some((change) => change.priorUnknown)) return { reason: 'the harness reported only what it wrote here, not what the file held before, so it cannot be put back', retry: false };
+  if (changes.some((change) => change.omitted)) return { reason: 'the harness reported this change only in part, so it cannot be reversed exactly', retry: false };
+  if (current === undefined) {
+    return changes.some((change) => change.change === 'delete')
+      ? { reason: 'the turn deleted it and the harness did not report its content', retry: false }
+      : { reason: 'it no longer exists', retry: true };
   }
+  return { reason: 'changed since that turn; not overwritten', retry: true };
+}
+
+/** A vendor harness: reverse the diffs its calls reported, newest first.
+ * Returns what is left to retry. */
+async function undoReportedTurn(record: TurnChangeRecord, workspace: string, result: Omit<TurnUndo, 'text'>): Promise<TurnChangeRecord['changes']> {
   const kept = [];
-  for (const [file, changes] of turnChanges([{ kind: 'tool-done', diff: last.changes }])) {
+  for (const [file, changes] of turnChanges([{ kind: 'tool-done', diff: record.changes }])) {
     const target = path.isAbsolute(file) ? file : path.resolve(workspace, file);
+    if (!inside(target, workspace)) {
+      result.conflicts.push({ path: target, reason: OUTSIDE_WORKSPACE });
+      continue;
+    }
     const current = await fs.readFile(target, 'utf8').catch(() => undefined);
     const unwound = unwindChanges(current, changes);
     if (!unwound.whole) {
-      result.conflicts.push({ path: target, reason: conflictReason(current, changes) });
-      kept.push(...changes);
+      const why = conflictReason(current, changes);
+      result.conflicts.push({ path: target, reason: why.reason });
+      if (why.retry) kept.push(...changes);
       continue;
     }
     try {
@@ -94,14 +128,60 @@ async function undoReportedTurn(stateDir: string, session: HarnessSession, works
       kept.push(...changes);
     }
   }
-  // Done files leave the record; what could not be undone stays for a retry.
-  await writeTurnChanges(stateDir, session.id, kept.length ? [...records.slice(0, -1), { ...last, changes: kept }] : records.slice(0, -1));
-  return { ...result, text: describe(result, workspace, 'Nothing to undo.') };
+  return kept;
 }
 
-export async function undoLastTurn(session: HarnessSession, options: { stateDir: string; who: string }): Promise<TurnUndo> {
+/** A turn is running in the conversation now: a scripted turn holds it, or
+ * the worker holding it has a turn in flight (its journal, read fresh). */
+export async function turnIsRunning(sessionId: string): Promise<boolean> {
+  const holder = await conversationHolder(sessionId).catch(() => undefined);
+  if (!holder) return false;
+  if (holder.kind === 'turn') return true;
+  return Boolean((await loadSessionFile(sessionId).catch(() => undefined))?.pendingTurn);
+}
+
+export async function undoLastTurn(
+  session: HarnessSession,
+  options: { stateDir: string; who: string; turnIsRunning?: (sessionId: string) => Promise<boolean> },
+): Promise<TurnUndo> {
   const workspace = session.workspace ?? process.cwd();
-  return isClikCodeAgent(session)
-    ? undoAgentTurn(options.stateDir, session, workspace)
-    : undoReportedTurn(options.stateDir, session, workspace, options.who);
+  const result: Omit<TurnUndo, 'text'> = { restored: [], removed: [], conflicts: [] };
+  if (await (options.turnIsRunning ?? turnIsRunning)(session.id)) {
+    return { ...result, text: 'Not undone: a turn is running in this conversation. Its edits are still being made -- run /undo once it has finished, or stop it first.' };
+  }
+  return withTurnChangesLock(options.stateDir, session.id, async () => {
+    const records = await readTurnChanges(options.stateDir, session.id);
+    const last = records.at(-1);
+    if (!last) {
+      return { ...result, text: `Nothing to undo: no turn in this conversation has recorded file edits. /undo reverses the edits ClikCode saw a turn make through file-editing tools; edits made any other way (a shell command, a tool that reports no diff) are not seen -- use /diff and git for those.` };
+    }
+    const earlier = records.slice(0, -1);
+    const name = turnName(last);
+    // Each turn is undone by the store that recorded it: the route it ran
+    // on, not the one the conversation is on now.
+    let kept: TurnChangeRecord | undefined;
+    let saw: boolean;
+    if (last.store === 'agent') {
+      const finished = await undoAgentTurn(options.stateDir, session.id, last, workspace, result);
+      saw = finished !== undefined;
+      if (finished === false) kept = last;
+    } else {
+      saw = last.changes.length > 0;
+      const left = saw ? await undoReportedTurn(last, workspace, result) : [];
+      if (left.length) kept = { ...last, changes: left };
+    }
+    // Done (or never possible) leaves the log, so a repeated /undo walks back
+    // to the turn before; what can still be undone stays for a retry.
+    await writeTurnChanges(options.stateDir, session.id, kept ? [...earlier, kept] : earlier);
+    if (!saw) {
+      const before = earlier.at(-1);
+      const who = last.store === 'agent' ? 'ClikCode\'s agent' : options.who;
+      return { ...result, text: [
+        `Nothing undone: ${name} made no edits ClikCode saw.`,
+        `${who}'s edits made any other way (a shell command, a tool that reports no diff) are not seen -- use /diff and git for those.`,
+        ...(before ? [`/undo again undoes ${turnName(before)}, the turn before it.`] : []),
+      ].join('\n') };
+    }
+    return { ...result, text: describe(result, workspace, name) };
+  });
 }

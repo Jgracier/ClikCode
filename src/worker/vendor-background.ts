@@ -16,6 +16,8 @@ import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import type { BackgroundTurnOutcome, VendorBackgroundTurn } from '../harness/transport/background-turn.js';
 import type { BroadcastObserver } from './broadcast-observer.js';
+import { TurnRecorder } from '../session/turn-changes.js';
+import { stateDirectory } from '../session/store/paths.js';
 
 export const BACKGROUND_TURN_LABEL = 'background work';
 
@@ -93,6 +95,10 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     deps.changed();
     const { observer } = deps;
     const finished: string[] = [];
+    // A turn of its own for /undo: edits a vendor made in the background are
+    // not the user turn's before or after it.
+    const recorder = new TurnRecorder(BACKGROUND_TURN_LABEL, 'reported');
+    recorder.start();
     observer.startTurn(BACKGROUND_TURN_LABEL);
     // The waiting line is this turn's until another turn starts over it.
     const generation = observer.turnGeneration;
@@ -101,6 +107,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       onResponseDelta: (text, mode) => observer.response(text, mode ?? 'append'),
       onActivity: (event) => {
         if (event.kind === 'tool-done' || event.kind === 'tool-error') finished.push(`${event.kind === 'tool-error' ? 'failed ' : ''}${event.label}`);
+        recorder.add(event);
         observer.activityEvent(event);
       },
       onThought: (text, id) => observer.activityEvent({ kind: 'thinking', label: thoughtLabel(text), ...(id ? { id } : {}) }),
@@ -113,6 +120,9 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     try {
       const outcome = await turn.finished;
       const record = backgroundTurnRecord(outcome, finished);
+      // Only background work that left something in the conversation is a
+      // turn there to undo.
+      if (record) await recorder.finish(stateDirectory(), deps.sessionId).catch(() => undefined);
       if (!owned()) {
         // A user turn superseded this one: it owns the windows' waiting line,
         // and the conversation until it is saved.

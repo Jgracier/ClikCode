@@ -79,6 +79,8 @@ export class DurableTurnCheckpoint {
   /** A debounced write that failed with no caller to reject to. Surfaced by
    *  complete(), so a turn whose conversation was never saved says so. */
   private writeError: Error | undefined;
+  /** Also told every activity: the turn's record for /undo (session/turn-changes.ts). */
+  private recorder: { add(event: HarnessActivityEvent): void } | undefined;
 
   private constructor(private readonly state: HarnessState, readonly session: HarnessSession) {}
 
@@ -101,6 +103,7 @@ export class DurableTurnCheckpoint {
   }
 
   activity(event: HarnessActivityEvent): void {
+    this.recorder?.add(event);
     recordPendingActivity(this.session, event, new Date().toISOString());
     this.schedule();
   }
@@ -169,6 +172,10 @@ export class DurableTurnCheckpoint {
    * the failure outright; the debounced write here goes through the same
    * path as every other write, and its failure is remembered rather than
    * dropped (see writeError). */
+  record(recorder: { add(event: HarnessActivityEvent): void }): void {
+    this.recorder = recorder;
+  }
+
   touch(): void {
     this.schedule();
   }
@@ -216,6 +223,10 @@ export async function startTurnCheckpoint(
   state: HarnessState, session: HarnessSession, prompt: string, run: TurnRunOptions,
 ): Promise<DurableTurnCheckpoint> {
   const checkpoint = await DurableTurnCheckpoint.start(state, session, prompt, run.queuedTurnId);
+  if (run.recorder) {
+    run.recorder.start();
+    checkpoint.record(run.recorder);
+  }
   run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
   run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   return checkpoint;

@@ -18,6 +18,8 @@ import { runAgentTurn } from './agent-turn.js';
 import { sendDirectApiTurn } from './direct-turn.js';
 import { sendVendorTurn } from './vendor-turn.js';
 import { isQueuedTurnAlreadyRun } from './turn-journal.js';
+import { TurnRecorder } from '../session/turn-changes.js';
+import { stateDirectory } from '../session/store/paths.js';
 
 /** Options supplied by any caller of a turn. */
 export interface TurnRunOptions {
@@ -33,6 +35,8 @@ export interface TurnRunOptions {
    * broadcaster to its attached clients satisfies this the same way
    * TerminalHarnessPrompter does, structurally. */
   prompter?: TurnObserver;
+  /** Set by runSessionTurn, not by callers: the turn's record for /undo. */
+  recorder?: TurnRecorder;
 }
 
 export async function runSessionTurn(
@@ -44,14 +48,24 @@ export async function runSessionTurn(
   // A session that left ClikCode Local lets go of the model this process
   // held for it (a worker that ran its earlier turns, say).
   if (session.route !== 'clikcode-local') await releaseHeldLocalModel(session.id);
+  // Every turn that starts is recorded when it ends, however it ends and
+  // whatever ran it (a worker, a script, the console loop), edits or none:
+  // /undo acts on the conversation's actual last turn, with the store of the
+  // route that turn ran on (session/turn-changes.ts).
+  const agent = isClikCodeAgent(session);
+  const recorder = new TurnRecorder(prompt.trim(), agent ? 'agent' : 'reported');
+  const recorded = { ...run, recorder };
   try {
-    if (isClikCodeAgent(session)) return await runAgentTurn({ config, state, session, prompt, signal, run });
-    return await runAccountTurn(state, session, prompt, signal, run);
+    if (agent) return await runAgentTurn({ config, state, session, prompt, signal, run: recorded });
+    return await runAccountTurn(state, session, prompt, signal, recorded);
   } catch (error) {
     // Already run by another submit of the same queued entry: nothing to do,
     // and nothing went wrong.
     if (isQueuedTurnAlreadyRun(error)) return;
     throw error;
+  } finally {
+    // A record that failed to write must not fail the turn it records.
+    await recorder.finish(stateDirectory(), id).catch(() => undefined);
   }
 }
 
