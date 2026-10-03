@@ -262,14 +262,19 @@ export function activityLifecyclePhase(
       if (matchingKey) next.delete(matchingKey);
     }
   }
-  const running = [...next.values()];
+  return { activeTools: next, ...openToolsStatus(next) };
+}
+
+/** What the status line says about the calls still open: the newest one's
+ * verb and kind of work, or "thinking" when none is. */
+export function openToolsStatus(activeTools: ReadonlyMap<string, OpenTool>): { phase: string; category?: ToolCategory } {
+  const running = [...activeTools.values()];
   const current = running[running.length - 1];
-  if (!current) return { activeTools: next, phase: 'thinking' };
+  if (!current) return { phase: 'thinking' };
   // Providers working inside this turn name the status line together, so
   // Claude waiting on Cursor and Codex reads as that, not as the newest verb.
   const providers = [...new Set(running.flatMap((tool) => tool.swarmProvider ? [tool.swarmProvider] : []))];
   return {
-    activeTools: next,
     phase: providers.length ? `waiting on ${providers.join(', ')}` : toolStatusVerb(current),
     ...(current.category ? { category: current.category } : {}),
   };
