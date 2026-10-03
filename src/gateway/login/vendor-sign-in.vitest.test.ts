@@ -57,6 +57,7 @@ describe('reading what a vendor screen waits on, from real screens', () => {
 
   it('a line waiting for an answer: Hermes, Claude Code', () => {
     expect(readScreenPrompt('Paste your API key: ')).toEqual({ kind: 'input', prompt: 'Paste your API key', secret: true });
+    expect(readScreenPrompt('OPENROUTER_API_KEY (or Enter to cancel): ')).toEqual({ kind: 'input', prompt: 'OPENROUTER_API_KEY (or Enter to cancel)', secret: true });
     expect(readScreenPrompt('Paste your API key: *************\nLabel (optional, default: api-key-1):')).toEqual({ kind: 'input', prompt: 'Label (optional, default: api-key-1)', secret: false });
     expect(readScreenPrompt('Opening browser to sign in…\nIf the browser didn\'t open, visit: https://claude.com/cai/oauth/authorize?code=true\nPaste code here if prompted > '))
       .toEqual({ kind: 'input', prompt: 'Paste code here if prompted', secret: false });
@@ -83,6 +84,34 @@ describe('reading what a vendor screen waits on, from real screens', () => {
       .toEqual({ kind: 'input', prompt: 'DeepSeek API Key: Model IDs', secret: false });
     expect(readScreenPrompt('╭────╮\n│ Enter Gemini API Key │\n│ Please enter your Gemini API key. │\n│ ╭──╮ │\n│ │ Paste your API key here │ │\n│ ╰──╯ │\n│ (Press Enter to submit, Esc to cancel, Ctrl+C to clear stored key) │\n╰────╯\n'))
       .toMatchObject({ kind: 'input', secret: true });
+  });
+
+  it('Devin\'s numbered menu, a description under each option', () => {
+    const screen = 'Devin CLI\nHow would you like to log in?\n❭ 1 Log in with browser\nRecommended for most users\n2 Paste a token manually\nFor SSH or remote sessions without browser access\n3 Log in with Windsurf for Enterprise\nFor enterprise customers only\n↑↓ select · ↵ confirm · esc cancel\n';
+    expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'How would you like to log in?', choices: ['Log in with browser', 'Paste a token manually', 'Log in with Windsurf for Enterprise'], selected: 0, style: 'arrows' });
+  });
+
+  it('Hermes\'s numbered list, answered by typing a number', () => {
+    const screen = '  Select provider:\n(●) 1. Nous Portal (Everything your agent needs)\n(○) 2. Fireworks AI\n(○) 3. OpenRouter (Pay-per-use API aggregator)\nChoice [default 1]: ';
+    const prompt = readScreenPrompt(screen);
+    expect(prompt).toEqual({ kind: 'choice', title: 'Select provider:', choices: ['Nous Portal (Everything your agent needs)', 'Fireworks AI', 'OpenRouter (Pay-per-use API aggregator)'], selected: 0, style: 'number' });
+    expect(choiceKeys(prompt as Extract<typeof prompt, { kind: 'choice' }>, 2)).toBe('3\r');
+  });
+
+  it('Hermes\'s full-screen radio list, its title scrolled away', () => {
+    expect(readScreenPrompt('  ↑↓ navigate  ENTER/SPACE select  ESC cancel\n\n → (●) Nous Portal (Everything your agent needs)\n   (○) Fireworks AI (OpenAI-compatible direct model API)\n   (○) OpenRouter (Pay-per-use API aggregator)\n'))
+      .toEqual({ kind: 'choice', title: 'Choose one', choices: ['Nous Portal (Everything your agent needs)', 'Fireworks AI (OpenAI-compatible direct model API)', 'OpenRouter (Pay-per-use API aggregator)'], selected: 0, style: 'arrows' });
+  });
+
+  it('Droid\'s one-line pointer list', () => {
+    expect(readScreenPrompt('│ Welcome to Factory CLI │\n╰──────╯\nPlease login with your Factory account to continue.\n> Login\n  Exit\n'))
+      .toEqual({ kind: 'choice', title: 'Please login with your Factory account to continue.', choices: ['Login', 'Exit'], selected: 0, style: 'arrows' });
+  });
+
+  it('a clack confirm on one line: Goose', () => {
+    const prompt = readScreenPrompt('┌   goose-configure\n│\n◆  Share anonymous usage data to help improve goose?\n│  ● Yes / ○ No\n└\n');
+    expect(prompt).toEqual({ kind: 'choice', title: 'Share anonymous usage data to help improve goose?', choices: ['Yes', 'No'], selected: 0, style: 'sideways' });
+    expect(choiceKeys(prompt as Extract<typeof prompt, { kind: 'choice' }>, 1)).toBe('\u001b[C\r');
   });
 
   it('nothing while a vendor only waits on the browser', () => {

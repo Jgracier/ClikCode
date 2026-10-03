@@ -26,7 +26,8 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../../harness/transport/spawn.js';
-import { runInPty } from './pty.js';
+import { runInPty, SIGN_IN_COLUMNS, SIGN_IN_ROWS } from './pty.js';
+import { Screen, type ScreenState } from './screen.js';
 import { extractLoginUrl, stripAnsi } from './url.js';
 
 export interface LoginLink { url: string; code?: string }
@@ -79,10 +80,11 @@ export function chooseLoginLink(input: { printed?: string; opened?: string; loca
 
 /** Something the vendor's screen is waiting on. */
 export type ScreenPrompt =
-  | { kind: 'choice'; title: string; choices: readonly string[]; selected: number; style: 'arrows' | 'yes-no' }
+  | { kind: 'choice'; title: string; choices: readonly string[]; selected: number; style: 'arrows' | 'yes-no' | 'number' | 'sideways' }
   | { kind: 'input'; prompt: string; secret: boolean };
 
-const SECRET_WORDS = /\b(?:api[ _-]?key|key|token|secret|password)\b/i;
+// `OPENROUTER_API_KEY` too: an underscore is no word boundary.
+const SECRET_WORDS = /api[ _-]?key|\b(?:key|token|secret|password)\b/i;
 /** A key or token, not a prompt that merely mentions one in a default
  * (`Label (optional, default: api-key-1)`). */
 function isSecret(prompt: string): boolean {
@@ -97,21 +99,32 @@ export function keystrokes(send: string): string {
   return send.replace(/\{[a-z]+\}/g, (token) => KEYS[token] ?? token);
 }
 
+/** Text drawn on a screen large enough that nothing scrolls or wraps. */
+function drawText(text: string): ScreenState {
+  const screen = new Screen(Math.max(24, text.split('\n').length + 2), 400);
+  screen.write(text);
+  return screen.state();
+}
+
 /** Lines as a terminal would leave them: each carriage return starts the
  * line over, so a redrawn line keeps only its last drawing. */
 function screenLines(text: string): string[] {
   return stripAnsi(text).split('\n').map((line) => (line.split('\r').filter((part) => part.trim()).pop() ?? '').trimEnd());
 }
 
-/** What the vendor's screen is waiting on, read from what it printed since
- * the last answer; undefined when it is not waiting on anything known. */
-export function readScreenPrompt(tail: string): ScreenPrompt | undefined {
-  const lines = screenLines(tail);
-  // A question on the last line, the cursor still on it, is what the screen
-  // waits on now -- whatever menu was drawn above it before (Gemini redraws
-  // its sign-in menu once more on the way to `Enter the authorization
-  // code:`). An active menu never ends on such a line.
-  const last = [...lines].reverse().find((line) => line.trim())?.trim();
+/** What the vendor's screen is waiting on, or undefined when it is not
+ * waiting on anything known. Given text, it is drawn on a large screen
+ * first (tests, and what is printed line by line). */
+export function readScreenPrompt(shown: string | ScreenState): ScreenPrompt | undefined {
+  const state = typeof shown === 'string' ? drawText(shown) : shown;
+  const lines = state.lines;
+  // The line the cursor waits on, when it waits right after a question:
+  // what the screen asks now, whatever menu is drawn above it (Gemini
+  // redraws its sign-in menu once more on the way to `Enter the
+  // authorization code:`).
+  const before = (lines[state.row] ?? '').slice(0, state.column);
+  const after = (lines[state.row] ?? '').slice(state.column);
+  const last = !after.trim() ? before.trim() : '';
   if (last) {
     // aider: `Login to OpenRouter or create a free account? (Y)es/(N)o [Yes]:`
     const yesNo = /^(.*?)\s*(?:\(Y\)es\/\(N\)o|\[(?:Y\/n|y\/N|y\/n|Y\/N)\])\s*(?:\[(Yes|No)\])?\s*:?$/i.exec(last);
@@ -120,23 +133,48 @@ export function readScreenPrompt(tail: string): ScreenPrompt | undefined {
       return { kind: 'choice', title: yesNo[1]!.trim(), choices: ['Yes', 'No'], selected: defaultNo ? 1 : 0, style: 'yes-no' };
     }
     // `Paste your API key:` `Label (optional, default: api-key-1):`
-    // `Paste code here if prompted >` -- a line ending in a prompt mark, with
-    // the cursor still on it (nothing printed after).
-    if (/[:>?]$/.test(last) && last.length <= 140 && !/https?:\/\//.test(last) && !/[\r\n]\s*$/.test(stripAnsi(tail))) {
+    // `Paste code here if prompted >`
+    if (/[:>?]$/.test(last) && last.length <= 140 && !/https?:\/\//.test(last)) {
       const prompt = last.replace(/\s*[:>?]$/, '').trim();
+      // `Choice [default 1]:` under a numbered list (Hermes): the list is the
+      // question, answered by typing an option's number.
+      const asksNumber = /\b(?:choice|choose|select|option|number)\b/i.test(prompt);
+      const list = asksNumber ? numberedList(lines.slice(0, state.row), true) : undefined;
+      if (list && list.prompt.kind === 'choice') {
+        const fallback = /\[default (\d+)\]/i.exec(prompt)?.[1];
+        return { ...list.prompt, title: list.prompt.title || prompt, selected: fallback ? Number(fallback) - 1 : list.prompt.selected, style: 'number' };
+      }
       if (prompt) return { kind: 'input', prompt, secret: isSecret(prompt) };
     }
   }
   // Of the menus and fields drawn since the last answer, the one drawn last
   // is what the screen shows now: an Ink app redraws the menu just answered
   // on its way to the next screen.
-  const drawn = [readClack(lines), readEnquirer(lines), readNumbered(lines), readPointer(lines), readInputBox(lines)]
+  const drawn = [readClack(lines), readEnquirer(lines), readNumbered(lines), readPointer(lines), readRadio(lines), readInputBox(lines)]
     .filter((found): found is Drawn => Boolean(found));
   return drawn.sort((left, right) => right.at - left.at)[0]?.prompt;
 }
 
 /** A prompt a reader found, and the line it is drawn from. */
 interface Drawn { prompt: ScreenPrompt; at: number }
+
+/** A radio list, as Hermes's full-screen menu draws one: `→ (●) X` the
+ * current option, `(○) Y` the rest. Its title may have scrolled away; the
+ * line above, unless it only lists keys, stands in. */
+function readRadio(lines: readonly string[]): Drawn | undefined {
+  const option = (line: string) => /^\s*(?:[→>›❯]\s*)?\((●|○)\)\s+(?!\d+\.\s)(.+?)\s*$/.exec(line);
+  let end = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) if (option(lines[index]!)) { end = index; break; }
+  if (end < 0) return undefined;
+  let start = end;
+  while (start > 0 && option(lines[start - 1]!)) start -= 1;
+  const found = lines.slice(start, end + 1).map((line) => option(line)!);
+  const selected = found.findIndex((match) => match[1] === '●');
+  if (found.length < 2 || selected < 0) return undefined;
+  const title = [...lines.slice(0, start)].reverse().map((line) => line.trim())
+    .find((line) => line && !/\b(?:navigate|ENTER|ESC|select)\b.*\b(?:select|cancel|confirm)\b/i.test(line)) ?? 'Choose one';
+  return { prompt: { kind: 'choice', title, choices: found.map((match) => match[2]!), selected, style: 'arrows' }, at: start };
+}
 
 /** A boxed text field, as Ink apps draw one (Gemini's key, Qwen's): the
  * last box on screen says `Enter to submit`, and its first line says what
@@ -157,48 +195,43 @@ function readInputBox(lines: readonly string[]): Drawn | undefined {
   return { prompt: { kind: 'input', prompt, secret: isSecret(field) }, at: top };
 }
 
-/** A pointer menu, as Qwen draws one: entries separated by blank lines, the
- * current one's first line marked `› `, each with a description under it.
- * The label is an entry's first line; the title the line above them all. */
+/** A pointer menu: the current entry marked `› ` or `> `. Qwen's has a
+ * description under each entry and blank lines between them (an entry is
+ * its first line); Droid's is one line per entry (`> Login` / `Exit`).
+ * The title is the line above them all. */
 function readPointer(lines: readonly string[]): Drawn | undefined {
   const plain = lines.map((line) => line.replace(/[│┃║]/g, ' ').trimEnd());
-  const marker = (line: string): boolean => /^\s*›\s+\S/.test(line);
+  const marker = (line: string): boolean => /^\s*[›>]\s+\S/.test(line);
   let at = -1;
   for (let index = plain.length - 1; index >= 0; index -= 1) if (marker(plain[index]!)) { at = index; break; }
   if (at < 0) return undefined;
   // The marker stands in the indentation: `› Alibaba` lines up with
   // `  Third-party`.
-  const indent = (line: string): number => { const shown = line.replace('›', ' '); return shown.length - shown.trimStart().length; };
+  const indent = (line: string): number => { const shown = line.replace(/[›>]/, ' '); return shown.length - shown.trimStart().length; };
   const column = indent(plain[at]!);
-  // The menu runs from the first entry above the marker to the last below
-  // it: lines at the marker's column, blank lines between them.
-  const isEntryStart = (index: number): boolean => {
-    const line = plain[index]!;
-    if (!line.trim() || indent(line) !== column) return false;
-    return index === 0 || !plain[index - 1]!.trim() || marker(line);
-  };
+  const inMenu = (line: string): boolean => !/^\s*[─━]{3,}/.test(line) && (!line.trim() || indent(line) === column);
   let first = at;
-  for (let index = at - 1; index >= 0; index -= 1) {
-    const line = plain[index]!;
-    if (!line.trim()) continue;
-    if (indent(line) < column || /^\s*[─━]{3,}/.test(line)) break;
-    if (isEntryStart(index)) first = index;
+  while (first > 0 && inMenu(plain[first - 1]!)) first -= 1;
+  let last = at;
+  while (last < plain.length - 1 && inMenu(plain[last + 1]!)) last += 1;
+  // Groups of lines between blank lines.
+  const groups: number[][] = [];
+  for (let index = first; index <= last; index += 1) {
+    if (!plain[index]!.trim()) { if (groups.at(-1)?.length) groups.push([]); continue; }
+    if (!groups.length) groups.push([]);
+    groups.at(-1)!.push(index);
   }
-  const entries: number[] = [];
-  for (let index = first; index < plain.length; index += 1) {
-    const line = plain[index]!;
-    if (/^\s*[─━]{3,}/.test(line) || (line.trim() && indent(line) < column)) break;
-    if (isEntryStart(index)) entries.push(index);
-  }
+  const filled = groups.filter((group) => group.length);
+  const entries = filled.length > 1 ? filled.map((group) => group[0]!) : (filled[0] ?? []);
   if (entries.length < 2 || !entries.includes(at)) return undefined;
-  const title = [...plain.slice(0, first)].reverse().map((line) => line.trim()).find((line) => line && !/^[┌└╭╰─━]+/.test(line)) ?? '';
+  const title = [...plain.slice(0, entries[0])].reverse().map((line) => line.trim()).find((line) => line && !/^[┌└╭╰─━]+/.test(line)) ?? '';
   return {
     prompt: {
       kind: 'choice', title,
-      choices: entries.map((index) => plain[index]!.trim().replace(/^›\s*/, '')),
+      choices: entries.map((index) => plain[index]!.trim().replace(/^[›>]\s*/, '')),
       selected: entries.indexOf(at), style: 'arrows',
     },
-    at: first,
+    at: entries[0]!,
   };
 }
 
@@ -217,6 +250,11 @@ function readClack(lines: readonly string[]): Drawn | undefined {
   const choices: string[] = [];
   let selected = 0;
   for (const line of lines.slice(at + 1)) {
+    // A confirm draws both answers on one line: `● Yes / ○ No`.
+    const inline = /^\s*[│|]?\s*([●○])\s+(.+?)\s+\/\s+([●○])\s+(.+?)\s*$/.exec(line);
+    if (inline) {
+      return { prompt: { kind: 'choice', title, choices: [inline[2]!, inline[4]!], selected: inline[3] === '●' ? 1 : 0, style: 'sideways' }, at };
+    }
     const option = /^\s*[│|]?\s*([●○])\s+(.+?)\s*$/.exec(line);
     if (!option) continue;
     if (option[1] === '●') selected = choices.length;
@@ -245,32 +283,49 @@ function readEnquirer(lines: readonly string[]): Drawn | undefined {
   return { prompt: { kind: 'choice', title, choices, selected, style: 'arrows' }, at };
 }
 
-/** A numbered menu, as Ink apps draw one (Gemini's, Qwen's): `● 1. X`
- * current, `  2. Y` the rest, often inside a box; its title is the line
- * above. The last drawing is the one shown. */
-function readNumbered(lines: readonly string[]): Drawn | undefined {
+/** A numbered menu: `● 1. X` (Gemini, in a box), `❭ 1 X` with a
+ * description under each (Devin), `(●) 1. X` (Hermes). The current option
+ * is marked; its title is the line above the first. The last drawing is
+ * the one shown. With `unmarked`, a list nothing marks counts too (one
+ * answered by typing its number, see readScreenPrompt). */
+function numberedList(lines: readonly string[], unmarked = false): (Drawn & { marked: boolean }) | undefined {
   const plain = lines.map((line) => line.replace(/[│┃║]/g, ' ').trimEnd());
-  const option = (line: string) => /^\s*([●›❯>])?\s*(\d+)\.\s+(.+?)\s*$/.exec(line);
-  let end = -1;
-  for (let index = plain.length - 1; index >= 0; index -= 1) {
-    if (option(plain[index]!)?.[2] && option(plain[index]!)![2] !== '1') { end = index; break; }
+  const option = (line: string) => /^\s*(?:([●›❯>❭])|\((●|○)\))?\s*(\d+)[.)]?\s+(\S.*?)\s*$/.exec(line);
+  // From the last option up to option 1, descriptions allowed between.
+  let index = plain.length - 1;
+  while (index >= 0 && !option(plain[index]!)) index -= 1;
+  if (index < 0) return undefined;
+  const found: { at: number; match: RegExpExecArray }[] = [];
+  let expected = Number(option(plain[index]!)![3]);
+  if (expected < 2) return undefined;
+  let gap = 0;
+  for (; index >= 0 && expected >= 1; index -= 1) {
+    const match = option(plain[index]!);
+    if (match && Number(match[3]) === expected) { found.unshift({ at: index, match }); expected -= 1; gap = 0; continue; }
+    if (++gap > 3) return undefined;
   }
-  if (end < 0) return undefined;
-  let start = end;
-  while (start > 0 && option(plain[start - 1]!)) start -= 1;
-  const block = plain.slice(start, end + 1).map((line) => option(line)!);
-  if (block[0]![2] !== '1' || block.some((match, index) => Number(match[2]) !== index + 1)) return undefined;
+  if (expected !== 0) return undefined;
   // A menu marks its current option; a numbered list of tips does not.
-  const marked = block.findIndex((match) => match[1]);
-  if (marked < 0) return undefined;
+  const marked = found.findIndex(({ match }) => match[1] || match[2] === '●');
+  if (marked < 0 && !unmarked) return undefined;
+  const start = found[0]!.at;
   const title = [...plain.slice(0, start)].reverse().map((line) => line.trim()).find((line) => line && !/^[╭╰─━┌└]+/.test(line)) ?? '';
-  return { prompt: { kind: 'choice', title: title.replace(/^\?\s*/, ''), choices: block.map((match) => match[3]!), selected: marked, style: 'arrows' }, at: start };
+  return {
+    prompt: { kind: 'choice', title: title.replace(/^\?\s*/, ''), choices: found.map(({ match }) => match[4]!), selected: Math.max(0, marked), style: 'arrows' },
+    at: start, marked: marked >= 0,
+  };
+}
+
+function readNumbered(lines: readonly string[]): Drawn | undefined {
+  return numberedList(lines);
 }
 
 /** Keys that move a menu from `from` to `to` and pick it. */
 export function choiceKeys(prompt: Extract<ScreenPrompt, { kind: 'choice' }>, to: number): string {
   if (prompt.style === 'yes-no') return to === 0 ? 'y\r' : 'n\r';
+  if (prompt.style === 'number') return `${to + 1}\r`;
   const moves = to - prompt.selected;
+  if (prompt.style === 'sideways') return `${(moves >= 0 ? '\u001b[C' : '\u001b[D').repeat(Math.abs(moves))}\r`;
   return `${(moves >= 0 ? KEYS['{down}']! : KEYS['{up}']!).repeat(Math.abs(moves))}\r`;
 }
 
@@ -329,6 +384,10 @@ export async function runVendorSignIn(input: {
     } : {}),
   };
   let raw = '';
+  const screen = new Screen(SIGN_IN_ROWS, SIGN_IN_COLUMNS);
+  // Read only once the screen has changed since the last answer: until the
+  // vendor redraws, the prompt just answered is still on it.
+  let changed = false;
   let opened: string | undefined;
   let shown: LoginLink | undefined;
   let write: (text: string) => void = () => undefined;
@@ -357,6 +416,7 @@ export async function runVendorSignIn(input: {
       if (exited) return;
       if (keys === undefined) { abort(); return; }
       answeredAt = raw.length;
+      changed = false;
       // One key at a time: an Ink app takes a burst like `sk-123\r` as
       // pasted text, Enter and all, and never submits it.
       for (const key of keys.match(/\u001b\[[A-D]|\r|[^\r\u001b]+|\u001b/g) ?? []) {
@@ -380,7 +440,8 @@ export async function runVendorSignIn(input: {
         : keystrokes(next.send ?? ''))).finally(schedule);
       return;
     }
-    const prompt = readScreenPrompt(raw.slice(answeredAt));
+    if (!changed) return;
+    const prompt = readScreenPrompt(screen.state());
     if (!prompt) return;
     const key = `${prompt.kind}:${prompt.kind === 'choice' ? prompt.title : prompt.prompt}`;
     if (lastPrompt && lastPrompt.key === key && Date.now() - lastPrompt.at < REDRAW_MS) return;
@@ -395,7 +456,7 @@ export async function runVendorSignIn(input: {
     if (settle) clearTimeout(settle);
     settle = setTimeout(read, SETTLE_MS);
   };
-  const onOutput = (chunk: string): void => { raw += chunk; publishLink(); schedule(); };
+  const onOutput = (chunk: string): void => { raw += chunk; screen.write(chunk); changed = true; publishLink(); schedule(); };
 
   const poll = standIns ? setInterval(() => {
     void readFile(standIns.log, 'utf8').then((text) => {
