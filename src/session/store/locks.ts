@@ -6,7 +6,7 @@ import { link, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ensurePrivateDirectory } from './files.js';
-import { safeRecordFileName, sessionsDirectory, stateDirectory } from './paths.js';
+import { stateDirectory } from './paths.js';
 
 class StateLockTimeoutError extends Error {
   constructor(lockPath: string, holder: string | undefined, waitedMs: number) {
@@ -82,7 +82,12 @@ export async function breakStaleLock(lockPath: string, observedRaw: string): Pro
 }
 
 /** Cross-process mutual exclusion on `lockPath`, serialized in-process first so
- * one process never contends with itself. Not re-entrant. */
+ * one process never contends with itself. Not re-entrant: code that needs a
+ * lock its caller already holds takes proof of it as a parameter instead
+ * (StateLockHeld). Implicit re-entrancy (AsyncLocalStorage) was tried and
+ * removed: promises started inside a locked section inherited the "held"
+ * mark after the section had released, and sibling tasks in one chain ran
+ * past each other. */
 export async function withFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
   const previous = lockQueues.get(lockPath) ?? Promise.resolve();
   const result = previous.then(() => holdFileLock(lockPath, run));
@@ -98,6 +103,11 @@ export async function withFileLock<T>(lockPath: string, run: () => Promise<T>): 
  * every other ClikCode. */
 export async function fileLocksIdle(): Promise<void> {
   while (lockQueues.size) await Promise.all([...lockQueues.values()]);
+}
+
+/** Whether this process holds, or is waiting for, any file lock right now. */
+export function fileLocksHeld(): boolean {
+  return lockQueues.size > 0;
 }
 
 async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
@@ -145,10 +155,16 @@ function stateLockPath(): string {
   return join(stateDirectory(), 'harness-state.json.lock');
 }
 
-export function withStateLock<T>(run: () => Promise<T>): Promise<T> {
-  return withFileLock(stateLockPath(), run);
-}
+declare const stateLockBrand: unique symbol;
+/** Proof, passed down explicitly, that the caller holds the state lock. Only
+ * withStateLock makes one. Functions that must run under the state lock
+ * (transcript writes, migration) take it as a parameter, so holding the lock
+ * is checked by the compiler and nothing ever re-takes it. */
+export type StateLockHeld = { readonly [stateLockBrand]: true };
+const STATE_LOCK_HELD = Object.freeze({}) as StateLockHeld;
 
-export function withSessionLock<T>(sessionId: string, run: () => Promise<T>): Promise<T> {
-  return withFileLock(join(sessionsDirectory(), `${safeRecordFileName(sessionId)}.lock`), run);
+/** The one lock every index and transcript write runs under. Order is always
+ * state lock first, then any session lock -- never the reverse. */
+export function withStateLock<T>(run: (held: StateLockHeld) => Promise<T>): Promise<T> {
+  return withFileLock(stateLockPath(), () => run(STATE_LOCK_HELD));
 }

@@ -3,7 +3,7 @@
 
 import type { HarnessSession } from '../model.js';
 import { cloneData, sameData } from './data.js';
-import { withSessionLock } from './locks.js';
+import type { StateLockHeld } from './locks.js';
 import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, type SessionFile } from './records.js';
 
 type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
@@ -74,8 +74,8 @@ function keepsHistory(before: readonly TranscriptMessage[] | undefined, after: r
 
 /** Gives every child that points into `parentId` its own full copy. Called
  * before the parent's existing history is rewritten or removed, so a child can
- * never silently change or lose messages. Requires the state lock: that is what
- * guarantees no new reference is being created while this scans. */
+ * never silently change or lose messages. Runs under the caller's state lock:
+ * that is what guarantees no new reference is being created while this scans. */
 async function materializeChildrenOf(parentId: string): Promise<string[]> {
   const rewritten: string[] = [];
   for (const id of await listStoredSessionIds()) {
@@ -86,14 +86,10 @@ async function materializeChildrenOf(parentId: string): Promise<string[]> {
     // because materializing is by value: once the direct child owns its copy,
     // nothing beneath it depends on `parentId` any more.
     if (peek.transcriptRef.sessionId !== parentId) continue;
-    await withSessionLock(id, async () => {
-      const file = await loadSessionFile(id);
-      if (!file?.transcriptRef || file.transcriptRef.sessionId !== parentId) return;
-      const messages = await materializedMessages(file, new Set([id]));
-      const { transcriptRef: _dropped, ...rest } = file;
-      await storeSessionFile(id, { ...rest, messages: cloneData(messages ?? []) });
-      rewritten.push(id);
-    });
+    const messages = await materializedMessages(peek, new Set([id]));
+    const { transcriptRef: _dropped, ...rest } = peek;
+    await storeSessionFile(id, { ...rest, messages: cloneData(messages ?? []) });
+    rewritten.push(id);
   }
   return rewritten;
 }
@@ -110,49 +106,50 @@ interface TranscriptWriteOptions {
 /** Below this, a reference saves nothing worth the indirection. */
 const MIN_SHARED_MESSAGES = 2;
 
-/** Persists one conversation's transcript. The caller must hold the state lock
- * (it may materialize children and create parent references). */
-export async function writeSessionTranscript(id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
-  await withSessionLock(id, async () => {
-    const previous = await loadSessionFile(id);
-    const previousMessages = previous ? await materializedMessages(previous, new Set([id])) : undefined;
-    if (previous && !keepsHistory(previousMessages, next.messages)) await materializeChildrenOf(id);
-    if (transcriptIsEmpty(next)) {
-      await removeSessionFile(id);
-      return;
-    }
-    const parentId = options.parentSessionId ?? previous?.transcriptRef?.sessionId;
-    if (parentId && parentId !== id && next.messages && next.messages.length >= MIN_SHARED_MESSAGES) {
-      const stored = await withSessionLock(parentId, async () => {
-        const parent = await loadSessionFile(parentId);
-        if (!parent) return false;
-        // A reference must never lead back here, or both histories vanish.
-        for (let hop = parent.transcriptRef, guard = 0; hop; guard += 1) {
-          if (hop.sessionId === id || guard > 64) return false;
-          hop = (await loadSessionFile(hop.sessionId))?.transcriptRef;
-        }
-        const parentMessages = await materializedMessages(parent, new Set([parentId]));
-        const shared = commonPrefixLength(parentMessages ?? [], next.messages ?? []);
-        if (shared < MIN_SHARED_MESSAGES) return false;
-        const file: SessionFile = {
-          v: 1 as const, id, transcriptRef: { sessionId: parentId, uptoIndex: shared },
-          messages: next.messages!.slice(shared),
-          ...(next.pendingTurn !== undefined ? { pendingTurn: next.pendingTurn } : {}),
-        };
-        await storeSessionFile(id, options.frozen ? file : cloneData(file));
-        return true;
-      });
-      if (stored) return;
-    }
-    const file: SessionFile = { v: 1 as const, id, ...next };
-    await storeSessionFile(id, options.frozen ? file : cloneData(file));
-  });
+/** Persists one conversation's transcript, under the caller's state lock (it
+ * may materialize children and create parent references).
+ *
+ * Every session file is written only under the state lock, so no per-session
+ * lock is taken. There used to be one per file, nested child->parent here and
+ * parent->child in materializeChildrenOf: a lock-order cycle that only the
+ * state lock around both kept from deadlocking. */
+export async function writeSessionTranscript(_held: StateLockHeld, id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
+  const previous = await loadSessionFile(id);
+  const previousMessages = previous ? await materializedMessages(previous, new Set([id])) : undefined;
+  if (previous && !keepsHistory(previousMessages, next.messages)) await materializeChildrenOf(id);
+  if (transcriptIsEmpty(next)) {
+    await removeSessionFile(id);
+    return;
+  }
+  const parentId = options.parentSessionId ?? previous?.transcriptRef?.sessionId;
+  const file: SessionFile = (parentId && await referenceInto(parentId, id, next)) || { v: 1 as const, id, ...next };
+  await storeSessionFile(id, options.frozen ? file : cloneData(file));
 }
 
-/** Removes a conversation's transcript, first giving its children their own copy. */
-export async function deleteSessionTranscript(id: string): Promise<void> {
-  await withSessionLock(id, async () => {
-    await materializeChildrenOf(id);
-    await removeSessionFile(id);
-  });
+/** `next` stored as a reference into `parentId`'s history, when that shares
+ * enough of it and cannot form a cycle. */
+async function referenceInto(parentId: string, id: string, next: SessionTranscript): Promise<SessionFile | undefined> {
+  if (parentId === id || !next.messages || next.messages.length < MIN_SHARED_MESSAGES) return undefined;
+  const parent = await loadSessionFile(parentId);
+  if (!parent) return undefined;
+  // A reference must never lead back here, or both histories vanish.
+  for (let hop = parent.transcriptRef, guard = 0; hop; guard += 1) {
+    if (hop.sessionId === id || guard > 64) return undefined;
+    hop = (await loadSessionFile(hop.sessionId))?.transcriptRef;
+  }
+  const parentMessages = await materializedMessages(parent, new Set([parentId]));
+  const shared = commonPrefixLength(parentMessages ?? [], next.messages);
+  if (shared < MIN_SHARED_MESSAGES) return undefined;
+  return {
+    v: 1 as const, id, transcriptRef: { sessionId: parentId, uptoIndex: shared },
+    messages: next.messages.slice(shared),
+    ...(next.pendingTurn !== undefined ? { pendingTurn: next.pendingTurn } : {}),
+  };
+}
+
+/** Removes a conversation's transcript, first giving its children their own
+ * copy. Under the caller's state lock, like writeSessionTranscript. */
+export async function deleteSessionTranscript(_held: StateLockHeld, id: string): Promise<void> {
+  await materializeChildrenOf(id);
+  await removeSessionFile(id);
 }

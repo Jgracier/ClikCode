@@ -117,7 +117,7 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
   let index = await loadIndex();
   if (!index) {
     // Removed between the check and the read (tests, manual cleanup).
-    await withStateLock(() => ensureLayoutLocked());
+    await withStateLock((held) => ensureLayoutLocked(held));
     index = await loadIndex();
     if (!index) throw new Error('local AI harness state could not be created');
   }

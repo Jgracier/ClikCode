@@ -377,19 +377,23 @@ function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
 
+/** Longest a live holder is waited on before the install gives up with a clear error. */
+const LOCK_MAX_WAIT_MS = 10 * 60 * 1000;
+
 /** Run `work` holding the per-harness install lock -- a directory, since
  * creating one is atomic everywhere. A holder that died, or has held it past
  * any install's time limit, is taken over. `onWait` is called once, if the
  * lock is busy. */
 export async function withInstallLock<T>(
   key: string, work: () => Promise<T>, onWait?: () => void,
-  options: { directory?: string; staleMs?: number; pollMs?: number } = {},
+  options: { directory?: string; staleMs?: number; pollMs?: number; maxWaitMs?: number } = {},
 ): Promise<T> {
   const directory = options.directory ?? join(stateDirectory(), 'tools', 'locks');
   await mkdir(directory, { recursive: true });
   const lock = join(directory, `${key.replace(/[^A-Za-z0-9._-]/g, '_')}.lock`);
   const owner = join(lock, 'owner.json');
   let waited = false;
+  const waitStarted = Date.now();
   for (;;) {
     try {
       await mkdir(lock);
@@ -407,6 +411,11 @@ export async function withInstallLock<T>(
       continue;
     }
     if (!waited) { waited = true; onWait?.(); }
+    // A live holder is never taken over (it may still be installing), but it
+    // must not block every other install forever either.
+    if (Date.now() - waitStarted > (options.maxWaitMs ?? LOCK_MAX_WAIT_MS)) {
+      throw new Error(`another ClikCode install of ${key} is still running (pid ${holder?.pid ?? 'unknown'}); try again once it finishes`);
+    }
     await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? LOCK_POLL_MS));
   }
   try { return await work(); } finally { await rm(lock, { recursive: true, force: true }).catch(() => undefined); }
