@@ -488,6 +488,8 @@ export const maxPromptArgvBytes = 96 * 1024;
 export const HOME_REDIRECT_ENV_DEFAULTS: Readonly<Record<string, string | null>> = {
   GIT_CONFIG_GLOBAL: '~/.gitconfig',
   NPM_CONFIG_USERCONFIG: '~/.npmrc',
+  // npx keeps every MCP server it runs here; one per profile was 2.5 GB.
+  NPM_CONFIG_CACHE: '~/.npm',
   GH_CONFIG_DIR: '~/.config/gh',
   DOCKER_CONFIG: '~/.docker',
   GNUPGHOME: '~/.gnupg',
