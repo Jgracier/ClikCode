@@ -3,7 +3,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { CachedSessionFacts, cachedDirectory, codexPathById, discoveryCache, loadDiscoveryCache, saveDiscoveryCache } from '../cache.js';
+import { CachedSessionFacts, cachedDirectory, codexPathById, discoveryCacheChanged, loadDiscoveryCache, saveDiscoveryCache } from '../cache.js';
 import { readFilePrefix, sortedSubdirectories } from '../files.js';
 import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { conversationTitle } from '../conversation-title.js';
@@ -91,7 +91,7 @@ export async function discoverCodexFsSessions(workspace: string, environment: Na
       if (!facts.id || !facts.title) {
         facts = parseCodexSessionHead(await readFilePrefix(path, 64_000).catch(() => ''), name);
         listing.files[name] = facts;
-        discoveryCache!.dirty = true;
+        discoveryCacheChanged();
       }
       if (!facts.id) continue;
       codexPathById.set(`${root}\u0000${facts.id}`, path);

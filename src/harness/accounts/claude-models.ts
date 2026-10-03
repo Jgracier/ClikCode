@@ -17,11 +17,9 @@
  * one moment after an update changes them. The same rule version-memo.ts
  * follows, for the same reason: a TTL here would be wrong both ways.
  */
-import { open, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { atomicWriteFile } from '../../session/store/files.js';
-import { stateDirectory } from '../../session/store/paths.js';
-import { binaryFingerprint } from '../transport/native/version-memo.js';
+import { open } from 'node:fs/promises';
+import { jsonMemo } from '../../session/store/json-memo.js';
+import { binaryFingerprint, sameFingerprint, type BinaryFingerprint } from '../transport/native/version-memo.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 
 export interface ClaudeModelTable {
@@ -30,8 +28,6 @@ export interface ClaudeModelTable {
   /** Model id -> the name Claude Code itself shows for it. */
   displayNames: Record<string, string>;
 }
-
-type Fingerprint = { path: string; mtimeMs: number; size: number };
 
 const LATEST = /latest_per_family:\{([^}]*)\}/;
 const ALIAS_ENTRY = /([a-z]+):"(claude-[a-z0-9-]+)"/g;
@@ -73,18 +69,17 @@ async function scanBinary(path: string): Promise<ClaudeModelTable | undefined> {
   return Object.keys(table.aliases).length ? table : undefined;
 }
 
-interface MemoFile { v: 1; fingerprint: Fingerprint; table: ClaudeModelTable }
+interface MemoFile { v: 1; fingerprint: BinaryFingerprint; table: ClaudeModelTable }
 
-function memoPath(): string | undefined {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
-  const directory = stateDirectory();
-  return directory ? join(directory, 'cache', 'claude-models.json') : undefined;
-}
+/** One entry: the table of the last binary scanned. Read straight from disk
+ * whenever the binary in hand is not the one already held, so a scan another
+ * process just did is picked up rather than repeated. */
+const memo = jsonMemo<MemoFile | undefined>('cache/claude-models.json', () => undefined, (parsed) => {
+  const file = parsed as MemoFile;
+  return file.v === 1 ? file : undefined;
+});
 
-const sameFile = (left: Fingerprint | undefined, right: Fingerprint | undefined): boolean =>
-  Boolean(left && right && left.path === right.path && left.mtimeMs === right.mtimeMs && left.size === right.size);
-
-let current: { fingerprint: Fingerprint; table: ClaudeModelTable } | undefined;
+let current: { fingerprint: BinaryFingerprint; table: ClaudeModelTable } | undefined;
 let pending: Promise<ClaudeModelTable | undefined> | undefined;
 
 /** The table for the Claude Code that is installed right now, or undefined
@@ -93,22 +88,17 @@ let pending: Promise<ClaudeModelTable | undefined> | undefined;
 export async function claudeModelTable(binary = 'claude'): Promise<ClaudeModelTable | undefined> {
   const fingerprint = await binaryFingerprint(await resolveBinaryPath(binary));
   if (!fingerprint) return undefined;
-  if (current && sameFile(current.fingerprint, fingerprint)) return current.table;
-  const path = memoPath();
-  if (path) {
-    try {
-      const memo = JSON.parse(await readFile(path, 'utf8')) as MemoFile;
-      if (memo?.v === 1 && sameFile(memo.fingerprint, fingerprint)) {
-        current = { fingerprint, table: memo.table };
-        return memo.table;
-      }
-    } catch { /* fail-open-ok: no memo, or a damaged one, costs one scan. */ }
+  if (current && sameFingerprint(current.fingerprint, fingerprint)) return current.table;
+  const remembered = await memo.read();
+  if (remembered && sameFingerprint(remembered.fingerprint, fingerprint)) {
+    current = { fingerprint, table: remembered.table };
+    return remembered.table;
   }
   // One scan per build however many pickers ask at once.
   pending ??= scanBinary(fingerprint.path).then(async (table) => {
     if (table) {
       current = { fingerprint, table };
-      if (path) await atomicWriteFile(path, JSON.stringify({ v: 1, fingerprint, table } satisfies MemoFile)).catch(() => undefined);
+      await memo.write({ v: 1, fingerprint, table });
     }
     return table;
   }).catch(() => undefined).finally(() => { pending = undefined; });
