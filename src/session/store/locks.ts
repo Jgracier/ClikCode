@@ -1,8 +1,10 @@
-/** Lock files that survive a killed process. A lock records its owner, and a
- * lock whose owner is gone is broken rather than waited on forever. */
+/** Lock files that survive a killed process. A lock records its owner and is
+ * kept fresh while held; one that stops being refreshed, or whose owner is
+ * visibly gone, is broken rather than waited on forever. */
 
 import { randomBytes } from 'node:crypto';
-import { link, open, readFile, rename, stat, unlink } from 'node:fs/promises';
+import { readlinkSync } from 'node:fs';
+import { link, open, readFile, rename, stat, unlink, utimes } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { ensurePrivateDirectory } from './files.js';
@@ -27,18 +29,32 @@ export function pidIsAlive(pid: number): boolean {
   }
 }
 
-interface LockOwner { pid: number; host: string; nonce: string; at: string }
+/** `pidns` is this process's pid namespace (Linux): a pid only means
+ * something to a process in the same one. */
+interface LockOwner { pid: number; host: string; nonce: string; at: string; pidns?: string }
 
-const LOCK_TUNING = {
-  /** A holder on another machine (shared home) can only be judged by age. */
+/** Exported for tests only; production code never changes these. */
+export const LOCK_TUNING = {
+  /** A lock whose file has not been refreshed for this long is stale. */
   staleMs: 30_000,
-  /** A live local pid is trusted this long before pid reuse is suspected. */
-  livePidStaleMs: 5 * 60_000,
+  /** A holder refreshes its lock file's mtime this often... */
+  heartbeatMs: 10_000,
+  /** ...for at most this long. A holder stuck past it stops refreshing, and
+   * is broken staleMs later rather than stalling every ClikCode forever. */
+  maxHoldMs: 5 * 60_000,
   /** Writes wait this long, then fail loudly. They never proceed unlocked. */
   waitMs: 30_000,
 };
 
 const lockQueues = new Map<string, Promise<unknown>>();
+
+let ownPidNamespace: string | null | undefined;
+function pidNamespace(): string | undefined {
+  if (ownPidNamespace === undefined) {
+    try { ownPidNamespace = readlinkSync('/proc/self/ns/pid'); } catch { ownPidNamespace = null; }
+  }
+  return ownPidNamespace ?? undefined;
+}
 
 function parseLockOwner(raw: string): LockOwner | undefined {
   try {
@@ -51,34 +67,62 @@ function parseLockOwner(raw: string): LockOwner | undefined {
   }
 }
 
-async function lockLooksStale(lockPath: string, raw: string): Promise<boolean> {
+/** A held lock is refreshed (heartbeat), so staleness is its file's age --
+ * whatever host or pid namespace the holder is in. The one shortcut: a
+ * holder this process can see is dead (same host, same pid namespace, pid
+ * gone) is stale at once. A pid that merely is not visible -- a holder in
+ * another container -- says nothing; only the heartbeat does. An owner
+ * written without `pidns` (an older build) is judged as one in ours. */
+export async function lockLooksStale(lockPath: string, raw: string): Promise<boolean> {
   const age = await stat(lockPath).then((info) => Date.now() - info.mtimeMs).catch(() => undefined);
   if (age === undefined) return false; // Already gone; the open will simply succeed.
+  if (age > LOCK_TUNING.staleMs) return true;
   const owner = parseLockOwner(raw);
-  // An empty file is a holder between create and write; only age condemns it.
-  if (!owner) return age > LOCK_TUNING.staleMs;
-  if (owner.host === hostname()) return pidIsAlive(owner.pid) ? age > LOCK_TUNING.livePidStaleMs : true;
-  return age > LOCK_TUNING.staleMs;
+  if (!owner || owner.host !== hostname()) return false;
+  if (owner.pidns !== undefined && owner.pidns !== pidNamespace()) return false;
+  return !pidIsAlive(owner.pid);
 }
 
 /** Removes a stale lock without ever removing a fresh one.
  *
  * Unlinking by path is racy: two waiters both judge the lock stale, the first
- * unlinks and re-acquires, the second then unlinks the *fresh* lock. Renaming
- * to a private name is atomic, so exactly one waiter takes the file; it then
- * checks that what it took is the lock it judged, and puts it back otherwise. */
-export async function breakStaleLock(lockPath: string, observedRaw: string): Promise<void> {
-  const current = await readFile(lockPath, 'utf8').catch(() => undefined);
-  if (current !== observedRaw) return;
-  const aside = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.stale`;
+ * unlinks and re-acquires, the second then unlinks the *fresh* lock. So
+ * breakers take turns (`.breaking`, created exclusively, held for a few file
+ * operations); the one whose turn it is re-checks that the file is still the
+ * one judged -- same content, and, with `stillStale`, still stale (a holder
+ * may have heartbeated since) -- then renames it aside and checks by inode
+ * that what it took is that file, putting it back otherwise. Without turns,
+ * a second breaker could take a fresh lock and fail to put it back (a third
+ * waiter having created one meanwhile): two holders. */
+export async function breakStaleLock(lockPath: string, observedRaw: string, stillStale?: (raw: string) => Promise<boolean>): Promise<void> {
+  const breaking = `${lockPath}.breaking`;
   try {
-    await rename(lockPath, aside);
-  } catch {
-    return; // Another waiter already took it.
+    await (await open(breaking, 'wx', 0o600)).close();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return;
+    // A breaker killed mid-turn leaves its marker; a live one holds it for
+    // milliseconds.
+    const age = await stat(breaking).then((info) => Date.now() - info.mtimeMs).catch(() => undefined);
+    if (age !== undefined && age > LOCK_TUNING.staleMs) await unlink(breaking).catch(() => undefined);
+    return;
   }
-  const taken = await readFile(aside, 'utf8').catch(() => undefined);
-  if (taken !== observedRaw) await link(aside, lockPath).catch(() => undefined);
-  await unlink(aside).catch(() => undefined);
+  try {
+    const judged = await stat(lockPath).catch(() => undefined);
+    const current = await readFile(lockPath, 'utf8').catch(() => undefined);
+    if (!judged || current !== observedRaw) return;
+    if (stillStale && !await stillStale(current)) return;
+    const aside = `${lockPath}.${process.pid}.${randomBytes(6).toString('hex')}.stale`;
+    try {
+      await rename(lockPath, aside);
+    } catch {
+      return; // Released meanwhile.
+    }
+    const taken = await stat(aside).catch(() => undefined);
+    if (!taken || taken.ino !== judged.ino) await link(aside, lockPath).catch(() => undefined);
+    await unlink(aside).catch(() => undefined);
+  } finally {
+    await unlink(breaking).catch(() => undefined);
+  }
 }
 
 /** Cross-process mutual exclusion on `lockPath`, serialized in-process first so
@@ -90,11 +134,24 @@ export async function breakStaleLock(lockPath: string, observedRaw: string): Pro
  * past each other. */
 export async function withFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
   const previous = lockQueues.get(lockPath) ?? Promise.resolve();
-  const result = previous.then(() => holdFileLock(lockPath, run));
+  const result = queueTurn(lockPath, previous).then(() => holdFileLock(lockPath, run));
   const settled = result.catch(() => undefined);
   lockQueues.set(lockPath, settled);
   void settled.then(() => { if (lockQueues.get(lockPath) === settled) lockQueues.delete(lockPath); });
   return result;
+}
+
+/** Waits for this process's earlier holder of `lockPath` -- for as long as
+ * one may legitimately wait for the file and then hold it -- then fails the
+ * same loud way a cross-process wait does. Waiting forever on a holder stuck
+ * in this process left every write behind it hanging with no error. */
+function queueTurn(lockPath: string, previous: Promise<unknown>): Promise<void> {
+  const limit = LOCK_TUNING.waitMs + LOCK_TUNING.maxHoldMs;
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new StateLockTimeoutError(lockPath, `this process (pid ${process.pid})`, limit)), limit);
+    timer.unref?.();
+    void previous.then(() => { clearTimeout(timer); resolve(); });
+  });
 }
 
 /** Resolves at a moment this process holds and awaits no file lock. A caller
@@ -112,7 +169,8 @@ export function fileLocksHeld(): boolean {
 
 async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
   await ensurePrivateDirectory(dirname(lockPath));
-  const owner: LockOwner = { pid: process.pid, host: hostname(), nonce: randomBytes(12).toString('hex'), at: new Date().toISOString() };
+  const pidns = pidNamespace();
+  const owner: LockOwner = { pid: process.pid, host: hostname(), nonce: randomBytes(12).toString('hex'), at: new Date().toISOString(), ...(pidns ? { pidns } : {}) };
   const mine = JSON.stringify(owner);
   const started = Date.now();
   let holder: string | undefined;
@@ -129,7 +187,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise
       const other = parseLockOwner(raw);
       holder = other ? `pid ${other.pid} on ${other.host}` : undefined;
       if (await lockLooksStale(lockPath, raw)) {
-        await breakStaleLock(lockPath, raw);
+        await breakStaleLock(lockPath, raw, (current) => lockLooksStale(lockPath, current));
         continue;
       }
     }
@@ -139,9 +197,22 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise
     if (waited > LOCK_TUNING.waitMs) throw new StateLockTimeoutError(lockPath, holder, waited);
     await new Promise((resolve) => setTimeout(resolve, 8 + Math.floor(Math.random() * 12)));
   }
+  // The heartbeat: a held lock's file stays fresh, so other processes judge
+  // it by age alone (lockLooksStale) -- up to maxHoldMs.
+  const heldSince = Date.now();
+  const heartbeat = setInterval(() => {
+    if (Date.now() - heldSince > LOCK_TUNING.maxHoldMs) { clearInterval(heartbeat); return; }
+    void readFile(lockPath, 'utf8').then((current) => {
+      if (current !== mine) { clearInterval(heartbeat); return undefined; }
+      const now = new Date();
+      return utimes(lockPath, now, now);
+    }).catch(() => undefined);
+  }, LOCK_TUNING.heartbeatMs);
+  heartbeat.unref();
   try {
     return await run();
   } finally {
+    clearInterval(heartbeat);
     // Only ever remove our own lock: if it was judged stale and replaced while
     // we ran, the file now belongs to someone else.
     const current = await readFile(lockPath, 'utf8').catch(() => undefined);
@@ -163,8 +234,7 @@ declare const stateLockBrand: unique symbol;
 export type StateLockHeld = { readonly [stateLockBrand]: true };
 const STATE_LOCK_HELD = Object.freeze({}) as StateLockHeld;
 
-/** The one lock every index and transcript write runs under. Order is always
- * state lock first, then any session lock -- never the reverse. */
+/** The one lock every index and transcript write runs under. */
 export function withStateLock<T>(run: (held: StateLockHeld) => Promise<T>): Promise<T> {
   return withFileLock(stateLockPath(), () => run(STATE_LOCK_HELD));
 }

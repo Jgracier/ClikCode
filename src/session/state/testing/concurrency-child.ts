@@ -3,6 +3,8 @@
 
 import { forceStoreSession, unforceStoreSession } from '../../ephemeral.js';
 import type { HarnessSession } from '../../model.js';
+import { open, unlink } from 'node:fs/promises';
+import { withFileLock } from '../../store/locks.js';
 import { readState } from '../read.js';
 import { writeState } from '../write.js';
 
@@ -46,6 +48,18 @@ async function main(): Promise<void> {
     } as HarnessSession);
     forceStoreSession(id);
     try { await writeState(state); } finally { unforceStoreSession(id); }
+  } else if (scenario === 'contend') {
+    // Takes the lock at `id` (a path) `count` times; inside, proves it is
+    // the only holder by creating a marker exclusively.
+    for (let step = 0; step < count; step += 1) {
+      await withFileLock(id, async () => {
+        const marker = await open(`${id}.inside`, 'wx').catch(() => undefined);
+        if (!marker) throw new Error('two holders at once');
+        await marker.close();
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        await unlink(`${id}.inside`);
+      });
+    }
   } else throw new Error(`unknown scenario ${scenario}`);
 }
 
