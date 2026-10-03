@@ -332,7 +332,21 @@ export async function sendVendorTurn(input: {
     // A harness that reports a failed call as its reply (Hermes, over ACP
     // and the CLI alike) declares what those replies look like.
     const replyError = !result.isError ? harnessReplyError(harness, result.text ?? '') : undefined;
-    if (replyError) result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
+    if (replyError) {
+      // The notice is not the answer: take it off what is shown and saved, so
+      // the next account continues from real progress rather than a banner.
+      // Read from the saved answer, which the title filter already produced;
+      // a notice-only reply clears it.
+      const onScreen = harnessReplyError(harness, session.pendingTurn?.response ?? '');
+      const withoutNotice = onScreen?.withoutNotice;
+      if (withoutNotice) {
+        checkpoint.response(withoutNotice, 'replace');
+        prompter?.response(withoutNotice, 'replace');
+      } else if (onScreen) {
+        editAnswer('clear');
+      }
+      result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
+    }
     if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
     if (session.nativeSessionId) keepTransport(transport);
     // A route that keeps no history: forget the session, so the next turn
@@ -462,12 +476,17 @@ export async function sendVendorTurn(input: {
       } else {
         forgetNativeThread(session);
         // Built while the interrupted attempt's touched-file hints are still
-        // on the checkpoint; only then is the partial response cleared,
-        // because a fresh thread answers the whole request again and keeping
-        // the old half would show it twice (the direct-API path does the
-        // same).
+        // on the checkpoint. Keep any real progress already on screen: the
+        // rehydration prompt tells the next account to finish without
+        // repeating, so clearing here made the first half vanish and the
+        // retry look like a fresh start from the original prompt.
         turnText = interruptedTurnFailoverPrompt(session, { requestContext });
-        editAnswer('clear');
+        const partial = session.pendingTurn?.response ?? '';
+        if (partial.trim()) {
+          if (!/\n\s*\n\s*$/.test(partial)) editAnswer('new-paragraph');
+        } else {
+          editAnswer('clear');
+        }
       }
       continue;
     }

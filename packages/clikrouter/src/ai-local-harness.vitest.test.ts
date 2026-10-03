@@ -621,6 +621,17 @@ describe('replies that are really a failed call', () => {
     expect(harnessReplyError(harness('auggie'), '⚠️ **You have run out of usage for an account. Please upgrade.** ⚠️')).toEqual({ statusCode: 402 });
     expect(harnessReplyError(harness('auggie'), 'The test says “You have run out of usage for” in a fixture.')).toBeUndefined();
   });
+
+  it('reads Cursor\'s upgrade banner as a spent plan, keeping any real progress before it', () => {
+    expect(harnessReplyError(harness('cursor'), 'Upgrade your plan to continue')).toEqual({ statusCode: 402 });
+    expect(harnessReplyError(harness('cursor'), 'Upgrade your account to continue')).toEqual({ statusCode: 402 });
+    expect(harnessReplyError(harness('cursor'), 'Here is the patch.\n\nUpgrade your plan to continue')).toEqual({
+      statusCode: 402, withoutNotice: 'Here is the patch.',
+    });
+    expect(harnessReplyError(harness('cursor'), 'Add a payment method to continue')).toEqual({ statusCode: 402 });
+    expect(harnessReplyError(harness('cursor'), 'Please sign in to continue')).toEqual({ statusCode: 401 });
+    expect(harnessReplyError(harness('cursor'), 'I would upgrade your plan to continue the migration.')).toBeUndefined();
+  });
 });
 
 describe('an ACP launch', () => {
