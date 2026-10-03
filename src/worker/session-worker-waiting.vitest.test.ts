@@ -24,7 +24,7 @@ import { closeAllWorkerClients, followWorkerTurn, questionOrWorker, runTurnThrou
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const distEntry = join(repoRoot, 'dist', 'index.js');
-const ENV_KEYS = ['CLIKCODE_HOME', 'CLIKCODE_WORKER_ENTRY', 'XDG_CONFIG_HOME', 'CLIKCODE_GATEWAY_URL_OVERRIDE', 'CLIKCODE_WORKER_IDLE_EXIT_MS'] as const;
+const ENV_KEYS = ['CLIKCODE_HOME', 'CLIKCODE_WORKER_ENTRY', 'XDG_CONFIG_HOME', 'CLIKCODE_GATEWAY_URL_OVERRIDE', 'CLIKCODE_WORKER_IDLE_EXIT_MS', 'CLIKCODE_WORKER_BUILD_WATCH_MS'] as const;
 const savedEnv = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 
 let root: string | undefined;
@@ -260,6 +260,18 @@ describe('a session worker waits for what it should', () => {
     await processExit(pid);
     expect(JSON.stringify((await storedSession(session.id)).messages)).toContain('Job done.');
   }, 60_000);
+
+  it('idle-exits on time while its build check keeps running', async () => {
+    // A build check far more often than the idle limit: the check must not
+    // restart the idle timer, or the worker would never leave.
+    process.env.CLIKCODE_WORKER_BUILD_WATCH_MS = '100';
+    const session = await gatewaySession('bypass', 1_000);
+    const client = await attach(session.id);
+    const pid = workerPids[0]!;
+    client.close();
+    clients.splice(0);
+    await processExit(pid, 8_000);
+  }, 30_000);
 
   it('records a shell it stops on shutdown as a queued notification for the next worker', async () => {
     const session = await gatewaySession();

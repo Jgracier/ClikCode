@@ -40,6 +40,9 @@ import { generateWorkerToken, removeWorkerRecord, socketPathFor, takeConversatio
  * that motivated this design did. CLIKCODE_WORKER_IDLE_EXIT_MS overrides it
  * for tests that need to watch a worker decide to exit. */
 const IDLE_EXIT_MS = Number(process.env.CLIKCODE_WORKER_IDLE_EXIT_MS) > 0 ? Number(process.env.CLIKCODE_WORKER_IDLE_EXIT_MS) : 30 * 60 * 1000;
+/** How often an idle worker checks whether a rebuild replaced its entry.
+ * CLIKCODE_WORKER_BUILD_WATCH_MS overrides it for tests. */
+const BUILD_WATCH_MS = Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS) > 0 ? Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS) : 15_000;
 
 /** A background shell keeps an otherwise idle worker alive -- its exit is
  * owed to the model -- but not for ever: this long after it started, with
@@ -145,20 +148,25 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   /** Idle means no client, no turn, no background shell whose exit the
    * model is still owed, and no notification on its way to it. A running
    * shell instead arms the abandoned-shell ceiling (ABANDONED_SHELL_MS). */
+  /** Nobody attached, nothing running, and the entry on disk is no longer
+   * what this process loaded: leave now so the next open gets a fresh
+   * worker. An attached window is left alone -- its own attach asks for
+   * retirement; killing under a live prompt is worse. */
+  const leaveIfStaleBuild = (): boolean => {
+    if (!spawnedBuild || observer.attachedCount > 0 || retireBlocker()) return false;
+    const live = currentWorkerBuild();
+    if (!live || live === spawnedBuild) return false;
+    void shutdown('replaced by a newer ClikCode build');
+    return true;
+  };
+
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
     if (retireWhenIdle && !retireBlocker()) { void shutdown('replaced by a newer ClikCode build'); return; }
-    // Nobody attached, nothing running, and the entry on disk is no longer
-    // what this process loaded: leave now so the next open gets a fresh
-    // worker. An attached window is left alone -- its own attach or a board
-    // sweep asks for retirement; killing under a live prompt is worse.
-    if (spawnedBuild && observer.attachedCount === 0 && !retireBlocker()) {
-      const live = currentWorkerBuild();
-      if (live && live !== spawnedBuild) { void shutdown('replaced by a newer ClikCode build'); return; }
-    }
+    if (leaveIfStaleBuild()) return;
     if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
     if (runningShellCount(agentSession) > 0) {
       const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
@@ -592,8 +600,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   scheduleIdleExit();
   // A rebuild while this worker sits idle with nobody attached: scheduleIdleExit
   // only runs on attach/detach/turn edges otherwise, so without this a stale
-  // worker would wait out the full idle timeout before noticing.
-  const buildWatch = setInterval(() => scheduleIdleExit(), 15_000);
+  // worker would wait out the full idle timeout before noticing. This checks
+  // the build only: re-arming the idle timer here would restart it every
+  // tick, and it would never fire.
+  const buildWatch = setInterval(() => { leaveIfStaleBuild(); }, BUILD_WATCH_MS);
   buildWatch.unref();
   // A notification a previous worker recorded but never ran.
   void drainQueue().catch(() => undefined);
