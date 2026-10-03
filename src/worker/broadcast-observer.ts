@@ -55,7 +55,7 @@ export class BroadcastObserver implements TurnObserver {
   private liveActivities: LiveActivity[] = [];
   private livePlan: readonly PlanEntry[] = [];
   /** The turn and the session spool can both report one clerk event. */
-  private readonly seenActivity = new Set<string>();
+  private readonly seenActivity = new Map<string, string>();
   /** Each open request is kept WITH the event that asked it, so a client
    * attaching later is asked too (reofferPending). They used to go only to
    * whoever was attached at that moment: a turn waiting on an approval with
@@ -141,8 +141,9 @@ export class BroadcastObserver implements TurnObserver {
   activityEvent(event: HarnessActivityEvent): void {
     if (event.id) {
       const key = `${event.id}\0${event.kind}\0${event.parentId ?? ''}\0${event.label}`;
-      if (this.seenActivity.has(key)) return;
-      this.seenActivity.add(key);
+      const value = JSON.stringify(event);
+      if (this.seenActivity.get(key) === value) return;
+      this.seenActivity.set(key, value);
     }
     this.outputStarted = true;
     if (this.waitingLabel && isTranscriptActivity(event)) this.liveActivities.push({ event, responseOffset: this.liveText.length });
@@ -194,6 +195,7 @@ export class BroadcastObserver implements TurnObserver {
   /** startWaiting, naming the prompt the turn runs, for clients following it. */
   startTurn(message: string, prompt?: string): void {
     this.generation++;
+    this.seenActivity.clear();
     this.liveText = '';
     this.waitingLabel = message;
     this.livePrompt = prompt;
