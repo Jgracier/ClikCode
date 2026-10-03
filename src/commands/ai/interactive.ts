@@ -38,7 +38,6 @@ import { harnessModelLabel, resolveNativeModel, warmNativeModelCatalog } from '.
 import { settingLabel } from '../../tui/pickers/setting-scope.js';
 import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, nativeAvailableCommands } from '../../turn/vendor-process.js';
-import { discardInterruptedTurn } from '../../turn/turn-journal.js';
 import { synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { turnEnvironment } from '../../turn/turn-environment.js';
 import { runSessionTurn } from '../../turn/session-turn.js';
@@ -61,7 +60,7 @@ import { exportTranscript } from '../../tui/slash/export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from '../../tui/slash/memory.js';
 import { nativeManagerListing } from '../../tui/slash/native-manager.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../../tui/pickers/account.js';
-import { interactiveResumeInPicker, sameProviderCanTakeTurn } from '../../tui/pickers/resume-in.js';
+import { interactiveResumeInPicker, interruptedTurnResumePrompt, sameProviderCanTakeTurn } from '../../tui/pickers/resume-in.js';
 import { chooseOption } from '../../tui/pickers/choose.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
@@ -393,19 +392,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     // An account of this provider got its quota back after failover looked
     // (a re-read landed meanwhile): send it again here, once, rather than
     // offering to leave the provider.
-    const again = promptText !== autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
+    const again = promptText !== autoResent && await sameProviderCanTakeTurn(id);
     if (again) {
-      // As Resume in does: the message is sent again, so it must not also
-      // stay behind as the interrupted turn.
-      await discardInterruptedTurn(id, promptText).catch(() => undefined);
+      const continuation = await interruptedTurnResumePrompt(id, promptText);
       autoResent = promptText;
-      resend = promptText;
+      resend = continuation;
       notice = undefined;
     } else {
-      const moved = await interactiveResumeInPicker(terminal, id, promptText).catch(() => undefined);
+      const moved = await interactiveResumeInPicker(terminal, id, promptText);
       if (moved) {
-        id = moved;
-        resend = promptText;
+        id = moved.id;
+        resend = moved.prompt;
         notice = undefined;
       }
     }

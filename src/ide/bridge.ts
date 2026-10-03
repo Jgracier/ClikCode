@@ -28,7 +28,6 @@ import { discardIfBlank, ensureSessionOnDisk } from '../session/blank.js';
 import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneAttachment } from '../session/attachments.js';
 import { compactPath } from '../harness/protocol/labels.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
-import { discardInterruptedTurn } from '../turn/turn-journal.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
@@ -70,7 +69,7 @@ import { interactiveToolsPicker } from '../tui/pickers/tools.js';
 import { interactiveSettingsPicker } from '../tui/pickers/settings.js';
 import { interactiveSwarmPicker } from '../tui/pickers/swarm.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
-import { interactiveResumeInPicker, sameProviderCanTakeTurn } from '../tui/pickers/resume-in.js';
+import { interactiveResumeInPicker, interruptedTurnResumePrompt, sameProviderCanTakeTurn } from '../tui/pickers/resume-in.js';
 import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import type { WorkerEvent } from '../worker/protocol.js';
@@ -535,17 +534,17 @@ export class IdeBridge {
       if (!cancelled && !options.queuedTurnId && !options.resent && isUsageExhaustedMessage(message)) {
         // Out of usage on every account here: once more on this provider if
         // an account came back, otherwise the harnesses that still have some.
-        const again = line !== this.autoResent && await sameProviderCanTakeTurn(id).catch(() => false);
+        const again = line !== this.autoResent && await sameProviderCanTakeTurn(id);
         if (again) {
-          await discardInterruptedTurn(id, line).catch(() => undefined);
+          const continuation = await interruptedTurnResumePrompt(id, line);
           this.autoResent = line;
-          await this.execute(line, { resent: true });
+          await this.execute(continuation, { resent: true });
           return;
         }
-        const moved = await interactiveResumeInPicker(this.prompter, id, line).catch(() => undefined);
+        const moved = await interactiveResumeInPicker(this.prompter, id, line);
         if (moved) {
-          await this.switchTo(moved);
-          await this.execute(line, { resent: true });
+          await this.switchTo(moved.id);
+          await this.execute(moved.prompt, { resent: true });
           return;
         }
       }
