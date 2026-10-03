@@ -2349,23 +2349,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.paletteCommands = commands;
     // A message sent now that started no turn is not waiting any more.
     if (this.sendNow?.taken) this.sendNow = undefined;
-    if (!input.isTTY) {
-      // A single check here used to end the whole session the instant it
-      // failed once -- fatal specifically after a long suspend/resume
-      // window (a vendor login's own OAuth wait, the one case this
-      // codebase has anything that runs for 20+ seconds with the real
-      // terminal handed over), where a connection hiccup reconnecting a
-      // moment later still read as isTTY=false on the very next check and
-      // silently discarded whatever the suspended command was about to
-      // save, with no error and no crash log to show for it (this exact
-      // path, confirmed live: real OAuth completed, then the whole process
-      // was just gone). Retrying briefly gives a transient blip a real
-      // chance to resolve before treating the terminal as genuinely closed.
-      for (let attempt = 0; attempt < 20 && !input.isTTY; attempt++) {
-        await new Promise((resolveWait) => setTimeout(resolveWait, 500));
-      }
-      if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
-    }
+    // Node sets isTTY once when it creates process.stdin and never changes
+    // it, and this prompter is only built when stdin is a TTY
+    // (terminalUiSupported). So this is a guard, not a wait: an earlier
+    // version retried here for 10s after a vendor login, which could never
+    // change the answer -- it only delayed the same exit.
+    if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
     return new Promise((resolveQuestion, rejectQuestion) => {
       let value = this.queuedDraft ?? '';
       this.queuedDraft = undefined;
