@@ -7,6 +7,7 @@ import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 import { firstUsefulLine } from '../../protocol/stderr-line.js';
 import { LineBuffer } from '../../protocol/json-lines.js';
+import { configuredIdleMs, PERSISTENT_TOOL_IDLE_MS } from '../turn-watchdog.js';
 
 interface NativeHarnessTurnOutput {
   stdout: string;
@@ -183,27 +184,16 @@ interface NativeHarnessTurnOptions {
 /** Deliberately an *idle* timeout rather than a wall-clock cap: a legitimate
  * agentic turn can run for a very long time, but it narrates while it does.
  * A harness that has said nothing at all for this long is wedged, and without
- * this the turn blocks forever with only Ctrl+C to break it. */
-const DEFAULT_TURN_IDLE_TIMEOUT_MS = 10 * 60 * 1000;
-
-/** A build or test suite can legitimately be silent far longer than a model. */
-const DEFAULT_TOOL_IDLE_TIMEOUT_MS = 60 * 60 * 1000;
+ * this the turn blocks forever with only Ctrl+C to break it. The budgets and
+ * CLIKCODE_TURN_IDLE_TIMEOUT_MS are the persistent transports' own
+ * (turn-watchdog.ts): one policy, one definition. */
+const DEFAULT_TOOL_IDLE_TIMEOUT_MS = PERSISTENT_TOOL_IDLE_MS;
 
 /** Hard cap on retained output when nothing streams it away. */
 const TURN_OUTPUT_LIMIT = 16 * 1024 * 1024;
 
 /** Retained tail per stream when the caller consumes lines as they arrive. */
 const TURN_OUTPUT_TAIL_LIMIT = 4 * 1024 * 1024;
-
-function turnIdleTimeoutMs(
-  override?: number, environment: NodeJS.ProcessEnv = process.env,
-): number {
-  if (override !== undefined) return override;
-  const configured = Number(environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS);
-  return Number.isFinite(configured) && environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS !== undefined && environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS !== ''
-    ? configured
-    : DEFAULT_TURN_IDLE_TIMEOUT_MS;
-}
 
 /** A failed turn keeps its two streams apart: stderr is the vendor CLI's own
  * diagnostics and is safe to classify, stdout may be model-authored text that
@@ -271,7 +261,7 @@ export async function captureNativeHarnessTurn(
     let closeGraceTimer: NodeJS.Timeout | undefined;
     let timedOut = false;
     let timedOutAfterMs = 0;
-    const idleLimit = turnIdleTimeoutMs(options.idleTimeoutMs);
+    const idleLimit = options.idleTimeoutMs ?? configuredIdleMs();
     const toolIdleLimit = options.toolIdleTimeoutMs ?? DEFAULT_TOOL_IDLE_TIMEOUT_MS;
     const controller = options.idleController as BoundIdleController | undefined;
     const tailLimit = Math.max(1024, options.retainTailLimit ?? TURN_OUTPUT_TAIL_LIMIT);
