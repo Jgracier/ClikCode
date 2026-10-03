@@ -192,6 +192,47 @@ SCENARIOS = {
         'watch': [], 'final_once': ['part2 ok', 'part11 ok', 'All twelve parts pass.'],
         'never': ['Interrupted turn activity'],
     },
+    # Into another conversation and back. The conversation joined is the only
+    # one on screen, even scrolled all the way up: the one left is not kept
+    # above it, and no screenful of blank rows separates them.
+    'switch-shows-only-that-conversation': {
+        'cols': 70,
+        'turns': [{'blocks': ['ALPHA answer lives here.']}, {'blocks': ['BETA answer lives here.']}],
+        'steps': [
+            ('type', 'first conversation question'), ('wait_for', 'ALPHA answer lives here.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2),
+            ('type', 'second conversation question'), ('wait_for', 'BETA answer lives here.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'ALPHA answer lives here.', 10), ('mark',), ('settle', 2),
+            ('keys', '\x1b[<64;10;10M' * 40), ('settle', 1),
+        ],
+        'watch': [], 'final_contains': ['first conversation question', 'ALPHA answer lives here.'],
+        'never_after_mark': ['BETA answer lives here.', 'second conversation question'],
+    },
+    # The phone report: back into a conversation while its turn is running.
+    # Its earlier history is there above the live turn -- not cut off at the
+    # live answer -- and the conversation left is nowhere, scrolled up or not.
+    'switch-into-running-turn-keeps-history': {
+        'cols': 70, 'env': {'FAKE_TOOL_MS': '1500'},
+        'turns': [{'blocks': ['ALPHA answer lives here.']}, {'blocks': ['BETA answer lives here.']},
+                  {'tools_first': 8, 'blocks': ['All eight parts pass.']}],
+        'steps': [
+            ('type', 'first conversation question'), ('wait_for', 'ALPHA answer lives here.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2),
+            ('type', 'second conversation question'), ('wait_for', 'BETA answer lives here.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'ALPHA answer lives here.', 10), ('settle', 1),
+            ('type', 'run every part'), ('wait_for', 'esc to interrupt', 30), ('settle', 3),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'BETA answer lives here.', 10), ('settle', 1.5),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'run every part', 10), ('mark',), ('settle', 1),
+            ('keys', '\x1b[<64;10;10M' * 40), ('settle', 1),
+        ],
+        'watch': [],
+        'ever_after_mark': ['first conversation question', 'ALPHA answer lives here.'],
+        'never_after_mark': ['BETA answer lives here.', 'second conversation question'],
+    },
     # The slash menu, a step at a time. Choosing a command that takes a value
     # opens its own titled picker -- the typed command gone, never left under
     # it -- starting on the current value, and the change is confirmed.
@@ -390,6 +431,7 @@ def run(name, spec, entry, keep):
     problems = []
     pump(spec.get('startup', 5))
     typed_at = None
+    marked_at = None
     for step in spec['steps']:
         if step[0] == 'type':
             for ch in step[1]: os.write(fd, ch.encode()); pump(0.02)
@@ -402,6 +444,9 @@ def run(name, spec, entry, keep):
             if not pump(step[2], step[1]): problems.append(f'timed out waiting for {step[1]!r}')
         elif step[0] == 'settle':
             pump(step[1])
+        elif step[0] == 'mark':
+            # Where 'never_after_mark' starts looking.
+            marked_at = len(frames)
         elif step[0] == 'damage_and_redraw':
             # Simulate cells lost by the client: the app's cached frame is still
             # intact, but the emulated display is blank. Ctrl+L must rebuild it.
@@ -498,6 +543,11 @@ def run(name, spec, entry, keep):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     for phrase in spec.get('final_once', []):
         if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
+    for phrase in spec.get('ever_after_mark', []):
+        if not any(phrase in text for _, text in frames[marked_at or 0:]): problems.append(f'never on screen after the mark: {phrase!r}')
+    for phrase in spec.get('never_after_mark', []):
+        shown = [t for t, text in frames[marked_at or 0:] if phrase in text]
+        if shown: problems.append(f'shown in {len(shown)} frame(s) after the mark, first at {shown[0]:.2f}s: {phrase!r}')
     # Sequences the screen never shows (title, progress, focus, a
     # notification), in the order they must have been written.
     at = 0

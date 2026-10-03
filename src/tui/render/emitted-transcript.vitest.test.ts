@@ -92,15 +92,16 @@ describe('what has already been written to scrollback', () => {
     expect(record.wasRetired('done')).toBe(false);
   });
 
-  it('asks for a blank screen only when something is already above it', () => {
+  it('asks for a reseed the same way whether or not anything was written', () => {
     const first = new EmittedTranscript();
     first.requestReseed();
-    expect(first.pendingReseed()).toBe('first');
+    expect(first.pendingReseed()).toBe(true);
 
     const returning = new EmittedTranscript();
     returning.settle(3);
+    returning.reseeded();
     returning.requestReseed();
-    expect(returning.pendingReseed()).toBe('scroll-away');
+    expect(returning.pendingReseed()).toBe(true);
   });
 
   it('starts from nothing after a reseed, so the WHOLE conversation is rewritten', () => {
@@ -126,10 +127,10 @@ describe('what has already been written to scrollback', () => {
     const point = record.resume([user('keep')]);
     expect(point.diverged).toBe(true);
     expect(point.firstUnwritten).toBe(0);
-    expect(record.pendingReseed()).toBe('scroll-away');
+    expect(record.pendingReseed()).toBe(true);
   });
 
   it('starts a fresh session already owing a reseed, before anything is written', () => {
-    expect(new EmittedTranscript().pendingReseed()).toBe('first');
+    expect(new EmittedTranscript().pendingReseed()).toBe(true);
   });
 });
