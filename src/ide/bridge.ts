@@ -75,6 +75,7 @@ import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import type { WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
+import { watchConversationList, type ListWatch } from '../session/list-watch.js';
 import { encodeTerminalSpec, IDE_PROTOCOL, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
 import { sessionEvent } from './session-event.js';
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
@@ -105,6 +106,9 @@ export class IdeBridge {
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
   private readonly timers: NodeJS.Timeout[] = [];
   private closed = false;
+  /** Open conversations lists in the editor, and the watch behind them. */
+  private listWatchers = 0;
+  private listWatch: ListWatch | undefined;
   /** A setting chosen in the editor's own widget is on screen there already:
    * its "Model set to …" confirmation is not said again in the chat. */
   quietOutput = 0;
@@ -166,6 +170,9 @@ export class IdeBridge {
       case 'choose':
         void this.choose(request.requestId, request.choice);
         return;
+      case 'watch-conversations':
+        this.watchConversations(request.on);
+        return;
       case 'close':
         void this.shutdown();
         return;
@@ -175,9 +182,23 @@ export class IdeBridge {
     }
   }
 
+  /** While the editor shows a conversations list, tell it when the state or
+   * worker directories change, so it re-queries then instead of on a timer. */
+  private watchConversations(on: boolean): void {
+    this.listWatchers = Math.max(0, this.listWatchers + (on ? 1 : -1));
+    if (this.listWatchers && !this.listWatch && !this.closed) {
+      this.listWatch = watchConversationList(() => this.channel.send({ type: 'conversations-changed' }));
+    } else if (!this.listWatchers && this.listWatch) {
+      this.listWatch.stop();
+      this.listWatch = undefined;
+    }
+  }
+
   async shutdown(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
+    this.listWatch?.stop();
+    this.listWatch = undefined;
     for (const timer of this.timers) clearInterval(timer);
     this.prompter.cancelAll();
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));

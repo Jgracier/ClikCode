@@ -256,8 +256,11 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     const spin = setInterval(() => {
       if (finished || aside) return;
       const anyWorking = rows().some((row) => row.working);
+      const hadWorking = wasWorking;
       if (settled(anyWorking)) return;
-      if (!anyWorking) return;
+      // One more draw after the last running row finishes, or its spinner
+      // stays on screen until a key is pressed.
+      if (!anyWorking && !hadWorking) return;
       if (!reducedMotion()) frame += 1;
       draw();
     }, SPIN_MS);

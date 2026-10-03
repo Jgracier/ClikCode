@@ -63,7 +63,7 @@ export function currentWorkerBuild(): string | undefined {
   }
 }
 
-function workersDirectory(): string {
+export function workersDirectory(): string {
   return join(stateDirectory(), 'workers');
 }
 

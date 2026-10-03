@@ -23,6 +23,7 @@ import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { sessionClaimIsLive } from '../../session/claim.js';
 import { livePendingTurns, liveWorkerSessions } from '../../session/liveness.js';
+import { watchConversationList } from '../../session/list-watch.js';
 import { conversationRows, recencySection, sectionRank, SECTION_TITLES, type ConversationRow, type ConversationSection } from '../../session/conversation-rows.js';
 import { activityGlyph, subagentOptions, turnPace, workingDetail } from './conversation-activity.js';
 import { conversationIdFor, conversationOption, isBlankConversation } from '../../session/options.js';
@@ -364,21 +365,20 @@ export async function interactiveSessionPicker(
   };
   // Asked for on every keypress (the list redraws, and a picker re-reads its
   // rows each time). Nothing it reads changes between keys except discovery
-  // landing, so the rows are rebuilt only then -- not all five hundred of
-  // them per arrow press. A spinning row also re-checks the journal so the
-  // spinner stops when that turn ends.
-  let lastActivityAt = 0;
+  // landing or the watch below, so the rows are rebuilt only then -- not all
+  // five hundred of them per arrow press.
   const buildOptions = (): PickerOption<string>[] => {
     if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision) {
-      if (built.options.some((row) => row.working) && Date.now() - lastActivityAt >= 1_000) {
-        lastActivityAt = Date.now();
-        refreshActivity();
-      }
       return built.options;
     }
     built = { discovering, slow: slowDiscovery, discovered, revision: listRevision, options: buildFresh() };
     return built.options;
   };
+  // A turn starting or ending, or a worker exiting, writes the state or
+  // worker directories: re-check then, instead of polling while a row spins,
+  // so the spinner stops when the turn is over (session/list-watch.ts; a
+  // slow poll where the directories cannot be watched).
+  const listWatch = watchConversationList(refreshActivity);
 
   /** What a row action did to the chat that is open, so the loop can move off
    * one that no longer exists (deleted) or is put away (archived). */
@@ -415,29 +415,33 @@ export async function interactiveSessionPicker(
     }
   };
   let selected: string | undefined;
-  if (onBoard) {
-    // The row for the conversation this window is in: its root, since the row
-    // stands for the whole conversation and names its latest chat.
-    const currentRoot = current ? conversationIdFor(current) : undefined;
-    const initial = buildOptions().find((option) => {
-      const listed = sessions.find((session) => session.id === option.value);
-      return listed !== undefined && conversationIdFor(listed) === currentRoot;
-    })?.value;
-    const result = await rl.board!({
-      conversations: buildOptions, commands: boardCommands!, refresh: refreshes, onAction: manage,
-      ...(initial ? { initial } : {}),
-      ...(hooks?.onSessionsSettled ? { onSessionsSettled: hooks.onSessionsSettled } : {}),
-    });
-    if (result && 'compose' in result) return { compose: result.compose };
-    if (result && 'command' in result) return { command: result.command };
-    selected = result?.open;
-  } else {
-    selected = await chooseOption(rl, 'Conversations', buildOptions(),
-      (value, action) => manage(value, action),
-      { refreshedOptions: buildOptions, refresh: refreshes,
-        // Taller than a settings list -- it is the place to look over
-        // everything running -- but never more than a small terminal can hold.
-        rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
+  try {
+    if (onBoard) {
+      // The row for the conversation this window is in: its root, since the row
+      // stands for the whole conversation and names its latest chat.
+      const currentRoot = current ? conversationIdFor(current) : undefined;
+      const initial = buildOptions().find((option) => {
+        const listed = sessions.find((session) => session.id === option.value);
+        return listed !== undefined && conversationIdFor(listed) === currentRoot;
+      })?.value;
+      const result = await rl.board!({
+        conversations: buildOptions, commands: boardCommands!, refresh: refreshes, onAction: manage,
+        ...(initial ? { initial } : {}),
+        ...(hooks?.onSessionsSettled ? { onSessionsSettled: hooks.onSessionsSettled } : {}),
+      });
+      if (result && 'compose' in result) return { compose: result.compose };
+      if (result && 'command' in result) return { command: result.command };
+      selected = result?.open;
+    } else {
+      selected = await chooseOption(rl, 'Conversations', buildOptions(),
+        (value, action) => manage(value, action),
+        { refreshedOptions: buildOptions, refresh: refreshes,
+          // Taller than a settings list -- it is the place to look over
+          // everything running -- but never more than a small terminal can hold.
+          rows: Math.max(8, Math.min(14, (process.stdout.rows ?? 24) - 16)) });
+    }
+  } finally {
+    listWatch.stop();
   }
   // Delete and archive always return to the list. If the open chat was the
   // one removed, the list's "current" is the fresh draft made above.

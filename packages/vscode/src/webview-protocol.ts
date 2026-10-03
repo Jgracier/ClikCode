@@ -43,12 +43,17 @@ export type ToWebview =
   | { type: 'ui-request'; id: string; request: IdeUiRequest }
   | { type: 'ui-update'; id: string; items: readonly IdePickItem[] }
   | { type: 'ui-cancel'; id: string }
+  /** ClikCode saw the conversations change: an open list re-queries. */
+  | { type: 'conversations-changed' }
   /** Integration tests only (extensionMode Test): read or drive the DOM. */
   | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key' | 'paste'; selector: string; text?: string };
 
 export type WebviewRequest =
   | { method: 'query'; query: IdeQueryName; provider?: string; network?: boolean }
   | { method: 'choose'; choice: IdeChoice }
+  /** A conversations list opened (`on`) or closed: ClikCode tells it of
+   * changes while it is open. */
+  | { method: 'watchConversations'; on: boolean }
   /** Workspace files matching a partial path, for @-mentions. */
   | { method: 'files'; text: string }
   /** `resume` of a conversation another chat shows brings that chat up instead. */

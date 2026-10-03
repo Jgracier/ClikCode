@@ -2,7 +2,7 @@
  * state file the way the terminal's pickers do, and the bridge answers the
  * revision-2 requests without disturbing a running turn. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Conf from 'conf';
@@ -186,6 +186,30 @@ describe('the bridge\'s revision-2 requests', () => {
     expect(await result('b')).toMatchObject({ ok: true });
     expect(duringTurn).toHaveBeenCalledWith('s1', '/permissions auto');
     expect(bridge.quietOutput).toBe(0);
+  });
+
+  it('tells an open conversations list when the state changes, and stops when the last one closes', async () => {
+    const { bridge, sent } = bridgeFor();
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-ide-watch-'));
+    process.env.CLIKCODE_HOME = root;
+    await mkdir(join(root, 'sessions'));
+    const changes = () => sent.filter((item) => item.type === 'conversations-changed').length;
+    const waitFor = async (ok: () => boolean) => {
+      for (let i = 0; i < 200 && !ok(); i += 1) await new Promise((resolve) => setTimeout(resolve, 10));
+      return ok();
+    };
+    bridge.handle({ type: 'watch-conversations', on: true });
+    bridge.handle({ type: 'watch-conversations', on: true });
+    await writeFile(join(root, 'sessions', 's1.json'), '{}');
+    expect(await waitFor(() => changes() > 0)).toBe(true);
+    bridge.handle({ type: 'watch-conversations', on: false });
+    expect((bridge as unknown as { listWatch?: unknown }).listWatch).toBeDefined();
+    bridge.handle({ type: 'watch-conversations', on: false });
+    expect((bridge as unknown as { listWatch?: unknown }).listWatch).toBeUndefined();
+    const after = changes();
+    await writeFile(join(root, 'index.json'), '{}');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(changes()).toBe(after);
   });
 
   it('will not move a conversation to another provider under a running turn', async () => {
