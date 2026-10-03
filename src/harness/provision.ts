@@ -2,10 +2,9 @@
  * only what that harness does not already have.
  *
  * MCP servers come from `<state dir>/mcp.json`. Skills come from the same
- * directories ClikCode's own agent reads. Hooks come from Claude's settings
- * files, and are written only for a harness that executes that same JSON.
- * Claude and Grok already load those files, so writing them again would run
- * every hook twice. A harness with a different hook schema is left alone.
+ * directories ClikCode's own agent reads. Hooks are not copied: Claude and
+ * Grok already run Claude's hook files, and every other harness uses a hook
+ * schema of its own.
  *
  * An existing name is never replaced. The vendor's copy may be one the user
  * edited, and a different command under the same name stays theirs.
@@ -17,7 +16,6 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js
 import { installMcpOnHarness, type McpServerEntry } from './mcp-registry.js';
 import { loadMcpServers, type McpServerSpec } from '../agent/mcp/config.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
-import type { HookConfig } from '../agent/hooks.js';
 import { discoverSkills, type Skill } from '../agent/skills.js';
 import { stateDirectory } from '../session/store/paths.js';
 
@@ -44,24 +42,10 @@ const PROJECT_SKILL_DIR: Record<string, readonly string[]> = {
   command: ['.commandcode', 'skills'],
 };
 
-/** Harnesses that already execute Claude's settings.json hooks. Writing a
- * second copy would run every hook twice. Everyone else uses a different
- * hook schema, so nothing is translated into it. */
-const INHERITS_CLAUDE_HOOKS = new Set(['claude', 'grok']);
-
-/** `inherits` already runs Claude's hook files. `different` uses another
- * schema, which is not rewritten. */
-export function hookShare(command: string): 'inherits' | 'different' {
-  return INHERITS_CLAUDE_HOOKS.has(command) ? 'inherits' : 'different';
-}
-
-const HOOK_EVENTS = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'SessionStart', 'Stop'] as const;
-
 export interface ProvisionResult {
   mcpInstalled: string[];
   mcpSkipped: string[];
   skillsCopied: string[];
-  hooksAdded: number;
 }
 
 export interface ProvisionInput {
@@ -99,53 +83,6 @@ function specToEntry(spec: McpServerSpec): McpServerEntry {
   return { name: spec.name, target: spec.url, ...(Object.keys(spec.headers).length ? { headers: spec.headers } : {}) };
 }
 
-/** Commands already declared for one event. A repeat of the same command is
- * the same hook, whatever matcher group it sits in. */
-function hookCommands(config: HookConfig | undefined, event: typeof HOOK_EVENTS[number]): Set<string> {
-  const commands = new Set<string>();
-  for (const group of config?.[event] ?? []) {
-    for (const hook of group.hooks ?? []) {
-      if (typeof hook.command === 'string' && hook.command.trim()) commands.add(hook.command.trim());
-    }
-  }
-  return commands;
-}
-
-/** Append hook commands the file does not already run. Existing groups are
- * not edited. Returns how many commands were added, and writes nothing when
- * that number is zero. */
-export async function syncClaudeHookFile(file: string, incoming: HookConfig): Promise<number> {
-  let root: Record<string, unknown> = {};
-  const existingText = await readFile(file, 'utf8').catch(() => undefined);
-  if (existingText?.trim()) {
-    let parsed: unknown;
-    try { parsed = JSON.parse(existingText); } catch { return 0; }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return 0;
-    root = parsed as Record<string, unknown>;
-  }
-  const current = root.hooks && typeof root.hooks === 'object' && !Array.isArray(root.hooks)
-    ? root.hooks as HookConfig
-    : {};
-  const merged: HookConfig = { ...current };
-  let added = 0;
-  for (const event of HOOK_EVENTS) {
-    const have = hookCommands(current, event);
-    const groups = [];
-    for (const group of incoming[event] ?? []) {
-      const fresh = (group.hooks ?? []).filter((hook) => typeof hook.command === 'string' && hook.command.trim() && !have.has(hook.command.trim()));
-      if (!fresh.length) continue;
-      added += fresh.length;
-      groups.push({ ...(group.matcher ? { matcher: group.matcher } : {}), hooks: fresh });
-    }
-    if (groups.length) merged[event] = [...(merged[event] ?? []), ...groups];
-  }
-  if (!added) return 0;
-  root.hooks = merged;
-  await mkdir(join(file, '..'), { recursive: true });
-  await writeFile(file, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
-  return added;
-}
-
 async function copySkill(skill: Skill, directory: string): Promise<boolean> {
   if (skill.name.includes('/') || skill.name.includes('\\') || skill.name === '..') return false;
   const destination = join(directory, skill.name);
@@ -168,7 +105,6 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   const mcpInstalled: string[] = [];
   const mcpSkipped: string[] = [];
   const skillsCopied: string[] = [];
-  let hooksAdded = 0;
 
   const loaded = await loadMcpServers(stateDir);
   const present = await vendorMcpServerNames(input.harness.command, home, profile);
@@ -211,14 +147,11 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     }
   }
 
-  // inherits: already running. different: another schema, left untouched.
-  if (hookShare(input.harness.command) === 'inherits') hooksAdded = 0;
-
-  return { mcpInstalled, mcpSkipped, skillsCopied, hooksAdded };
+  return { mcpInstalled, mcpSkipped, skillsCopied };
 }
 
 /** Grok's compat.claude flags default to on. An explicit false is the only off. */
-async function grokImports(home: string, flag: 'mcps' | 'skills' | 'hooks'): Promise<boolean> {
+async function grokImports(home: string, flag: 'mcps' | 'skills'): Promise<boolean> {
   const text = await readFile(join(home, '.grok', 'config.toml'), 'utf8').catch(() => '');
   const section = text.match(/\[compat\.claude\][^\[]*/);
   if (!section) return true;
