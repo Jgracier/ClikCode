@@ -37,16 +37,14 @@ describe('how a turn reads', () => {
   });
 
   it('says what the turn is doing: you, the call, the reasoning, then the thinking in words', () => {
-    expect(turnStatus({ asking: true, toolPhase: 'running tests' })).toEqual({ label: 'waiting for you', tone: 'asking', stall: 0 });
-    expect(turnStatus({ toolPhase: 'running tests', quietMs: 60_000 })).toEqual({ label: 'running tests', tone: 'tool', stall: 0 });
+    expect(turnStatus({ asking: true, toolPhase: 'running tests' })).toEqual({ label: 'waiting for you', tone: 'asking' });
+    expect(turnStatus({ toolPhase: 'running tests' })).toEqual({ label: 'running tests', tone: 'tool' });
     expect(turnStatus({ thought: '**Inspecting the parser** I should look at…', phase: 'thinking' }).label).toBe('Inspecting the parser');
     expect(turnStatus({ phase: 'thinking', thinkingMs: 25_000 }).label).toBe('thinking more');
     // A clock read just before the thinking began: still words, never a crash.
     expect(turnStatus({ phase: 'thinking', thinkingMs: -400 }).label).toBe('thinking');
     expect(turnStatus({ phase: 'thinking', thinkingMs: Number.NaN }).label).toBe('thinking');
     expect(turnStatus({ phase: 'generating response' }).label).toBe('generating response');
-    expect(turnStatus({ phase: 'thinking', quietMs: 15_000 }).stall).toBeCloseTo(0.5);
-    expect(turnStatus({ phase: 'thinking', quietMs: 30_000 }).tone).toBe('stalled');
     expect(reasoningHeading('no heading here')).toBeUndefined();
   });
 

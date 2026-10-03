@@ -1,10 +1,8 @@
 /** The status line's look: the spinner and the label turnStatus() chose,
- * coloured by what the turn is doing, a highlight swept across the label
- * while work arrives, and the fade toward red as silence goes on.
+ * coloured by what the turn is doing, a highlight swept across the label.
  *
- * Truecolor terminals get blends -- the highlight is the tone brightened, the
- * stall a mix of the tone and red. Fewer colours, and the highlight is bold
- * and the stall goes yellow then red. No colour at all (NO_COLOR, a pipe) and
+ * Truecolor terminals get blends -- the highlight is the tone brightened.
+ * Fewer colours, and the highlight is bold. No colour at all (NO_COLOR, a pipe) and
  * chalk writes the words alone, which is all they need to read. */
 
 import chalk, { type ChalkInstance } from 'chalk';
@@ -34,36 +32,32 @@ function blend(from: Rgb, to: Rgb, amount: number): Rgb {
   return [0, 1, 2].map((index) => Math.round(from[index]! + (to[index]! - from[index]!) * t)) as unknown as Rgb;
 }
 
-/** The tone's colour: thinking cyan, a call its category's, asking blue,
- * stalled red. */
+/** The tone's colour: thinking cyan, a call its category's, asking blue. */
 export function statusColour(tone: StatusTone, category?: ToolCategory): Colour {
   if (tone === 'asking') return 'blue';
-  if (tone === 'stalled') return 'red';
   if (tone === 'tool' && category) return TOOL_CATEGORY[category].colour;
   return 'cyan';
 }
 
 /** The spinner glyph and the label, painted. `shimmer` is false whenever the
- * band should hold still: reduced motion, an approval up, a stall. */
+ * band should hold still: reduced motion, an approval up. */
 export function paintStatus(input: {
-  glyph: string; label: string; tone: StatusTone; stall: number; category?: ToolCategory;
+  glyph: string; label: string; tone: StatusTone; category?: ToolCategory;
   frame: number; shimmer: boolean;
 }, paint: ChalkInstance = chalk): { spinner: string; label: string } {
   const base = statusColour(input.tone, input.category);
   if (paint.level === 0) return { spinner: input.glyph, label: input.label };
   const characters = [...input.label];
-  const levels = input.shimmer && input.stall === 0 ? shimmerLevels(characters.length, input.frame * SHIMMER_STRIDE) : undefined;
+  const levels = input.shimmer ? shimmerLevels(characters.length, input.frame * SHIMMER_STRIDE) : undefined;
   if (paint.level >= 3) {
-    const tone = blend(RGB[base], RGB.red, input.stall);
+    const tone = RGB[base];
     const label = levels
       ? characters.map((character, index) => paint.rgb(...blend(tone, WHITE, (levels[index] ?? 0) * SHIMMER_LIFT))(character)).join('')
       : paint.rgb(...tone)(input.label);
     return { spinner: paint.rgb(...tone)(input.glyph), label };
   }
-  // Sixteen or 256 colours: no blend to fade through, so the stall steps.
-  const colour: Colour = input.stall >= 1 ? 'red' : input.stall > 0 ? 'yellow' : base;
   const label = levels
-    ? characters.map((character, index) => ((levels[index] ?? 0) >= 0.5 ? paint.bold[colour](character) : paint[colour](character))).join('')
-    : paint[colour](input.label);
-  return { spinner: paint[colour](input.glyph), label };
+    ? characters.map((character, index) => ((levels[index] ?? 0) >= 0.5 ? paint.bold[base](character) : paint[base](character))).join('')
+    : paint[base](input.label);
+  return { spinner: paint[base](input.glyph), label };
 }

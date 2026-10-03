@@ -30,7 +30,7 @@ import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock,
 import type { HarnessSession } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, openToolsStatus, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
-import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, turnStalledMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
+import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
 import { paintStatus } from './render/status-line.js';
@@ -766,7 +766,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (text) { this.thought = undefined; if (this.turn) this.turn.thinkingSince = Date.now(); }
     // A replacement is usually the same answer again, so only its growth counts.
     this.streamedChars += mode === 'replace' ? Math.max(0, text.length - this.liveResponse.length) : text.length;
-    if (text) this.noteData();
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -782,7 +781,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const normalized = sanitizeTerminalText(message, { keepSgr: true, singleLine: true }).trim();
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
-    this.noteData();
     this.activityEntries = [...this.activityEntries, {
       anchor: this.turn ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0,
       ...(this.turn ? { responseOffset: this.liveResponse.length } : {}),
@@ -799,7 +797,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the live region. Pass an empty list to remove it. */
   setPlan(entries: readonly PlanEntry[]): void {
     this.planEntries = entries.map((entry) => ({ ...entry }));
-    this.noteData();
     this.schedulePaint();
   }
 
@@ -812,7 +809,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (live.index <= this.liveActivitiesShown) return;
       this.liveActivitiesShown = live.index;
     }
-    this.noteData();
     if (event.parentId) {
       // A sub-agent's own calls stay inside the agent row. They are not
       // separate messages, and they do not move the status line.
@@ -1074,7 +1070,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.closed) return;
     const now = Date.now();
     // Reduced motion never animates: the band ticks for the clock alone.
-    this.waitingTickFast = !this.reducedMotion && turnAnimating(turn.clock, now, this.turnWaits());
+    this.waitingTickFast = !this.reducedMotion && turnAnimating(this.turnWaits());
     const delay = nextTurnTickMs(turn.clock, now, this.waitingTickFast);
     turn.timer = setTimeout(() => {
       turn.timer = undefined;
@@ -1086,14 +1082,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.scheduleWaitingTick();
     }, delay);
     turn.timer.unref();
-  }
-
-  /** A delta or an event arrived: the turn is not stalled, and if the band
-   * had slowed to the clock it picks the spinner back up at once. */
-  private noteData(): void {
-    if (!this.turn) return;
-    this.turn.clock = { ...this.turn.clock, lastDataAt: Date.now() };
-    if (!this.waitingTickFast) this.scheduleWaitingTick();
   }
 
   /** An approval has been answered (or the turn ended under one). */
@@ -1212,7 +1200,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   phase(message: string): void {
     const turn = this.turn;
     if (!turn || turn.cancelled || turn.label === message) return;
-    this.noteData();
     // The band says "waiting for approval" while one is up; remember the phase
     // for when it is answered instead of replacing that.
     if (this.pendingApproval) { this.approvalRestoreLabel = message; return; }
@@ -1278,7 +1265,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The vendor's count covers everything streamed so far; only what streams
     // after it is estimated.
     if (usage.output !== undefined) this.usageCharsCounted = this.streamedChars;
-    this.noteData();
     this.updateWaiting();
   }
 
@@ -1321,15 +1307,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * written -- the style of a native CLI's own status row -- driven by what
    * actually arrives: the open call names the verb, the clock stops for an
    * approval, the token count is estimated from the stream until the vendor
-   * reports its own, and a turn that has sent nothing for a while says so. */
+   * reports its own. */
   private waitingLine(turn: WaitingTurn): string {
     const now = Date.now();
     const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
     const tokens = formatTurnUsage(this.turnUsage, estimatedTokens(this.streamedChars - this.usageCharsCounted));
-    const stalled = turnStalledMs(turn.clock, now, this.turnWaits());
     // What it says and how it looks, by the shared rules (turn-flow.ts):
     // waiting on the user, the open call, the reasoning's heading, the
-    // thinking in words; and a tone that fades toward red with silence.
+    // thinking in words.
     const tool = this.toolStatus();
     const status = turnStatus({
       phase: turn.label,
@@ -1337,23 +1322,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
       thinkingMs: now - turn.thinkingSince,
       asking: Boolean(this.pendingApproval),
-      quietMs: this.pendingApproval ? 0 : now - turn.clock.lastDataAt,
     });
     // "send", not "steer or queue": which of the two happens depends on the
     // harness, and each submission's own row says which it was.
-    const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''}${stalled ? ` · nothing received for ${formatElapsed(stalled)}` : ''})`
+    const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
       + `${turn.cancel && !this.pendingApproval ? ' · esc to interrupt' : ''}`
       + `${turn.leave && !this.pendingApproval && !turn.draft ? ' · ← conversations' : ''}`
       + `${turn.submit ? (turn.draft.trim() && turn.cancel && !this.pendingApproval ? ' · enter to send · ctrl+s to send now' : ' · type and press Enter to send') : ''}`;
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
     const split = status.label.length;
-    // One spinner, one motion, for every harness and every tool. It moves
-    // while data does, the label shimmering with it; quiet, both hold still
-    // and fade toward red.
+    // One spinner, one motion, for every harness and every tool, the label
+    // shimmering with it; both hold still only while an approval waits.
     const glyph = waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
     const painted = paintStatus({
-      glyph, label: label.slice(0, split), tone: status.tone, stall: status.stall,
+      glyph, label: label.slice(0, split), tone: status.tone,
       ...(status.tone === 'tool' && tool?.category ? { category: tool.category } : {}),
       frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
     });

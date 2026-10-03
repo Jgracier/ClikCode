@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, SPIN_MS, STALL_MS, startTurnClock,
-  turnAnimating, turnElapsedMs, turnStalledMs,
+  joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, SPIN_MS, startTurnClock,
+  turnAnimating, turnElapsedMs,
 } from './activity-view';
 
 const idle = { toolsRunning: false, approval: false };
@@ -16,8 +16,6 @@ describe('the turn clock', () => {
     const resumed = resumeTurnClock(paused, 10_000);
     expect(resumed.pausedAt).toBeUndefined();
     expect(turnElapsedMs(resumed, 12_000)).toBe(5_000);
-    // Reading the approval was not a stall.
-    expect(resumed.lastDataAt).toBe(10_000);
     expect(resumeTurnClock(resumed, 20_000)).toBe(resumed);
   });
 
@@ -27,20 +25,11 @@ describe('the turn clock', () => {
     expect(joinTurnClock(clock, 60_000)).toBe(clock);
   });
 
-  it('calls silence a stall only past STALL_MS, and never while a call runs or an approval is up', () => {
+  it('spins for the whole turn, quiet or not, and only ticks the clock while an approval waits', () => {
     const clock = startTurnClock(0);
-    expect(turnStalledMs(clock, STALL_MS - 1, idle)).toBe(0);
-    expect(turnStalledMs(clock, STALL_MS + 2_000, idle)).toBe(STALL_MS + 2_000);
-    expect(turnStalledMs(clock, STALL_MS + 2_000, { toolsRunning: true, approval: false })).toBe(0);
-    expect(turnStalledMs(clock, STALL_MS + 2_000, { toolsRunning: false, approval: true })).toBe(0);
-  });
-
-  it('spins while something moves and otherwise ticks just past each whole second', () => {
-    const clock = startTurnClock(0);
-    expect(turnAnimating(clock, 100, idle)).toBe(true);
-    expect(turnAnimating(clock, STALL_MS, idle)).toBe(false);
-    expect(turnAnimating(clock, STALL_MS, { toolsRunning: true, approval: false })).toBe(true);
-    expect(turnAnimating(clock, 100, { toolsRunning: true, approval: true })).toBe(false);
+    expect(turnAnimating(idle)).toBe(true);
+    expect(turnAnimating({ toolsRunning: true, approval: false })).toBe(true);
+    expect(turnAnimating({ toolsRunning: true, approval: true })).toBe(false);
     expect(nextTurnTickMs(clock, 100, true)).toBe(SPIN_MS);
     expect(nextTurnTickMs(clock, 16_250, false)).toBe(755);
   });

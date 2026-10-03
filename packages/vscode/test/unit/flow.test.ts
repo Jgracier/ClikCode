@@ -112,26 +112,26 @@ describe('tool rows', () => {
 describe('the working line', () => {
   const live = (patch: Partial<LiveTurn> = {}): LiveTurn => ({
     text: '', waitingLabel: 'thinking', activities: [], reasoning: [], seen: 0, openTools: [], steers: [],
-    startedAt: 0, lastEventAt: 0, thinkingSince: 0, ...patch,
+    startedAt: 0, thinkingSince: 0, ...patch,
   });
 
   it('says it waits for you, in the permission colour, while an approval is up', () => {
-    expect(workingStatus(live(), true, 60_000)).toMatchObject({ label: 'Waiting for you…', tone: 'asking', stall: 0, toneClass: 'tone-permission' });
+    expect(workingStatus(live(), true, 60_000)).toMatchObject({ label: 'Waiting for you…', tone: 'asking', toneClass: 'tone-permission' });
   });
 
   it("names the open call's work in its category's colour", () => {
     const status = workingStatus(live({ toolPhase: 'running tests', openTools: [['t', { label: 'npm test', category: 'run' }]] }), false, 30_000);
-    expect(status).toMatchObject({ label: 'Running tests…', tone: 'tool', stall: 0, toneClass: 'tone-yellow' });
+    expect(status).toMatchObject({ label: 'Running tests…', tone: 'tool', toneClass: 'tone-yellow' });
   });
 
   it("shows the reasoning's own heading, else escalating thinking words", () => {
-    expect(workingStatus(live({ thought: { text: '**Inspecting the parser** first' }, lastEventAt: 1000 }), false, 2000).label).toBe('Inspecting the parser…');
-    expect(workingStatus(live({ lastEventAt: 24_000 }), false, 25_000).label).toBe('Thinking more…');
-    expect(workingStatus(live({ lastEventAt: 2_000 }), false, 3_000)).toMatchObject({ label: 'Thinking…', toneClass: 'tone-cyan' });
+    expect(workingStatus(live({ thought: { text: '**Inspecting the parser** first' }}), false, 2000).label).toBe('Inspecting the parser…');
+    expect(workingStatus(live({ thinkingSince: 0 }), false, 25_000).label).toBe('Thinking more…');
+    expect(workingStatus(live(), false, 3_000)).toMatchObject({ label: 'Thinking…', toneClass: 'tone-cyan' });
   });
 
-  it('goes toward red as silence goes on', () => {
-    expect(workingStatus(live(), false, 15_000).stall).toBeCloseTo(0.5);
-    expect(workingStatus(live(), false, 40_000)).toMatchObject({ tone: 'stalled', stall: 1 });
+  it('never turns toward red or says nothing arrived, however long it is quiet', () => {
+    expect(workingStatus(live(), false, 600_000)).toMatchObject({ tone: 'thinking', toneClass: 'tone-cyan' });
   });
+
 });
