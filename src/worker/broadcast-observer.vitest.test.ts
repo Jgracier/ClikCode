@@ -103,6 +103,19 @@ describe('a notice about the turn', () => {
 });
 
 describe('a window joining a running turn', () => {
+  it('keeps changed output from one running tool while dropping identical duplicate events', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('running tests');
+    const started = { kind: 'tool-start' as const, id: 'test', label: 'Bash(npm test)', output: ['file 1 passed'] };
+    observer.activityEvent(started);
+    observer.activityEvent(started);
+    observer.activityEvent({ ...started, output: ['file 1 passed', 'file 2 passed'] });
+    expect(client.frames.filter((frame) => frame.type === 'activity')).toHaveLength(2);
+    expect(observer.liveSnapshot()?.activities.at(-1)?.event.output).toEqual(['file 1 passed', 'file 2 passed']);
+  });
+
   it('is given the turn\'s tool rows, where they fell in its answer, and its plan', () => {
     const observer = new BroadcastObserver();
     observer.startTurn('thinking', 'fix the build');
