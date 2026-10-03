@@ -27,7 +27,9 @@ vi.mock('../../commands/ai/conversations', async (original) => ({
       id, conversationId: sourceId, parentSessionId: sourceId, route: 'local', accountId: null, provider: 'openai', model: null,
       nativeHarness: command, effort: 'medium', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
       handoff: { fromSessionId: sourceId, fromHarness: 'claude', at: now, ...(selection.turn ? { turn: selection.turn } : {}) },
-      messages: [{ role: 'user', content: 'fix the parser' }],
+      // As a real branch: the interrupted turn and its partial answer, enough
+      // for the store to share the parent's transcript (and take its lock).
+      messages: [{ role: 'user', content: 'fix the parser' }, { role: 'assistant', content: 'half' }],
     } as HarnessSession);
     forceStoreSession(id);
     await writeState(state);
