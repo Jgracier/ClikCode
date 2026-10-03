@@ -3,11 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const vendorLogout = vi.fn(async () => undefined);
-vi.mock('../harness/transport/native/command.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../harness/transport/native/command.js')>(),
-  runNativeHarnessCommand: vendorLogout,
-}));
+const vendorLogout = vi.fn(async (): Promise<void> => undefined);
 vi.mock('../harness/accounts/auth-files.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../harness/accounts/auth-files.js')>(),
   harnessCanLogout: () => true,
@@ -29,20 +25,31 @@ afterEach(() => {
   else process.env.CLIKCODE_HOME = previousHome;
 });
 
+async function signedInAccount(): Promise<void> {
+  const root = await mkdtemp(join(tmpdir(), 'clikcode-signout-'));
+  process.env.CLIKCODE_HOME = root;
+  await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
+    version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
+    accounts: [{ id: 'acct', provider: 'openai', label: 'Work', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:codex', signedInAt: '2026-09-01T00:00:00.000Z' }],
+    sessions: [], invocations: [],
+    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+  })}\n`);
+}
+
 describe('sign-out', () => {
   it('runs the vendor logout and retires the sign-in a live vendor child holds', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'clikcode-signout-'));
-    process.env.CLIKCODE_HOME = root;
-    await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-      version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
-      accounts: [{ id: 'acct', provider: 'openai', label: 'Work', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:codex', signedInAt: '2026-09-01T00:00:00.000Z' }],
-      sessions: [], invocations: [],
-      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-    })}\n`);
+    await signedInAccount();
     await signOutAccount('acct');
     expect(vendorLogout).toHaveBeenCalledOnce();
     const account = (await readState()).accounts.find((item) => item.id === 'acct');
     expect(account?.status).toBe('needs_login');
     expect(account?.signedInAt).toBeUndefined();
+  });
+
+  it('leaves the account signed in when the vendor refuses the logout', async () => {
+    await signedInAccount();
+    vendorLogout.mockRejectedValueOnce(new Error('codex exited 1'));
+    await expect(signOutAccount('acct')).rejects.toThrow('codex exited 1');
+    expect((await readState()).accounts.find((item) => item.id === 'acct')?.status).toBe('ready');
   });
 });
