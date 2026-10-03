@@ -275,16 +275,20 @@ describe('session worker (real spawned process, real socket)', () => {
     spawnedClients.push(second);
     await second.initialSnapshot;
 
-    // A refresh asks the worker to re-render from disk; both attached
-    // clients should see it, proving the broadcast reaches every socket,
-    // not just whichever one most recently attached.
+    // One window changed the conversation's settings (a /model, an account
+    // swap) and sends refresh: the worker re-reads state and every attached
+    // window -- not just the most recent one -- gets the new settings.
+    const state = await readState();
+    const stored = state.sessions.find((item) => item.id === session.id)!;
+    stored.model = 'changed-in-another-window';
+    await writeState(state);
     first.send({ type: 'refresh' });
     const [firstSnapshot, secondSnapshot] = await Promise.all([
       nextEvent(first, 'snapshot'),
       nextEvent(second, 'snapshot'),
     ]);
-    expect(firstSnapshot).toMatchObject({ session: { id: session.id } });
-    expect(secondSnapshot).toMatchObject({ session: { id: session.id } });
+    expect(firstSnapshot).toMatchObject({ session: { id: session.id, model: 'changed-in-another-window' } });
+    expect(secondSnapshot).toMatchObject({ session: { id: session.id, model: 'changed-in-another-window' } });
   });
 
   it('a submit that fails immediately still completes the waiting-start/stop lifecycle', async () => {

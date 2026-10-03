@@ -35,10 +35,10 @@ export type ClientCommand =
   /** The vendor sign-in a `sign-in-request` asked for has finished, on the
    * client's own terminal; `error` when it failed. */
   | { type: 'sign-in-response'; id: string; error?: string }
-  /** The client made a change the worker did not: an account swap from a
-   * local-only login flow, a manual edit to state. Re-read rather than
-   * synchronize field-by-field -- the source of truth is the state file
-   * either way, this just says "yours might be stale now." */
+  /** The client changed what the conversation runs on (account, provider,
+   * model, effort, route) outside a turn -- a slash command, a sign-in. The
+   * worker re-reads state and sends every window a snapshot, so the others
+   * stop showing the old one. Sent when `shownSettingsKey` changes. */
   | { type: 'refresh' }
   /** Get ready for the conversation's route: on an agent route (the Gateway,
    * ClikCode Local) start its MCP servers and, for the Gateway, open the
@@ -141,6 +141,12 @@ export type WorkerEvent =
    * longer queued (already run or taken back); `error`: the state could not
    * be read or written, and it is still queued. */
   | { type: 'unqueued'; id: string; outcome: 'removed' | 'running' | 'gone' | 'error'; message?: string };
+
+/** What a window shows of a conversation's settings. A client that sees it
+ * change between two reads of state sends `refresh`. */
+export function shownSettingsKey(session: Pick<HarnessSession, 'id' | 'route' | 'accountId' | 'provider' | 'model' | 'effort' | 'nativeHarness'>): string {
+  return [session.id, session.route, session.accountId, session.provider, session.model, session.effort, session.nativeHarness].join('|');
+}
 
 const FRAME_SEPARATOR = '\n';
 
