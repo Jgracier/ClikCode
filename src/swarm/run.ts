@@ -157,7 +157,6 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
     await lock(input.host.id, async () => {
       const board = applyCard(await readBoard(input.host.id), reserved.workerId, card);
       await writeBoard(input.host.id, board);
-      input.host.swarmBoard = board;
     });
     await emit(input.host.id, {
       kind: 'tool-done', id: input.request.callId, label, agent: true, swarm, output: formatCard(card).split('\n'),
