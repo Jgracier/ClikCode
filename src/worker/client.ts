@@ -173,9 +173,10 @@ async function retireIfStale(record: WorkerRuntimeRecord): Promise<WorkerRuntime
 }
 
 /** Asks every worker still running a different build to step down. Idle ones
- * exit now; busy ones exit when their turn ends. Called when Left opens the
- * board and when this window notices a rebuild -- otherwise a chat you never
- * reopen would keep the old code for its whole idle lifetime. */
+ * exit now; busy ones exit when their turn ends. Called when this window
+ * notices a rebuild: an unattached worker sees the rebuild on its own, but
+ * one held by a window that is never idle enough to re-exec would otherwise
+ * keep the old code for as long as that window stays open. */
 export async function retireStaleWorkers(): Promise<void> {
   const build = currentWorkerBuild();
   if (!build) return;
