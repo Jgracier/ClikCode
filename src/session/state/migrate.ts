@@ -13,7 +13,7 @@ import { acquireSessionClaim, claimIsHeld } from '../claims.js';
 import { HarnessStateVersionError, StateIndex, loadIndex, resetHarnessStateCaches, storeIndex } from './index-file.js';
 import { capInvocations, totalsOf } from './invocations.js';
 import { splitSession } from './merge.js';
-import { HARNESS_STATE_VERSION, exists, harnessIndexPath, harnessStatePath, isoStamp } from './paths.js';
+import { HARNESS_STATE_VERSION, exists, harnessIndexPath, harnessStatePath } from './paths.js';
 import { HarnessSecrets, readSecretsFile, writeSecretsFile } from './secrets.js';
 import { HARNESS_DEFAULT_SETTINGS } from './settings.js';
 
@@ -125,9 +125,10 @@ async function migrateSingleFileToSplitLayout(): Promise<void> {
     throw new Error(`ClikCode state migration could not be verified (${problems.slice(0, 5).join(', ')}). The original ${harnessStatePath()} was left untouched.`);
   }
 
-  const stamp = isoStamp();
+  // One fixed name: an older build still writing the single file would
+  // otherwise leave a new copy behind on every migration.
   const legacyPath = harnessStatePath();
-  const aside = join(stateDirectory(), `harness-state.legacy-${stamp}.json`);
+  const aside = join(stateDirectory(), 'harness-state.legacy.json');
   if (await exists(legacyPath)) {
     await rename(legacyPath, aside);
     await chmod(aside, 0o600).catch(() => undefined);
