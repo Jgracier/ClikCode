@@ -42,7 +42,7 @@ import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
-import { steerTranscriptRows } from './render/steer-rows.js';
+import { hasDurableSteer, steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
@@ -1394,7 +1394,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // turn ends and shows whatever it shows then.
       ...storedQueued.filter((item) => item.kind !== 'command')
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
-      ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item))
+      ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item)
+        && !hasDurableSteer(item, pending?.steers ?? []))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
       ...(this.sendNow ? [{ role: 'user' as const, content: this.sendNow.text, queueState: 'now' as const }] : []),
     ];

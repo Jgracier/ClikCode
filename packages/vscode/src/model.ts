@@ -496,7 +496,9 @@ function endTurn(model: ChatModel): ChatModel {
   const traces = (activities.length || reasoning || plan) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
       userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan } : {}),
-      ...(model.live?.steers.length ? { steers: model.live.steers } : {}), text: model.live?.text ?? '',
+      // Completed steers are materialized as user messages in session.messages.
+      // Keeping the live badges in the finished trace displayed each prompt twice.
+      text: model.live?.text ?? '',
       startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
     }].slice(-MAX_TRACES)
     : model.traces;

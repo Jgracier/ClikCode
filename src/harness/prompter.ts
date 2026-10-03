@@ -122,6 +122,8 @@ export interface PickerSettings<T> {
   refresh?: Promise<unknown> | readonly Promise<unknown>[];
   /** Rows the list may use, when more than the default suits it. */
   rows?: number;
+  /** Count real records when the list also contains an action row. */
+  totalItems?: number;
 }
 
 export interface PickerOption<T> {

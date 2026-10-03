@@ -79,7 +79,7 @@ export async function interactiveAccountPicker(
         actionPerformed = true;
         await manageAccountAction(rl, choice.accountId, action);
       },
-      { onBack: () => { backedOut = true; }, refreshedOptions: accountOptions, refresh: usageRefresh },
+      { onBack: () => { backedOut = true; }, refreshedOptions: accountOptions, refresh: usageRefresh, totalItems: providerAccounts.length },
     );
     if (backedOut) {
       if (rl instanceof TerminalHarnessPrompter) rl.restoreDraft('/');

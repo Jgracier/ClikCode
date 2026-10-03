@@ -132,7 +132,7 @@ export function runOptionPicker<T>(
       const back = selectedOption?.inner?.options.length ? `\u2190 ${selectedOption.inner.title.toLowerCase()}` : '\u2190 back';
       const hint = query
         ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit`
-        : `${currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit · type to filter`;
+        : `${settings?.totalItems ?? currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit · type to filter`;
       host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, headings: true, hint });
     };
     let finished = false;

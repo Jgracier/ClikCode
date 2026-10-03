@@ -80,6 +80,23 @@ describe('chat model', () => {
     expect(joined.live?.steers).toEqual([{ text: 'also this', offset: 2 }]);
   });
 
+  it('shows a submitted steer only as a user message once the turn finishes', () => {
+    const startedAt = new Date().toISOString();
+    const during = run([worker({
+      type: 'snapshot', session: session({ pendingTurn: { prompt: 'p', startedAt, updatedAt: startedAt, outputStarted: true,
+        steers: [{ text: 'also this', submittedAt: startedAt, responseOffset: 2 }] } }),
+      live: { text: 'abc', waitingLabel: 'thinking' },
+    })], run([{ type: 'session', session: session() }]));
+    expect(during.live?.steers).toHaveLength(1);
+    const finished = run([activity({ kind: 'tool-done', id: 'r', label: 'Read a.ts', category: 'read' }), worker({ type: 'waiting-stop' }), { type: 'session', session: session({ messages: [
+      { role: 'user', content: 'p' }, { role: 'assistant', content: 'ab' },
+      { role: 'user', content: 'also this' }, { role: 'assistant', content: 'c' },
+    ] }) }], during);
+    expect(finished.messages.filter((message) => message.role === 'user' && message.content === 'also this')).toHaveLength(1);
+    expect(finished.traces).toHaveLength(1);
+    expect(finished.traces[0]?.steers).toBeUndefined();
+  });
+
   it("counts a sub-agent's tool uses on its parent row, and keeps the count when it finishes", () => {
     const working = turn(
       activity({ kind: 'tool-start', id: 'agent', label: 'Task explore', agent: true }),
