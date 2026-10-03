@@ -43,8 +43,11 @@ if (argv[0] === 'login') {
   // answered yet, so a test can cancel the wait.
   const started = Date.now();
   const hold = process.env.FAKE_LOGIN_HOLD;
-  const tick = () => (hold && existsSync(hold) && Date.now() - started < 30_000 ? setTimeout(tick, 100) : process.exit(0));
-  setTimeout(tick, 2000);
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  while (hold && existsSync(hold) && Date.now() - started < 30_000) await new Promise((resolve) => setTimeout(resolve, 100));
+  // Awaited, never a timer: everything below is the agent, and a login that
+  // fell through into it used up the scenario's first answer.
+  process.exit(0);
 } else if (['logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
 
 // `grok agent stdio`: the ACP agent ClikCode starts for Grok since it moved
