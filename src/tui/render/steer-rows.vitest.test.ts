@@ -6,7 +6,7 @@
  * cannot take it back.
  */
 import { describe, expect, it } from 'vitest';
-import { steerTranscriptRows, type LiveSubmission } from './steer-rows';
+import { hasDurableSteer, steerTranscriptRows, type LiveSubmission } from './steer-rows';
 
 const render = (text: string) => [`row:${text}`];
 const live = (text: string, sequence: number, state: LiveSubmission['state'] = 'steered'): LiveSubmission =>
@@ -16,6 +16,10 @@ const rows = (input: Partial<Parameters<typeof steerTranscriptRows>[0]>) => stee
 });
 
 describe('which steers reach the transcript', () => {
+  it('replaces a provisional queued row when the same submission lands as a steer', () => {
+    expect(hasDurableSteer({ id: 'a', text: 'same' }, [{ id: 'a', text: 'same' }])).toBe(true);
+    expect(hasDurableSteer({ id: 'b', text: 'same' }, [{ id: 'a', text: 'same' }])).toBe(false);
+  });
   it('draws a live steer once, before the turn is materialized', () => {
     expect(rows({ live: [live('try the other file', 7)] })).toEqual([
       { id: 'steer#7', done: true, responseOffset: 7, lines: ['row:try the other file'] },
@@ -79,4 +83,3 @@ describe('which steers reach the transcript', () => {
     expect(result).toHaveLength(1);
   });
 });
-

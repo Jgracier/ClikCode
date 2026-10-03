@@ -20,9 +20,12 @@ describe('shared ACP adapter contract', () => {
         }
       } });
     `;
+    const authenticated: string[] = [];
     const result = await runAcpTurn({ binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(),
-      prompt: 'check', environment: {}, permissionMode: 'ask', allowAgentAuth: true });
+      prompt: 'check', environment: {}, permissionMode: 'ask', allowAgentAuth: true,
+      onAuthenticated: async () => { authenticated.push('consent-complete'); } });
     expect(JSON.parse(result.text)).toEqual(['initialize', 'session/new', ...(authAt === 'session/new' ? ['authenticate', 'session/new', 'session/prompt'] : ['session/prompt', 'authenticate', 'session/prompt'])]);
+    expect(authenticated).toEqual(['consent-complete']);
   });
 
   it('hands a session the MCP servers the caller named', async () => {

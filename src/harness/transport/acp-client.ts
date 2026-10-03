@@ -533,6 +533,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
           || (method === 'session/prompt' && (turn.sawActivity || turn.text))) throw error;
         input.onPhase?.(`signing in to ${input.command}…`);
         await peer.request('authenticate', { methodId: choices[0]!.id }, { timeoutMs: 300_000 });
+        await input.onAuthenticated?.();
         stillRunning();
         return await peer.request(method, params, options);
       }

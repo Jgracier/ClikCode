@@ -6,6 +6,7 @@ import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import chalk from 'chalk';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
+import { deferredWorkReply, DEFERRED_WORK_CONTINUATION } from './deferred-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
 import { classifyAccountFailure } from './failover.js';
@@ -200,6 +201,7 @@ export async function sendVendorTurn(input: {
   };
   const pendingWork = createPendingWorkTracker(harness.command);
   let pendingContinuations = 0;
+  let deferredContinuations = 0;
   const pendingWorkStartedAt = Date.now();
   /** Tokens from earlier attempts of this same continued turn; the loop
    *  clears turnUsage on every pass, which is right for a failover and
@@ -318,7 +320,12 @@ export async function sendVendorTurn(input: {
       } else {
         result = await runVendorSessionAttempt({
           harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint,
-          sharedObserver, effort: turnEffort(), onSessionId, runCli: runStructuredCliTurn,
+          sharedObserver, effort: turnEffort(), onSessionId,
+          onAuthenticated: async () => {
+            account = await syncAccountIdentityAfterLogin(harness, account, state);
+            session.accountId = account.id;
+          },
+          runCli: runStructuredCliTurn,
         });
       }
     } catch (error) {
@@ -492,6 +499,20 @@ export async function sendVendorTurn(input: {
     }
     session.nativeStartedAt ??= new Date().toISOString();
     delete session.nativeSessionPreallocated;
+    const planModeActive = harness.planMode && session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
+    // Only into a session that remembers the turn: a stateless route would
+    // receive the continuation with no idea what work it refers to. After two
+    // tries the reply stands as the answer; discarding it loses real text.
+    const deferred = !planModeActive && !!session.nativeSessionId && deferredWorkReply(text, result.text);
+    if (deferred && deferredContinuations >= 2) {
+      prompter?.activity(chalk.yellow(`${harness.displayName} offered to do the work later instead of doing it`));
+    } else if (deferred) {
+      deferredContinuations += 1;
+      carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
+      editAnswer('new-paragraph');
+      turnText = DEFERRED_WORK_CONTINUATION;
+      continue;
+    }
     // The harness ended the turn with a tool it never settled -- it
     // backgrounded a command and stopped. Re-drive it so it goes and reads
     // the result, instead of leaving the answer stranded in a task log and
