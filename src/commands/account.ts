@@ -164,6 +164,22 @@ export async function syncAccountIdentityAfterLogin(
 }
 
 export async function aiAccountLogin(harnessCommandName: string, label?: string): Promise<string> {
+  // A sign-in creates its profile before the vendor runs. One that fails, is
+  // cancelled, or resolves to an account that keeps its own profile would
+  // otherwise leave that directory behind for good, as would the profile an
+  // account gives up for a new one.
+  const touched = new Set<string>();
+  try {
+    return await signInAccount(harnessCommandName, label, touched);
+  } finally {
+    if (touched.size) {
+      const { accounts } = await readState({ transcripts: [] });
+      for (const path of touched) await purgeAccountProfile({ nativeProfile: { env: '', path } }, accounts);
+    }
+  }
+}
+
+async function signInAccount(harnessCommandName: string, label: string | undefined, touched: Set<string>): Promise<string> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   const state = await readState();
@@ -199,7 +215,10 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   const profilePath = harness.profileEnv
     ? join(harnessStatePath(), '..', 'profiles', harness.command, accountId)
     : undefined;
-  if (profilePath) await mkdir(profilePath, { recursive: true, mode: 0o700 });
+  if (profilePath) {
+    touched.add(profilePath);
+    await mkdir(profilePath, { recursive: true, mode: 0o700 });
+  }
   // Antigravity CLI's own default auth checks the OS-level keyring first --
   // confirmed live it's tied to the login *session* (via D-Bus), not to
   // $HOME, so every isolated profile above silently resolves to the same
@@ -228,6 +247,7 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
   if (harness.command === 'vibe' && profilePath) {
     for (const previous of state.accounts.filter((account) => account.provider === harness.provider && !account.nativeProfile)) {
       const previousPath = join(harnessStatePath(), '..', 'profiles', harness.command, previous.id);
+      touched.add(previousPath);
       await mkdir(previousPath, { recursive: true, mode: 0o700 });
       if (await captureMistralVibeCredential(previousPath)) previous.nativeProfile = { env: 'VIBE_HOME', path: previousPath };
     }
@@ -264,7 +284,10 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
       const existingHasNativeSessions = state.sessions.some((session) => session.accountId === existingMatch.id && session.nativeSessionId);
       existingMatch.label = nameAccount(state.accounts, harness, derived, existingMatch.id);
       existingMatch.status = 'ready';
-      if (nativeProfile && !existingHasNativeSessions) existingMatch.nativeProfile = nativeProfile;
+      if (nativeProfile && !existingHasNativeSessions) {
+        if (existingMatch.nativeProfile?.path) touched.add(existingMatch.nativeProfile.path);
+        existingMatch.nativeProfile = nativeProfile;
+      }
       existingMatch.verification = undefined;
       const verifyNotice = recordVerification(existingMatch, loginError);
       await writeState(state);
