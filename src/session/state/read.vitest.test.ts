@@ -42,7 +42,7 @@ describe('harness state normalization', () => {
     }
   });
 
-  it('drops a usage estimate an older build stored, and keeps the vendor\'s own reading', async () => {
+  it('drops a usage estimate an older build stored and its high-water limit, and keeps the vendor\'s own reading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
     process.env.CLIKCODE_HOME = root;
     const now = new Date().toISOString();
@@ -61,7 +61,8 @@ describe('harness state normalization', () => {
     try {
       const state = await readState();
       const estimated = state.accounts.find((account) => account.id === 'estimated') as Record<string, unknown> | undefined;
-      expect(estimated?.usageLearning).toBeUndefined();
+      // Its refusals stay; the faulty high-water "limit" does not.
+      expect(estimated?.usageLearning).toEqual({ turns: [], hits: [] });
       expect(estimated?.usage).toBeUndefined();
       expect(state.accounts.find((account) => account.id === 'vendor')?.usage?.label).toBe('5h 99% left');
     } finally {

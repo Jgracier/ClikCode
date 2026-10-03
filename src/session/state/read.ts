@@ -1,6 +1,7 @@
 /** Assembling one HarnessState from the index, the secrets file and the
  * per-session transcripts. */
 
+import type { UsageLearning } from '../../harness/accounts/usage-learning.js';
 import type { HarnessSession, HarnessState } from '../model.js';
 import { ephemeralSessions } from '../ephemeral.js';
 import { markFromIndex, markTranscriptLoaded, sessionFromIndex, transcriptWasLoaded } from '../list-facts.js';
@@ -61,6 +62,12 @@ function attachHidden(state: HarnessState, secrets: HarnessSecrets, rollups: Rec
   return state;
 }
 
+/** Old refusal snapshots named the one-day window "24h". */
+function legacyCosts(costs: Record<string, number> | undefined): Record<string, number> {
+  const { '24h': daily, ...rest } = costs ?? {};
+  return daily === undefined ? rest : { ...rest, daily };
+}
+
 function normalizedState(raw: HarnessState): HarnessState {
   // Older previews did not include a failover preference. Migrate those
   // sessions to the safe default so a local account does not remain stuck
@@ -84,13 +91,17 @@ function normalizedState(raw: HarnessState): HarnessState {
   // vendor's "resets in" hint, else a default window -- see
   // quotaMarkExpiresAt). The 60-second value older builds wrote is long past,
   // which only means that account is tried again and re-marked if it refuses.
-  // ClikCode's own usage estimate, which older builds stored on the account
-  // (`usageLearning`, and a reading marked `learned`), is dropped as it is
-  // read: only the vendor's figures and its refusals say whether an account
-  // has usage, so nothing here may answer that from an estimate.
+  // A usage reading older builds stored as an estimate (`learned`) is not the
+  // vendor's and goes. Their usageLearning kept a "limit" that was the most
+  // ever allowed, counting the allowed turn itself -- wrong, and dropped --
+  // beside refusals snapshotted the right way, which are kept.
   const accounts = (Array.isArray(raw.accounts) ? raw.accounts : []).map((account) => {
-    const { usageLearning: _estimate, ...rest } = account as typeof account & { usageLearning?: unknown };
-    return (rest.usage as { learned?: boolean } | undefined)?.learned ? { ...rest, usage: undefined } : rest;
+    const usage = (account.usage as { learned?: boolean } | undefined)?.learned ? undefined : account.usage;
+    const learning = account.usageLearning as (UsageLearning & { highWater?: unknown }) | undefined;
+    const usageLearning = learning && !Array.isArray(learning.turns)
+      ? { turns: [], hits: (learning.hits ?? []).map((hit) => ({ at: hit.at, costs: legacyCosts(hit.costs) })) }
+      : learning;
+    return { ...account, usage, ...(usageLearning ? { usageLearning } : {}) };
   });
   const normalized = {
     ...raw, accounts, sessions, invocations: Array.isArray(raw.invocations) ? raw.invocations : [],

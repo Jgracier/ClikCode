@@ -55,7 +55,7 @@ export interface ClerkCandidate {
 export function clerkAccounts(state: HarnessState, host: HarnessSession, now = Date.now()): ClerkCandidate[] {
   const ranked = state.accounts.flatMap((account) => {
     if (account.id === host.accountId) return [];
-    const usage = clerkUsage(account, now);
+    const usage = clerkUsage(account, now, state);
     if (!usage) return [];
     const harness = localHarnessForProvider(account.provider) ?? localHarnessForCommand(account.provider);
     if (!harness || !harnessCanRunTurns(harness)) return [];

@@ -86,7 +86,7 @@ export async function sendDirectApiTurn(input: {
     sessionId: session.id, accountId: account.id, provider: session.provider ?? account.provider, model, startedAt,
     usage: { input: turn.usage.inputTokens, output: turn.usage.outputTokens },
   });
-  recordSuccessfulAccountTurn(account);
+  recordSuccessfulAccountTurn(state, account, invocation);
   const completedText = await completeTurnCheckpoint(session, checkpoint, turn.text, { title: titleStream?.title });
   if (!prompter) emitHarnessOutput({ session, text: completedText, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...accounts.switched() });
   } finally {
