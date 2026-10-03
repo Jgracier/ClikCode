@@ -142,6 +142,12 @@ export async function prepareSessionWorker(sessionId: string, options: { spawn: 
   (await clientFor(sessionId)).send({ type: 'prepare' });
 }
 
+/** This terminal changed what the conversation runs on: the worker re-sends
+ * it to every window attached. Only to a worker already attached. */
+export function refreshSessionWorker(sessionId: string): void {
+  clients.get(sessionId)?.send({ type: 'refresh' });
+}
+
 /** This terminal has left a conversation: its worker stops what it started
  * for it. The worker itself stays, so going back to it is instant. */
 export function releaseSessionWorker(sessionId: string): void {

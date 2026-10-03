@@ -50,7 +50,7 @@ import { type ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { WorkerClient } from '../worker/client.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
-import type { WorkerEvent } from '../worker/protocol.js';
+import { shownSettingsKey, type WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
 import { watchConversationList, type ListWatch } from '../session/list-watch.js';
 import { encodeTerminalSpec, IDE_PROTOCOL, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
@@ -71,6 +71,8 @@ export class IdeBridge {
   readonly prompter: IdePrompter;
   private sessionId: string | undefined;
   private worker: { sessionId: string; client: WorkerClient } | undefined;
+  /** shownSettingsKey of the chat as last sent to the editor. */
+  private shownSettings: string | undefined;
   /** Seen waiting-start without its waiting-stop: a turn is running on this
    * conversation's worker, whichever client started it. */
   private workerTurnRunning = false;
@@ -227,6 +229,11 @@ export class IdeBridge {
     if (!this.sessionId) return;
     const { session, account } = await this.current();
     this.channel.send(sessionEvent(session, account));
+    // A command here changed what the chat runs on: every other window
+    // attached to its worker (a terminal, another editor) re-renders.
+    const key = shownSettingsKey(session);
+    if (this.shownSettings?.startsWith(`${session.id}|`) && this.shownSettings !== key && this.worker?.sessionId === session.id) this.worker.client.send({ type: 'refresh' });
+    this.shownSettings = key;
   }
 
   // ---- conversations -------------------------------------------------------

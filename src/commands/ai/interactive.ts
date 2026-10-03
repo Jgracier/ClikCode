@@ -50,7 +50,8 @@ import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
 import { interactiveModelPicker } from '../../tui/pickers/model.js';
 import { interactiveSessionPicker } from '../../tui/pickers/session.js';
 import type { InteractiveSlashOutcome } from '../../tui/slash/interactive-keys.js';
-import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from '../../worker/turn-bridge.js';
+import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, questionOrWorker, refreshSessionWorker, releaseSessionWorker, runTurnThroughWorker, workerQueueMark, workerTurn } from '../../worker/turn-bridge.js';
+import { shownSettingsKey } from '../../worker/protocol.js';
 import { retireStaleWorkers } from '../../worker/client.js';
 import { replaceCliWithNewBuild } from './build-replace.js';
 
@@ -306,6 +307,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let transportSessionId = id;
   /** `<session id> <route>` this terminal last prepared a worker for. */
   let preparedRoute: string | undefined;
+  /** What this terminal last read of the conversation's settings: a change
+   * between two reads (a /account, /model, sign-in) is sent to the worker so
+   * every other window attached to it re-renders. */
+  let shownSettings: string | undefined;
   /** A turn failed (see afterTurnFailure): one this window submitted, or one
    * it was only following -- most often "All accounts exhausted" from a
    * worker this window did not drive; left uncaught that crashed the loop
@@ -361,6 +366,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           preparedRoute = routeKey;
           void prepareSessionWorker(latest.id, { spawn: isClikCodeAgent(latest) }).catch(() => undefined);
         }
+        const settingsKey = shownSettingsKey(latest);
+        if (shownSettings?.startsWith(`${latest.id}|`) && shownSettings !== settingsKey) refreshSessionWorker(latest.id);
+        shownSettings = settingsKey;
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
         /** The turn the worker is running, followed to its end and shown as

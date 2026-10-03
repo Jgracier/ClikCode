@@ -462,7 +462,11 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     }
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
-    if (command.type === 'refresh') { observer.render((await currentSessionAndAccount()).session); return; }
+    if (command.type === 'refresh') {
+      const { session: current, account } = await currentSessionAndAccount();
+      observer.render(current, account);
+      return;
+    }
     if (command.type === 'prepare') { await prepareForRoute(); return; }
     // Another window's turn may be using them: a turn keeps what it started,
     // and the turn's own end releases them if nobody is left.
