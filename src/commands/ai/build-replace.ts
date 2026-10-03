@@ -4,6 +4,7 @@
  */
 import { spawnSync } from 'node:child_process';
 import { stdout } from 'node:process';
+import { fileLocksIdle } from '../../session/store/locks.js';
 import { REEXEC_TERMINAL_ENV } from '../../tui/restore.js';
 
 /** argv after the node binary: this CLI, and the chat to reopen. */
@@ -39,12 +40,19 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
     // chain of blocked parent processes behind. Flush the last answer first.
     if (typeof process.execve === 'function') {
       await new Promise<void>((resolve) => stdout.write('', () => resolve()));
+      // A background state write may still hold a lock. Exec keeps this pid,
+      // so a lock taken now would never be released and would read as live.
+      // Nothing may await between this and the exec.
+      await fileLocksIdle();
       try {
         process.execve(process.execPath, [process.execPath, ...relaunchArgv(entry, sessionId)],
           { ...process.env, [REEXEC_TERMINAL_ENV]: '1' });
       } catch { /* The existing child path restores the terminal on failure. */ }
     }
     try { input.closeUi(); } catch { /* the terminal is still handed over */ }
+    // spawnSync blocks this process for the child's whole life; a lock held
+    // across it would stall every other ClikCode the same way.
+    await fileLocksIdle();
     let status = 1;
     try {
       const result = spawnSync(process.execPath, relaunchArgv(entry, sessionId), { stdio: 'inherit' });
