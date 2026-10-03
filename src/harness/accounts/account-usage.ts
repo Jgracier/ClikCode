@@ -7,9 +7,7 @@ import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES } from './usage-probes.js';
-import { learnedUsageReading } from './usage-learning.js';
-import { learnedUsageNow } from './usage-now.js';
-import { AccountUsageReading, UsageCacheEntry, UsageReading, nativeUsageCache, quotaMarkExpiresAt, quotaMarkedAt, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, windowSpent } from './usage-reading.js';
+import { AccountUsageReading, UsageCacheEntry, UsageReading, accountQuotaSpent, nativeUsageCache, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 
 /** How long a windowless balance reading is reused before its harness is
@@ -27,17 +25,7 @@ export async function nativeUsageReading(
   // probe also made every reading that harness had already given unreadable.
   const reportsOnStream = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  // Harnesses without a native quota probe or stream reading can learn a
-  // figure from this account's own history -- see
-  // usage-learning.ts. It needs no probe, no network and no cache (it is
-  // arithmetic over invocations we already store), so it short-circuits ahead
-  // of all of that. It returns undefined until the account has actually hit
-  // the limit enough times to know where it is, which is why this reads as
-  // "no usage source" exactly as before on a fresh account.
-  if (!probe && !reportsOnStream) {
-    if (!account) return undefined;
-    return learnedUsageReading(account.usageLearning, state.invocations, account.id, Date.now());
-  }
+  if (!probe && !reportsOnStream) return undefined;
   const cacheKey = usageCacheKey(session.nativeHarness, account?.id, session.nativeSessionId);
   const cached = nativeUsageCache.get(cacheKey);
   // The account's own record is the shared reading: every terminal sees it, so
@@ -70,12 +58,7 @@ export async function nativeUsageReading(
   // A failed probe is held off briefly -- see NATIVE_USAGE_FAILURE_TTL_MS.
   // That is not a cached figure; there is no figure.
   if (entry?.failed && Number.isFinite(entry.at) && Date.now() - entry.at < NATIVE_USAGE_FAILURE_TTL_MS && !options.network) {
-    // The probe errored. Skip that error. A learned amount still answers,
-    // and so does a vendor figure the error carried forward.
-    if (account) {
-      const learned = learnedUsageNow(account, state);
-      if (learned?.windows.length && !(entry.windows?.length)) return learned;
-    }
+    // The probe errored. A vendor figure the error carried forward answers.
     return entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   // A turn STARTED on the account since the reading makes it old news.
@@ -111,25 +94,15 @@ export async function nativeUsageReading(
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const reading: UsageReading | undefined = probe ? await probe(session, environment).catch(() => undefined) : undefined;
   // Carry the last known figure through a failure rather than blanking it --
-  // but never past its own reset, when it stops describing anything. When
-  // there is nothing to carry, the learned figure is the amount. The failed
-  // probe itself is not stored as usage.
+  // but never past its own reset, when it stops describing anything. The
+  // failed probe itself is not stored as usage.
   const carried = entry && usageReadingIsCurrent(entry) ? entry : undefined;
-  const learned = !reading?.label && !(carried?.windows?.length)
-    ? learnedUsageNow(account, state)
-    : undefined;
   const probedAt = Date.now();
   const next: UsageCacheEntry = reading?.label !== undefined
     ? { at: probedAt, label: reading.label, ...(reading.windows.length ? { windows: reading.windows } : {}) }
-    : learned?.windows.length
-      ? { at: probedAt, failed: true }
-      : { at: probedAt, failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) };
+    : { at: probedAt, failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) };
   nativeUsageCache.set(cacheKey, next);
-  if (!reading?.label && learned?.windows.length) {
-    // The probe failed. Keep its failure in the cache so it is not asked
-    // again immediately, and store the learned amount as the usage.
-    account.usage = { at: new Date(probedAt - 1).toISOString(), ...(learned.label === undefined ? {} : { label: learned.label }), learned: true, windows: learned.windows } as AiHarnessAccount['usage'];
-  } else if (reading?.label !== undefined) {
+  if (reading?.label !== undefined) {
     account.usage = accountUsageFrom(next);
     // The moment a reading shows room, the refusal it overtakes is cleared on
     // the record too -- not left for the next failover to notice.
@@ -146,7 +119,6 @@ export async function nativeUsageReading(
   // writeState merges per field, so publishing this reading cannot disturb
   // anything another terminal changed meanwhile.
   await writeState(state).catch(() => undefined);
-  if (!reading?.label && learned?.windows.length) return learned;
   const shown = !reading?.label && carried?.windows?.length ? carried : next;
   return { windows: shown.windows ?? [], ...(shown.label === undefined ? {} : { label: shown.label }) };
 }
@@ -165,17 +137,6 @@ function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, ha
  * any, or a bare stand-in otherwise — codexUsageProbe ignores the session
  * argument entirely, and a stand-in with no nativeSessionId simply yields no
  * OpenCode label rather than a wrong one. */
-// There was a harnessReportsUsage(command) gate here, asking whether any
-// harness could ever produce a usage figure. Every harness can now: one has a
-// probe, or reports on its own stream, or has a limit learned from its own
-// refusals. A predicate that is true for all twenty-four inputs is not a
-// gate, so it is gone rather than left returning a constant.
-//
-// The question that actually matters was always the other one -- does this
-// account have something to say RIGHT NOW -- and that is answered where the
-// evidence lives: a probe returns nothing, or learnedUsageReading withholds a
-// figure until the account has hit its limit enough times to place it.
-
 export async function accountUsageLabel(
   account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
 ): Promise<string | undefined> {
@@ -211,35 +172,26 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
   return Date.now() - latest.at < BALANCE_READING_TTL_MS ? latest.label : undefined;
 }
 
-/** Accounts that were out of quota and may not be any more, on a harness
- * that can be asked.
- *
- * Only the chat's own account was ever re-read, so an account that ran out
- * kept its last reading -- "5h 0% left" -- until someone opened the picker,
- * and nothing said its quota had come back. Due when that reading has gone
- * past a reset it describes, or when the refusal it is marked with has
- * expired and no reading since has said otherwise. */
 function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
   let command: string | undefined;
   try { command = localHarnessForProvider(account.provider)?.command; } catch { command = undefined; }
   return Boolean(command && NATIVE_USAGE_PROBES[command]);
 }
 
+/** Accounts that were out of quota and may not be any more, on a harness
+ * that can be asked: a spent window whose reset has passed -- or that never
+ * said when it resets, which nothing else would ever re-read -- or a refusal
+ * that has stopped holding while the record still says exhausted. Only the
+ * chat's own account used to be re-read, so the rest kept "out of usage"
+ * until someone opened the picker. */
 export function accountsDueForUsageRecheck(
   state: HarnessState, now: number = Date.now(), canBeAsked: (account: AiHarnessAccount) => boolean = accountUsageCanBeAsked,
 ): AiHarnessAccount[] {
   return state.accounts.filter((account) => {
     if (account.authKind !== 'vendor-cli' || account.status !== 'ready' || !canBeAsked(account)) return false;
-    const reading = account.usage as AccountUsageReading | undefined;
-    const windows = reading?.windows ?? [];
-    const wasSpent = account.quotaState === 'exhausted' || windows.some(windowSpent);
-    if (!wasSpent) return false;
-    if (windows.length && !usageReadingIsCurrent({ windows }, now)) return true;
-    if (account.quotaState !== 'exhausted' || (quotaMarkExpiresAt(account) ?? Number.POSITIVE_INFINITY) > now) return false;
-    // A current reading taken after the refusal already answers it.
-    const readAt = Date.parse(reading?.at ?? '');
-    const marked = quotaMarkedAt(account);
-    return !(windows.length && !reading?.failed && Number.isFinite(readAt) && marked !== undefined && readAt > marked);
+    const windowDue = vendorWindows(account)
+      .some((window) => windowSpent(window) && !(window.resetsAt !== undefined && Date.parse(window.resetsAt) > now));
+    return windowDue || (account.quotaState === 'exhausted' && !accountQuotaSpent(account, now));
   });
 }
 

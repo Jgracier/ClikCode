@@ -145,8 +145,7 @@ describe('pending work tracker', () => {
     // The failover loop clears per-attempt usage on every pass: right for a
     // failover, where the abandoned attempt belongs to the account that
     // failed, and wrong for a continuation, where every attempt ran on the
-    // same account as part of one turn. Left alone it undercounted, and
-    // usage-learning fits its learned limits from these invocation records.
+    // same account as part of one turn. Left alone it undercounted.
     it('sums counts across attempts', () => {
       expect(addTurnUsage({ input: 100, output: 10 }, { input: 250, output: 40 }))
         .toEqual({ input: 350, output: 50 });

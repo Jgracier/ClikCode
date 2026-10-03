@@ -509,11 +509,10 @@ export async function sendVendorTurn(input: {
       continue;
     }
     // One invocation for the whole turn, however many continuations it took:
-    // recording one per pass counted every earlier pass again each time
-    // (usage-learning fits its limits from exactly these records).
+    // recording one per pass counted every earlier pass again each time.
     const usage = addTurnUsage(carriedPendingUsage, turnUsage);
     const invocation = recordInvocation(state, { sessionId: session.id, accountId: account.id, provider: harness.provider, model, startedAt, usage });
-    recordSuccessfulAccountTurn(state, account, invocation.at);
+    recordSuccessfulAccountTurn(account);
     showStopReason(prompter, usage?.stopReason);
     // Completion always extracts the title, including when the stream that
     // filtered an earlier attempt was replaced during a retry.

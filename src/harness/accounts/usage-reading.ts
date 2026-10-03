@@ -110,55 +110,41 @@ export function usageReadingIsCurrent(reading: { windows?: readonly UsageWindow[
  * back, because nothing re-reads a vendor that publishes no usage. */
 export const QUOTA_MARK_DEFAULT_MS = 5 * 60 * 60 * 1000;
 
-/** When the refusal was recorded. Marks written before `quotaExhaustedAt`
- * existed are dated by the refusal the usage learner stored with them --
- * recordRefused runs at the same moment the mark is set. */
-export function quotaMarkedAt(account: AiHarnessAccount): number | undefined {
-  const explicit = Date.parse(account.quotaExhaustedAt ?? '');
-  if (Number.isFinite(explicit)) return explicit;
-  const last = Date.parse(account.usageLearning?.hits?.at(-1)?.at ?? '');
-  return Number.isFinite(last) ? last : undefined;
+/** The windows the vendor reported for this account, from a reading that
+ * did not fail. */
+export function vendorWindows(account: AiHarnessAccount): UsageWindow[] {
+  const reading = account.usage as AccountUsageReading | undefined;
+  return reading && !reading.failed ? reading.windows ?? [] : [];
 }
 
-/** When a failover mark stops holding on its own, in epoch ms. Every path
- * that marks an account dates it (quotaExhaustedAt, or the refusal the usage
- * learner recorded), so a mark with no date at all is not one ClikCode wrote
- * in a turn; with nothing to measure a window from, it holds as before. */
+/** When a refusal mark stops holding on its own, in epoch ms: the vendor's
+ * own "resets in" hint, else QUOTA_MARK_DEFAULT_MS after the refusal. A mark
+ * with no date (older builds) is not upheld: nothing says how long it holds,
+ * and a turn that is refused again marks it again. */
 export function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefined {
   if (account.quotaState !== 'exhausted') return undefined;
   const retry = Date.parse(account.quotaRetryAt ?? '');
   if (Number.isFinite(retry)) return retry;
-  const marked = quotaMarkedAt(account);
-  return marked === undefined ? Number.POSITIVE_INFINITY : marked + QUOTA_MARK_DEFAULT_MS;
+  const marked = Date.parse(account.quotaExhaustedAt ?? '');
+  return Number.isFinite(marked) ? marked + QUOTA_MARK_DEFAULT_MS : undefined;
 }
 
 /** Is this account out of quota right now?
  *
- * The one answer every screen and every failover decision uses. Decided on
- * the unrounded `usedPct >= 100`, never on the display string ("0% left" is
- * also what 99.6% used rounds to).
- *
- * A reading's spent window holds until its own `resetsAt`. A failover mark
- * (`quotaState: 'exhausted'`) holds until the first of:
- *  - a window that was spent when the vendor refused has since reset;
- *  - a reading taken after the refusal shows room;
- *  - the mark's own expiry (the vendor's hint, else QUOTA_MARK_DEFAULT_MS).
- * Without these the mark only cleared on a successful turn, and failover
- * never attempts a turn on an account it believes is spent -- so an account
- * whose quota had been back for ten hours still read "out of usage". */
+ * The one answer every screen and every failover decision uses, from two
+ * facts only, both the vendor's:
+ *  - a window it reported spent (`usedPct >= 100`, unrounded) holds until
+ *    that window's own reset, or until a newer reading when it gave none;
+ *  - a refusal holds until its expiry (above), unless a reading the vendor
+ *    published after it shows no window spent. */
 export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now()): boolean {
-  const reading = account.usage as AccountUsageReading | undefined;
-  const windows = reading?.windows ?? [];
-  const spent = windows.filter(windowSpent);
-  if (spent.some((window) => window.resetsAt === undefined || Date.parse(window.resetsAt) > now)) return true;
-  if (account.quotaState !== 'exhausted') return false;
-  const marked = quotaMarkedAt(account);
-  // Only a window still spent at the moment of the refusal explains it. One
-  // that had already reset before then says nothing about why it refused.
-  if (spent.some((window) => marked === undefined || Date.parse(window.resetsAt!) > marked)) return false;
-  const readAt = Date.parse(reading?.at ?? '');
-  if (windows.length && !reading?.failed && marked !== undefined && Number.isFinite(readAt) && readAt > marked) return false;
-  return (quotaMarkExpiresAt(account) ?? 0) > now;
+  const windows = vendorWindows(account);
+  if (windows.some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now))) return true;
+  const expires = quotaMarkExpiresAt(account);
+  if (expires === undefined || expires <= now) return false;
+  const readAt = Date.parse(account.usage?.at ?? '');
+  const markedAt = Date.parse(account.quotaExhaustedAt ?? '');
+  return !(windows.length && readAt > markedAt);
 }
 
 /** Can this account take a turn now? Signed in, not held by the vendor for
