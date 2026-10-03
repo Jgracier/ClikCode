@@ -30,10 +30,6 @@ export function harnessCommand(): string {
   return 'clikcode';
 }
 
-export function isoStamp(): string {
-  return new Date().toISOString().replace(/[:.]/g, '-');
-}
-
 export async function exists(path: string): Promise<boolean> {
   return stat(path).then(() => true, () => false);
 }
