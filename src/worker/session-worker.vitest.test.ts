@@ -226,11 +226,18 @@ describe('session worker (real spawned process, real socket)', () => {
     client.send({ type: 'steer', text: 'never mind this', id: 'msg-2' });
     await queued;
     const changed = nextEvent(client, 'snapshot');
+    const removed = nextEvent(client, 'unqueued');
     client.send({ type: 'unqueue', id: 'msg-2' });
+    expect(await removed).toMatchObject({ type: 'unqueued', id: 'msg-2', outcome: 'removed' });
     const snapshot = await changed as Extract<WorkerEvent, { type: 'snapshot' }>;
     expect(snapshot.session.queuedTurns ?? []).toEqual([]);
     const stored = (await readState()).sessions.find((item) => item.id === session.id);
     expect(stored?.queuedTurns ?? []).toEqual([]);
+    // Asked again, it is no longer there: still answered, so the window
+    // asking does not wait on a reply that never comes.
+    const gone = nextEvent(client, 'unqueued');
+    client.send({ type: 'unqueue', id: 'msg-2' });
+    expect(await gone).toMatchObject({ type: 'unqueued', id: 'msg-2', outcome: 'gone' });
   });
 
   it('rejects an attach carrying the wrong token', async () => {
