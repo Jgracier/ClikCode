@@ -12,8 +12,6 @@ export interface WorkingStatus {
   /** As shown: `Reading app.ts…`, `Waiting for you…`. */
   label: string;
   tone: StatusTone;
-  /** How far silence has taken the line toward red, 0..1. */
-  stall: number;
   /** The colour class: thinking blue, the running call's own colour, the
    * permission colour while asking. */
   toneClass: string;
@@ -29,7 +27,6 @@ export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: 
     ...(live?.thought ? { thought: live.thought.text } : {}),
     thinkingMs: live ? now - (live.thinkingSince ?? live.startedAt) : 0,
     asking,
-    quietMs: live ? now - (live.lastEventAt ?? live.startedAt) : 0,
   });
   const open = live?.openTools[live.openTools.length - 1]?.[1];
   const toneClass = status.tone === 'asking' ? 'tone-permission'

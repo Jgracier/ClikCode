@@ -5,7 +5,7 @@ import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   ACTIVITY_PREVIEW_LINES, activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
-  outputPreview, previewLinesFor, SPIN_MS, STALL_MS, toolUses, waitingSpinnerGlyph,
+  outputPreview, previewLinesFor, SPIN_MS, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
@@ -501,19 +501,16 @@ const VISIBLE_ACTIVITIES = 6;
 /** The working line, the one thing on screen that moves while a turn runs:
  * what the turn is doing (turn-flow's rule: waiting on you, the open call's
  * verb, the reasoning's own heading, or how long it has thought), in the
- * colour of that work, a shimmer passing over it (CSS); toward red as
- * silence goes on. The thought being had is its tooltip, and opens under it.
+ * colour of that work, a shimmer passing over it (CSS). The thought being had is its tooltip, and opens under it.
  * Ticks on its own. */
 function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; elsewhere: boolean; asking: boolean }): JSX.Element {
   const now = useNow();
   const [open, setOpen] = useState(false);
   const status = workingStatus(live, asking, now);
-  const quiet = live && !asking && !live.openTools.length ? now - (live.lastEventAt ?? live.startedAt) : 0;
-  const stalled = quiet >= STALL_MS;
   const thought = asking ? undefined : live?.thought?.text;
   return (
     <div class="working-wrap">
-      <div class={`working status-${status.tone}`} role="status" style={{ '--stall': String(status.stall) }}>
+      <div class={`working status-${status.tone}`} role="status">
         <Spinner tone={status.toneClass} still={asking} />
         <span class={`working-label ${status.toneClass}`} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
@@ -521,7 +518,6 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
         <span class="muted">{live ? formatElapsed(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
-        {stalled ? <span class="stalled" title="Nothing has arrived from the agent for a while">nothing received for {formatElapsed(quiet)}</span> : null}
         {asking ? null : <span class="muted working-hint">Esc to stop</span>}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}

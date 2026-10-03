@@ -102,8 +102,6 @@ export interface LiveTurn {
   /** Messages sent into this turn while it runs, where they landed. */
   steers: Array<{ text: string; offset: number }>;
   startedAt: number;
-  /** When the turn last said anything: text, a tool, a thought, a phase. */
-  lastEventAt: number;
   /** When the model last went back to thinking -- the turn began, or its
    * last open call closed: how long it has thought, for the status line's
    * words ("still thinking"). Not moved by the answer's deltas, which stay
@@ -366,7 +364,7 @@ function applyActivity(live: LiveTurn, event: HarnessActivityEvent, offset?: num
 }
 
 function freshLive(waitingLabel: string, startedAt = Date.now()): LiveTurn {
-  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, openTools: [], steers: [], startedAt, lastEventAt: Date.now(), thinkingSince: Date.now() };
+  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, openTools: [], steers: [], startedAt, thinkingSince: Date.now() };
 }
 
 /** Text replaced wholesale keeps the rows placed in what it kept; one placed
@@ -418,7 +416,6 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         turnUserIndex: next.turnUserIndex ?? next.messages.length,
         live: {
           ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers,
-          ...(next.live?.text === event.live.text ? {} : { lastEventAt: Date.now() }),
         },
         ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
       };
@@ -440,14 +437,14 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
         reasoning: rebaseOffsets(after.reasoning, live.text, text),
       } : {};
-      return { ...model, live: { ...after, ...placed, text, lastEventAt: Date.now() } };
+      return { ...model, live: { ...after, ...placed, text } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
-      return { ...model, live: { ...applyActivity(live, event.event), lastEventAt: Date.now() } };
+      return { ...model, live: applyActivity(live, event.event) };
     }
     case 'phase':
-      return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message), lastEventAt: Date.now() } } : model;
+      return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
     case 'plan':
       return { ...model, plan: event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) };
     case 'usage': {

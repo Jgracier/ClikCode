@@ -224,7 +224,6 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .working { display: flex; align-items: center; gap: 8px; margin-top: 6px; font-size: 0.93em; }
 .working-label { color: var(--vscode-foreground); }
 .working-hint { margin-left: auto; }
-.stalled { display: inline-flex; gap: 4px; align-items: center; color: var(--warn); }
 @keyframes pulse { 0%, 100% { opacity: 0.35; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1); } }
 @keyframes spin { to { transform: rotate(360deg); } }
 .plan-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; background: var(--subtle); }
@@ -504,12 +503,11 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .tone-plain { --tone: var(--vscode-foreground); color: var(--tone); }
 .activity.done .activity-status:not(.tone-cyan):not(.tone-yellow):not(.tone-blue):not(.tone-magenta):not(.tone-green) { color: var(--muted); }
 .working .spinner { width: 2.2ch; }
-/* The working line: its tone, mixed toward red as silence goes on (--stall,
-   0..1, set on the line), and a highlight sweeping across the words every
-   two seconds -- all CSS, nothing redrawn per frame. Still under reduced
-   motion. */
+/* The working line: its tone, and a highlight sweeping across the words
+   every two seconds -- all CSS, nothing redrawn per frame. Still under
+   reduced motion. */
 .working .spinner, .working .working-label {
-  --tone-now: color-mix(in srgb, var(--err) calc(var(--stall, 0) * 100%), var(--tone, var(--vscode-foreground)));
+  --tone-now: var(--tone, var(--vscode-foreground));
   color: var(--tone-now);
 }
 .working .working-label {
