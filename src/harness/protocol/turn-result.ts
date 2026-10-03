@@ -238,8 +238,8 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // mistake a model TALKING about running out of usage for an account that
   // has. errorKind is set to the same vocabulary the rest of the pipeline
   // already understands, so classifyAccountFailure resolves it to
-  // 'quota-exhausted' and the existing failover and usage-learning paths
-  // handle it with no new branching anywhere.
+  // 'quota-exhausted' and the existing failover path handles it with no new
+  // branching anywhere.
   const quotaSignal = harness.turn.quotaSignals?.find((phrase) => text.includes(phrase));
   if (quotaSignal) {
     throw Object.assign(

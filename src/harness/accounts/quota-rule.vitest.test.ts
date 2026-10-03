@@ -60,12 +60,23 @@ describe('can an account take a turn now', () => {
     expect(accountCanTakeTurn(soon, now)).toBe(true);
   });
 
-  it('dates a mark written before quotaExhaustedAt by the refusal the learner stored', () => {
-    const legacy = (hitAt: string) => account({
-      provider: 'antigravity', quotaState: 'exhausted', usageLearning: { highWater: {}, hits: [{ at: hitAt, costs: {} }] },
-    });
-    expect(accountCanTakeTurn(legacy(minutes(-96 * 60)), now)).toBe(true);
-    expect(accountCanTakeTurn(legacy(minutes(-30)), now)).toBe(false);
+  it('does not uphold a mark with no date, which says nothing about how long it holds', () => {
+    expect(accountCanTakeTurn(account({ provider: 'antigravity', quotaState: 'exhausted' }), now)).toBe(true);
+  });
+
+  it('keeps a spent window with no reset until a newer reading says otherwise', () => {
+    const spent = account({ usage: reading(minutes(-5), [{ name: '5h', usedPct: 100 }]) });
+    expect(accountCanTakeTurn(spent, now)).toBe(false);
+    expect(accountCanTakeTurn(account({ usage: reading(minutes(-1), [{ name: '5h', usedPct: 20 }]) }), now)).toBe(true);
+  });
+
+  it('decides on the unrounded figure: 99.6% used is not spent', () => {
+    expect(accountCanTakeTurn(account({ usage: reading(minutes(-1), [{ name: '5h', usedPct: 99.6, resetsAt: minutes(60) }]) }), now)).toBe(true);
+  });
+
+  it('ignores a failed reading, so a probe error never marks an account out', () => {
+    const failed = account({ usage: { at: minutes(-1), failed: true, windows: [{ name: '5h', usedPct: 100, resetsAt: minutes(60) }] } as AiHarnessAccount['usage'] });
+    expect(accountCanTakeTurn(failed, now)).toBe(true);
   });
 
   it('never counts an account the vendor holds for verification, or one signed out', () => {
@@ -85,6 +96,11 @@ describe('which accounts are re-read', () => {
     const waiting = account({ id: 'w', quotaState: 'exhausted', quotaExhaustedAt: minutes(-10), usage: reading(minutes(-5), [{ name: '5h', usedPct: 100, resetsAt: minutes(200) }]) });
     const healthy = account({ id: 'h', usage: reading(minutes(-5), [{ name: '5h', usedPct: 30, resetsAt: minutes(-1) }]) });
     expect(accountsDueForUsageRecheck(state([recovered, waiting, healthy]), now, askable).map((item) => item.id)).toEqual(['r']);
+  });
+
+  it('re-reads a spent window that never said when it resets, which nothing else would', () => {
+    const undated = account({ id: 'u', usage: reading(minutes(-60), [{ name: '5h', usedPct: 100 }]) });
+    expect(accountsDueForUsageRecheck(state([undated]), now, askable).map((item) => item.id)).toEqual(['u']);
   });
 
   it('re-reads an expired refusal with no reading since, but not a vendor it cannot ask', () => {

@@ -18,9 +18,9 @@ describe('resume in', () => {
   it('offers other harnesses with an account that has usage, best tier first', () => {
     const harnesses = [harness('claude', 'anthropic', 0), harness('codex', 'openai', 0), harness('gemini', 'google', 1), harness('hermes', 'nous', 2)];
     const accounts = [
-      account('a1', 'anthropic', { quotaState: 'exhausted' }),
+      account('a1', 'anthropic', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() }),
       account('g1', 'google'),
-      account('o1', 'openai', { quotaState: 'exhausted' }),
+      account('o1', 'openai', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() }),
       account('o2', 'openai'),
       account('n1', 'nous', { status: 'needs_login' }),
     ];
@@ -32,7 +32,7 @@ describe('resume in', () => {
 
   it('counts only a ready, unspent, verified account as having usage', () => {
     expect(accountHasUsage(account('x', 'p'))).toBe(true);
-    expect(accountHasUsage(account('x', 'p', { quotaState: 'exhausted' }))).toBe(false);
+    expect(accountHasUsage(account('x', 'p', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() }))).toBe(false);
     expect(accountHasUsage(account('x', 'p', { status: 'needs_login' }))).toBe(false);
     expect(accountHasUsage(account('x', 'p', { verification: { reason: 'verify' } as never }))).toBe(false);
   });

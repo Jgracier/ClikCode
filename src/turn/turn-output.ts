@@ -16,8 +16,7 @@ import type { TurnObserver } from './observer.js';
 type Invocation = HarnessState['invocations'][number];
 
 /** One turn in the invocation log, however many attempts it took: who
- * answered, how long it took, and what it used (usage-learning fits its
- * limits from exactly these records). */
+ * answered, how long it took, and what it used. */
 export function recordInvocation(state: HarnessState, turn: {
   sessionId: string; accountId: string; provider: string; model?: string | null;
   startedAt: number; usage?: TurnUsage; contextProfile?: string;

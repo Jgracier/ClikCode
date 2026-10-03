@@ -1,6 +1,5 @@
 /** Select a usable account for a turn or a failover. */
-import { noteStoredQuota } from './account-switch.js';
-import { accountCanTakeTurn } from '../harness/accounts/usage-reading.js';
+import { accountCanTakeTurn, accountQuotaSpent, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -32,30 +31,34 @@ export function providerHasAccountForTurn(
   return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now));
 }
 
+/** Room the vendor last reported on this account, in percent: the tightest
+ * window that can stop it, from a reading still current. Undefined when it
+ * reported none. Ranking only -- whether the account may be tried at all is
+ * accountQuotaSpent, and a turn since the reading does not change either:
+ * the figure is old, not wrong, and only the vendor says an account is out. */
+export function reportedRoom(account: AiHarnessAccount, now: number = Date.now()): number | undefined {
+  const windows = vendorWindows(account).filter((window) => !window.advisory);
+  if (!windows.length || !usageReadingIsCurrent({ windows }, now)) return undefined;
+  return Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPct)));
+}
+
+/** The account a failover moves to: same provider and transport, signed in,
+ * not held for verification, not out of quota, not already tried -- most
+ * reported room first, an account with no figure after those. Reads stored
+ * state only (a live probe per candidate is what made a switch take minutes)
+ * and writes nothing. */
 export function nextUsableFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesTransport: (candidate: AiHarnessAccount) => boolean,
   attempted: ReadonlySet<string>,
+  now: number = Date.now(),
 ): AiHarnessAccount | undefined {
-  // An account the vendor is holding for verification refuses every turn
-  // until the user confirms it, so trying it only fails the switch.
-  const candidates = state.accounts.filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
-    && candidate.provider === current.provider && candidate.status === 'ready' && !candidate.verification
-    && matchesTransport(candidate));
-  const usable: Array<{ account: AiHarnessAccount; remaining?: number }> = [];
-  for (const candidate of candidates) {
-    // Stored usage only. Asking the vendor here ran a probe per account
-    // before the retry, which is the multi-minute switch. An account whose
-    // figure says it is empty is skipped. One with no figure is still
-    // eligible and is classified when its own turn comes back.
-    const remaining = noteStoredQuota(candidate, state);
-    if (remaining === 0) continue;
-    usable.push({ account: candidate, ...(remaining === undefined ? {} : { remaining }) });
-  }
-  // Measured room first. An account with no figure never outranks one that
-  // has some, and it is not treated as empty either.
-  return usable.sort((left, right) => (right.remaining ?? Number.NEGATIVE_INFINITY) - (left.remaining ?? Number.NEGATIVE_INFINITY))[0]?.account;
+  const room = (account: AiHarnessAccount): number => reportedRoom(account, now) ?? -1;
+  return state.accounts
+    .filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
+      && candidate.provider === current.provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now))
+    .sort((left, right) => room(right) - room(left))[0];
 }
 
 /** Decide the first account from stored usage before starting a provider. */
@@ -66,7 +69,7 @@ export function initialAccountChoice(
   matchesBackend: (candidate: AiHarnessAccount) => boolean,
   attempted: Set<string>,
 ): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount } | { kind: 'exhausted'; error: Error } {
-  if (policy !== 'on-quota-exhausted' || noteStoredQuota(current, state) !== 0) return { kind: 'continue' };
+  if (policy !== 'on-quota-exhausted' || !accountQuotaSpent(current)) return { kind: 'continue' };
   attempted.add(current.id);
   const fallback = nextUsableFailoverAccount(state, current, matchesBackend, attempted);
   if (fallback) return { kind: 'switch', account: fallback };
@@ -121,7 +124,9 @@ export interface FailoverTally {
  * about how much allowance is left. A rejected REQUEST is not an account
  * problem at all: every account refuses the same argv the same way (ClikCode
  * once sent --effort to Antigravity, then walked seven accounts collecting
- * the same refusal), so it is surfaced as the vendor worded it. */
+ * the same refusal), so it is surfaced as the vendor worded it. Nor is a
+ * stall: a vendor that went quiet for the idle budget says nothing about the
+ * account, and moving on only started the request over somewhere else. */
 export async function accountAfterFailure(input: {
   state: HarnessState;
   session: HarnessSession;
@@ -142,9 +147,12 @@ export async function accountAfterFailure(input: {
     throw isTurnCancelled(failure) ? failure : turnCancelledError();
   }
   if (kind === 'authentication-required') account.status = 'needs_login';
-  if (kind === 'request-invalid') { await input.persist(); throw failure; }
+  if (kind === 'request-invalid' || (failure as { reason?: unknown } | undefined)?.reason === 'idle-timeout') {
+    await input.persist();
+    throw failure;
+  }
   if (kind === 'quota-exhausted') {
-    recordQuotaRefusal(state, account, failure);
+    recordQuotaRefusal(account, failure);
     tally.exhaustedAny = true;
   } else tally.lastOtherFailure = failure;
   tally.attempted.add(account.id);

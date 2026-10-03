@@ -12,22 +12,22 @@ function state(accounts: AiHarnessAccount[]): HarnessState {
 
 describe('the account a provider switch lands on', () => {
   it('takes a usable account when there is one', () => {
-    const accounts = [account('spent', { quotaState: 'exhausted' }), account('fresh', { quotaState: 'available' })];
+    const accounts = [account('spent', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() }), account('fresh', { quotaState: 'available' })];
     expect(signedInAccountId(state(accounts), 'antigravity')).toBe('fresh');
   });
 
   it('still picks an account when every one is spent or awaiting verification, so no sign-in is asked for', () => {
     const accounts = [
-      account('spent', { quotaState: 'exhausted' }),
+      account('spent', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() }),
       account('verify', { quotaState: 'available', verification: { at: '2026-09-26T00:00:00Z' } }),
     ];
     // Quota left, even pending verification, ranks ahead of quota spent.
     expect(signedInAccountId(state(accounts), 'antigravity')).toBe('verify');
-    expect(signedInAccountId(state([account('only', { quotaState: 'exhausted' })]), 'antigravity')).toBe('only');
+    expect(signedInAccountId(state([account('only', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() })]), 'antigravity')).toBe('only');
   });
 
   it("keeps the session's own account when it is signed in", () => {
-    const accounts = [account('a', { quotaState: 'exhausted' }), account('b', { quotaState: 'exhausted' })];
+    const accounts = [account('a', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() }), account('b', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() })];
     expect(signedInAccountId(state(accounts), 'antigravity', 'b')).toBe('b');
   });
 

@@ -154,16 +154,7 @@ export interface AiHarnessAccount {
    * process meant the cost of displaying it scaled with the number of open
    * terminals -- which is what rate-limited the account out of reading its
    * own usage. */
-  usage?: { at: string; label?: string; failed?: boolean; learned?: boolean };
-  /** Learned quota shape, for the twenty-one harnesses that publish none.
-   *  `highWater` is the largest cost ever ALLOWED in each candidate window
-   *  (the limit estimate, converging from below) and `hits` is a bounded log
-   *  of refusals with the window costs snapshotted at that moment. Nothing is
-   *  displayed from this until it is mature -- see usage-learning.ts. */
-  usageLearning?: {
-    highWater: Record<string, number>;
-    hits: { at: string; costs: Record<string, number> }[];
-  };
+  usage?: { at: string; label?: string; failed?: boolean };
   nativeProfile?: {
     env: string;
     path: string;

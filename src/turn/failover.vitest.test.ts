@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, usageLabelIsExhausted, usageLabelRemainingPercent, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, quotaRetryHint } from './failover';
 import { failoverPrompt } from './failover-prompt.js';
 
 describe('ClikCode account failover', () => {
@@ -23,16 +23,6 @@ describe('ClikCode account failover', () => {
       new Error('Qwen Code: No auth type is selected. Please configure an auth type (e.g. via settings or `--auth-type`) before running in non-interactive mode.'),
       { isResultError: true },
     )).toBe('authentication-required');
-  });
-
-  it('routes around accounts whose live usage window is exhausted', () => {
-    expect(usageLabelIsExhausted('5h 0% left · weekly 69% left')).toBe(true);
-    expect(usageLabelIsExhausted('5h 58% left · weekly 0% left')).toBe(true);
-    expect(usageLabelIsExhausted('5h 0.1% left · weekly 69% left')).toBe(false);
-    expect(usageLabelIsExhausted('usage unavailable')).toBe(false);
-    expect(usageLabelRemainingPercent('5h 58% left · weekly 29% left')).toBe(29);
-    expect(usageLabelRemainingPercent('5h 42% used · weekly 71% used')).toBe(29);
-    expect(usageLabelRemainingPercent('12k tok · $0.02')).toBeUndefined();
   });
 
   it('rehydrates the complete canonical transcript and interrupted request', () => {

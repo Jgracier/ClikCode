@@ -84,7 +84,14 @@ function normalizedState(raw: HarnessState): HarnessState {
   // vendor's "resets in" hint, else a default window -- see
   // quotaMarkExpiresAt). The 60-second value older builds wrote is long past,
   // which only means that account is tried again and re-marked if it refuses.
-  const accounts = raw.accounts;
+  // ClikCode's own usage estimate, which older builds stored on the account
+  // (`usageLearning`, and a reading marked `learned`), is dropped as it is
+  // read: only the vendor's figures and its refusals say whether an account
+  // has usage, so nothing here may answer that from an estimate.
+  const accounts = (Array.isArray(raw.accounts) ? raw.accounts : []).map((account) => {
+    const { usageLearning: _estimate, ...rest } = account as typeof account & { usageLearning?: unknown };
+    return (rest.usage as { learned?: boolean } | undefined)?.learned ? { ...rest, usage: undefined } : rest;
+  });
   const normalized = {
     ...raw, accounts, sessions, invocations: Array.isArray(raw.invocations) ? raw.invocations : [],
     globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...raw.globalSettings, permissionMode: normalizedPermissionMode(raw.globalSettings?.permissionMode) },
