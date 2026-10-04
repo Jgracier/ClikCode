@@ -429,7 +429,7 @@ SCENARIOS = {
                   {'blocks': ['Sent now and answered.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('keys', 'do this instead'), ('wait_for', 'ctrl+s to send now', 5), ('keys', '\x13'),
+            ('keys', 'do this instead'), ('wait_for', 'ctrl+s stop & send', 5), ('keys', '\x13'),
             ('wait_for', 'Sent now and answered.', 40), ('settle', 3),
         ],
         'watch': ['start the long job', 'do this instead', 'Sent now and answered.'],
@@ -442,7 +442,7 @@ SCENARIOS = {
                   {'blocks': ['The queued one answered now.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('type', 'then do this'), ('wait_for', 'ctrl+s sends now', 10), ('keys', '\x13'),
+            ('type', 'then do this'), ('wait_for', 'ctrl+s stop & send', 10), ('keys', '\x13'),
             ('wait_for', 'The queued one answered now.', 40), ('settle', 3),
         ],
         'watch': ['start the long job', 'then do this', 'The queued one answered now.'],

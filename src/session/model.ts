@@ -128,7 +128,14 @@ export interface HarnessSession {
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */
-  queuedTurns?: Array<{ id: string; text: string; submittedAt: string; kind?: 'command' | 'notification' }>;
+  queuedTurns?: Array<{
+    id: string; text: string; submittedAt: string; kind?: 'command' | 'notification';
+    /** The running turn (its pendingTurn.startedAt) is holding this message
+     * to steer in at its next safe moment -- no tool call open, so nothing
+     * running is interrupted. Queued only as the fallback: it runs as the next
+     * turn if that turn ends first. Meaningless once that turn is over. */
+    heldForTurn?: string;
+  }>;
   attachments?: string[];
   /** Output the user's `!<command>` runs produced between turns. Injected into
    * the next turn the way attachments are (see shellContextBlock and

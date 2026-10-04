@@ -144,7 +144,7 @@ export interface ChatModel {
   notes: Note[];
   /** `notification`: a finished background task the agent is owed, not
    * something the user typed. */
-  queued: Array<{ id: string; text: string; command: boolean; notification?: boolean }>;
+  queued: Array<{ id: string; text: string; command: boolean; notification?: boolean; held?: boolean }>;
   running: boolean;
   /** This client's submitted prompt, until a snapshot carries it. */
   pendingPrompt?: string;
@@ -260,7 +260,12 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     workspace: session.workspace,
     messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : (session.messages ?? []).map(({ role, content }) => ({ role, content })),
     traces: withSavedTraces(model.traces, session.messages ?? []),
-    queued: (session.queuedTurns ?? []).map((item) => ({ id: item.id, text: item.text, command: item.kind === 'command', ...(item.kind === 'notification' ? { notification: true } : {}) })),
+    queued: (session.queuedTurns ?? []).map((item) => ({
+      id: item.id, text: item.text, command: item.kind === 'command', ...(item.kind === 'notification' ? { notification: true } : {}),
+      // The running turn is holding it to send in once no tool call is open
+      // (acp-client.ts); queued only in case that moment never comes.
+      ...(item.heldForTurn && item.heldForTurn === pending?.startedAt ? { held: true } : {}),
+    })),
     // The worker's journal of the running turn has the prompt from here on.
     pendingPrompt: pending?.prompt ?? (model.running ? model.pendingPrompt : undefined),
   };

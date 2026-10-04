@@ -14,6 +14,16 @@
  * one place, with the cases written down.
  */
 
+/** What a message typed during a turn is called on screen, by where it is.
+ *  Enter delivers it without stopping anything; Ctrl+S stops the turn --
+ *  its tool calls and sub-agents with it -- and sends, which its hint says. */
+export const STEER_WORDS = {
+  /** Held by the turn until no tool call is open (acp-client.ts). */
+  held: 'sending at the next pause',
+  steered: 'sent into the turn',
+  stopAndSend: 'ctrl+s stop & send',
+} as const;
+
 /** Anything the live composer is tracking. Only 'steered' entries are ever
  *  drawn here; the rest are still in flight or failed. */
 export type LiveSubmission = {

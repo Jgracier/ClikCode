@@ -79,8 +79,13 @@ export interface HarnessTurnObserver {
   /** Quota and limit numbers the harness volunteers mid-turn. */
   onRateLimits?: (rateLimits: unknown) => void;
   /** Published with a handler while a turn can be steered, and with nothing
-   * when it can no longer be. */
-  onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
+   * when it can no longer be. The handler resolves once the text is in the
+   * turn. `hold` (live-input.ts SteerHold) is for a transport that cannot
+   * steer yet without breaking something -- ACP, while a tool call is open --
+   * but will at the turn's next safe moment: it calls `hold(withdraw)`, which
+   * queues the message as the fallback, and settles its promise later.
+   * `withdraw` answers false once the message is already on its way. */
+  onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) => void;
   /** Slash commands the agent offers for this session. */
   onAvailableCommands?: (commands: readonly HarnessAvailableCommand[]) => void;
 }

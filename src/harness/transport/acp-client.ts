@@ -345,6 +345,19 @@ interface LiveAgent {
   modes?: Json;
   authMethods?: Json[];
   configOptions?: Json[];
+  /** The agent takes `_session/steering` (InitializeResponse
+   * `_meta.steering.supported`; claude-agent-acp 0.84). */
+  steering?: boolean;
+}
+
+/** A message typed during the turn, waiting for a moment it can be steered
+ * in without interrupting anything (see AcpSessionImpl.steerSafe). */
+interface HeldSteer {
+  text: string;
+  /** Settles when the broker has its fallback copy queued; never sent first. */
+  ready: Promise<void>;
+  resolve: () => void;
+  reject: (error: Error) => void;
 }
 
 /** Whatever is receiving the agent's session/update right now: the user's
@@ -391,6 +404,12 @@ interface ActiveTurn extends Stream {
   fail: (error: Error) => void;
   /** Running while the agent retries a rate-limited call; progress stops it. */
   throttled?: NodeJS.Timeout;
+  /** Messages waiting to be steered in, oldest first. */
+  held: HeldSteer[];
+  /** The `_session/steering` requests being sent now, one at a time. */
+  flushing?: Promise<void>;
+  /** Approvals the user is being asked for now. */
+  approvals: number;
 }
 
 interface BackgroundRun extends Stream {
@@ -434,6 +453,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const { failure, fail } = turnFailure();
     const turn: ActiveTurn = {
       input, observer: input, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
+      held: [], approvals: 0,
     };
     return this.runActive(turn, input.signal, failure, () => this.flow(turn, argv), {
       // After a failure the child's protocol state is unknown. Drop it; the
@@ -441,6 +461,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       failed: (error) => this.dropLive(error),
       ended: () => {
         if (turn.throttled) clearTimeout(turn.throttled);
+        input.onSteerReady?.(undefined);
+        this.releaseSteers(turn);
         this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
         // ACP defines the answer to session/prompt as the end of the turn: a
         // tool call it left unsettled is not waited for (agents do leave some,
@@ -534,6 +556,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       }, setup);
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
       live.authMethods = Array.isArray(initialized.authMethods) ? initialized.authMethods : [];
+      live.steering = initialized._meta?.steering?.supported === true;
       stillRunning();
     }
     const requestWithAuth = async (method: string, params: Json, options: { timeoutMs?: number; idleReset?: boolean } = setup): Promise<Json> => {
@@ -663,7 +686,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // No wall-clock timeout: a prompt legitimately runs for hours, and the
     // idle watchdog above is its only ceiling.
     turn.prompt = requestWithAuth('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
+    if (live.steering) input.onSteerReady?.((text, hold) => this.steer(turn, text, hold));
     const completed = await turn.prompt as Json;
+    // The answer ends the turn: nothing held can be steered into it any more
+    // (each goes to the queue as the next turn), and one already sent is
+    // answered before the turn is reported over.
+    if (live.steering) input.onSteerReady?.(undefined);
+    this.releaseSteers(turn);
+    await turn.flushing;
     if (completed.stopReason === 'cancelled') throw turnCancelledError();
     // `end_turn`, or the reason the agent stopped short (max_tokens,
     // max_turn_requests, refusal), beside whatever usage it counted.
@@ -690,6 +720,87 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // produced neither prose nor activity is a failure.
     if (!text && !turn.sawActivity) throw new Error(`${input.command} ACP returned no assistant text`);
     return { text, nativeSessionId: turn.sessionId! };
+  }
+
+  /** No tool call is open and the user is not being asked anything. Claude's
+   * adapter injects a steer at once, which cancels a call in flight (verified
+   * live: `[Request interrupted by user for tool use]`, the work redone) --
+   * and a sub-agent's call is open for the sub-agent's whole run. Between
+   * calls nothing is lost. */
+  private steerSafe(turn: ActiveTurn): boolean {
+    return !turn.done && this.turn === turn && this.pendingTools.size === 0 && turn.approvals === 0;
+  }
+
+  /** The turn's steer handler. Sent now when nothing would be interrupted;
+   * otherwise held (and queued by the caller as the fallback) until the next
+   * moment that is true. A caller that cannot hold gets a rejection: queue. */
+  private steer(turn: ActiveTurn, text: string, hold?: (withdraw: () => boolean) => Promise<void>): Promise<void> {
+    if (turn.done || this.turn !== turn) return Promise.reject(new Error(`${turn.input.command} ACP turn ended`));
+    // Anything already held goes first: messages arrive in the order typed.
+    const now = this.steerSafe(turn) && turn.held.length === 0 && !turn.flushing;
+    if (!now && !hold) return Promise.reject(new Error(`${turn.input.command} is running a tool`));
+    return new Promise<void>((resolve, reject) => {
+      // Never sent once it is no longer the user's: its queued copy failed to
+      // be written (the message went back to the composer), or was taken back.
+      // False once it is on its way: it can no longer be taken back.
+      const drop = (error: Error): boolean => {
+        const index = turn.held.indexOf(item);
+        if (index < 0) return false; // already sent, or released
+        turn.held.splice(index, 1);
+        reject(error);
+        return true;
+      };
+      const ready = now ? Promise.resolve() : hold!(() => drop(new Error('taken back from the queue')));
+      const item: HeldSteer = { text, ready, resolve, reject };
+      turn.held.push(item);
+      ready.catch((error: unknown) => drop(error instanceof Error ? error : new Error(String(error))));
+      this.flushSteers(turn);
+    });
+  }
+
+  /** Send what is held, oldest first, while it stays safe to. */
+  private flushSteers(turn: ActiveTurn): void {
+    const live = this.live;
+    if (turn.flushing || !turn.held.length || !live || !this.steerSafe(turn)) return;
+    turn.flushing = (async () => {
+      while (turn.held.length && this.steerSafe(turn)) {
+        const item = turn.held[0]!;
+        try { await item.ready; } catch { continue; } // already taken out and rejected
+        // Taken back while its fallback copy was being written.
+        if (turn.held[0] !== item) continue;
+        if (!this.steerSafe(turn)) break;
+        turn.held.shift();
+        try {
+          // `promptRequired`: the agent has no turn running (it ended between
+          // here and there); ClikCode owns the next turn, so the queued copy
+          // runs. Never let the agent start a detached one (`startedNewTurn`).
+          const answer = await live.peer.request('_session/steering', {
+            sessionId: turn.sessionId, prompt: [{ type: 'text', text: item.text }],
+            _meta: { steering: { idleBehavior: 'promptRequired' } },
+          }, { timeoutMs: JSONRPC_SETUP_TIMEOUT_MS });
+          if (answer?.outcome === 'injected') item.resolve();
+          else item.reject(new Error(`${turn.input.command} did not take the message into its turn (${String(answer?.outcome)})`));
+        } catch (error) {
+          item.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+      }
+    })().finally(() => {
+      turn.flushing = undefined;
+      // Typed while the last one was being sent.
+      this.flushSteers(turn);
+    });
+  }
+
+  /** A moment that may be safe: look again once this burst of updates is in
+   * (an agent announces parallel calls back to back). */
+  private steerPause(turn: ActiveTurn): void {
+    if (!turn.held.length) return;
+    setImmediate(() => this.flushSteers(turn));
+  }
+
+  /** The turn is over: whatever is still held runs as the next turn. */
+  private releaseSteers(turn: ActiveTurn): void {
+    for (const item of turn.held.splice(0)) item.reject(new Error(`${turn.input.command} ACP turn ended`));
   }
 
   /** Where an update goes: the user's turn while one runs, otherwise a
@@ -738,6 +849,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (toolSettled(update)) {
       this.pendingTools.delete(id);
       target?.watchdog?.toolFinished(id);
+      if (target && target === this.turn && this.pendingTools.size === 0) this.steerPause(this.turn);
     } else if (update.sessionUpdate === 'tool_call' ? toolRunning(update) : update.status === 'in_progress' || update.status === 'pending') {
       if (!this.pendingTools.has(id)) this.pendingTools.set(id, String(update.title ?? 'tool'));
       target?.watchdog?.toolStarted(id);
@@ -882,6 +994,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!stream) return cancelled;
     const plan = acpPermissionPlan(turn?.input.permissionMode ?? 'ask', params);
     let accepted = plan.action === 'allow';
+    // The call being asked about is open from here, whether or not the agent
+    // announced it first: a steer now would cancel it once it runs.
+    const callId = typeof params.toolCall?.toolCallId === 'string' ? params.toolCall.toolCallId as string : undefined;
+    const opened = Boolean(turn && callId && !this.pendingTools.has(callId));
+    if (opened) this.pendingTools.set(callId!, String(params.toolCall?.title ?? 'tool'));
     if (!accepted) {
       const title = String(params.toolCall?.title ?? params.toolCall?.name ?? 'Approve tool');
       const detail = [
@@ -890,12 +1007,23 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       ].filter(Boolean).join('\n') || undefined;
       // The agent is waiting on the user, not wedged.
       const resume = stream.watchdog?.pause();
+      // Nothing is steered in while the user is being asked.
+      if (turn) turn.approvals++;
       try {
         const diff = acpActivityEvent({ ...params.toolCall, sessionUpdate: 'tool_call' })?.diff;
         accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail, diff?.length ? { diff } : undefined) === true;
       } finally {
         resume?.();
+        if (turn) {
+          turn.approvals--;
+          this.steerPause(turn);
+        }
       }
+    }
+    // Refused, it never runs; an agent that reports it failed settles it too.
+    if (opened && !accepted && turn) {
+      this.pendingTools.delete(callId!);
+      if (this.pendingTools.size === 0) this.steerPause(turn);
     }
     // ACP requires `cancelled` for requests outstanding when a turn is cancelled.
     if (turn?.done) return cancelled;

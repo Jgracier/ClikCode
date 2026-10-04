@@ -112,8 +112,9 @@ export class DurableTurnCheckpoint {
     this.schedule();
   }
 
-  async queue(submission: LiveTurnSubmission): Promise<void> {
-    enqueueSessionTurn(this.session, submission, new Date().toISOString());
+  async queue(submission: LiveTurnSubmission, options: { held?: boolean } = {}): Promise<void> {
+    const heldForTurn = options.held ? this.session.pendingTurn?.startedAt : undefined;
+    enqueueSessionTurn(this.session, heldForTurn ? { ...submission, heldForTurn } : submission, new Date().toISOString());
     try {
       await this.persistNow();
     } catch (error) {
@@ -240,7 +241,7 @@ export async function startTurnCheckpoint(
     run.recorder.start();
     checkpoint.record(run.recorder);
   }
-  run.liveInput?.bindQueue((submission) => checkpoint.queue(submission));
+  run.liveInput?.bindQueue((submission, options) => checkpoint.queue(submission, options));
   run.liveInput?.setLateSteerHandler((submission) => checkpoint.unqueueSoon(submission));
   return checkpoint;
 }
