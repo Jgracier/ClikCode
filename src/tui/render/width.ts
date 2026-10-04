@@ -127,26 +127,58 @@ export function sliceToWidth(value: string, width: number): string {
   return value;
 }
 
+const CONTROLS = /^[\u0000-\u001f\u007f-\u009f]+$/;
+const MARK = /\p{Mark}/u;
+const EMOJI_PRESENTATION = /\p{Emoji_Presentation}/u;
+const EMOJI = /\p{Emoji}/u;
+const KEYCAP_BASE = /^[0-9#*]$/;
+
+/** Width of text made only of characters that are always one cell and never
+ * join a cluster, or -1 when any character is not. Nearly every string the
+ * renderer measures is ASCII plus the odd dash, bullet, ellipsis or box rule,
+ * where the grapheme segmenter and its Unicode-property tests are pure cost.
+ * Anything that could combine (marks, joiners, variation selectors) or be
+ * wide (CJK, emoji) is outside these ranges, so it takes the full path. */
+function simpleWidth(plain: string): number {
+  let width = 0;
+  for (let index = 0; index < plain.length; index += 1) {
+    const code = plain.charCodeAt(index);
+    if (code >= 0x20 && code < 0x7f) width += 1;
+    else if (code === 0x09) width += TAB_WIDTH - (width % TAB_WIDTH);
+    else if (code < 0xa0) continue; // C0/C1 controls draw nothing
+    else if (code < 0x300 || (code >= 0x2010 && code <= 0x2027) || (code >= 0x2500 && code <= 0x259f)) width += 1;
+    else return -1;
+  }
+  return width;
+}
+
 export function terminalCellWidth(value: string): number {
   const plain = value.includes('\u001b') ? value.replace(ZERO_WIDTH_SEQUENCES, '') : value;
+  const simple = simpleWidth(plain);
+  if (simple >= 0) return simple;
   let width = 0;
   for (const { segment } of graphemes().segment(plain)) {
     if (segment === '\t') { width += TAB_WIDTH - (width % TAB_WIDTH); continue; }
-    // Other control characters occupy no cell (and are stripped before paint).
-    if (segment.length === 1 && /[\u0000-\u001f\u007f-\u009f]/.test(segment)) continue;
+    // Other control characters occupy no cell (and are stripped before paint),
+    // CRLF included, which the segmenter makes one cluster.
+    if (CONTROLS.test(segment)) continue;
+    const code = segment.codePointAt(0) ?? 0;
+    // Printable ASCII alone is one cell; only a cluster built on it (a keycap)
+    // needs the tests below.
+    if (segment.length === 1 && code < 0x7f) { width += 1; continue; }
     // The base character decides the cell count; whatever the cluster attaches
     // to it (marks, variation selectors, joiners) draws inside those cells.
-    const base = String.fromCodePoint(segment.codePointAt(0) ?? 0);
-    if (/\p{Mark}/u.test(base)) continue;
+    const base = String.fromCodePoint(code);
+    if (MARK.test(base)) continue;
     // Presentation is part of the width. U+FE0F asks for the emoji glyph, which
     // terminals draw two cells wide even for a symbol that is one cell as text
     // (U+2611 BALLOT BOX, U+2764 HEART); U+FE0E asks for the narrow text glyph.
     // Symbols that default to emoji presentation (U+26A1, U+2705) are wide on
     // their own.
-    const wide = segment.includes('\ufe0e') ? isWideCodePoint(base.codePointAt(0) ?? 0) && (base.codePointAt(0) ?? 0) >= 0x1f000
-      : isWideCodePoint(base.codePointAt(0) ?? 0)
-        || /\p{Emoji_Presentation}/u.test(base)
-        || (segment.includes('\ufe0f') && /\p{Emoji}/u.test(base) && !/^[0-9#*]$/.test(base))
+    const wide = segment.includes('\ufe0e') ? isWideCodePoint(code) && code >= 0x1f000
+      : isWideCodePoint(code)
+        || EMOJI_PRESENTATION.test(base)
+        || (segment.includes('\ufe0f') && EMOJI.test(base) && !KEYCAP_BASE.test(base))
         || (segment.includes('\u20e3'));
     width += wide ? 2 : 1;
   }
