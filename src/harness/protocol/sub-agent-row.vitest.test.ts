@@ -14,7 +14,7 @@ describe('a sub-agent row', () => {
     let agent = { kind: 'tool-start' as const, id: 'a', label: 'Task(explore)', agent: true };
     agent = withChildTool(withChildTool(agent, { kind: 'tool-start' }), { kind: 'tool-done' });
     const finished = mergeActivity(agent, { kind: 'tool-done', id: 'a', label: 'Task(explore)', durationMs: 65_000 });
-    expect(plain(renderActivityLine(finished)[0]!)).toBe('  Task(explore) (1 tool use · 1m 05s)');
+    expect(plain(renderActivityLine(finished)[0]!)).toBe('  Task(explore) (1 tool use · 1m 5s)');
   });
 
   it("shows what the sub-agent spent when the harness reports it on the result, its count over the display's", () => {
@@ -26,7 +26,7 @@ describe('a sub-agent row', () => {
     })[0]!;
     expect(result).toMatchObject({ kind: 'tool-done', id: 'a', childTools: 12, childTokens: 30_412, durationMs: 65_000 });
     const finished = mergeActivity(agent, result);
-    expect(plain(renderActivityLine(finished)[0]!)).toBe('  Task(explore) (12 tool uses · 30k tokens · 1m 05s)');
+    expect(plain(renderActivityLine(finished)[0]!)).toBe('  Task(explore) (12 tool uses · 30k tokens · 1m 5s)');
     // An ordinary result reports none of it.
     expect(subAgentTotals({ stdout: 'ok' })).toEqual({});
   });

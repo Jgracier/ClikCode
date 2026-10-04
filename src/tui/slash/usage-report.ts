@@ -3,7 +3,7 @@
 import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { compactCount, dollars } from '../render/usage-line.js';
+import { compactCount, dollars } from '../../harness/protocol/format.js';
 import { learnedReading } from '../../harness/accounts/learned-usage.js';
 import { accountQuotaSpent, usageReadingIsCurrent, vendorWindows, usageResetLabel, usageWindowTitle, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
 

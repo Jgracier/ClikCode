@@ -1,24 +1,6 @@
 /** Small pure helpers for what the webview shows. */
 
-export function relativeTime(iso: string | undefined, now = Date.now()): string {
-  if (!iso) return '';
-  const at = Date.parse(iso);
-  if (Number.isNaN(at)) return '';
-  const seconds = Math.max(0, Math.round((now - at) / 1000));
-  if (seconds < 45) return 'just now';
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  return new Date(at).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-export function homeRelative(path: string | undefined): string {
-  if (!path) return '';
-  return path.replace(/^\/home\/[^/]+|^\/Users\/[^/]+|^[A-Z]:\\Users\\[^\\]+/, '~');
-}
+export { relativeTime, tildePath } from '../../../../src/harness/protocol/format';
 
 /** A path-looking token in a tool label or inline code, with a line number
  * when one is attached (`src/a.ts:12`). */

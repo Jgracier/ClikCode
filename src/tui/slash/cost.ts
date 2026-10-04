@@ -4,9 +4,10 @@ import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
 import type { HarnessSession } from '../../session/model.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { sessionHarness } from './context.js';
+import { compactCount, relativeTime } from '../../harness/protocol/format.js';
 
 function formatTokens(value: number | undefined): string {
-  return value === undefined ? '—' : value.toLocaleString('en-US');
+  return value === undefined ? '—' : compactCount(value);
 }
 
 export function contextUsageText(session: HarnessSession): string {
@@ -16,7 +17,7 @@ export function contextUsageText(session: HarnessSession): string {
   const used = usage.contextUsed ?? usage.totalTokens ?? ((usage.input ?? 0) + (usage.output ?? 0) || undefined);
   const window = usage.contextWindow;
   return [
-    `Context usage (as of ${usage.at})`,
+    `Context usage (${relativeTime(usage.at)})`,
     window && used !== undefined ? `  window     ${formatTokens(used)} / ${formatTokens(window)} tokens (${Math.min(100, Math.round((used / window) * 100))}%)` : `  window     not reported by ${who}`,
     `  input      ${formatTokens(usage.input)}`,
     `  cached     ${formatTokens(usage.cacheRead)}`,

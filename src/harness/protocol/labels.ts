@@ -1,13 +1,13 @@
 /** Short human labels: a compacted path, and which provider a session is on. */
 
 import { homedir } from 'node:os';
+import { tildePath } from './format.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import type { HarnessSession } from '../../session/model.js';
 import { clikCodeAgentLabel, isClikCodeAgent } from '../../session/route.js';
 
 export function compactPath(path: string): string {
-  const home = homedir();
-  return path === home ? '~' : path.startsWith(`${home}/`) ? `~/${path.slice(home.length + 1)}` : path;
+  return tildePath(path, homedir());
 }
 
 export function sessionProviderLabel(session: HarnessSession): string {

@@ -106,7 +106,7 @@ export function commandPreviewRows(preview: CommandPreview): string[] {
   return [...preview.head.map(row), ...note, ...preview.tail.map(row)];
 }
 
-/** `(exit 2 · 3.4s)`, `(12 tool uses · 30k tokens · 1m 05s)` after a
+/** `(exit 2 · 3.4s)`, `(12 tool uses · 30k tokens · 1m 5s)` after a
  * finished call (activityOutcome). */
 function outcomeSuffix(event: HarnessActivityEvent): string | undefined {
   const outcome = activityOutcome(event);

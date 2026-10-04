@@ -7,6 +7,7 @@ import type { ChatModel } from '../model';
 import type { IdeAccount, IdeAccounts, IdeChoice, IdeGateway, IdeModels, IdeProvider } from '../protocol';
 import { post, request, uid } from './bus';
 import { modelLabel, titleCase } from './format';
+import { dollars } from '../../../../src/harness/protocol/format';
 import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
 
 /** Model lists, kept for the panel's life: a second look is instant. */
@@ -250,16 +251,12 @@ const ACCOUNT_PROBLEM: Record<NonNullable<IdeAccount['problem']>, string> = {
   verify: 'needs verifying', reauth: 'signed out', 'out-of-usage': 'out of usage',
 };
 
-function money(value: number): string {
-  return value.toLocaleString(undefined, { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
 /** The Gateway's credit, as the account menu's row says it. */
 function creditText(gateway: IdeGateway): { label: string; detail: string } {
   const credit = gateway.credit;
   if (!gateway.connected) return { label: 'Sign in to the Gateway', detail: 'Hosted models from every lab, paid from one balance' };
   if (credit?.unlimited) return { label: 'Unlimited credit', detail: 'Your plan includes unlimited AI credit' };
-  const balance = credit?.balanceUsd !== undefined ? money(credit.balanceUsd) : '—';
+  const balance = credit?.balanceUsd !== undefined ? dollars(credit.balanceUsd) : '—';
   return {
     label: `Credit ${balance}`,
     detail: gateway.error ?? `${credit?.allowed === false ? 'Out of credit: buy more' : 'Buy credit'}${credit?.autoTopUp ? ' · auto top-up on' : ''}`,

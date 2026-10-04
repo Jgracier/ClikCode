@@ -8,6 +8,7 @@ import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } 
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
+import { compactCount } from '../../../../src/harness/protocol/format';
 import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
@@ -531,7 +532,7 @@ function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['con
   const radius = 6;
   const circumference = 2 * Math.PI * radius;
   const percent = context.percent;
-  const figures = context.used ? `${compact(context.used)}${context.window ? ` of ${compact(context.window)}` : ''} tokens` : '';
+  const figures = context.used ? `${compactCount(context.used)}${context.window ? ` of ${compactCount(context.window)}` : ''} tokens` : '';
   const label = `Context ${percent < 10 ? percent.toFixed(1) : Math.round(percent)}% used${figures ? ` (${figures})` : ''}`;
   return (
     <button type="button" class={`context-meter${percent >= 90 ? ' high' : percent >= 70 ? ' warn' : ''}`} title={`${label}${tokens ? `\nLast turn: ${tokens}` : ''}\nClick for the breakdown.`} aria-label={label}
@@ -544,8 +545,6 @@ function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['con
     </button>
   );
 }
-
-const compact = (count: number): string => (count < 1000 ? String(count) : count < 1_000_000 ? `${Math.round(count / 1000)}k` : `${(count / 1_000_000).toFixed(1)}M`);
 
 /** A sign-in in progress: its link opened in the browser and its code to
  * confirm there, once the vendor gives one; questions it asks come up as

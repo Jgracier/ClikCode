@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { markFromIndex } from './list-facts.js';
 import type { HarnessSession } from './model.js';
-import { chatNamed, conversationPreview, isBlankConversation, relativeTime, sessionPickerOptions } from './options.js';
+import { chatNamed, conversationPreview, isBlankConversation, sessionPickerOptions } from './options.js';
 
 const now = new Date().toISOString();
 const chat = (extra: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -58,7 +58,6 @@ describe('a chat nothing happened in', () => {
     const row = sessionPickerOptions([used], 'other', () => 'Claude', Date.parse(now))[0]!;
     expect(row.detail).toContain('5m ago');
     expect(row.detail).toContain('fix the scroll jump');
-    expect(relativeTime(used.updatedAt, Date.parse(now))).toBe('5m ago');
     expect(conversationPreview(used)).toBe('fix the scroll jump');
   });
 });

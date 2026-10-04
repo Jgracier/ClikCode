@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './width';
-import { appendThought, formatElapsed, liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './waiting';
+import { appendThought, liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './waiting';
 import { waitingSpinnerFrame } from '../../harness/protocol/activity-view';
 import { visibleTail } from './width';
 
@@ -52,8 +52,6 @@ describe('the waiting band', () => {
   });
 
   it('times a call that has run for a second or more, and not one that has not', () => {
-    expect(formatElapsed(42_900)).toBe('42s');
-    expect(formatElapsed(185_000)).toBe('3m 5s');
     expect(runningChatLine('Bash(make)', 0, 'command', 400)).not.toContain('(0s)');
     expect(runningChatLine('Bash(make)', 0, 'command', 12_300)).toContain('(12s)');
   });

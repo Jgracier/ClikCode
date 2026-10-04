@@ -10,7 +10,7 @@ import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
-import { homeRelative, relativeTime } from './format';
+import { relativeTime, tildePath } from './format';
 import { choose } from './picker';
 import { HistoryMenu } from './screens';
 import { Sheet, type OpenQuestion } from './sheet';
@@ -63,7 +63,7 @@ function Welcome({ model, onPrompt, onMenu }: { model: ChatModel; onPrompt: (tex
         <h1>What should we build?</h1>
         <p class="muted">
           {provider ? <>{provider.name}{model.model ? <> · {chatModelLabel(model, provider.name)}</> : null}</> : 'ClikCode'}
-          {folder ? <> · <span title={homeRelative(model.workspace)}>{folder}</span></> : null}
+          {folder ? <> · <span title={model.workspace ? tildePath(model.workspace) : ''}>{folder}</span></> : null}
         </p>
       </div>
       {needsSignIn || needsGateway ? (

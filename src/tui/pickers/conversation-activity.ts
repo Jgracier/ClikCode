@@ -8,6 +8,7 @@
 
 import chalk from 'chalk';
 import { waitingSpinnerGlyph } from '../render/waiting.js';
+import { shortDuration } from '../../harness/protocol/format.js';
 import type { PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession } from '../../session/model.js';
 
@@ -23,16 +24,6 @@ export function turnPace(lastActivityAt: string, now: number): TurnPace {
   const quiet = now - Date.parse(lastActivityAt);
   if (!(quiet >= SLOWING_AFTER_MS)) return 'flowing';
   return quiet < STUCK_AFTER_MS ? 'slowing' : 'stuck';
-}
-
-/** `45s`, `4m`, `2h 5m` -- compact, because it shares a row. */
-export function shortDuration(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  return hours < 24 ? `${hours}h ${minutes % 60}m` : `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 const PACE_COLOR: Record<TurnPace, (text: string) => string> = {

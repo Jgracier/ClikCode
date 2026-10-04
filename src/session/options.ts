@@ -19,6 +19,7 @@ import { commonControlFor, optionIdsForControl } from '../harness/options.js';
 import { harnessTierRank } from '../runtime/lazy-bridge.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { sessionProviderLabel } from '../harness/protocol/labels.js';
+import { relativeTime } from '../harness/protocol/format.js';
 import { harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { PickerOption } from '../harness/prompter.js';
@@ -79,22 +80,6 @@ export function isBlankConversation(session: HarnessSession): boolean {
     && !(session.attachments?.length)
     && !(session.shellNotes?.length)
     && session.nameSource !== 'user';
-}
-
-/** `just now`, `4m ago`, `2h ago`, then a date. A conversation row shares its
- * width with the title, so a full locale timestamp does not fit. */
-export function relativeTime(iso: string, now = Date.now()): string {
-  const then = Date.parse(iso);
-  if (Number.isNaN(then)) return '';
-  const delta = Math.max(0, now - then);
-  if (delta < 45_000) return 'just now';
-  const minutes = Math.round(delta / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(delta / 3_600_000);
-  if (hours < 36) return `${hours}h ago`;
-  const days = Math.round(delta / 86_400_000);
-  if (days < 14) return `${days}d ago`;
-  return new Date(then).toLocaleDateString();
 }
 
 /** The one conversation a typed name picks out: an exact name (ignoring
