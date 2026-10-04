@@ -33,6 +33,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // the same reason as session-worker: neither is anything to type.
   program.command('ide-bridge', { hidden: true }).action(async () => (await import('../ide/bridge.js')).runIdeBridge(config));
   program.command('ide-terminal <spec>', { hidden: true }).action(async (spec: string) => (await import('../ide/terminal.js')).runIdeTerminal(spec));
+  program.command('conversations-mcp', { hidden: true }).description('Serves search_conversations, read_conversation and active_conversations to a vendor agent over stdio MCP').action(async () => (await import('../search/mcp.js')).serveConversationsMcp());
   program.command('swarm-mcp', { hidden: true }).description('Answers the swarm tool for the ACP session that spawned it').action(async () => (await import('../swarm/mcp.js')).serveSwarmMcp());
   program.command('start').description('Start the optional loopback-only control API')
     .option('--port <port>', 'Optional explicit loopback port; default is OS-assigned')

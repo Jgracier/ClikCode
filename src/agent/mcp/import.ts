@@ -28,6 +28,7 @@ import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { MCP_SERVERS_KEY, mcpConfigFilePath, parseMcpServerEntry } from './config.js';
+import { CONVERSATIONS_MCP_NAME } from '../../search/mcp-entry.js';
 
 type Format = 'json' | 'jsonc' | 'toml' | 'yaml';
 type Dialect = 'mcp-servers' | 'gemini' | 'opencode' | 'goose' | 'codex';
@@ -323,6 +324,10 @@ export async function importVendorMcpServers(
       if (!table) continue;
       for (const [name, raw] of Object.entries(table)) {
         const from = source.vendor;
+        if (name === CONVERSATIONS_MCP_NAME) {
+          skipped.push({ name, from, reason: 'is ClikCode\'s own; its agent has these tools built in' });
+          continue;
+        }
         const normalized = normalize(source.dialect, raw);
         if ('skip' in normalized) {
           skipped.push({ name, from, reason: normalized.skip });
