@@ -46,6 +46,7 @@ import { createHash } from 'node:crypto';
 import { readdir, readFile, rm, stat, statfs, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { httpJson } from './launch.js';
+import { serversDir } from './paths.js';
 
 /** Shorter prefixes are read faster than a restore is worth managing. */
 const MIN_PREFIX_TOKENS = 1024;
@@ -55,10 +56,15 @@ const BOUNDARY_SLACK = 4;
 /** Saved system+tools prefixes kept per server configuration, newest used
  * first; one is a few hundred MB. */
 const KEEP_FILES = 4;
-/** Conversation states are bounded by bytes: one grows with its chat. */
-const CONVERSATION_BYTES = 4 * 1024 ** 3;
-/** ...and never more than this share of the disk's free space. */
-const CONVERSATION_DISK_SHARE = 0.1;
+/** Every saved state on this machine -- all models, all cache types --
+ * shares one byte budget: prefixes first, then conversation states (one
+ * grows with its chat), newest first. */
+const TOTAL_BYTES = 8 * 1024 ** 3;
+/** ...and never more than this share of the disk's space left for it. */
+const DISK_SHARE = 0.1;
+/** A state nobody saved or restored for this long goes, whatever the budget:
+ * a model not used in two weeks, or one whose weights were deleted. */
+const MAX_AGE_MS = 14 * 24 * 60 * 60_000;
 /** The longest reread a resumed chat should pay, in seconds of this
  * machine's measured prompt reading. */
 const CHECKPOINT_SECONDS = 15;
@@ -84,8 +90,8 @@ interface Saved { tokens?: number[]; kind: Kind }
 export interface PrefixCacheOptions {
   /** This server's measured prompt reading, tokens per second. */
   promptPerSecond?: number;
-  /** Overrides the disk budget for conversation states (tests). */
-  conversationBytes?: number;
+  /** Overrides the machine-wide byte budget (tests). */
+  budgetBytes?: number;
 }
 
 const caches = new Map<string, PrefixCache>();
@@ -291,32 +297,91 @@ export class PrefixCache {
     return (slots.json as SlotInfo[]).find((slot) => !slot.is_processing && slot.id_task === undefined)?.id;
   }
 
-  /** Prefixes: the newest few. Conversation states: the newest that fit
-   * the byte budget. Newest means last saved or restored. */
   private async prune(): Promise<void> {
-    const saved = await this.savedStates();
-    const dated = await Promise.all([...saved].map(async ([key, state]) => {
-      const info = await stat(join(this.dir, `${key}.bin`)).catch(() => undefined);
-      return { key, kind: state.kind, at: info?.mtimeMs ?? 0, bytes: info?.size ?? 0 };
-    }));
-    dated.sort((left, right) => right.at - left.at);
-    const budget = await this.conversationBudget();
-    let prefixes = 0, bytes = 0;
-    for (const state of dated) {
-      const keep = state.kind === 'prefix' ? ++prefixes <= KEEP_FILES : (bytes += state.bytes) <= budget;
-      if (!keep) await this.remove(state.key);
-    }
-    // Sidecars whose state is gone.
-    for (const name of await readdir(this.dir).catch(() => [] as string[])) {
-      if (name.endsWith(TOKENS_SUFFIX) && !saved.has(name.slice(0, -TOKENS_SUFFIX.length))) await rm(join(this.dir, name), { force: true });
-    }
+    await enforcePrefixCacheBudget({ dirs: [this.dir], ...(this.options.budgetBytes !== undefined ? { budgetBytes: this.options.budgetBytes } : {}) });
   }
+}
 
-  private async conversationBudget(): Promise<number> {
-    if (this.options.conversationBytes !== undefined) return this.options.conversationBytes;
-    const disk = await statfs(this.dir).catch(() => undefined);
-    return disk ? Math.min(CONVERSATION_BYTES, disk.bavail * disk.bsize * CONVERSATION_DISK_SHARE) : CONVERSATION_BYTES;
+/** Saved states' kinds by sidecar path and mtime: a sidecar holds a whole
+ * conversation's tokens, and the budget is enforced on every save. */
+const kinds = new Map<string, { mtimeMs: number; kind: Kind }>();
+
+async function kindOf(sidecar: string): Promise<Kind> {
+  const info = await stat(sidecar).catch(() => undefined);
+  if (!info) return 'prefix';
+  const known = kinds.get(sidecar);
+  if (known?.mtimeMs === info.mtimeMs) return known.kind;
+  const raw = await readFile(sidecar, 'utf8').then((text) => JSON.parse(text) as unknown, () => undefined);
+  const kind: Kind = !Array.isArray(raw) && (raw as { kind?: unknown } | undefined)?.kind === 'conversation' ? 'conversation' : 'prefix';
+  kinds.set(sidecar, { mtimeMs: info.mtimeMs, kind });
+  return kind;
+}
+
+/** Every prefix-cache directory under the local model servers. */
+async function prefixCacheDirs(): Promise<string[]> {
+  const dirs: string[] = [];
+  for (const server of await readdir(serversDir()).catch(() => [] as string[])) {
+    const root = join(serversDir(), server, 'prefix-cache');
+    for (const type of await readdir(root).catch(() => [] as string[])) dirs.push(join(root, type));
   }
+  return dirs;
+}
+
+/** Holds every saved state on this machine to one budget. Run when a server
+ * starts and after every save. In order: states older than MAX_AGE_MS go;
+ * each configuration keeps its newest KEEP_FILES prefixes; then, newest
+ * first, prefixes and then conversation states are kept while they fit the
+ * budget. A state a running server was about to restore only costs that
+ * server a read (see the top of this file). */
+export async function enforcePrefixCacheBudget(options: { dirs?: readonly string[]; budgetBytes?: number; now?: number } = {}): Promise<void> {
+  const now = options.now ?? Date.now();
+  const dirs = [...new Set([...(await prefixCacheDirs()), ...(options.dirs ?? [])])];
+  interface State { dir: string; key: string; kind: Kind; at: number; bytes: number }
+  const states: State[] = [];
+  for (const dir of dirs) {
+    const names = await readdir(dir).catch(() => [] as string[]);
+    const present = new Set(names);
+    for (const name of names) {
+      // Sidecars whose state is gone.
+      if (name.endsWith(TOKENS_SUFFIX) && !present.has(`${name.slice(0, -TOKENS_SUFFIX.length)}.bin`)) await rm(join(dir, name), { force: true });
+      if (!name.endsWith('.bin')) continue;
+      const key = name.slice(0, -'.bin'.length);
+      const info = await stat(join(dir, name)).catch(() => undefined);
+      if (!info) continue;
+      states.push({ dir, key, kind: await kindOf(join(dir, `${key}${TOKENS_SUFFIX}`)), at: info.mtimeMs, bytes: info.size });
+    }
+  }
+  states.sort((left, right) => right.at - left.at);
+  const drop = async (state: State): Promise<void> => {
+    kinds.delete(join(state.dir, `${state.key}${TOKENS_SUFFIX}`));
+    await rm(join(state.dir, `${state.key}.bin`), { force: true });
+    await rm(join(state.dir, `${state.key}${TOKENS_SUFFIX}`), { force: true });
+  };
+  const kept: State[] = [];
+  const prefixesIn = new Map<string, number>();
+  for (const state of states) {
+    const count = state.kind === 'prefix' ? (prefixesIn.get(state.dir) ?? 0) + 1 : 0;
+    if (state.kind === 'prefix') prefixesIn.set(state.dir, count);
+    if (now - state.at > MAX_AGE_MS || count > KEEP_FILES) await drop(state);
+    else kept.push(state);
+  }
+  const held = kept.reduce((sum, state) => sum + state.bytes, 0);
+  const budget = options.budgetBytes ?? await machineBudget(dirs[0], held);
+  let bytes = 0;
+  for (const state of [...kept.filter((item) => item.kind === 'prefix'), ...kept.filter((item) => item.kind === 'conversation')]) {
+    // The newest prefix of each configuration stays whatever the budget:
+    // without it every start reads the system prompt again.
+    const newestPrefix = state.kind === 'prefix' && kept.find((item) => item.dir === state.dir && item.kind === 'prefix') === state;
+    if (bytes + state.bytes > budget && !newestPrefix) await drop(state);
+    else bytes += state.bytes;
+  }
+}
+
+/** TOTAL_BYTES, or DISK_SHARE of the space these states could use (free
+ * space plus what they hold), whichever is less. */
+async function machineBudget(dir: string | undefined, held: number): Promise<number> {
+  const disk = dir ? await statfs(dir).catch(() => undefined) : undefined;
+  return disk ? Math.min(TOTAL_BYTES, (disk.bavail * disk.bsize + held) * DISK_SHARE) : TOTAL_BYTES;
 }
 
 function keyOf(tokens: readonly number[]): string {

@@ -151,7 +151,7 @@ describe('prefix cache', () => {
 
   it('keeps the newest few saved prefixes', async () => {
     await listen();
-    for (let i = 0; i < 6; i++) await fs.writeFile(path.join(dir, `old${i}.bin`), 'x').then(() => fs.utimes(path.join(dir, `old${i}.bin`), i + 1, i + 1));
+    for (let i = 0; i < 6; i++) await fs.writeFile(path.join(dir, `old${i}.bin`), 'x').then(() => fs.utimes(path.join(dir, `old${i}.bin`), Date.now() / 1000 - 100 + i, Date.now() / 1000 - 100 + i));
     await new PrefixCache(port, dir).prepare(request('go'));
     const left = (await fs.readdir(dir)).filter((name) => name.endsWith('.bin')).sort();
     expect(left).toHaveLength(4);
@@ -245,7 +245,7 @@ describe('prefix cache', () => {
 
     it('bounds conversation states by bytes but keeps prefixes', async () => {
       await listen();
-      await new PrefixCache(port, dir, { ...options, conversationBytes: 0 }).prepare(chat(user1));
+      await new PrefixCache(port, dir, { ...options, budgetBytes: 0 }).prepare(chat(user1));
       expect(await conversationStates()).toEqual([]);
       expect((await fs.readdir(dir)).filter((name) => name.endsWith('.bin'))).toHaveLength(1);
     });
@@ -267,3 +267,40 @@ async function writeSaved(): Promise<void> {
   }
   for (const [file, tokens] of savedTokens) fake.files.set(file, tokens);
 }
+
+describe('the machine-wide budget for saved states', () => {
+  const previousHome = process.env.CLIKCODE_LOCAL_MODELS_HOME;
+  afterEach(() => {
+    if (previousHome === undefined) delete process.env.CLIKCODE_LOCAL_MODELS_HOME;
+    else process.env.CLIKCODE_LOCAL_MODELS_HOME = previousHome;
+  });
+
+  it('expires old states, then keeps the newest across every model within one budget', async () => {
+    const { enforcePrefixCacheBudget } = await import('./prefix-cache');
+    process.env.CLIKCODE_LOCAL_MODELS_HOME = dir;
+    fake = fakeServer();
+    const now = Date.now();
+    const state = async (model: string, key: string, kind: 'prefix' | 'conversation', ageDays: number, bytes: number) => {
+      const at = path.join(dir, 'servers', model, 'prefix-cache', 'f16');
+      await fs.mkdir(at, { recursive: true });
+      await fs.writeFile(path.join(at, `${key}.bin`), Buffer.alloc(bytes));
+      await fs.writeFile(path.join(at, `${key}.tokens.json`), JSON.stringify({ kind, tokens: [1] }));
+      const when = (now - ageDays * 86_400_000) / 1000;
+      await fs.utimes(path.join(at, `${key}.bin`), when, when);
+    };
+    await state('a', 'a-prefix', 'prefix', 1, 100);
+    await state('a', 'a-chat-new', 'conversation', 1, 300);
+    await state('a', 'a-ancient', 'prefix', 20, 10);
+    await state('b', 'b-prefix', 'prefix', 2, 100);
+    await state('b', 'b-chat-old', 'conversation', 3, 300);
+    // A model whose weights were deleted: its state ages out like any other.
+    await state('gone', 'gone-prefix', 'prefix', 15, 10);
+    await enforcePrefixCacheBudget({ budgetBytes: 550, now });
+    const left = async (model: string) => (await fs.readdir(path.join(dir, 'servers', model, 'prefix-cache', 'f16')).catch(() => [])).filter((name) => name.endsWith('.bin')).sort();
+    expect(await left('a')).toEqual(['a-chat-new.bin', 'a-prefix.bin']);
+    expect(await left('b')).toEqual(['b-prefix.bin']);
+    expect(await left('gone')).toEqual([]);
+    // The sidecars went with their states.
+    expect((await fs.readdir(path.join(dir, 'servers', 'b', 'prefix-cache', 'f16'))).sort()).toEqual(['b-prefix.bin', 'b-prefix.tokens.json']);
+  });
+});
