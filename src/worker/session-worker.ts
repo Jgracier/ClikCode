@@ -63,8 +63,6 @@ const ABANDONED_SHELL_MS = 24 * 60 * 60 * 1000;
  * still running between turns (a process's exit gives no event to another
  * process's parent). */
 const VENDOR_WORK_RECHECK_MS = 30 * 1000;
-/** The longest a shutdown may take before the process exits regardless. */
-const SHUTDOWN_DEADLINE_MS = 15 * 1000;
 
 interface ConnectionState {
   socket: Socket;
@@ -685,12 +683,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * what it stopped must not exit underneath that write. */
   let shuttingDown: Promise<void> | undefined;
   const shutdown = (reason: string): Promise<void> => {
-    if (!shuttingDown) {
-      // Whatever a step below does -- a vendor that ignores its close, a
-      // write that never returns -- the process goes.
-      setTimeout(() => process.exit(0), SHUTDOWN_DEADLINE_MS).unref();
-      shuttingDown = shutdownOnce(reason).catch(() => process.exit(0));
-    }
+    // Every step below is bounded (a vendor gets seconds, then is killed; a
+    // state write gives up after its lock wait). A step that throws must
+    // still end in an exit: a rejected shutdown never reached it.
+    shuttingDown ??= shutdownOnce(reason).catch(() => process.exit(0));
     return shuttingDown;
   };
   const shutdownOnce = async (reason: string): Promise<void> => {
