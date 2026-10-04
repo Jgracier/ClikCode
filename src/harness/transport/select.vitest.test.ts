@@ -28,12 +28,23 @@ describe('harness turn transports', () => {
   it('keeps native conversations on the transport that created their vendor session', () => {
     const openCode = catalog('opencode');
     expect(sessionTurnTransport(openCode, {})).toBe('acp');
-    for (const command of ['claude', 'gemini', 'opencode', 'goose', 'kiro', 'qwen', 'kilo', 'auggie', 'cursor', 'grok']) {
+    for (const command of ['claude', 'gemini', 'opencode', 'goose', 'kiro', 'qwen', 'kilo', 'auggie', 'cursor']) {
       expect(sessionTurnTransport(catalog(command), { nativeSessionId: 'old-cli-thread' }), command).toBe('structured-cli');
     }
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'new-acp-thread', nativeTransport: 'acp' })).toBe('acp');
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' })).toBe('structured-cli');
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'locally-minted', nativeSessionPreallocated: true })).toBe('acp');
+  });
+
+  it('never pins a thread to the CLI when ACP and the CLI share one session store', () => {
+    // Grok Build: `grok agent stdio` loads a `grok -p` thread and `grok -p
+    // --resume` continues an ACP one (verified live both ways). A chat once
+    // pinned to the one-shot CLI by a single fallback turn kept no process
+    // alive between turns, so subagents it started died with each turn.
+    const grok = catalog('grok');
+    expect(sessionTurnTransport(grok, { nativeSessionId: 'old-cli-thread' })).toBe('acp');
+    expect(sessionTurnTransport(grok, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' })).toBe('acp');
+    expect(sessionTurnTransport(grok, { nativeSessionId: 'acp-thread', nativeTransport: 'acp' })).toBe('acp');
   });
 
   it('decides from the declaration, not the command name', () => {

@@ -49,6 +49,12 @@ export interface AiHarnessAcpDefinition {
   /** Existing native sessions created before ACP became primary for this
    * harness used the structured CLI. Keep those threads on their transport. */
   legacyCliSessions?: boolean;
+  /** ACP and the one-shot CLI read and write one session store: either
+   * continues a thread the other started (verified live for Grok Build in
+   * both directions). Such a thread is never pinned to the transport that
+   * created it -- it runs over ACP, and a turn ACP cannot take (an image, a
+   * model its list leaves out) uses the CLI for that turn only. */
+  sharedSessions?: boolean;
   /** ACP config option that selects the reasoning effort. */
   effortConfigId?: string;
   /** ACP config option used by agents that select a model provider first. */
@@ -684,7 +690,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // than getting a near-identical one of its own. Its ACP server publishes
   // session-wide token usage, which ClikCode turns into a per-turn reading.
   // It publishes no quota window (errors are balance-based: HTTP 402).
-  { command: 'grok', provider: 'xai', displayName: 'Grok Build', surface: 'terminal', tier: 'primary', transport: 'acp', acp: { argv: ['agent', 'stdio'], inheritCliOptions: false, effortConfigId: 'reasoning_effort', legacyCliSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['low', 'medium', 'high'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'grok', npmPackage: '@xai-official/grok', authFiles: [{ path: '~/.grok/auth.json' }], authEnv: ['XAI_API_KEY'], loginArgv: ['login'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'default'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions'] }, auto: { argv: ['--permission-mode', 'auto'] } }, turn: { startArgv: ['--output-format', 'streaming-messages-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
+  { command: 'grok', provider: 'xai', displayName: 'Grok Build', surface: 'terminal', tier: 'primary', transport: 'acp', acp: { argv: ['agent', 'stdio'], inheritCliOptions: false, effortConfigId: 'reasoning_effort', sharedSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['low', 'medium', 'high'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'grok', npmPackage: '@xai-official/grok', authFiles: [{ path: '~/.grok/auth.json' }], authEnv: ['XAI_API_KEY'], loginArgv: ['login'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'default'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions'] }, auto: { argv: ['--permission-mode', 'auto'] } }, turn: { startArgv: ['--output-format', 'streaming-messages-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Restored and re-checked against gemini 0.60.0 on a real install, not the
   // entry this replaces. What changed: --acp is the flag now (the old
   // --experimental-acp is deprecated), -r/--resume takes "latest" or an index

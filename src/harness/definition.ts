@@ -33,6 +33,7 @@ export interface AiHarnessAcpDefinition {
   optionPlacement?: 'before' | 'after';
   inheritCliOptions?: boolean;
   legacyCliSessions?: boolean;
+  sharedSessions?: boolean;
   effortConfigId?: string;
   providerConfigId?: string;
   permissionModeIds?: Readonly<Partial<Record<AiHarnessPermissionMode, string>>>;

@@ -130,8 +130,8 @@ export async function runVendorSessionAttempt(input: {
         if (!(unsupported.acpUnsupportedImages || unsupported.acpUnsupportedModel || unsupported.acpUnsupportedEffort) || !harness.turn) throw error;
         // An ACP session id is not guaranteed to identify the same vendor
         // thread in the one-shot CLI. Only a new chat can safely switch
-        // transports for this turn.
-        if (session.nativeSessionId) throw error;
+        // transports for this turn -- unless the two share one store.
+        if (session.nativeSessionId && !harness.acp?.sharedSessions) throw error;
         session.nativeTransport = harness.turn.output === 'text' ? 'text-cli' : 'structured-cli';
         await checkpoint.persistNow();
         prompter?.phase('using structured CLI fallback');
