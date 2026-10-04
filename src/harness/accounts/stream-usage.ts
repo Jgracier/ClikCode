@@ -74,13 +74,41 @@ export function accountUsageFrom(entry: UsageCacheEntry): AccountUsageReading {
   };
 }
 
+/** How often one account's stream reading is written to the shared index.
+ * Vendors repeat their quota on every message; this terminal sees each one at
+ * once (nativeUsageCache), other terminals a minute later at most. */
+const PUBLISH_INTERVAL_MS = 60_000;
+interface PublishSlot { at: number; timer?: NodeJS.Timeout; latest?: UsageCacheEntry }
+const published = new Map<string, PublishSlot>();
+
 /** Publish a reading onto the account so every terminal sees it, and into the
- * in-process cache so this terminal's next paint does not re-probe. */
+ * in-process cache so this terminal's next paint does not re-probe. Within
+ * PUBLISH_INTERVAL_MS of the last write only the newest reading is kept, and
+ * written when the interval ends. */
 async function publishUsageReading(cacheKey: string, accountId: string | null | undefined, reading: UsageReading): Promise<void> {
   const entry: UsageCacheEntry = { at: Date.now(), ...(reading.label === undefined ? {} : { label: reading.label }), ...(reading.windows.length ? { windows: reading.windows } : {}) };
   nativeUsageCache.set(cacheKey, entry);
   if (!accountId) return;
-  const state = await readState();
+  const slot = published.get(accountId);
+  if (slot && entry.at - slot.at < PUBLISH_INTERVAL_MS) {
+    slot.latest = entry;
+    slot.timer ??= setTimeout(() => {
+      slot.timer = undefined;
+      const latest = slot.latest;
+      slot.latest = undefined;
+      if (latest) void storeAccountUsage(accountId, latest).catch(() => undefined);
+    }, slot.at + PUBLISH_INTERVAL_MS - entry.at).unref();
+    return;
+  }
+  await storeAccountUsage(accountId, entry);
+}
+
+async function storeAccountUsage(accountId: string, entry: UsageCacheEntry): Promise<void> {
+  const slot = published.get(accountId);
+  if (slot) slot.at = Date.now();
+  else published.set(accountId, { at: Date.now() });
+  // The index only: no transcript is needed to update an account.
+  const state = await readState({ transcripts: [] });
   const account = state.accounts.find((item) => item.id === accountId);
   if (!account) return;
   account.usage = accountUsageFrom(entry);

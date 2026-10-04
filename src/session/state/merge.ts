@@ -93,7 +93,7 @@ export function splitSession(session: HarnessSession): { meta: SessionMeta; tran
 // Baseline
 // ---------------------------------------------------------------------------
 
-interface BaselineSession {
+export interface BaselineSession {
   meta: SessionMeta;
   transcript: SessionTranscript;
   claim?: HarnessSession['claim'];
@@ -148,6 +148,35 @@ export const DRAFT_BASELINE = Symbol('clikcode.draftBaseline');
 
 export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineData; [DRAFT_BASELINE]?: Map<string, BaselineSession> };
 
+/** One session as it is at this instant, sharing whatever `kept` already
+ * holds unchanged (see baselineOf). */
+export function baselineSession(session: HarnessSession, kept: BaselineSession | undefined): BaselineSession {
+  const { meta, claim } = splitSession(session);
+  // Messages left unset were not opened. That is not an empty transcript:
+  // reuse the one this baseline already holds so a later write cannot
+  // replace the file with nothing. A transcript that was opened and cleared
+  // has `messages: []`, which still takes the path below.
+  if (session.messages === undefined && session.pendingTurn === undefined && kept) {
+    return {
+      meta: cloneData(meta),
+      transcript: kept.transcript,
+      ...(claim ? { claim: cloneData(claim) } : {}),
+      ...(kept.messagesFrom ? { messagesFrom: kept.messagesFrom } : {}),
+    };
+  }
+  const messages = baselineList(session.messages, kept?.transcript.messages, kept?.messagesFrom);
+  const pendingTurn = kept && sameData(kept.transcript.pendingTurn, session.pendingTurn) ? kept.transcript.pendingTurn : cloneData(session.pendingTurn);
+  const transcript: SessionTranscript = kept && messages.copy === kept.transcript.messages && pendingTurn === kept.transcript.pendingTurn
+    ? kept.transcript
+    : { ...(messages.copy !== undefined ? { messages: messages.copy } : {}), ...(pendingTurn !== undefined ? { pendingTurn } : {}) };
+  return {
+    meta: cloneData(meta),
+    transcript,
+    ...(claim ? { claim: cloneData(claim) } : {}),
+    ...(messages.from ? { messagesFrom: messages.from } : {}),
+  };
+}
+
 /** `state` exactly as it is at this instant. Whatever `previous` already
  * holds unchanged is shared with it rather than copied: history that did not
  * change is neither compared in full nor copied again, so a checkpoint's cost
@@ -156,34 +185,7 @@ export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineDa
  * identity (see writeState and writeSessionTranscript). */
 export function baselineOf(state: HarnessState, previous?: StateBaselineData): StateBaselineData {
   const sessions = new Map<string, BaselineSession>();
-  for (const session of state.sessions ?? []) {
-    const kept = previous?.sessions.get(session.id);
-    const { meta, claim } = splitSession(session);
-    // Messages left unset were not opened. That is not an empty transcript:
-    // reuse the one this baseline already holds so a later write cannot
-    // replace the file with nothing. A transcript that was opened and cleared
-    // has `messages: []`, which still takes the path below.
-    if (session.messages === undefined && session.pendingTurn === undefined && kept) {
-      sessions.set(session.id, {
-        meta: cloneData(meta),
-        transcript: kept.transcript,
-        ...(claim ? { claim: cloneData(claim) } : {}),
-        ...(kept.messagesFrom ? { messagesFrom: kept.messagesFrom } : {}),
-      });
-      continue;
-    }
-    const messages = baselineList(session.messages, kept?.transcript.messages, kept?.messagesFrom);
-    const pendingTurn = kept && sameData(kept.transcript.pendingTurn, session.pendingTurn) ? kept.transcript.pendingTurn : cloneData(session.pendingTurn);
-    const transcript: SessionTranscript = kept && messages.copy === kept.transcript.messages && pendingTurn === kept.transcript.pendingTurn
-      ? kept.transcript
-      : { ...(messages.copy !== undefined ? { messages: messages.copy } : {}), ...(pendingTurn !== undefined ? { pendingTurn } : {}) };
-    sessions.set(session.id, {
-      meta: cloneData(meta),
-      transcript,
-      ...(claim ? { claim: cloneData(claim) } : {}),
-      ...(messages.from ? { messagesFrom: messages.from } : {}),
-    });
-  }
+  for (const session of state.sessions ?? []) sessions.set(session.id, baselineSession(session, previous?.sessions.get(session.id)));
   const invocations = baselineList(state.invocations ?? [], previous?.invocations, previous?.invocationsFrom);
   return {
     installationId: state.installationId,

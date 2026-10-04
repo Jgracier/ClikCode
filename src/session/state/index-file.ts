@@ -1,7 +1,7 @@
 /** The state index file itself: parsing it, its version gate, and the single
  * cached copy every read shares. */
 
-import { copyFile, readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessState } from '../model.js';
 import { cloneData } from '../store/data.js';
@@ -37,9 +37,15 @@ export class HarnessStateVersionError extends Error {
 const HARNESS_STATE_STATS = { indexWrites: 0 };
 
 /** Parsed index keyed by the exact bytes it came from. Comparing bytes rather
- * than mtime means a merge base can never be stale, and an unchanged index
- * (every streamed checkpoint) is never re-parsed. Treated as immutable. */
-let indexCache: { directory: string; raw: string; index: StateIndex } | undefined;
+ * than mtime means a merge base can never be stale, and an unchanged index is
+ * never re-parsed. Treated as immutable. `identity` lets an unchanged file
+ * skip even the read: every write replaces it by rename, so a new inode,
+ * size or ctime is guaranteed whenever its bytes change. */
+let indexCache: { directory: string; raw: string; index: StateIndex; identity?: string } | undefined;
+
+function fileIdentity(info: { ino: number; size: number; mtimeMs: number; ctimeMs: number }): string {
+  return `${info.ino}:${info.size}:${info.mtimeMs}:${info.ctimeMs}`;
+}
 
 function parseIndex(raw: string): StateIndex {
   const parsed = JSON.parse(raw) as Partial<StateIndex>;
@@ -62,16 +68,25 @@ function parseIndex(raw: string): StateIndex {
 export async function loadIndex(): Promise<StateIndex | undefined> {
   const path = harnessIndexPath();
   let raw: string;
+  let identity: string | undefined;
   try {
+    const before = await stat(path);
+    identity = fileIdentity(before);
+    if (indexCache && indexCache.directory === stateDirectory() && indexCache.identity === identity) return indexCache.index;
     raw = await readFile(path, 'utf8');
+    // Replaced between the stat and the read: do not pin these bytes to it.
+    if (fileIdentity(await stat(path)) !== identity) identity = undefined;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  if (indexCache && indexCache.directory === stateDirectory() && indexCache.raw === raw) return indexCache.index;
+  if (indexCache && indexCache.directory === stateDirectory() && indexCache.raw === raw) {
+    if (identity) indexCache.identity = identity;
+    return indexCache.index;
+  }
   try {
     const index = parseIndex(raw);
-    indexCache = { directory: stateDirectory(), raw, index };
+    indexCache = { directory: stateDirectory(), raw, index, ...(identity ? { identity } : {}) };
     return index;
   } catch (error) {
     try {
@@ -83,13 +98,26 @@ export async function loadIndex(): Promise<StateIndex | undefined> {
   }
 }
 
+/** Whether `next` adds, removes or reorders a conversation or an account
+ * relative to `previous`: the changes a damaged index would be costly to lose. */
+export function indexStructureChanged(previous: StateIndex | undefined, next: StateIndex): boolean {
+  if (!previous) return true;
+  const ids = (list: readonly { id: string }[]): string => list.map((item) => item.id).join('\n');
+  return ids(previous.sessions) !== ids(next.sessions) || ids(previous.accounts) !== ids(next.accounts);
+}
+
+/** Writes the index. `backup` also refreshes `index.json.bak`, loadIndex's
+ * fallback for a damaged primary -- written atomically like the primary, and
+ * only when asked (a structural change): copying 600KB beside every field
+ * edit doubled every index write for a file that is only read after damage. */
 export async function storeIndex(index: StateIndex, options: { backup: boolean }): Promise<void> {
   const path = harnessIndexPath();
   const raw = `${JSON.stringify(index)}\n`;
   await atomicWriteFile(path, raw);
   HARNESS_STATE_STATS.indexWrites += 1;
-  indexCache = { directory: stateDirectory(), raw, index: cloneData(index) };
-  if (options.backup) await copyFile(path, `${path}.bak`).catch(() => undefined);
+  const info = await stat(path).catch(() => undefined);
+  indexCache = { directory: stateDirectory(), raw, index: cloneData(index), ...(info ? { identity: fileIdentity(info) } : {}) };
+  if (options.backup) await atomicWriteFile(`${path}.bak`, raw).catch(() => undefined);
 }
 
 export function resetHarnessStateCaches(): void {

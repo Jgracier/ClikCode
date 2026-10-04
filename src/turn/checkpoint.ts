@@ -172,7 +172,11 @@ export function runningActivityLabel(pending: HarnessSession['pendingTurn']): st
   return open ? `running ${open.label}` : undefined;
 }
 
-/** Starting another turn commits an older interrupted checkpoint first. */
+/** Starting another turn commits an older interrupted checkpoint first.
+ *
+ * The session's date moves here and when the turn finishes, not on every
+ * streamed delta: it is an index field, and the index is not rewritten while
+ * an answer streams (writeTranscriptCheckpoint). */
 export function beginPendingTurn(session: HarnessSession, prompt: string, now: string): void {
   if (session.pendingTurn) session.messages = sessionTranscriptMessages(session);
   session.pendingTurn = { prompt, startedAt: now, updatedAt: now, outputStarted: false };
@@ -189,7 +193,6 @@ export function updatePendingResponse(
   else pending.response = mode === 'replace' ? text : `${pending.response ?? ''}${text}`;
   pending.outputStarted = Boolean(text || pending.activities?.length);
   pending.updatedAt = now;
-  session.updatedAt = now;
 }
 
 /** Which sub-agents are running, kept by call id: a start adds one, its own
@@ -241,7 +244,6 @@ export function recordPendingActivity(session: HarnessSession, event: HarnessAct
   pending.activities = next;
   pending.outputStarted = true;
   pending.updatedAt = now;
-  session.updatedAt = now;
 }
 
 export function recordPendingSteer(
@@ -253,7 +255,6 @@ export function recordPendingSteer(
     text: text.trim(), submittedAt, responseOffset: Math.max(0, responseOffset), ...(id ? { id } : {}),
   }];
   pending.updatedAt = now;
-  session.updatedAt = now;
 }
 
 export function enqueueSessionTurn(session: HarnessSession, submission: LiveTurnSubmission, now: string): void {

@@ -5,7 +5,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { LiveTurnSubmission } from './live-input.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { readState } from '../session/state/read.js';
-import { writeState } from '../session/state/write.js';
+import { writeState, writeTranscriptCheckpoint } from '../session/state/write.js';
 import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, updatePendingResponse } from './checkpoint.js';
 
 /** Name a chat, once, from a title the model produced.
@@ -70,12 +70,16 @@ export function isQueuedTurnAlreadyRun(error: unknown): boolean {
 }
 
 /** Serializes bounded checkpoint writes for one in-flight turn. Deltas update
- * memory immediately and coalesce into a disk write, while start, provider
- * identity changes, completion, and error unwinding force a durable flush. */
+ * memory immediately and coalesce into a write of the transcript alone (never
+ * the shared index), while start, provider identity changes, completion, and
+ * error unwinding force a full durable flush. */
 export class DurableTurnCheckpoint {
   private timer: NodeJS.Timeout | undefined;
   private writes: Promise<void> = Promise.resolve();
   private dirty = false;
+  /** Something on the session's index row changed since the last full write
+   *  (touch, unqueueSoon): the debounced write must be a full one. */
+  private rowDirty = false;
   /** A debounced write that failed with no caller to reject to. Surfaced by
    *  complete(), so a turn whose conversation was never saved says so. */
   private writeError: Error | undefined;
@@ -176,8 +180,10 @@ export class DurableTurnCheckpoint {
     this.recorder = recorder;
   }
 
+  /** The session's record (not just its answer) changed: a native identity
+   *  confirmed, a self-reported model. Written in full, debounced. */
   touch(): void {
-    this.schedule();
+    this.schedule(true);
   }
 
   /** The steer-landed-late case, for a synchronous caller: drop the queued
@@ -186,11 +192,12 @@ export class DurableTurnCheckpoint {
    *  `unqueue(...).catch(() => undefined)` could silently leave the queued
    *  copy in place, which is a duplicate message sent later. */
   unqueueSoon(submission: LiveTurnSubmission): void {
-    if (consumeSessionTurn(this.session, submission.id)) this.schedule();
+    if (consumeSessionTurn(this.session, submission.id)) this.schedule(true);
   }
 
-  private schedule(): void {
+  private schedule(row = false): void {
     this.dirty = true;
+    if (row) this.rowDirty = true;
     if (this.timer) return;
     this.timer = setTimeout(() => {
       this.timer = undefined;
@@ -199,11 +206,13 @@ export class DurableTurnCheckpoint {
       // A debounced write has no caller to reject to. Remember the failure so
       // complete() -- which does have one -- reports it, instead of it
       // vanishing into an unhandled rejection.
-      void this.enqueue().catch((error: unknown) => { this.writeError = error as Error; });
+      void this.enqueue(!this.rowDirty).catch((error: unknown) => { this.writeError = error as Error; });
     }, 250);
   }
 
-  private enqueue(): Promise<void> {
+  /** `transcriptOnly`: a streamed delta, stored without touching the index
+   *  (falls back to a full write when that cannot be done). */
+  private enqueue(transcriptOnly = false): Promise<void> {
     // `this.writes.then(...)` off a REJECTED promise never runs its callback,
     // so chaining the next write onto a failed one permanently stopped
     // writeState from ever being called again -- the turn kept streaming and
@@ -212,7 +221,11 @@ export class DurableTurnCheckpoint {
     //
     // So the chain the NEXT write builds on is always settled, while the
     // promise handed back to THIS caller still carries its own real failure.
-    const write = this.writes.catch(() => undefined).then(() => writeState(this.state));
+    if (!transcriptOnly) this.rowDirty = false;
+    const write = this.writes.catch(() => undefined).then(async () => {
+      if (transcriptOnly && await writeTranscriptCheckpoint(this.state, this.session.id)) return;
+      await writeState(this.state);
+    });
     this.writes = write.catch(() => undefined);
     return write;
   }
