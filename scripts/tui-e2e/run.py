@@ -448,6 +448,24 @@ SCENARIOS = {
         'watch': ['start the long job', 'then do this', 'The queued one answered now.'],
         'never': ['The long job is finished.'],
     },
+    # Enter mid-turn into an agent that takes steering (Claude Code over
+    # ACP): the message waits while a call runs -- a steer would interrupt it
+    # -- and goes into the SAME turn the moment the call is done. The call
+    # completes, the turn is never stopped, nothing becomes a second turn.
+    'steer-at-next-pause': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 6000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
+            ('type', 'also run the linter'), ('wait_for', 'sending at the next pause', 10),
+            ('wait_for', 'Steered in: also run the linter.', 40), ('settle', 3),
+        ],
+        'watch': ['start the build', 'Steered in: also run the linter.'],
+        'ever': ['sending at the next pause', 'sent into the turn'],
+        'never': ['Request interrupted', 'Queued turn answered.', 'stopping'],
+        'final_once': ['Steered in: also run the linter.'],
+    },
     # The terminal around the UI: focus reports asked for and the shell's
     # title saved on the way in; progress while the turn runs; a notification
     # when it ends with the window unfocused for long enough; everything
