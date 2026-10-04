@@ -62,6 +62,7 @@ import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { appendThought, composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { keyHint } from '../harness/protocol/wording.js';
+import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -2305,7 +2306,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.redrawSelection();
     if (!text) return;
     void copyToClipboard(text).catch((error: unknown) => {
-      this.showTransientNotice(`Could not copy: ${error instanceof Error ? error.message : String(error)}`, NOTICE_MS, () => this.redrawSelection());
+      this.showTransientNotice(userError('copy', error), NOTICE_MS, () => this.redrawSelection());
       this.redrawSelection();
     });
   }

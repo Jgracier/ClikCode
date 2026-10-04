@@ -2,6 +2,7 @@
  * feeds, and the webviews showing it. The side bar is one chat; every editor
  * tab is another, each with its own bridge, so each shows its own
  * conversation -- the bridge is one conversation at a time, like a terminal. */
+import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import { homedir, tmpdir } from 'node:os';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -255,7 +256,7 @@ export class ClikCodeController implements vscode.Disposable {
     try {
       runtime = await resolveRuntime({ path: settings.get<string>('path'), nodePath: settings.get<string>('nodePath') });
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorText(error);
       log.appendLine(message);
       this.setModel({ ...this.model, connection: 'error', connectionError: message, remedy: error instanceof RuntimeError && error.kind === 'clikcode-missing' ? 'install' : undefined });
       return;
@@ -330,12 +331,12 @@ export class ClikCodeController implements vscode.Disposable {
         // A new chat nothing was sent in was never stored: reconnecting (a
         // rebuild, clikcode.restart) has nothing to resume, and failing here
         // left the panel dead. It is still a new chat.
-        if (!resume || !/no chat matches/.test(error instanceof Error ? error.message : String(error))) throw error;
+        if (!resume || !/no chat matches/.test(errorText(error))) throw error;
         await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode: 'new' });
       });
     } catch (error) {
       if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
-      const message = error instanceof Error ? error.message : String(error);
+      const message = errorText(error);
       log.appendLine(message);
       this.setModel({ ...this.model, connection: bridge.running ? 'ready' : 'error', connectionError: message });
       if (bridge.running) this.note(message, 'error');
@@ -406,7 +407,7 @@ export class ClikCodeController implements vscode.Disposable {
           env: { ...event.environment, ...bridge.runtime.env },
           cwd: this.model.workspace ?? this.workspaceFolder(),
         }).then(() => bridge.send({ type: 'sign-in-result', id: event.id }),
-          (error: unknown) => bridge.send({ type: 'sign-in-result', id: event.id, error: error instanceof Error ? error.message : String(error) }));
+          (error: unknown) => bridge.send({ type: 'sign-in-result', id: event.id, error: errorText(error) }));
         return;
       }
       case 'sign-in-link':
@@ -503,7 +504,7 @@ export class ClikCodeController implements vscode.Disposable {
     // `running`: it is the turn now. `gone`: it already ran or was taken
     // back. Either way sending it again would run it twice.
     this.dropSendNow();
-    if (event.outcome === 'error') void vscode.window.showErrorMessage(`ClikCode could not take the message out of the queue: ${event.message ?? 'unknown error'}`);
+    if (event.outcome === 'error') void vscode.window.showErrorMessage(userError('take the message out of the queue', event.message));
   }
 
   private stopForSendNow(): void {
@@ -626,7 +627,7 @@ export class ClikCodeController implements vscode.Disposable {
   private async undoFiles(files: ReadonlyArray<{ name?: string; path?: string; before: string; whole: boolean; created: boolean }>, what: string, question: (names: string) => string, action: string): Promise<void> {
     const stale = files.filter((item) => !item.whole || !item.path);
     if (stale.length) {
-      void vscode.window.showWarningMessage(`ClikCode cannot undo ${what}: ${stale.map((item) => item.name ?? 'a file').join(', ')} changed since.`);
+      void vscode.window.showWarningMessage(userError(`undo ${what}`, `${stale.map((item) => item.name ?? 'a file').join(', ')} changed since`));
       return;
     }
     const names = files.map((item) => item.name).join(', ');
@@ -639,7 +640,7 @@ export class ClikCodeController implements vscode.Disposable {
       const document = await vscode.workspace.openTextDocument(uri);
       edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), item.before);
     }
-    if (!(await vscode.workspace.applyEdit(edit))) { void vscode.window.showErrorMessage(`ClikCode could not undo the change to ${names}.`); return; }
+    if (!(await vscode.workspace.applyEdit(edit))) { void vscode.window.showErrorMessage(userError(`undo the change to ${names}`)); return; }
     await Promise.all(files.filter((item) => !item.created).map(async (item) => (await vscode.workspace.openTextDocument(vscode.Uri.file(item.path!))).save()));
     this.note(`Undid the change to ${names}`);
   }
@@ -678,7 +679,7 @@ export class ClikCodeController implements vscode.Disposable {
     try {
       await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(sessionId ? { sessionId } : {}) });
     } catch (error) {
-      this.note(error instanceof Error ? error.message : String(error), 'error');
+      this.note(errorText(error), 'error');
     }
   }
 
@@ -693,7 +694,7 @@ export class ClikCodeController implements vscode.Disposable {
     try {
       reply(true, await this.handle(request));
     } catch (error) {
-      reply(false, undefined, error instanceof Error ? error.message : String(error));
+      reply(false, undefined, errorText(error));
     }
   }
 
@@ -861,6 +862,6 @@ async function openWorkspaceFile(path: string, line: number | undefined, workspa
     const position = line && line > 0 ? new vscode.Position(line - 1, 0) : undefined;
     await vscode.window.showTextDocument(document, { preview: true, ...(position ? { selection: new vscode.Range(position, position) } : {}) });
   } catch {
-    void vscode.window.showWarningMessage(`ClikCode: cannot open ${path}`);
+    void vscode.window.showWarningMessage(userError(`open ${path}`));
   }
 }
