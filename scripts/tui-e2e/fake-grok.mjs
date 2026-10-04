@@ -65,6 +65,13 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
   const models = { currentModelId: 'grok-4', availableModels: [{ modelId: 'grok-4', name: 'Grok 4' }, { modelId: 'grok-4-fast', name: 'Grok 4 Fast' }] };
   let sessionId;
   let cancelled = false;
+  // FAKE_STEERING: advertise `_session/steering` the way claude-agent-acp
+  // 0.84 does, and behave as it does -- a steer injected while a call is open
+  // interrupts that call. What was steered in is answered before the turn ends.
+  const steering = process.env.FAKE_STEERING === '1';
+  const open = new Set();
+  let running = false;
+  let steered = [];
   // Requests this agent made of the client (permissions), by id.
   const asked = new Map();
   let askedCount = 0;
@@ -80,9 +87,13 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     const received = /pasted row 1\n[\s\S]*pasted row 12/.test(said) && !said.includes('[Pasted text') ? 'whole' : 'missing';
     const turn = nextTurn();
     cancelled = false;
+    running = true;
+    steered = [];
     const tool = async (toolCallId, command, result, ms) => {
+      open.add(toolCallId);
       update({ sessionUpdate: 'tool_call', toolCallId, title: command, kind: 'execute', status: 'in_progress', rawInput: { command } });
       await sleep(ms);
+      if (!open.delete(toolCallId)) return; // interrupted by a steer
       update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: result } }] });
     };
     // `thought`: reasoning before anything else, a word at a time, then a
@@ -157,8 +168,24 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       }
       if (index < turn.blocks.length - 1 && !cancelled) await tool(`tool_${index}`, 'git log -1 --oneline', 'abc123 fix', 600);
     }
+    for (const text of steered.splice(0)) {
+      for (const piece of `Steered in: ${text}.`.match(/\S+\s*/g) ?? []) {
+        await sleep(Number(process.env.FAKE_DELAY_MS ?? 120));
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
+      }
+    }
     await sleep(300);
+    running = false;
     send({ id, result: { stopReason: cancelled ? 'cancelled' : 'end_turn' } });
+  };
+  const steer = (id, params) => {
+    if (!running && params?._meta?.steering?.idleBehavior === 'promptRequired') { send({ id, result: { outcome: 'promptRequired', reason: 'noRunningTurn' } }); return; }
+    for (const toolCallId of open) {
+      open.delete(toolCallId);
+      update({ sessionUpdate: 'tool_call_update', toolCallId, status: 'failed', content: [{ type: 'content', content: { type: 'text', text: '[Request interrupted by user for tool use]' } }] });
+    }
+    steered.push((params?.prompt ?? []).map((part) => part?.text ?? '').join(''));
+    send({ id, result: { outcome: 'injected' } });
   };
   let buffer = '';
   process.stdin.on('data', (chunk) => {
@@ -170,7 +197,8 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       const message = JSON.parse(line);
       const { id, method, params } = message;
       if (!method && asked.has(id)) { asked.get(id)(message.result); asked.delete(id); }
-      else if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [] } });
+      else if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], ...(steering ? { _meta: { steering: { supported: true } } } : {}) } });
+      else if (method === '_session/steering' && steering) steer(id, params);
       else if (method === 'session/new') { sessionId = randomUUID(); send({ id, result: { sessionId, models } }); }
       else if (method === 'session/load' || method === 'session/resume') { sessionId = params.sessionId; send({ id, result: { models } }); }
       else if (method === 'session/set_model') { models.currentModelId = params.modelId; send({ id, result: {} }); }
