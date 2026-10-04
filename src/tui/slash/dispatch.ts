@@ -38,6 +38,7 @@ import { interactiveToolsPicker } from '../pickers/tools.js';
 import { interactiveSettingsPicker } from '../pickers/settings.js';
 import { interactiveSwarmPicker } from '../pickers/swarm.js';
 import { doctorSummary } from '../doctor-summary.js';
+import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { aiSessionCommand, slashRouteTurn } from './handlers.js';
 import { routeSlashInput, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { sessionHarness, slashRouteContextFor } from './context.js';
@@ -221,6 +222,19 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     },
     effort: async () => args ? setWithValue(`Effort set to ${settingLabel(args.trim().toLowerCase() === 'default' ? '' : args.trim().toLowerCase())}`) : interactiveEffortPicker(rl, id),
     permissions: async () => args ? setWithValue(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`) : interactivePermissionPicker(rl, id),
+    send: async () => {
+      if (args) return setWithValue(`Messages typed mid-turn: ${parseSendMode(args)}`);
+      // Two rows, the current one marked: what a message typed while a turn
+      // runs does from now on, in every conversation.
+      const current = sendModeOf(state.globalSettings);
+      const chosen = await chooseOption(rl, 'Messages typed mid-turn', SEND_MODES.map((mode) => ({
+        label: mode[0]!.toUpperCase() + mode.slice(1), detail: `· ${SEND_MODE_DETAIL[mode]}${mode === current ? ' · current' : ''}`, value: mode,
+      })), undefined, { startAt: current });
+      if (!chosen) return {};
+      await viaHeadless(`/send ${chosen}`);
+      rl.notice?.(`Messages typed mid-turn: ${chosen}`);
+      return {};
+    },
     swarm: async () => (args ? viaHeadless(text) : interactiveSwarmPicker(rl, id)),
     options: async () => interactiveHarnessOptionPicker(rl, id),
     capabilities: async () => {

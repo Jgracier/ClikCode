@@ -190,7 +190,7 @@ describe('applyDefaultSetting', () => {
     // through to the same unknown-key branch as any other unrecognised key.
     const target: Partial<HarnessDefaultSettings> = {};
     expect(() => applyDefaultSetting(target as Partial<HarnessDefaultSettings & { model: string }>, 'model', 'gpt-5'))
-      .toThrow('unknown setting "model"; choose effort, permissions, or failover');
+      .toThrow('unknown setting "model"; choose effort, permissions, send, or failover');
   });
 
   it('sets effort when no harness is given to gate against', () => {
@@ -271,7 +271,15 @@ describe('applyDefaultSetting', () => {
   it('omits model from the unknown-key message when the target has no model field', () => {
     const target: Partial<HarnessDefaultSettings> = {};
     expect(() => applyDefaultSetting(target as Partial<HarnessDefaultSettings & { model: string }>, 'bogus', 'x'))
-      .toThrow('unknown setting "bogus"; choose effort, permissions, or failover');
+      .toThrow('unknown setting "bogus"; choose effort, permissions, send, or failover');
+  });
+
+  it('takes send (steer or queue) as a global default only', () => {
+    const global: Partial<HarnessDefaultSettings> = {};
+    applyDefaultSetting(global as Partial<HarnessDefaultSettings & { model: string }>, 'send', 'Queue');
+    expect(global.sendMode).toBe('queue');
+    expect(() => applyDefaultSetting(global as Partial<HarnessDefaultSettings & { model: string }>, 'send', 'later')).toThrow('usage: /send [steer|queue]');
+    expect(() => applyDefaultSetting(settings(), 'send', 'queue')).toThrow('unknown setting "send"');
   });
 });
 

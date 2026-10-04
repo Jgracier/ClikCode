@@ -29,6 +29,7 @@ import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { forgetNativeThread } from './native-thread.js';
 import { conversationRows, type ConversationRow } from './conversation-rows.js';
+import { parseSendMode } from '../turn/send-mode.js';
 
 /** Effort words every harness understands, narrowed per harness by
  * harnessSupportsEffort. */
@@ -297,10 +298,14 @@ export function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { m
     target.permissionMode = value as AiHarnessPermissionMode;
   } else if (normalizedKey === 'failover') {
     target.accountFailover = normalizeFailoverWord(value);
+  } else if (normalizedKey === 'send' && !('model' in target) && !harness) {
+    // Global only: how a message typed mid-turn is delivered is the user's
+    // habit, not a provider's.
+    target.sendMode = parseSendMode(value);
   } else if (normalizedKey === 'model' && 'model' in target) {
     target.model = normalizeModelWord(value) ?? undefined;
   } else {
-    throw new Error(`unknown setting "${key}"; choose ${'model' in target ? 'model, ' : ''}effort, permissions, or failover`);
+    throw new Error(`unknown setting "${key}"; choose ${'model' in target ? 'model, ' : ''}effort, permissions, ${'model' in target ? '' : 'send, '}or failover`);
   }
 }
 

@@ -381,6 +381,8 @@ export class ClikCodeController implements vscode.Disposable {
 
   private onBridgeEvent(event: IdeEvent): void {
     this.setModel(applyEvent(this.model, event));
+    // `/send` changed how mid-turn messages go: the composer says so.
+    if (event.type === 'output' && typeof event.payload.sendMode === 'string') this.refreshStructured(false);
     switch (event.type) {
       case 'ui-request':
         void this.ask(event.id, event.request);

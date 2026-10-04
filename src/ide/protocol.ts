@@ -191,6 +191,8 @@ export interface IdeChatSettings {
   /** One switch. Off until this chat turns it on. `current` and `choices`
    * stay so an editor from before the switch still renders one On row. */
   swarm?: { enabled: boolean; current?: string[]; choices?: Array<{ id: string; label: string; detail: string }> };
+  /** `/send`: what a message typed mid-turn does, in every chat. */
+  send?: 'steer' | 'queue';
 }
 
 export interface IdeGateway {

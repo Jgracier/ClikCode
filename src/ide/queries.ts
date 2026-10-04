@@ -8,6 +8,7 @@
  * the other way through `choose` in bridge.ts, onto the same commands the
  * pickers end in.
  */
+import { sendModeOf } from '../turn/send-mode.js';
 import { turnPace } from '../harness/protocol/turn-pace.js';
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
@@ -241,7 +242,7 @@ export async function accountList(state: HarnessState, session: HarnessSession |
  * /permissions would list, and the Settings rows that are a switch. */
 export async function chatSettings(state: HarnessState, session: HarnessSession): Promise<IdeChatSettings> {
   const harness = harnessOf(session);
-  const settings: IdeChatSettings = {};
+  const settings: IdeChatSettings = { send: sendModeOf(state.globalSettings) };
   if (isGatewayService(session)) {
     const current = gatewayEffort(session);
     settings.effort = { ...(current ? { current } : {}), choices: [...GATEWAY_EFFORTS] };

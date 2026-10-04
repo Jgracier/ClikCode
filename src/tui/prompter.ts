@@ -63,6 +63,7 @@ import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { appendThought, composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { keyHint } from '../harness/protocol/wording.js';
+import type { SendMode } from '../turn/send-mode.js';
 import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
@@ -192,7 +193,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private journal: JournalState = { running: true };
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
-  private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command' }> = [];
+  private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command'; unsteered?: boolean }> = [];
+  /** `/send`: what Enter on a message mid-turn does, as the band says it. */
+  private sendMode: SendMode = 'steer';
   private waitingSubmissionId = 0;
   private timelineSequence = 0;
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
@@ -421,6 +424,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
   };
 
+  /** `/send steer|queue`, from the setting (the loop) or the command. */
+  setSendMode(mode: SendMode): void {
+    if (mode === this.sendMode) return;
+    this.sendMode = mode;
+    if (this.turn) this.updateWaiting();
+  }
+
   /** A message typed during this turn is waiting with its row on screen --
    * queued for after it, or held for its next pause -- so Enter on nothing
    * means "send it now". One still being submitted has not been answered yet:
@@ -463,6 +473,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (item) {
         item.state = result.disposition;
         item.id = result.submission.id;
+        if (result.unsteered) item.unsteered = true;
       }
       this.updateWaiting();
     }).catch(() => {
@@ -1384,12 +1395,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       thinkingMs: now - turn.thinkingSince,
       asking: Boolean(this.pendingApproval),
     });
-    // "send", not "steer or queue": which of the two happens depends on the
-    // harness, and each submission's own row says which it was.
+    // The send mode (/send) is what Enter does with text: steer (each row
+    // then says whether the agent took it) or queue. With nothing typed and
+    // a message waiting, Enter again stops the turn and sends it.
+    const enterHint = turn.draft.trim() ? ` · enter to ${this.sendMode}`
+      : turn.cancel && !turn.cancelled && this.messageWaiting() ? ` · ${STEER_WORDS.stopAndSend}`
+        : ` · type and press Enter to ${this.sendMode}`;
     const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
       + `${turn.cancel && !this.pendingApproval ? ` · ${keyHint('stop')}` : ''}`
       + `${turn.leave && !this.pendingApproval && !turn.draft ? ' · ← conversations' : ''}`
-      + `${turn.submit ? (turn.draft.trim() && turn.cancel && !this.pendingApproval ? ` · ${keyHint('send')} · ${STEER_WORDS.stopAndSend}` : ' · type and press Enter to send') : ''}`;
+      + `${turn.submit && !this.pendingApproval ? enterHint : ''}`;
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
     const split = status.label.length;
@@ -1537,19 +1552,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // moment before -- when a match can only be this same message, already
     // written. Matching by text alone showed "yes" sent twice as one row.
     const storedCopy = (item: { id?: string; text: string }): boolean => (item.id ? storedQueuedIds.has(item.id) : storedQueuedTexts.has(item.text));
-    const queuedMessages = [
+    // Steering was asked for and nothing running could take it: the row
+    // says so, by identity, on whichever copy is drawn.
+    const unsteeredIds = new Set(this.waitingSubmissions.flatMap((item) => (item.unsteered && item.id ? [item.id] : [])));
+    const queuedMessages: Array<{ role: 'user'; content: string; queueState: string; unsteered?: boolean }> = [
       // A queued COMMAND is not a message and gets no row: it runs when the
       // turn ends and shows whatever it shows then.
       ...storedQueued.filter((item) => item.kind !== 'command')
         // Held by the running turn to steer in once no tool call is open
         // (acp-client.ts): it is on its way into this turn, not the next.
         .map((item) => ({
-          role: 'user' as const, content: item.text,
+          role: 'user' as const, content: item.text, ...(unsteeredIds.has(item.id) ? { unsteered: true } : {}),
           queueState: this.turn && item.heldForTurn && item.heldForTurn === pending?.startedAt ? 'pause' as const : 'queued' as const,
         })),
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item)
         && !hasDurableSteer(item, pending?.steers ?? []))
-        .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
+        .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state, ...(item.unsteered ? { unsteered: true } : {}) })),
     ];
     // While a turn runs a waiting message can be sent at once -- Enter again,
     // with nothing typed -- by stopping the turn, which the hint says: it ends
@@ -1899,7 +1917,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const status = message.queueState === 'steered' ? STEER_WORDS.steered
         : message.queueState === 'sending' ? 'submitting…'
           : message.queueState === 'pause' ? `${STEER_WORDS.held}${sendNowHint}`
-            : message.queueState === 'error' ? 'not sent · restored for editing' : `queued for next turn${sendNowHint}`;
+            : message.queueState === 'error' ? 'not sent · restored for editing'
+              : `queued for next turn${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}${sendNowHint}`;
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.
       // The speaker changes once, where the queue begins: two rows there, the

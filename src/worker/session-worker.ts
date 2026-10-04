@@ -26,6 +26,7 @@ import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
 import { consumeQueuedTurn } from './consume-queued.js';
 import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
+import { deliverTyped } from '../turn/send-mode.js';
 import { closePersistentTransport, persistentWorkRunning, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
@@ -614,8 +615,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       return;
     }
     if (command.type === 'steer') {
-      const answer = (disposition: 'steered' | 'queued' | 'error', message?: string): void => {
-        if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}) });
+      const answer = (disposition: 'steered' | 'queued' | 'error', message?: string, unsteered?: boolean): void => {
+        if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}) });
       };
       // The turn ended between the client's Enter and this arriving. This used
       // to `return` -- and the message was simply gone. Nothing is running to
@@ -639,8 +640,11 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       const liveInput = activeLiveInput;
       const handled = (async () => {
         try {
-          const result = await liveInput.submit(command.text, command.id);
-          answer(result.disposition === 'steered' ? 'steered' : 'queued');
+          // `/send queue` is the user's global choice, read as the message
+          // arrives so a change mid-turn applies to the next one typed.
+          const settings = await readState({ transcripts: [] }).then((state) => state.globalSettings, () => undefined);
+          const result = await deliverTyped(liveInput, command.text, command.id, settings);
+          answer(result.disposition === 'steered' ? 'steered' : 'queued', undefined, result.unsteered);
           // Every window shows the queue, not only the one that typed it.
           if (result.disposition !== 'steered') broadcastQueueChanged();
           else showEveryWindow();

@@ -159,6 +159,9 @@ export interface HarnessDefaultSettings {
   effort: string;
   permissionMode: AiHarnessPermissionMode;
   accountFailover: 'never' | 'on-quota-exhausted';
+  /** Global only: what a message typed mid-turn does (`/send`,
+   *  turn/send-mode.ts). Absent means steer. */
+  sendMode?: 'steer' | 'queue';
 }
 
 export interface HarnessState {

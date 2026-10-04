@@ -40,7 +40,7 @@ export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo', 'changes',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
-  'model', 'effort', 'fast', 'swarm', 'permissions', 'options', 'capabilities', 'settings',
+  'model', 'effort', 'fast', 'swarm', 'permissions', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'archive', 'delete',
   'usage', 'doctor',
 ] as const;
@@ -189,6 +189,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       : { available: false, reason: 'Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.' }),
   }),
   entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
+  entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
   entry('settings', 'Settings', 'configure this workspace', { argHint: '[tools|model|effort|permissions|failover|option|global|provider …]' }),

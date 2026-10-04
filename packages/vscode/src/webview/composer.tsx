@@ -5,12 +5,12 @@ import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, providerDisplayName, stopAndSendReady, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, providerDisplayName, queuedRowLabel, stopAndSendReady, type ChatModel } from '../model';
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
 import { compactCount } from '../../../../src/harness/protocol/format';
-import { buttonTitle, keyHint } from '../../../../src/harness/protocol/wording';
+import { buttonTitle } from '../../../../src/harness/protocol/wording';
 import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
@@ -405,7 +405,7 @@ export function Composer(props: {
   const stopAndSend = stopAndSendReady(model) && !text.trim() && !attachments.length;
   const firstWaiting = model.queued.findIndex((item) => !item.notification && !item.command);
   const placeholder = !connected ? 'ClikCode is not connected'
-    : model.running ? 'Steer or queue a message…'
+    : model.running ? (model.chatSettings?.send === 'queue' ? 'Queue a message for after this turn…' : 'Steer the running turn…')
       : `Ask ${providerDisplayName(model, knownProviders()) ?? 'ClikCode'} anything`;
 
   const footerButton = useMemo(() => (name: Menu, content: JSX.Element, label: string, id: string) => (
@@ -432,7 +432,7 @@ export function Composer(props: {
           ) : (
             <div key={item.id} class="queued-item">
               <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
-              <span class="muted">{item.held ? 'sending at the next pause' : 'queued'}{index === firstWaiting && stopAndSend ? ` · ${keyHint('sendNow')}` : ''}</span>
+              <span class="muted">{queuedRowLabel(model, item, index === firstWaiting && stopAndSend)}</span>
               <button type="button" class="icon-button tiny" title="Edit: take it back into the message box" aria-label="Edit queued message"
                 onClick={() => { post({ type: 'unqueue', id: item.id }); props.handle.current?.insert(item.text); }}><Icon name="edit" /></button>
               <button type="button" class="icon-button tiny" title="Remove from the queue" aria-label="Remove queued message"
