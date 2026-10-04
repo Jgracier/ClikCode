@@ -40,6 +40,7 @@ import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
+import { conversationsMcpEntry } from '../search/mcp-entry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
@@ -287,11 +288,15 @@ export async function sendVendorTurn(input: {
     // hook that is already in the harness is left as it is. A new MCP server
     // is invisible to a process that is already running, so that process is
     // closed and this attempt starts one that can see it.
+    const conversations = conversationsMcpEntry();
     const provisioned = await provisionChosenHarness({
       harness, account, workspace: session.workspace, stateDir: stateDirectory(),
+      ...(conversations ? { builtins: [conversations] } : {}),
     });
     if (provisioned.mcpInstalled.length) await closePersistentTransport(session.id);
-    const environment = turnEnvironment(harness, account, session.permissionMode ?? 'ask');
+    // Which conversation this is, for ClikCode's conversation MCP server the
+    // vendor starts (search/mcp.ts): it leaves this one out of its answers.
+    const environment = { ...turnEnvironment(harness, account, session.permissionMode ?? 'ask'), CLIKCODE_SESSION_ID: session.id };
     const transport = sessionTurnTransport(harness, session);
     activeTransport = transport;
     // A fresh native thread with prior ClikCode messages: see above. Also

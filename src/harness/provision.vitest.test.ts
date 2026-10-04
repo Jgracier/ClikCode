@@ -8,6 +8,7 @@ import type { AiHarnessAccount } from './definition.js';
 import { provisionChosenHarness, skillRoot } from './provision.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
+import { conversationsMcpEntry } from '../search/mcp-entry.js';
 
 const cursor = allLocalHarnesses().find((item) => item.command === 'cursor')!;
 const grok = allLocalHarnesses().find((item) => item.command === 'grok')!;
@@ -56,6 +57,35 @@ describe('provisioning the harness that was chosen', () => {
     expect(written.mcpServers.fresh).toEqual({ command: 'npx', args: ['-y', 'fresh-mcp'] });
     const again = await provisionChosenHarness({ harness: cursor, account: account(home), workspace, stateDir: state, home, install });
     expect(again.mcpInstalled).toEqual([]);
+  });
+
+  it("gives every harness ClikCode's conversation server, once, unless a server by that name is already there", async () => {
+    const { home, state, workspace } = await layout();
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    await writeFile(join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: {} }));
+    const builtin = conversationsMcpEntry('/opt/clikcode/bin/clikcode', '/usr/bin/node', 'linux', () => true)!;
+    expect(builtin).toEqual({ name: 'clikcode-conversations', target: '/opt/clikcode/bin/clikcode', args: ['conversations-mcp'] });
+    expect(conversationsMcpEntry('/x/dist/index.js', '/usr/bin/node', 'linux', () => false)!.args).toEqual(['/x/dist/index.js', 'conversations-mcp']);
+    const install: NonNullable<Parameters<typeof provisionChosenHarness>[0]['install']> = async (_harness, entry) => {
+      await writeMcpConfigEntry(join(home, '.cursor', 'mcp.json'), 'mcpServers', entry);
+      return { harness: 'cursor', ok: true };
+    };
+    const first = await provisionChosenHarness({ harness: cursor, account: account(home), workspace, stateDir: state, home, install, builtins: [builtin] });
+    expect(first.mcpInstalled).toEqual(['clikcode-conversations']);
+    const written = JSON.parse(await readFile(join(home, '.cursor', 'mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
+    expect(written.mcpServers['clikcode-conversations']).toEqual({ command: '/opt/clikcode/bin/clikcode', args: ['conversations-mcp'] });
+    const again = await provisionChosenHarness({ harness: cursor, account: account(home), workspace, stateDir: state, home, install, builtins: [builtin] });
+    expect(again.mcpInstalled).toEqual([]);
+    // The user's own server by that name is theirs.
+    const other = await layout();
+    await mkdir(join(other.home, '.cursor'), { recursive: true });
+    await writeFile(join(other.state, 'mcp.json'), JSON.stringify({ mcpServers: { 'clikcode-conversations': { command: 'mine' } } }));
+    const entries: string[] = [];
+    await provisionChosenHarness({
+      harness: cursor, account: account(other.home), workspace: other.workspace, stateDir: other.state, home: other.home, builtins: [builtin],
+      install: async (_harness, entry) => { entries.push(entry.target); return { harness: 'cursor', ok: true }; },
+    });
+    expect(entries).toEqual(['mine']);
   });
 
   it('does not write into an MCP file it cannot parse', async () => {
