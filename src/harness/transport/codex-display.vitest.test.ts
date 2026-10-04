@@ -21,6 +21,7 @@ describe('Codex items', () => {
     expect(label({ type: 'search', query: 'acp spec' })).toMatch(/acp spec/);
     expect(label({ type: 'openPage', url: 'https://example.com/a' })).toMatch(/https:\/\/example\.com\/a/);
     expect(label({ type: 'findInPage', url: 'https://example.com/a', pattern: 'usage' })).toMatch(/"usage" in https:\/\/example\.com\/a/);
+    expect(codexActivityForItem({ type: 'webSearch', id: 'w', query: 'x', action: { type: 'search' } }, true)).toMatchObject({ category: 'fetch' });
   });
 
   it('reads a declined command as declined, not done', () => {
