@@ -645,8 +645,9 @@ def run(name, spec, entry, keep):
     # command, a picker that leaves the screen) switches them all off, and
     # coming back must switch them on again -- the mouse modes are what make
     # a phone swipe scroll, bracketed paste what keeps a pasted newline from
-    # sending. 'modes_off_at_end' names the scenarios that leave them off.
-    if not spec.get('modes_off_at_end'):
+    # sending. 'modes_off_at_end' names any scenario that leaves them off.
+    # Only for the full-screen UI: classic mode asks for none of them.
+    if not spec.get('modes_off_at_end') and b'\x1b[?1049h' in bytes(raw):
         # Up to the exit's own teardown, which leaves the alternate screen
         # last and rightly switches everything off.
         # That teardown switches the mouse off on the alternate screen, leaves
