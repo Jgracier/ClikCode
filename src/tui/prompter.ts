@@ -1942,6 +1942,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.syncTerminalSignals();
   }
 
+  /** The last frame's live rows made safe, by the row as built and the width. */
+  private safeLiveRows = { limit: 0, rows: new Map<string, string>() };
+
   /** One frame: `finished` rows are retired into the transcript, and the live
    * region below them is replaced. */
   private renderFrame(
@@ -1958,11 +1961,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const limit = Math.max(1, (output.columns || 100) - 1);
     const safeRow = (row: string): string =>
       closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
+    // Most live rows are the same from one frame to the next (the footer, the
+    // answer's settled lines), so each is made safe once while it stays.
+    const known = this.safeLiveRows.limit === limit ? this.safeLiveRows.rows : new Map<string, string>();
+    const rows = new Map<string, string>();
+    const safeLive = live.map((row) => {
+      const safe = known.get(row) ?? safeRow(row);
+      rows.set(row, safe);
+      return safe;
+    });
+    this.safeLiveRows = { limit, rows };
     // Frames that coalesce while a write drains accumulate their finished rows
     // instead of replacing them. A live row dropped here is drawn again by the
     // frame that replaces it; a retired row would simply be lost.
     this.pendingFinished.push(...finished.map(safeRow));
-    this.pendingLive = { live: live.map(safeRow), cursorRow, cursorColumn, hideCursor };
+    this.pendingLive = { live: safeLive, cursorRow, cursorColumn, hideCursor };
     if (!this.frameInFlight) this.flushFrame();
   }
 
