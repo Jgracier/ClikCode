@@ -68,7 +68,7 @@ describe('profile tool specs', () => {
   it('minimal shortens only the descriptions it has a terse form for, and deterministically', () => {
     const shaped = PROFILES.minimal.shapeSpecs(specs);
     const changed = shaped.filter((spec, index) => spec.description !== specs[index].description).map((spec) => spec.name);
-    expect(changed.sort()).toEqual(['task', 'web_fetch', 'web_search']);
+    expect(changed.sort()).toEqual(['active_conversations', 'read_conversation', 'search_conversations', 'task', 'web_fetch', 'web_search']);
     shaped.forEach((spec, index) => expect(spec.description.length).toBeLessThanOrEqual(specs[index].description.length));
     expect(JSON.stringify(PROFILES.minimal.shapeSpecs(specs))).toBe(JSON.stringify(shaped));
   });

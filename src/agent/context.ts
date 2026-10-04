@@ -16,6 +16,7 @@ import path from 'node:path';
 import { spawnPortable, terminatePortable } from '../harness/transport/spawn.js';
 import type { ConversationItem, ModelClient, TokenUsage } from './model-client.js';
 import { OUTPUT_CAPS } from './security.js';
+import { CONVERSATION_TOOLS_NOTE } from '../search/tools.js';
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPACTION_THRESHOLD = 0.8;
@@ -51,7 +52,8 @@ const COMMUNICATION = `# Communication
 - Reference code as path:line. Do not paste large files back to the user.
 - When the task is done, stop calling tools and give a short summary of what changed and anything the user should check. If you are blocked, say precisely what is blocking you.
 - A tool result starting with "Tool result for" in the conversation is the harness reporting a tool's output, not a message typed by the user.
-- An <environment> block in a user message is the harness reporting the date and git state at that moment, not text the user typed.`;
+- An <environment> block in a user message is the harness reporting the date and git state at that moment, not text the user typed.
+- ${CONVERSATION_TOOLS_NOTE}`;
 
 /** Minimal's replacement for the "Editing files" and "Shell" sections: the
  * rules there that no tool description carries. */

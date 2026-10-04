@@ -121,6 +121,9 @@ const TERSE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   task: 'Start a read-only research sub-agent. It sees none of this conversation: give it a self-contained prompt. Only its final answer comes back.',
   web_fetch: 'Fetch a public http(s) URL and return its content as text.',
   web_search: 'Search the web; returns titles, URLs and snippets.',
+  search_conversations: 'Search the user\'s other ClikCode conversations; returns matching chats with snippets and anchors.',
+  read_conversation: 'Read another conversation\'s messages around an anchor, or its latest turns.',
+  active_conversations: 'What the user\'s other conversations are doing now.',
 };
 
 function withoutClosedObjects(schema: unknown): unknown {
