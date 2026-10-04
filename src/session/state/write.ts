@@ -9,7 +9,7 @@ import { isBlankConversation } from '../options.js';
 import { sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { forgetSessionArtifacts } from '../store/forget.js';
-import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript } from '../store/transcripts.js';
+import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript, writeSessionTurn } from '../store/transcripts.js';
 import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
 import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
@@ -159,7 +159,9 @@ export async function writeState(state: HarnessState): Promise<void> {
  * The index is the list -- titles, dates, accounts -- shared by every
  * process, and nothing on it changes while an answer streams. Rewriting it
  * (with a backup) four times a second per worker was most of what ClikCode
- * wrote to disk. Here only the transcript is merged and stored, and only the
+ * wrote to disk. Here only the transcript is merged and stored -- and when
+ * only the running turn's journal changed, just that journal (records.ts
+ * says what builds that predate that file see) -- and only the
  * transcript part of the baseline moves forward: any field of the record the
  * turn changed meanwhile (its date, its last usage) is still a difference the
  * next full writeState stores, at the turn's end at the latest.
@@ -177,7 +179,8 @@ export async function writeTranscriptCheckpoint(state: HarnessState, sessionId: 
     if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
     if (!disk?.sessions.some((item) => item.id === sessionId)) return false;
     const now = baselineSession(session, before);
-    if (now.transcript !== before.transcript) {
+    // Only the turn's journal changed (the common case): its own small file.
+    if (now.transcript !== before.transcript && !await writeSessionTurn(held, sessionId, now.transcript, before.transcript)) {
       await writeSessionTranscript(held, sessionId, now.transcript, { parentSessionId: session.parentSessionId, frozen: true, base: before.transcript });
     }
     // The current baseline object: a full write may have replaced it while

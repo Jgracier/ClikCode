@@ -25,6 +25,9 @@ function artifactPaths(id: string): string[] {
     join(root, 'claims', `${record}.json`),
     join(sessionsDirectory(), `${record}.lock`),
     join(sessionsDirectory(), `${record}.resume-in.lock`),
+    // Normally removed with the transcript; one a build that predates it
+    // left behind when it deleted the transcript goes here.
+    join(sessionsDirectory(), `${record}.turn`),
   ];
   if (segment && segment !== '.' && segment !== '..') paths.push(join(root, 'checkpoints', segment));
   if (/^[A-Za-z0-9._-]{1,128}$/.test(id) && id !== '.' && id !== '..') paths.push(join(sessionsDirectory(), id));

@@ -25,3 +25,10 @@ export function safeRecordFileName(id: string): string {
 export function sessionFilePath(id: string): string {
   return join(sessionsDirectory(), `${safeRecordFileName(id)}.json`);
 }
+
+/** The running turn's journal while it streams (records.ts). Not `.json`:
+ * every build lists sessions by that suffix, and an id may itself end in
+ * `.turn`, whose transcript is then `<id>.turn.json` -- never this name. */
+export function sessionTurnPath(id: string): string {
+  return join(sessionsDirectory(), `${safeRecordFileName(id)}.turn`);
+}

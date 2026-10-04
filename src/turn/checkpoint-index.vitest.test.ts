@@ -39,9 +39,15 @@ describe('a streaming turn and the shared index', () => {
       // The index is the very file the turn's start wrote...
       const during = await stat(indexPath);
       expect({ ino: during.ino, mtimeMs: during.mtimeMs }).toEqual({ ino: started.ino, mtimeMs: started.mtimeMs });
-      // ...and the answer so far is on disk.
+      // ...and the answer so far is on disk, in the turn's own file: the
+      // transcript still holds the journal as the turn started.
       const stored = JSON.parse(await readFile(join(root, 'sessions', 's.json'), 'utf8'));
-      expect(stored.pendingTurn?.response).toBe('part 0 part 1 part 2 part 3 ');
+      expect(stored.pendingTurn).toMatchObject({ prompt: 'go', outputStarted: false });
+      expect(stored.pendingTurn.response).toBeUndefined();
+      const turn = JSON.parse(await readFile(join(root, 'sessions', 's.turn'), 'utf8'));
+      expect(turn.response).toBe('part 0 part 1 part 2 part 3 ');
+      resetHarnessStateCaches();
+      expect((await readState()).sessions.find((item) => item.id === 's')?.pendingTurn?.response).toBe('part 0 part 1 part 2 part 3 ');
 
       await checkpoint.complete('part 0 part 1 part 2 part 3 done');
       resetHarnessStateCaches();
@@ -51,6 +57,7 @@ describe('a streaming turn and the shared index', () => {
       // What the turn changed on the row mid-stream is stored at its end.
       expect(finished.lastUsage).toMatchObject({ input: 3, output: 3 });
       expect(finished.updatedAt > now).toBe(true);
+      await expect(stat(join(root, 'sessions', 's.turn'))).rejects.toThrow();
     } finally {
       if (previous === undefined) delete process.env.CLIKCODE_HOME;
       else process.env.CLIKCODE_HOME = previous;
