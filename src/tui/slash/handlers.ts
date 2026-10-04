@@ -67,7 +67,8 @@ import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.j
 import { forgetNativeThread } from '../../session/native-thread.js';
 import { carryNativeSession } from '../../session/carry.js';
 import { turnEnvironment } from '../../turn/turn-environment.js';
-import { undoLastTurn } from '../../session/undo-turn.js';
+import { undoTurnsBack } from '../../session/undo-turn.js';
+import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../session/turn-changes.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
 /** A setting changed: stamp the session, store the state, and show the
@@ -660,9 +661,20 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!account) throw new Error('This conversation has no account to sign out.');
     await aiAccountLogout(account.id);
   },
-  undo: async ({ session }) => {
+  changes: async ({ session, words }) => {
+    const records = await readTurnChanges(stateDirectory(), session.id);
+    if (!words[0]) return emitHarnessOutput({ panel: 'changes', text: turnChangesList(records, session.workspace) });
+    const n = Number(words[0]);
+    const record = turnChangesAgo(records, n);
+    if (!record) throw new Error(records.length ? `usage: /changes [N]  -- N from 1 (the last turn) to ${records.length}` : 'No turns recorded yet in this conversation.');
+    return emitHarnessOutput({ panel: 'changes', text: turnChangesDiff(record, n, session.workspace), diff: record.changes });
+  },
+  undo: async ({ session, words }) => {
     const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'This provider';
-    const undone = await undoLastTurn(session, { stateDir: stateDirectory(), who });
+    // `/undo N`: the last N turns, as /changes numbers them.
+    const back = words[0] ? Number(words[0]) : 1;
+    if (!Number.isInteger(back) || back < 1) throw new Error('usage: /undo [N]  -- N turns back, as /changes numbers them');
+    const undone = await undoTurnsBack(session, back, { stateDir: stateDirectory(), who });
     return emitHarnessOutput({ panel: 'undo', text: undone.text, restored: undone.restored, removed: undone.removed, conflicts: undone.conflicts });
   },
 };

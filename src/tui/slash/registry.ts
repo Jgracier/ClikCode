@@ -37,7 +37,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * tables are typed `Record<SlashHandlerKey, …>` and a missing or extra handler
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
-  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo',
+  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo', 'changes',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'swarm', 'permissions', 'options', 'capabilities', 'settings',
@@ -137,7 +137,8 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('history', 'Conversation', 'show this conversation'),
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
-  entry('undo', 'Conversation', "revert the last turn's file edits (refuses files changed since)", { availability: undoAvailability }),
+  entry('undo', 'Conversation', "revert the last turn's file edits, or the last N turns' (refuses files changed since)", { argHint: '[N]', availability: undoAvailability }),
+  entry('changes', 'Conversation', "each recent turn's file edits; N shows that turn's diff", { argHint: '[N]', availability: undoAvailability }),
   entry('native', 'Conversation', 'send text to the harness verbatim (also: //text)', { argHint: '<text>', availability: needsHarness('sending native commands') }),
   entry('select', 'Conversation', "hand the mouse to the terminal's own selection (drag-to-copy works without it)"),
   entry('redraw', 'Conversation', 'repaint the screen'),

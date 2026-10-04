@@ -582,6 +582,19 @@ SCENARIOS = {
         'final_contains': ['first question', 'ALPHA answer lives here.', 'files on disk are not rewound'],
         'never_after_mark': ['BETA answer lives here.'],
     },
+    # /changes lists the turn's edit, /changes 1 shows its diff, /undo 1 puts
+    # the file back.
+    'changes-and-undo': {
+        'turns': [{'edits': [{'path': 'notes.txt', 'old': 'alpha\nbeta\n', 'new': 'alpha\nGAMMA\n'}], 'blocks': ['Edited the notes.']}],
+        'steps': [
+            ('type', 'edit the notes'), ('wait_for', 'Edited the notes.', 30), ('settle', 2),
+            ('type', '/changes'), ('wait_for', 'notes.txt · +1 -1', 10), ('settle', 1), ('keys', '\x1b'), ('settle', 1),
+            ('type', '/changes 1'), ('wait_for', '+ GAMMA', 10), ('settle', 1), ('keys', '\x1b'), ('settle', 1),
+            ('type', '/undo 1'), ('wait_for', 'restored  notes.txt', 10), ('settle', 1),
+        ],
+        'watch': [], 'ever': ['1  edit the notes', 'Turn 1 · edit the notes', '- beta'],
+        'file_contains': {'notes.txt': 'alpha\nbeta\n'},
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -818,6 +831,10 @@ def run(name, spec, entry, keep):
         shown = '\n'.join(snaps.get(name, []))
         for phrase in phrases:
             if phrase not in shown: problems.append(f'not on the {name!r} screen: {phrase!r}')
+    for name, text in spec.get('file_contains', {}).items():
+        try: found = open(os.path.join(workspace, name)).read()
+        except OSError: found = None
+        if found != text: problems.append(f'{name} holds {found!r}, expected {text!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     for phrase in spec.get('final_once', []):
