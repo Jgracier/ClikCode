@@ -52,8 +52,9 @@ export interface SignInScreen extends SignInUi {
 /** A screen no reader knows, answered from the catalog: when the vendor's
  * text since the last answer shows `when` (compared without colours, spaces
  * or case), send `send` (keys: {enter} {down} {up} {tab} {esc} {space} {ctrl-c} {ctrl-d}), or
- * ask the user and send the answer with Enter. Each fires once, whichever
- * comes first: a vendor's screens depend on what the user chose. */
+ * ask the user and send the answer with Enter. Whichever matches first: a
+ * vendor's screens depend on what the user chose. One still on screen two
+ * seconds later fires again (its key was dropped). */
 export interface SignInStep { when: string; send?: string; ask?: { prompt: string; secret?: boolean } }
 
 /** A device code: from the link's own `user_code`, else the first
@@ -159,7 +160,7 @@ export function readScreenPrompt(shown: string | ScreenState): ScreenPrompt | un
   // Of the menus and fields drawn since the last answer, the one drawn last
   // is what the screen shows now: an Ink app redraws the menu just answered
   // on its way to the next screen.
-  const drawn = [readClack(lines), readEnquirer(lines), readNumbered(lines), readRadio(lines), readPointer(lines), readCards(lines), readInputBox(lines)]
+  const drawn = [readClack(lines), readEnquirer(lines), readNumbered(lines), readRadio(lines), readPointer(lines), readCards(lines), readInputBox(lines), readTitledField(state)]
     .filter((found): found is Drawn => Boolean(found));
   const found = drawn.sort((left, right) => right.at - left.at)[0]?.prompt;
   // A list that shows a few of many and filters as you type (Cline's 228
@@ -173,18 +174,34 @@ export function readScreenPrompt(shown: string | ScreenState): ScreenPrompt | un
 /** A prompt a reader found, and the line it is drawn from. */
 interface Drawn { prompt: ScreenPrompt; at: number }
 
-/** A menu of cards, as Cline draws one: a box per option, its first line
- * the label (after an icon), the current one marked `→` at its right edge.
- * The title is the line above the first card. */
+/** A field whose name is in its border, the cursor inside it (Vibe's
+ * `┌─ Paste API key ──`): what the screen waits on is typing there. */
+function readTitledField(state: ScreenState): Drawn | undefined {
+  const { lines, row } = state;
+  for (let index = row - 1; index >= 0 && row - index <= 4; index -= 1) {
+    const title = /^\s*[┌╭]─+\s*([^─┐╮]+?)\s*─/.exec(lines[index]!)?.[1];
+    if (!title) continue;
+    const closed = lines.slice(row + 1, row + 5).some((line) => /^\s*[└╰]─/.test(line));
+    if (!closed || !/[A-Za-z]/.test(title)) return undefined;
+    return { prompt: { kind: 'input', prompt: title, secret: isSecret(title) }, at: index };
+  }
+  return undefined;
+}
+
+/** A menu of cards: a box per option, its first line the label (after an
+ * icon), the current one marked `→` at its right edge (Cline) or `>` left
+ * of the box (Vibe). The title is the line above the first card. */
 function readCards(lines: readonly string[]): Drawn | undefined {
   const cards: { at: number; label: string; current: boolean }[] = [];
   let open = -1;
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    if (/^\s*╭─/.test(line)) { open = index; continue; }
-    if (/^\s*╰─/.test(line) && open >= 0) {
-      const first = lines.slice(open + 1, index).map((row) => row.replace(/^\s*│\s?|\s*│\s*$/g, '').trim()).find(Boolean);
-      if (first) cards.push({ at: open, label: first.replace(/^[^\p{L}\p{N}(]+\s*/u, '').replace(/\s*→$/, '').trim(), current: /→\s*$/.test(first) });
+    if (/^\s*[╭┌]─/.test(line)) { open = index; continue; }
+    if (/^\s*[╰└]─/.test(line) && open >= 0) {
+      const rows = lines.slice(open + 1, index);
+      const first = rows.map((row) => row.replace(/^\s*>?\s*│\s?|\s*│\s*$/g, '').trim()).find(Boolean);
+      const current = (first !== undefined && /→\s*$/.test(first)) || rows.some((row) => /^\s*>\s*│/.test(row));
+      if (first) cards.push({ at: open, label: first.replace(/^[^\p{L}\p{N}(]+\s*/u, '').replace(/\s*→$/, '').trim(), current });
       open = -1;
     }
   }
@@ -196,6 +213,9 @@ function readCards(lines: readonly string[]): Drawn | undefined {
   }
   const selected = run.findIndex((card) => card.current);
   if (run.length < 2 || selected < 0) return undefined;
+  // A menu says how to move through it; the same cards as a progress view
+  // (Vibe's `Open browser / Complete sign-in / Finished setup`) do not.
+  if (!lines.slice(run.at(-1)!.at).some((line) => /↑|↓|\bnavigate\b|\benter (?:to )?select\b/i.test(line))) return undefined;
   return { prompt: { kind: 'choice', title: titleAbove(lines, run[0]!.at), choices: run.map((card) => card.label), selected, style: 'arrows' }, at: run[0]!.at };
 }
 
@@ -261,9 +281,12 @@ function readInputBox(lines: readonly string[]): Drawn | undefined {
  * The title is the line above them all. */
 function readPointer(lines: readonly string[]): Drawn | undefined {
   const plain = lines.map((line) => line.replace(/[│┃║]/g, ' ').trimEnd());
-  const marker = (line: string): boolean => /^\s*[›>→❯]\s+(?!\([●○]\))\S/.test(line);
+  // Not a radio mark, and not a card's border (Vibe's `> │ Launch browser`).
+  const marker = (line: string): boolean => /^\s*[›>→❯]\s+(?!\([●○]\)|[│┃])\S/.test(line);
   let at = -1;
-  for (let index = plain.length - 1; index >= 0; index -= 1) if (marker(plain[index]!)) { at = index; break; }
+  // Not a card's `> │ X` (Vibe): with its border blanked it would read as
+  // a pointer. A pointer inside a box (Qwen's `│ › X`) is one.
+  for (let index = plain.length - 1; index >= 0; index -= 1) if (marker(plain[index]!) && !/^\s*[›>→❯]\s*[│┃]/.test(lines[index]!)) { at = index; break; }
   if (at < 0) return undefined;
   // The marker stands in the indentation: `› Alibaba` lines up with
   // `  Third-party`.
@@ -394,6 +417,23 @@ export function choiceKeys(prompt: Extract<ScreenPrompt, { kind: 'choice' }>, to
   return `${(moves >= 0 ? KEYS['{down}']! : KEYS['{up}']!).repeat(Math.abs(moves))}\r`;
 }
 
+/** What a terminal answers to the questions a TUI asks it on start --
+ * device attributes, cursor position, modes, colours, version. Unanswered,
+ * Textual apps (Vibe) wait and draw nothing; others guess and draw worse. */
+export function terminalReplies(chunk: string, cursor: { row: number; column: number }): string {
+  let reply = '';
+  for (const match of chunk.matchAll(/\u001b\[(?:0?c|6n|\?(\d+)\$p|>0?q|5n)|\u001b\](1[01]);\?(?:\u0007|\u001b\\)/g)) {
+    const query = match[0];
+    if (/^\u001b\[0?c$/.test(query)) reply += '\u001b[?62;22c';
+    else if (query === '\u001b[6n') reply += `\u001b[${cursor.row + 1};${cursor.column + 1}R`;
+    else if (query === '\u001b[5n') reply += '\u001b[0n';
+    else if (match[1]) reply += `\u001b[?${match[1]};2$y`;
+    else if (/^\u001b\[>0?q$/.test(query)) reply += '\u001bP>|xterm(388)\u001b\\';
+    else if (match[2]) reply += `\u001b]${match[2]};rgb:${match[2] === '10' ? 'ffff/ffff/ffff' : '0000/0000/0000'}\u001b\\`;
+  }
+  return reply;
+}
+
 function compact(text: string): string {
   return stripAnsi(text).replace(/\s+/g, '').toLowerCase();
 }
@@ -421,6 +461,14 @@ const SETTLE_MS = 350;
 /** The same prompt seen again this soon after it was answered is the
  * vendor redrawing it on the way to the next one, not asking again. */
 const REDRAW_MS = 4_000;
+/** How often the credential is looked for, and how long the vendor gets
+ * to finish once it is there. */
+const SIGNED_IN_POLL_MS = 1_000;
+const SIGNED_IN_GRACE_MS = 1_500;
+/** How soon a step whose text the screen still shows may fire again. */
+const STEP_AGAIN_MS = 2_000;
+/** The longest a screen that keeps drawing goes unread. */
+const MAX_UNREAD_MS = 1_000;
 /** Between keys sent to the vendor (see answer()). */
 const KEY_GAP_MS = 100;
 
@@ -434,6 +482,9 @@ export async function runVendorSignIn(input: {
   local: boolean;
   steps?: readonly SignInStep[];
   ui: SignInUi;
+  /** True once the vendor has written its credential: the sign-in is done,
+   * and the vendor is closed after a moment to finish writing. */
+  signedIn?: () => Promise<boolean>;
 }): Promise<void> {
   const { ui } = input;
   const cancelled = (): Error => new Error(`sign-in to ${input.displayName} was cancelled`);
@@ -460,8 +511,11 @@ export async function runVendorSignIn(input: {
   let shown: LoginLink | undefined;
   let write: (text: string) => void = () => undefined;
   let exited = false;
-  // Catalog steps, each fired once.
-  const fired = new Set<number>();
+  // Catalog steps: each fires when its text shows since the last answer,
+  // and again if the screen still shows it a while later -- a key sent
+  // mid-animation (Vibe's welcome) is dropped, and the screen says so by
+  // drawing the same thing again.
+  const fired = new Map<number, number>();
   // Prompts are read from what was printed since the last answer.
   let answeredAt = 0;
   let answering = false;
@@ -499,10 +553,10 @@ export async function runVendorSignIn(input: {
     if (answering || exited) return;
     publishLink();
     const since = compact(raw.slice(answeredAt));
-    const index = input.steps?.findIndex((rule, at) => !fired.has(at) && since.includes(compact(rule.when))) ?? -1;
+    const index = input.steps?.findIndex((rule, at) => Date.now() - (fired.get(at) ?? 0) >= STEP_AGAIN_MS && since.includes(compact(rule.when))) ?? -1;
     const next = index >= 0 ? input.steps![index]! : undefined;
     if (next) {
-      fired.add(index);
+      fired.set(index, Date.now());
       void answer(async () => (next.ask
         ? `${await ui.ask(next.ask.prompt, Boolean(next.ask.secret))}\r`
         : keystrokes(next.send ?? ''))).finally(schedule);
@@ -524,12 +578,40 @@ export async function runVendorSignIn(input: {
       return choiceKeys(prompt, index);
     }).finally(() => { lastPrompt = { key, at: Date.now() }; schedule(); });
   };
+  // A screen that never goes quiet (Vibe's animated welcome) is still read:
+  // at least once a second while it keeps drawing.
+  let deadline: NodeJS.Timeout | undefined;
+  const readNow = (): void => {
+    if (settle) clearTimeout(settle);
+    if (deadline) clearTimeout(deadline);
+    settle = undefined;
+    deadline = undefined;
+    read();
+  };
   const schedule = (): void => {
     if (settle) clearTimeout(settle);
-    settle = setTimeout(read, SETTLE_MS);
+    settle = setTimeout(readNow, SETTLE_MS);
+    deadline ??= setTimeout(readNow, MAX_UNREAD_MS);
   };
-  const onOutput = (chunk: string): void => { raw += chunk; screen.write(chunk); changed = true; publishLink(); schedule(); };
+  const onOutput = (chunk: string): void => {
+    raw += chunk;
+    screen.write(chunk);
+    const replies = terminalReplies(chunk, screen.state());
+    if (replies) write(replies);
+    changed = true;
+    publishLink();
+    schedule();
+  };
 
+  let succeeded = false;
+  const watch = input.signedIn ? setInterval(() => {
+    if (succeeded) return;
+    void input.signedIn!().then((done) => {
+      if (!done || succeeded) return;
+      succeeded = true;
+      setTimeout(abort, SIGNED_IN_GRACE_MS);
+    }, () => undefined);
+  }, SIGNED_IN_POLL_MS) : undefined;
   const poll = standIns ? setInterval(() => {
     void readFile(standIns.log, 'utf8').then((text) => {
       const last = text.trim().split('\n').pop();
@@ -549,9 +631,12 @@ export async function runVendorSignIn(input: {
     exited = true;
     ui.signal?.removeEventListener('abort', abort);
     if (poll) clearInterval(poll);
+    if (watch) clearInterval(watch);
     if (settle) clearTimeout(settle);
+    if (deadline) clearTimeout(deadline);
     if (standIns) await rm(standIns.dir, { recursive: true, force: true }).catch(() => undefined);
   }
+  if (succeeded) return;
   if (controller.signal.aborted) throw cancelled();
   if (exitCode !== 0) {
     const said = screenLines(raw).map((line) => line.trim()).filter(Boolean).pop();

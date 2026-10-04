@@ -2,7 +2,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { chooseLoginLink, choiceKeys, extractLoginCode, readScreenPrompt, runVendorSignIn, type LoginLink, type SignInUi } from './vendor-sign-in.js';
+import { terminalReplies, chooseLoginLink, choiceKeys, extractLoginCode, readScreenPrompt, runVendorSignIn, type LoginLink, type SignInUi } from './vendor-sign-in.js';
 import { extractLoginUrl } from './url.js';
 
 describe('reading a link sign-in', () => {
@@ -121,6 +121,16 @@ describe('reading what a vendor screen waits on, from real screens', () => {
     expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Popular', choices: ['Cline Usage-Billing (OAuth)', 'DeepSeek', 'Anthropic'], selected: 0, style: 'arrows', searchable: true });
   });
 
+  it('Vibe\'s cards, the current one marked left of its box', () => {
+    const screen = '   Welcome to Mistral Vibe\n   Choose your sign in method\n\n   ┌──────────┐\n > │ Launch browser │\n   │ Sign in to Mistral AI Studio and finish setup automatically. │\n   └──────────┘\n\n   or\n\n   ┌──────────┐\n   │ Use an API key │\n   │ Already have a key? Paste it manually instead. │\n   └──────────┘\n   Use ↑↓ to navigate - Enter Select - Esc Cancel\n';
+    expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Choose your sign in method', choices: ['Launch browser', 'Use an API key'], selected: 0, style: 'arrows' });
+  });
+
+  it('the same cards as a progress view are not a menu (Vibe, waiting on the browser)', () => {
+    const screen = '   Launch browser\n   Your browser should open automatically\n   ┌──────┐\n > │   Open browser │\n   │   Failed to open browser for sign-in. │\n   └──────┘\n   ┌──────┐\n   │   Complete sign-in │\n   │   Waiting for authentication... │\n   └──────┘\n   If your browser did not open, copy this URL (press c).\n   Press r to retry - Press m to enter API key manually - Esc to cancel\n';
+    expect(readScreenPrompt(screen)).toBeUndefined();
+  });
+
   it('Droid\'s one-line pointer list', () => {
     expect(readScreenPrompt('│ Welcome to Factory CLI │\n╰──────╯\nPlease login with your Factory account to continue.\n> Login\n  Exit\n'))
       .toEqual({ kind: 'choice', title: 'Please login with your Factory account to continue.', choices: ['Login', 'Exit'], selected: 0, style: 'arrows' });
@@ -136,6 +146,14 @@ describe('reading what a vendor screen waits on, from real screens', () => {
     expect(readScreenPrompt('To sign in, open this URL in your browser:\n  https://accounts.x.ai/oauth2/device?user_code=5FCB-TTXG\nWaiting for authorization...')).toBeUndefined();
     expect(readScreenPrompt('If your browser didn\'t open, use this link:\nhttps://cursor.com/loginDeepControl?x=1')).toBeUndefined();
     expect(readScreenPrompt('Starting login process...\n')).toBeUndefined();
+  });
+});
+
+describe('answering a TUI\'s questions to its terminal', () => {
+  it('answers what Vibe, Gemini and Cline ask on start', () => {
+    expect(terminalReplies('\u001b[c\u001b[6n\u001b[?2026$p\u001b]11;?\u0007\u001b[>0q', { row: 4, column: 9 }))
+      .toBe('\u001b[?62;22c\u001b[5;10R\u001b[?2026;2$y\u001b]11;rgb:0000/0000/0000\u001b\\\u001bP>|xterm(388)\u001b\\');
+    expect(terminalReplies('plain text', { row: 0, column: 0 })).toBe('');
   });
 });
 
@@ -205,6 +223,18 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     const vendor = await script('printf "Continue? [Y/n] "\nread answer\nsleep 30\n');
     await expect(runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: ui({ choose: [] }).value }))
       .rejects.toThrow(/cancelled/);
+  });
+
+  it('is done once the vendor writes its credential, though it goes on into its app', async () => {
+    const credential = join(dir, 'auth.json');
+    const vendor = await script(`echo '{"token":"t"}' > '${credential}'\necho "Welcome to the app"\nsleep 30\n`);
+    const { access } = await import('node:fs/promises');
+    const started = Date.now();
+    await runVendorSignIn({
+      binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: ui().value,
+      signedIn: () => access(credential).then(() => true, () => false),
+    });
+    expect(Date.now() - started).toBeLessThan(10_000);
   });
 
   it('says what the vendor said when its sign-in fails', async () => {

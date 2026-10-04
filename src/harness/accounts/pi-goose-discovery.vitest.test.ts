@@ -27,7 +27,7 @@ describe('pi discovery', () => {
       { id: 'zai', label: 'ZAI' }, { id: 'anthropic', label: 'Anthropic' }, { id: 'xai', label: 'xAI' },
     ], ['xai/grok-5']);
     expect(connect.map((item) => item.id)).toEqual(['anthropic', 'zai']);
-    expect(connect[0]).toEqual({ id: 'anthropic', label: 'Anthropic', detail: 'sign in inside Pi', argv: [], hint: 'type /login anthropic' });
+    expect(connect[0]).toEqual({ id: 'anthropic', label: 'Anthropic', detail: 'sign in inside Pi', argv: [] });
   });
 
   it('names a provider after its module, skipping the API-key variant', () => {
@@ -59,7 +59,6 @@ describe('goose discovery', () => {
     expect(connect.map((item) => item.id)).toEqual(['anthropic', 'zeta']);
     expect(connect[0]).toEqual({
       id: 'anthropic', label: 'Anthropic', detail: 'set up in goose configure', argv: ['configure'],
-      hint: 'choose Configure Providers, then Anthropic',
     });
   });
 

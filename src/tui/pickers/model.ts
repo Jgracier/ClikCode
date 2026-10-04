@@ -152,7 +152,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     })));
     const connect = catalog.connect.find((item) => item.id === target);
     if (!connect) return;
-    const signIn = { ...harness, loginArgv: connect.argv, ...(connect.hint ? { loginHint: connect.hint } : {}) };
+    const signIn = { ...harness, loginArgv: connect.argv };
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     // The vendor asks its own questions (browser code, pasted key), so it
     // gets the real terminal, exactly like an account sign-in.

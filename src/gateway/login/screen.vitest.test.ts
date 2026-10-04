@@ -23,6 +23,12 @@ describe('the screen a sign-in draws', () => {
     expect(readScreenPrompt(screen.state())).toEqual({ kind: 'input', prompt: 'Paste your API key', secret: true });
   });
 
+  it('reads a field named in its border, the cursor inside it (Vibe)', () => {
+    const screen = new Screen(12, 80);
+    screen.write('  Get your Mistral API key\r\n\r\n  ┌─ Paste API key ─────────┐\r\n  │                         │\r\n  └─────────────────────────┘\u001b[4;5H');
+    expect(readScreenPrompt(screen.state())).toEqual({ kind: 'input', prompt: 'Paste API key', secret: true });
+  });
+
   it('scrolls at the bottom and wraps at the edge', () => {
     const screen = new Screen(3, 10);
     screen.write('one\r\ntwo\r\nthree\r\nfour');

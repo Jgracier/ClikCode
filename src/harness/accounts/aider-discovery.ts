@@ -120,7 +120,7 @@ export async function discoverAiderModels(
   }
   // No key at all: Aider's one sign-in is OpenRouter's, from its own first run.
   const connect: ModelCatalogConnect[] = providers.length ? [] : [{
-    id: 'openrouter', label: 'OpenRouter', detail: 'sign in with Aider', argv: harness.loginArgv ?? [], ...(harness.loginHint ? { hint: harness.loginHint } : {}),
+    id: 'openrouter', label: 'OpenRouter', detail: 'sign in with Aider', argv: harness.loginArgv ?? [],
   }];
   return { models: [...new Set(models)], labels, connect };
 }

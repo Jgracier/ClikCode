@@ -8,7 +8,9 @@ import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, type SignInScreen } from '../../../gateway/login/vendor-sign-in.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
 import { NativeHarnessSpec } from './binary.js';
+import { captureNativeHarnessOutput } from './command.js';
 import { ensureNativeHarness } from './inspect.js';
+import { authFilePresent, authFilesStamp } from '../../accounts/auth-files.js';
 
 const screens = new AsyncLocalStorage<SignInScreen>();
 
@@ -50,7 +52,12 @@ export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: 
   const screen = own ?? plainSignInScreen(spec.displayName);
   const local = hasLocalDisplay();
   try {
+    if (spec.loginKeyCommand) { await signInWithKey(spec, spec.loginKeyCommand, envOverrides, screen); return; }
+    // Over once the vendor writes its credential: several go on into their
+    // own app afterwards (Droid, Vibe), and only the file says it worked.
+    const before = spec.authFiles?.length ? await authFilesStamp(spec, envOverrides) : undefined;
     await runVendorSignIn({
+      ...(before !== undefined ? { signedIn: async () => (await authFilesStamp(spec, envOverrides)) !== before && authFilePresent(spec, envOverrides) } : {}),
       binary: spec.binary,
       args: !local && spec.loginRemoteArgv ? spec.loginRemoteArgv : spec.loginArgv ?? [],
       env: envOverrides, displayName: spec.displayName, local,
@@ -58,4 +65,23 @@ export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: 
       ui: screen,
     });
   } finally { if (!own) screen.stop(); }
+}
+
+/** A key stored by the vendor's own commands (loginKeyCommand): its
+ * providers listed, one chosen and its key asked on ClikCode's screen, the
+ * key piped in -- never an argument, so never in a process list. */
+async function signInWithKey(
+  spec: NativeHarnessSpec, command: NonNullable<NativeHarnessSpec['loginKeyCommand']>,
+  env: Readonly<Record<string, string>>, screen: SignInScreen,
+): Promise<void> {
+  const cancelled = (): Error => new Error(`sign-in to ${spec.displayName} was cancelled`);
+  const listed = await captureNativeHarnessOutput(spec, command.providersArgv, env);
+  const providers = [...new Set(listed.split('\n').map((line) => line.trim().split(/\s+/)[0] ?? '').filter((word) => /^[a-z][\w.-]*$/i.test(word)))];
+  if (!providers.length) throw new Error(`${spec.displayName} listed no providers to sign in to`);
+  const index = await screen.choose(`Sign in to ${spec.displayName} with`, providers);
+  if (index === undefined || screen.signal.aborted) throw cancelled();
+  const key = (await screen.ask(`${providers[index]} API key`, true)).trim();
+  if (!key || screen.signal.aborted) throw cancelled();
+  const argv = command.setArgv.map((part) => part.replace('{provider}', providers[index]!));
+  await captureNativeHarnessOutput(spec, argv, env, 30_000, undefined, `${key}\n`);
 }
