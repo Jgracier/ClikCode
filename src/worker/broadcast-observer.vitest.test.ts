@@ -177,3 +177,21 @@ describe('a window that stops reading', () => {
     expect(written.length).toBe(before);
   });
 });
+
+describe('an approval another process can see', () => {
+  it('tells the worker which approval waits, oldest first, and when none does', async () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    const told: Array<string | undefined> = [];
+    observer.onAwaitingApproval = (approval) => told.push(approval?.title);
+    const first = observer.approval('Run npm test?');
+    const second = observer.approval('Write a.txt?');
+    const [one, two] = client.frames.filter((frame) => frame.type === 'approval-request') as Array<{ id: string }>;
+    observer.resolveApproval(one!.id, true);
+    observer.resolveApproval(two!.id, false);
+    await expect(first).resolves.toBe(true);
+    await expect(second).resolves.toBe(false);
+    expect(told).toEqual(['Run npm test?', 'Run npm test?', 'Write a.txt?', undefined]);
+  });
+});

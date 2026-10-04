@@ -101,6 +101,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   if (await workerIsReachable(socketPath)) { await hold.release(); return; }
   await unlink(socketPath).catch(() => undefined);
   const observer = new BroadcastObserver();
+  /** The last write of this worker's record: an approval's state, chained
+   * so the file ends as the last state told (see onAwaitingApproval). */
+  let recordWrite: Promise<void> = Promise.resolve();
   const token = generateWorkerToken();
 
   /** Set the moment a turn is decided on (startTurn), synchronously, and
@@ -690,6 +693,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     server.close();
     // Only what is still this worker's: the record and socket of a worker
     // that replaced it are that worker's to remove.
+    observer.onAwaitingApproval = undefined;
+    await recordWrite;
     await removeWorkerRecord(sessionId, token).catch(() => undefined);
     if (await hold.held()) await unlink(socketPath).catch(() => undefined);
     await hold.release().catch(() => undefined);
@@ -717,10 +722,16 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     await hold.release();
     throw error;
   }
-  await writeWorkerRecord({
+  const record = {
     pid: process.pid, sessionId, socketPath, installationId: state.installationId, startedAt: new Date().toISOString(), token,
     ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}),
-  });
+  };
+  await writeWorkerRecord(record);
+  observer.onAwaitingApproval = (awaitingApproval) => {
+    recordWrite = recordWrite
+      .then(() => writeWorkerRecord({ ...record, ...(awaitingApproval ? { awaitingApproval } : {}) }))
+      .catch(() => undefined);
+  };
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
   scheduleIdleExit();

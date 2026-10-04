@@ -63,6 +63,21 @@ export class BroadcastObserver implements TurnObserver {
   private readonly pendingApprovals = new Map<string, { resolve: (approved: boolean | 'always') => void; event: WorkerEvent }>();
   private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent }>();
 
+  /** Told when the oldest approval still waiting changes (undefined: none
+   * waits). The worker records it beside its runtime record, so another
+   * process can say a conversation is waiting on the user without
+   * attaching to it. */
+  onAwaitingApproval?: (approval: { title: string; since: string } | undefined) => void;
+  private awaitingSince = new Map<string, string>();
+
+  private announceAwaiting(): void {
+    const first = this.pendingApprovals.entries().next();
+    if (first.done) { this.onAwaitingApproval?.(undefined); return; }
+    const [id, pending] = first.value;
+    const title = pending.event.type === 'approval-request' ? pending.event.title : 'approval';
+    this.onAwaitingApproval?.({ title, since: this.awaitingSince.get(id) ?? new Date().toISOString() });
+  }
+
   attach(socket: Socket): void {
     this.clients.add(socket);
   }
@@ -106,13 +121,18 @@ export class BroadcastObserver implements TurnObserver {
     const pending = this.pendingApprovals.get(id);
     if (!pending) return;
     this.pendingApprovals.delete(id);
+    this.awaitingSince.delete(id);
     pending.resolve(approved);
+    this.announceAwaiting();
   }
 
   /** A turn's end, whatever it was: nobody is left to answer what it asked. */
   private dropPending(): void {
+    const hadApprovals = this.pendingApprovals.size > 0;
     for (const pending of this.pendingApprovals.values()) pending.resolve(false);
     this.pendingApprovals.clear();
+    this.awaitingSince.clear();
+    if (hadApprovals) this.announceAwaiting();
     for (const pending of this.pendingSignIns.values()) pending.reject(new Error('the turn ended'));
     this.pendingSignIns.clear();
   }
@@ -168,7 +188,9 @@ export class BroadcastObserver implements TurnObserver {
     const event: WorkerEvent = { type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}) };
     return new Promise((resolveApproval) => {
       this.pendingApprovals.set(id, { resolve: resolveApproval, event });
+      this.awaitingSince.set(id, new Date().toISOString());
       this.broadcast(event);
+      this.announceAwaiting();
     });
   }
 
