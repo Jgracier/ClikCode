@@ -6,7 +6,6 @@ import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import chalk from 'chalk';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
-import { deferredWorkReply, DEFERRED_WORK_CONTINUATION } from './deferred-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
 import { classifyAccountFailure } from './failover.js';
@@ -203,7 +202,6 @@ export async function sendVendorTurn(input: {
   };
   const pendingWork = createPendingWorkTracker(harness.command);
   let pendingContinuations = 0;
-  let deferredContinuations = 0;
   const pendingWorkStartedAt = Date.now();
   /** Tokens from earlier attempts of this same continued turn; the loop
    *  clears turnUsage on every pass, which is right for a failover and
@@ -260,8 +258,10 @@ export async function sendVendorTurn(input: {
     delete session.nativeSessionPreallocated;
     await checkpoint.persistNow();
   };
-  /** A vendor thread stays on the transport that created it (select.ts). */
+  /** A vendor thread stays on the transport that created it (select.ts),
+   * unless ACP and the CLI share its store and it is tied to neither. */
   const keepTransport = (transport: typeof activeTransport): void => {
+    if (harness.acp?.sharedSessions) return;
     if (transport === 'acp' || transport === 'structured-cli' || transport === 'text-cli') session.nativeTransport ??= transport;
   };
   /** The observer members every transport implements identically. Each
@@ -505,23 +505,6 @@ export async function sendVendorTurn(input: {
     }
     session.nativeStartedAt ??= new Date().toISOString();
     delete session.nativeSessionPreallocated;
-    const planModeActive = harness.planMode && session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
-    // After two tries the reply stands as the answer; discarding it loses
-    // real text. A route that keeps no history (its thread was forgotten
-    // above) gets the conversation and this turn's reply retold with the
-    // continuation, or it would not know what work it refers to.
-    const deferred = !planModeActive && deferredWorkReply(text, result.text);
-    if (deferred && deferredContinuations >= 2) {
-      prompter?.activity(chalk.yellow(`${harness.displayName} offered to do the work later instead of doing it`));
-    } else if (deferred) {
-      deferredContinuations += 1;
-      carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
-      turnText = session.nativeSessionId
-        ? DEFERRED_WORK_CONTINUATION
-        : interruptedTurnFailoverPrompt(session, { requestContext, request: DEFERRED_WORK_CONTINUATION, touchedFiles: [] });
-      editAnswer('new-paragraph');
-      continue;
-    }
     // The harness ended the turn with a tool it never settled -- it
     // backgrounded a command and stopped. Re-drive it so it goes and reads
     // the result, instead of leaving the answer stranded in a task log and
