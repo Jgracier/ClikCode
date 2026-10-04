@@ -60,10 +60,16 @@ export function signalsTeardown(): string {
  * included, is undone before this one asks for anything. Clearing a mode that
  * is already clear costs nothing. */
 export function terminalPrepare(): string {
-  return '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l'
-    + '\x1b[?2004l\x1b[?2031l\x1b[?1004l'
-    + '\x1b[>4m\x1b(B\x0f\x1b7\x1b[r\x1b8';
+  return `${MOUSE_MODES_OFF}${READ_MODES_OFF}${LATCHED_OFF}`;
 }
+
+/** Every mouse mode a client may hold, off -- `?1016` too, which this never
+ * sets but whatever ran before may have. */
+export const MOUSE_MODES_OFF = '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
+/** Bracketed paste, theme and focus reports, off. */
+const READ_MODES_OFF = '\x1b[?2004l\x1b[?2031l\x1b[?1004l';
+/** State a client latches: modifyOtherKeys, the charset, the scroll region. */
+const LATCHED_OFF = '\x1b[>4m\x1b(B\x0f\x1b7\x1b[r\x1b8';
 
 /** Everything a client may hold, cleared on BOTH screens.
  *
@@ -76,11 +82,8 @@ export function terminalPrepare(): string {
  * `?1016` and modifyOtherKeys are cleared although this never sets them, for
  * the same reason Claude Code does: whatever ran before may have. */
 export function terminalTeardown(leavingAlternateScreen: boolean): string {
-  const mouseOff = '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
-  const readsOff = '\x1b[?2004l\x1b[?2031l\x1b[?1004l';
-  const latchedOff = '\x1b[>4m\x1b(B\x0f\x1b7\x1b[r\x1b8';
-  return `${mouseOff}${readsOff}${leavingAlternateScreen ? '\x1b[?1049l' : ''}`
-    + `${mouseOff}${readsOff}${latchedOff}\x1b[?7h\x1b[?25h`;
+  return `${MOUSE_MODES_OFF}${READ_MODES_OFF}${leavingAlternateScreen ? '\x1b[?1049l' : ''}`
+    + `${MOUSE_MODES_OFF}${READ_MODES_OFF}${LATCHED_OFF}\x1b[?7h\x1b[?25h`;
 }
 
 /** Leave the terminal the way a shell expects it: synchronized update closed,

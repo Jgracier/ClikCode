@@ -2,8 +2,9 @@
  * raw-mode flag they depend on, and selection mode. */
 
 import { kittyKeyboardSafe, POP_KITTY_KEYBOARD, PUSH_KITTY_KEYBOARD } from './keys.js';
-import { stdin as input, stdout as output } from 'node:process';
-import { terminalModes } from './restore.js';
+import { stdin as input } from 'node:process';
+import { MOUSE_MODES_OFF, signalsTeardown, terminalModes, terminalTeardown } from './restore.js';
+import { FOCUS_REPORTING_ON } from './terminal-signals.js';
 import { logCursorEvent } from './cursor-log.js';
 
 /** Bracketed paste. Without it the terminal hands pasted text over as ordinary
@@ -30,8 +31,6 @@ export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
  * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
 export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
 
-const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1000l';
-
 /** The opening form, used once when the program takes the screen. The `?1006l`
  * before `?1006h` is deliberate and comes from the bare script that receives
  * the gesture on this user's phone when ClikCode does not: it makes SGR
@@ -41,7 +40,7 @@ const DISABLE_MOUSE_TRACKING = '\u001b[?1006l\u001b[?1003l\u001b[?1002l\u001b[?1
  * It exists as a named constant so that every enable site is greppable through
  * one name. Spelled out inline, this one escaped the first pass at gating the
  * modes behind SELECTION_MODE, and /select did nothing as a result. */
-export const OPENING_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
+const OPENING_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006l\u001b[?1006h';
 
 /** Selection mode: the mouse handed back to the terminal.
  *
@@ -51,11 +50,72 @@ export const OPENING_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u
  * gives both. So this releases all four modes on request: swipe-scroll stops
  * working, and selecting and copying chat text starts.
  *
- * Read by the resize handler as well as by setup. Re-asserting the modes
- * after a resize is what makes swipe-scroll survive the phone keyboard
- * appearing; without this flag it would also silently cancel selection mode
- * the moment the keyboard moved. */
+ * Read by every place the mouse modes are asked for (sessionModesOn,
+ * redrawPreamble), so neither taking the screen back nor a resize quietly
+ * cancels it. */
 export const SELECTION_MODE = { active: false };
+
+/** The session's modes, as one thing: bracketed paste, the mouse (unless
+ * /select gave it back), focus reports. Switched on when the screen is taken
+ * and again when it is taken BACK -- from a `!` command, a picker that
+ * leaves the screen, Ctrl+Z -- and off for each of those hand-overs. These
+ * two, sessionModesOff and redrawPreamble are the only places that change
+ * them, and each returns what to write rather than writing it, so it goes
+ * out inside a frame. The record is kept by the same call that writes the
+ * sequence, so it cannot drift from the terminal: it did, when a hand-over
+ * switched the modes off and left the record saying on, and nothing ever
+ * switched them back -- a swipe stopped scrolling and a paste was read as
+ * keystrokes for the rest of the session.
+ *
+ * `opening` is the first taking of the screen (OPENING_MOUSE_TRACKING). */
+export function sessionModesOn(opening = false): string {
+  terminalModes.bracketedPaste = true;
+  terminalModes.wheelReporting = !SELECTION_MODE.active;
+  const mouse = SELECTION_MODE.active ? '' : opening ? OPENING_MOUSE_TRACKING : ENABLE_MOUSE_TRACKING;
+  return `${ENABLE_BRACKETED_PASTE}${mouse}${FOCUS_REPORTING_ON}`;
+}
+
+/** Every session mode off, and the title and progress handed back, for
+ * giving the terminal to something else. `leavingAlternateScreen` when the
+ * main screen goes with it (Ctrl+Z). */
+export function sessionModesOff(leavingAlternateScreen: boolean): string {
+  terminalModes.bracketedPaste = false;
+  terminalModes.wheelReporting = false;
+  return `${popReadModes()}${terminalTeardown(leavingAlternateScreen)}${signalsTeardown()}`;
+}
+
+/** What a frame that draws rows writes first, by why it is drawn.
+ *
+ * After a resize it is the sequence Claude Code sends on the user's phone,
+ * captured there, and the only thing that keeps a swipe scrolling with the
+ * keyboard hidden (the keyboard sliding away IS a resize):
+ *
+ *     ?1000h ?1002h ?1003h ?1006h  ?25l  ESC[2J ESC[H  ...rows
+ *
+ * Both halves matter. Without the modes a swipe stopped scrolling; without
+ * the clear it stopped too (2026-10-03, when the clear was taken off every
+ * full frame to keep a settling reply from flashing). The pty suite checks
+ * this sequence after every resize burst.
+ *
+ * `repair` (Ctrl+L) clears and homes, and a frame drawn for any other reason
+ * (a reply settling) never clears. Autowrap goes off before any row. */
+export type Redraw = 'resize' | 'repair';
+export function redrawPreamble(redraw: Redraw | undefined): string {
+  const hide = '\u001b[?25l\u001b[?7l';
+  if (redraw === 'resize') return `${SELECTION_MODE.active ? '' : ENABLE_MOUSE_TRACKING}${hide}\u001b[2J\u001b[H`;
+  if (redraw === 'repair') return `${hide}\u001b[2J\u001b[H`;
+  return hide;
+}
+
+/** Mode changes asked for between frames (/select): the next frame writes
+ * them first, inside its synchronized update, never interleaved with one
+ * already on its way. */
+let queuedModes = '';
+export function takeQueuedModes(): string {
+  const taken = queuedModes;
+  queuedModes = '';
+  return taken;
+}
 
 /** SGR: `CSI < button ; column ; row M|m`. Wheel up is 64, wheel down 65. */
 const MOUSE_EVENT = /^\u001b\[<(\d+);\d+;\d+[Mm]$/;
@@ -152,7 +212,7 @@ export function enterInputModes(): string {
  * away has no reason to forward the swipe that follows, and claims the
  * gesture for itself instead.
  *
- * They come back off in terminalTeardown() (restore.ts), which is for handing
+ * They come back off in sessionModesOff(), which is for handing
  * the terminal to something else: a suspend, a vendor CLI, an exit. */
 export function popReadModes(): string {
   if (!terminalModes.kittyKeyboard) return '';
@@ -166,11 +226,11 @@ export function popReadModes(): string {
 export function setSelectionMode(active: boolean): string {
   SELECTION_MODE.active = active;
   if (active) {
-    output.write(DISABLE_MOUSE_TRACKING);
+    queuedModes += MOUSE_MODES_OFF;
     terminalModes.wheelReporting = false;
     return 'Selection mode on — select and copy with your terminal as usual. Swipe-scrolling is off until you run /select again.';
   }
-  output.write(ENABLE_MOUSE_TRACKING);
+  queuedModes += ENABLE_MOUSE_TRACKING;
   terminalModes.wheelReporting = true;
   return 'Selection mode off — swipe-scrolling is back.';
 }
