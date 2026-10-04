@@ -12,6 +12,7 @@
  * dropped the next time the row is summarized. */
 
 import { hidden } from './store/data.js';
+import { isClikCodeNotice } from './clikcode-notice.js';
 import type { HarnessSession } from './model.js';
 
 const TRANSCRIPT_LOADED = Symbol('clikcode.transcriptLoaded');
@@ -38,9 +39,11 @@ function previewFromTranscript(session: HarnessSession, limit = 48): string | un
   let text: string | undefined;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message?.role === 'user' && message.content.trim()) { text = message.content; break; }
+    // A notice ClikCode sent in the user's place is not something they asked.
+    if (message?.role === 'user' && message.content.trim() && !isClikCodeNotice(message.content)) { text = message.content; break; }
   }
-  text ??= session.pendingTurn?.prompt;
+  const pending = session.pendingTurn?.prompt;
+  if (pending && !isClikCodeNotice(pending)) text ??= pending;
   if (!text?.trim()) return undefined;
   const line = text.replace(/\s+/g, ' ').trim();
   return line.length > limit ? `${line.slice(0, limit - 1)}…` : line;
