@@ -3,6 +3,7 @@
  * working, and the tool result is the card. */
 
 import { randomUUID } from 'node:crypto';
+import { serveStdioMcp, type McpSend } from '../harness/mcp-stdio-server.js';
 import { readState } from '../session/state/read.js';
 import { activeSwarmHost } from './store.js';
 import { swarmIsOn } from './policy.js';
@@ -75,15 +76,15 @@ async function callTool(args: Record<string, unknown> | undefined, onStep?: (lab
   return result?.output ?? 'Keep this task on the host. It is small enough that another provider would cost more than it saves.';
 }
 
-function respond(id: RpcMessage['id'], result: unknown): string {
-  return JSON.stringify({ jsonrpc: '2.0', id, result });
+function respond(id: RpcMessage['id'], result: unknown): unknown {
+  return { jsonrpc: '2.0', id, result };
 }
 
-function fail(id: RpcMessage['id'], message: string): string {
-  return JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32603, message } });
+function fail(id: RpcMessage['id'], message: string): unknown {
+  return { jsonrpc: '2.0', id, error: { code: -32603, message } };
 }
 
-async function dispatch(message: RpcMessage, write: (payload: string) => void): Promise<string | undefined> {
+async function dispatch(message: RpcMessage, send: McpSend): Promise<unknown> {
   if (!message.method || message.id === undefined || message.id === null) return undefined;
   if (message.method === 'initialize') {
     return respond(message.id, {
@@ -100,7 +101,7 @@ async function dispatch(message: RpcMessage, write: (payload: string) => void): 
       const text = message.params?.name === 'swarm'
         ? await callTool(message.params.arguments, token === undefined ? undefined : (label) => {
           progress += 1;
-          write(JSON.stringify({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress, message: label } }));
+          send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress, message: label } });
         })
         : `Unknown tool ${message.params?.name ?? ''}`;
       const isError = text.startsWith('No host') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage');
@@ -112,53 +113,7 @@ async function dispatch(message: RpcMessage, write: (payload: string) => void): 
   return respond(message.id, {});
 }
 
-/** Stdio MCP, framed the way vendor clients send it (Content-Length), and
- * also newline-delimited JSON for a manual check. */
+/** Stdio MCP, answered (progress included) in whichever framing the client used. */
 export function serveSwarmMcp(): Promise<void> {
-  return new Promise((resolve) => {
-    let buffer = Buffer.alloc(0);
-    let draining = false;
-    const write = (payload: string): void => {
-      const body = Buffer.from(payload, 'utf8');
-      process.stdout.write(`Content-Length: ${body.length}\r\n\r\n${payload}`);
-    };
-    const take = async (): Promise<void> => {
-      if (draining) return;
-      draining = true;
-      try {
-      for (;;) {
-        const headerEnd = buffer.indexOf('\r\n\r\n');
-        const lineEnd = buffer.indexOf('\n');
-        if (buffer.subarray(0, Math.min(buffer.length, 15)).toString('utf8').toLowerCase().startsWith('content-length:')) {
-          if (headerEnd < 0) return;
-          const header = buffer.subarray(0, headerEnd).toString('utf8');
-          const match = /Content-Length:\s*(\d+)/i.exec(header);
-          if (!match) { buffer = buffer.subarray(headerEnd + 4); continue; }
-          const length = Number(match[1]);
-          const start = headerEnd + 4;
-          if (buffer.length < start + length) return;
-          const body = buffer.subarray(start, start + length).toString('utf8');
-          buffer = buffer.subarray(start + length);
-          await deliver(body);
-          continue;
-        }
-        if (lineEnd < 0) return;
-        const line = buffer.subarray(0, lineEnd).toString('utf8').trim();
-        buffer = buffer.subarray(lineEnd + 1);
-        if (!line || line.startsWith('Content-Length')) continue;
-        await deliver(line);
-      }
-      } finally {
-        draining = false;
-      }
-    };
-    const deliver = async (body: string): Promise<void> => {
-      let message: RpcMessage;
-      try { message = JSON.parse(body) as RpcMessage; } catch { return; }
-      const payload = await dispatch(message, write);
-      if (payload) write(payload);
-    };
-    process.stdin.on('data', (chunk: Buffer) => { buffer = Buffer.concat([buffer, chunk]); void take(); });
-    process.stdin.on('end', () => resolve());
-  });
+  return serveStdioMcp((message, send) => dispatch(message as RpcMessage, send));
 }

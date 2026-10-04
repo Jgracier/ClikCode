@@ -11,6 +11,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { serveStdioMcp } from '../harness/mcp-stdio-server.js';
 import { CONVERSATIONS_MCP_NAME } from './mcp-entry.js';
 import { CONVERSATION_TOOLS, CONVERSATION_TOOLS_NOTE, conversationTool, type ConversationToolContext } from './tools.js';
 
@@ -97,51 +98,10 @@ export async function answerMcp(message: RpcMessage, context: ConversationToolCo
   return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } };
 }
 
-/** Stdio MCP. Each answer goes back in the framing its request came in:
- * newline-delimited JSON (the MCP stdio transport), or Content-Length
- * frames, which some clients send. */
+/** Stdio MCP, answered in whichever framing the client used. */
 export function serveConversationsMcp(): Promise<void> {
   const context: ConversationToolContext = {};
   const current = currentConversationSession();
   if (current) context.currentSessionId = current;
-  return new Promise((resolve) => {
-    let buffer = Buffer.alloc(0);
-    let queue = Promise.resolve();
-    const write = (payload: unknown, framed: boolean): void => {
-      const body = JSON.stringify(payload);
-      process.stdout.write(framed ? `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}` : `${body}\n`);
-    };
-    const deliver = (body: string, framed: boolean): void => {
-      let message: RpcMessage;
-      try { message = JSON.parse(body) as RpcMessage; } catch { return; }
-      // In order: a client may pipeline, and answers must not overtake.
-      queue = queue.then(async () => {
-        const answer = await answerMcp(message, context);
-        if (answer) write(answer, framed);
-      }).catch(() => undefined);
-    };
-    const take = (): void => {
-      for (;;) {
-        const head = buffer.subarray(0, Math.min(buffer.length, 15)).toString('utf8').toLowerCase();
-        if (head.startsWith('content-length:') || (buffer.length < 15 && 'content-length:'.startsWith(head) && head.length > 0)) {
-          const headerEnd = buffer.indexOf('\r\n\r\n');
-          if (headerEnd < 0) return;
-          const length = Number(/Content-Length:\s*(\d+)/i.exec(buffer.subarray(0, headerEnd).toString('utf8'))?.[1]);
-          if (!Number.isFinite(length)) { buffer = buffer.subarray(headerEnd + 4); continue; }
-          if (buffer.length < headerEnd + 4 + length) return;
-          const body = buffer.subarray(headerEnd + 4, headerEnd + 4 + length).toString('utf8');
-          buffer = buffer.subarray(headerEnd + 4 + length);
-          deliver(body, true);
-          continue;
-        }
-        const lineEnd = buffer.indexOf('\n');
-        if (lineEnd < 0) return;
-        const line = buffer.subarray(0, lineEnd).toString('utf8').trim();
-        buffer = buffer.subarray(lineEnd + 1);
-        if (line) deliver(line, false);
-      }
-    };
-    process.stdin.on('data', (chunk: Buffer) => { buffer = Buffer.concat([buffer, chunk]); take(); });
-    process.stdin.on('end', () => { void queue.then(() => resolve()); });
-  });
+  return serveStdioMcp((message) => answerMcp(message as RpcMessage, context));
 }

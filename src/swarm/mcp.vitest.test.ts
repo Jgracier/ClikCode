@@ -45,4 +45,31 @@ describe('swarm MCP framing', () => {
       await rm(home, { recursive: true, force: true });
     }
   });
+
+  it('answers a newline-delimited client in newline-delimited JSON', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clikcode-swarm-mcp-'));
+    const child = spawn(process.execPath, ['dist/index.js', 'swarm-mcp'], {
+      cwd: process.cwd(), env: { ...process.env, HOME: home, CLIKCODE_HOME: home }, stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    try {
+      const lines = await new Promise<string[]>((resolve, reject) => {
+        let text = '';
+        const timer = setTimeout(() => reject(new Error(`swarm did not answer: ${text}`)), 5_000);
+        child.stdout.on('data', (chunk: Buffer) => {
+          text += chunk.toString('utf8');
+          const done = text.split('\n').filter(Boolean);
+          if (done.length >= 2 && text.endsWith('\n')) { clearTimeout(timer); resolve(done); }
+        });
+        child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize' })}\n${JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/list' })}\n`);
+      });
+      expect(lines.map((line) => (JSON.parse(line) as { id: number }).id)).toEqual([1, 2]);
+      expect(lines.join('')).not.toContain('Content-Length');
+    } finally {
+      if (child.exitCode === null) {
+        child.kill();
+        await new Promise<void>((resolve) => child.once('close', () => resolve()));
+      }
+      await rm(home, { recursive: true, force: true });
+    }
+  });
 });
