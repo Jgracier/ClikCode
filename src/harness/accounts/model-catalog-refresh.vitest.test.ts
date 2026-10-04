@@ -54,4 +54,41 @@ describe('ACP model catalog refresh', () => {
     expect((await nativeModelCatalog(harness, account('first'))).models).toEqual(['first-model']);
     expect(queryAcp).toHaveBeenCalledTimes(2);
   });
+
+  it('runs one discovery for callers that ask at once, and a new one for a changed source', async () => {
+    const harness = {
+      command: 'test-acp-single-flight', binary: 'missing-test-acp-single-flight', transport: 'acp',
+      acp: { argv: [] },
+    } as unknown as AiLocalHarnessDefinition;
+    let answer!: () => void;
+    queryAcp.mockImplementation(() => new Promise((resolve) => { answer = () => resolve({ models: ['only-model'], labels: {} }); }));
+    const asked = [nativeModelCatalog(harness), nativeModelCatalog(harness), nativeModelCatalog(harness)];
+    await vi.waitFor(() => expect(queryAcp).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    answer();
+    for (const result of await Promise.all(asked)) expect(result.models).toEqual(['only-model']);
+    expect(queryAcp).toHaveBeenCalledTimes(1);
+
+    // Another account is another source: never answered by this one's run.
+    const other = { id: 'other', provider: 'test', label: 'other', models: [], status: 'ready' } as unknown as AiHarnessAccount;
+    queryAcp.mockImplementation(async () => ({ models: ['other-model'], labels: {} }));
+    expect((await nativeModelCatalog(harness, other)).models).toEqual(['other-model']);
+    expect(queryAcp).toHaveBeenCalledTimes(2);
+  });
+
+  it('is not invalidated by the account model list its own discovery wrote', async () => {
+    const harness = {
+      command: 'test-acp-own-sync', binary: 'missing-test-acp-own-sync', transport: 'acp',
+      acp: { argv: [] },
+    } as unknown as AiLocalHarnessDefinition;
+    const account = (models: string[]): AiHarnessAccount => ({ id: 'acct', provider: 'test', label: 'acct', models, status: 'ready' }) as unknown as AiHarnessAccount;
+    queryAcp.mockImplementation(async () => ({ models: ['m1', 'm2'], labels: {} }));
+    expect((await nativeModelCatalog(harness, account([]))).models).toEqual(['m1', 'm2']);
+    // The account as it reads after the sync: the same list.
+    expect((await nativeModelCatalog(harness, account(['m1', 'm2']))).models).toEqual(['m1', 'm2']);
+    expect(queryAcp).toHaveBeenCalledTimes(1);
+    // A model the account gained since is a reason to read again.
+    expect((await nativeModelCatalog(harness, account(['m1', 'm2', 'custom']))).models).toContain('custom');
+    expect(queryAcp).toHaveBeenCalledTimes(2);
+  });
 });

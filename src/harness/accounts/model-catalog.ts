@@ -124,8 +124,17 @@ const memo = jsonMemo<ModelCatalogMemoFile>('model-catalog.json', () => ({ v: 1,
   return file.v === 1 && file.entries && typeof file.entries === 'object' ? file : undefined;
 });
 
+/** Discoveries running now, by harness+account and the identity of what
+ * they read (catalogFingerprint). A chat opening asks for its catalog from
+ * several places at once -- the warm-up, the session's model, the effort
+ * list -- and each used to run the vendor's `models` itself: three `grok
+ * models` at every start. They now share one; a changed binary or sign-in
+ * is a different identity, so it is never answered by a run that predates it. */
+const discoveries = new Map<string, Promise<ModelCatalogResult>>();
+
 export function resetModelCatalogMemo(): void {
   memo.reset();
+  discoveries.clear();
 }
 
 /** How long a server-sourced CLI or ACP model list is trusted. */
@@ -156,8 +165,7 @@ function catalogProfileRoot(harness: AiLocalHarnessDefinition, account?: AiHarne
 /** Harnesses whose list comes from the models.dev catalog. */
 const MODELS_DEV_HARNESSES: ReadonlySet<string> = new Set(['copilot', 'goose']);
 
-/** Every file nativeModelCatalogUncached reads, as identities, plus the
- * account's own model list. Kept beside the reader it describes: a file read
+/** Every file nativeModelCatalogUncached reads, as identities. Kept beside the reader it describes: a file read
  * there and not listed here is a value that can go stale unnoticed. */
 async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): Promise<string> {
   const root = catalogProfileRoot(harness, account);
@@ -199,7 +207,11 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     acp: harness.acp && { binary: harness.acp.binary, argv: harness.acp.argv, listsModels: harness.acp.listsModels },
     modelDiscoveryArgv: harness.modelDiscoveryArgv,
   });
-  return [discoveryContract, ...identities, ...driven, (account?.models ?? []).join(',')].join('|');
+  // Not the account's own model list: discovery writes its answer there
+  // (syncAccountModels), so a fingerprint holding it invalidated its own
+  // entry -- the next ask, a moment later, ran the vendor's `models` again.
+  // cachedCatalog checks the account's models against the entry instead.
+  return [discoveryContract, ...identities, ...driven].join('|');
 }
 
 function cacheKey(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): string {
@@ -210,11 +222,14 @@ function cacheKey(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount)
 async function cachedCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
-  options?: { allowStale?: boolean },
+  options?: { allowStale?: boolean; fingerprint?: string },
 ): Promise<ModelCatalogResult | undefined> {
   const cached = (await memo.load()).entries[cacheKey(harness, account)];
   if (!cached) return undefined;
-  if (cached.fingerprint !== await catalogFingerprint(harness, account)) return undefined;
+  if (cached.fingerprint !== (options?.fingerprint ?? await catalogFingerprint(harness, account))) return undefined;
+  // A model the account lists that the entry lacks was added since: the
+  // list is read again with it.
+  if (account?.models?.some((model) => !cached.result.models.includes(model))) return undefined;
   if (harness.acp && cached.result.models.length === 0) return undefined;
   const isExpired = serverModelList(harness) && Date.now() - cached.at >= SERVER_LIST_TTL_MS;
   if (isExpired && !options?.allowStale) return undefined;
@@ -346,11 +361,25 @@ export async function nativeModelCatalog(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
 ): Promise<ModelCatalogResult> {
-  const cached = await cachedCatalog(harness, account);
-  if (cached) return cached;
   // Fingerprinted BEFORE reading, so a file that changes mid-read leaves an
   // entry that no longer matches rather than one that looks current.
   const fingerprint = await catalogFingerprint(harness, account);
+  const cached = await cachedCatalog(harness, account, { fingerprint });
+  if (cached) return cached;
+  const key = [cacheKey(harness, account), fingerprint, ...(account?.models ?? [])].join('\n');
+  const running = discoveries.get(key);
+  if (running) return running;
+  const discovery = discoverModelCatalog(harness, account, fingerprint)
+    .finally(() => { if (discoveries.get(key) === discovery) discoveries.delete(key); });
+  discoveries.set(key, discovery);
+  return discovery;
+}
+
+async function discoverModelCatalog(
+  harness: AiLocalHarnessDefinition,
+  account: AiHarnessAccount | undefined,
+  fingerprint: string,
+): Promise<ModelCatalogResult> {
   const result = await nativeModelCatalogUncached(harness, account);
   rememberVendorModelNames(harness, result);
   // A list read from a server (Copilot's, from models.dev) that came back
