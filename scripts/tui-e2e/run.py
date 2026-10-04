@@ -289,6 +289,17 @@ SCENARIOS = {
         'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'esc to interrupt'],
         'final_contains': ['signed in to'], 'never': ['Confirm this code in your browser', 'Waiting for authorization', 'not a tty'],
     },
+    # A sign-in that asks for a key: asked under ClikCode's band, typed
+    # there as dots, never the vendor's own prompt on screen.
+    'account-add-key-sign-in': {
+        'turns': [TWO_BLOCKS],
+        'env': {'FAKE_LOGIN_KEY': 'sk-test-42'},
+        # With no account selected the sign-in starts at launch.
+        'steps': [('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
+                  ('keys', 'sk-test-42'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 15), ('settle', 1)],
+        'watch': [], 'ever': ['Paste your API key · type it and press Enter', '••••••••••'],
+        'final_contains': ['signed in to'], 'never': ['sk-test-42', 'Paste your API key: ', 'did not finish'],
+    },
     # Back from a sub-menu lands on the row it was opened from, with no
     # spinner or empty composer flashed on the way into the list.
     'settings-back-lands-on-row': {
