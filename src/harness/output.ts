@@ -119,7 +119,7 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (payload.panel === 'settings' && payload.session) {
     const session = payload.session as HarnessSession;
     const account = typeof payload.account === 'string' ? payload.account : undefined;
-    write(`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort, /provider, or /switch.')}\n\n`);
+    write(`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort or /provider.')}\n\n`);
     return;
   }
   if (payload.panel === 'accounts' && Array.isArray(payload.accounts)) {

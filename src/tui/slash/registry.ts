@@ -151,7 +151,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('add-dir', 'Workspace', 'give the harness another writable directory', { argHint: '<dir>', availability: bothRoutes('adding directories') }),
   entry('mention', 'Workspace', 'attach a file to the next request; alone, lists what is attached', { aliases: ['attachments'], argHint: '[path|clear]' }),
 
-  entry('provider', 'Provider', 'choose a provider', { aliases: ['switch', 'engine'] }),
+  entry('provider', 'Provider', 'choose a provider', { aliases: ['switch'] }),
   entry('account', 'Provider', 'switch, add or remove accounts', { aliases: ['accounts'], handlerKey: 'accounts', argHint: '[label|login|add|remove|failover …]', duringTurn: 'apply' }),
   entry('login', 'Provider', 'sign in to the current provider', { availability: needsHarness('signing in') }),
   entry('logout', 'Provider', 'sign the current account out', { availability: needsHarness('signing out') }),

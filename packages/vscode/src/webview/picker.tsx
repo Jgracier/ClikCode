@@ -266,7 +266,7 @@ function creditText(gateway: IdeGateway): { label: string; detail: string } {
 /** The accounts of the chat's own provider, as a short list: choosing one
  * moves the chat onto it; another can be added for the same provider. On
  * the Gateway, its credit (a click buys more). Every account of every
- * provider, with its usage and actions, is the /accounts sheet. */
+ * provider, with its usage and actions, is the /account sheet. */
 export function AccountMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const [data, setData] = useState<IdeAccounts>();
   const [gateway, setGateway] = useState<IdeGateway>();
@@ -308,7 +308,7 @@ export function AccountMenu(props: { model: ChatModel; onClose: () => void; onEr
     }));
   }
   if (addable) rows.push(row('add', 'add', 'Add account', '', () => { choose({ kind: 'add-account', provider: addable.provider }).catch(fail); }));
-  rows.push(row('all', 'organization', 'All accounts & usage', '', () => post({ type: 'send', text: '/accounts', id: uid() })));
+  rows.push(row('all', 'organization', 'All accounts & usage', '', () => post({ type: 'send', text: '/account', id: uid() })));
   const failover = data && props.model.chatSettings?.failover !== undefined ? data.failover : undefined;
   return (
     <Popover label="Accounts" onClose={props.onClose} class="menu" id="account-menu">

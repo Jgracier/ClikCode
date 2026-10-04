@@ -326,9 +326,8 @@ reference reads better that way. The remaining ~35 commands, grouped as
 
 | Command | What it does |
 | --- | --- |
-| `/provider` (also `/switch`, `/engine`) | choose a provider |
-| `/account [label]` | switch accounts |
-| `/accounts [use\|login\|add\|remove\|failover auto\|never]` | list and manage accounts |
+| `/provider` (also `/switch`) | choose a provider |
+| `/account [label\|login\|add\|remove\|failover auto\|never]` (also `/accounts`) | switch, add or remove accounts |
 | `/login` | sign in to the current provider |
 | `/logout` | sign the current account out |
 | `/gateway` | route this conversation through ClikDeploy Gateway |
