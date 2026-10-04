@@ -281,6 +281,26 @@ describe('a session worker waits for what it should', () => {
     await processExit(pid, 8_000);
   }, 30_000);
 
+  it('writes its lifecycle -- attach, turn start and end, idle state -- to the lifecycle log', async () => {
+    process.env.CLIKCODE_LIFECYCLE_LOG = '1';
+    try {
+      const session = await gatewaySession();
+      const client = await attach(session.id);
+      const done = eventsUntil(client, 'waiting-stop');
+      client.send({ type: 'submit', text: 'say hi', echo: true });
+      (await gateway!.next()).respond(text('hi'));
+      await done;
+      const logPath = join(process.env.CLIKCODE_HOME!, 'logs', 'lifecycle.log');
+      const events = async (): Promise<string[]> => (await import('node:fs/promises')).readFile(logPath, 'utf8')
+        .then((raw) => raw.trim().split('\n').map((line) => JSON.parse(line) as { event: string; role: string; session?: string })
+          .filter((entry) => entry.role === 'worker' && entry.session === session.id).map((entry) => entry.event), () => []);
+      for (let tries = 0; tries < 100 && !(await events()).includes('worker.turn.end'); tries += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+      const seen = await events();
+      for (const event of ['process.start', 'worker.client.attach', 'worker.turn.start', 'worker.turn.end', 'worker.idle']) expect(seen).toContain(event);
+      expect(seen.indexOf('worker.turn.start')).toBeLessThan(seen.indexOf('worker.turn.end'));
+    } finally { delete process.env.CLIKCODE_LIFECYCLE_LOG; }
+  }, 60_000);
+
   it('idle-exits even when its home was deleted under it (a test run ending)', async () => {
     const session = await gatewaySession('bypass', 1_000);
     const client = await attach(session.id);

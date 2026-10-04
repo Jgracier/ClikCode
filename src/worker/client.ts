@@ -4,6 +4,7 @@
  * either way, which is the whole point: a reconnect is never a special case
  * (see reseedTranscript in tui/prompter.ts for what that used to cost).
  */
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
@@ -41,6 +42,7 @@ function workerSpawnArgv(sessionId: string): string[] {
  * accepts a connection -- not until the child process merely exists, which
  * would race the worker's own listen() call. */
 async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecord> {
+  lifecycle('client.worker.spawn', { worker: sessionId });
   const child = spawn(process.execPath, workerSpawnArgv(sessionId), {
     // windowsHide: a detached child on Windows otherwise opens a console
     // window of its own for as long as the worker lives.
@@ -81,6 +83,7 @@ const RETIRE_TIMEOUT_MS = 3_000;
  * The stale worker is then reused, and retired the next time nothing is
  * running -- which the next attach, after that turn, is. */
 async function retireWorker(record: WorkerRuntimeRecord): Promise<boolean> {
+  lifecycle('client.worker.retire', { worker: record.sessionId, workerPid: record.pid });
   try { process.kill(record.pid, 'SIGTERM'); } catch { return true; }
   return socketReleased(record);
 }
@@ -256,7 +259,7 @@ export class WorkerClient extends EventEmitter {
       this.early = undefined;
       queueMicrotask(() => { for (const event of held) this.emit('event', event); });
     });
-    socket.on('close', () => this.emit('close'));
+    socket.on('close', () => { lifecycle('client.worker.closed'); this.emit('close'); });
   }
 
   static async attach(sessionId: string): Promise<WorkerClient> {
@@ -277,6 +280,7 @@ export class WorkerClient extends EventEmitter {
       candidate.once('error', rejectSocket);
     });
     const client = new WorkerClient(socket);
+    lifecycle('client.worker.connect', { worker: record.sessionId, workerPid: record.pid });
     client.send({ type: 'attach', token: record.token });
     const initial = await client.initialSnapshot;
     if (initial.type === 'attach-rejected') { client.close(); throw new Error(`worker rejected this connection: ${initial.reason}`); }

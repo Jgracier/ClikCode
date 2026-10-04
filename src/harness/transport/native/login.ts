@@ -3,6 +3,7 @@
  * withSignInScreen -- the CLI's, the VS Code panel's -- or, with none, plain
  * stdin/stdout (`clikcode accounts login` from a shell). */
 
+import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, type SignInScreen } from '../../../gateway/login/vendor-sign-in.js';
@@ -47,6 +48,17 @@ export function plainSignInScreen(name: string): SignInScreen {
 
 /** Sign in to a harness through its own login, on ClikCode's screen. */
 export async function loginNativeHarness(spec: NativeHarnessSpec, envOverrides: Readonly<Record<string, string>> = {}): Promise<void> {
+  lifecycle('signin.start', { harness: spec.command });
+  try {
+    await loginNativeHarnessInner(spec, envOverrides);
+    lifecycle('signin.end', { harness: spec.command, outcome: 'signed in' });
+  } catch (error) {
+    lifecycle('signin.end', { harness: spec.command, outcome: (error instanceof Error ? error.message : String(error)).slice(0, 200) });
+    throw error;
+  }
+}
+
+async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Readonly<Record<string, string>>): Promise<void> {
   await ensureNativeHarness(spec);
   const own = screens.getStore();
   const screen = own ?? plainSignInScreen(spec.displayName);

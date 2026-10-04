@@ -7,6 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { lifecycle, setLifecycleRole } from '../../runtime/lifecycle-log.js';
 import { STOPPED } from '../../harness/protocol/wording.js';
 import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent } from '../../session/route.js';
@@ -128,8 +129,14 @@ export async function aiSessionInteractive(config: Conf, id: string): Promise<vo
   // nothing else is watching. /exit and /quit remain the ways to leave.
   const ignoreInterrupt = (): void => {};
   process.on('SIGINT', ignoreInterrupt);
+  setLifecycleRole('window', id);
+  lifecycle('window.open', { cols: process.stdout.columns, rows: process.stdout.rows, tty: Boolean(process.stdin.isTTY) });
   try {
     await aiSessionInteractiveInner(config, id);
+    lifecycle('window.exit', { how: 'left' });
+  } catch (error) {
+    lifecycle('window.exit', { how: 'error', message: error instanceof Error ? error.message.slice(0, 300) : String(error) });
+    throw error;
   } finally {
     process.off('SIGINT', ignoreInterrupt);
   }
