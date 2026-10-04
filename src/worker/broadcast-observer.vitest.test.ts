@@ -184,7 +184,7 @@ describe('an approval another process can see', () => {
     const client = fakeClient();
     observer.attach(client.socket);
     const told: Array<string | undefined> = [];
-    observer.onAwaitingApproval = (approval) => told.push(approval?.title);
+    observer.onAwaitingApproval = (approval) => { told.push(approval?.title); };
     const first = observer.approval('Run npm test?');
     const second = observer.approval('Write a.txt?');
     const [one, two] = client.frames.filter((frame) => frame.type === 'approval-request') as Array<{ id: string }>;
@@ -193,5 +193,20 @@ describe('an approval another process can see', () => {
     await expect(first).resolves.toBe(true);
     await expect(second).resolves.toBe(false);
     expect(told).toEqual(['Run npm test?', 'Run npm test?', 'Write a.txt?', undefined]);
+  });
+});
+
+describe('an approval is recorded before it is asked', () => {
+  it('waits for the record to be written before a window sees the question', async () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    let written!: () => void;
+    observer.onAwaitingApproval = () => new Promise<void>((resolve) => { written = resolve; });
+    void observer.approval('Delete build/?');
+    expect(client.frames.some((frame) => frame.type === 'approval-request')).toBe(false);
+    written();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(client.frames.some((frame) => frame.type === 'approval-request')).toBe(true);
   });
 });
