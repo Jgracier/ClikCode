@@ -8,6 +8,7 @@
  * the other way through `choose` in bridge.ts, onto the same commands the
  * pickers end in.
  */
+import { turnPace } from '../harness/protocol/turn-pace.js';
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
 import { savedGatewayModels, gatewayModels, gatewayModelDetail } from '../gateway/models.js';
@@ -173,6 +174,7 @@ export async function conversationList(state: HarnessState, currentId: string | 
       // Only a live generating turn is `working` (animated). An idle worker
       // still marks the row, but Active vs Past is by recency, not liveness.
       ...(row.activity ? { activity: row.activity } : {}),
+      ...(row.activity === 'working' && row.pending ? { pace: turnPace(row.pending.updatedAt, Date.now()) } : {}),
       section: row.section,
       current: row.current,
     };

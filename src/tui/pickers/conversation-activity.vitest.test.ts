@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { subagentOptions, turnPace, workingDetail } from './conversation-activity';
+import { subagentOptions, workingDetail } from './conversation-activity';
+import { turnPace } from '../../harness/protocol/turn-pace';
 
 const NOW = Date.parse('2026-09-29T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
