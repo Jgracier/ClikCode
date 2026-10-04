@@ -44,6 +44,8 @@ import { sessionHarness, slashRouteContextFor } from './context.js';
 import { enqueueCommandLine } from './queue.js';
 import { impliedHarnessCommand } from './infer-provider.js';
 import { capabilitiesText } from './capabilities-text.js';
+import { forkPoint, forkPointOptions } from './fork-at.js';
+import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { compactConversation } from './compact.js';
 import { exportTranscript } from './export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
@@ -243,6 +245,16 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     },
     // No "[y/N]": archiving is undone by resuming it. A confirmation earns
     // its keypress only for what cannot be taken back -- /delete keeps its own.
+    // `/fork` with nothing after it, where a picker can be shown: which of
+    // the user's messages to fork after, newest first.
+    fork: async () => {
+      const options = args || !host.canPick ? [] : forkPointOptions(sessionTranscriptMessages(session));
+      const at = options.length > 1 ? await chooseOption(rl, 'Fork after which message?', options) : forkPoint(route.words[0]);
+      if (options.length > 1 && at === undefined) return {};
+      const outcome = await viaHeadless(options.length > 1 ? `/fork @${at}` : text);
+      // Said here too: the panel is drawn on the conversation being left.
+      return at === undefined ? outcome : { ...outcome, notice: `Forked after message ${at} · files on disk are not rewound: /changes lists each turn's edits, /undo takes them back` };
+    },
     archive: async () => { await aiSessionCommand(id, '/archive'); return { exit: true }; },
     delete: async () => {
       // The same confirmation every delete uses: Cancel first.

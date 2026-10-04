@@ -195,7 +195,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('sessions', 'Sessions', 'manage conversations', { argHint: '[list|show|open|close <id>]' }),
   entry('resume', 'Sessions', 'resume another conversation'),
   entry('rename', 'Sessions', 'name this conversation', { argHint: '[name]' }),
-  entry('fork', 'Sessions', 'branch this conversation', { argHint: '[name]' }),
+  entry('fork', 'Sessions', 'branch this conversation, or only through message N', { argHint: '[@N] [name]' }),
   entry('archive', 'Sessions', 'archive this conversation'),
   entry('delete', 'Sessions', 'delete this conversation', { argHint: '[confirm]' }),
 

@@ -568,6 +568,20 @@ SCENARIOS = {
                   ('type', '/usage all'), ('wait_for', 'Last 7 days', 10), ('settle', 1)],
         'watch': [], 'final_contains': ['Grok Build', 'Last 7 days', 'tokens unknown · 1 turn · cost unknown'], 'never': ['$0.00'],
     },
+    # /fork with no N: a picker of the user's messages, newest first; the fork
+    # after message 1 holds only that exchange, and says files are not rewound.
+    'fork-at-message': {
+        'turns': [{'blocks': ['ALPHA answer lives here.']}, {'blocks': ['BETA answer lives here.']}],
+        'steps': [
+            ('type', 'first question'), ('wait_for', 'ALPHA answer lives here.', 30), ('settle', 2),
+            ('type', 'second question'), ('wait_for', 'BETA answer lives here.', 30), ('settle', 2),
+            ('type', '/fork'), ('wait_for', 'Fork after which message?', 10), ('settle', 0.5),
+            ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'Forked after message 1', 10), ('mark',), ('settle', 2),
+        ],
+        'watch': [], 'ever': ['2  second question', '1  first question'],
+        'final_contains': ['first question', 'ALPHA answer lives here.', 'files on disk are not rewound'],
+        'never_after_mark': ['BETA answer lives here.'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
