@@ -51,7 +51,7 @@ export interface SignInScreen extends SignInUi {
 
 /** A screen no reader knows, answered from the catalog: when the vendor's
  * text since the last answer shows `when` (compared without colours, spaces
- * or case), send `send` (keys: {enter} {down} {up} {tab} {esc} {space}), or
+ * or case), send `send` (keys: {enter} {down} {up} {tab} {esc} {space} {ctrl-c} {ctrl-d}), or
  * ask the user and send the answer with Enter. Each fires once, whichever
  * comes first: a vendor's screens depend on what the user chose. */
 export interface SignInStep { when: string; send?: string; ask?: { prompt: string; secret?: boolean } }
@@ -80,7 +80,7 @@ export function chooseLoginLink(input: { printed?: string; opened?: string; loca
 
 /** Something the vendor's screen is waiting on. */
 export type ScreenPrompt =
-  | { kind: 'choice'; title: string; choices: readonly string[]; selected: number; style: 'arrows' | 'yes-no' | 'number' | 'sideways' }
+  | { kind: 'choice'; title: string; choices: readonly string[]; selected: number; style: 'arrows' | 'yes-no' | 'number' | 'sideways'; searchable?: boolean }
   | { kind: 'input'; prompt: string; secret: boolean };
 
 // `OPENROUTER_API_KEY` too: an underscore is no word boundary.
@@ -92,11 +92,20 @@ function isSecret(prompt: string): boolean {
 }
 const KEYS: Readonly<Record<string, string>> = {
   '{enter}': '\r', '{down}': '\u001b[B', '{up}': '\u001b[A', '{tab}': '\t', '{esc}': '\u001b', '{space}': ' ',
+  '{ctrl-c}': '\u0003', '{ctrl-d}': '\u0004',
 };
+
+/** A menu's title: the nearest line above it that says something --
+ * not a border, a key hint, or a search box's lone `>`. */
+function titleAbove(lines: readonly string[], start: number, fallback = ''): string {
+  return [...lines.slice(0, start)].reverse().map((line) => line.replace(/[│┃║]/g, ' ').trim())
+    .find((line) => /[A-Za-z]/.test(line) && !/^[┌└╭╰─━]/.test(line) && !/\b(?:navigate|ENTER|ESC|select)\b.*\b(?:select|cancel|confirm)\b/i.test(line))
+    ?.replace(/^\?\s*/, '') ?? fallback;
+}
 
 /** Keys for `send` (see SignInStep). */
 export function keystrokes(send: string): string {
-  return send.replace(/\{[a-z]+\}/g, (token) => KEYS[token] ?? token);
+  return send.replace(/\{[a-z-]+\}/g, (token) => KEYS[token] ?? token);
 }
 
 /** Text drawn on a screen large enough that nothing scrolls or wraps. */
@@ -150,13 +159,45 @@ export function readScreenPrompt(shown: string | ScreenState): ScreenPrompt | un
   // Of the menus and fields drawn since the last answer, the one drawn last
   // is what the screen shows now: an Ink app redraws the menu just answered
   // on its way to the next screen.
-  const drawn = [readClack(lines), readEnquirer(lines), readNumbered(lines), readPointer(lines), readRadio(lines), readInputBox(lines)]
+  const drawn = [readClack(lines), readEnquirer(lines), readNumbered(lines), readRadio(lines), readPointer(lines), readCards(lines), readInputBox(lines)]
     .filter((found): found is Drawn => Boolean(found));
-  return drawn.sort((left, right) => right.at - left.at)[0]?.prompt;
+  const found = drawn.sort((left, right) => right.at - left.at)[0]?.prompt;
+  // A list that shows a few of many and filters as you type (Cline's 228
+  // providers, Pi's, OpenCode's): ClikCode offers a search as well.
+  if (found?.kind === 'choice' && found.style === 'arrows' && lines.some((line) => /\btype to (?:search|filter)\b|\bsearch [a-z]+\.\.\.|\bsearch:|\d+ more\b/i.test(line))) {
+    return { ...found, searchable: true };
+  }
+  return found;
 }
 
 /** A prompt a reader found, and the line it is drawn from. */
 interface Drawn { prompt: ScreenPrompt; at: number }
+
+/** A menu of cards, as Cline draws one: a box per option, its first line
+ * the label (after an icon), the current one marked `→` at its right edge.
+ * The title is the line above the first card. */
+function readCards(lines: readonly string[]): Drawn | undefined {
+  const cards: { at: number; label: string; current: boolean }[] = [];
+  let open = -1;
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    if (/^\s*╭─/.test(line)) { open = index; continue; }
+    if (/^\s*╰─/.test(line) && open >= 0) {
+      const first = lines.slice(open + 1, index).map((row) => row.replace(/^\s*│\s?|\s*│\s*$/g, '').trim()).find(Boolean);
+      if (first) cards.push({ at: open, label: first.replace(/^[^\p{L}\p{N}(]+\s*/u, '').replace(/\s*→$/, '').trim(), current: /→\s*$/.test(first) });
+      open = -1;
+    }
+  }
+  // Only the cards stacked last, one right under the next.
+  const run: typeof cards = [];
+  for (const card of cards.reverse()) {
+    if (run.length && run[0]!.at - card.at > 8) break;
+    run.unshift(card);
+  }
+  const selected = run.findIndex((card) => card.current);
+  if (run.length < 2 || selected < 0) return undefined;
+  return { prompt: { kind: 'choice', title: titleAbove(lines, run[0]!.at), choices: run.map((card) => card.label), selected, style: 'arrows' }, at: run[0]!.at };
+}
 
 /** A radio list, as Hermes's full-screen menu draws one: `→ (●) X` the
  * current option, `(○) Y` the rest. Its title may have scrolled away; the
@@ -171,8 +212,7 @@ function readRadio(lines: readonly string[]): Drawn | undefined {
   const found = lines.slice(start, end + 1).map((line) => option(line)!);
   const selected = found.findIndex((match) => match[1] === '●');
   if (found.length < 2 || selected < 0) return undefined;
-  const title = [...lines.slice(0, start)].reverse().map((line) => line.trim())
-    .find((line) => line && !/\b(?:navigate|ENTER|ESC|select)\b.*\b(?:select|cancel|confirm)\b/i.test(line)) ?? 'Choose one';
+  const title = titleAbove(lines, start, 'Choose one');
   return { prompt: { kind: 'choice', title, choices: found.map((match) => match[2]!), selected, style: 'arrows' }, at: start };
 }
 
@@ -180,34 +220,54 @@ function readRadio(lines: readonly string[]): Drawn | undefined {
  * last box on screen says `Enter to submit`, and its first line says what
  * goes in it. */
 function readInputBox(lines: readonly string[]): Drawn | undefined {
+  const hint = (line: string): boolean => /\benter to (?:submit|save|confirm|continue)\b/i.test(line);
+  let at = -1;
+  for (let index = lines.length - 1; index >= 0; index -= 1) if (hint(lines[index]!)) { at = index; break; }
+  if (at < 0) return undefined;
+  const content = (line: string): string => line.replace(/^\s*[│┃]\s?|\s*[│┃]\s*$/g, '').trim();
+  // The box the hint is in, or the one just above it.
   let top = -1;
-  for (let index = lines.length - 1; index >= 0; index -= 1) if (/^\s*[┌╭]/.test(lines[index]!)) { top = index; break; }
-  if (top < 0) return undefined;
-  let bottom = lines.length;
-  for (let index = top + 1; index < lines.length; index += 1) if (/^\s*[└╰]/.test(lines[index]!)) { bottom = index; break; }
-  const inside = lines.slice(top + 1, bottom).map((line) => line.replace(/^\s*[│┃]\s?|\s*[│┃]\s*$/g, '').trim()).filter(Boolean);
-  if (!inside.some((line) => /\benter to submit\b/i.test(line))) return undefined;
-  // `DeepSeek API Key · Step 2/2 · Model IDs`: the field is the last part,
-  // and only the field says whether it is a secret.
-  const parts = inside[0]!.split(/\s+·\s+/).filter((part) => !/^Step \d+\/\d+$/i.test(part));
-  const field = parts.at(-1)!;
-  const prompt = parts.length > 1 ? `${parts[0]}: ${field}` : field;
-  return { prompt: { kind: 'input', prompt, secret: isSecret(field) }, at: top };
+  for (let index = at; index >= 0 && at - index < 40; index -= 1) {
+    if (/^\s*[┌╭]/.test(lines[index]!)) { top = index; break; }
+  }
+  let bottom = -1;
+  if (top >= 0) for (let index = top + 1; index < lines.length; index += 1) if (/^\s*[└╰]/.test(lines[index]!)) { bottom = index; break; }
+  if (top >= 0 && bottom >= 0 && (bottom >= at || at - bottom <= 3)) {
+    const inside = lines.slice(top + 1, bottom).map(content).filter(Boolean).filter((line) => !hint(line));
+    // `DeepSeek API Key · Step 2/2 · Model IDs`: the field is the last part,
+    // and only the field says whether it is a secret.
+    const parts = (inside[0] ?? '').split(/\s+·\s+/).filter((part) => !/^Step \d+\/\d+$/i.test(part));
+    const label = [lines[top - 1], lines[top - 2]].map((line) => (line ?? '').trim()).find((line) => /[A-Za-z]/.test(line) && line.length <= 60);
+    // A one-line box is the field itself, its text a placeholder; what it is
+    // for is the label above it (Cline's `API key`).
+    const field = inside.length <= 1 && label ? label : parts.at(-1) ?? label ?? '';
+    if (!field) return undefined;
+    const prompt = parts.length > 1 ? `${parts[0]}: ${field}` : field;
+    return { prompt: { kind: 'input', prompt, secret: isSecret(field) || (inside.length <= 1 && isSecret(inside[0] ?? '')) }, at: top };
+  }
+  // Unboxed (Pi): the question, a `>` line to type on, then the hint.
+  if (!lines.slice(Math.max(0, at - 4), at).some((line) => /^\s*>/.test(line))) return undefined;
+  for (let index = at - 1; index >= 0; index -= 1) {
+    const line = lines[index]!.trim();
+    if (!line || line.startsWith('>')) continue;
+    return { prompt: { kind: 'input', prompt: line, secret: isSecret(line) }, at: index };
+  }
+  return undefined;
 }
 
-/** A pointer menu: the current entry marked `› ` or `> `. Qwen's has a
+/** A pointer menu: the current entry marked `› `, `> ` or `→ ` (Pi). Qwen's has a
  * description under each entry and blank lines between them (an entry is
  * its first line); Droid's is one line per entry (`> Login` / `Exit`).
  * The title is the line above them all. */
 function readPointer(lines: readonly string[]): Drawn | undefined {
   const plain = lines.map((line) => line.replace(/[│┃║]/g, ' ').trimEnd());
-  const marker = (line: string): boolean => /^\s*[›>]\s+\S/.test(line);
+  const marker = (line: string): boolean => /^\s*[›>→❯]\s+(?!\([●○]\))\S/.test(line);
   let at = -1;
   for (let index = plain.length - 1; index >= 0; index -= 1) if (marker(plain[index]!)) { at = index; break; }
   if (at < 0) return undefined;
   // The marker stands in the indentation: `› Alibaba` lines up with
   // `  Third-party`.
-  const indent = (line: string): number => { const shown = line.replace(/[›>]/, ' '); return shown.length - shown.trimStart().length; };
+  const indent = (line: string): number => { const shown = line.replace(/[›>→❯]/, ' '); return shown.length - shown.trimStart().length; };
   const column = indent(plain[at]!);
   const inMenu = (line: string): boolean => !/^\s*[─━]{3,}/.test(line) && (!line.trim() || indent(line) === column);
   let first = at;
@@ -223,12 +283,14 @@ function readPointer(lines: readonly string[]): Drawn | undefined {
   }
   const filled = groups.filter((group) => group.length);
   const entries = filled.length > 1 ? filled.map((group) => group[0]!) : (filled[0] ?? []);
-  if (entries.length < 2 || !entries.includes(at)) return undefined;
-  const title = [...plain.slice(0, entries[0])].reverse().map((line) => line.trim()).find((line) => line && !/^[┌└╭╰─━]+/.test(line)) ?? '';
+  // One entry is a menu only behind an unmistakable marker (a search
+  // narrowed to one): `> ` alone is also a chat's input line.
+  if (!entries.includes(at) || entries.length < (/^\s*[❯→]/.test(plain[at]!) ? 1 : 2)) return undefined;
+  const title = titleAbove(lines, entries[0]!);
   return {
     prompt: {
       kind: 'choice', title,
-      choices: entries.map((index) => plain[index]!.trim().replace(/^[›>]\s*/, '')),
+      choices: entries.map((index) => plain[index]!.trim().replace(/^[›>→❯]\s*/, '')),
       selected: entries.indexOf(at), style: 'arrows',
     },
     at: entries[0]!,
@@ -280,7 +342,10 @@ function readEnquirer(lines: readonly string[]): Drawn | undefined {
   const choices = drawing.map((line) => line.trim().replace(/^❯\s*/, ''));
   const selected = Math.max(0, drawing.findIndex((line) => /^\s*❯/.test(line)));
   const title = lines[at]!.replace(/^\s*\?\s*/, '').replace(/\s*[›»].*$/, '').trim();
-  return { prompt: { kind: 'choice', title, choices, selected, style: 'arrows' }, at };
+  // Anchored at the drawing shown, where a pointer reader would see the
+  // same lines: the two tie, and this, the more specific, comes first.
+  const shownAt = lines.lastIndexOf(drawing[0]!);
+  return { prompt: { kind: 'choice', title, choices, selected, style: 'arrows' }, at: Math.max(at, shownAt) };
 }
 
 /** A numbered menu: `● 1. X` (Gemini, in a box), `❭ 1 X` with a
@@ -309,7 +374,7 @@ function numberedList(lines: readonly string[], unmarked = false): (Drawn & { ma
   const marked = found.findIndex(({ match }) => match[1] || match[2] === '●');
   if (marked < 0 && !unmarked) return undefined;
   const start = found[0]!.at;
-  const title = [...plain.slice(0, start)].reverse().map((line) => line.trim()).find((line) => line && !/^[╭╰─━┌└]+/.test(line)) ?? '';
+  const title = titleAbove(lines, start);
   return {
     prompt: { kind: 'choice', title: title.replace(/^\?\s*/, ''), choices: found.map(({ match }) => match[4]!), selected: Math.max(0, marked), style: 'arrows' },
     at: start, marked: marked >= 0,
@@ -346,6 +411,9 @@ async function openerStandIns(): Promise<{ dir: string; log: string }> {
   }));
   return { dir, log };
 }
+
+/** The extra choice a searchable list gets (readScreenPrompt). */
+export const SEARCH_CHOICE = 'Search for another…';
 
 /** How long the vendor's screen must be quiet before it is read: a prompt
  * is drawn in a burst, and reading mid-burst sees half a menu. */
@@ -419,7 +487,7 @@ export async function runVendorSignIn(input: {
       changed = false;
       // One key at a time: an Ink app takes a burst like `sk-123\r` as
       // pasted text, Enter and all, and never submits it.
-      for (const key of keys.match(/\u001b\[[A-D]|\r|[^\r\u001b]+|\u001b/g) ?? []) {
+      for (const key of keys.match(/\u001b\[[A-D]|[\r\u0003\u0004]|[^\r\u0003\u0004\u001b]+|\u001b/g) ?? []) {
         if (exited) return;
         write(key);
         await new Promise((resolve) => setTimeout(resolve, KEY_GAP_MS));
@@ -448,8 +516,12 @@ export async function runVendorSignIn(input: {
     lastPrompt = { key, at: Date.now() };
     void answer(async () => {
       if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret)}\r`;
-      const index = await ui.choose(prompt.title, prompt.choices);
-      return index === undefined ? undefined : choiceKeys(prompt, index);
+      const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
+      const index = await ui.choose(prompt.title, choices);
+      if (index === undefined) return undefined;
+      // Typed into the vendor's own search; the filtered list is read next.
+      if (index === prompt.choices.length) return ui.ask(`Search ${prompt.title.replace(/:$/, '')}`, false);
+      return choiceKeys(prompt, index);
     }).finally(() => { lastPrompt = { key, at: Date.now() }; schedule(); });
   };
   const schedule = (): void => {

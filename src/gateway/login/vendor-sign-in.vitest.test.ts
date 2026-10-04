@@ -22,6 +22,8 @@ describe('reading a link sign-in', () => {
     expect(extractLoginUrl('Opening browser for Kimi device login: https://www.kimi.ai/code/authorize_device?user_code=TUD5-HVED'))
       .toBe('https://www.kimi.ai/code/authorize_device?user_code=TUD5-HVED');
     expect(extractLoginUrl('docs at https://example.com/guide')).toBeUndefined();
+    // Drawn inside a box, it ends at the border.
+    expect(extractLoginUrl('│ https://authkit.cline.bot/device?user_code=SDRC-GRRT│││╰────')).toBe('https://authkit.cline.bot/device?user_code=SDRC-GRRT');
   });
 
   it('prefers the link the vendor tried to open where a browser is local, the printed one where none is', () => {
@@ -84,6 +86,12 @@ describe('reading what a vendor screen waits on, from real screens', () => {
       .toEqual({ kind: 'input', prompt: 'DeepSeek API Key: Model IDs', secret: false });
     expect(readScreenPrompt('╭────╮\n│ Enter Gemini API Key │\n│ Please enter your Gemini API key. │\n│ ╭──╮ │\n│ │ Paste your API key here │ │\n│ ╰──╯ │\n│ (Press Enter to submit, Esc to cancel, Ctrl+C to clear stored key) │\n╰────╯\n'))
       .toMatchObject({ kind: 'input', secret: true });
+    // A one-line box under its label, the hint below it (Cline).
+    expect(readScreenPrompt('      Mistral\n\n  API key\n  ╭──────────╮\n  │ Paste your API key here... │\n  ╰──────────╯\n\n     Enter to save, Esc to go back, Ctrl+C to exit\n'))
+      .toEqual({ kind: 'input', prompt: 'API key', secret: true });
+    // Unboxed, as Pi draws it.
+    expect(readScreenPrompt(' Enter Anthropic API key\n\n>\n\n (escape/ctrl+c to cancel, enter to submit)\n'))
+      .toEqual({ kind: 'input', prompt: 'Enter Anthropic API key', secret: true });
   });
 
   it('Devin\'s numbered menu, a description under each option', () => {
@@ -101,6 +109,16 @@ describe('reading what a vendor screen waits on, from real screens', () => {
   it('Hermes\'s full-screen radio list, its title scrolled away', () => {
     expect(readScreenPrompt('  ↑↓ navigate  ENTER/SPACE select  ESC cancel\n\n → (●) Nous Portal (Everything your agent needs)\n   (○) Fireworks AI (OpenAI-compatible direct model API)\n   (○) OpenRouter (Pay-per-use API aggregator)\n'))
       .toEqual({ kind: 'choice', title: 'Choose one', choices: ['Nous Portal (Everything your agent needs)', 'Fireworks AI (OpenAI-compatible direct model API)', 'OpenRouter (Pay-per-use API aggregator)'], selected: 0, style: 'arrows' });
+  });
+
+  it('Cline\'s cards, the current one marked at its edge', () => {
+    const screen = '      Welcome to Cline\n  Connect a model provider to get started.\n\n  ╭──────────────╮\n  │ ☺ Sign in with Cline        → │\n  │   Latest models with regular free promos │\n  ╰──────────────╯\n  ╭──────────────╮\n  │ ✦ Sign in with ChatGPT        │\n  │   Use your ChatGPT Plus subscription │\n  ╰──────────────╯\n  ╭──────────────╮\n  │ ⚷ Bring your own provider     │\n  │   API key or local server (e.g. Ollama) │\n  ╰──────────────╯\n     ↑/↓ navigate, Enter to select, Ctrl+C to exit\n';
+    expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Connect a model provider to get started.', choices: ['Sign in with Cline', 'Sign in with ChatGPT', 'Bring your own provider'], selected: 0, style: 'arrows' });
+  });
+
+  it('Cline\'s long provider list, searchable', () => {
+    const screen = '  Choose a provider\n  ╭──────╮\n  │ Search providers... │\n  ╰──────╯\n   Popular\n   ❯ Cline Usage-Billing (OAuth)\n     DeepSeek\n     Anthropic\n   ▼ 220 more\n  Type to search, ↑/↓ navigate, Enter to select, Esc to go back,\n';
+    expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Popular', choices: ['Cline Usage-Billing (OAuth)', 'DeepSeek', 'Anthropic'], selected: 0, style: 'arrows', searchable: true });
   });
 
   it('Droid\'s one-line pointer list', () => {
