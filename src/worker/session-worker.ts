@@ -19,7 +19,7 @@ import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
 import { consumeQueuedTurn } from './consume-queued.js';
 import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
-import { closePersistentTransport, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
+import { closePersistentTransport, persistentWorkRunning, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
@@ -51,6 +51,10 @@ const BUILD_WATCH_MS = Number(process.env.CLIKCODE_WORKER_BUILD_WATCH_MS) > 0 ? 
  * nobody attached and no turn running, it is stopped, and the model is told
  * so like any other exit. */
 const ABANDONED_SHELL_MS = 24 * 60 * 60 * 1000;
+/** How often a worker that reached its idle time looks again at vendor work
+ * still running between turns (a process's exit gives no event to another
+ * process's parent). */
+const VENDOR_WORK_RECHECK_MS = 30 * 1000;
 
 interface ConnectionState {
   socket: Socket;
@@ -146,6 +150,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (turnRunning || draining) return 'a turn is running';
     if (vendorBackground.busy) return 'vendor background work is running';
     if (hasHeldVendorProcess(sessionId)) return 'a vendor is still finishing its background work';
+    if (vendorWorkSince !== undefined) return 'the vendor is still running work it started';
     if (runningShellCount(agentSession) > 0) return 'a background shell is running';
     if (agentSession.notifications.length) return 'a notification is on its way to the model';
     return undefined;
@@ -191,8 +196,50 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       idleTimer.unref();
       return;
     }
-    idleTimer = setTimeout(() => { void shutdown('idle timeout'); }, IDLE_EXIT_MS);
+    idleTimer = setTimeout(() => { void idleReached(); }, IDLE_EXIT_MS);
     idleTimer.unref();
+  };
+
+  /** When the vendor's background work began to hold this worker up. */
+  let vendorWorkSince: number | undefined;
+  /** Idle time is up. A persistent vendor still running work it started (a
+   * background shell under ACP, Codex items) keeps the worker -- and so the
+   * vendor -- up until that work ends, then the idle clock starts again;
+   * bounded like a background shell (ABANDONED_SHELL_MS). */
+  const idleReached = async (): Promise<void> => {
+    idleTimer = undefined;
+    const running = await persistentWorkRunning(sessionId);
+    // Something happened meanwhile (a turn, a window): its own edge re-arms.
+    if (idleTimer || turnRunning || draining || observer.attachedCount > 0) return;
+    if (running) {
+      vendorWorkSince ??= Date.now();
+      if (Date.now() - vendorWorkSince < ABANDONED_SHELL_MS) {
+        idleTimer = setTimeout(() => { void idleReached(); }, VENDOR_WORK_RECHECK_MS);
+        idleTimer.unref();
+        return;
+      }
+      vendorWorkSince = undefined;
+      // shutdown tells the model the work was stopped, and why.
+      void shutdown('the work was still running 24 hours after it started, with no ClikCode window open');
+      return;
+    }
+    // The work just ended: a whole idle period from now, not what was left.
+    if (vendorWorkSince !== undefined) { vendorWorkSince = undefined; scheduleIdleExit(); return; }
+    void shutdown('idle timeout');
+  };
+
+  /** Tell the model, through the next worker for this conversation, that
+   * work its vendor left running was stopped -- never stopped unsaid. */
+  const recordVendorWorkStopped = async (reason: string): Promise<void> => {
+    const latest = await readState();
+    const found = latest.sessions.find((item) => item.id === sessionId);
+    if (!found) return;
+    const submittedAt = new Date().toISOString();
+    enqueueSessionTurn(found, {
+      id: randomUUID(), submittedAt, kind: 'notification',
+      text: `[ClikCode] Background work you started in an earlier turn (a background command or server) was stopped: ${reason}. Check whether it finished, and start it again if it is still needed.`,
+    }, submittedAt);
+    await writeState(latest);
   };
 
   /** Stops each shell past the ceiling. Each one's exit then arrives as a
@@ -608,6 +655,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // next worker for the conversation delivers it.
     const undelivered = disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
     await recordNotifications(undelivered).catch(() => undefined);
+    // The same for work a persistent vendor left running: closing the child
+    // below stops it.
+    if (await persistentWorkRunning(sessionId)) await recordVendorWorkStopped(`ClikCode's worker for this conversation stopped (${reason})`).catch(() => undefined);
     // Codex app-server and ACP children are spawned detached too, and were
     // orphaned the same way.
     await closePersistentTransport().catch(() => undefined);

@@ -9,6 +9,7 @@ import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, VendorBackgroundTurnHandler } from './background-turn.js';
 import { createTurnWatchdog, type TurnWatchdog } from './turn-watchdog.js';
+import { processGroupMembers } from './process-group.js';
 
 /** How long a cancelled turn gets to unwind before its child is killed. */
 export const CANCEL_SETTLE_MS = 2000;
@@ -24,7 +25,7 @@ export interface PersistentSessionOptions {
   toolIdleMs?: number;
 }
 
-interface PersistentLive { peer: JsonRpcPeer; key: string }
+interface PersistentLive { peer: JsonRpcPeer; key: string; pid?: number }
 interface PersistentTurn { done: boolean; fail: (error: Error) => void; watchdog?: TurnWatchdog }
 interface PersistentBackground { channel: BackgroundTurnChannel; watchdog?: TurnWatchdog }
 
@@ -56,6 +57,12 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
   private readonly idleMs?: number;
   private readonly toolIdleMs?: number;
+  /** The child's process group when the current turn's prompt went out
+   * (promptSent): what was already running -- the vendor, its MCP servers. */
+  private atPrompt?: Promise<Set<number>>;
+  /** Processes a turn started and left running after it: the vendor's
+   * background work (a `run_in_background` shell, a dev server). */
+  private readonly leftRunning = new Set<number>();
 
   constructor(options: PersistentSessionOptions, private readonly label: string) {
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
@@ -66,6 +73,39 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
 
   /** Forget the vendor work being tracked as still running. */
   protected abstract clearPending(): void;
+  /** Vendor work the protocol itself says is still running (Codex items). */
+  protected abstract pendingCount(): number;
+
+  /** The transport is about to send the turn's prompt (awaited first): what
+   * runs in the child's group from here on, and is still running when the
+   * turn ends, is the vendor's background work. */
+  protected async promptSent(): Promise<void> {
+    const pid = this.live?.pid;
+    // Read before the prompt goes out: a job the vendor starts for it must
+    // not already be in the snapshot.
+    this.atPrompt = pid ? Promise.resolve(await processGroupMembers(pid).catch(() => new Set<number>())) : undefined;
+  }
+
+  /** Whether the vendor is still doing work between turns -- tracked by its
+   * protocol, or processes a turn left running. The session worker stays
+   * up for it (session-worker.ts) instead of closing the child under it. */
+  async backgroundWorkRunning(): Promise<boolean> {
+    if (this.isClosed || !this.live || this.live.peer.closed) return false;
+    if (this.pendingCount() > 0) return true;
+    if (!this.leftRunning.size || !this.live.pid) return false;
+    const members = await processGroupMembers(this.live.pid);
+    for (const pid of this.leftRunning) if (!members.has(pid)) this.leftRunning.delete(pid);
+    return this.leftRunning.size > 0;
+  }
+
+  private async noteLeftRunning(): Promise<void> {
+    const before = this.atPrompt;
+    this.atPrompt = undefined;
+    const pid = this.live?.pid;
+    if (!before || !pid) return;
+    const [then, now] = await Promise.all([before, processGroupMembers(pid)]);
+    for (const member of now) if (member !== pid && !then.has(member)) this.leftRunning.add(member);
+  }
   /** Ask the vendor to stop `turn`, settling `this.settling` (settleCancel);
    * false when the turn has not reached the point it can be asked. */
   protected abstract interrupt(turn: T, live: L): boolean;
@@ -123,6 +163,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
       hooks.ended(succeeded);
+      void this.noteLeftRunning().catch(() => undefined);
     }
   }
 
@@ -171,9 +212,11 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const child = this.spawn(launch.binary, launch.argv, {
       cwd: launch.cwd, env: { ...process.env, ...launch.environment }, stdio: ['pipe', 'pipe', 'pipe'], detached,
     });
+    this.leftRunning.clear();
     const live: L = {
       ...fields,
       key,
+      ...(child.pid ? { pid: child.pid } : {}),
       peer: new JsonRpcPeer(child, {
         ...launch.peer,
         detached,
