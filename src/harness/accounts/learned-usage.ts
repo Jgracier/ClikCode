@@ -28,10 +28,11 @@ function turnStart(invocation: Invocation): number {
 }
 
 /** The account's learning, with a ledger. An account that has none yet gets
- * one from the invocation log -- which keeps only the newest records across
- * every account, so the ledger is complete only from the oldest it holds,
- * and a refusal from before that keeps its own snapshot. Refusals already on
- * record learn when a turn was next allowed after them. */
+ * one from the invocation log -- which keeps every record of the last
+ * RAW_RETENTION_DAYS (session/state/invocations.ts), more than a weekly
+ * window, so the ledger is complete from the oldest it holds, and a refusal
+ * from before that keeps its own snapshot. Refusals already on record learn
+ * when a turn was next allowed after them. */
 export function learningFor(state: HarnessState, account: AiHarnessAccount, now: number = Date.now()): UsageLearning {
   const stored = account.usageLearning;
   if (stored && (stored.turns.length || stored.since !== undefined)) return stored;
