@@ -4,16 +4,22 @@
  * These ran the turn in-process whatever else was running it. With a worker
  * mid-turn, the second turn's checkpoint marked the worker's journal finished
  * (beginPendingTurn), both wrote the whole transcript, and the last writer
- * won. Now a reachable worker runs it, queued behind a running turn exactly
- * as a message typed in a window is; with none, it runs here holding the
- * conversation, so no worker can start in the middle of it. */
+ * won. Now a worker runs it, queued behind a running turn exactly as a
+ * message typed in a window is -- started for it when none is running, so
+ * what the turn leaves running (a background shell, a vendor's background
+ * work) has an owner after this process exits: its exit reaches the model,
+ * and nothing is orphaned. Only when no worker can start does it run here,
+ * holding the conversation so none starts mid-turn. */
 import type Conf from 'conf';
 import { stdout as output } from 'node:process';
 import { WorkerClient } from './client.js';
 import { takeConversation } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import { runSessionTurn } from '../turn/session-turn.js';
-import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { consumeSessionTurn, enqueueSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { randomUUID } from 'node:crypto';
+import { disposeSessionState, formatShellNotifications } from '../agent/session-state.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { textTranscript } from '../turn/turn-activities.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
@@ -25,9 +31,11 @@ import { turnCancelledError } from '../agent/cancellation.js';
 export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: string, signal?: AbortSignal): Promise<void> {
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
+  let spawnFailed = false;
   for (;;) {
     if (signal?.aborted) throw turnCancelledError();
-    const client = await WorkerClient.attachExisting(sessionId).catch(() => undefined);
+    const client = await WorkerClient.attachExisting(sessionId).catch(() => undefined)
+      ?? (spawnFailed ? undefined : await WorkerClient.attach(sessionId).catch(() => { spawnFailed = true; return undefined; }));
     if (client) {
       try {
         if (await turnThroughWorker(client, sessionId, text, signal)) return;
@@ -39,7 +47,14 @@ export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: 
     }
     const taken = await takeConversation(sessionId, 'turn');
     if ('hold' in taken) {
-      try { return await runSessionTurn(config, sessionId, text, signal); } finally { await taken.hold.release(); }
+      try {
+        return await runSessionTurn(config, sessionId, text, signal);
+      } finally {
+        // No worker will own what the turn left running: stop it, and queue
+        // what the model is owed for whoever opens the conversation next.
+        await settleInProcessWork(sessionId).catch(() => undefined);
+        await taken.hold.release();
+      }
     }
     // A worker is coming up (it answers in a moment), or another scripted
     // turn is running here (this one goes after it).
@@ -152,4 +167,19 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
     signal?.addEventListener('abort', onAbort, { once: true });
     client.send({ type: 'submit', text, echo: true });
   });
+}
+
+/** After a turn run here (no worker could start): background shells it
+ * started are stopped -- they are detached, and would otherwise outlive this
+ * process with nobody to report them -- and each, with any notification not
+ * yet delivered, is queued as a turn for the next worker. */
+async function settleInProcessWork(sessionId: string): Promise<void> {
+  const undelivered = disposeSessionState(stateDirectory(), sessionId, 'the command that started it ended and no ClikCode worker could keep it');
+  if (!undelivered.length) return;
+  const state = await readState();
+  const found = state.sessions.find((item) => item.id === sessionId);
+  if (!found) return;
+  const submittedAt = new Date().toISOString();
+  enqueueSessionTurn(found, { id: randomUUID(), text: formatShellNotifications(undelivered), submittedAt, kind: 'notification' }, submittedAt);
+  await writeState(state);
 }
