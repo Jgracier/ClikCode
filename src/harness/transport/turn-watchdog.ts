@@ -51,16 +51,28 @@ export function createTurnWatchdog(options: TurnWatchdogOptions): TurnWatchdog {
   let timer: NodeJS.Timeout | undefined;
   let paused = 0;
   let stopped = false;
+  /** Bumped by every arm: a countdown that fires after a later arm is stale. */
+  let armed = 0;
   const arm = (): void => {
+    armed += 1;
     if (timer) clearTimeout(timer);
     timer = undefined;
     if (stopped || paused > 0 || idleMs <= 0) return;
     const budget = running.size > 0 ? Math.max(idleMs, toolIdleMs) : idleMs;
+    const mine = armed;
     timer = setTimeout(() => {
       timer = undefined;
-      if (stopped) return;
-      stopped = true;
-      options.onIdle(budget);
+      // A process that was not scheduled for a while (a loaded machine, a
+      // laptop waking) runs its expired timers BEFORE reading the input that
+      // arrived meanwhile -- the vendor's messages were there in time, and
+      // the turn was failed as silent anyway. Decide only after this turn of
+      // the event loop has read what is waiting (setImmediate runs after the
+      // poll phase); any of it re-arms the countdown.
+      setImmediate(() => {
+        if (stopped || armed !== mine) return;
+        stopped = true;
+        options.onIdle(budget);
+      });
     }, budget);
     timer.unref?.();
   };

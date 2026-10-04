@@ -429,11 +429,14 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     this.threadId = threadId;
     await input.onSessionId?.(threadId);
     stillRunning();
-    // The turn ends on Codex's own turn/completed. This is only the ceiling
-    // for a server that has stopped talking without saying so.
-    turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError('Codex', afterMs)));
     await this.promptSent();
     stillRunning();
+    // The turn ends on Codex's own turn/completed. This is only the ceiling
+    // for a server that has stopped talking without saying so -- counted from
+    // the prompt going out, not from before promptSent's scan of every
+    // process on the machine, which on a loaded one took long enough to be
+    // mistaken for Codex's silence.
+    turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError('Codex', afterMs)));
     const turnResult = await peer.request('turn/start', {
       threadId,
       input: [

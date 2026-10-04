@@ -118,7 +118,7 @@ describe('shared ACP adapter contract', () => {
         if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
         else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1',
           configOptions: [{ id: 'model', currentValue: 'default', options: [{ value: 'default' }, { value: 'opus' }] }] } });
-        else if (m.method === 'session/set_config_option') setTimeout(() => send({ id: m.id, result: {} }), 1200);
+        else if (m.method === 'session/set_config_option') setTimeout(() => send({ id: m.id, result: {} }), 2500);
         else if (m.method === 'session/prompt') {
           send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ready' } } } });
           send({ id: m.id, result: { stopReason: 'end_turn' } });
@@ -128,7 +128,9 @@ describe('shared ACP adapter contract', () => {
     const phases: string[] = [];
     const result = await runAcpTurn({
       binary: process.execPath, command: 'claude', argv: ['-e', agent], cwd: process.cwd(),
-      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'opus', setupTimeoutMs: 200,
+      // Long enough for node to start the fake agent on a loaded machine;
+      // the model change takes well past it.
+      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'opus', setupTimeoutMs: 1000,
       acp: { inheritCliOptions: false }, onPhase: (phase) => phases.push(phase),
     });
     expect(result.text).toBe('ready');
