@@ -468,6 +468,22 @@ SCENARIOS = {
         'never': ['Request interrupted', 'Queued turn answered.', 'stopping'],
         'final_once': ['Steered in: also run the linter.'],
     },
+    # `/send queue`: the same steering-capable agent, and the message waits
+    # for the turn to end instead -- never steered in, never stopping it.
+    'send-queue-mode': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 4000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
+            ('type', 'start the build'), ('wait_for', 'press Enter to queue', 30),
+            ('type', 'also run the linter'), ('wait_for', 'queued for next turn', 10),
+            ('wait_for', 'The build passed.', 40), ('wait_for', 'Queued turn answered.', 40), ('settle', 3),
+        ],
+        'watch': ['start the build', 'also run the linter', 'Queued turn answered.'],
+        'ever': ['queued for next turn'],
+        'never': ['Steered in: also run the linter.', 'sending at the next pause', 'sent into the turn', 'stopping'],
+    },
     # The terminal around the UI: focus reports asked for and the shell's
     # title saved on the way in; progress while the turn runs; a notification
     # when it ends with the window unfocused for long enough; everything

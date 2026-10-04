@@ -20,6 +20,10 @@ export interface LiveTurnInputResult {
    * slow): true once it was steered in after all and its queued copy is gone,
    * false if the queued copy stands. */
   landed?: Promise<boolean>;
+  /** Queued though steering was asked for: nothing running could take a
+   * steer (an agent that takes none, or a turn not yet able to). The row
+   * says so rather than leaving it to look like the user's choice. */
+  unsteered?: true;
 }
 
 /** `held`: the message is queued only as a fallback -- the running turn's
@@ -121,12 +125,13 @@ export class LiveTurnInputBroker {
    * durable copy -- a queued turn, or a steer recorded on the turn -- can be
    * matched to that row by identity instead of by its words. Two messages
    * that say the same thing are still two messages. */
-  async submit(raw: string, id: string = randomUUID()): Promise<LiveTurnInputResult> {
+  async submit(raw: string, id: string = randomUUID(), options: { queue?: boolean } = {}): Promise<LiveTurnInputResult> {
     const text = raw.trim();
     if (!text) throw new Error('message is empty');
     const submission = { id, text, submittedAt: new Date().toISOString() };
     await this.queueReady;
-    const steer = this.steerHandler;
+    // `/send queue`: never into the running turn, whatever it could take.
+    const steer = options.queue ? undefined : this.steerHandler;
     if (steer) {
       // A transport that never answers turn/steer (wedged app-server, a
       // dropped JSON-RPC response) must not strand the message in a promise
@@ -177,6 +182,6 @@ export class LiveTurnInputBroker {
       }
     }
     await this.queueHandler!(submission);
-    return { disposition: 'queued', submission };
+    return { disposition: 'queued', submission, ...(!steer && !options.queue ? { unsteered: true as const } : {}) };
   }
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, stopAndSendReady, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { applyEvent, emptyModel, queuedRowLabel, stopAndSendReady, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -80,6 +80,21 @@ describe('enter again: stop & send', () => {
     expect(stopAndSendReady({ queued: [message], running: false })).toBe(false);
     expect(stopAndSendReady({ queued: [], running: true })).toBe(false);
     expect(stopAndSendReady({ queued: [notice, command], running: true })).toBe(false);
+  });
+});
+
+describe('a queued row says where it waits and what Enter does', () => {
+  it('names the hold, a steer the turn could not take, and enter again', () => {
+    const submissions = [{ id: 'u', text: 'x', disposition: 'queued', unsteered: true }];
+    expect(queuedRowLabel({ submissions: [] }, { id: 'a' }, false)).toBe('queued');
+    expect(queuedRowLabel({ submissions: [] }, { id: 'a', held: true }, true)).toBe('sending at the next pause · enter again to stop & send');
+    expect(queuedRowLabel({ submissions }, { id: 'u' }, true)).toBe("queued · this turn can't take it · enter again to stop & send");
+  });
+
+  it('carries the worker\'s unsteered answer onto the typed message', () => {
+    const typed = { ...emptyModel(), submissions: [{ id: 'u', text: 'x' }] };
+    const next = applyEvent(typed, { type: 'worker', sessionId: 's', event: { type: 'submission', id: 'u', disposition: 'queued', unsteered: true } });
+    expect(next.submissions[0]).toMatchObject({ disposition: 'queued', unsteered: true });
   });
 });
 

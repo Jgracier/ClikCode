@@ -10,6 +10,7 @@
  * own snapshot carries it.
  */
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
+import { STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
 import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, withChildTool, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
@@ -167,7 +168,7 @@ export interface ChatModel {
   /** A sign-in the bridge is running: its card shows the link and code. */
   signIn?: { id: string; name: string; url?: string; code?: string };
   /** A message typed during the turn and what became of it. */
-  submissions: Array<{ id: string; text: string; disposition?: string }>;
+  submissions: Array<{ id: string; text: string; disposition?: string; unsteered?: boolean }>;
   /** Read by the extension after each change of conversation. */
   chatSettings?: IdeChatSettings;
   provider?: IdeProvider;
@@ -510,7 +511,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'turn-error':
       return withNote(model, { kind: 'notice', level: 'error', text: stripAnsi(event.message) });
     case 'submission':
-      return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition } : item)) };
+      return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item)) };
     case 'shutdown':
       // An idle worker retiring (a newer build, an idle timeout) is invisible:
       // the bridge attaches to its replacement. Only a cut-off turn is news.
@@ -591,6 +592,14 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
  * message and never makes Enter stop anything. */
 export function stopAndSendReady(model: Pick<ChatModel, 'queued' | 'running'>): boolean {
   return model.running && model.queued.some((item) => !item.notification && !item.command);
+}
+
+/** A queued row's words: where it waits, why when steering was asked for
+ * and the turn could not take it, and -- while Enter would do it -- that
+ * Enter again stops the turn and sends it. */
+export function queuedRowLabel(model: Pick<ChatModel, 'submissions'>, item: { id: string; held?: boolean }, enterAgain: boolean): string {
+  const unsteered = model.submissions.some((entry) => entry.id === item.id && entry.unsteered);
+  return [item.held ? STEER_WORDS.held : 'queued', ...(unsteered ? [STEER_WORDS.unsteered] : []), ...(enterAgain ? [STEER_WORDS.stopAndSend] : [])].join(' · ');
 }
 
 export function answeredApproval(model: ChatModel, id: string): ChatModel {

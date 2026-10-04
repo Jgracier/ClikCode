@@ -340,6 +340,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/models` | list models configured on local accounts |
 | `/effort [level]` | reasoning level |
 | `/permissions [ask\|bypass\|auto]` | approval behavior |
+| `/send [steer\|queue]` | messages typed mid-turn: steer them into the running turn at its next pause (where the agent takes steering; elsewhere they queue, and say so), or queue them for after it. Global; bare `/send` shows the two |
 | `/options` | provider-specific modes and controls |
 | `/capabilities` | what the selected provider supports |
 | `/settings [route\|account\|model\|effort\|permissions\|option\|global\|provider …]` | configure this workspace |

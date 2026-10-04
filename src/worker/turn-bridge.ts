@@ -419,7 +419,7 @@ async function driveWorkerTurn(
           ]);
           pendingSubmissions.delete(id);
           if (outcome?.disposition === 'error') throw new Error(outcome.message ?? 'message not sent');
-          return { disposition: outcome?.disposition ?? 'queued', submission };
+          return { disposition: outcome?.disposition ?? 'queued', submission, ...(outcome?.unsteered ? { unsteered: true as const } : {}) };
         },
         // A slash line is never the worker's business: it is ClikCode's own
         // command, and it runs here when the turn ends.

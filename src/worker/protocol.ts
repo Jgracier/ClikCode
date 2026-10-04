@@ -122,7 +122,9 @@ export type WorkerEvent =
    * not the client's guess. The client used to assume "queued" for every one
    * and never learn otherwise, so a message steered straight into the answer
    * said "queued for next turn" for the rest of the turn. */
-  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string }
+  /** `unsteered`: queued though steering was asked for -- nothing running
+   *  could take a steer (LiveTurnInputResult.unsteered). */
+  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string; unsteered?: boolean }
   /** The worker is exiting (idle timeout, explicit stop, an unrecoverable
    * error) -- told, not just disconnected, so a client can say why instead
    * of a bare "connection closed". */

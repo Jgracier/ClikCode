@@ -35,6 +35,7 @@ import { sendScriptedTurn } from '../../worker/scripted-send.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { SELECTION_MODE, setSelectionMode } from '../modes.js';
 import { TERMINAL } from '../active-terminal.js';
+import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
 import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, sessionPermissionModes, setSessionHarnessOption } from '../../session/options.js';
@@ -188,6 +189,18 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // Same as /model: the reported mode described the previous request.
     if (session.reported?.permissionMode) delete session.reported.permissionMode;
     return saveSettings(state, session);
+  },
+  // Global, not this chat's: how mid-turn messages go is the user's habit.
+  // The worker reads it as each message arrives (session-worker.ts).
+  send: async ({ state, words }) => {
+    if (!words[0]) {
+      const current = sendModeOf(state.globalSettings);
+      return emitHarnessOutput({ panel: 'send', sendMode: current, text: `Messages typed mid-turn: ${current} · ${SEND_MODE_DETAIL[current]}`, controls: SEND_MODES.map((mode) => `send ${mode}`) });
+    }
+    const mode = parseSendMode(words[0]);
+    await aiSettingsSetGlobal('send', mode, false);
+    TERMINAL.active?.setSendMode(mode);
+    return emitHarnessOutput({ panel: 'settings-updated', sendMode: mode, text: `Messages typed mid-turn: ${mode}` });
   },
   search: async ({ args }) => {
     if (!args.trim()) throw new Error('usage: /search <words>');
@@ -449,7 +462,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!setting) return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
     if (setting === 'global') {
       const [key, ...rest] = words;
-      if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|failover> <value>');
+      if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|failover|send> <value>');
       await aiSettingsSetGlobal(key, rest.join(' '), false);
       return emitHarnessOutput({ panel: 'settings-updated', text: `Global default updated: ${key} = ${rest.join(' ')}` });
     }
