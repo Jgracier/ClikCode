@@ -6,33 +6,43 @@ import { blankChatSweepable } from './blank.js';
 import { sessionFromIndex, stampListFacts } from './list-facts.js';
 import { liveWorkerSessions } from './liveness.js';
 import { isBlankConversation } from './options.js';
+import type { HarnessState } from './model.js';
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 
-let backfill: Promise<void> | undefined;
+let backfill: Promise<HarnessState | undefined> | undefined;
 
 /** One pass for the life of the process. A failure clears it so the next
  * list can try again; success stays, so opening the list twice does not
- * read every transcript twice. */
-export function backfillListFacts(): Promise<void> {
-  if (!backfill) {
-    backfill = (async () => {
-      const indexed = await readState({ transcripts: [] });
-      if (indexed.sessions.every((session) => session.listChecked || isBlankConversation(session))) return;
-      const state = await readState();
-      let changed = false;
-      for (const session of state.sessions) if (stampListFacts(session)) changed = true;
-      // Only stored empty chats nothing could be about to use: the one
-      // another process just stored for its worker is not this pass's to drop.
-      const workerIsLive = await liveWorkerSessions();
-      const kept = state.sessions.filter((session) => !sessionFromIndex(session) || !blankChatSweepable(session, workerIsLive));
-      if (kept.length !== state.sessions.length) {
-        state.sessions = kept;
-        changed = true;
-      }
-      if (changed) await writeState(state);
-    })();
-    void backfill.then(() => undefined, () => { backfill = undefined; });
-  }
-  return backfill;
+ * read every transcript twice. Resolves to the state it stored, when it
+ * stored one: what a list on screen copies its new facts from. */
+export function backfillListFacts(
+  /** The index as the caller just read it (transcripts unread), so the list
+   * that is opening does not read it a second time to decide. */
+  indexed?: HarnessState,
+): Promise<HarnessState | undefined> {
+  // Only the call that ran the pass gets its state: one handed to a later
+  // list would be older than what that list just read.
+  if (backfill) return backfill.then(() => undefined);
+  const pass = (async () => {
+    const index = indexed ?? await readState({ transcripts: [] });
+    if (index.sessions.every((session) => session.listChecked || isBlankConversation(session))) return undefined;
+    const state = await readState();
+    let changed = false;
+    for (const session of state.sessions) if (stampListFacts(session)) changed = true;
+    // Only stored empty chats nothing could be about to use: the one
+    // another process just stored for its worker is not this pass's to drop.
+    const workerIsLive = await liveWorkerSessions();
+    const kept = state.sessions.filter((session) => !sessionFromIndex(session) || !blankChatSweepable(session, workerIsLive));
+    if (kept.length !== state.sessions.length) {
+      state.sessions = kept;
+      changed = true;
+    }
+    if (!changed) return undefined;
+    await writeState(state);
+    return state;
+  })();
+  backfill = pass;
+  void pass.then(() => undefined, () => { backfill = undefined; });
+  return pass;
 }
