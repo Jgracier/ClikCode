@@ -8,6 +8,7 @@ import { stampListFacts } from '../list-facts.js';
 import { isBlankConversation } from '../options.js';
 import { sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
+import { forgetSessionArtifacts } from '../store/forget.js';
 import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript } from '../store/transcripts.js';
 import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
 import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex } from './index-file.js';
@@ -56,6 +57,7 @@ async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData
 export async function writeState(state: HarnessState): Promise<void> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   let written: StateBaselineData | undefined;
+  const deleted: string[] = [];
   await withStateLock(async (held) => {
     // No legacy single-file check here: readState migrates it (ensureLayout),
     // and only builds from before 2026-09-19 ever wrote that file.
@@ -123,7 +125,9 @@ export async function writeState(state: HarnessState): Promise<void> {
     // 3. Deliberate deletions last, children materialized before the parent goes.
     const remaining = new Set(next.sessions.map((session) => session.id));
     for (const id of baseline?.sessions.keys() ?? []) {
-      if (!remaining.has(id)) await deleteSessionTranscript(held, id);
+      if (remaining.has(id)) continue;
+      await deleteSessionTranscript(held, id);
+      deleted.push(id);
     }
 
     // 4. Secrets, only when this caller changed them.
@@ -142,6 +146,9 @@ export async function writeState(state: HarnessState): Promise<void> {
     written = taken;
   });
   await applyClaimIntent(state, baseline);
+  // What else the deleted chats left (agent history, checkpoints, claims):
+  // outside the lock, since a checkpoint directory can be large.
+  for (const id of deleted) await forgetSessionArtifacts(id);
   // Later writes from this same object diff from what this one stored, not
   // from the original read -- nor from the object as it looks now.
   rememberBaseline(state, written);
