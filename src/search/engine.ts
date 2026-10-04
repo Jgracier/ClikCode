@@ -2,22 +2,29 @@
  * and exactly where.
  *
  * Ranking, in order of what decides:
- *   1. A conversation with the exact phrase (case-insensitive) is above one
+ *   1. Its title is the query (case-insensitive), then a title holding every
+ *      word: a conversation named for something outranks any that mention it.
+ *   2. A conversation with the exact phrase (case-insensitive) is above one
  *      that only has every word somewhere in a message.
- *   2. Mentions, weighted by how recent the conversation is: the same count
+ *   3. Mentions, weighted by how recent the conversation is: the same count
  *      in this week's chat outranks last month's.
  *
- * A mention is one exact occurrence of the phrase, or one message holding
- * every word without the phrase. A conversation's branches share history,
- * so a message found in a fork and in its parent counts once. */
+ * A conversation's mentions are its exact occurrences of the phrase when it
+ * has any; only when it has none, each message holding every word. So the
+ * count, the snippets and the /search walk are all of one kind. A
+ * conversation's branches share history; it is searched as one merged
+ * numbering (corpus.ts conversationView), so a shared message counts once. */
 
 import { conversationGroups, conversationTitle, type ConversationGroup } from './conversations.js';
-import { sessionDoc, type MessageDoc } from './corpus.js';
+import { conversationView, type MessageDoc } from './corpus.js';
 
 export interface Mention {
-  /** The chat (branch) the message is in, and where in it. */
+  /** The chat (branch) the message is stored in, and where in it: what the
+   * terminal opens. */
   sessionId: string;
   messageIndex: number;
+  /** Where it is in the conversation's merged numbering: what agents see. */
+  position: number;
   /** Into the message's searchable text (content, then its tool calls). */
   offset: number;
   length: number;
@@ -34,9 +41,11 @@ export interface ConversationHit {
   harness?: string;
   updatedAt: string;
   updatedAtMs: number;
-  /** Newest branch first, each in transcript order. */
+  /** In the conversation's merged order. All exact when exactCount > 0. */
   mentions: Mention[];
   exactCount: number;
+  /** The title is the query, or holds every word of it. */
+  titleMatch?: 'exact' | 'words';
   score: number;
 }
 
@@ -52,6 +61,8 @@ export interface ParsedQuery {
 export interface SearchOptions {
   /** Only conversations active at or after this time (ms). */
   sinceMs?: number;
+  /** Only this conversation (its id). */
+  conversationId?: string;
   /** Left out entirely: the conversation an agent is asking from. */
   excludeConversationId?: string;
   excludeSessionId?: string;
@@ -111,35 +122,34 @@ export function messageMentions(message: MessageDoc, query: ParsedQuery): Array<
   return [{ offset: message.lower.indexOf(first), length: first.length, exact: false }];
 }
 
+/** How a title matches: it is the query, or it holds every word. */
+export function titleMatch(title: string, query: ParsedQuery): ConversationHit['titleMatch'] {
+  const lower = title.trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!lower) return undefined;
+  if (new RegExp(`^${query.phrase.source}$`).test(lower)) return 'exact';
+  return query.words.every((word) => lower.includes(word)) ? 'words' : undefined;
+}
+
+const TITLE_TIER = { exact: 3_000_000, words: 2_000_000 } as const;
+
 async function conversationHit(group: ConversationGroup, query: ParsedQuery, now: number): Promise<ConversationHit | undefined> {
-  const mentions: Mention[] = [];
-  // Messages already counted in a newer branch. Only matched messages are
-  // fingerprinted: an identical message matches identically.
-  const counted = new Set<string>();
-  for (const branch of group.branches) {
-    const doc = await sessionDoc(branch.id);
-    if (!doc) continue;
-    const here = new Set<string>();
-    for (const [messageIndex, message] of doc.messages.entries()) {
-      const found = messageMentions(message, query);
-      if (!found.length) continue;
-      if (counted.has(message.fingerprint)) continue;
-      here.add(message.fingerprint);
-      for (const mention of found) mentions.push({ sessionId: branch.id, messageIndex, ...mention });
-    }
-    for (const fingerprint of here) counted.add(fingerprint);
+  const view = await conversationView(group);
+  let mentions: Mention[] = [];
+  for (const [position, entry] of view.entries.entries()) {
+    for (const mention of messageMentions(entry.message, query)) mentions.push({ sessionId: entry.sessionId, messageIndex: entry.index, position, ...mention });
   }
-  if (!mentions.length) return undefined;
   const exactCount = mentions.filter((mention) => mention.exact).length;
-  const wordCount = mentions.length - exactCount;
+  if (exactCount) mentions = mentions.filter((mention) => mention.exact);
   const newest = group.newest;
-  // Exact first (a whole tier), then weighted mentions.
-  const score = (exactCount ? 1_000_000 : 0) + (exactCount * 3 + wordCount) * recencyBoost(group.updatedAtMs, now);
+  const named = titleMatch(conversationTitle(newest, Number.POSITIVE_INFINITY), query);
+  if (!mentions.length && !named) return undefined;
+  // Title, then exact (whole tiers), then weighted mentions.
+  const score = (named ? TITLE_TIER[named] : 0) + (exactCount ? 1_000_000 : 0) + (exactCount ? exactCount * 3 : mentions.length) * recencyBoost(group.updatedAtMs, now);
   return {
     conversationId: group.id, sessionId: newest.id, title: conversationTitle(newest),
     provider: newest.provider ?? null, model: newest.model ?? null,
     ...(newest.nativeHarness ? { harness: newest.nativeHarness } : {}),
-    updatedAt: newest.updatedAt, updatedAtMs: group.updatedAtMs, mentions, exactCount, score,
+    updatedAt: newest.updatedAt, updatedAtMs: group.updatedAtMs, mentions, exactCount, ...(named ? { titleMatch: named } : {}), score,
   };
 }
 
@@ -147,7 +157,8 @@ export async function searchConversations(text: string, options: SearchOptions =
   const query = parseQuery(text);
   if (!query) return undefined;
   const now = options.now ?? Date.now();
-  const groups = (await conversationGroups()).filter((group) => group.id !== options.excludeConversationId
+  const groups = (await conversationGroups()).filter((group) => (options.conversationId === undefined || group.id === options.conversationId)
+    && group.id !== options.excludeConversationId
     && !group.branches.some((branch) => branch.id === options.excludeSessionId)
     && (options.sinceMs === undefined || group.updatedAtMs >= options.sinceMs));
   const hits: ConversationHit[] = [];

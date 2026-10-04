@@ -73,13 +73,21 @@ describe('clikcode conversations-mcp', () => {
       expect(String(init.result?.instructions)).toContain('search_conversations');
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
       send(2, 'tools/list');
-      expect((await answers.next(2)).result?.tools?.map((tool) => tool.name)).toEqual(['search_conversations', 'read_conversation', 'active_conversations']);
+      const tools = (await answers.next(2)).result?.tools as Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+      expect(tools.map((tool) => tool.name)).toEqual(['search_conversations', 'read_conversation', 'active_conversations']);
+      expect(Object.keys(tools[0]!.inputSchema.properties)).toContain('in');
+      expect(Object.keys(tools[1]!.inputSchema.properties)).toContain('full');
       send(3, 'tools/call', { name: 'search_conversations', arguments: { query: 'webhook retry storm' } });
       const found = (await answers.next(3)).result!.content![0]!.text;
       expect(found).toContain('Webhook retries — id other-00');
       expect(found).not.toContain('Mine —');
       send(4, 'tools/call', { name: 'read_conversation', arguments: { id: 'other-0001-aaaa', at: '0' } });
       expect((await answers.next(4)).result!.content![0]!.text).toContain('[#0 user] the webhook retry storm');
+      // Inside one conversation (the current one too), and one message whole.
+      send(7, 'tools/call', { name: 'search_conversations', arguments: { query: 'retry storm', in: 'current-0002-bbbb' } });
+      expect((await answers.next(7)).result!.content![0]!.text).toContain('"retry storm" in Mine — id current- · codex · gpt-5 · just now · 1 mention of the phrase. read_conversation(id, at) opens an anchor.\n  @current-:0 user: webhook retry storm here too');
+      send(8, 'tools/call', { name: 'read_conversation', arguments: { id: 'other-00', at: 'other-00:1', full: true } });
+      expect((await answers.next(8)).result!.content![0]!.text).toMatch(/\n\[#1 assistant\] noted$/);
       send(5, 'tools/call', { name: 'nope', arguments: {} });
       expect((await answers.next(5)).error?.message).toContain('Unknown tool');
       // A client that frames its messages is answered framed.

@@ -13,6 +13,7 @@
 
 import { stat } from 'node:fs/promises';
 import type { TranscriptMessage } from '../session/model.js';
+import type { ConversationGroup } from './conversations.js';
 import { sessionFilePath } from '../session/store/paths.js';
 import { loadSessionFile } from '../session/store/records.js';
 import { readSessionTranscript } from '../session/store/transcripts.js';
@@ -75,6 +76,7 @@ export function corpusBuilds(): number {
 
 export function resetCorpusCache(): void {
   cache.clear();
+  views.clear();
 }
 
 /** The identity of a transcript: each file it is read from. Undefined when
@@ -117,4 +119,84 @@ export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
   const doc: SessionDoc = { id, messages: (transcript.messages ?? []).map(messageDoc) };
   cache.set(path, { chain, key, doc });
   return doc;
+}
+
+/** One message of a conversation as the user numbers it: which chat it is
+ * stored in, and where. */
+export interface ViewEntry {
+  sessionId: string;
+  /** Its index in that chat's transcript. */
+  index: number;
+  message: MessageDoc;
+  /** Set on the first message of a branch's own part (a fork that diverged
+   * from the main line): the position of the message it follows, -1 when
+   * it shares nothing. */
+  forkAfter?: number;
+}
+
+/** A conversation's messages merged into one numbering: the newest chat's
+ * transcript first (what opening the conversation shows, so its positions
+ * are the ones the user sees), then each older branch's messages that the
+ * ones before do not share, newest branch first. A branch shares the
+ * longest common prefix it has with any branch placed before it. */
+export interface ConversationView {
+  entries: ViewEntry[];
+  /** How many entries are the newest chat's own transcript. */
+  mainLength: number;
+  /** Per chat id: the position of each of its messages. */
+  positions: Map<string, number[]>;
+}
+
+interface ViewCacheEntry { ids: string; docs: Array<SessionDoc | undefined>; view: ConversationView }
+
+/** By the conversation's file path (so two state directories never share),
+ * valid while its chats are the same and every one's doc is the very object
+ * it was built from: sessionDoc returns the cached one while files are
+ * unchanged. */
+const views = new Map<string, ViewCacheEntry>();
+
+function sharedPrefix(left: readonly MessageDoc[], right: readonly MessageDoc[]): number {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index]!.fingerprint === right[index]!.fingerprint) index += 1;
+  return index;
+}
+
+export function buildView(branches: ReadonlyArray<{ id: string; doc: SessionDoc | undefined }>): ConversationView {
+  const entries: ViewEntry[] = [];
+  const positions = new Map<string, number[]>();
+  const placed: Array<{ messages: readonly MessageDoc[]; at: number[] }> = [];
+  let mainLength = 0;
+  for (const { id, doc } of branches) {
+    if (!doc) continue;
+    const messages = doc.messages;
+    let shared = 0;
+    let from: number[] = [];
+    for (const other of placed) {
+      const length = sharedPrefix(other.messages, messages);
+      if (length > shared) { shared = length; from = other.at; }
+    }
+    const at = from.slice(0, shared);
+    for (let index = shared; index < messages.length; index += 1) {
+      at.push(entries.length);
+      entries.push({ sessionId: id, index, message: messages[index]!, ...(placed.length && index === shared ? { forkAfter: shared ? from[shared - 1]! : -1 } : {}) });
+    }
+    if (!placed.length) mainLength = entries.length;
+    placed.push({ messages, at });
+    positions.set(id, at);
+  }
+  return { entries, mainLength, positions };
+}
+
+/** A conversation's merged messages (see ConversationView), rebuilt only
+ * when one of its chats changed. */
+export async function conversationView(group: Pick<ConversationGroup, 'id' | 'branches'>): Promise<ConversationView> {
+  const docs = await Promise.all(group.branches.map((branch) => sessionDoc(branch.id)));
+  const key = sessionFilePath(group.id);
+  const ids = group.branches.map((branch) => branch.id).join(',');
+  const cached = views.get(key);
+  if (cached?.ids === ids && cached.docs.every((doc, index) => doc === docs[index])) return cached.view;
+  const view = buildView(group.branches.map((branch, index) => ({ id: branch.id, doc: docs[index] })));
+  views.set(key, { ids, docs, view });
+  return view;
 }

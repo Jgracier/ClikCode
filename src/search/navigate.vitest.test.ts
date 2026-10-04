@@ -3,7 +3,7 @@ import type { ConversationHit, Mention } from './engine.js';
 import { MentionBrowser } from './navigate.js';
 import { highlightWords, rowOfOccurrence } from '../tui/render/search-focus.js';
 
-const mention = (sessionId: string, messageIndex: number): Mention => ({ sessionId, messageIndex, offset: 0, length: 3, exact: true });
+const mention = (sessionId: string, messageIndex: number): Mention => ({ sessionId, messageIndex, position: messageIndex, offset: 0, length: 3, exact: true });
 const hit = (id: string, count: number): ConversationHit => ({
   conversationId: id, sessionId: id, title: id, provider: null, model: null, updatedAt: '', updatedAtMs: 0,
   mentions: Array.from({ length: count }, (_, index) => mention(id, index)), exactCount: count, score: count,
@@ -22,6 +22,11 @@ describe('walking mentions', () => {
     expect(browser.current()).toMatchObject({ chat: 1, index: 0, mention: { sessionId: 'b' } });
     expect(browser.nextChat()).toBe(true);
     expect(browser.current()).toMatchObject({ chat: 0, index: 0 });
+    // Found by its title alone: a stop with no mention.
+    const titled = new MentionBrowser([{ ...hit('named', 0), titleMatch: 'exact' }, hit('b', 1)]);
+    expect(titled.current().mention).toBeUndefined();
+    expect(titled.status()).toBe('title match, no mentions in it · chat 1 of 2 · ↑↓ next/previous · tab next chat · esc done');
+    expect(titled.next()).toBe(false);
     expect(new MentionBrowser([hit('only', 2)]).status()).toBe('mention 1 of 2 · ↑↓ next/previous · tab next chat · esc done');
   });
 });

@@ -29,12 +29,13 @@ export async function browseSearch(
   let shown: string | undefined;
   for (;;) {
     const stop = browser.current();
-    const session = await load(stop.mention.sessionId);
+    // Found by its title alone: the conversation at its latest message.
+    const session = await load(stop.mention?.sessionId ?? stop.hit.sessionId);
     if (session) {
       shown = session.id;
       screen.showMention(session, {
-        messageIndex: stop.mention.messageIndex,
-        occurrence: await mentionOccurrence(stop.mention, result.query),
+        messageIndex: stop.mention?.messageIndex ?? Math.max(0, (session.messages?.length ?? 1) - 1),
+        occurrence: stop.mention ? await mentionOccurrence(stop.mention, result.query) : 0,
         words: result.query.words,
         status: browser.status(),
       });

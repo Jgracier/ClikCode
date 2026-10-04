@@ -7,7 +7,7 @@ import { defineTool, type ToolDefinition } from '../tool-contract.js';
 const clip = (text: string, max = 48): string => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
 
 function label(tool: ConversationTool, args: Record<string, unknown>): string {
-  if (tool.name === 'search_conversations') return `Search conversations "${clip(String(args.query ?? ''))}"`;
+  if (tool.name === 'search_conversations') return `Search ${typeof args.in === 'string' && args.in ? `conversation ${clip(args.in, 12)} for` : 'conversations'} "${clip(String(args.query ?? ''))}"`;
   if (tool.name === 'read_conversation') return `Read conversation ${clip(String(args.id ?? ''), 12)}${args.at !== undefined ? ` at ${String(args.at)}` : ''}`;
   return 'Active conversations';
 }

@@ -1,7 +1,7 @@
 /** Search results and conversation blocks as compact text for an agent:
  * a few hundred tokens a call, every string masked. */
 
-import type { MessageDoc } from './corpus.js';
+import type { ConversationView, MessageDoc } from './corpus.js';
 import type { ConversationHit, Mention } from './engine.js';
 import { maskSecrets } from './secrets.js';
 
@@ -11,9 +11,10 @@ export function shortId(id: string): string {
   return id.slice(0, 8);
 }
 
-/** `<chat>:<message index>`: what read_conversation's `at` takes. */
-export function anchorOf(mention: Pick<Mention, 'sessionId' | 'messageIndex'>): string {
-  return `${shortId(mention.sessionId)}:${mention.messageIndex}`;
+/** `<conversation>:<message number>`, the number in the conversation's
+ * merged numbering: what read_conversation's `at` takes. */
+export function anchorOf(conversationId: string, position: number): string {
+  return `${shortId(conversationId)}:${position}`;
 }
 
 export function parseAnchor(value: unknown): { session?: string; messageIndex: number } | undefined {
@@ -34,6 +35,19 @@ export function ago(atMs: number, now = Date.now()): string {
   if (hours < 36) return `${hours}h ago`;
   const days = Math.round(hours / 24);
   return days < 60 ? `${days}d ago` : new Date(atMs).toISOString().slice(0, 10);
+}
+
+/** How long, compactly: `40s`, `12m`, `3h 5m`, `2d 4h`. */
+export function duration(ms: number): string {
+  if (!Number.isFinite(ms)) return 'unknown';
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
+  const days = Math.floor(hours / 24);
+  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
 }
 
 /** `claude · sonnet`: who ran it. */
@@ -65,40 +79,52 @@ export function snippet(message: MessageDoc, mention: Pick<Mention, 'offset'>, c
   return `${where}: ${maskSecrets(picked.join(' ⏎ ').replace(/\s+/g, ' ').trim())}`;
 }
 
-/** Snippets for a hit: its first mentions, one per message. */
-export function hitSnippets(hit: ConversationHit, messageAt: (mention: Mention) => MessageDoc | undefined, count = 3): string[] {
+/** Snippets for a hit: its first mentions, one per message. They are of
+ * the kind counted -- phrase matches when it has any (engine.ts). */
+export function hitSnippets(hit: ConversationHit, view: ConversationView, count = 3): string[] {
   const out: string[] = [];
-  const seen = new Set<string>();
+  let last = -1;
   for (const mention of hit.mentions) {
     if (out.length >= count) break;
-    const anchor = anchorOf(mention);
-    if (seen.has(anchor)) continue;
-    seen.add(anchor);
-    const message = messageAt(mention);
-    if (message) out.push(`@${anchor} ${snippet(message, mention)}`);
+    if (mention.position === last) continue;
+    last = mention.position;
+    const message = view.entries[mention.position]?.message;
+    if (message) out.push(`@${anchorOf(hit.conversationId, mention.position)} ${snippet(message, mention)}`);
   }
   return out;
+}
+
+/** "12 mentions of the phrase", "3 messages with all the words (not the
+ * phrase)": what was counted, said. */
+export function mentionCount(hit: Pick<ConversationHit, 'mentions' | 'exactCount'>, words: number): string {
+  const count = hit.mentions.length;
+  if (hit.exactCount) return `${count} mention${count === 1 ? '' : 's'}${words > 1 ? ' of the phrase' : ''}`;
+  if (!count) return 'no mentions in its messages';
+  return `${count} message${count === 1 ? '' : 's'} with all the words (not the phrase)`;
 }
 
 /** One message for read_conversation: what was said, then its tool calls
  * compacted to a label and two lines of output, within `budget`
  * characters. Over budget, the middle goes -- unless `focus` says where the
  * part that matters is, and then the text around it stays. */
-export function renderMessage(index: number, message: MessageDoc, budget: number, focus?: number): string {
+export function renderMessage(index: number, message: MessageDoc, budget: number, focus?: number): { text: string; shortened: boolean } {
   const head = `[#${index} ${message.role}]`;
   const content = message.text.slice(0, message.contentLength).trim();
   const calls = message.text.slice(message.contentLength).split('\n').filter(Boolean);
   // A call's own line plus at most two of its output lines.
   const compactCalls: string[] = [];
   let outputKept = 0;
+  let dropped = false;
   for (const line of calls) {
     if (line.startsWith('  ⏺')) { compactCalls.push(line); outputKept = 0; continue; }
-    if (outputKept < 2) { compactCalls.push(line); outputKept += 1; } else if (outputKept === 2) { compactCalls.push('    …'); outputKept += 1; }
+    if (outputKept < 2) { compactCalls.push(line); outputKept += 1; } else { dropped = true; if (outputKept === 2) { compactCalls.push('    …'); outputKept += 1; } }
   }
   let body = content;
   let callText = compactCalls.join('\n');
+  let shortened = dropped;
   const room = Math.max(200, budget - head.length - 2);
   if (body.length + callText.length + 1 > room) {
+    shortened = true;
     const callRoom = Math.min(callText.length, Math.floor(room * 0.3));
     if (callText.length > callRoom) {
       const kept = callText.slice(0, callRoom);
@@ -115,5 +141,13 @@ export function renderMessage(index: number, message: MessageDoc, budget: number
       }
     }
   }
-  return maskSecrets([`${head} ${body}`.trimEnd(), ...(callText ? [callText] : [])].join('\n'));
+  return { text: maskSecrets([`${head} ${body}`.trimEnd(), ...(callText ? [callText] : [])].join('\n')), shortened };
+}
+
+/** One message whole -- what was said and every tool call with all the
+ * output it kept -- cut only at `budget` characters. */
+export function renderFullMessage(index: number, message: MessageDoc, budget: number): string {
+  const text = `[#${index} ${message.role}] ${message.text.trim()}`;
+  if (text.length <= budget) return maskSecrets(text);
+  return maskSecrets(`${text.slice(0, budget)} [… ${text.length - budget} more chars; raise maxChars]`);
 }
