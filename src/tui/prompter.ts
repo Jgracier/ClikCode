@@ -55,7 +55,7 @@ import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { messageRows as cachedMessageRows, renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
-import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingInputAction } from './input-decoder.js';
+import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { estimatedTokens, formatTurnUsage } from './render/usage-line.js';
@@ -67,12 +67,6 @@ import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
-
-/** Ctrl+S during a turn: stop it and send the typed (or queued) message as
- * the next turn at once. Ctrl+Enter, what Codex and Cursor use, is not a
- * key most terminals can tell from Enter; Ctrl+S reaches a raw-mode reader
- * (flow control is off) and nothing else here uses it. */
-const SEND_NOW_KEY = '\u0013';
 
 /** How long a resize burst is given to finish before the settled redraw. A
  * phone dismissing its keyboard emits several SIGWINCHes a few tens of
@@ -128,7 +122,7 @@ type WaitingTurn = {
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
-  /** Esc or Ctrl+S has asked the turn to stop. */
+  /** Esc, or Enter again on a waiting message, has asked the turn to stop. */
   cancelled: boolean;
   cancel?: (restoreDraft: boolean) => void;
   /** Absent for a wait that takes no messages. */
@@ -282,9 +276,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Approvals answered since the last time none was waiting: this one is
    * number answered + 1 of answered + 1 + queued. */
   private approvalsAnswered = 0;
-  /** Ctrl+S's message: typed during a turn to be the next one at once.
-   * `taken` once the loop has it and the turn it starts is starting. */
-  private sendNow?: { text: string; taken: boolean };
   /** Whether the terminal says it is being looked at (terminal-signals.ts). */
   private focus: FocusState = { since: 0 };
   private stopFocusReports?: () => void;
@@ -378,25 +369,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.leave();
       return;
     }
-    // Ctrl+S: stop and send. What is typed (or, with nothing typed, the
-    // message already queued) becomes the next turn at once: this one is
-    // stopped, with everything it is running. Enter sends without stopping.
-    if (key === SEND_NOW_KEY && turn.cancel && turn.submit && !turn.cancelled) {
-      const text = turn.draft.trim();
-      const queued = Boolean(this.currentSession?.queuedTurns?.some((item) => item.kind !== 'command'))
-        || this.waitingSubmissions.some((item) => item.state === 'queued' || item.state === 'sending');
-      if (!text && !queued) return;
-      if (text) {
-        this.sendNow = { text, taken: false };
-        turn.draft = '';
-        turn.cursor = 0;
-      }
-      turn.cancelled = true;
-      turn.label = 'stopping…';
-      this.updateWaiting();
-      turn.cancel(false);
-      return;
-    }
     const action = waitingInputAction(key);
     if (action === 'cancel-edit' || action === 'cancel-stop') {
       if (turn.cancelled) return;
@@ -422,8 +394,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.updateWaiting();
         return;
       }
+      if (!turn.submit) return;
+      // Enter again, nothing typed, on a message already waiting: stop the
+      // turn -- its tool calls and sub-agents with it -- and what waits is
+      // sent as the next turn at once (the loop takes the queue's head).
+      const enter = waitingEnterAction(turn.draft, this.messageWaiting(), Boolean(turn.cancel) && !turn.cancelled);
+      if (enter === 'stop-and-send') {
+        turn.cancelled = true;
+        turn.label = 'stopping…';
+        this.updateWaiting();
+        turn.cancel!(false);
+        return;
+      }
+      if (enter !== 'deliver') return;
       const text = turn.draft.trim();
-      if (!text || !turn.submit) return;
       turn.draft = '';
       turn.cursor = 0;
       this.submitWaiting(text);
@@ -436,6 +420,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
     }
   };
+
+  /** A message typed during this turn is waiting with its row on screen --
+   * queued for after it, or held for its next pause -- so Enter on nothing
+   * means "send it now". One still being submitted has not been answered yet:
+   * a quick double Enter must not stop the turn it was meant to reach. */
+  private messageWaiting(): boolean {
+    return Boolean(this.currentSession?.queuedTurns?.some((item) => item.kind !== 'command'))
+      || this.waitingSubmissions.some((item) => item.state === 'queued');
+  }
 
   /** A message typed during the turn, sent: steered into it or queued
    * behind it (the harness decides; its row says which), or a slash line,
@@ -711,21 +704,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * source and arrives later; see render/pending-prompt.ts. */
   submitted(prompt: string | undefined): void {
     this.submittedPrompt = prompt;
-    // The message sent now is this turn's prompt from here: its row goes in
-    // the frame the prompt is drawn in, never a frame before.
-    if (this.sendNow?.taken) this.sendNow = undefined;
-  }
-
-  /** A message to send as the next turn at once (Ctrl+S during a turn),
-   * for the conversation loop to take once the stopped turn has ended. Its
-   * row stays until the turn it starts draws its prompt (submitted). */
-  takeSendNow(): string | undefined {
-    const pending = this.sendNow;
-    if (!pending || pending.taken) return undefined;
-    // A command or a shell line starts no turn that would draw its prompt.
-    if (/^[/!]/.test(pending.text)) this.sendNow = undefined;
-    else pending.taken = true;
-    return pending.text;
   }
 
   /** The conversation as the transcript writes it outside a turn's own view.
@@ -1037,7 +1015,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (early) this.turn!.draft = '';
     this.stopWaiting(false);
     this.submittedPrompt = submittedPrompt;
-    if (this.sendNow?.taken) this.sendNow = undefined;
     // A summary its turn never got to write (it ended with no answer) is
     // not this turn's.
     this.pendingTurnSummary = undefined;
@@ -1573,11 +1550,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item)
         && !hasDurableSteer(item, pending?.steers ?? []))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
-      ...(this.sendNow ? [{ role: 'user' as const, content: this.sendNow.text, queueState: 'now' as const }] : []),
     ];
-    // While a turn runs a queued message can be sent at once (Ctrl+S) -- by
-    // stopping the turn, which the hint says: it ends sub-agents too.
-    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled ? ` · ${STEER_WORDS.stopAndSend}` : '';
+    // While a turn runs a waiting message can be sent at once -- Enter again,
+    // with nothing typed -- by stopping the turn, which the hint says: it ends
+    // sub-agents too. Not while something is typed: Enter then delivers that.
+    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled && !this.turn.draft.trim() ? ` · ${STEER_WORDS.stopAndSend}` : '';
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
@@ -1921,7 +1898,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // message the moment it is sent, and would then be written a second time.
       const status = message.queueState === 'steered' ? STEER_WORDS.steered
         : message.queueState === 'sending' ? 'submitting…'
-          : message.queueState === 'now' ? 'sending now'
           : message.queueState === 'pause' ? `${STEER_WORDS.held}${sendNowHint}`
             : message.queueState === 'error' ? 'not sent · restored for editing' : `queued for next turn${sendNowHint}`;
       // One row, the same separator the transcript gives every other message:
@@ -2623,8 +2599,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Kept for the turn this prompt's answer starts: a turn in flight offers
     // the same commands, and this is where they are known.
     this.paletteCommands = commands;
-    // A message sent now that started no turn is not waiting any more.
-    if (this.sendNow?.taken) this.sendNow = undefined;
     // Node sets isTTY once when it creates process.stdin and never changes
     // it, and this prompter is only built when stdin is a TTY
     // (terminalUiSupported). So this is a guard, not a wait: an earlier

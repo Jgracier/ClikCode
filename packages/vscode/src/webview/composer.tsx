@@ -5,12 +5,12 @@ import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, providerDisplayName, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, providerDisplayName, stopAndSendReady, type ChatModel } from '../model';
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
 import { compactCount } from '../../../../src/harness/protocol/format';
-import { buttonTitle } from '../../../../src/harness/protocol/wording';
+import { buttonTitle, keyHint } from '../../../../src/harness/protocol/wording';
 import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
@@ -231,6 +231,9 @@ export function Composer(props: {
   }, [tokenKey, token?.query, model.sessionId, model.providerId, model.model]);
 
   const send = (): void => {
+    // Enter again: nothing typed, a message already waiting in the queue --
+    // stop the turn, and what waits is sent next at once.
+    if (!text.trim() && !attachments.length && stopAndSendReady(model)) { post({ type: 'cancel', restoreDraft: false }); return; }
     if (!text.trim() && !attachments.length) return;
     const message = composeMessage(text, attachments);
     if (!message || !connected) return;
@@ -397,6 +400,10 @@ export function Composer(props: {
   const usage = model.turnUsage && { ...model.turnUsage, contextUsed: undefined, contextWindow: undefined, contextPercent: undefined };
   const tokens = formatTurnUsage(usage, estimate) || undefined;
 
+  // Enter on an empty box stops the turn and sends what waits: the hint goes
+  // on the first message that would go, and only while Enter would do it.
+  const stopAndSend = stopAndSendReady(model) && !text.trim() && !attachments.length;
+  const firstWaiting = model.queued.findIndex((item) => !item.notification && !item.command);
   const placeholder = !connected ? 'ClikCode is not connected'
     : model.running ? 'Steer or queue a message…'
       : `Ask ${providerDisplayName(model, knownProviders()) ?? 'ClikCode'} anything`;
@@ -419,17 +426,13 @@ export function Composer(props: {
       ) : null}
       {model.queued.length ? (
         <div class="queued" aria-label="Queued messages">
-          {model.queued.map((item) => item.notification ? (
+          {model.queued.map((item, index) => item.notification ? (
             // A background task's result the agent is owed: not the user's to edit.
             <div key={item.id} class="queued-item"><Icon name="bell" /><span class="queued-text">Background task finished</span><span class="muted">next turn</span></div>
           ) : (
             <div key={item.id} class="queued-item">
               <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
-              <span class="muted">{item.held ? 'sending at the next pause' : 'queued'}</span>
-              {model.running ? (
-                <button type="button" class="icon-button tiny" title="Send now: stop the running turn and send this next" aria-label="Send queued message now"
-                  data-send-now={item.id} onClick={() => post({ type: 'sendNow', id: item.id })}><Icon name="debug-step-over" /></button>
-              ) : null}
+              <span class="muted">{item.held ? 'sending at the next pause' : 'queued'}{index === firstWaiting && stopAndSend ? ` · ${keyHint('sendNow')}` : ''}</span>
               <button type="button" class="icon-button tiny" title="Edit: take it back into the message box" aria-label="Edit queued message"
                 onClick={() => { post({ type: 'unqueue', id: item.id }); props.handle.current?.insert(item.text); }}><Icon name="edit" /></button>
               <button type="button" class="icon-button tiny" title="Remove from the queue" aria-label="Remove queued message"
@@ -486,7 +489,10 @@ export function Composer(props: {
           {model.running ? (
             <button type="button" id="stop-button" class="send stop" aria-label={buttonTitle('stop')} title={buttonTitle('stop')} onClick={() => post({ type: 'cancel', restoreDraft: !text })}><Icon name="debug-stop" /></button>
           ) : null}
-          {!model.running || text.trim() ? (
+          {stopAndSend ? (
+            <button type="button" id="send-button" class="send" data-stop-and-send="true" aria-label={buttonTitle('sendNow')} title={buttonTitle('sendNow')}
+              disabled={!connected} onClick={send}><Icon name="debug-step-over" /></button>
+          ) : !model.running || text.trim() ? (
             <button type="button" id="send-button" class="send" aria-label={model.running ? 'Send into the running turn' : 'Send (Enter)'} title={model.running ? 'Steer (Enter)' : 'Send (Enter)'}
               disabled={!connected || (!text.trim() && !attachments.length)} onClick={send}><Icon name={model.running ? 'debug-step-into' : 'arrow-up'} /></button>
           ) : null}

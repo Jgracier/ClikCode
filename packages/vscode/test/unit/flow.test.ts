@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, sendNowPlan, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { applyEvent, emptyModel, stopAndSendReady, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -67,23 +67,19 @@ describe("a turn's changes, together", () => {
   });
 });
 
-describe('send a queued message now', () => {
-  const queued = [
-    { id: 'a', text: 'first', command: false }, { id: 'n', text: 'done', command: false, notification: true }, { id: 'b', text: 'second', command: false },
-  ];
+describe('enter again: stop & send', () => {
+  const message = { id: 'a', text: 'first', command: false };
+  const notice = { id: 'n', text: 'done', command: false, notification: true };
+  const command = { id: 'c', text: '/model opus', command: true };
 
-  it('stops the turn only, for the queue head: the queue sends it next itself', () => {
-    expect(sendNowPlan({ queued, running: true }, 'a')).toBe('stop');
+  it('stops the turn when a message of the user\'s is waiting', () => {
+    expect(stopAndSendReady({ queued: [notice, message], running: true })).toBe(true);
   });
 
-  it('takes a later one out of the queue, stops the turn, and sends it after', () => {
-    expect(sendNowPlan({ queued, running: true }, 'b')).toBe('unqueue-and-stop');
-  });
-
-  it('just sends it with nothing running; never a notification or one already gone', () => {
-    expect(sendNowPlan({ queued, running: false }, 'b')).toBe('send');
-    expect(sendNowPlan({ queued, running: true }, 'n')).toBeUndefined();
-    expect(sendNowPlan({ queued, running: true }, 'gone')).toBeUndefined();
+  it('never with nothing running, nothing waiting, or only a notice or a command waiting', () => {
+    expect(stopAndSendReady({ queued: [message], running: false })).toBe(false);
+    expect(stopAndSendReady({ queued: [], running: true })).toBe(false);
+    expect(stopAndSendReady({ queued: [notice, command], running: true })).toBe(false);
   });
 });
 

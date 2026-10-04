@@ -31,7 +31,8 @@ Copy lines from a file and paste them into the chat: they arrive as a reference 
 not as a wall of text. Copied files paste as references too (images attach as images). `Alt+K` in an
 editor (or right-click → *Add to ClikCode Chat*) adds the selection directly. Nothing is attached on
 its own: what you select stays yours until you paste or add it. Tool activity streams as compact rows that link to the files they touch; type while a
-turn runs to steer it, `Esc` to stop.
+turn runs to steer it (or queue it for after the turn: `/send`), `Enter` again on an empty box to stop and
+send what is waiting, `Esc` to stop.
 
 **Review every change.** When an agent asks to edit a file, the approval appears above the message box
 (`1` Allow, `2` Always allow, `3` Reject) and the proposed change opens in a diff editor with
@@ -65,6 +66,7 @@ and its tools and MCP servers. Every slash command works from the message box.
 | `Alt+K` in an editor | Add the selection (or the file) to the chat |
 | `Ctrl+N` (`Cmd+N`) in the chat | New chat |
 | `Enter` / `Shift+Enter` | Send / new line |
+| `Enter` on an empty box, a message waiting | Stop the running turn and send what is waiting now |
 | `Esc` in the chat | Stop the running turn |
 | `@`, `/` | Mention a file, run a command |
 | `1` `2` `3` on an approval | Allow, always allow, reject |

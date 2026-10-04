@@ -584,18 +584,13 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
   }
 }
 
-/** How "Send now" on a queued message (Codex, Cursor) gets it sent next.
- * Nothing running: take it from the queue and send it. The queue's head: stop
- * the turn and nothing else -- the bridge sends the queue's head as soon as a
- * turn ends, so taking it out and sending it again could only race that
- * (and run it twice). Further back: take it out, stop the turn, and send it
- * once the turn has stopped. The IDE protocol cannot reorder the queue, so
- * messages queued ahead of it still go first. */
-export function sendNowPlan(model: Pick<ChatModel, 'queued' | 'running'>, id: string): 'send' | 'stop' | 'unqueue-and-stop' | undefined {
-  const index = model.queued.findIndex((item) => item.id === id);
-  if (index < 0 || model.queued[index]!.notification) return undefined;
-  if (!model.running) return 'send';
-  return index === 0 ? 'stop' : 'unqueue-and-stop';
+/** Enter on an empty message box while a turn runs, with a message of the
+ * user's already waiting (its row is in the queue): "enter again" -- stop the
+ * turn, and what waits goes next, the queue's head first, as the bridge sends
+ * it whenever a turn ends. A background task's notice is not the user's
+ * message and never makes Enter stop anything. */
+export function stopAndSendReady(model: Pick<ChatModel, 'queued' | 'running'>): boolean {
+  return model.running && model.queued.some((item) => !item.notification && !item.command);
 }
 
 export function answeredApproval(model: ChatModel, id: string): ChatModel {
