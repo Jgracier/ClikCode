@@ -172,7 +172,10 @@ export async function closeAllWorkerClients(): Promise<void> {
 export async function runTurnThroughWorker(
   sessionId: string, rl: TerminalHarnessPrompter, promptText: string, turn: WorkerTurnRequest,
 ): Promise<{ notice?: string; left?: true }> {
-  const client = await clientFor(sessionId);
+  // The first message of a conversation waits on its worker starting; the
+  // message and the spinner do not.
+  if (!clients.has(sessionId)) rl.turnStarting();
+  const client = await clientFor(sessionId).catch((error: unknown) => { rl.stopWaiting(); throw error; });
   return driveWorkerTurn(sessionId, client, rl, () => {
     client.send({ type: 'submit', text: promptText, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
   });

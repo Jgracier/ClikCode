@@ -93,6 +93,7 @@ function fakePrompter(): TerminalHarnessPrompter & { calls: string[] } {
     setTurnUsage: record('setTurnUsage'),
     approval: async (...args: unknown[]) => { record('approval')(...args); return false; },
     startWaiting: record('startWaiting'),
+    turnStarting: record('turnStarting'),
     stopWaiting: record('stopWaiting'),
     suspend: async (...args: unknown[]) => { record('suspend')(...args); },
     resume: record('resume'),
@@ -114,6 +115,8 @@ describe('runTurnThroughWorker (real spawned worker, fake terminal)', () => {
     // command typed during it (queued, then run when the turn ends).
     expect(rl.calls).toContain('startWaiting("thinking",[fn],[fn],[fn],[fn])');
     expect(rl.calls).toContain('stopWaiting()');
+    // No worker attached yet: the spinner went up before it answered.
+    expect(rl.calls.indexOf('turnStarting()')).toBeLessThan(rl.calls.findIndex((call) => call.startsWith('render(')));
     // Rendered the optimistic pending state via the worker's own snapshot
     // on attach, before the submit was even sent -- proves the event
     // ordering (attach -> snapshot -> submit) actually holds over the wire,
