@@ -166,6 +166,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** What the waiting composer is for while a sign-in asks for a code or a
    * key: Enter hands the draft here instead of to the turn. */
   private signInInput?: { secret: boolean; submit: (text: string) => void };
+  /** A sign-in is up: the wait is on the user, in their browser, so the band
+   * holds still as it does for an approval -- the clock ticks, nothing spins. */
+  private signingIn = false;
   /** collapseToolRuns over activityEntries, redone only when they change. */
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
   /** The calls still open: the status line names the newest (toolStatus). */
@@ -970,10 +973,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (!turn && !controller.signal.aborted) this.startWaiting(label, cancel);
       }
     };
+    this.signingIn = true;
     if (turn) {
       turn.label = label;
       turn.cancel = cancel;
       turn.cancelled = false;
+      this.scheduleWaitingTick();
       this.updateWaiting();
     } else this.startWaiting(label, cancel);
     return {
@@ -981,6 +986,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       stop: () => {
         this.signInLines = [];
         this.signInInput = undefined;
+        this.signingIn = false;
         if (!turn) { if (this.turn) this.stopWaiting(); return; }
         if (this.turn !== turn) { this.schedulePaint(); return; }
         turn.label = saved!.label;
@@ -988,6 +994,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         turn.cancelled = saved!.cancelled;
         turn.draft = '';
         turn.cursor = 0;
+        this.scheduleWaitingTick();
         this.updateWaiting();
       },
     };
@@ -1099,7 +1106,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** What the turn waits on besides the model, for the clock's decisions. */
   private turnWaits(): TurnWaits {
-    return { toolsRunning: this.activeTools.size > 0, approval: Boolean(this.pendingApproval) };
+    return { toolsRunning: this.activeTools.size > 0, approval: Boolean(this.pendingApproval) || this.signingIn };
   }
 
   private scheduleWaitingTick(): void {
