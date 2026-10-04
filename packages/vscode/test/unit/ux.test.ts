@@ -134,6 +134,14 @@ describe('composer history and notice levels', () => {
     ])).toEqual(['one', 'two']);
   });
 
+  it('does not recall a notice ClikCode sent in the user\'s place', () => {
+    expect(promptHistory([
+      { role: 'user', content: 'one' }, { role: 'assistant', content: 'a' },
+      { role: 'user', content: '[ClikCode] Background work you started was stopped: a newer build.' },
+      { role: 'user', content: '[background shell 2 exited (code 0)] npm test\nok' },
+    ])).toEqual(['one']);
+  });
+
   it('reads a terminal note\'s level from its colour', () => {
     expect(noticeLevel('\u001b[33mswitched to work@example.com\u001b[39m')).toBe('warning');
     expect(noticeLevel('\u001b[1;31mfailed\u001b[0m')).toBe('error');

@@ -90,6 +90,18 @@ SCENARIOS = {
         # Only the first turn ran a tool; the second, short and tool-free, ends bare.
         'final_once': ['Worked for'],
     },
+    # A notice ClikCode sends the model in the user's place is drawn as a
+    # muted ClikCode notice, under its own label, never as the user's `›`.
+    'clikcode-notice-row': {
+        'turns': [{'blocks': ['Nothing needs restarting.']}],
+        # Typed here to stand in for the worker's queued notice; once sent
+        # (the composer is empty again) it is never drawn as the user's.
+        'steps': [('type', '[ClikCode] Background work was stopped: a test.'), ('mark',),
+                  ('wait_for', 'Nothing needs restarting.', 30), ('settle', 3)],
+        'watch': ['Nothing needs restarting.'],
+        'final_contains': ['ClikCode notice', 'Background work was stopped: a test.'],
+        'never_after_mark': ['› [ClikCode]', '[ClikCode] Background'],
+    },
     'message-typed-mid-answer': {
         'turns': [TWO_BLOCKS, {'blocks': ['Queued one answered now.']}],
         'steps': [

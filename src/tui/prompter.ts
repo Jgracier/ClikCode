@@ -53,7 +53,8 @@ import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/sea
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
-import { messageRows as cachedMessageRows, renderMessageBlocks } from './render/message-blocks.js';
+import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
+import { isClikCodeNotice } from '../session/clikcode-notice.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
@@ -1730,6 +1731,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }), '']
       : []);
     const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
+    /** A user-side message: what the user wrote, or a notice ClikCode sent
+     * the model in their place (session/clikcode-notice.ts). */
+    const userRows = (content: string): readonly string[] => (isClikCodeNotice(content)
+      ? clikCodeNoticeRows(content, conversationInner) : messageRows(content, userMarker));
     /** Activity that belongs between two messages rather than inside a turn.
      * Retired once, by identity rather than by text -- two rows that say the
      * same thing are still two rows -- and an entry that arrives after its
@@ -1924,7 +1929,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // vendor that repeated its first reply's tag, or an older transcript.
         emit(message.role === 'assistant'
           ? messageRows(stripRepeatedTitles(message.content), '·')
-          : messageRows(message.content, userMarker));
+          : userRows(message.content));
       }
       if (index === liveAssistant) {
         this.emitted.liveAnswerSettled();
@@ -1977,7 +1982,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // they are a list of things the same person wrote, not a new speaker
       // each time.
       liveConversation.push(...(queueIndex === 0 ? ['', ''] : ['']),
-        ...messageRows(message.content, userMarker), `  ${chalk.dim(`↳ ${status}`)}`);
+        ...userRows(message.content), `  ${chalk.dim(`↳ ${status}`)}`);
     }
     const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText();
