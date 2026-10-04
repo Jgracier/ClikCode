@@ -9,6 +9,7 @@ import chalk, { type ChalkInstance } from 'chalk';
 import type { ToolCategory } from '../../harness/prompter.js';
 import { TOOL_CATEGORY } from '../../harness/protocol/tool-category.js';
 import { shimmerLevels, type StatusTone } from '../../harness/protocol/turn-flow.js';
+import { SHIMMER_STRIDE } from '../../harness/protocol/timings.js';
 
 type Colour = 'cyan' | 'blue' | 'magenta' | 'yellow' | 'green' | 'red';
 type Rgb = readonly [number, number, number];
@@ -23,9 +24,6 @@ const WHITE: Rgb = [255, 255, 255];
 /** How far the highlight brightens the tone at its centre. */
 const SHIMMER_LIFT = 0.65;
 
-/** The highlight moves this many characters per spinner step: at SPIN_MS a
- * step, one would take most of ten seconds to cross a short label. */
-const SHIMMER_STRIDE = 2;
 
 function blend(from: Rgb, to: Rgb, amount: number): Rgb {
   const t = Math.max(0, Math.min(1, amount));

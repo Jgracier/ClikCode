@@ -7,6 +7,7 @@
 import type { FileDiff } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { formatElapsed } from './format.js';
+import { SHIMMER_WIDTH } from './timings.js';
 
 /** Each row's first word, running and done ("Reading" / "Read"), as all four
  * write it. A command keeps its `$`; an unknown tool keeps its own name. */
@@ -124,7 +125,7 @@ export function turnStatus(state: {
 /** One frame of the shimmer the status label wears (Claude Code and Codex
  * both sweep a highlight across it): each character's brightness, 0..1, as
  * a band `width` characters wide passes over. */
-export function shimmerLevels(length: number, frame: number, width = 4): number[] {
+export function shimmerLevels(length: number, frame: number, width = SHIMMER_WIDTH): number[] {
   const span = length + width * 2;
   const centre = (frame % span) - width;
   return Array.from({ length }, (_, index) => {

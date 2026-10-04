@@ -45,6 +45,9 @@ export type ToWebview =
   | { type: 'ui-cancel'; id: string }
   /** ClikCode saw the conversations change: an open list re-queries. */
   | { type: 'conversations-changed' }
+  /** The view was shown or hidden. A retained page keeps running while
+   * hidden, so it pauses its clock on this (webview/clock.ts). */
+  | { type: 'visible'; visible: boolean }
   /** Integration tests only (extensionMode Test): read or drive the DOM. */
   | { type: 'probe'; id: string; action: 'query' | 'click' | 'type' | 'key' | 'paste'; selector: string; text?: string };
 

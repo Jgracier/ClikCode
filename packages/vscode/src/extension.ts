@@ -105,8 +105,9 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
 
   const sidebarProvider: vscode.WebviewViewProvider = {
     resolveWebviewView(view) {
-      const { dispose } = surfaceFor(sidebar, view.webview, 'sidebar', () => view.visible);
-      view.onDidDispose(dispose);
+      const { surface, dispose } = surfaceFor(sidebar, view.webview, 'sidebar', () => view.visible);
+      const shown = view.onDidChangeVisibility(() => surface.post({ type: 'visible', visible: view.visible }));
+      view.onDidDispose(() => { shown.dispose(); dispose(); });
     },
   };
 
@@ -116,7 +117,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     const controller = new ClikCodeController(host, first, `tab ${tabCount}`);
     tabs.set(panel, controller);
     panel.iconPath = { light: vscode.Uri.joinPath(context.extensionUri, 'media', 'editor-light.svg'), dark: vscode.Uri.joinPath(context.extensionUri, 'media', 'editor-dark.svg') };
-    const { dispose } = surfaceFor(controller, panel.webview, 'tab', () => panel.visible);
+    const { surface, dispose } = surfaceFor(controller, panel.webview, 'tab', () => panel.visible);
     // A tab that is waiting on an answer, or finished out of sight, says so
     // in its title, where it shows among the other tabs.
     const title = (): void => {
@@ -125,7 +126,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       panel.title = `${flag}${model.title ? truncate(model.title, 32) : 'ClikCode'}`;
     };
     const retitle = controller.onDidChange(title);
-    panel.onDidChangeViewState(() => { title(); paint(); });
+    panel.onDidChangeViewState(() => { title(); paint(); surface.post({ type: 'visible', visible: panel.visible }); });
     panel.onDidDispose(() => {
       tabs.delete(panel);
       retitle.dispose();

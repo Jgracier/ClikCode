@@ -9,7 +9,13 @@ import {
 } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
-import { SPIN_MS } from '../../../../src/harness/protocol/timings';
+import { shimmerCycleMs } from '../../../../src/harness/protocol/timings';
+import { ACTIONS } from '../../../../src/harness/protocol/wording';
+import { useNow, useSpinFrame } from './clock';
+
+/** The shimmer sweeps a label at the terminal's pace: the same characters a
+ * step, so a longer label takes longer, as it does there. */
+const shimmerStyle = (label: string): string => `--shimmer-cycle: ${shimmerCycleMs(label.length)}ms`;
 import { formatElapsed } from '../../../../src/harness/protocol/format';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
@@ -107,31 +113,26 @@ function toneOf(activity: Activity): string {
 
 /** The terminal's spinner, the same braille frames at the same rate: a
  * command's in yellow, a sub-agent's in cyan, the turn's own still and
- * yellow when nothing is arriving. Still under reduced motion. */
-const REDUCED_MOTION = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
-
+ * yellow when nothing is arriving. Every spinner on the page steps on the
+ * page's one clock; still under reduced motion and while hidden. */
 export function Spinner({ tone = '', still = false }: { tone?: string; still?: boolean }): JSX.Element {
-  const [frame, setFrame] = useState(0);
-  useEffect(() => {
-    if (still || REDUCED_MOTION) return undefined;
-    const timer = setInterval(() => setFrame((value) => value + 1), SPIN_MS);
-    return () => clearInterval(timer);
-  }, [still]);
+  const frame = useSpinFrame(!still);
   return <span class={`spinner ${tone}`} aria-hidden="true">{waitingSpinnerGlyph(frame)}</span>;
 }
 
 /** A tool label with the path in it made a link to the file. */
 function ActivityLabel({ label, workspace, shimmer }: { label: string; workspace?: string; shimmer?: boolean }): JSX.Element {
   const className = shimmer ? 'activity-text swarm-name' : 'activity-text';
+  const style = shimmer ? shimmerStyle(label) : undefined;
   const found = pathIn(label);
-  if (!found) return <span class={className} title={label}>{relative(label, workspace)}</span>;
+  if (!found) return <span class={className} style={style} title={label}>{relative(label, workspace)}</span>;
   const before = relative(label.slice(0, found.index), workspace);
   const written = found.path + (found.line ? `:${found.line}` : '');
   const after = relative(label.slice(found.index + written.length), workspace);
   // Shown relative to the workspace, opened by the path the tool used.
   const shown = relative(found.path, workspace) + (found.line ? `:${found.line}` : '');
   return (
-    <span class={className} title={label}>
+    <span class={className} style={style} title={label}>
       {before}
       <a href="#" class="file-link" data-file={found.path} data-line={found.line} title={`Open ${found.path}`}>{shown}</a>
       {after}
@@ -487,16 +488,6 @@ function Plan({ plan, folded = false, running = false }: { plan: ChatModel['plan
   );
 }
 
-/** The time, once a second, while mounted. */
-function useNow(): number {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-  return now;
-}
-
 /** Rows of one run of calls shown before the earlier ones fold away. */
 const VISIBLE_ACTIVITIES = 6;
 
@@ -514,13 +505,13 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
     <div class="working-wrap">
       <div class={`working status-${status.tone}`} role="status">
         <Spinner tone={status.toneClass} still={asking} />
-        <span class={`working-label ${status.toneClass}`} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
+        <span class={`working-label ${status.toneClass}`} style={shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
         <span class="muted">{live ? formatElapsed(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
-        {asking ? null : <span class="muted working-hint">Esc to stop</span>}
+        {asking ? null : <span class="muted working-hint">{`${ACTIONS.stop.key} to ${ACTIONS.stop.verb}`}</span>}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
