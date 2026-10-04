@@ -12,7 +12,7 @@ import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, e
 import { stdin as input, stdout as output } from 'node:process';
 import { composerLayout } from './render/composer-layout.js';
 import { closeOpenHyperlink } from './render/hyperlinks.js';
-import { createStreamingBlockParser, splitIntoBlocks } from './render/markdown.js';
+import { createStreamingBlockParser } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
 import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
 import { installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
@@ -51,7 +51,7 @@ import { pendingPromptText } from './render/pending-prompt.js';
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
-import { renderMessageBlocks } from './render/message-blocks.js';
+import { messageRows as cachedMessageRows, renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingInputAction } from './input-decoder.js';
@@ -1612,8 +1612,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         return `  ${index === 0 && category ? TOOL_CATEGORY_STYLE[category].paint(text) : text}`;
       }), '']
       : []);
-    const messageRows = (content: string, marker: string): string[] =>
-      renderMessageBlocks(splitIntoBlocks(sanitizeTerminalText(content)), marker, conversationInner);
+    const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
     /** Activity that belongs between two messages rather than inside a turn.
      * Retired once, by identity rather than by text -- two rows that say the
      * same thing are still two rows -- and an entry that arrives after its
