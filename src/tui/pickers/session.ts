@@ -277,8 +277,9 @@ export async function interactiveSessionPicker(
   };
   // Conversations written before the summary existed get one after the list
   // is already up. The redraw copies the new previews onto the rows it holds.
-  refreshes.push(backfillListFacts().then(async () => {
-    const fresh = await readState({ transcripts: [] });
+  refreshes.push(backfillListFacts(state).then((fresh) => {
+    // Nothing was stored: the list already shows what the index holds.
+    if (!fresh) return;
     const byId = new Map(fresh.sessions.map((session) => [session.id, session]));
     for (const session of sessions) {
       const next = byId.get(session.id);
