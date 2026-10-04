@@ -4,27 +4,14 @@
  * The look follows Claude Code's own session list -- sections with their size
  * beside them, a dot per running session, and a pace that turns from flowing
  * to slowing to stuck as a turn goes quiet -- with conversations where it has
- * background jobs. The thresholds are Claude Code's: three minutes, fifteen. */
+ * background jobs. The thresholds are in harness/protocol/turn-pace.ts. */
 
 import chalk from 'chalk';
 import { waitingSpinnerGlyph } from '../render/waiting.js';
 import { shortDuration } from '../../harness/protocol/format.js';
+import { turnPace, type TurnPace } from '../../harness/protocol/turn-pace.js';
 import type { PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession } from '../../session/model.js';
-
-export type TurnPace = 'flowing' | 'slowing' | 'stuck';
-
-const SLOWING_AFTER_MS = 3 * 60_000;
-const STUCK_AFTER_MS = 15 * 60_000;
-
-/** How long since the running turn last did anything -- streamed a word or
- * started a call. A long turn that is still moving is flowing; one that has
- * said nothing for fifteen minutes is stuck, however young it is. */
-export function turnPace(lastActivityAt: string, now: number): TurnPace {
-  const quiet = now - Date.parse(lastActivityAt);
-  if (!(quiet >= SLOWING_AFTER_MS)) return 'flowing';
-  return quiet < STUCK_AFTER_MS ? 'slowing' : 'stuck';
-}
 
 const PACE_COLOR: Record<TurnPace, (text: string) => string> = {
   flowing: chalk.green, slowing: chalk.yellow, stuck: chalk.red,

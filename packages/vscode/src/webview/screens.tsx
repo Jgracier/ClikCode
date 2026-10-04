@@ -86,7 +86,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
           render: () => (
             <div class={`conversation${row.current ? ' current' : ''}`} title={row.preview}>
               {row.attention === 'waiting' ? <Icon name="bell-dot" label="waiting for your answer" />
-                : row.activity === 'working' ? <span class="conversation-dot working" aria-label="working" />
+                : row.activity === 'working' ? <span class={`conversation-dot working ${row.pace ?? 'flowing'}`} aria-label={row.pace && row.pace !== 'flowing' ? `working · ${row.pace}` : 'working'} />
                   : row.current ? <Icon name="check" label="this chat" />
                     : row.attention === 'unread' ? <span class="conversation-dot unread" aria-label="finished" /> : <span class="conversation-dot" aria-hidden="true" />}
               <div class="conversation-main">

@@ -16,6 +16,7 @@
  * so a worker that learns a new event needs no change here -- and an editor
  * that does not know one ignores it.
  */
+import type { TurnPace } from '../harness/protocol/turn-pace.js';
 import type { HarnessSession } from '../session/model.js';
 import type { ClientCommand, WorkerEvent } from '../worker/protocol.js';
 
@@ -142,6 +143,8 @@ export interface IdeConversation {
   /** First words of the last message, for the list. */
   preview?: string;
   activity?: 'working' | 'idle';
+  /** A working row's pace: its dot's colour, as in the terminal board. */
+  pace?: TurnPace;
   /** Where the terminal board lists it: Working (generating), Active (last
    * 24 hours), Past. Absent from a bridge before this field. */
   section?: 'working' | 'active' | 'past';

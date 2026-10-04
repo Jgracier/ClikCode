@@ -459,7 +459,10 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 /* ---- conversations ---- */
 .conversation { display: flex; gap: 10px; padding: 8px; align-items: flex-start; }
 .conversation-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; flex: none; background: transparent; }
-.conversation-dot.working { background: var(--vscode-textLink-foreground); border-color: transparent; animation: pulse 1.4s ease-in-out infinite; }
+.conversation-dot.working { background: var(--vscode-terminal-ansiGreen, var(--vscode-charts-green, #89d185)); border-color: transparent; animation: pulse 1.4s ease-in-out infinite; }
+/* A working turn's pace (src/harness/protocol/turn-pace.ts), coloured as the terminal board colours it. */
+.conversation-dot.working.slowing { background: var(--vscode-terminal-ansiYellow, var(--vscode-charts-yellow, #cca700)); }
+.conversation-dot.working.stuck { background: var(--vscode-terminal-ansiRed, var(--vscode-charts-red, #f14c4c)); }
 .conversation-dot.idle { background: var(--ok); border-color: transparent; }
 .conversation-dot.unread { background: var(--vscode-textLink-foreground); }
 .conversation-main { flex: 1; min-width: 0; }
@@ -493,12 +496,13 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 /* The terminal's spinner and its tool colours, in the theme's own palette.
    Each tone names its colour (--tone) so the working line can mix it. */
 .spinner { display: inline-block; width: 2ch; font-family: var(--vscode-editor-font-family); line-height: 1; color: var(--muted); }
-.tone-cyan { --tone: var(--vscode-charts-blue, #3794ff); color: var(--tone); }
-.tone-yellow { --tone: var(--vscode-charts-yellow, #cca700); color: var(--tone); }
-.tone-blue { --tone: var(--vscode-symbolIcon-fileForeground, var(--vscode-charts-blue, #3794ff)); color: var(--tone); }
-.tone-magenta { --tone: var(--vscode-charts-purple, #b180d7); color: var(--tone); }
-.tone-green { --tone: var(--vscode-charts-green, #89d185); color: var(--tone); }
-/* Asking the user: the permission colour, as the approval card's. */
+/* Each tool category's colour (TOOL_CATEGORY in src/harness/protocol/tool-category.ts)
+ * is the theme's own terminal colour of that name, so the panel and the terminal agree. */
+.tone-blue { --tone: var(--vscode-terminal-ansiBlue, var(--vscode-charts-blue, #3794ff)); color: var(--tone); }
+.tone-magenta { --tone: var(--vscode-terminal-ansiMagenta, var(--vscode-charts-purple, #b180d7)); color: var(--tone); }
+.tone-yellow { --tone: var(--vscode-terminal-ansiYellow, var(--vscode-charts-yellow, #cca700)); color: var(--tone); }
+.tone-cyan { --tone: var(--vscode-terminal-ansiCyan, #29b8db); color: var(--tone); }
+.tone-green { --tone: var(--vscode-terminal-ansiGreen, var(--vscode-charts-green, #89d185)); color: var(--tone); }
 .tone-permission { --tone: var(--vscode-textLink-foreground, #3794ff); color: var(--tone); }
 .tone-plain { --tone: var(--vscode-foreground); color: var(--tone); }
 .activity.done .activity-status:not(.tone-cyan):not(.tone-yellow):not(.tone-blue):not(.tone-magenta):not(.tone-green) { color: var(--muted); }
