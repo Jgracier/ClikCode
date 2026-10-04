@@ -17,6 +17,7 @@ import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
+import { readTurnActivities } from '../../../src/turn/turn-activities';
 
 /** One tool call, as the terminal's activity log keeps it: the harness's own
  * event fields (cleaned of escapes), merged frame by frame with the CLI's
@@ -57,9 +58,11 @@ export interface Approval {
   diff?: FileDiff[];
 }
 
-/** A finished turn's tool activity, kept beside the answer it produced. The
- * worker's transcript holds only the messages; this is the editor's own
- * record of how the answer was reached, and goes with the window. */
+/** A finished turn's tool activity, kept beside the answer it produced. Its
+ * calls are the saved turn's own (`activities` on the assistant message, the
+ * same record the terminal draws a reopened turn from), so a panel opened
+ * after the turn shows them too; its reasoning and plan are this window's
+ * own record of the turn, and go with the window. */
 export interface TurnTrace {
   /** Index in `messages` of the prompt the turn answered. */
   userIndex: number;
@@ -75,6 +78,8 @@ export interface TurnTrace {
   plan?: ChatModel['plan'];
   startedAt: number;
   endedAt: number;
+  /** The calls and text are the saved turn's, not this window's. */
+  saved?: boolean;
 }
 
 /** One settled thought: what it said, where in the answer it came, and for
@@ -253,7 +258,8 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     permissions: session.permissionMode ?? 'ask',
     route: session.route,
     workspace: session.workspace,
-    messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : session.messages ?? [],
+    messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : (session.messages ?? []).map(({ role, content }) => ({ role, content })),
+    traces: withSavedTraces(model.traces, session.messages ?? []),
     queued: (session.queuedTurns ?? []).map((item) => ({ id: item.id, text: item.text, command: item.kind === 'command', ...(item.kind === 'notification' ? { notification: true } : {}) })),
     // The worker's journal of the running turn has the prompt from here on.
     pendingPrompt: pending?.prompt ?? (model.running ? model.pendingPrompt : undefined),
@@ -265,6 +271,31 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
 function sameMessages(previous: ChatModel['messages'], next: ChatModel['messages']): boolean {
   return previous.length === next.length
     && previous.every((message, index) => message.role === next[index]!.role && message.content === next[index]!.content);
+}
+
+/** The calls each saved turn kept, as the traces the transcript draws them
+ * from. The saved copy wins over this window's own record of the same turn
+ * -- its calls and the text they are placed in -- while the reasoning and
+ * plan only this window saw stay. Unchanged, the same list comes back, so
+ * the page does not redraw the history. */
+function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSession['messages']>): TurnTrace[] {
+  const byUser = new Map(traces.map((trace) => [trace.userIndex, trace]));
+  let changed = false;
+  messages.forEach((message, index) => {
+    if (message.role !== 'assistant') return;
+    const saved = readTurnActivities(message.activities, message.content.length);
+    if (!saved.length) return;
+    // Folded by the same upsert live frames go through.
+    const activities = saved.reduce<LiveTurn>(
+      (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
+    ).activities.map(({ startedAt: _startedAt, ...activity }) => activity);
+    const prior = byUser.get(index - 1);
+    const next: TurnTrace = { startedAt: 0, endedAt: 0, ...prior, userIndex: index - 1, activities, text: message.content, saved: true };
+    if (prior && JSON.stringify(prior) === JSON.stringify(next)) return;
+    byUser.set(index - 1, next);
+    changed = true;
+  });
+  return changed ? [...byUser.values()].sort((left, right) => left.userIndex - right.userIndex).slice(-MAX_TRACES) : traces;
 }
 
 function cleanEvent(event: HarnessActivityEvent): HarnessActivityEvent {
@@ -492,6 +523,9 @@ function endTurn(model: ChatModel): ChatModel {
   const activities = model.live?.activities ?? [];
   const reasoning = turnReasoning(model.live);
   const plan = model.plan.length ? model.plan : undefined;
+  // The saved turn's calls, when its snapshot came first, win over the ones
+  // this window watched (see withSavedTraces).
+  const saved = model.traces.find((trace) => trace.userIndex === model.turnUserIndex && trace.saved);
   const traces = (activities.length || reasoning || plan) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
       userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan } : {}),
@@ -499,6 +533,7 @@ function endTurn(model: ChatModel): ChatModel {
       // Keeping the live badges in the finished trace displayed each prompt twice.
       text: model.live?.text ?? '',
       startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
+      ...(saved ? { activities: saved.activities, text: saved.text, saved: true } : {}),
     }].slice(-MAX_TRACES)
     : model.traces;
   return { ...model, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined, traces };
