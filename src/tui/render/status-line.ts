@@ -50,12 +50,28 @@ export function paintStatus(input: {
   if (paint.level >= 3) {
     const tone = RGB[base];
     const label = levels
-      ? characters.map((character, index) => paint.rgb(...blend(tone, WHITE, (levels[index] ?? 0) * SHIMMER_LIFT))(character)).join('')
+      ? painted(characters, (index) => blend(tone, WHITE, (levels[index] ?? 0) * SHIMMER_LIFT).join(','), (key, run) => paint.rgb(...(key.split(',').map(Number) as unknown as Rgb))(run))
       : paint.rgb(...tone)(input.label);
     return { spinner: paint.rgb(...tone)(input.glyph), label };
   }
   const label = levels
-    ? characters.map((character, index) => ((levels[index] ?? 0) >= 0.5 ? paint.bold[base](character) : paint[base](character))).join('')
+    ? painted(characters, (index) => ((levels[index] ?? 0) >= 0.5 ? 'bold' : ''), (key, run) => (key ? paint.bold[base](run) : paint[base](run)))
     : paint[base](input.label);
   return { spinner: paint[base](input.glyph), label };
+}
+
+/** The characters as runs of one look each, every run painted once: the
+ * colour codes go out where the colour changes, not around every character.
+ * Away from the highlight a label is one run. */
+function painted(characters: readonly string[], look: (index: number) => string, paintRun: (key: string, run: string) => string): string {
+  let out = '';
+  let run = '';
+  let key: string | undefined;
+  characters.forEach((character, index) => {
+    const next = look(index);
+    if (key !== undefined && next !== key) { out += paintRun(key, run); run = ''; }
+    key = next;
+    run += character;
+  });
+  return key === undefined ? out : out + paintRun(key, run);
 }

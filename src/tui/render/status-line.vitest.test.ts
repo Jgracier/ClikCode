@@ -35,4 +35,15 @@ describe('the status line', () => {
     const colours = new Set(shimmering.label.match(/38;2;\d+;\d+;\d+/g));
     expect(colours.size).toBeGreaterThan(1);
   });
+
+  it('writes a colour where it changes, not around every character', () => {
+    const label = 'thinking about the repository layout now';
+    for (const level of [1, 3] as const) {
+      const shimmering = paintStatus({ ...base, label, tone: 'thinking', frame: 2, shimmer: true }, new Chalk({ level }));
+      expect(strip(shimmering.label)).toBe(label);
+      const opens = shimmering.label.match(/\u001b\[(?:1|3\d|38;2;\d+;\d+;\d+)m/g) ?? [];
+      // One run before the highlight, its few blended steps, one after.
+      expect(opens.length).toBeLessThan(label.length / 2);
+    }
+  });
 });
