@@ -14,6 +14,7 @@ import { claimSession, releaseSession, sessionClaimIsLive } from './claim.js';
 import { blankChatSweepable, discardIfBlank, ensureSessionOnDisk } from './blank.js';
 import { liveWorkerSessions } from './liveness.js';
 import { backfillListFacts } from './list-backfill.js';
+import { sweepStateDaily } from './state/sweep.js';
 import { chatNamed, isBlankConversation, latestChat } from './options.js';
 import type { HarnessSession, HarnessState } from './model.js';
 import { launchSession } from '../commands/ai/sessions.js';
@@ -51,6 +52,8 @@ export async function openConversation(
   if (state.sessions.some((session) => !session.listChecked && !isBlankConversation(session))) {
     void backfillListFacts().catch(() => undefined);
   }
+  // Housekeeping, in the background and at most daily (session/state/sweep.ts).
+  void sweepStateDaily().catch(() => undefined);
   let session: HarnessSession | undefined;
   if (mode === 'resume') {
     if (!ref) throw new Error('resume needs a conversation id');
