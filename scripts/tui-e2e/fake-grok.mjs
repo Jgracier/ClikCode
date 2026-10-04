@@ -38,6 +38,14 @@ if (argv[0] === 'models' || argv.includes('--list-models')) { console.log('grok-
 // it insists on a TTY.
 if (argv[0] === 'login') {
   if (!process.stdin.isTTY || !process.stdout.isTTY) { console.log('not a tty'); process.exit(9); }
+  // FAKE_LOGIN_KEY: a sign-in that asks for a key on its own prompt line, as
+  // Hermes's does, and succeeds only with that key.
+  if (process.env.FAKE_LOGIN_KEY) {
+    process.stdout.write('Paste your API key: ');
+    const typed = await new Promise((resolve) => { let line = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', (chunk) => { line += chunk; if (line.includes('\n') || line.includes('\r')) resolve(line.trim()); }); });
+    process.stdout.write('\n');
+    process.exit(typed === process.env.FAKE_LOGIN_KEY ? 0 : 4);
+  }
   console.log('To sign in, open this URL in your browser:\n  https://accounts.x.ai/oauth2/device?user_code=AB12-CD34\nConfirm this code in your browser:\n  AB12-CD34\nWaiting for authorization...');
   // FAKE_LOGIN_HOLD: while that file exists (up to 30s) the browser has not
   // answered yet, so a test can cancel the wait.
