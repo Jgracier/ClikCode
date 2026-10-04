@@ -56,6 +56,7 @@ import { compactConversation } from './compact.js';
 import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from './context.js';
 import { contextUsageText } from './cost.js';
 import { usageReport, usageReportAll } from './usage-report.js';
+import { forkPoint, messagesThrough } from './fork-at.js';
 import { exportTranscript } from './export-transcript.js';
 import { nativeManagerListing } from './native-manager.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
@@ -253,20 +254,32 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return emitHarnessOutput({ panel: 'session-deleted', text: 'Conversation deleted from ClikCode.' });
   },
   fork: async ({ state, session, words }) => {
+    // `/fork @N [name]`: only through user message N and its answer. Stored
+    // as a reference into this conversation's history (TranscriptRef).
+    const at = forkPoint(words[0]);
+    if (at !== undefined) words.shift();
+    const messages = sessionTranscriptMessages(session);
     const now = new Date().toISOString();
     const fork: HarnessSession = {
       ...session, id: randomUUID(), name: words.join(' ').trim() || (session.name ? `${session.name} (fork)` : undefined),
       conversationId: conversationIdFor(session), parentSessionId: session.id,
-      messages: sessionTranscriptMessages(session), pendingTurn: undefined,
+      messages: at === undefined ? messages : messagesThrough(messages, at), pendingTurn: undefined,
+      // No vendor thread: the next turn replays the kept messages to rebuild
+      // the context, so a fork at N does not carry what came after it.
       nativeSessionId: undefined, nativeStartedAt: undefined, createdAt: now, updatedAt: now, status: 'active', closedAt: undefined,
     };
     // A fork is a sibling concept, not another copy of the handoff event that
     // created its parent. Its parentSessionId is sufficient ancestry.
     delete fork.handoff;
+    // A turn parked for the reset is the original's to send.
+    delete fork.resumeAt;
     state.sessions.push(fork);
     await writeState(state);
     // The fork is where the user goes next: returning its id switches to it.
-    emitHarnessOutput({ panel: 'session-forked', text: `Forked as ${fork.id.slice(0, 8)} -- you are in the fork; the original is still in your conversations.`, session: fork });
+    const text = at === undefined
+      ? `Forked as ${fork.id.slice(0, 8)} -- you are in the fork; the original is still in your conversations.`
+      : `Forked after message ${at} as ${fork.id.slice(0, 8)} -- you are in the fork; the original is still in your conversations. Files on disk are not rewound: /changes lists what each turn edited, /undo takes it back.`;
+    emitHarnessOutput({ panel: 'session-forked', text, session: fork });
     return fork.id;
   },
   model: async ({ state, session, words }) => {
