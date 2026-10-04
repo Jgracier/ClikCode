@@ -257,7 +257,7 @@ export function recordPendingSteer(
   pending.updatedAt = now;
 }
 
-export function enqueueSessionTurn(session: HarnessSession, submission: LiveTurnSubmission, now: string): void {
+export function enqueueSessionTurn(session: HarnessSession, submission: NonNullable<HarnessSession['queuedTurns']>[number], now: string): void {
   if ((session.queuedTurns ?? []).some((item) => item.id === submission.id)) return;
   session.queuedTurns = [...(session.queuedTurns ?? []), submission];
   session.updatedAt = now;

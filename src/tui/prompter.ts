@@ -46,7 +46,7 @@ import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
-import { hasDurableSteer, steerTranscriptRows } from './render/steer-rows.js';
+import { hasDurableSteer, STEER_WORDS, steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
@@ -363,8 +363,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.leave();
       return;
     }
-    // Ctrl+S: send now. What is typed (or, with nothing typed, the message
-    // already queued) becomes the next turn at once: this one is stopped.
+    // Ctrl+S: stop and send. What is typed (or, with nothing typed, the
+    // message already queued) becomes the next turn at once: this one is
+    // stopped, with everything it is running. Enter sends without stopping.
     if (key === SEND_NOW_KEY && turn.cancel && turn.submit && !turn.cancelled) {
       const text = turn.draft.trim();
       const queued = Boolean(this.currentSession?.queuedTurns?.some((item) => item.kind !== 'command'))
@@ -1339,7 +1340,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
       + `${turn.cancel && !this.pendingApproval ? ' · esc to interrupt' : ''}`
       + `${turn.leave && !this.pendingApproval && !turn.draft ? ' · ← conversations' : ''}`
-      + `${turn.submit ? (turn.draft.trim() && turn.cancel && !this.pendingApproval ? ' · enter to send · ctrl+s to send now' : ' · type and press Enter to send') : ''}`;
+      + `${turn.submit ? (turn.draft.trim() && turn.cancel && !this.pendingApproval ? ` · enter to send · ${STEER_WORDS.stopAndSend}` : ' · type and press Enter to send') : ''}`;
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
     const split = status.label.length;
@@ -1491,14 +1492,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // A queued COMMAND is not a message and gets no row: it runs when the
       // turn ends and shows whatever it shows then.
       ...storedQueued.filter((item) => item.kind !== 'command')
-        .map((item) => ({ role: 'user' as const, content: item.text, queueState: 'queued' as const })),
+        // Held by the running turn to steer in once no tool call is open
+        // (acp-client.ts): it is on its way into this turn, not the next.
+        .map((item) => ({
+          role: 'user' as const, content: item.text,
+          queueState: this.turn && item.heldForTurn && item.heldForTurn === pending?.startedAt ? 'pause' as const : 'queued' as const,
+        })),
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item)
         && !hasDurableSteer(item, pending?.steers ?? []))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state })),
       ...(this.sendNow ? [{ role: 'user' as const, content: this.sendNow.text, queueState: 'now' as const }] : []),
     ];
-    // While a turn runs a queued message can be sent at once (Ctrl+S).
-    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled ? ' · ctrl+s sends now' : '';
+    // While a turn runs a queued message can be sent at once (Ctrl+S) -- by
+    // stopping the turn, which the hint says: it ends sub-agents too.
+    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled ? ` · ${STEER_WORDS.stopAndSend}` : '';
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
@@ -1704,7 +1711,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // One row on each side, matching every other message: a steer is a
       // message the user wrote mid-answer.
       const steerRows = (text: string): string[] => [
-        '', '', ...messageRows(text, userMarker), `  ${chalk.dim('↳ steered into active turn')}`, '',
+        '', '', ...messageRows(text, userMarker), `  ${chalk.dim(`↳ ${STEER_WORDS.steered}`)}`, '',
       ];
       tools.push(...steerTranscriptRows({
         durable: pending?.steers ?? [], live: this.waitingSubmissions,
@@ -1837,9 +1844,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
       // message the moment it is sent, and would then be written a second time.
-      const status = message.queueState === 'steered' ? 'steered into active turn'
+      const status = message.queueState === 'steered' ? STEER_WORDS.steered
         : message.queueState === 'sending' ? 'submitting…'
           : message.queueState === 'now' ? 'sending now'
+          : message.queueState === 'pause' ? `${STEER_WORDS.held}${sendNowHint}`
             : message.queueState === 'error' ? 'not sent · restored for editing' : `queued for next turn${sendNowHint}`;
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.

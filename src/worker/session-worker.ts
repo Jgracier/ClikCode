@@ -556,6 +556,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         sendEvent(socket, { type: 'unqueued', id: command.id, outcome, ...(message ? { message } : {}) });
       };
       if (activeQueuedTurnId === command.id) { answer('running'); return; }
+      // One the running turn is holding to steer in must not be sent now;
+      // one already on its way into the turn is not the queue's any more.
+      if (activeLiveInput?.withdraw(command.id) === false) { answer('running'); return; }
       try {
         const state = await readState();
         const found = state.sessions.find((item) => item.id === sessionId);
@@ -610,6 +613,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
           // Every window shows the queue, not only the one that typed it.
           if (result.disposition !== 'steered') broadcastQueueChanged();
           else showEveryWindow();
+          // Held for the next pause, then steered in: out of the queue and
+          // into the turn, on every window.
+          void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           answer('error', message);

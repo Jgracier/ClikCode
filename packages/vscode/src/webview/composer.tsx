@@ -423,7 +423,7 @@ export function Composer(props: {
           ) : (
             <div key={item.id} class="queued-item">
               <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
-              <span class="muted">queued</span>
+              <span class="muted">{item.held ? 'sending at the next pause' : 'queued'}</span>
               {model.running ? (
                 <button type="button" class="icon-button tiny" title="Send now: stop the running turn and send this next" aria-label="Send queued message now"
                   data-send-now={item.id} onClick={() => post({ type: 'sendNow', id: item.id })}><Icon name="debug-step-over" /></button>

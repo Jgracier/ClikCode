@@ -47,6 +47,17 @@ export async function runVendorSessionAttempt(input: {
     delete session.nativeSessionPreallocated;
   }
   const declaredOptions = localHarnessCapabilityManifest(harness).options;
+  // Codex steers at once; ACP may hold a message until no tool call is open
+  // (acp-client.ts). Recorded under the id the composer shows it by, so the
+  // durable steer matches its row by identity.
+  const onSteerReady: HarnessTurnObserver['onSteerReady'] = (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission, hold) => {
+    let held = false;
+    await handler(steerText, (withdraw) => { held = true; return hold(withdraw); });
+    // A held message was queued as the fallback: take that copy out in the
+    // same write that records the steer, so no snapshot shows it twice.
+    if (held) checkpoint.unqueueSoon(submission);
+    await checkpoint.steer(submission);
+  } : undefined);
   const persistent = run.persistentTransports
     ? persistentTransportFor(session.id, transport, vendorChildKey(harness, account, environment, session.workspace))
     : undefined;
@@ -69,14 +80,7 @@ export async function runVendorSessionAttempt(input: {
           void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
         },
         ...sharedObserver,
-        // Steering is genuinely codex-only: it is the one transport
-        // that accepts input mid-turn.
-        onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
-          await handler(steerText);
-          // Recorded under the id the composer shows it by, so the
-          // durable steer matches its row by identity.
-          await checkpoint.steer(submission);
-        } : undefined),
+        onSteerReady,
       };
       result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
     } else {
@@ -102,6 +106,7 @@ export async function runVendorSessionAttempt(input: {
         environment, signal, images, onSessionId,
         ...(swarmIsOn(session) ? { mcpServers: swarmAcpMcpServers() } : {}),
         ...sharedObserver,
+        onSteerReady,
       };
       // An agent that keeps its usage only in its session file (Cline): the
       // turn's share is what the file's total grew by.
@@ -110,7 +115,14 @@ export async function runVendorSessionAttempt(input: {
         ? await readAcpUsageFile(usageFile, session.nativeSessionId, environment) ?? {}
         : {};
       try {
-        result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+        try {
+          result = persistent ? await (persistent.session as AcpSession).runTurn(acpInput) : await runAcpTurn(acpInput);
+        } finally {
+          // A message held for the next pause has been steered in or released
+          // to the queue by now; let what follows either land before the
+          // journal is completed, so it is one or the other, never both.
+          await run.liveInput?.settled();
+        }
         const usageAfter = usageFile && result.nativeSessionId ? await readAcpUsageFile(usageFile, result.nativeSessionId, environment) : undefined;
         if (usageAfter) sharedObserver.onUsage?.(turnShareOf(usageAfter, usageBefore));
       } catch (error) {

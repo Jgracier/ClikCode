@@ -248,6 +248,14 @@ describe('chat model', () => {
     expect(model.queued).toEqual([{ id: 'q', text: 'later', command: false }]);
   });
 
+  it('shows a message the running turn holds for its next pause as on its way, not queued', () => {
+    const pendingTurn = { prompt: 'p', startedAt: 't1', updatedAt: 't1', outputStarted: true };
+    const held = (heldForTurn: string) => run([{ type: 'session', session: session({ pendingTurn, queuedTurns: [{ id: 'q', text: 'also', submittedAt: '', heldForTurn }] }) }]).queued;
+    expect(held('t1')).toEqual([{ id: 'q', text: 'also', command: false, held: true }]);
+    // Held by a turn that is over: it is the next turn now.
+    expect(held('t0')).toEqual([{ id: 'q', text: 'also', command: false }]);
+  });
+
   it('resets when the conversation changes, and picks up a turn already running on attach', () => {
     const first = run([{ type: 'session', session: session({ messages: [{ role: 'user', content: 'old' }] }) }]);
     const next = run([worker({ type: 'snapshot', session: session({ id: 's1' }) })], first);
