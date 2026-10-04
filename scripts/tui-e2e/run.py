@@ -524,6 +524,15 @@ def run(name, spec, entry, keep):
                 screen.resize(lines=lines, columns=70)
                 pump(0.05)
             pump(0.5)
+            # The scroll fix for a phone with its keyboard hidden: after a
+            # resize, all four mouse modes, then hide, clear and home, then
+            # the rows -- as Claude Code sends it there. Without the clear,
+            # a swipe stopped scrolling.
+            settled = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h\x1b[?25l\x1b[?7l\x1b[2J\x1b[H'
+            deadline = time.time() + 3
+            while settled not in bytes(raw[before:]) and time.time() < deadline: pump(0.1)
+            if settled not in bytes(raw[before:]):
+                problems.append('after a resize: not the mouse modes, then a clear and home, before the redraw')
             mouse_reset = b'\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'
             resets = raw[before:].count(mouse_reset)
             if resets != 1: problems.append(f'resize burst sent {resets} mouse resets, expected one')
