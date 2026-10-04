@@ -16,10 +16,20 @@ import { COMMAND_HEAD_LINES } from './activity-view.js';
  * renderer can choose what to show (first lines, or a command's last). */
 export const EVENT_OUTPUT_LINES = 20;
 
+/** What a harness appends to a command's output that the command never
+ * printed: Claude Code's `Shell cwd was reset to <dir>` when the command
+ * left its shell in another directory. Shown as the command's last line --
+ * the one a row shows -- it filled a slot under nearly every command. */
+const HARNESS_NOTE = /(?:^|\r?\n)Shell cwd was reset to [^\r\n]+\s*$/;
+
+export function withoutHarnessNotes(text: string): string {
+  return text.replace(HARNESS_NOTE, '');
+}
+
 /** A tool's output as an event carries it: at most EVENT_OUTPUT_LINES lines,
  * from the start or (`tail`) the end, with the count of what was dropped. */
 export function activityOutput(text: string, options: { tail?: boolean } = {}): Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail' | 'outputHead'> {
-  const normalized = text.replace(/\r?\n$/, '');
+  const normalized = withoutHarnessNotes(text).replace(/\r?\n$/, '');
   if (!normalized.trim()) return {};
   const lines = normalized.split(/\r?\n/);
   const kept = options.tail ? lines.slice(-EVENT_OUTPUT_LINES) : lines.slice(0, EVENT_OUTPUT_LINES);
@@ -33,7 +43,7 @@ export function activityOutput(text: string, options: { tail?: boolean } = {}): 
 }
 
 function cappedActivityOutput(text: string): Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail'> {
-  const normalized = text.trim();
+  const normalized = withoutHarnessNotes(text).trim();
   if (!normalized) return {};
   // Machine-readable tool output belongs to the native event protocol, not
   // the human transcript. Printing JSON/JSONL here was the reason a working
