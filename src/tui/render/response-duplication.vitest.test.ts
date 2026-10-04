@@ -55,28 +55,39 @@ describe('the live answer slot', () => {
   });
 });
 
-describe('every mouse-tracking enable site is gated', () => {
-  it('spells the modes out only in named constants', async () => {
+describe('the session modes, and selection mode', () => {
+  it('lives in modes.ts alone: the prompter never spells a mouse mode out', async () => {
     // The screen-opening write spelled the escapes inline, so it escaped the
     // first pass at gating them behind SELECTION_MODE and re-enabled tracking
     // on every new prompter -- defeating /select.
-    const modes = await readFile(new URL('../modes.ts', import.meta.url), 'utf8');
-    const declarations = modes.split('\n').filter((line) =>
-      line.includes('?1003h') && line.includes('export const'));
-    expect(declarations).toHaveLength(2);
-
     const prompter = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
-    const inline = prompter.split('\n').filter((line) =>
-      line.includes('?1003h') && !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'));
-    expect(inline, 'prompter must use the constants, not raw escapes').toEqual([]);
+    const inline = prompter.split('\n').filter((line) => /\?100[0236]h|_MOUSE_TRACKING/.test(line)
+      && !line.trimStart().startsWith('//') && !line.trimStart().startsWith('*'));
+    expect(inline, 'prompter must go through sessionModesOn / redrawPreamble').toEqual([]);
   });
 
-  it('checks selection mode wherever the prompter enables tracking', async () => {
-    const lines = (await readFile(new URL('../prompter.ts', import.meta.url), 'utf8')).split('\n');
-    for (const [index, line] of lines.entries()) {
-      if (!/\b(ENABLE|OPENING)_MOUSE_TRACKING\b/.test(line)) continue;
-      if (line.includes('import ')) continue;
-      expect(line, `ungated enable at line ${index + 1}: ${line.trim()}`).toContain('SELECTION_MODE.active');
+  it('asks for the mouse on taking the screen, after a resize, and back from a hand-over -- unless /select gave it back', async () => {
+    const { SELECTION_MODE, redrawPreamble, sessionModesOff, sessionModesOn } = await import('../modes.js');
+    const { terminalModes } = await import('../restore.js');
+    const mouse = '\u001b[?1000h\u001b[?1002h\u001b[?1003h';
+    try {
+      expect(sessionModesOn(true)).toContain(mouse);
+      expect(redrawPreamble('resize')).toBe('\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h\u001b[?25l\u001b[?7l\u001b[2J\u001b[H');
+      // A hand-over switches everything off and the record says so, so
+      // taking the screen back switches it all on again.
+      expect(sessionModesOff(false)).toContain('\u001b[?1000l');
+      expect(terminalModes.wheelReporting || terminalModes.bracketedPaste).toBe(false);
+      expect(sessionModesOn()).toContain(`\u001b[?2004h${mouse}`);
+      expect(terminalModes.wheelReporting && terminalModes.bracketedPaste).toBe(true);
+      SELECTION_MODE.active = true;
+      expect(sessionModesOn()).not.toContain('?1000h');
+      expect(redrawPreamble('resize')).not.toContain('?1000h');
+      expect(redrawPreamble('resize')).toContain('\u001b[2J\u001b[H');
+    } finally {
+      SELECTION_MODE.active = false;
     }
+    expect(redrawPreamble('repair')).toBe('\u001b[?25l\u001b[?7l\u001b[2J\u001b[H');
+    // A reply settling never clears.
+    expect(redrawPreamble(undefined)).toBe('\u001b[?25l\u001b[?7l');
   });
 });

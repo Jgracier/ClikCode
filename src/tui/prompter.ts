@@ -16,7 +16,7 @@ import { createStreamingBlockParser, splitIntoBlocks } from './render/markdown.j
 import { sanitizeTerminalText } from './render/text.js';
 import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
 import { installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
-import { FOCUS_REPORTING_ON, PUSH_TITLE, notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle, type FocusState } from './terminal-signals.js';
+import { PUSH_TITLE, notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle, type FocusState } from './terminal-signals.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
 import { stripRepeatedTitles } from '../session/title.js';
 import { isGatewayService } from '../session/route.js';
@@ -53,7 +53,7 @@ import { renderMessageBlocks } from './render/message-blocks.js';
 import { reducedMotion } from './capabilities.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingInputAction } from './input-decoder.js';
-import { ENABLE_BRACKETED_PASTE, ENABLE_MOUSE_TRACKING, OPENING_MOUSE_TRACKING, SELECTION_MODE, SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, setTerminalRawMode, wheelScrollRows } from './modes.js';
+import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { estimatedTokens, formatTurnUsage } from './render/usage-line.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
@@ -169,7 +169,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private liveResponse = '';
   private responsePaintTimer?: NodeJS.Timeout;
   private frameInFlight = false;
-  private clearNextFrame = false;
+  /** Why the next frame that draws rows is drawn, when it is not routine:
+   * after a resize, or a repair (Ctrl+L). See redrawPreamble. */
+  private pendingRedraw: Redraw | undefined;
   private queuedDraft?: string;
   /** The turn this window stepped out of (leaveTurn), still running in its
    * worker. What it already wrote to scrollback is remembered here, nothing
@@ -284,7 +286,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Rebuild the whole viewport from our retained state, including the live
     // answer and any approval, without changing the turn or the draft.
     if (key === '\u000c') {
-      this.clearNextFrame = true;
+      this.requestRedraw('repair');
       this.forgetScreenPosition();
       this.paintWaiting(turn);
       return;
@@ -494,17 +496,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // of width wraps the transcript again from its source first.
       this.forgetScreenPosition();
       logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
-      // A phone sends several size changes while its keyboard moves. Queue
-      // one mouse-mode reset with the settled repaint. Writing these modes
-      // here left them interleaved with in-flight frames, and sent the same
-      // four private sequences for every intermediate size.
-      if (!SELECTION_MODE.active) this.mouseResetPending = true;
-      // And the settled repaint clears and homes before it draws: the modes,
-      // then ?25l ESC[2J ESC[H, then the rows -- what Claude Code sends after
-      // a resize on the user's phone. Without the clear, a swipe with the
-      // keyboard hidden stopped scrolling (2026-10-03, after 4d5e566 dropped
-      // it from every full frame). A reply settling still never clears.
-      this.clearNextFrame = true;
+      // A phone sends several size changes while its keyboard moves: one
+      // settled repaint carries the phone's resize sequence (redrawPreamble)
+      // inside its frame. Written here, the modes went out interleaved with
+      // frames in flight, once per intermediate size.
+      this.requestRedraw('resize');
       // No height probe here: it jumps the cursor to the bottom-right corner
       // and asks, at exactly the moment a swipe is being recognised. The size
       // the terminal announces is what the layout uses.
@@ -541,7 +537,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the size has stopped changing. Short enough not to be seen, long enough to
    * land after the client has finished. */
   private resizePaintTimer?: NodeJS.Timeout;
-  private mouseResetPending = false;
   private repaintAfterResize(): void {
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = setTimeout(() => {
@@ -655,9 +650,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       //
       // Selection mode means the user asked for the mouse back; taking the
       // screen must not quietly take it again.
-      output.write(`${ENABLE_BRACKETED_PASTE}${SELECTION_MODE.active ? '' : OPENING_MOUSE_TRACKING}${FOCUS_REPORTING_ON}`);
-      terminalModes.bracketedPaste = true;
-      terminalModes.wheelReporting = true;
+      output.write(sessionModesOn(true));
     }
     // The shell's own title is saved, to be put back on the way out; this
     // UI sets its own while it runs (syncTerminalSignals).
@@ -1153,11 +1146,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (refresh && !this.closed) this.repaint({ keepPalette: false });
   }
 
-  /** Back from a suspend: focus reports and the title again. */
+  /** Back from a hand-over (a `!` command, a picker that left the screen,
+   * Ctrl+Z): every session mode on again, the title taken, and the next
+   * frame drawn as after a resize -- the screen may well have changed size,
+   * and was certainly drawn on by something else. */
   private retakeTerminalSignals(): void {
     if (!output.isTTY) return;
-    output.write(FOCUS_REPORTING_ON);
+    output.write(sessionModesOn());
     this.takeTerminalTitle();
+    this.requestRedraw('resize');
+  }
+
+  /** A resize outranks a repair: it does all a repair does, and more. */
+  private requestRedraw(redraw: Redraw): void {
+    if (this.pendingRedraw !== 'resize') this.pendingRedraw = redraw;
   }
 
   /** Save the shell's title, once per taking of the terminal. */
@@ -2068,29 +2070,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // block's last row: the status line, under the composer. Only the `?25h`
     // below depends on whether the frame shows it.
     const park = `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
-    const mouseReset = this.mouseResetPending && !SELECTION_MODE.active ? ENABLE_MOUSE_TRACKING : '';
+    const modes = takeQueuedModes();
     const showCursor = !pending.hideCursor;
     // Nothing changed: nothing is written. A clock that ticks every second
     // used to send a cursor hide, a park and a show each time regardless.
-    if (!updates.length && !mouseReset && park === this.lastPark && showCursor === this.cursorShown) return;
-    // A full frame already addresses and erases every row, so a reply that
-    // settles never clears (that exposed an empty frame on terminals without
-    // synchronized updates). Only a repaint after a resize, and Ctrl+L, do.
-    // Autowrap goes off before any row is drawn.
-    // Held until a frame that draws rows: a clear with nothing after it
-    // would only blank the screen.
-    const clear = this.clearNextFrame && updates.length ? '\u001b[2J\u001b[H' : '';
-    if (updates.length) this.clearNextFrame = false;
-    const draw = updates.length ? `\u001b[?25l\u001b[?7l${clear}${updates.join('')}` : '';
+    if (!updates.length && !modes && park === this.lastPark && showCursor === this.cursorShown) return;
+    // The preamble goes with rows, never alone: a clear with nothing after
+    // it would only blank the screen, so a resize or repair waits for them.
+    const draw = updates.length ? `${redrawPreamble(this.pendingRedraw)}${updates.join('')}` : '';
+    if (updates.length) this.pendingRedraw = undefined;
     const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
       : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
     // One synchronized update (DEC 2026): a terminal that supports it shows
     // the frame whole or not at all, never half-drawn; one that does not
     // ignores the two sequences. restoreTerminal closes it on any exit.
-    const frame = `\u001b[?2026h${mouseReset}${draw}${park}${cursor}\u001b[?2026l`;
+    const frame = `\u001b[?2026h${modes}${draw}${park}${cursor}\u001b[?2026l`;
     this.lastPark = park;
     this.cursorShown = showCursor;
-    this.mouseResetPending = false;
     this.frameInFlight = true;
     terminalModes.painted = true;
     logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
@@ -2399,13 +2395,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.responsePaintTimer = undefined;
     this.pendingLive = undefined;
     setTerminalRawMode(false);
-    output.write(
-      `${popReadModes()}`
-      // Whoever takes the terminal takes the main screen with it: a vendor
-      // login prompt drawn on our alternate screen would vanish with it.
-      + terminalTeardown(true)
-      + signalsTeardown(),
-    );
+    // Whoever takes the terminal takes the main screen with it: a vendor
+    // login prompt drawn on our alternate screen would vanish with it.
+    output.write(sessionModesOff(true));
     terminalModes.alternateScreen = false;
     process.once('SIGCONT', this.onContinue);
     process.kill(process.pid, 'SIGTSTP');
@@ -2562,7 +2554,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       settings?.signal?.addEventListener('abort', interrupt, { once: true });
       const handleKey = (key: string): void => {
         if (key === '\u000c') {
-          this.clearNextFrame = true;
+          this.requestRedraw('repair');
           this.forgetScreenPosition();
           return draw();
         }
@@ -2821,7 +2813,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Remove the composer and footer before handing over, so the vendor's
     // output continues directly under the conversation instead of being typed
     // across this UI's status rows.
-    output.write(`${popReadModes()}${terminalTeardown(false)}${signalsTeardown()}`);
+    output.write(sessionModesOff(false));
     // Best-effort mitigation, not a confirmed root cause: a vendor login's
     // own paste handling erroring right after handoff is plausibly a race
     // between the terminal actually finishing its mode switch (raw -> cooked,

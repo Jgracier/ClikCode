@@ -78,6 +78,24 @@ SCENARIOS = {
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 4)],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
     },
+    # Opening $EDITOR (/memory edit) hands the terminal over and takes it
+    # back: swipe scrolling and bracketed paste must come back with it.
+    'editor-keeps-modes': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 1),
+                  ('type', '/memory edit'), ('settle', 3)],
+        'env': {'EDITOR': '/bin/true'},
+        'watch': [], 'final_contains': ['The final commit is live.'],
+    },
+    # /select gives the mouse back to the terminal and /select again takes
+    # it: each goes out with the next frame, in that order.
+    'select-mode-toggles-mouse': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '/select'), ('wait_for', 'Selection mode on', 10), ('settle', 1),
+                  ('type', '/select'), ('wait_for', 'Selection mode off', 10), ('settle', 1)],
+        'watch': [],
+        'raw_in_order': ['\x1b[?1000h', '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l', '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h'],
+    },
     'select-and-copy': {
         'turns': [TWO_BLOCKS],
         'steps': [
@@ -622,6 +640,25 @@ def run(name, spec, entry, keep):
         found = bytes(raw).find(sequence.encode(), at)
         if found < 0: problems.append(f'not written (after what came before it): {sequence!r}')
         else: at = found + len(sequence)
+    # The session's modes are on at the end, whatever happened on the way:
+    # each was asked for after it was last switched off. A hand-over (a `!`
+    # command, a picker that leaves the screen) switches them all off, and
+    # coming back must switch them on again -- the mouse modes are what make
+    # a phone swipe scroll, bracketed paste what keeps a pasted newline from
+    # sending. 'modes_off_at_end' names the scenarios that leave them off.
+    if not spec.get('modes_off_at_end'):
+        # Up to the exit's own teardown, which leaves the alternate screen
+        # last and rightly switches everything off.
+        # That teardown switches the mouse off on the alternate screen, leaves
+        # it, and switches it off again: cut where it starts.
+        tail = bytes(raw)
+        leave = tail.rfind(b'\x1b[?1049l')
+        if leave >= 0:
+            start = tail.rfind(b'\x1b[?1006l\x1b[?1016l', 0, leave)
+            tail = tail[:start if 0 <= start and leave - start < 200 else leave]
+        for mode in ('1000', '1002', '1003', '1006', '2004'):
+            on, off = tail.rfind(f'\x1b[?{mode}h'.encode()), tail.rfind(f'\x1b[?{mode}l'.encode())
+            if on < 0 or on < off: problems.append(f'mode ?{mode} is off at the end (last switched off, never on again)')
     for sequence in spec.get('raw_never', []):
         if sequence.encode() in bytes(raw): problems.append(f'written, and never should be: {sequence!r}')
     if spec.get('no_clear_after_type') and typed_raw_at is not None and b'\x1b[2J' in raw[typed_raw_at:]:
