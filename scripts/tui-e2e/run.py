@@ -738,6 +738,13 @@ def run(name, spec, entry, keep):
 
     problems = []
     pump(spec.get('startup', 5))
+    # A fresh state signs in to the fake harness first (its `login` takes two
+    # seconds). On a loaded machine that was still finishing when the fixed
+    # startup ran out, and what was typed meanwhile went to a composer about
+    # to be replaced. Typing starts once the sign-in has finished.
+    if spec.get('wait_sign_in', True) and frames and 'waiting for you to sign in' in frames[-1][1]:
+        if not pump(30, 'signed in to'): problems.append('timed out waiting for the sign-in at startup')
+        pump(0.5)
     typed_at = None
     typed_raw_at = None
     marked_at = None

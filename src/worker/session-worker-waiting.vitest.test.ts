@@ -477,8 +477,13 @@ describe('a window at its prompt', () => {
   it('is interrupted by a turn the worker starts itself, and by a change to the queue', async () => {
     const session = await gatewaySession();
     const other = await attach(session.id);
+    // This window's own connection first, and the queue as it read it: a
+    // steer sent while that connection was still being made was reported to
+    // nobody, and the prompt waited for it forever (seen under load).
+    await questionOrWorker(session.id, async () => 'typed');
+    const mark = workerQueueMark(session.id);
     // Idle window: the typed-as-the-turn-ended race queues a message.
-    const queued = questionOrWorker(session.id, idlePrompt);
+    const queued = questionOrWorker(session.id, idlePrompt, mark);
     other.send({ type: 'steer', text: 'queued while idle', id: 'late-1' });
     expect(await queued).toEqual({ woke: 'queue' });
 
