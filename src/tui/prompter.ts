@@ -499,6 +499,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // here left them interleaved with in-flight frames, and sent the same
       // four private sequences for every intermediate size.
       if (!SELECTION_MODE.active) this.mouseResetPending = true;
+      // And the settled repaint clears and homes before it draws: the modes,
+      // then ?25l ESC[2J ESC[H, then the rows -- what Claude Code sends after
+      // a resize on the user's phone. Without the clear, a swipe with the
+      // keyboard hidden stopped scrolling (2026-10-03, after 4d5e566 dropped
+      // it from every full frame). A reply settling still never clears.
+      this.clearNextFrame = true;
       // No height probe here: it jumps the cursor to the bottom-right corner
       // and asks, at exactly the moment a swipe is being recognised. The size
       // the terminal announces is what the layout uses.
@@ -2067,12 +2073,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Nothing changed: nothing is written. A clock that ticks every second
     // used to send a cursor hide, a park and a show each time regardless.
     if (!updates.length && !mouseReset && park === this.lastPark && showCursor === this.cursorShown) return;
-    // A full frame already addresses and erases every row. Clearing the
-    // screen first exposes an empty frame on terminals that do not implement
-    // synchronized updates, especially when a reply settles or the phone
-    // changes height. Autowrap goes off before any row is drawn.
-    const clear = this.clearNextFrame ? '\u001b[2J\u001b[H' : '';
-    this.clearNextFrame = false;
+    // A full frame already addresses and erases every row, so a reply that
+    // settles never clears (that exposed an empty frame on terminals without
+    // synchronized updates). Only a repaint after a resize, and Ctrl+L, do.
+    // Autowrap goes off before any row is drawn.
+    // Held until a frame that draws rows: a clear with nothing after it
+    // would only blank the screen.
+    const clear = this.clearNextFrame && updates.length ? '\u001b[2J\u001b[H' : '';
+    if (updates.length) this.clearNextFrame = false;
     const draw = updates.length ? `\u001b[?25l\u001b[?7l${clear}${updates.join('')}` : '';
     const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
       : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
