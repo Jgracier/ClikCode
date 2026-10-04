@@ -1,7 +1,7 @@
 /** How an ACP turn waits: for the answer to session/prompt, with the idle
  * watchdog as a ceiling -- and where updates the agent sends between prompts
  * go. Driven by a real child speaking ACP. */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createAcpSession } from './acp-client.js';
 import type { VendorBackgroundTurn } from './background-turn.js';
 import type { HarnessActivityEvent } from '../prompter.js';
@@ -88,9 +88,9 @@ describe('updates an ACP agent sends between prompts', () => {
         { update: { sessionUpdate: 'session_info_update', updatedAt: 'now' } },
       ]]));
       expect(result.text).toBe('first');
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      expect(turns).toHaveLength(1);
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
       expect(await turns[0]!.finished).toEqual({ text: 'A task you started finished.', ended: 'completed' });
+      expect(turns).toHaveLength(1);
     } finally { await session.close(); }
   });
 
@@ -102,14 +102,17 @@ describe('updates an ACP agent sends between prompts', () => {
         { update: chunk('one') }, { answer: true },
         { after: 50, update: tool('bg', 'pending') },
         { after: 50, update: { sessionUpdate: 'usage_update', used: 1, size: 2 } },
-        { after: 150, update: tool('bg', 'completed') },
+        // Long enough that the check below runs while the tool is still
+        // running, however late this process is scheduled.
+        { after: 1000, update: tool('bg', 'completed') },
       ]]));
-      await new Promise((resolve) => setTimeout(resolve, 120));
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
       const seen: HarnessActivityEvent[] = [];
       turns[0]!.attach({ onActivity: (event) => seen.push(event) });
       let ended = false;
       void turns[0]!.finished.then(() => { ended = true; });
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Past the usage_update, well before the tool settles.
+      await new Promise((resolve) => setTimeout(resolve, 200));
       expect(ended, 'usage_update does not end it while the tool runs').toBe(false);
       expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
       expect(seen.map((event) => event.kind)).toEqual(['tool-start', 'tool-done']);
@@ -126,8 +129,7 @@ describe('updates an ACP agent sends between prompts', () => {
     ], { onActivity: (event: HarnessActivityEvent) => activity.push(event) });
     try {
       await session.runTurn(prompts);
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(turns).toHaveLength(1);
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
       expect((await session.runTurn(prompts)).text).toBe('two');
       expect(await turns[0]!.finished).toEqual({ text: '', ended: 'superseded' });
       expect(activity.map((event) => `${event.kind} ${event.id}`)).toEqual(['tool-done bg']);

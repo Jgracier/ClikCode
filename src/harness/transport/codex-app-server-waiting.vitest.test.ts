@@ -3,7 +3,7 @@
  * leaves running. Driven by a real child process speaking the app-server's
  * JSONL the way codex 0.155 does (shapes recorded from a live probe). */
 import { spawn } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createCodexSession } from './codex-app-server.js';
 import type { VendorBackgroundTurn } from './background-turn.js';
 import type { HarnessActivityEvent } from '../prompter.js';
@@ -89,13 +89,16 @@ describe('the idle watchdog on a Codex turn', () => {
     } finally { await codex.close(); }
   });
 
+  // The budgets here leave the fake server room to be scheduled late on a
+  // loaded machine: each gap the turn must survive is well inside its budget,
+  // and the one it must outlast (a silent tool) well past the idle one.
   it('gives a running tool the longer budget, and any notification restarts it', async () => {
     const codex = session([[
       { send: command('build', false) },
-      { after: 350, send: command('build', true) },
-      { after: 150, send: { method: 'item/agentMessage/delta', params: { threadId: 'T', turnId: '{{turn}}', itemId: 'm', delta: 'ok' } } },
-      { after: 150, send: turnCompleted('T', '{{turn}}') },
-    ]], { idleMs: 250, toolIdleMs: 2000 });
+      { after: 900, send: command('build', true) },
+      { after: 200, send: { method: 'item/agentMessage/delta', params: { threadId: 'T', turnId: '{{turn}}', itemId: 'm', delta: 'ok' } } },
+      { after: 200, send: turnCompleted('T', '{{turn}}') },
+    ]], { idleMs: 600, toolIdleMs: 5000 });
     try {
       expect((await codex.runTurn(input())).text).toBe('ok');
     } finally { await codex.close(); }
@@ -105,11 +108,11 @@ describe('the idle watchdog on a Codex turn', () => {
     const codex = session([[
       { send: command('build', false) },
       { approve: 'build' },
-    ], []], { idleMs: 150, toolIdleMs: 150 });
+    ], []], { idleMs: 600, toolIdleMs: 600 });
     let answered = false;
     try {
       const running = codex.runTurn(input([], {
-        onApproval: () => new Promise<boolean>((resolve) => setTimeout(() => { answered = true; resolve(true); }, 500)),
+        onApproval: () => new Promise<boolean>((resolve) => setTimeout(() => { answered = true; resolve(true); }, 1500)),
       }));
       const failure = await running.catch((error: Error & { reason?: string }) => error);
       // The watchdog only fires once the approval has been answered.
@@ -152,12 +155,12 @@ describe('work a Codex turn leaves running', () => {
     ]], { backgroundTurns: (turn) => turns.push(turn) });
     try {
       await codex.runTurn(input());
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(turns.map((turn) => turn.reason)).toEqual(['vendor-turn']);
+      await vi.waitFor(() => expect(turns.map((turn) => turn.reason)).toEqual(['vendor-turn']), { timeout: 5000, interval: 10 });
       const text: string[] = [];
       turns[0]!.attach({ onResponseDelta: (delta) => text.push(delta) });
-      expect(text.join('')).toBe('The sub-agent finished.');
       expect(await turns[0]!.finished).toEqual({ text: 'The sub-agent finished.', ended: 'completed' });
+      expect(text.join('')).toBe('The sub-agent finished.');
+      expect(turns).toHaveLength(1);
     } finally { await codex.close(); }
   });
 
