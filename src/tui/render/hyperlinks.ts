@@ -28,6 +28,9 @@ let hyperlinksEnabled: boolean | undefined;
 /** Resolved once per process unless something sets it explicitly. */
 export const linksOn = (): boolean => hyperlinksEnabled ?? (hyperlinksEnabled = hyperlinksSupported());
 
+/** An SGR whose parameters include 4, underline on. */
+const UNDERLINE_ON = /\u001b\[(?:[0-9;]*;)?4[;m]/;
+
 /** A hard-wrapped link can leave its hyperlink open at the end of a row. Rows
  * are repainted independently, so the attribute must never outlive its row.
  * The same is true of chalk's underline SGR: wrapWords hard-breaks a long
@@ -36,6 +39,8 @@ export const linksOn = (): boolean => hyperlinksEnabled ?? (hyperlinksEnabled = 
 export function closeOpenHyperlink(row: string): string {
   const last = row.lastIndexOf('\u001b]8;');
   const closedLink = last === -1 || row.startsWith(HYPERLINK_CLOSE, last) ? row : `${row}${HYPERLINK_CLOSE}`;
+  // Nearly every row never turns underline on, and then none is left open.
+  if (!UNDERLINE_ON.test(closedLink)) return closedLink;
   let underline = false;
   for (const match of closedLink.matchAll(/\u001b\[([0-9;]*)m/g)) {
     const params = match[1]!.split(';').filter(Boolean).map(Number);

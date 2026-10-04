@@ -3,7 +3,8 @@
 
 import chalk from 'chalk';
 import { closeOpenHyperlink } from './hyperlinks.js';
-import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock } from './markdown.js';
+import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock, splitIntoBlocks } from './markdown.js';
+import { sanitizeTerminalText } from './text.js';
 import { terminalCellWidth } from './width.js';
 import { wrapCodeLine, wrapWords } from './wrap.js';
 import type { MessageBlock } from '../../harness/prompter.js';
@@ -86,5 +87,35 @@ export function renderMessageBlocks(
       rows.push(`${linePrefix()}${indentation}${cell}`);
     }
   }
+  return rows;
+}
+
+/** How many whole messages' rows are kept: a long chat's scrollback window
+ * and the one switched away from and back to. */
+const MESSAGE_ROWS_KEPT = 2000;
+
+/** Rows of whole saved messages, by everything that decides them: the width
+ * and colour level (`look`), then the marker, then the text. */
+let messageRowCache: { look: string; byMarker: Map<string, Map<string, readonly string[]>> } | undefined;
+
+/** One whole message's rows, as renderMessageBlocks lays them out from its
+ * raw text. Opening a chat lays out every message in its scrollback window
+ * and switching back did it all again; a message's rows depend only on what
+ * is in the key, so each is laid out once per width. Least recently used
+ * goes first. Rows are shared: callers copy, never edit. */
+export function messageRows(content: string, marker: string, width: number): readonly string[] {
+  const look = `${width}:${chalk.level}`;
+  if (messageRowCache?.look !== look) messageRowCache = { look, byMarker: new Map() };
+  let cache = messageRowCache.byMarker.get(marker);
+  if (!cache) messageRowCache.byMarker.set(marker, cache = new Map());
+  const hit = cache.get(content);
+  if (hit) {
+    cache.delete(content);
+    cache.set(content, hit);
+    return hit;
+  }
+  const rows = renderMessageBlocks(splitIntoBlocks(sanitizeTerminalText(content)), marker, width);
+  cache.set(content, rows);
+  if (cache.size > MESSAGE_ROWS_KEPT) cache.delete(cache.keys().next().value!);
   return rows;
 }

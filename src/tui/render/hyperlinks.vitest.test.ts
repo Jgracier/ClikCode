@@ -14,5 +14,6 @@ describe('closeOpenHyperlink', () => {
     expect(closeOpenHyperlink('\u001b[4mpartial-link-label')).toBe('\u001b[4mpartial-link-label\u001b[24m');
     expect(closeOpenHyperlink('\u001b[4mlabel\u001b[24m and more')).toBe('\u001b[4mlabel\u001b[24m and more');
     expect(closeOpenHyperlink('\u001b[0mreset already')).toBe('\u001b[0mreset already');
+    expect(closeOpenHyperlink('\u001b[1;4mbold underline')).toBe('\u001b[1;4mbold underline\u001b[24m');
   });
 });
