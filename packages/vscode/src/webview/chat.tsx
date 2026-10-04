@@ -9,7 +9,7 @@ import {
 } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
-import { shimmerCycleMs } from '../../../../src/harness/protocol/timings';
+import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
 import { ACTIONS } from '../../../../src/harness/protocol/wording';
 import { useNow, useSpinFrame } from './clock';
 
@@ -50,7 +50,7 @@ function CopyAnswer({ text }: { text: string }): JSX.Element {
   const [copied, setCopied] = useState(false);
   return (
     <button type="button" class="icon-button tiny message-copy" title={copied ? 'Copied' : 'Copy answer'} aria-label={copied ? 'Copied' : 'Copy answer'}
-      onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}>
+      onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), COPIED_MS); }); }}>
       <Icon name={copied ? 'check' : 'copy'} />
     </button>
   );
