@@ -38,7 +38,9 @@ export function stripAnsi(text: string): string {
  * URL that looks like an authorisation endpoint, so an ordinary link printed
  * in a banner ("docs at https://…") is not mistaken for one. */
 export function extractLoginUrl(text: string): string | undefined {
-  const urls = stripAnsi(text).match(/https:\/\/[^\s"'<>)\]]+/g) ?? [];
+  // A link drawn inside a box (Cline's) ends at the border: box-drawing
+  // and block characters are never part of a URL.
+  const urls = stripAnsi(text).match(/https:\/\/[^\s"'<>)\]\u2500-\u259f]+/g) ?? [];
   const isAuth = (url: string): boolean =>
     /\b(?:oauth2?|auth|authorize|authorise|login|sign-?in|device|activate)\b|user_code=|_device\b/i.test(url);
   // The longest match wins among equals: an authorisation URL carries its
