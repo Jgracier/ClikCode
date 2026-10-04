@@ -185,3 +185,35 @@ export async function undoLastTurn(
     return { ...result, text: describe(result, workspace, name) };
   });
 }
+
+/** `/undo N`: the last N turns (1 = the last, as /changes numbers them),
+ * newest first, each by the same rules as /undo -- and it stops at the first
+ * turn that left a file alone: undoing an older turn under it would put back
+ * a file the newer turn's kept change still depends on. */
+export async function undoTurnsBack(
+  session: HarnessSession, n: number,
+  options: { stateDir: string; who: string; turnIsRunning?: (sessionId: string) => Promise<boolean> },
+): Promise<TurnUndo> {
+  if (n <= 1) return undoLastTurn(session, options);
+  const total: Omit<TurnUndo, 'text'> = { restored: [], removed: [], conflicts: [] };
+  const texts: string[] = [];
+  let undone = 0;
+  let check = options.turnIsRunning;
+  for (; undone < n; undone += 1) {
+    const recorded = await readTurnChanges(options.stateDir, session.id);
+    if (!recorded.length) break;
+    const step = await undoLastTurn(session, { ...options, ...(check ? { turnIsRunning: check } : {}) });
+    // Asked once: what runs next would be this conversation's own new turn.
+    check = async () => false;
+    if (step.text.startsWith('Not undone:')) return step;
+    total.restored.push(...step.restored);
+    total.removed.push(...step.removed);
+    total.conflicts.push(...step.conflicts);
+    texts.push(step.text.replace(`\n\n${SHELL_CAVEAT}`, '').replace(/\n\/undo again undoes .*$/, ''));
+    if (step.conflicts.length) { undone += 1; break; }
+  }
+  if (!texts.length) return undoLastTurn(session, options);
+  const stopped = total.conflicts.length && undone < n ? [`Stopped after ${undone} of ${n} turns: a file was left alone, so older turns were not undone.`] : [];
+  const short = !total.conflicts.length && undone < n ? [`Only ${undone} turn${undone === 1 ? ' was' : 's were'} recorded to undo.`] : [];
+  return { ...total, text: [...texts, ...stopped, ...short, SHELL_CAVEAT].join('\n\n') };
+}

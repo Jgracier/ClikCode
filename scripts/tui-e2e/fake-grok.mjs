@@ -149,6 +149,17 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     // `hold_ms`: one more call that runs that long with nothing new arriving,
     // so a test can look at a running turn whose screen holds still.
     if (turn.hold_ms && !cancelled) await tool('hold_1', 'sleep 30', 'held call done', turn.hold_ms);
+    // `edits`: files the turn edits in its working directory, each written
+    // from `old` to `new` and reported as an ACP diff, as an edit tool does.
+    for (const [index, edit] of (turn.edits ?? []).entries()) {
+      if (cancelled) break;
+      const { writeFileSync: write } = await import('node:fs');
+      write(edit.path, edit.old);
+      update({ sessionUpdate: 'tool_call', toolCallId: `edit_${index}`, title: `Edit ${edit.path}`, kind: 'edit', status: 'in_progress', rawInput: { path: edit.path } });
+      await sleep(200);
+      write(edit.path, edit.new);
+      update({ sessionUpdate: 'tool_call_update', toolCallId: `edit_${index}`, status: 'completed', content: [{ type: 'diff', path: edit.path, oldText: edit.old, newText: edit.new }] });
+    }
     // `streamed_tool`: a command printing a line at a time while it runs, then
     // completing with no content -- how ACP agents report a long build.
     if (turn.streamed_tool) {

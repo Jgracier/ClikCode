@@ -19,7 +19,7 @@ import path from 'node:path';
 import type { FileDiff } from '../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { withFileLock } from './store/locks.js';
-import { safeRecordFileName } from './store/paths.js';
+import { safeRecordFileName, stateDirectory } from './store/paths.js';
 
 export type TurnChangeStore = 'agent' | 'reported';
 
@@ -125,4 +125,61 @@ export class TurnChangeCollector {
     this.order.length = 0;
     return out;
   }
+}
+
+/** Forgets a conversation's turn log (session/store/forget.ts calls this when
+ * the conversation goes). */
+export async function removeTurnChanges(sessionId: string, stateDir: string = stateDirectory()): Promise<void> {
+  const file = logPath(stateDir, sessionId);
+  await fs.rm(file, { force: true });
+  await fs.rm(`${file}.lock`, { recursive: true, force: true });
+}
+
+// ---------------------------------------------------------------------------
+// /changes: the recorded turns, newest first, numbered as turns ago -- 1 is
+// the last turn, the same N `/undo N` undoes back through.
+// ---------------------------------------------------------------------------
+
+function promptLine(record: TurnChangeRecord, width = 60): string {
+  const prompt = record.prompt?.replace(/\s+/g, ' ').trim() || '(no prompt recorded)';
+  return prompt.length > width ? `${prompt.slice(0, width - 1)}…` : prompt;
+}
+
+function shownPath(file: string, workspace: string | undefined): string {
+  if (!workspace || !path.isAbsolute(file)) return file;
+  const relative = path.relative(workspace, file);
+  return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : file;
+}
+
+/** The record `n` turns ago (1 = the last), or undefined. */
+export function turnChangesAgo(records: readonly TurnChangeRecord[], n: number): TurnChangeRecord | undefined {
+  return Number.isInteger(n) && n >= 1 ? records[records.length - n] : undefined;
+}
+
+/** `/changes`: one line per recorded turn, newest first -- its prompt, the
+ * files it edited, and the lines added and removed. */
+export function turnChangesList(records: readonly TurnChangeRecord[], workspace?: string): string {
+  if (!records.length) return 'No turns recorded yet in this conversation. Each turn\'s file edits are listed here once it has run.';
+  const rows = [...records].reverse().map((record, index) => {
+    const files = [...new Set(record.changes.flatMap((change) => (change.path ? [shownPath(change.path, workspace)] : [])))];
+    const added = record.changes.reduce((sum, change) => sum + change.additions, 0);
+    const removed = record.changes.reduce((sum, change) => sum + change.removals, 0);
+    const what = files.length
+      ? `${files.slice(0, 3).join(', ')}${files.length > 3 ? ` +${files.length - 3} more` : ''} · +${added} -${removed}`
+      : 'no edits seen';
+    return `  ${String(index + 1).padStart(2)}  ${promptLine(record)}\n      ${what}`;
+  });
+  return [...rows, '', '/changes N shows that turn\'s diff; /undo N undoes the turns back through it.'].join('\n');
+}
+
+/** `/changes N`: that turn's diff, file by file. */
+export function turnChangesDiff(record: TurnChangeRecord, n: number, workspace?: string): string {
+  const head = `Turn ${n} · ${promptLine(record, 80)}`;
+  if (!record.changes.length) return `${head}\n\nNo edits seen: edits made by a shell command, or by a tool that reports no diff, are not recorded.`;
+  const files = record.changes.map((change) => {
+    const title = `${change.path ? shownPath(change.path, workspace) : '(unnamed file)'}  +${change.additions} -${change.removals}${change.change === 'add' ? ' (new)' : change.change === 'delete' ? ' (deleted)' : ''}`;
+    const lines = change.lines.map((line) => line.kind === 'gap' ? '  …' : `${line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' '} ${line.text}`);
+    return [title, ...lines, ...(change.omitted ? [`  … ${change.omitted} more lines not recorded`] : [])].join('\n');
+  });
+  return [head, ...files].join('\n\n');
 }

@@ -12,8 +12,8 @@ import { FileCheckpointStore } from '../agent/file-checkpoints.js';
 import { resolveSlashCommand } from '../tui/slash/registry.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from './model.js';
-import { appendTurnChanges, readTurnChanges, TurnRecorder } from './turn-changes.js';
-import { undoLastTurn as undoTurn } from './undo-turn.js';
+import { appendTurnChanges, readTurnChanges, removeTurnChanges, TurnRecorder, turnChangesAgo, turnChangesDiff, turnChangesList } from './turn-changes.js';
+import { undoLastTurn as undoTurn, undoTurnsBack } from './undo-turn.js';
 
 const undoLastTurn = (s: HarnessSession, options: { stateDir: string; who: string }) => undoTurn(s, { ...options, turnIsRunning: async () => false });
 
@@ -354,5 +354,68 @@ describe('/undo availability', () => {
 
   it('is unavailable on a plain-text CLI, saying why', () => {
     expect(undo('local', harness('text-cli'))).toMatchObject({ available: false, reason: expect.stringMatching(/Aider runs as a plain-text CLI/) });
+  });
+});
+
+describe('/undo N and /changes', () => {
+  /** Three vendor turns, each changing one line of a.txt. */
+  async function threeTurns(id: string): Promise<HarnessSession> {
+    const s = session(id, 'local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'one\ntwo\nthree\n');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'ONE\ntwo\nthree\n');
+    await reportTurn(s.id, [{ kind: 'tool-done', id: 'c1', label: 'Edit a.txt', diff: eventDiff('one', 'ONE', { path: 'a.txt' }) }], 'shout the first line');
+    await reportTurn(s.id, [], 'just explain it');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'ONE\ntwo\nTHREE\n');
+    await fs.writeFile(path.join(cwd, 'b.txt'), 'made\n');
+    await reportTurn(s.id, [
+      { kind: 'tool-done', id: 'c2', label: 'Edit a.txt', diff: eventDiff('three', 'THREE', { path: 'a.txt' }) },
+      { kind: 'tool-done', id: 'c3', label: 'Write b.txt', diff: eventDiff('', 'made\n', { path: 'b.txt', numbered: true }) },
+    ], 'shout the last line');
+    return s;
+  }
+
+  it('lists the turns newest first, numbered as turns ago, and shows one turn as a diff', async () => {
+    const s = await threeTurns('changes-1');
+    const records = await readTurnChanges(stateDir, s.id);
+    const list = turnChangesList(records, cwd);
+    expect(list.split('\n').slice(0, 6)).toEqual([
+      '   1  shout the last line', '      a.txt, b.txt · +2 -1',
+      '   2  just explain it', '      no edits seen',
+      '   3  shout the first line', '      a.txt · +1 -1',
+    ]);
+    const diff = turnChangesDiff(turnChangesAgo(records, 3)!, 3, cwd);
+    expect(diff).toContain('Turn 3 · shout the first line');
+    expect(diff).toContain('a.txt  +1 -1');
+    expect(diff).toContain('- one');
+    expect(diff).toContain('+ ONE');
+    expect(turnChangesAgo(records, 4)).toBeUndefined();
+  });
+
+  it('undoes back through turn N newest first, an edit-less turn counting as one', async () => {
+    const s = await threeTurns('undo-n-1');
+    const undone = await undoTurnsBack(s, 3, { stateDir, who: 'OpenCode', turnIsRunning: async () => false });
+    expect(await read('a.txt')).toBe('one\ntwo\nthree\n');
+    expect(await exists('b.txt')).toBe(false);
+    expect(undone.conflicts).toEqual([]);
+    expect(undone.text).toContain('"shout the last line"');
+    expect(undone.text).toContain('"shout the first line"');
+    expect(await readTurnChanges(stateDir, s.id)).toEqual([]);
+  });
+
+  it('stops at the first turn that left a file alone, and keeps the older turns', async () => {
+    const s = await threeTurns('undo-n-2');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'ONE\ntwo\nmine now\n');
+    const undone = await undoTurnsBack(s, 3, { stateDir, who: 'OpenCode', turnIsRunning: async () => false });
+    expect(undone.conflicts.map((item) => path.basename(item.path))).toEqual(['a.txt']);
+    expect(undone.text).toContain('Stopped after 1 of 3 turns');
+    expect(await read('a.txt')).toBe('ONE\ntwo\nmine now\n');
+    expect((await readTurnChanges(stateDir, s.id)).map((record) => record.prompt)).toEqual(['shout the first line', 'just explain it', 'shout the last line']);
+  });
+
+  it('refuses while a turn is running, and forgets the log with the conversation', async () => {
+    const s = await threeTurns('undo-n-3');
+    expect((await undoTurnsBack(s, 2, { stateDir, who: 'OpenCode', turnIsRunning: async () => true })).text).toMatch(/^Not undone: a turn is running/);
+    await removeTurnChanges(s.id, stateDir);
+    expect(await readTurnChanges(stateDir, s.id)).toEqual([]);
   });
 });
