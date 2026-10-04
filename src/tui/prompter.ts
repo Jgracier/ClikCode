@@ -4,6 +4,7 @@
  * written at an address, and a frame writes only the rows that changed. */
 
 import chalk from 'chalk';
+import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import type { LoginLink, SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import { pastedText } from './keys.js';
@@ -503,6 +504,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** An approval answered: the next one waiting comes up, or the band goes
    * back to what the turn was doing. */
   private answerApproval(pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always'): void {
+    lifecycle('window.approval.answer', { answer: answer === 'always' ? 'always' : answer ? 'allow' : 'deny' });
     this.pendingApproval = undefined;
     this.approvalsAnswered += 1;
     pending.resolve(answer);
@@ -591,6 +593,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = setTimeout(() => {
       this.resizePaintTimer = undefined;
+      lifecycle('window.resize', { cols: output.columns, rows: output.rows });
       if (this.closed || this.suspended) return;
       this.rewrapIfWidthChanged();
       // Whole, whatever the immediate frame already drew: the preamble this
@@ -744,6 +747,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   render(session: HarnessSession, _account?: string, notice?: string, journal?: JournalState): void {
     if (this.currentSession?.id !== session.id) {
+      setLifecycleSession(session.id);
+      lifecycle('window.conversation', { from: this.currentSession?.id ?? null, harness: session.nativeHarness ?? session.route });
       // A /search mention belongs to the conversation it was found in.
       if (this.mentionFocus?.sessionId !== session.id) this.mentionFocus = undefined;
       this.activityEntries = [];
@@ -948,6 +953,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * rather than starting a wait, which would reset the turn; stop() gives
    * them back. */
   signInScreen(name: string): SignInScreen {
+    lifecycle('window.signin.start', { name });
     const controller = new AbortController();
     const label = `waiting for you to sign in to ${name} in your browser`;
     const cancel = (): void => controller.abort();
@@ -1025,6 +1031,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onCommand?: (text: string) => Promise<LiveTurnInputResult>,
     onLeave?: () => void,
   ): void {
+    lifecycle('window.turn.start', { label: message.slice(0, 80), steerable: Boolean(onSubmit) });
     // stopWaiting is also how a finished turn drops its prompt. Calling it
     // here, a moment after Enter painted that prompt, used to drop the prompt
     // with it -- the message flashed and was gone until a later snapshot
@@ -1177,6 +1184,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   stopWaiting(refresh = true): void {
     const turn = this.turn;
+    if (turn) lifecycle('window.turn.end', { cancelled: turn.cancelled });
     if (turn) {
       if (turn.timer) clearTimeout(turn.timer);
       turn.timer = undefined;
@@ -1286,6 +1294,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'> {
+    lifecycle('window.approval.ask', { title: title.slice(0, 80) });
     return new Promise<boolean | 'always'>((resolveApproval) => {
       if (!this.pendingApproval) this.approvalRestoreLabel = this.turn?.label ?? '';
       this.approvalQueue.push({
@@ -2634,6 +2643,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // version retried here for 10s after a vendor login, which could never
     // change the answer -- it only delayed the same exit.
     if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
+    lifecycle('window.prompt.start');
     return new Promise((resolveQuestion, rejectQuestion) => {
       let value = this.queuedDraft ?? '';
       this.queuedDraft = undefined;
@@ -2707,6 +2717,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       };
       const finish = (answer: string): void => {
         if (!release()) return;
+        lifecycle('window.prompt.end', { how: !answer ? 'empty' : answer.startsWith('/') ? `command ${answer.split(/\s/, 1)[0]}` : 'message' });
         this.clearTransientNotice();
         if (answer) this.panelState = undefined;
         // A line sent is done with the mention it was looking at.
@@ -2930,11 +2941,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onAction?: (value: T, action: string) => Promise<void>,
     settings?: PickerSettings<T>,
   ): Promise<T | undefined> {
-    return runOptionPicker<T>(this.pickerHost(), title, options, onAction, settings);
+    lifecycle('window.picker.open', { title: title.slice(0, 80), options: options.length });
+    return runOptionPicker<T>(this.pickerHost(), title, options, onAction, settings)
+      .finally(() => lifecycle('window.picker.close', { title: title.slice(0, 80) }));
   }
 
   board(settings: ConversationBoardSettings): Promise<BoardResult | undefined> {
-    return runConversationBoard(this.pickerHost(), settings);
+    lifecycle('window.board.open');
+    return runConversationBoard(this.pickerHost(), settings).finally(() => lifecycle('window.board.close'));
   }
 
   private pickerHost(): OptionPickerHost {
@@ -2962,6 +2976,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   close(): void {
     if (this.closed) return;
+    lifecycle('window.close');
     this.closed = true;
     this.pendingLive = undefined;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
@@ -3000,6 +3015,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * login) without tearing the session down, so ClikCode's UI can resume in
    * place once that process exits. */
   async suspend(): Promise<void> {
+    lifecycle('window.suspend');
     this.suspended = true;
     this.pendingLive = undefined;
     this.forgetScreenPosition();
@@ -3024,6 +3040,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   resume(): void {
     if (this.closed) return;
+    lifecycle('window.resume');
     // A vendor login can resize a mobile terminal while it owns the TTY; the
     // transcript is written again at the new width when control returns.
     this.suspended = false;

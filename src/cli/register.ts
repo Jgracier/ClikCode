@@ -41,6 +41,13 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('status').description('Show the optional local control API runtime').action(aiStatus);
   program.command('stop').description('Stop this ClikCode installation’s optional control API').action(aiStop);
   program.command('doctor').description('Inspect installed harness versions and centralized capabilities').action(aiDoctor);
+  program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
+    .option('--session <id>', 'Only this conversation (an id or the start of one)')
+    .option('--role <role>', 'Only window, worker, bridge or command')
+    .option('--since <age>', 'Only the last 30s, 10m, 2h, 1d')
+    .option('-n, --lines <count>', 'How many lines (default 100)')
+    .option('-f, --follow', 'Keep printing as it is written')
+    .action(async (options) => (await import('../commands/logs.js')).showLogs(options));
   program.command('permissions [mode]').description('Choose Ask, Bypass, or Auto approval behavior for the active chat')
     .action((mode?: string) => aiPermissions(mode));
   const accounts = program.command('accounts').alias('account').description('Manage local provider accounts');

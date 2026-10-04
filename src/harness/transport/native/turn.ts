@@ -2,6 +2,7 @@
  * silent harness has stopped, and the caps on how much of its output is
  * kept. */
 
+import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import { killProcessTreePortable, spawnPortable as spawn } from '../spawn.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
@@ -247,6 +248,9 @@ export async function captureNativeHarnessTurn(
       detached: process.platform !== 'win32',
       ...(options.cwd ? { cwd: options.cwd } : {}),
     });
+    const spawnedAt = Date.now();
+    lifecycle('vendor.turn.spawn', { harness: spec.command, child: child.pid });
+    child.once('close', (code, signal) => lifecycle('vendor.turn.exit', { harness: spec.command, child: child.pid, code, signal, ms: Date.now() - spawnedAt }));
     let stdout = '';
     let stderr = '';
     let exceededLimit = false;

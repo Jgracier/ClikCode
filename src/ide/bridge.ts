@@ -11,6 +11,7 @@
  * One conversation at a time, like a terminal: `open` switches, and a slash
  * command that moves the conversation (/new, a handoff, /resume) switches too.
  */
+import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
@@ -115,6 +116,8 @@ export class IdeBridge {
   }
 
   handle(request: IdeRequest): void {
+    // What the editor asked for, minus its frequent read-only queries.
+    if (request.type !== 'query') lifecycle('bridge.request', { type: request.type, ...(request.type === 'choose' ? { kind: request.choice.kind } : {}) });
     switch (request.type) {
       case 'open':
         this.enqueue(async () => {
@@ -263,6 +266,8 @@ export class IdeBridge {
       await leaveConversation(previous);
     }
     this.sessionId = id;
+    setLifecycleSession(id);
+    lifecycle('bridge.conversation');
     this.preparedRoute = undefined;
     await claimConversation(id);
     await this.emitSession();
@@ -817,8 +822,8 @@ export async function runIdeBridge(config: Conf): Promise<void> {
     if (message && typeof message === 'object' && typeof (message as { type?: unknown }).type === 'string') running.handle(message as IdeRequest);
   });
   // The editor closed or crashed: the channel is gone with it.
-  process.on('disconnect', () => { void running.shutdown().finally(() => process.exit(0)); });
-  process.on('SIGTERM', () => { void running.shutdown().finally(() => process.exit(0)); });
+  process.on('disconnect', () => { lifecycle('bridge.stop', { reason: 'editor disconnected' }); void running.shutdown().finally(() => process.exit(0)); });
+  process.on('SIGTERM', () => { lifecycle('bridge.stop', { reason: 'SIGTERM' }); void running.shutdown().finally(() => process.exit(0)); });
   running.start();
   await new Promise<void>(() => { /* lives as long as the channel */ });
 }

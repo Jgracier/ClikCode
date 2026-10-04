@@ -10,6 +10,7 @@
  */
 import { STOPPED } from '../harness/protocol/wording.js';
 import { spawn } from 'node:child_process';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { idleDecision, startsSuccessor } from './idle-decisions.js';
 import { createResumeWaiter } from './resume-wait.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
@@ -183,9 +184,21 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   };
 
   let awaitingHeldVendor = false;
+  /** What the worker's idle exit is doing now, logged when it changes: what
+   * holds it up, or that its timer runs (runtime/lifecycle-log.ts). */
+  let idleState = '';
+  const noteIdle = (state: string): void => {
+    if (state === idleState) return;
+    idleState = state;
+    lifecycle('worker.idle', { state });
+  };
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
+    noteIdle(turnRunning ? 'held: a turn is running' : vendorBackground.busy ? 'held: vendor background work'
+      : observer.attachedCount > 0 ? `held: ${observer.attachedCount} window(s) attached` : agentSession.notifications.length ? 'held: a notification to deliver'
+        : resumeWaiter.pending ? 'held: waiting for a quota reset' : hasHeldVendorProcess(sessionId) ? 'held: a vendor finishing background work'
+          : runningShellCount(agentSession) > 0 ? `held: ${runningShellCount(agentSession)} background shell(s)` : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
     if (retireWhenIdle && !retireBlocker()) { void shutdown('replaced by a newer ClikCode build'); return; }
@@ -225,6 +238,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // Something happened meanwhile (a turn, a window): its own edge re-arms.
     if (idleTimer || turnRunning || draining || observer.attachedCount > 0 || resumeWaiter.pending) return;
     const decision = idleDecision({ workRunning: running, workSince: vendorWorkSince, now: Date.now(), ceilingMs: ABANDONED_SHELL_MS });
+    noteIdle(decision === 'recheck' ? 'held: the vendor is still running work it started' : `idle reached: ${decision}`);
     if (decision === 'recheck') {
       vendorWorkSince ??= Date.now();
       idleTimer = setTimeout(() => { void idleReached(); }, VENDOR_WORK_RECHECK_MS);
@@ -423,6 +437,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
 
   const runTurn = async (command: Extract<ClientCommand, { type: 'submit' }>): Promise<void> => {
     turnRunning = true;
+    const turnStarted = Date.now();
+    let turnOutcome = 'completed';
+    lifecycle('worker.turn.start', { queued: Boolean(command.queuedTurnId), clients: observer.attachedCount });
     const resumed = resumingTurn;
     resumingTurn = false;
     if (idleTimer) clearTimeout(idleTimer);
@@ -454,6 +471,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       });
     } catch (error) {
       const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
+      turnOutcome = cancelled ? 'cancelled' : `error: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`;
       if (cancelled) {
         // Same distinction interactive.ts's own catch makes today: something
         // worth keeping (text or tool activity already streamed) is
@@ -501,6 +519,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       const ended = await currentSessionAndAccount();
       observer.endTurn(ended.session, ended.account);
       turnRunning = false;
+      lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
       activeQueuedTurnId = undefined;
       // Vendor work that arrived while this turn was finishing.
       vendorBackground.userTurnEnded();
@@ -533,6 +552,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         if (socket.destroyed) return;
         connection.attached = true;
         observer.attach(socket);
+        lifecycle('worker.client.attach', { clients: observer.attachedCount, turnRunning });
         observer.snapshotFor(socket, current, account);
         // A turn waiting on an answer is asked again here: whoever it asked
         // may be gone, and this window may be the only one left to answer.
@@ -669,7 +689,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     });
     socket.on('close', () => {
       connections.delete(socket);
+      const wasAttached = connection.attached;
       observer.detach(socket);
+      if (wasAttached) lifecycle('worker.client.detach', { clients: observer.attachedCount, turnRunning });
       // The conversation is closed on every terminal that had it: nothing
       // local stays running for it. A running turn keeps what it is using;
       // the next turn starts servers again if it needs them.
@@ -690,6 +712,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     return shuttingDown;
   };
   const shutdownOnce = async (reason: string): Promise<void> => {
+    lifecycle('worker.shutdown', { reason, turnRunning, clients: observer.attachedCount });
     // Background shells the agent tools started are spawned DETACHED on
     // everything but Windows, so they outlive this process rather than dying
     // with it. disposeSessionState is the only thing that kills them and had
@@ -731,7 +754,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // to reopen the conversation. Stopped by a signal, it stays stopped.
     // A turn parked for the reset is owed too: the successor sends it.
     resumeWaiter.stop();
-    if (startsSuccessor(owed || resumeWaiter.pending, reason)) startSuccessor();
+    const successor = startsSuccessor(owed || resumeWaiter.pending, reason);
+    lifecycle('worker.stopped', { reason, owed, successor });
+    if (successor) startSuccessor();
     process.exit(0);
   };
   const startSuccessor = (): void => {

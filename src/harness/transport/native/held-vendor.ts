@@ -20,6 +20,7 @@
  *  - the ceiling passes, or the idle watchdog stops a silent process.
  *
  * One per ClikCode session. */
+import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTurnHandler } from '../background-turn.js';
 import type { HarnessTurnObserver } from '../../events/turn-observer.js';
 import type { BackgroundWait } from './background-wait.js';
@@ -64,6 +65,7 @@ const gone = new Map<string, Array<() => void>>();
 function forget(sessionId: string, vendor: HeldVendor): void {
   if (held.get(sessionId) !== vendor) return;
   held.delete(sessionId);
+  lifecycle('vendor.released');
   for (const resolve of gone.get(sessionId)?.splice(0) ?? []) resolve();
 }
 
@@ -133,6 +135,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
   }
   const previous = held.get(options.sessionId);
   held.set(options.sessionId, vendor);
+  lifecycle('vendor.held', { pending: options.background.pending });
   if (previous) void previous.close();
   return vendor;
 }

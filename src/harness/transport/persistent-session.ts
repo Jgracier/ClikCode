@@ -3,6 +3,7 @@
  * against its failure, a polite cancel that settles before the child is
  * killed, and background turns for work the vendor does between ours. What
  * a turn says and how it is cancelled stay with each transport. */
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
 import { spawnPortable } from './spawn.js';
@@ -213,6 +214,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       cwd: launch.cwd, env: { ...process.env, ...launch.environment }, stdio: ['pipe', 'pipe', 'pipe'], detached,
     });
     this.leftRunning.clear();
+    lifecycle('vendor.child.spawn', { transport: this.label, child: child.pid });
+    child.once('close', (code, signal) => lifecycle('vendor.child.exit', { transport: this.label, child: child.pid, code, signal }));
     const live: L = {
       ...fields,
       key,

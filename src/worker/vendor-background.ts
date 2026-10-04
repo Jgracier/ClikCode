@@ -9,6 +9,7 @@
  * at a time, and never beside a user turn: a user turn supersedes it (the
  * transport ends it and hands the vendor to that turn), and one that arrives
  * while a user turn is still finishing starts right after. */
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
@@ -92,6 +93,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
 
   const run = async (turn: VendorBackgroundTurn): Promise<void> => {
     active = turn;
+    lifecycle('worker.background.start', { transport: turn.transport, reason: turn.reason });
     deps.changed();
     const { observer } = deps;
     const finished: string[] = [];
@@ -119,6 +121,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     turn.attach(sink);
     try {
       const outcome = await turn.finished;
+      lifecycle('worker.background.end', { ended: outcome.ended });
       const record = backgroundTurnRecord(outcome, finished);
       // Only background work that left something in the conversation is a
       // turn there to undo.

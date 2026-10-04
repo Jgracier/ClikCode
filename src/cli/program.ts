@@ -4,6 +4,7 @@
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs';
+import { lifecycleProcess, setLifecycleRole } from '../runtime/lifecycle-log.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { Command } from 'commander';
@@ -76,6 +77,12 @@ export function handleCommandError(error: unknown): void {
  */
 export function buildBaseProgram(config: Conf): Command {
   const program = new Command();
+  // Every process says what it is, when it started and how it ended
+  // (runtime/lifecycle-log.ts). A window names its conversation once open.
+  const [command, argument] = process.argv.slice(2);
+  if (command === 'session-worker') setLifecycleRole('worker', argument);
+  else if (command === 'ide-bridge') setLifecycleRole('bridge');
+  lifecycleProcess({ version: CLIKCODE_VERSION });
 
   // Restore the terminal FIRST. The ClikCode UI runs in raw mode with the
   // cursor hidden, autowrap off and bracketed paste on; an error printed into
