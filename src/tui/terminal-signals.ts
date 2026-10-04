@@ -57,9 +57,12 @@ export function shouldNotify(focus: FocusState, now: number): boolean {
   return focus.focused === false && now - focus.since >= NOTIFY_AFTER_UNFOCUSED_MS;
 }
 
-/** The title while a turn runs -- the spinner and what it is doing -- and
- * when idle, the conversation's name. */
-export function windowTitle(state: { running: boolean; glyph?: string; activity?: string; name?: string }): string {
-  if (!state.running) return state.name?.trim() || 'ClikCode';
-  return [state.glyph, state.activity?.trim() || 'working'].filter(Boolean).join(' ');
+/** The conversation's name, and while a turn runs, that it is working --
+ * or waiting for the user, which is worth seeing from another tab. Nothing
+ * that changes within a turn: a spinner or the current call in the title
+ * rewrote it every tick, and the tab's progress indicator already moves. */
+export function windowTitle(state: { running: boolean; asking?: boolean; name?: string }): string {
+  const name = state.name?.trim() || 'ClikCode';
+  if (!state.running) return name;
+  return `${state.asking ? 'waiting for you' : 'working'} · ${name}`;
 }

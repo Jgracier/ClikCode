@@ -1212,21 +1212,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** The window title and the tab's progress indicator, kept in step with
-   * the turn: spinner and activity while it runs, the conversation's name
-   * when idle. Written only when they change, and never off a TTY. */
-  private syncTerminalSignals(): void {
-    if (!output.isTTY || this.suspended || this.closed || !terminalModes.titlePushed) return;
+   * the turn: whether it is working or waiting for the user, and the
+   * conversation's name. Only what changed, for the next frame to carry
+   * (pendingSignals), and never off a TTY. The title holds still while a turn
+   * runs -- the progress indicator is what moves -- so a spinner tick writes
+   * nothing here. */
+  private terminalSignals(): string {
+    if (!output.isTTY || this.suspended || this.closed || !terminalModes.titlePushed) return '';
     const running = Boolean(this.turn);
     const title = windowTitle({
-      running, glyph: waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame),
-      activity: this.pendingApproval ? 'waiting for you' : (this.toolStatus()?.phase || this.turn?.label || '').replace(/(…|\.\.\.)$/, ''),
+      running, asking: Boolean(this.pendingApproval),
       ...(this.currentSession?.name ? { name: this.currentSession.name } : {}),
     });
     let sequence = '';
     if (title !== this.terminalTitle) { sequence += titleSequence(title); this.terminalTitle = title; }
     if (running !== terminalModes.progress) { sequence += progressSequence(running); terminalModes.progress = running; }
-    if (sequence) output.write(sequence);
+    return sequence;
   }
+  /** Title and progress sequences owed to the terminal, written inside the
+   * next synchronized frame rather than on their own beside it. */
+  private pendingSignals = '';
 
   /** Something needs the user -- a turn ended, an approval waits -- and the
    * terminal said it lost focus long enough ago: tell them (OSC 9 and a
@@ -1982,8 +1987,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // composer" is actually describing.
     const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
     const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
+    this.pendingSignals += this.terminalSignals();
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
-    this.syncTerminalSignals();
   }
 
   /** The last frame's live rows made safe, by the row as built and the width. */
@@ -2164,10 +2169,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // below depends on whether the frame shows it.
     const park = `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
     const modes = takeQueuedModes();
+    const signals = this.pendingSignals;
+    this.pendingSignals = '';
     const showCursor = !pending.hideCursor;
     // Nothing changed: nothing is written. A clock that ticks every second
     // used to send a cursor hide, a park and a show each time regardless.
-    if (!updates.length && !modes && park === this.lastPark && showCursor === this.cursorShown) return;
+    if (!updates.length && !modes && !signals && park === this.lastPark && showCursor === this.cursorShown) return;
     // The preamble goes with rows, never alone: a clear with nothing after
     // it would only blank the screen, so a resize or repair waits for them.
     const draw = updates.length ? `${redrawPreamble(this.pendingRedraw)}${updates.join('')}` : '';
@@ -2177,7 +2184,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // One synchronized update (DEC 2026): a terminal that supports it shows
     // the frame whole or not at all, never half-drawn; one that does not
     // ignores the two sequences. restoreTerminal closes it on any exit.
-    const frame = `\u001b[?2026h${modes}${draw}${park}${cursor}\u001b[?2026l`;
+    const frame = `\u001b[?2026h${modes}${signals}${draw}${park}${cursor}\u001b[?2026l`;
     this.lastPark = park;
     this.cursorShown = showCursor;
     this.frameInFlight = true;
