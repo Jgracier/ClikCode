@@ -586,6 +586,21 @@ SCENARIOS = {
         'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
         'never': ['Interrupted turn activity'],
     },
+    # A phone with its keyboard up sends a swipe as arrow keys only: Up with
+    # nothing typed must scroll a running turn back, as it does at the prompt.
+    # Recorded: during a long turn the keyboard came up and every swipe after
+    # that did nothing.
+    'long-turn-swipe-arrows-scroll': {
+        'cols': 70, 'rows': 32, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
+        'turns': [{'intro': 'Running every part now.', 'tools_first': 30, 'hold_ms': 25000, 'blocks': ['All thirty parts pass.']}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'),
+            *[step for _ in range(4) for step in (('keys', '\x1b[A'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
+            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'),
+        ],
+        'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
+        'never': ['Interrupted turn activity'],
+    },
     # The same in a window that joined the running turn (out to the board and
     # back), where the whole turn so far arrives at once.
     'joined-turn-scroll-moves-whole-screen': {

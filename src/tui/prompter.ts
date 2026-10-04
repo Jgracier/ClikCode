@@ -366,6 +366,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       return;
     }
+    // Up and Down with nothing typed read the conversation, as they do at
+    // the prompt. A phone sends a swipe as arrow keys and nothing else once
+    // its keyboard is up, so without this a running turn was the one time
+    // the conversation could not be scrolled at all -- recorded: a long turn,
+    // the keyboard came up, and every swipe after that did nothing.
+    if ((key === '\u001b[A' || key === '\u001b[B') && !turn.draft) {
+      if (this.scrollTranscript(key === '\u001b[A' ? SWIPE_ROWS : -SWIPE_ROWS)) return;
+      if (key === '\u001b[B') this.noteReadingDirection();
+      return;
+    }
     // Left with nothing typed steps away from the turn -- to the conversation
     // board -- and leaves it running: the worker owns it, not this window.
     if (key === '\u001b[D' && !turn.draft && turn.leave) {
