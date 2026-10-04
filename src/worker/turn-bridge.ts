@@ -195,7 +195,10 @@ export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSi
   const tracker = client ? trackers.get(client) : undefined;
   if (!tracker) return { line: await ask() };
   if (tracker.running) return { woke: 'turn', ...(tracker.prompt !== undefined ? { prompt: tracker.prompt } : {}) };
-  // The queue changed after the caller read it: read it again first.
+  // The queue changed after the caller read it: read it again first. A mark
+  // taken with no connection says nothing of what happened before this one
+  // was made (a worker started since, by another window), so that queue is
+  // read again too -- once: the next pass's mark is this connection's.
   if (queueMark !== undefined && tracker.queueVersion !== queueMark) return { woke: 'queue' };
   const controller = new AbortController();
   let reason: 'turn' | 'queue' | undefined;
@@ -210,11 +213,17 @@ export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSi
   }
 }
 
-/** Taken BEFORE reading the queue from state, and handed to questionOrWorker. */
-export function workerQueueMark(sessionId: string): number | undefined {
-  const client = clients.get(sessionId);
-  return client ? trackers.get(client)?.queueVersion : undefined;
+/** Taken BEFORE reading the queue from state, and handed to questionOrWorker.
+ * Attaches to a running worker first: a mark from no connection could not
+ * count a change made while a window's first prompt was still connecting,
+ * and that prompt then sat there with something queued. With no worker
+ * running, UNATTACHED -- which questionOrWorker treats as already stale if
+ * it does find one. */
+export async function workerQueueMark(sessionId: string): Promise<number> {
+  const client = await connect(sessionId, false).catch(() => undefined);
+  return (client ? trackers.get(client)?.queueVersion : undefined) ?? UNATTACHED;
 }
+const UNATTACHED = -1;
 
 /** Draws the running turn as far as it has got. Safe to repeat: the text is
  * replaced, an activity the window already shows is skipped by its index,

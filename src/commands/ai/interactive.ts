@@ -370,7 +370,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         void closePersistentTransport(leaving);
       }
       try {
-        const queueMark = workerQueueMark(id);
+        const queueMark = terminal ? await workerQueueMark(id) : undefined;
         const latestState = await readState({ transcripts: [id] });
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
