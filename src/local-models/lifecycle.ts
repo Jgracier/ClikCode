@@ -224,6 +224,8 @@ export interface SupervisorConfig {
    * run that starts right after another one joins it, instead of loading
    * the model again beside a copy that is still shutting down. */
   leaseGraceMs?: number;
+  /** How often the logs' size is checked; tests only. */
+  logCheckMs?: number;
   /** Watch the machine's memory while the model runs. */
   memory?: MemoryWatchConfig;
 }
@@ -288,7 +290,23 @@ function liveLeases() {
 // and on Windows (a below-normal parent's children are below-normal); set
 // on the child as well in case the platform does not pass it on.
 try { os.setPriority(0, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch {}
-const log = fs.openSync(path.join(config.dir, 'server.log'), 'a');
+// The server's log and this supervisor's own are kept to LOG_LIMIT each: the
+// older half moves to <name>.1 (replacing the one before). llama-server
+// holds server.log open, appending, so it is copied aside and truncated in
+// place rather than renamed out from under it.
+const LOG_LIMIT = 5 * 1024 * 1024;
+const serverLog = path.join(config.dir, 'server.log');
+const supervisorLog = path.join(config.dir, 'supervisor.log');
+function rotateLogs(fd) {
+  try {
+    if (fd === undefined) { if (fs.statSync(serverLog).size > LOG_LIMIT) fs.renameSync(serverLog, serverLog + '.1'); }
+    else if (fs.fstatSync(fd).size > LOG_LIMIT) { fs.copyFileSync(serverLog, serverLog + '.1'); fs.ftruncateSync(fd, 0); }
+  } catch {}
+  try { if (fs.statSync(supervisorLog).size > LOG_LIMIT) fs.renameSync(supervisorLog, supervisorLog + '.1'); } catch {}
+}
+rotateLogs();
+const log = fs.openSync(serverLog, 'a');
+setInterval(() => rotateLogs(log), config.logCheckMs || 60000).unref();
 const record = {
   supervisorPid: process.pid, serverPid: 0, port: config.port, modelId: config.modelId,
   alias: config.alias, context: config.context, startedAt: new Date().toISOString(),

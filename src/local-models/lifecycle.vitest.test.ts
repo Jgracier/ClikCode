@@ -55,3 +55,34 @@ describe('whether anyone holds a model', () => {
     expect(await heldByLiveProcess('m')).toBe(true);
   });
 });
+
+describe('the supervisor\'s logs', () => {
+  it('moves a large server.log aside at start, and trims one the server grows while running', async () => {
+    const { startSupervisor, SUPERVISOR_SCRIPT } = await import('./lifecycle');
+    const { readFileSync, statSync, existsSync } = await import('node:fs');
+    expect(SUPERVISOR_SCRIPT).toContain('rotateLogs');
+    const dir = serverDir('rotate-test');
+    mkdirSync(join(dir, 'leases'), { recursive: true });
+    writeFileSync(join(dir, 'leases', `${process.pid}-s.json`), '{}');
+    writeFileSync(join(dir, 'server.log'), 'old\n'.repeat(1_600_000));
+    // A stand-in server that writes 6MB, then waits.
+    const record = await startSupervisor({
+      modelId: 'rotate-test', dir, command: process.execPath, port: 1, alias: 'x', context: 1024,
+      args: ['-e', "process.stdout.write('new\\n'.repeat(1600000)); setInterval(() => {}, 1000)"],
+      env: {}, idleMs: 0, pollMs: 60_000, logCheckMs: 200,
+    } as never);
+    try {
+      // Moved aside before the server started: the server's own lines start the file.
+      expect(readFileSync(join(dir, 'server.log'), 'utf8').startsWith('old')).toBe(false);
+      for (let waited = 0; waited < 10_000; waited += 100) {
+        if (existsSync(join(dir, 'server.log.1')) && readFileSync(join(dir, 'server.log.1'), 'utf8').startsWith('new') && statSync(join(dir, 'server.log')).size < 1_000_000) break;
+        await new Promise((done) => setTimeout(done, 100));
+      }
+      expect(readFileSync(join(dir, 'server.log.1'), 'utf8').startsWith('new')).toBe(true);
+      expect(statSync(join(dir, 'server.log')).size).toBeLessThan(1_000_000);
+    } finally {
+      try { process.kill(record.serverPid, 'SIGKILL'); } catch { /* gone */ }
+      try { process.kill(record.supervisorPid, 'SIGKILL'); } catch { /* gone */ }
+    }
+  }, 20_000);
+});
