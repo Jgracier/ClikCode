@@ -6,6 +6,9 @@ import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
 import { commandOutcome, fileChangeActivity, thoughtLabel } from '../protocol/activity-events.js';
 import { categoryOf, commandText, formatToolRow, toolLabel } from '../protocol/tools.js';
+
+/** A Codex commandExecution is a shell call by its envelope's own shape. */
+const SHELL = categoryOf('shell');
 import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel } from './background-turn.js';
@@ -92,7 +95,7 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
   if (type === 'commandExecution') {
     const aggregated = completed && typeof item.aggregatedOutput === 'string' ? activityOutput(item.aggregatedOutput, { tail: true }) : {};
     return {
-      kind: completed ? completedKind : 'tool-start', label: formatToolRow('shell', codexCommandText(item.command) ?? 'command', 'run'), category: 'run', ...(id ? { id } : {}),
+      kind: completed ? completedKind : 'tool-start', label: formatToolRow('shell', codexCommandText(item.command) ?? 'command', SHELL.category), ...SHELL, ...(id ? { id } : {}),
       ...aggregated,
       ...(completed ? commandOutcome(item) : {}),
     };
@@ -130,10 +133,12 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
     // What it did: a search, or a page it opened or searched in.
     const action = asRecord(item.action);
     const url = typeof action?.url === 'string' ? action.url : undefined;
-    const label = action?.type === 'openPage' && url ? formatToolRow('web_fetch', url, 'fetch')
-      : action?.type === 'findInPage' && url ? formatToolRow('web_fetch', `${typeof action.pattern === 'string' ? `"${action.pattern}" in ` : ''}${url}`, 'fetch')
-        : formatToolRow('web_search', [item.query, action?.query].find((query): query is string => typeof query === 'string' && query.trim().length > 0), 'fetch');
-    return { kind: completed ? completedKind : 'tool-start', label, category: 'fetch', ...(id ? { id } : {}) };
+    const tool = (action?.type === 'openPage' || action?.type === 'findInPage') && url ? 'web_fetch' : 'web_search';
+    const classified = categoryOf(tool);
+    const label = action?.type === 'openPage' && url ? formatToolRow(tool, url, classified.category)
+      : action?.type === 'findInPage' && url ? formatToolRow(tool, `${typeof action.pattern === 'string' ? `"${action.pattern}" in ` : ''}${url}`, classified.category)
+        : formatToolRow(tool, [item.query, action?.query].find((query): query is string => typeof query === 'string' && query.trim().length > 0), classified.category);
+    return { kind: completed ? completedKind : 'tool-start', label, ...classified, ...(id ? { id } : {}) };
   }
   if (type === 'reasoning' && completed) {
     // The item's id, so the finished summary replaces the thought that

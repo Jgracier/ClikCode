@@ -22,6 +22,7 @@ import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
 import { createSubagentRunner } from './subagent.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
+import { categoryOf, GATEWAY_HARNESS_COMMAND } from '../harness/protocol/tools.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
 const DEFAULT_MAX_STEPS = 60;
@@ -31,17 +32,21 @@ const STEP_RETRY_CAP_SECONDS = 30;
 const NO_PROGRESS_LIMIT = 3;
 const STREAM_EVENT_INTERVAL_MS = 150;
 
-/** The gateway loop's label is the command or the path, not the tool name,
- * so the verb table cannot see that a bash call is a command. The class is
- * the fact that can. */
-function categoryForTool(tool: ToolDefinition | undefined): { category?: ToolCategory; agent?: boolean } {
+/** A tool's class, for one the shared classifier cannot name (an MCP
+ * server's, a skill). */
+const CLASS_CATEGORY: Partial<Record<ToolDefinition['class'], ToolCategory>> = { exec: 'run', read: 'read', write: 'edit', network: 'fetch' };
+
+/** The gateway loop's row category: the tool's own name through the classifier
+ * every harness's rows go through (so grep reads as a search here too), else
+ * its class. The label is the command or the path, so it is never used. */
+function categoryForTool(tool: ToolDefinition | undefined, args?: Record<string, unknown>): { category?: ToolCategory; agent?: boolean } {
   // The turn is waiting on a sub-agent, which the UI shows as an agent row.
-  if (tool?.name === TASK_TOOL_NAME) return { agent: true };
-  if (tool?.class === 'exec') return { category: 'run' };
-  if (tool?.class === 'read') return { category: 'read' };
-  if (tool?.class === 'write') return { category: 'edit' };
-  if (tool?.class === 'network') return { category: 'fetch' };
-  return {};
+  if (!tool) return {};
+  if (tool.name === TASK_TOOL_NAME) return { agent: true };
+  const named = categoryOf(tool.name, args, GATEWAY_HARNESS_COMMAND);
+  if (named.category) return named;
+  const category = CLASS_CATEGORY[tool.class];
+  return category ? { category } : {};
 }
 
 /** Structured classification only: a status code or an explicit kind set by
@@ -277,7 +282,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     const tool: ToolDefinition | undefined = tools.find((candidate) => candidate.name === call.name);
     let label = call.name;
     if (tool) { try { label = tool.label(call.args); } catch { /* invalid args: fall back to the name */ } }
-    const category = categoryForTool(tool);
+    const category = categoryForTool(tool, call.args && typeof call.args === 'object' ? call.args as Record<string, unknown> : undefined);
     input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });
     let startedAt: number | undefined;
     const finish = (result: ToolRunResult): ToolRunResult => {

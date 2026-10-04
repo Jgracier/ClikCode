@@ -160,6 +160,14 @@ describe('runGatewayHarnessTurn', () => {
     expect(results.map((item) => item.type === 'tool_result' && item.output.includes('B'))).toEqual([false, true]);
   });
 
+  it('classifies its rows the way every harness\'s are: grep is a search', async () => {
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'needle\n');
+    const h = harness([{ toolCalls: [{ id: 'g', name: 'grep', args: { pattern: 'needle' } }, { id: 'r', name: 'read_file', args: { path: 'a.txt' } }] }, { text: 'ok' }]);
+    await runGatewayHarnessTurn(h.input);
+    const started = (id: string) => h.events.find((event) => event.kind === 'tool-start' && event.id === id);
+    expect([started('g')?.category, started('r')?.category]).toEqual(['search', 'read']);
+  });
+
   it('reports a command\'s exit code and how long each call ran', async () => {
     const h = harness([{ toolCalls: [{ id: 'x', name: 'bash', args: { command: 'exit 3' } }] }, { text: 'ok' }]);
     await runGatewayHarnessTurn(h.input);
