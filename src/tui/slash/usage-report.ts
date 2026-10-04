@@ -1,9 +1,11 @@
-/** `/usage`: quota, tokens, and cost for the provider you are in. */
+/** `/usage`: quota, tokens, and cost for the provider you are in; `/usage
+ * all` for every provider and the last seven days. */
 
 import { isClikCodeAgent } from '../../session/route.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactCount, dollars } from '../../harness/protocol/format.js';
+import { invocationRollups } from '../../session/state/invocations.js';
 import { learnedReading } from '../../harness/accounts/learned-usage.js';
 import { accountQuotaSpent, usageReadingIsCurrent, vendorWindows, usageResetLabel, usageWindowTitle, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
 
@@ -116,4 +118,93 @@ export function usageReport(
     `  This chat · ${chatBits.join(' · ')}`,
   ];
   return { text: lines.join('\n'), totals };
+}
+
+const DAY_MS = 24 * 60 * 60_000;
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** `YYYY-MM-DD` in local time: a day is the user's day, not UTC's. */
+function localDay(at: number): string {
+  const date = new Date(at);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/** A cost that is only partly known says so; one never recorded is
+ * "cost unknown" -- never `$0.00`, which would claim it was free. */
+function costText(known: number, unknownTurns: number, knownTurns: number): string {
+  if (!knownTurns) return unknownTurns ? 'cost unknown' : '';
+  return unknownTurns ? `${dollars(known)} + unknown` : dollars(known);
+}
+
+/** Turns whose vendor reported no token counts read as unknown, not 0. */
+function tokensText(tokens: number, turns: number): string {
+  return turns && !tokens ? 'tokens unknown' : compactCount(tokens);
+}
+
+export interface UsageDay { day: string; turns: number; tokens: number; costUsd: number; costTurns: number; unknownCostTurns: number }
+
+/** The last `days` days, newest first, from the turn log and its per-day
+ * rollups (invocationRollups: folded records keep tokens but no cost, so
+ * their cost is unknown). A day with nothing recorded is listed as such. */
+export function usageDays(state: HarnessState, now: number = Date.now(), days = 7): UsageDay[] {
+  const table = new Map<string, UsageDay>();
+  for (let back = 0; back < days; back += 1) {
+    const day = localDay(now - back * DAY_MS);
+    table.set(day, { day, turns: 0, tokens: 0, costUsd: 0, costTurns: 0, unknownCostTurns: 0 });
+  }
+  for (const invocation of state.invocations) {
+    const row = table.get(localDay(Date.parse(invocation.at)));
+    if (!row) continue;
+    row.turns += 1;
+    row.tokens += tokenCount(invocation);
+    if (invocation.costUsd !== undefined) { row.costUsd += invocation.costUsd; row.costTurns += 1; } else row.unknownCostTurns += 1;
+  }
+  // Rollups are per UTC day: well past the raw retention, so never within
+  // this week in practice, but counted where they fall when they are.
+  for (const rollup of invocationRollups(state)) {
+    const row = table.get(rollup.day);
+    if (!row) continue;
+    row.turns += rollup.calls;
+    row.tokens += rollup.inputTokens + rollup.outputTokens;
+    row.unknownCostTurns += rollup.calls;
+  }
+  return [...table.values()];
+}
+
+/** `/usage all`: every provider with an account or recorded use -- its
+ * accounts' allowances and its totals -- then the last seven days. */
+export function usageReportAll(
+  state: HarnessState, session: HarnessSession, options: { now?: number; providerName?: (provider: string) => string } = {},
+): { text: string } {
+  const now = options.now ?? Date.now();
+  const name = options.providerName ?? ((provider: string) => provider);
+  const providers = [...new Set([...state.accounts.map((account) => account.provider), ...state.invocations.map((item) => item.provider)])]
+    .sort((left, right) => name(left).localeCompare(name(right)));
+  const sections = providers.map((provider) => {
+    const accounts = state.accounts.filter((account) => account.provider === provider);
+    const totals = sumInvocations(state.invocations.filter((item) => item.provider === provider));
+    const unknown = state.invocations.filter((item) => item.provider === provider && item.costUsd === undefined).length;
+    const cost = costText(totals.costUsd, unknown, totals.turns - unknown);
+    return [
+      name(provider),
+      ...accounts.flatMap((account) => {
+        const quota = allowance(account, state, now);
+        const label = account.id === session.accountId ? `${account.label} · current` : account.label;
+        return [`  ${label}${quota.label === 'not reported yet' ? '' : ` · ${quota.label}`}${quota.reset ? ` · ${quota.reset}` : ''}`];
+      }),
+      `  ${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'} · ${tokensText(totals.totalTokens, totals.turns)}${cost ? ` · ${cost}` : ''}`,
+    ].join('\n');
+  });
+  const days = usageDays(state, now);
+  const width = Math.max(...days.map((row) => tokensText(row.tokens, row.turns).length));
+  const week = days.map((row) => {
+    // Spelled out, not toLocaleDateString: the same on every machine.
+    const date = new Date(`${row.day}T12:00:00`);
+    const label = `${WEEKDAYS[date.getDay()]} ${MONTHS[date.getMonth()]} ${date.getDate()}`;
+    if (!row.turns) return `  ${label.padEnd(11)}  —`;
+    const cost = costText(row.costUsd, row.unknownCostTurns, row.costTurns);
+    return `  ${label.padEnd(11)}  ${tokensText(row.tokens, row.turns).padStart(width)} · ${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}${cost ? ` · ${cost}` : ''}`;
+  });
+  return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...week].join('\n')].join('\n\n') };
 }
