@@ -345,6 +345,30 @@ SCENARIOS = {
         'watch': [], 'ever': ['Paste your API key · type it and press Enter', '••••••••••'],
         'final_contains': ['signed in to'], 'never': ['sk-test-42', 'Paste your API key: ', 'did not finish'],
     },
+    # A message typed while the sign-in at launch is still finishing: every
+    # key of it lands in the composer that opens after, once. They used to go
+    # nowhere, and the message was sent as "heck the commit".
+    'type-during-sign-in': {
+        'turns': [TWO_BLOCKS],
+        'startup': 0.5,
+        'steps': [('wait_for', 'waiting for you to sign in', 30),
+                  ('type_slow', 'please check the commit', 0.2),
+                  ('wait_for', 'The final commit is live.', 30), ('settle', 2)],
+        'watch': ['please check the commit', 'The final commit is live.'],
+        'ever': ['signed in to'],
+    },
+    # The same message sent (Enter) while the sign-in is still waiting on the
+    # browser: it is sent once the sign-in has finished, not dropped.
+    'send-during-sign-in': {
+        'turns': [TWO_BLOCKS],
+        'startup': 0.5, 'hold_sign_in': True,
+        'steps': [('wait_for', 'waiting for you to sign in', 30), ('settle', 0.3),
+                  ('type', 'please check the commit'), ('settle', 1),
+                  ('release_sign_in',),
+                  ('wait_for', 'The final commit is live.', 30), ('settle', 2)],
+        'watch': ['please check the commit', 'The final commit is live.'],
+        'ever': ['signed in to'],
+    },
     # Back from a sub-menu lands on the row it was opened from, with no
     # spinner or empty composer flashed on the way into the list.
     'settings-back-lands-on-row': {
@@ -705,6 +729,11 @@ def run(name, spec, entry, keep):
         'SSH_CONNECTION': '127.0.0.1 1 127.0.0.1 22',
     }
     if spec.get('classic'): env['CLIKCODE_TUI'] = 'classic'
+    # The fake sign-in waits on the browser for as long as this file exists.
+    sign_in_hold = os.path.join(root, 'login-hold')
+    if spec.get('hold_sign_in'):
+        open(sign_in_hold, 'w').close()
+        env['FAKE_LOGIN_HOLD'] = sign_in_hold
     cols = spec.get('cols', COLS)
     rows = spec.get('rows', ROWS)
 
@@ -738,13 +767,6 @@ def run(name, spec, entry, keep):
 
     problems = []
     pump(spec.get('startup', 5))
-    # A fresh state signs in to the fake harness first (its `login` takes two
-    # seconds). On a loaded machine that was still finishing when the fixed
-    # startup ran out, and what was typed meanwhile went to a composer about
-    # to be replaced. Typing starts once the sign-in has finished.
-    if spec.get('wait_sign_in', True) and frames and 'waiting for you to sign in' in frames[-1][1]:
-        if not pump(30, 'signed in to'): problems.append('timed out waiting for the sign-in at startup')
-        pump(0.5)
     typed_at = None
     typed_raw_at = None
     marked_at = None
@@ -755,6 +777,18 @@ def run(name, spec, entry, keep):
             os.write(fd, b'\r')
             if typed_at is None: typed_at = time.time() - start
             pump(0.3)
+        elif step[0] == 'type_slow':
+            # As 'type', one key every step[2] seconds: typing that spans
+            # something finishing underneath it.
+            if typed_raw_at is None: typed_raw_at = len(raw)
+            for ch in step[1]: os.write(fd, ch.encode()); pump(step[2])
+            os.write(fd, b'\r')
+            if typed_at is None: typed_at = time.time() - start
+            pump(0.3)
+        elif step[0] == 'release_sign_in':
+            if 'waiting for you to sign in' not in '\n'.join(screen.display):
+                problems.append('the sign-in had finished before it was released')
+            os.remove(sign_in_hold)
         elif step[0] == 'keys':
             os.write(fd, step[1].encode()); pump(0.3)
         elif step[0] == 'wait_for':

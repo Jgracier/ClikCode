@@ -181,6 +181,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * after a resize, or a repair (Ctrl+L). See redrawPreamble. */
   private pendingRedraw: Redraw | undefined;
   private queuedDraft?: string;
+  /** A message typed and sent (Enter) under a sign-in's own wait, and any
+   * keys after it: typed into the prompt that opens next, as if typed there,
+   * so it is sent -- the wait has no turn to send it to. */
+  private typedAhead: string[] = [];
   /** The turn this window stepped out of (leaveTurn), still running in its
    * worker. What it already wrote to scrollback is remembered here, nothing
    * more of it is drawn while away, and following the same turn again
@@ -400,6 +404,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.cursor = 0;
       this.signInInput.submit(text);
       this.updateWaiting();
+    } else if (this.signingIn && !turn.submit && (key === '\r' || this.typedAhead.length)) {
+      if (key === '\r' && !this.typedAhead.length) {
+        if (!turn.draft.trim()) return;
+        this.typedAhead.push(...Array.from(turn.draft));
+        turn.draft = '';
+        turn.cursor = 0;
+        this.updateWaiting();
+      }
+      this.typedAhead.push(key);
     } else if (key === '\r') {
       const continued = turn.submit ? backslashNewline(turn.draft, turn.cursor) : undefined;
       if (continued) {
@@ -425,7 +438,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.draft = '';
       turn.cursor = 0;
       this.submitWaiting(text);
-    } else if (turn.submit || turn.early || this.signInInput) {
+    } else if (turn.submit || turn.early || this.signInInput || this.signingIn) {
+      // A sign-in's wait keeps what is typed under it too: the composer that
+      // opens after it starts with that text (stopWaiting hands it on), where
+      // dropping it lost the start of a message typed as a sign-in finished.
       const edited = editWaitingComposer(turn.draft, turn.cursor, key);
       if (edited.changed) {
         turn.draft = edited.value;
@@ -972,13 +988,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     };
     // A code or key typed under the link: the waiting composer takes it, and
     // the band says what it is for.
+    // What was typed before the sign-in asked: set aside for the code, and
+    // put back once it is answered (or the sign-in ends unanswered). The
+    // code itself is the sign-in's and never joins it.
+    let aside: { draft: string; cursor: number } | undefined;
+    const putBack = (): void => {
+      const live = this.turn;
+      if (live && aside) { live.draft = aside.draft; live.cursor = aside.cursor; }
+      aside = undefined;
+    };
     const ask = (prompt: string, secret: boolean): Promise<string> => new Promise((resolve) => {
       const live = this.turn;
-      if (live) { live.draft = ''; live.cursor = 0; live.label = `${prompt} · type it and press Enter`; }
+      if (live) {
+        aside ??= { draft: live.draft, cursor: live.cursor };
+        live.draft = ''; live.cursor = 0; live.label = `${prompt} · type it and press Enter`;
+      }
       this.signInInput = {
         secret,
         submit: (text) => {
           this.signInInput = undefined;
+          putBack();
           if (this.turn) this.turn.label = label;
           resolve(text);
         },
@@ -1009,15 +1038,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       signal: controller.signal, show, ask, choose,
       stop: () => {
         this.signInLines = [];
+        // An unanswered code is dropped; what was typed for the conversation
+        // stays in the composer -- the turn's, or (outside one) the prompt's
+        // that opens next, by stopWaiting.
+        if (this.signInInput && this.turn) { this.turn.draft = ''; this.turn.cursor = 0; }
         this.signInInput = undefined;
+        putBack();
         this.signingIn = false;
         if (!turn) { if (this.turn) this.stopWaiting(); return; }
         if (this.turn !== turn) { this.schedulePaint(); return; }
         turn.label = saved!.label;
         turn.cancel = saved!.cancel;
         turn.cancelled = saved!.cancelled;
-        turn.draft = '';
-        turn.cursor = 0;
         this.scheduleWaitingTick();
         this.updateWaiting();
       },
@@ -2922,6 +2954,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         output.write(enterInputModes());
       };
       this.resumeInput = () => { stopInput(); if (!finished) listen(); };
+      // Typed ahead under a sign-in: before anything the terminal sends
+      // next (listen() hands that on, on a later tick than this one). What
+      // follows an Enter that sent this prompt is the next prompt's draft.
+      const ahead = this.typedAhead.splice(0);
+      if (ahead.length) {
+        process.nextTick(() => {
+          for (const [index, key] of ahead.entries()) {
+            if (!finished) { handleKey(key); continue; }
+            const rest = ahead.slice(index).filter((item) => !item.startsWith('\u001b') && item.charCodeAt(0) >= 0x20 && item !== '\u007f').join('');
+            if (rest) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}${rest}` : rest;
+            break;
+          }
+        });
+      }
       listen();
       draw();
     });
