@@ -16,12 +16,16 @@ export function harnessTurnTransport(harness: AiLocalHarnessDefinition): Harness
 }
 
 /** A vendor thread stays on the transport that created it. Older chats for
- * newly promoted ACP harnesses have no marker and belong to their CLI. */
+ * newly promoted ACP harnesses have no marker and belong to their CLI. A
+ * harness whose ACP and CLI share one session store (`sharedSessions`) has
+ * no such tie: its threads always take the preferred transport. Pinning
+ * them once left a Grok chat on the one-shot CLI for good after a single
+ * fallback turn -- no live process, so nothing it started outlived a turn. */
 export function sessionTurnTransport(
   harness: AiLocalHarnessDefinition,
   session: Pick<HarnessSession, 'nativeSessionId' | 'nativeSessionPreallocated' | 'nativeTransport'>,
 ): HarnessTurnTransport {
-  if (session.nativeSessionId && !session.nativeSessionPreallocated) {
+  if (session.nativeSessionId && !session.nativeSessionPreallocated && !harness.acp?.sharedSessions) {
     if (session.nativeTransport === 'acp' && harness.acp) return 'acp';
     if ((session.nativeTransport === 'structured-cli' || session.nativeTransport === 'text-cli') && harness.turn) return session.nativeTransport;
     if (!session.nativeTransport && harness.acp?.legacyCliSessions && harness.turn) {
