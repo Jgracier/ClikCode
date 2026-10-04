@@ -57,6 +57,14 @@ describe('usage on a passive paint', () => {
     expect(grok).toHaveBeenCalledTimes(2);
   });
 
+  it('asks the harness once when two ask at the same moment', async () => {
+    const session = { id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession;
+    const [first, second] = await Promise.all([nativeUsageReading(session, stateWith()), nativeUsageReading(session, stateWith())]);
+    expect(first?.label).toBe('weekly 100% left');
+    expect(second?.label).toBe('weekly 100% left');
+    expect(grok).toHaveBeenCalledTimes(1);
+  });
+
   it('never spawns a probe for an account that is not signed in, nor for no account', async () => {
     const signedOut = { accounts: [{ ...account, status: 'needs-login' }], sessions: [], invocations: [] } as unknown as HarnessState;
     expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession, signedOut, { network: true })).toBeUndefined();

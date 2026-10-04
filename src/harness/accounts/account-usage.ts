@@ -15,6 +15,20 @@ import { learnedReading, learnsUsage } from './learned-usage.js';
  * asked again (a turn on the account asks sooner). */
 export const BALANCE_READING_TTL_MS = 5 * 60_000;
 
+/** Probes in flight, by usage cache key. Opening a conversation asks for its
+ * usage from more than one place at once (the status line and the account
+ * refresh), and each spawned the vendor CLI: Grok's probe ran twice
+ * concurrently at every start. A second ask while one runs gets its answer. */
+const probesInFlight = new Map<string, Promise<UsageReading | undefined>>();
+
+function probeOnce(key: string, probe: () => Promise<UsageReading | undefined>): Promise<UsageReading | undefined> {
+  const running = probesInFlight.get(key);
+  if (running) return running;
+  const asked = probe().catch(() => undefined).finally(() => probesInFlight.delete(key));
+  probesInFlight.set(key, asked);
+  return asked;
+}
+
 /** The structured reading behind nativeUsageLabel: same caching, same sharing. */
 export async function nativeUsageReading(
   session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
@@ -95,7 +109,7 @@ export async function nativeUsageReading(
     return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const reading: UsageReading | undefined = probe ? await probe(session, environment).catch(() => undefined) : undefined;
+  const reading: UsageReading | undefined = probe ? await probeOnce(cacheKey, () => probe(session, environment)) : undefined;
   // Carry the last known figure through a failure rather than blanking it --
   // but never past its own reset, when it stops describing anything. The
   // failed probe itself is not stored as usage.
