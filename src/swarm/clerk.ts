@@ -6,8 +6,9 @@ import { parseNativeActivityEventsFromValue } from '../harness/protocol/activity
 import { parseJsonRecord } from '../harness/protocol/json-lines.js';
 import { nativeTurnResult } from '../harness/protocol/turn-result.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import { captureNativeHarnessTurn } from '../harness/transport/native/turn.js';
-import { streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
+import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput } from '../harness/transport/native/turn.js';
+import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
+import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { harnessAcpLaunch, nativeHarnessTurnArgv } from '../runtime/lazy-bridge.js';
 import { runAcpTurn } from '../harness/transport/acp-client.js';
 import type { HarnessState } from '../session/model.js';
@@ -60,14 +61,41 @@ export async function runProviderPrompt(input: {
     ...(input.model ? { model: input.model } : {}),
   });
   const environment = turnEnvironment(input.harness, input.account, mode);
+  // A clerk's background tasks are its work too: its input stays open until
+  // they finish (Claude stops them when its input ends), and each one gives
+  // the idle watchdog its tool budget, as a chat's own turn does
+  // (vendor-cli-attempt.ts). Nothing here can show a later follow-up, so the
+  // clerk's answer waits for them.
+  const idle = createTurnIdleController();
+  const held = input.harness.turn.promptInput === 'stdin' && input.harness.turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
+  const background = held ? createBackgroundWait({
+    onSettled: () => held.end(),
+    onTaskStarted: (id) => idle.toolStarted(`background:${id}`),
+    onTaskFinished: (id) => idle.toolFinished(`background:${id}`),
+  }) : undefined;
+  const inProcess = new Set<string>();
   let output;
   try {
     output = await captureNativeHarnessTurn(input.harness, argv, environment, {
       ...(input.workspace ? { cwd: input.workspace } : {}),
       ...(input.signal ? { signal: input.signal } : {}),
+      idleController: idle,
+      ...(held ? { input: held } : {}),
       ...(input.harness.turn.promptInput === 'stdin' ? { stdinText: input.harness.turn.stdinFormat === 'stream-json' ? streamJsonUserMessage(input.prompt) : input.prompt } : {}),
       onStdoutLine: (line) => {
         const record = parseJsonRecord(line);
+        if (record) idle.noteActivity();
+        // Answered: if only background work is left when the budget runs
+        // out, the clerk's turn ends as answered, not as a hang.
+        if (record?.type === 'result') idle.noteResult(record.is_error === true ? 'error' : 'success');
+        if (record && background) background.note(record);
+        else if (record) {
+          // A vendor that waits for its own background work in-process
+          // (Cursor) is silent meanwhile: that silence gets the tool budget.
+          const event = vendorBackgroundEvent(record);
+          if (event?.kind === 'started' && !inProcess.has(event.id)) { inProcess.add(event.id); idle.toolStarted(`background:${event.id}`); }
+          else if (event?.kind === 'finished' && inProcess.delete(event.id)) idle.toolFinished(`background:${event.id}`);
+        }
         if (!record || !input.onStep) return;
         const [event] = parseNativeActivityEventsFromValue(input.harness, record);
         if (event?.kind === 'tool-start' && event.label) input.onStep(event.label);
@@ -76,6 +104,8 @@ export async function runProviderPrompt(input: {
   } catch (error) {
     await note({ error });
     throw error;
+  } finally {
+    background?.dispose();
   }
   let result;
   try {
