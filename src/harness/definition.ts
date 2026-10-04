@@ -206,6 +206,8 @@ export interface AiLocalHarnessDefinition {
    * phone cannot reach. */
   loginRemoteArgv?: readonly string[];
   /** See the catalog (packages/clikrouter/src/ai-local-harness.ts). */
+  loginKeyCommand?: { providersArgv: readonly string[]; setArgv: readonly string[] };
+  /** See the catalog (packages/clikrouter/src/ai-local-harness.ts). */
   titleSource?: 'vendor' | 'none';
   defaultModel?: string;
   profileExtraEnv?: Readonly<Record<string, string>>;
@@ -217,7 +219,6 @@ export interface AiLocalHarnessDefinition {
   planMode?: { option: string; value: true | string };
   authFiles?: readonly { path: string; contains?: string; removeLine?: boolean }[];
   authEnv?: readonly string[];
-  loginHint?: string;
   versionArgv?: readonly string[];
   launchArgv?: readonly string[];
   modelArgvPrefix?: readonly string[];
@@ -332,9 +333,9 @@ export interface AiRouterRuntime {
 
 /** A provider the harness can reach but is not signed in to: the picker
  * offers `argv` (a vendor sign-in command) instead of models. Only
- * multi-provider harnesses publish these. `hint` is what to do once the
- * vendor opens, for one that signs in only from its own session (Pi). */
-export type ModelCatalogConnect = { id: string; label: string; detail?: string; argv: readonly string[]; hint?: string };
+ * multi-provider harnesses publish these. Signing in runs `argv` on
+ * ClikCode's own screen, like any sign-in. */
+export type ModelCatalogConnect = { id: string; label: string; detail?: string; argv: readonly string[] };
 export type ModelCatalogResult = {
   configured?: string;
   models: string[];

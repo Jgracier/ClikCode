@@ -36,6 +36,36 @@ async function present(entry: AuthFile, environment: Environment): Promise<boole
   }
 }
 
+/** What the credential files are now -- which exist, their size and
+ * time, whether they hold the credential -- to tell a sign-in that just
+ * wrote one from a credential that was already there (a reauthentication). */
+export async function authFilesStamp(
+  harness: Pick<AiLocalHarnessDefinition, 'authFiles'>,
+  profileEnvironment: Readonly<Record<string, string>>,
+  processEnvironment: Environment = process.env,
+): Promise<string> {
+  const environment = { ...processEnvironment, ...profileEnvironment };
+  const parts = await Promise.all((harness.authFiles ?? []).map(async (entry) => {
+    const path = expandAuthPath(entry.path, environment);
+    try {
+      const info = await stat(path);
+      return `${path}:${info.size}:${info.mtimeMs}:${await present(entry, environment)}`;
+    } catch { return `${path}:-`; }
+  }));
+  return parts.join('|');
+}
+
+/** Signed in by a credential on disk (not an API-key variable). */
+export async function authFilePresent(
+  harness: Pick<AiLocalHarnessDefinition, 'authFiles'>,
+  profileEnvironment: Readonly<Record<string, string>>,
+  processEnvironment: Environment = process.env,
+): Promise<boolean> {
+  const environment = { ...processEnvironment, ...profileEnvironment };
+  for (const entry of harness.authFiles ?? []) if (await present(entry, environment)) return true;
+  return false;
+}
+
 /** Whether ClikCode can tell this vendor's sign-in state without asking it. */
 export function hasAuthEvidence(harness: Pick<AiLocalHarnessDefinition, 'authFiles' | 'authEnv'>): boolean {
   return Boolean(harness.authFiles?.length || harness.authEnv?.length);

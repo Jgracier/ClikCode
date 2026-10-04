@@ -41,7 +41,7 @@ export function piConnect(
   };
   return providers
     .filter((provider) => !connected.has(provider.id))
-    .map((provider) => ({ id: provider.id, label: provider.label, detail: 'sign in inside Pi', argv: [], hint: `type /login ${provider.id}` }))
+    .map((provider) => ({ id: provider.id, label: provider.label, detail: 'sign in inside Pi', argv: [] }))
     .sort((left, right) => rank(left.id) - rank(right.id) || left.label.localeCompare(right.label));
 }
 

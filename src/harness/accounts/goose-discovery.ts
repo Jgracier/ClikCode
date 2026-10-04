@@ -58,7 +58,7 @@ export function gooseConnect(providers: readonly GooseProvider[]): ModelCatalogC
     .filter((provider) => !provider.configured)
     .map((provider) => ({
       id: provider.id, label: provider.label, detail: 'set up in goose configure',
-      argv: ['configure'], hint: `choose Configure Providers, then ${provider.label}`,
+      argv: ['configure'],
     }))
     .sort((left, right) => rank(left.id) - rank(right.id) || left.label.localeCompare(right.label));
 }
