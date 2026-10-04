@@ -61,6 +61,11 @@ function stepOf(turn: NonNullable<HarnessSession['pendingTurn']>): string | unde
   return turn.outputStarted ? 'working' : 'thinking';
 }
 
+function latest(updatedAt: string, updatedAtMs: number, turnAt: string | undefined): { updatedAt: string; updatedAtMs: number } {
+  const turnMs = turnAt ? Date.parse(turnAt) : Number.NaN;
+  return turnMs > updatedAtMs ? { updatedAt: turnAt!, updatedAtMs: turnMs } : { updatedAt, updatedAtMs };
+}
+
 export async function activeConversations(options: ActiveOptions = {}): Promise<ActiveConversation[]> {
   const now = options.now ?? Date.now();
   const host = hostname();
@@ -114,7 +119,8 @@ export async function activeConversations(options: ActiveOptions = {}): Promise<
       ...(turn ? { step: stepOf(turn), turnStartedAt: turn.startedAt } : {}),
       ...(turn?.subagents?.length ? { subagents: turn.subagents.map((agent) => oneLine(`${agent.label}${agent.step ? `: ${agent.step}` : ''}`, 120)) } : {}),
       ...(approval ? { awaitingApproval: approval } : {}),
-      updatedAt: group.newest.updatedAt, updatedAtMs: group.updatedAtMs,
+      // A running turn is newer than the transcript it has not saved yet.
+      ...latest(group.newest.updatedAt, group.updatedAtMs, turn?.updatedAt),
     });
   }
   const rank = { working: 0, open: 1, recent: 2 } as const;

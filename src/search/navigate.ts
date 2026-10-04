@@ -12,7 +12,8 @@ export interface MentionStop {
   hit: ConversationHit;
   /** Rank of the conversation, from 0. */
   chat: number;
-  mention: Mention;
+  /** Undefined for a conversation found by its title alone. */
+  mention: Mention | undefined;
   /** Of the conversation's mentions, from 0. */
   index: number;
 }
@@ -29,7 +30,7 @@ export class MentionBrowser {
 
   current(): MentionStop {
     const hit = this.hits[this.chat]!;
-    return { hit, chat: this.chat, mention: hit.mentions[this.index]!, index: this.index };
+    return { hit, chat: this.chat, mention: hit.mentions[this.index], index: this.index };
   }
 
   /** False at the last mention: it stays where it is. */
@@ -57,7 +58,8 @@ export class MentionBrowser {
   status(): string {
     const stop = this.current();
     const chats = this.hits.length > 1 ? ` · chat ${stop.chat + 1} of ${this.hits.length}` : '';
-    return `mention ${stop.index + 1} of ${stop.hit.mentions.length}${chats} · ${BROWSE_HINT}`;
+    const where = stop.mention ? `mention ${stop.index + 1} of ${stop.hit.mentions.length}` : 'title match, no mentions in it';
+    return `${where}${chats} · ${BROWSE_HINT}`;
   }
 }
 
@@ -77,7 +79,7 @@ export function searchResultsText(result: SearchResult, now = Date.now(), limit 
   if (!result.hits.length) return `No conversation mentions "${maskSecrets(result.query.text)}".`;
   const lines = [`"${maskSecrets(result.query.text)}" — ${result.hits.length} conversation${result.hits.length === 1 ? '' : 's'}`];
   for (const hit of result.hits.slice(0, limit)) {
-    lines.push(`  ${hit.mentions.length.toString().padStart(3)}  ${maskSecrets(hit.title)}  ${runsOn(hit)} · ${ago(hit.updatedAtMs, now)} · ${shortId(hit.sessionId)}`);
+    lines.push(`  ${hit.mentions.length.toString().padStart(3)}  ${maskSecrets(hit.title)}  ${runsOn(hit)} · ${ago(hit.updatedAtMs, now)}${hit.titleMatch ? ' · title' : ''} · ${shortId(hit.sessionId)}`);
   }
   if (result.hits.length > limit) lines.push(`  … ${result.hits.length - limit} more`);
   return lines.join('\n');

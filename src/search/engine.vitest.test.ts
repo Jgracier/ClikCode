@@ -6,9 +6,10 @@ import { writeState } from '../session/state/write.js';
 import { resetHarnessStateCaches } from '../session/state/index-file.js';
 import { sessionFilePath } from '../session/store/paths.js';
 import { loadSessionFile } from '../session/store/records.js';
-import { corpusBuilds, resetCorpusCache, sessionDoc } from './corpus.js';
-import { parseQuery, parseSince, recencyBoost, searchConversations } from './engine.js';
-import { snippet } from './format.js';
+import { conversationGroups } from './conversations.js';
+import { conversationView, corpusBuilds, resetCorpusCache, sessionDoc } from './corpus.js';
+import { parseQuery, parseSince, recencyBoost, searchConversations, titleMatch } from './engine.js';
+import { hitSnippets, mentionCount, snippet } from './format.js';
 import { maskSecrets } from './secrets.js';
 
 const NOW = Date.parse('2026-10-04T12:00:00Z');
@@ -130,6 +131,72 @@ describe('searchConversations', () => {
     await store(chat('old', [user('kiwi')], { updatedAt: daysAgo(10) }), chat('new', [user('kiwi')], { updatedAt: daysAgo(1) }));
     const result = (await searchConversations('kiwi', { now: NOW, sinceMs: NOW - 2 * 86_400_000 }))!;
     expect(result.hits.map((hit) => hit.conversationId)).toEqual(['new']);
+  });
+});
+
+describe('titles, phrase mentions and the merged numbering', () => {
+  it('ranks a conversation titled with the query first, then a title holding every word, then body mentions', async () => {
+    const many = Array.from({ length: 30 }, (_, index) => user(`prod deployment step ${index}`));
+    await store(
+      chat('busy', many, { name: 'Release notes', updatedAt: daysAgo(0) }),
+      chat('words', [user('nothing here')], { name: 'Deployment for prod, take two', updatedAt: daysAgo(20) }),
+      chat('named', [user('ship it'), assistant('prod is up; the deployment finished')], { name: 'Prod  Deployment', updatedAt: daysAgo(9) }),
+    );
+    const result = (await searchConversations('prod deployment', { now: NOW }))!;
+    expect(result.hits.map((hit) => [hit.conversationId, hit.titleMatch])).toEqual([['named', 'exact'], ['words', 'words'], ['busy', undefined]]);
+    // Found by its title alone: no mentions, still a hit.
+    expect(result.hits[1]!.mentions).toEqual([]);
+    expect(mentionCount(result.hits[1]!, 2)).toBe('no mentions in its messages');
+    expect(titleMatch('prod-deployment', parseQuery('Prod Deployment')!)).toBe('exact');
+    expect(titleMatch('Production', parseQuery('prod deployment')!)).toBeUndefined();
+  });
+
+  it('counts and shows only phrase matches when there are any, and says which it counted', async () => {
+    await store(chat('mixed', [
+      assistant('the background job and earlier work, started in a turn'),
+      assistant('background work, an earlier turn, you started it'),
+      user('[ClikCode] Background work you started in an earlier turn was stopped.'),
+      assistant('ok'),
+      user('[ClikCode] Background work you started in an earlier turn was stopped again.'),
+    ]), chat('words-only', [user('work you started in the background, an earlier turn')]));
+    const result = (await searchConversations('Background work you started in an earlier turn', { now: NOW }))!;
+    const [hit, words] = result.hits;
+    expect(hit!.conversationId).toBe('mixed');
+    expect(hit!.mentions.map((mention) => mention.position)).toEqual([2, 4]);
+    expect(hit!.mentions.every((mention) => mention.exact)).toBe(true);
+    expect(mentionCount(hit!, 8)).toBe('2 mentions of the phrase');
+    const snippets = hitSnippets(hit!, await conversationView((await conversationGroups()).find((group) => group.id === 'mixed')!));
+    expect(snippets).toEqual([
+      '@mixed:2 user: [ClikCode] Background work you started in an earlier turn was stopped.',
+      '@mixed:4 user: [ClikCode] Background work you started in an earlier turn was stopped again.',
+    ]);
+    expect(mentionCount(words!, 8)).toBe('1 message with all the words (not the phrase)');
+  });
+
+  it('searches one conversation when asked', async () => {
+    await store(chat('a', [user('kumquat')]), chat('b', [user('kumquat'), user('kumquat again')]));
+    const result = (await searchConversations('kumquat', { now: NOW, conversationId: 'b' }))!;
+    expect(result.hits.map((hit) => [hit.conversationId, hit.mentions.length])).toEqual([['b', 2]]);
+    expect(result.searched).toBe(1);
+  });
+
+  it('numbers a forked conversation once: the newest chat first, then what other branches add', async () => {
+    const shared = [user('start the quokka plan'), assistant('quokka plan started'), user('step two'), assistant('done two'), user('step three'), assistant('done three')];
+    await store(chat('trunk', [...shared, user('trunk quokka ending')], { conversationId: 'trunk', updatedAt: daysAgo(5) }));
+    await store(chat('side', [...shared.slice(0, 4), user('side quokka idea'), assistant('side done')], { conversationId: 'trunk', parentSessionId: 'trunk', updatedAt: daysAgo(1) }));
+    const group = (await conversationGroups()).find((item) => item.id === 'trunk')!;
+    const view = await conversationView(group);
+    // The newest chat (side) is the main line; trunk adds its own last three.
+    expect(view.mainLength).toBe(6);
+    expect(view.entries.map((entry) => `${entry.sessionId}:${entry.index}`)).toEqual(['side:0', 'side:1', 'side:2', 'side:3', 'side:4', 'side:5', 'trunk:4', 'trunk:5', 'trunk:6']);
+    expect(view.entries[6]!.forkAfter).toBe(3);
+    expect(view.positions.get('trunk')).toEqual([0, 1, 2, 3, 6, 7, 8]);
+    const hit = (await searchConversations('quokka', { now: NOW }))!.hits[0]!;
+    expect(hit.mentions.map((mention) => [mention.position, mention.sessionId, mention.messageIndex])).toEqual([
+      [0, 'side', 0], [1, 'side', 1], [4, 'side', 4], [8, 'trunk', 6],
+    ]);
+    // Unchanged files: the same view, not rebuilt.
+    expect(await conversationView(group)).toBe(view);
   });
 });
 
