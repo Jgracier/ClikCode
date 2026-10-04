@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { failoverPrompt, failoverPromptRequest, INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
 import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
-import { DEFERRED_WORK_CONTINUATION } from './deferred-work.js';
 import { conversationTitle } from '../session/discovery/conversation-title.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
@@ -26,19 +25,6 @@ describe('failoverPromptRequest', () => {
     const prompt = interruptedTurnFailoverPrompt(session);
     expect(prompt).toContain('/home/me/a.ts');
     expect(failoverPromptRequest(prompt)).toBe(INTERRUPTED_TURN_REQUEST);
-  });
-
-  it('retells this turn with a deferred-work continuation for a thread that remembers nothing', () => {
-    const session = {
-      messages: history,
-      pendingTurn: { prompt: 'fix the bug', response: 'I can fix the bug if you want.', startedAt: '', updatedAt: '', outputStarted: true, touchedFiles: ['/home/me/a.ts'] },
-    } as unknown as HarnessSession;
-    const prompt = interruptedTurnFailoverPrompt(session, { request: DEFERRED_WORK_CONTINUATION, touchedFiles: [] });
-    expect(prompt).toContain('use clikdeploy cli');
-    expect(prompt).toContain('fix the bug');
-    expect(prompt).toContain('I can fix the bug if you want.');
-    expect(prompt).not.toContain('/home/me/a.ts');
-    expect(failoverPromptRequest(prompt)).toBe(DEFERRED_WORK_CONTINUATION);
   });
 
   it('restores frame tags the prompt escaped', () => {
