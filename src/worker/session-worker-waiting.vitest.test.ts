@@ -450,7 +450,7 @@ function recordingPrompter(): TerminalHarnessPrompter & { calls: string[] } {
   const record = (name: string) => (...args: unknown[]) => { calls.push(`${name}(${args.map((arg) => (typeof arg === 'function' ? '[fn]' : JSON.stringify(arg))).join(',')})`); };
   return {
     calls, render: record('render'), response: record('response'), activity: record('activity'), activityEvent: record('activityEvent'),
-    phase: record('phase'), setPlan: record('setPlan'), setTurnUsage: record('setTurnUsage'), startWaiting: record('startWaiting'), stopWaiting: record('stopWaiting'),
+    phase: record('phase'), setPlan: record('setPlan'), setTurnUsage: record('setTurnUsage'), startWaiting: record('startWaiting'), turnStarting: record('turnStarting'), stopWaiting: record('stopWaiting'),
     approval: async (...args: unknown[]) => { record('approval')(...args); return true; },
     suspend: async () => undefined, resume: record('resume'), restoreDraft: record('restoreDraft'), submitted: record('submitted'),
   } as unknown as TerminalHarnessPrompter & { calls: string[] };

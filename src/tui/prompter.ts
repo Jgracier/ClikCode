@@ -138,6 +138,9 @@ type WaitingTurn = {
   leave?: () => void;
   timer?: NodeJS.Timeout;
   stopInput?: () => void;
+  /** Drawn before the turn's own controls exist (turnStarting): what is
+   * typed is kept for it, and an interrupt is passed on once it can be. */
+  early?: { interrupt?: { restoreDraft: boolean } };
 };
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -397,6 +400,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.cancelled = true;
       turn.label = 'stopping…';
       this.updateWaiting();
+      if (turn.early) turn.early.interrupt = { restoreDraft: action === 'cancel-edit' };
       turn.cancel?.(action === 'cancel-edit');
     } else if (key === '\u001a') {
       this.suspendToShell();
@@ -420,7 +424,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.draft = '';
       turn.cursor = 0;
       this.submitWaiting(text);
-    } else if (turn.submit || this.signInInput) {
+    } else if (turn.submit || turn.early || this.signInInput) {
       const edited = editWaitingComposer(turn.draft, turn.cursor, key);
       if (edited.changed) {
         turn.draft = edited.value;
@@ -1002,6 +1006,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // happened to bring it back. This call is only resetting the previous
     // turn's waiting state. The prompt belongs to the turn being started.
     const submittedPrompt = this.submittedPrompt;
+    // The same turn, drawn early: it carries on, its clock and draft with it.
+    const early = this.turn?.early ? { ...this.turn } : undefined;
+    if (early) this.turn!.draft = '';
     this.stopWaiting(false);
     this.submittedPrompt = submittedPrompt;
     if (this.sendNow?.taken) this.sendNow = undefined;
@@ -1031,7 +1038,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the transient assistant at this same index.
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     const turn: WaitingTurn = {
-      label: message, clock: startTurnClock(Date.now()), thinkingSince: Date.now(), draft: '', cursor: 0, cancelled: false,
+      label: message, clock: early?.clock ?? startTurnClock(Date.now()), thinkingSince: early?.thinkingSince ?? Date.now(),
+      draft: early?.draft ?? '', cursor: early?.cursor ?? 0, cancelled: false,
       ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
       ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
     };
@@ -1065,6 +1073,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.paint('', [], 0, '› ', 0);
     this.scheduleWaitingTick();
+    const interrupt = early?.early?.interrupt;
+    if (interrupt && onCancel) {
+      turn.cancelled = true;
+      turn.label = 'stopping…';
+      onCancel(interrupt.restoreDraft);
+      this.updateWaiting();
+    }
+  }
+
+  /** A turn is on its way, but what runs it is not answering yet: the first
+   * message of a conversation waits on its worker starting, most of 150ms of
+   * a node process loading. The message and the spinner are drawn now;
+   * startWaiting then takes over the same clock and draft, and an interrupt
+   * pressed meanwhile. */
+  turnStarting(): void {
+    this.startWaiting('thinking');
+    if (this.turn) this.turn.early = {};
   }
 
   /** What the status line says about the newest open call, if any is open. */
