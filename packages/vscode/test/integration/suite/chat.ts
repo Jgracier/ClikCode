@@ -89,7 +89,7 @@ export function chatSuite(): void {
       await waitFor(api, '#composer-input', 'back to the chat');
     });
 
-    it('signs in to a link provider inside the panel: a card with the code, the link opened once, no terminal', async () => {
+    it('signs in inside the panel: a link card with its code, a masked key sheet, never a terminal', async () => {
       const opened = (): string[] => (existsSync(process.env.CLIKCODE_IT_OPENED!) ? readFileSync(process.env.CLIKCODE_IT_OPENED!, 'utf8').trim().split('\n').filter(Boolean) : []);
       const path = process.env.PATH;
       process.env.PATH = `${process.env.CLIKCODE_IT_FAKE_BIN}:${path ?? ''}`;
@@ -115,10 +115,27 @@ export function chatSuite(): void {
         await waitFor(api, '#sign-in-link', 'the card gone once cancelled', 15_000, (found) => found.count === 0);
       } finally { rmSync(process.env.CLIKCODE_IT_HOLD!, { force: true }); }
       if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');
+
+      // A sign-in that asks for a key: ClikCode's own input sheet, masked.
+      process.env.FAKE_LOGIN_KEY = 'sk-test-42';
+      await vscode.commands.executeCommand('clikcode.restart');
+      await api.ready();
+      await api.send('/accounts add grok');
+      const field = await waitFor(api, '.sheet input#sheet-input', 'the key sheet', 30_000);
+      if (!/API key/i.test((await query(api, '.sheet .sheet-title')).text)) throw new Error(`the sheet asks "${(await query(api, '.sheet .sheet-title')).text}"`);
+      if ((await api.probe('query', '.sheet input#sheet-input[type="password"]') as { count: number }).count !== 1) throw new Error(`the key field is not masked: ${JSON.stringify(field)}`);
+      await screenshot('sign-in-key-sheet', 300);
+      await type(api, '.sheet input#sheet-input', 'sk-test-42');
+      await click(api, '.sheet button[type="submit"]');
+      await waitFor(api, '#sign-in-link', 'the card gone once signed in with the key', 30_000, (found) => found.count === 0);
+      if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a key sign-in');
       } finally {
+        delete process.env.FAKE_LOGIN_KEY;
         process.env.PATH = path;
         await vscode.commands.executeCommand('clikcode.restart');
         await api.ready();
+        // Connected again before the next test clicks anything.
+        await waitFor(api, '#provider-button', 'the provider button, enabled again', 60_000, (found) => found.count > 0 && !found.disabled);
       }
     });
 
