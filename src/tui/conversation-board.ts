@@ -24,10 +24,8 @@ import { reducedMotion } from './capabilities.js';
 import { pickerDeletesSelection } from './command-palette.js';
 import { asideOpener, confirmRowDelete, redrawOnRefresh, type OptionPickerHost } from './option-picker.js';
 import { workingSpinner } from './pickers/conversation-activity.js';
+import { SPIN_MS } from '../harness/protocol/timings.js';
 
-/** How often a running conversation's spinner moves. Only its cells change
- * between frames, so this costs a few bytes each, even over SSH. */
-const SPIN_MS = 160;
 
 export type BoardResult = { open: string } | { compose: string } | { command: string };
 

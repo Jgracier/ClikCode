@@ -9,7 +9,7 @@ import { visibleSlice } from '../../tui/render/width.js';
 import { compactCount, formatDuration } from './format.js';
 import { TOOL_CATEGORY } from './tool-category.js';
 import { isAgentToolName } from './tools.js';
-import { SPIN_MS } from './timings.js';
+import { SPIN_MS, SPIN_PHASES } from './timings.js';
 
 /** How much of a tool's work a transcript row shows. Enough to recognise the
  * edit or command at a glance without the trail crowding out the answer. */
@@ -285,7 +285,7 @@ export function openToolsStatus(activeTools: ReadonlyMap<string, OpenTool>): { p
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
  * the same compact shape without changing its dimensions. */
 export function waitingSpinnerFrame(frame: number): [boolean[], boolean[], boolean[], boolean[]] {
-  const phase = Math.abs(frame) % 4;
+  const phase = Math.abs(frame) % SPIN_PHASES;
   return Array.from({ length: 4 }, (_, row) =>
     Array.from({ length: 4 }, (_, column) => (row + column + phase) % 4 < 2),
   ) as [boolean[], boolean[], boolean[], boolean[]];
