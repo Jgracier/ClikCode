@@ -175,12 +175,25 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * what this process loaded: leave now so the next open gets a fresh
    * worker. An attached window is left alone -- its own attach asks for
    * retirement; killing under a live prompt is worse. */
-  const leaveIfStaleBuild = (): boolean => {
-    if (!spawnedBuild || observer.attachedCount > 0 || retireBlocker()) return false;
+  const leaveIfStaleBuild = (): void => {
+    if (!spawnedBuild || observer.attachedCount > 0 || retireBlocker()) return;
     const live = currentWorkerBuild();
-    if (!live || live === spawnedBuild) return false;
-    void shutdown('replaced by a newer ClikCode build');
-    return true;
+    if (!live || live === spawnedBuild) return;
+    retireIfFree();
+  };
+  /** Retire for a newer build unless the vendor is running work a tool call
+   * left (toolCallWork): retiring closes the vendor, which stops that work
+   * and owes the model a turn to say so. Checked again at every idle edge
+   * and build-watch tick, so it goes once the work has ended. */
+  let retireCheck: Promise<void> | undefined;
+  const retireIfFree = (): void => {
+    retireCheck ??= (async () => {
+      const running = await persistentWorkRunning(sessionId);
+      // Something started meanwhile: its own edge checks again.
+      if (retireBlocker()) return;
+      if (running) { noteIdle('held: retiring once the vendor\'s work ends'); return; }
+      void shutdown('replaced by a newer ClikCode build');
+    })().catch(() => undefined).finally(() => { retireCheck = undefined; });
   };
 
   let awaitingHeldVendor = false;
@@ -201,8 +214,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
           : runningShellCount(agentSession) > 0 ? `held: ${runningShellCount(agentSession)} background shell(s)` : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
-    if (retireWhenIdle && !retireBlocker()) { void shutdown('replaced by a newer ClikCode build'); return; }
-    if (leaveIfStaleBuild()) return;
+    if (retireWhenIdle && !retireBlocker()) retireIfFree();
+    else leaveIfStaleBuild();
     if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
     // A turn parked for a quota reset: this worker is what sends it.
     if (resumeWaiter.pending) return;
@@ -588,7 +601,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // is in the middle of something. A window used to decide from the
       // state file and SIGTERM it -- killing another window's turn whenever
       // the file had not caught up with the worker.
-      const blocker = retireBlocker();
+      const blocker = retireBlocker() ?? (await persistentWorkRunning(sessionId) ? 'the vendor is still running work it started' : retireBlocker());
       if (blocker) {
         retireWhenIdle = true;
         sendEvent(socket, { type: 'retire-declined', reason: blocker });

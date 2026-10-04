@@ -195,6 +195,22 @@ describe('durable turn checkpoints', () => {
     expect(consumeSessionTurn(target, queued.id)).toBe(true);
     expect(target.queuedTurns).toBeUndefined();
   });
+
+  it('queues a notification once while an identical one is undelivered', () => {
+    const target = session();
+    const at = '2026-01-02T00:00:00.000Z';
+    const notice = (id: string, text = '[ClikCode] Background work was stopped') => ({ id, text, submittedAt: at, kind: 'notification' as const });
+    enqueueSessionTurn(target, notice('n1'), at);
+    enqueueSessionTurn(target, notice('n2'), at);
+    // The user may well type the same words twice; those are theirs.
+    enqueueSessionTurn(target, { id: 'u1', text: '[ClikCode] Background work was stopped', submittedAt: at }, at);
+    enqueueSessionTurn(target, notice('n3', '[background shell 2 exited] npm test'), at);
+    expect(target.queuedTurns?.map((item) => item.id)).toEqual(['n1', 'u1', 'n3']);
+    // Delivered, the same news is news again.
+    consumeSessionTurn(target, 'n1');
+    enqueueSessionTurn(target, notice('n4'), at);
+    expect(target.queuedTurns?.map((item) => item.id)).toEqual(['u1', 'n3', 'n4']);
+  });
 });
 
 describe('a live submission is queued or it is not', () => {
