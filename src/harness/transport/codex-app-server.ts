@@ -43,6 +43,8 @@ export interface CodexSession {
   /** Interrupt the active turn; the child survives if it acknowledges in 2s. */
   cancel(): void;
   close(): Promise<void>;
+  /** Work the vendor is still doing between turns (persistent-session.ts). */
+  backgroundWorkRunning(): Promise<boolean>;
 }
 
 interface CodexAppServerTurnResult {
@@ -326,6 +328,10 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     await live.peer.request('turn/steer', codexSteerParams(turn.threadId, turn.turnId, text), { timeoutMs: JSONRPC_SETUP_TIMEOUT_MS });
   }
 
+  protected pendingCount(): number {
+    return this.pendingWork.size;
+  }
+
   protected clearPending(): void {
     this.pendingWork.clear();
   }
@@ -421,6 +427,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     // The turn ends on Codex's own turn/completed. This is only the ceiling
     // for a server that has stopped talking without saying so.
     turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError('Codex', afterMs)));
+    await this.promptSent();
+    stillRunning();
     const turnResult = await peer.request('turn/start', {
       threadId,
       input: [

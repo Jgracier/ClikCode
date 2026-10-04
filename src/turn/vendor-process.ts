@@ -78,6 +78,12 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
   return created;
 }
 
+/** Whether this session's persistent vendor is still doing work between
+ * turns: its worker stays up for it rather than closing the child under it. */
+export async function persistentWorkRunning(sessionId: string): Promise<boolean> {
+  return await persistentTransports.get(sessionId)?.session.backgroundWorkRunning?.().catch(() => false) ?? false;
+}
+
 export async function closePersistentTransport(sessionId?: string): Promise<void> {
   const ids = sessionId === undefined ? [...persistentTransports.keys()] : [sessionId];
   await Promise.all(ids.map(async (id) => {

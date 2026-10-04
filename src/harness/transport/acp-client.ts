@@ -89,6 +89,8 @@ export interface AcpSession {
    * session/cancel within two seconds. */
   cancel(): void;
   close(): Promise<void>;
+  /** Work the vendor is still doing between turns (persistent-session.ts). */
+  backgroundWorkRunning(): Promise<boolean>;
 }
 
 export function acpResponseDelta(update: Json): string | undefined {
@@ -453,6 +455,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     this.pendingTools.clear();
   }
 
+  protected pendingCount(): number {
+    // Cleared at each answer (see `ended` above): between turns only tools a
+    // background turn is following count.
+    return this.background ? this.pendingTools.size : 0;
+  }
+
   protected interrupt(turn: ActiveTurn, live: LiveAgent): boolean {
     const prompt = turn.prompt;
     if (!prompt || !turn.sessionId) return false;
@@ -646,6 +654,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Taken now, not when the turn was created: a session/load above may have
     // reported the totals this turn is measured from.
     turn.base = { ...this.sessionTotals };
+    await this.promptSent();
+    stillRunning();
     turn.promptStarted = true;
     // The turn ends with the agent's answer to session/prompt. This is only
     // the ceiling for an agent that has stopped talking without answering.
