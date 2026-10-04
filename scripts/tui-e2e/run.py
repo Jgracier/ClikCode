@@ -516,6 +516,44 @@ SCENARIOS = {
         'final_once': ['part0 ok', 'part3 ok', 'held call done'],
         'never': ['Interrupted turn activity'],
     },
+    # /search: the conversation with the most mentions opens at its first
+    # one -- far above what the screen shows -- highlighted; Down walks to
+    # the next, Tab to the next conversation, Esc stays there.
+    'search-walks-mentions': {
+        'cols': 80, 'env': {'FAKE_DELAY_MS': '5'},
+        'turns': [{'blocks': ['Zebra protocol starts here.', '\n\n'.join(f'Filler paragraph {n} of the long answer.' for n in range(1, 40)),
+                              'The zebra protocol again, near the end.']},
+                  {'blocks': ['One zebra protocol here.']}],
+        'steps': [
+            ('type', 'explain the zebra protocol'), ('wait_for', 'near the end.', 40), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2),
+            ('type', 'another zebra protocol question'), ('wait_for', 'One zebra protocol here.', 30), ('settle', 2),
+            ('type', '/search zebra protocol'), ('wait_for', 'mention 1 of 3', 15), ('settle', 1), ('snap', 'first'),
+            ('reversed', 'zebra protocol'),
+            ('keys', '\x1b[B'), ('wait_for', 'mention 2 of 3', 10), ('settle', 1), ('snap', 'second'),
+            ('keys', '\x1b[B'), ('wait_for', 'mention 3 of 3', 10), ('settle', 1), ('snap', 'last'),
+            ('keys', '\t'), ('wait_for', 'chat 2 of 2', 10), ('settle', 1), ('snap', 'next-chat'),
+            ('keys', '\x1b'), ('settle', 2), ('mark',),
+        ],
+        'watch': [],
+        'snap_contains': {
+            'first': ['explain the zebra protocol', 'mention 1 of 3 · chat 1 of 2 · ↑↓ next/previous · tab next chat · esc done'],
+            'second': ['Zebra protocol starts here.'],
+            'last': ['The zebra protocol again, near the end.'],
+            'next-chat': ['One zebra protocol here.', 'another zebra protocol question'],
+        },
+        'final_contains': ['One zebra protocol here.'],
+        'never_after_mark': ['↑↓ next/previous'],
+    },
+    # A search nothing matches says so and stays.
+    'search-no-match-stays': {
+        'turns': [{'blocks': ['Plain answer stays put.']}],
+        'steps': [
+            ('type', 'a plain question'), ('wait_for', 'Plain answer stays put.', 30), ('settle', 1),
+            ('type', '/search quokka'), ('wait_for', 'No conversation mentions "quokka"', 10), ('settle', 1),
+        ],
+        'watch': [], 'final_contains': ['Plain answer stays put.', 'No conversation mentions "quokka"'],
+    },
     # A long turn whose rows overflow the screen: a wheel notch back moves the
     # WHOLE transcript area -- its newest rows leave at the bottom -- and Esc
     # brings them back. It used to move only the top rows.
@@ -705,6 +743,18 @@ def run(name, spec, entry, keep):
             pid, fd = launch()
             screen.reset()
             pump(step[1] if len(step) > 1 else 5)
+        elif step[0] == 'reversed':
+            # The phrase is on screen with every one of its cells in inverse
+            # video (a /search match), case-insensitively.
+            wanted = step[1].lower()
+            found = False
+            for row in range(screen.lines):
+                line = ''.join(screen.buffer[row][col].data for col in range(screen.columns))
+                at = line.lower().find(wanted)
+                while at >= 0 and not found:
+                    found = all(screen.buffer[row][col].reverse for col in range(at, at + len(wanted)) if line[col] != ' ')
+                    at = line.lower().find(wanted, at + 1)
+            if not found: problems.append(f'not highlighted on screen: {step[1]!r}')
         elif step[0] == 'touch_entry':
             os.utime(entry, None)
         elif step[0] == 'damage_and_redraw':

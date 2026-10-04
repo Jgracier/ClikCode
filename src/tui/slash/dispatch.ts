@@ -47,6 +47,8 @@ import { capabilitiesText } from './capabilities-text.js';
 import { forkPoint, forkPointOptions } from './fork-at.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { compactConversation } from './compact.js';
+import { searchConversations } from '../../search/engine.js';
+import { searchResultsText } from '../../search/navigate.js';
 import { exportTranscript } from './export-transcript.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
 import { nativeManagerListing } from './native-manager.js';
@@ -76,6 +78,9 @@ export interface SlashHost {
   runTurn(targetId: string, prompt: string): Promise<void>;
   /** /resume and /sessions without a name. */
   openConversationPicker(id: string): Promise<InteractiveSlashOutcome>;
+  /** /search <words> where the conversation can be walked mention by
+   * mention. Absent: the results are listed in a panel. */
+  browseSearch?(query: string): Promise<InteractiveSlashOutcome>;
   /** `/memory edit`. */
   editFile(path: string, cwd: string): Promise<void>;
   /** A vendor's own manager (an argv it runs interactively), given a
@@ -238,6 +243,16 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     resume: async () => {
       const named = args ? chatNamed(state.sessions, args, id) : undefined;
       return named ? { id: named } : host.openConversationPicker(id);
+    },
+    search: async () => {
+      const query = args.trim();
+      if (!query) throw new Error('usage: /search <words>');
+      if (host.browseSearch) return host.browseSearch(query);
+      const result = await host.withBusy('searching conversations…', () => searchConversations(query));
+      if (!result?.hits.length) return { notice: `No conversation mentions "${query}"` };
+      const listed = searchResultsText(result);
+      const [title = 'Search', ...rest] = listed.split('\n');
+      host.panel('search', title, rest.join('\n'), listed);
     },
     rename: async () => {
       const name = args || (await host.ask('Conversation name')).trim();

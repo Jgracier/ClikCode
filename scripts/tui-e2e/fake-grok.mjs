@@ -57,6 +57,17 @@ if (argv[0] === 'login') {
   // fell through into it used up the scenario's first answer.
   process.exit(0);
 } else if (['logout', 'auth', 'status'].includes(argv[0])) process.exit(0);
+// `grok mcp add <name> <command> [args...]`, as the real one records it, so
+// the next turn finds the server there and does not add it again. Never a
+// turn: falling through used up the scenario's answers.
+if (argv[0] === 'mcp') {
+  if (argv[1] === 'add' && argv[2] && process.env.HOME) {
+    const { appendFileSync, mkdirSync } = await import('node:fs');
+    mkdirSync(`${process.env.HOME}/.grok`, { recursive: true });
+    appendFileSync(`${process.env.HOME}/.grok/config.toml`, `\n[mcp_servers.${JSON.stringify(argv[2])}]\ncommand = ${JSON.stringify(argv[3] ?? '')}\nargs = ${JSON.stringify(argv.slice(4))}\n`);
+  }
+  process.exit(0);
+}
 
 // `grok agent stdio`: the ACP agent ClikCode starts for Grok since it moved
 // to ACP. Same recorded turns, as session/update notifications.

@@ -41,7 +41,7 @@ export const SLASH_HANDLER_KEYS = [
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'swarm', 'permissions', 'options', 'capabilities', 'settings',
-  'sessions', 'resume', 'rename', 'fork', 'archive', 'delete',
+  'sessions', 'resume', 'search', 'rename', 'fork', 'archive', 'delete',
   'usage', 'doctor',
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
@@ -195,6 +195,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
 
   entry('sessions', 'Sessions', 'manage conversations', { argHint: '[list|show|open|close <id>]' }),
   entry('resume', 'Sessions', 'resume another conversation'),
+  entry('search', 'Sessions', 'open the conversation that mentions something most, at each mention', { argHint: '<words>' }),
   entry('rename', 'Sessions', 'name this conversation', { argHint: '[name]' }),
   entry('fork', 'Sessions', 'branch this conversation, or only through message N', { argHint: '[@N] [name]' }),
   entry('archive', 'Sessions', 'archive this conversation'),

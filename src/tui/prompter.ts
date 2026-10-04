@@ -48,6 +48,7 @@ import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
 import { hasDurableSteer, STEER_WORDS, steerTranscriptRows } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
+import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/search-focus.js';
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
@@ -238,6 +239,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Rows dropped from the front of alternateTranscript, so a line's number
    * stays the same when older rows are trimmed. */
   private alternateTrimmed = 0;
+  /** Each message's first line in the transcript, numbered as
+   * alternateTrimmed + index, so it holds while rows are trimmed. */
+  private readonly messageLines = new Map<number, number>();
+  /** /search: the mention being looked at in the conversation shown, its
+   * words highlighted; `jumped` once the view has been moved to it. */
+  private mentionFocus?: MentionFocus & { sessionId: string; jumped: boolean };
   /** The live rows below the transcript in the last frame: the text a
    * selection copies from them. */
   private frameLayout = { live: [] as string[] };
@@ -579,6 +586,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.lastFinishedRow = undefined;
     this.secondLastFinishedRow = undefined;
     this.alternateScrollback = 0;
+    this.messageLines.clear();
     this.stopSelectionScroll();
     this.selection = undefined;
   }
@@ -711,6 +719,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   render(session: HarnessSession, _account?: string, notice?: string, journal?: JournalState): void {
     if (this.currentSession?.id !== session.id) {
+      // A /search mention belongs to the conversation it was found in.
+      if (this.mentionFocus?.sessionId !== session.id) this.mentionFocus = undefined;
       this.activityEntries = [];
       this.planEntries = [];
       this.panelState = undefined;
@@ -1532,7 +1542,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // maxLiveConversation below. The distinction is the point: a spinner and
     // an elapsed clock in a fixed place are status, while a sentence being
     // rewritten under the eye is the thing that made reading impossible.
-    const notice = this.transientNotice ?? this.currentNotice;
+    const notice = this.mentionFocus?.status ?? this.transientNotice ?? this.currentNotice;
     const budget = frameRowBudget({
       targetHeight, waiting: Boolean(this.turn), notice: Boolean(notice), requestedPaletteCapacity,
     });
@@ -1762,7 +1772,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // alternateTranscript (same trade-off as its row cap). The first frame
     // then costs O(viewport), not O(history).
     if (reseeding && firstUnwritten === 0 && persistedMessages.length > 0) {
-      const from = reseedStartIndex(persistedMessages, ALTERNATE_TRANSCRIPT_ROWS, conversationInner);
+      // A /search mention further back than that starts the window there.
+      const focus = this.mentionFocus?.sessionId === session.id ? this.mentionFocus.messageIndex : undefined;
+      const recent = reseedStartIndex(persistedMessages, ALTERNATE_TRANSCRIPT_ROWS, conversationInner);
+      const from = focus === undefined ? recent : Math.min(recent, Math.max(0, focus - 1));
       if (from > 0) {
         for (let index = 0; index < from; index += 1) this.emitted.wrote(persistedMessages[index]!);
         this.emitted.settle(from);
@@ -1778,6 +1791,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     let drewLiveTurn = false;
     for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
       const message = persistedMessages[index]!;
+      this.messageLines.set(index, this.alternateTrimmed + this.alternateTranscript.length + this.pendingFinished.length + finished.length);
       const pastTools = message.role === 'assistant' && index !== liveAssistant && !drewLiveTurn ? savedTools(message, index) : [];
       if (index === liveAssistant && message.role === 'assistant') {
         // The answer that just streamed. Its rows are already in scrollback and
@@ -2021,7 +2035,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // messages" is. Growing the offset by the same count holds it still.
       if (this.alternateScrollback > 0) this.alternateScrollback += finished.length;
       // Trimming the front does not move the end, so it leaves the offset be.
-      const excess = this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS;
+      // Never past a /search mention being looked at: a long way back in a
+      // long chat is exactly where one can be.
+      const focusLine = this.mentionFocus ? this.messageLines.get(this.mentionFocus.messageIndex) : undefined;
+      const excess = Math.min(this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS,
+        focusLine === undefined ? Number.POSITIVE_INFINITY : focusLine - this.alternateTrimmed);
       if (excess > 0) {
         this.alternateTranscript.splice(0, excess);
         this.alternateTrimmed += excess;
@@ -2042,6 +2060,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // moment ago is suddenly past its end -- and every further swipe moves a
     // number while the view stays pinned at the top, which reads as scrolling
     // having stopped working. The offset is clamped to what can be shown.
+    this.jumpToMention(above);
     const furthest = Math.max(0, this.alternateTranscript.length - above);
     this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
     const scrolled = this.alternateScrollback;
@@ -2051,6 +2070,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     let rows = [...shownTranscript, ...shownLive];
     while (rows.length < height) rows.unshift('');
     this.frameLayout = { live: [...live] };
+    if (this.mentionFocus?.words.length) {
+      const words = this.mentionFocus.words;
+      const transcriptRows = rows.length - shownLive.length;
+      rows = rows.map((row, index) => (index < transcriptRows ? highlightWords(row, words) : row));
+    }
     if (this.selection) rows = highlightSelectionAt(rows, rows.map((_, row) => this.lineAtScreenRow(row)), this.selection);
     // Only what changed. A keystroke changes the composer's row and nothing
     // else, and rewriting the whole screen for it costs kilobytes per key on
@@ -2138,6 +2162,69 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.frameInFlight = false;
       if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
     });
+  }
+
+  /** /search: show `session` at one mention, its words highlighted and
+   * `focus.status` under it. The view moves to the mention on the frame
+   * that draws it -- rewriting the conversation from an earlier message
+   * first when the mention is older than what is on screen. */
+  showMention(session: HarnessSession, focus: MentionFocus): void {
+    this.mentionFocus = { ...focus, sessionId: session.id, jumped: false };
+    if (this.currentSession?.id === session.id && !this.messageLines.has(focus.messageIndex)) this.emitted.requestReseed();
+    this.render(session);
+  }
+
+  /** The next key while browsing mentions: Up/Down move between them, Tab
+   * goes to the next conversation, Esc (or Enter) ends it. Page keys and
+   * the wheel still scroll. */
+  mentionKey(): Promise<'next' | 'previous' | 'chat' | 'done'> {
+    return new Promise((resolve) => {
+      let stop: () => void = () => {};
+      const listen = (): void => {
+        stop = takeTerminalKeys((key) => {
+          const action = key === '\u001b[A' ? 'previous' as const : key === '\u001b[B' ? 'next' as const : key === '\t' ? 'chat' as const
+            : key === '\u001b' || key === '\r' || key === '\u0003' ? 'done' as const : undefined;
+          if (!action) {
+            if (key === '\u000c') { this.requestRedraw('repair'); this.forgetScreenPosition(); this.repaint(); return; }
+            this.handleScrollKey(key);
+            return;
+          }
+          stop();
+          this.resumeInput = undefined;
+          output.write(popReadModes());
+          resolve(action);
+        });
+        output.write(enterInputModes());
+      };
+      this.resumeInput = () => { stop(); listen(); };
+      listen();
+    });
+  }
+
+  /** Browsing is over: the view stays at the mention, its words stay
+   * highlighted until the next line is sent, and the status line goes. */
+  endMention(): void {
+    if (!this.mentionFocus) return;
+    this.mentionFocus = { ...this.mentionFocus, status: undefined };
+    this.repaint();
+  }
+
+  /** Puts the mention a few rows below the top of the view, once, on the
+   * first frame whose transcript holds it. */
+  private jumpToMention(above: number): void {
+    const focus = this.mentionFocus;
+    if (!focus || focus.jumped || this.currentSession?.id !== focus.sessionId) return;
+    const start = this.messageLines.get(focus.messageIndex);
+    if (start === undefined) return;
+    const from = start - this.alternateTrimmed;
+    if (from < 0 || from >= this.alternateTranscript.length) return;
+    const nextStart = this.messageLines.get(focus.messageIndex + 1);
+    const to = nextStart === undefined ? this.alternateTranscript.length : Math.min(this.alternateTranscript.length, nextStart - this.alternateTrimmed);
+    const found = focus.words[0] ? rowOfOccurrence(this.alternateTranscript.slice(from, to), focus.words[0], focus.occurrence) : undefined;
+    const row = from + (found ?? 0);
+    const first = Math.max(0, row - 3);
+    this.alternateScrollback = Math.max(0, this.alternateTranscript.length - above - first);
+    focus.jumped = true;
   }
 
   /** Move the viewport through the transcript. Positive scrolls back, and the
@@ -2561,6 +2648,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (!release()) return;
         this.clearTransientNotice();
         if (answer) this.panelState = undefined;
+        // A line sent is done with the mention it was looking at.
+        if (answer) this.mentionFocus = undefined;
         // The submitted line is the conversation's now. Leaving it in the
         // composer made the next idle check look like a draft still in progress.
         this.composer = { ...this.composer, text: '' };
