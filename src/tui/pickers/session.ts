@@ -2,6 +2,7 @@
  * outside ClikCode and that can be adopted. */
 
 import { compactPath } from '../../harness/protocol/labels.js';
+import { SLOW_WAIT_MS } from '../../harness/protocol/timings.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
@@ -253,7 +254,7 @@ export async function interactiveSessionPicker(
   // The "Looking for chats from other CLIs…" row is for a search worth
   // waiting on. Most finish in milliseconds, and the row flashed in and out.
   let slowDiscovery = false;
-  const slow = new Promise<void>((resolveSlow) => { setTimeout(resolveSlow, 400).unref(); }).then(() => { slowDiscovery = true; });
+  const slow = new Promise<void>((resolveSlow) => { setTimeout(resolveSlow, SLOW_WAIT_MS).unref(); }).then(() => { slowDiscovery = true; });
   const refreshes = [early, discovery, slow];
   let listRevision = 0;
   let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;

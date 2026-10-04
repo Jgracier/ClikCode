@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, SPIN_MS, startTurnClock,
+  joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock,
   turnAnimating, turnElapsedMs,
 } from './activity-view';
+import { SPIN_MS } from './timings.js';
 
 const idle = { toolsRunning: false, approval: false };
 
