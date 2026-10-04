@@ -37,6 +37,10 @@ export interface WorkerRuntimeRecord {
    * left the path behind after an unclean exit) is never mistaken for this
    * session's own worker. */
   token: string;
+  /** An approval the running turn is waiting on, oldest first. Rewritten as
+   * it changes, so a conversation list or another agent can tell a turn
+   * that is working from one that is waiting on the user. */
+  awaitingApproval?: { title: string; since: string };
 }
 
 /** What identifies a build: the entry file a worker actually loads, by
