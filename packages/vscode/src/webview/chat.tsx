@@ -4,12 +4,13 @@ import type { JSX } from 'preact';
 import { memo } from 'preact/compat';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
-  ACTIVITY_PREVIEW_LINES, activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, formatElapsed, LIVE_OUTPUT_LINES, liveWaitKind,
+  ACTIVITY_PREVIEW_LINES, activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, liveWaitKind,
   outputPreview, previewLinesFor, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import { SPIN_MS } from '../../../../src/harness/protocol/timings';
+import { formatElapsed } from '../../../../src/harness/protocol/format';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';

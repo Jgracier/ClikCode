@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { shortDuration, subagentOptions, turnPace, workingDetail } from './conversation-activity';
+import { subagentOptions, turnPace, workingDetail } from './conversation-activity';
 
 const NOW = Date.parse('2026-09-29T12:00:00.000Z');
 const ago = (ms: number) => new Date(NOW - ms).toISOString();
@@ -13,14 +13,6 @@ describe('turn pace', () => {
   it('slows after three quiet minutes and is stuck after fifteen', () => {
     expect(turnPace(ago(4 * 60_000), NOW)).toBe('slowing');
     expect(turnPace(ago(16 * 60_000), NOW)).toBe('stuck');
-  });
-});
-
-describe('short durations', () => {
-  it('uses the largest two units that fit', () => {
-    expect(shortDuration(45_000)).toBe('45s');
-    expect(shortDuration(4 * 60_000 + 5_000)).toBe('4m');
-    expect(shortDuration(27 * 3_600_000 + 23 * 60_000)).toBe('1d 3h');
   });
 });
 

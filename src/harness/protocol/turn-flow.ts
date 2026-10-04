@@ -6,7 +6,7 @@
 
 import type { FileDiff } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../prompter.js';
-import { formatElapsed } from './activity-view.js';
+import { formatElapsed } from './format.js';
 
 /** Each row's first word, running and done ("Reading" / "Read"), as all four
  * write it. A command keeps its `$`; an unknown tool keeps its own name. */

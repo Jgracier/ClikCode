@@ -6,7 +6,7 @@
 import type { FileDiff, DiffLine } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import { visibleSlice } from '../../tui/render/width.js';
-import { compactCount } from '../../tui/render/usage-line.js';
+import { compactCount, formatDuration } from './format.js';
 import { TOOL_CATEGORY } from './tool-category.js';
 import { isAgentToolName } from './tools.js';
 import { SPIN_MS } from './timings.js';
@@ -362,19 +362,6 @@ export function turnAnimating(waits: TurnWaits): boolean {
  * otherwise just past the clock's next whole second. */
 export function nextTurnTickMs(clock: TurnClock, now: number, animating: boolean): number {
   return animating ? SPIN_MS : 1000 - (turnElapsedMs(clock, now) % 1000) + 5;
-}
-
-/** `42s`, then `3m 5s`: the waiting band's clock and a running call's. */
-export function formatElapsed(ms: number): string {
-  const seconds = Math.max(0, Math.floor(ms / 1000));
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-}
-
-/** A finished call's run time: `3.4s`, `12s`, `2m 05s`. */
-export function formatDuration(ms: number): string {
-  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const minutes = Math.floor(ms / 60_000);
-  return `${minutes}m ${String(Math.round((ms % 60_000) / 1000)).padStart(2, '0')}s`;
 }
 
 /** What follows a finished call: a non-zero exit and a run of a second or

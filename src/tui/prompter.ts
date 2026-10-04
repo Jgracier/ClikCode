@@ -59,7 +59,8 @@ import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { estimatedTokens, formatTurnUsage } from './render/usage-line.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import { appendThought, composerUsageLabel, formatElapsed, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
+import { appendThought, composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
+import { formatElapsed } from '../harness/protocol/format.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -817,7 +818,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (event.kind === 'tool-start' || event.kind === 'thinking') this.childActivity.set(event.parentId, event.label);
       else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.childActivity.delete(event.parentId);
       // And how much it has done, as Claude Code counts it: the agent row
-      // ends "(12 tool uses, 1m 05s)".
+      // ends "(12 tool uses, 1m 5s)".
       if (event.kind === 'tool-start') {
         this.activityEntries = this.activityEntries.map((entry) => {
           const parent = entry.event;
