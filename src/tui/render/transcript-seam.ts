@@ -20,6 +20,16 @@ export function messageKey(message: TranscriptMessage): string {
   return `${message.role}:${message.content}`;
 }
 
+/** `messageKey(message) === key`, without building the key: run against
+ * every message of a long chat on every frame, the concatenation was a copy
+ * of the whole history per frame. Only a key of the same length can match,
+ * so most comparisons end at the length check. */
+export function hasMessageKey(message: TranscriptMessage, key: string): boolean {
+  const { role, content } = message;
+  return key.length === role.length + 1 + content.length && key.startsWith(role) && key.charCodeAt(role.length) === 0x3a
+    && key.endsWith(content);
+}
+
 /** The index to resume writing at.
  *
  * A count alone cannot answer this if a caller provides a WINDOW instead of
@@ -36,7 +46,7 @@ export function firstUnwritten(
   let seam = Math.min(emittedMessages, persisted.length);
   if (lastEmittedMessage === undefined) return seam;
   for (let index = persisted.length - 1; index >= 0; index -= 1) {
-    if (messageKey(persisted[index]!) === lastEmittedMessage) return index + 1;
+    if (hasMessageKey(persisted[index]!, lastEmittedMessage)) return index + 1;
   }
   return seam;
 }

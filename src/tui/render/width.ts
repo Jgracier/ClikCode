@@ -132,30 +132,70 @@ const MARK = /\p{Mark}/u;
 const EMOJI_PRESENTATION = /\p{Emoji_Presentation}/u;
 const EMOJI = /\p{Emoji}/u;
 const KEYCAP_BASE = /^[0-9#*]$/;
+const GRAPHEME_EXTEND = /\p{Grapheme_Extend}/u;
+
+/** BMP characters that are one cell and always a cluster of their own (see
+ * oneCell), decided the first time each is met: 0 not yet, 1 yes, 2 no. */
+const ONE_CELL = new Uint8Array(0x10000);
+
+/** Whether a BMP code unit at or above U+00A0 is one cell however it is
+ * surrounded by others like it: not a mark or other extender, not wide, not
+ * emoji by default, not a surrogate half, and none of what the grapheme
+ * rules join to a neighbour -- Hangul jamo, the Prepend characters, the two
+ * SpacingMark letters (U+0E33, U+0EB3), the zero-width joiner. Checked
+ * against Intl.Segmenter over every BMP character when this was written. */
+function oneCell(code: number): boolean {
+  let known = ONE_CELL[code]!;
+  if (!known) {
+    const character = String.fromCharCode(code);
+    const joins = (code >= 0xd800 && code <= 0xdfff)
+      || (code >= 0x1100 && code <= 0x11ff) || (code >= 0xa960 && code <= 0xa97f) || (code >= 0xd7b0 && code <= 0xd7ff)
+      || (code >= 0x600 && code <= 0x605) || code === 0x6dd || code === 0x70f || code === 0x890 || code === 0x891
+      || code === 0x8e2 || code === 0xd4e || code === 0xe33 || code === 0xeb3 || code === 0x200d;
+    known = joins || isWideCodePoint(code) || MARK.test(character) || GRAPHEME_EXTEND.test(character)
+      || EMOJI_PRESENTATION.test(character) ? 2 : 1;
+    ONE_CELL[code] = known;
+  }
+  return known === 1;
+}
 
 /** Width of text made only of characters that are always one cell and never
  * join a cluster, or -1 when any character is not. Nearly every string the
- * renderer measures is ASCII plus the odd dash, bullet, ellipsis or box rule,
- * where the grapheme segmenter and its Unicode-property tests are pure cost.
- * Anything that could combine (marks, joiners, variation selectors) or be
- * wide (CJK, emoji) is outside these ranges, so it takes the full path. */
-function simpleWidth(plain: string): number {
+ * renderer measures is text like that -- ASCII, accents, bullets, arrows, box
+ * rules, spinner braille -- with this UI's own SGR and OSC 8 sequences in it,
+ * where stripping those with a regex, the grapheme segmenter and its
+ * Unicode-property tests are pure cost. The two zero-width sequences are stepped over in place; anything else
+ * that could combine (marks, joiners, variation selectors), be wide (CJK,
+ * emoji) or be another escape takes the full path. */
+function simpleWidth(value: string): number {
   let width = 0;
-  for (let index = 0; index < plain.length; index += 1) {
-    const code = plain.charCodeAt(index);
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
     if (code >= 0x20 && code < 0x7f) width += 1;
-    else if (code === 0x09) width += TAB_WIDTH - (width % TAB_WIDTH);
+    else if (code === 0x1b) {
+      const next = value.charCodeAt(index + 1);
+      let end = index + 2;
+      if (next === 0x5b) { // CSI: only SGR (`ESC [ digits;… m`) is zero-width
+        while (end < value.length && ((value.charCodeAt(end) >= 0x30 && value.charCodeAt(end) <= 0x39) || value.charCodeAt(end) === 0x3b)) end += 1;
+        if (value.charCodeAt(end) !== 0x6d) return -1;
+      } else if (next === 0x5d && value.startsWith('8;', end)) { // OSC 8, ended by ST
+        while (end < value.length && !'\u0007\u001b\n'.includes(value[end]!)) end += 1;
+        if (value.charCodeAt(end) !== 0x1b || value.charCodeAt(end + 1) !== 0x5c) return -1;
+        end += 1;
+      } else return -1;
+      index = end;
+    } else if (code === 0x09) width += TAB_WIDTH - (width % TAB_WIDTH);
     else if (code < 0xa0) continue; // C0/C1 controls draw nothing
-    else if (code < 0x300 || (code >= 0x2010 && code <= 0x2027) || (code >= 0x2500 && code <= 0x259f)) width += 1;
+    else if (oneCell(code)) width += 1;
     else return -1;
   }
   return width;
 }
 
 export function terminalCellWidth(value: string): number {
-  const plain = value.includes('\u001b') ? value.replace(ZERO_WIDTH_SEQUENCES, '') : value;
-  const simple = simpleWidth(plain);
+  const simple = simpleWidth(value);
   if (simple >= 0) return simple;
+  const plain = value.includes('\u001b') ? value.replace(ZERO_WIDTH_SEQUENCES, '') : value;
   let width = 0;
   for (const { segment } of graphemes().segment(plain)) {
     if (segment === '\t') { width += TAB_WIDTH - (width % TAB_WIDTH); continue; }

@@ -12,7 +12,7 @@
  * what has been drawn and answers where to carry on from.
  */
 
-import { firstUnwritten, liveAssistantAt, materializedPendingTurn, messageKey, type TranscriptMessage } from './transcript-seam.js';
+import { firstUnwritten, hasMessageKey, liveAssistantAt, materializedPendingTurn, messageKey, type TranscriptMessage } from './transcript-seam.js';
 
 
 export type ResumePoint = {
@@ -41,7 +41,8 @@ export class EmittedTranscript {
 
   /** Everything the caller needs to know before it starts writing. */
   resume(persisted: readonly TranscriptMessage[]): ResumePoint {
-    if (this.lastMessage !== undefined && !persisted.some((message) => messageKey(message) === this.lastMessage)) {
+    const last = this.lastMessage;
+    if (last !== undefined && !persisted.some((message) => hasMessageKey(message, last))) {
       // The last row painted is not in the journal. Continuing from a count
       // would skip or repeat it. The list is the source: rewrite it.
       this.requestReseed();
