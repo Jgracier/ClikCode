@@ -82,7 +82,8 @@ export function buildBaseProgram(config: Conf): Command {
   const [command, argument] = process.argv.slice(2);
   if (command === 'session-worker') setLifecycleRole('worker', argument);
   else if (command === 'ide-bridge') setLifecycleRole('bridge');
-  lifecycleProcess({ version: CLIKCODE_VERSION });
+  // Reading the log is not part of what it records.
+  if (command !== 'logs') lifecycleProcess({ version: CLIKCODE_VERSION });
 
   // Restore the terminal FIRST. The ClikCode UI runs in raw mode with the
   // cursor hidden, autowrap off and bracketed paste on; an error printed into
