@@ -201,7 +201,9 @@ export class TurnTranscript {
     } else if (open && open.kind !== 'code') {
       // Everything but the row still being written is final.
       if (this.openProseRows === 0) this.openProseFirst = !this.started;
-      const rows = input.renderBlocks([open], this.openProseFirst);
+      // Still growing: drawn by the live renderer, which lays out only what
+      // changed since the last frame (the same rows, by its contract).
+      const rows = renderLive([open], this.openProseFirst);
       const keep = Math.max(this.openProseRows, rows.length - 1);
       const newly = rows.slice(this.openProseRows, keep);
       if (newly.length) {

@@ -29,7 +29,7 @@ function styleWords(text: string, style: (word: string) => string): string {
 /** Render CommonMark/GFM inline tokens directly to self-contained ANSI spans.
  * Tokenizing before styling prevents escape sequences from being reparsed as
  * markdown and keeps styling valid when the terminal wraps a line. */
-const renderInlineMarkdownWith = (text: string, hyperlinks: boolean): string => {
+const renderInlineTokens = (tokens: Token[], hyperlinks: boolean): string => {
   type Style = (value: string) => string;
   const render = (tokens: Token[], styles: Style[] = []): string => tokens.map((token) => {
     const apply = (value: string, extra: Style[] = styles): string => styleWords(value, (word) => extra.reduce((result, style) => style(result), word));
@@ -54,8 +54,12 @@ const renderInlineMarkdownWith = (text: string, hyperlinks: boolean): string => 
     if ('text' in token && typeof token.text === 'string') return apply(token.text);
     return typeof token.raw === 'string' ? apply(token.raw) : '';
   }).join('');
-  return render(Lexer.lexInline(text, { gfm: true, breaks: false }));
+  return render(tokens);
 };
+
+const lexInline = (text: string): Token[] => Lexer.lexInline(text, { gfm: true, breaks: false });
+
+const renderInlineMarkdownWith = (text: string, hyperlinks: boolean): string => renderInlineTokens(lexInline(text), hyperlinks);
 
 const renderInlineLinked = memoizeByText((text: string) => renderInlineMarkdownWith(text, true));
 
@@ -63,8 +67,66 @@ const renderInlinePlain = memoizeByText((text: string) => renderInlineMarkdownWi
 
 export const renderInlineMarkdown = (text: string): string => (linksOn() ? renderInlineLinked : renderInlinePlain)(text);
 
-/** For the block that is still receiving tokens: same output, no cache entry. */
-export const renderInlineMarkdownLive = (text: string): string => renderInlineMarkdownWith(text, linksOn());
+/** A character that can open or close something inline (emphasis, code, a
+ * link, raw HTML, an escape or an entity) if more text arrives. */
+const MAY_PAIR_LATER = /[*_~`[\]<>!\\&]/;
+
+/** Whether `token` lexes the same however the text after it goes on: a
+ * construct already closed, or plain text -- an autolink's included, which
+ * can swallow a `_` emphasis would take -- with nothing in it a later
+ * character could pair with. Raw HTML never is: it changes how marked reads
+ * what comes after it. */
+const closedInline = (token: Token): boolean => (token.type === 'text' || (token.type === 'link' && !token.raw.startsWith('['))
+  ? !MAY_PAIR_LATER.test(token.raw)
+  : ['strong', 'em', 'del', 'codespan', 'link', 'br', 'escape'].includes(token.type));
+
+/** marked's own mask (its `blockSkip`): before lexing inline text it blanks
+ * out what looks like a link, a code span or a tag, pairing brackets and
+ * backticks across the WHOLE text, and emphasis is then matched against the
+ * masked copy. So a prefix only lexes alone as it does in the whole when
+ * every bracket, backtick and angle bracket in it is paired inside it. */
+const MASKED = /\[[^[\]]*?\]\((?:\\.|[^\\()]|\((?:\\.|[^\\()])*\))*\)|`[^`]*?`|<[^<>]*?>/g;
+const pairedInside = (text: string): boolean => !text.includes('\\') && !/[[`<]/.test(text.replace(MASKED, ''));
+
+/** What of the open block's text is already rendered for good: a prefix
+ * that ends in a single space between two words, and its rendering. */
+let liveInline = { hyperlinks: false, prefix: '', rendered: '' };
+
+/** For the block that is still receiving tokens: the same output as
+ * renderInlineMarkdown, no cache entry, and only the text after the last
+ * settled point lexed and styled again. An answer that is one long
+ * paragraph was lexed and styled whole on every frame.
+ *
+ * The text splits at a point without changing a token when everything
+ * before it is closed (closedInline) and the point is a single space between
+ * two words: no delimiter after it can pair with one before it, every closer
+ * before it was judged by a character also before it, and no run of spaces
+ * spans it to become a line break. A later frame only appends, so the word
+ * after the point stays where it is. */
+export const renderInlineMarkdownLive = (text: string): string => {
+  const hyperlinks = linksOn();
+  if (liveInline.hyperlinks !== hyperlinks || !text.startsWith(liveInline.prefix)) liveInline = { hyperlinks, prefix: '', rendered: '' };
+  const { prefix, rendered } = liveInline;
+  const rest = text.slice(prefix.length);
+  const tokens = lexInline(rest);
+  // The last point in `rest` the text may split at, and the tokens before it.
+  let split = 0;
+  let offset = 0;
+  for (const token of tokens) {
+    if (!closedInline(token)) break;
+    const end = offset + token.raw.length;
+    // Inside plain text (closed constructs are never split), or at its end.
+    const from = token.type === 'text' ? offset + 2 : end;
+    for (let at = end; at >= from && at > split; at -= 1) {
+      if (rest[at - 1] === ' ' && rest[at - 2] !== undefined && /\S/.test(rest[at - 2]!) && rest[at] !== undefined && /\S/.test(rest[at]!)) { split = at; break; }
+    }
+    offset = end;
+  }
+  if (split === 0 || !pairedInside(rest.slice(0, split))) return rendered + renderInlineTokens(tokens, hyperlinks);
+  const settled = renderInlineTokens(lexInline(rest.slice(0, split)), hyperlinks);
+  liveInline = { hyperlinks, prefix: prefix + rest.slice(0, split), rendered: rendered + settled };
+  return liveInline.rendered + renderInlineTokens(lexInline(rest.slice(split)), hyperlinks);
+};
 
 /** Convert the original CommonMark/GFM block tree into the small semantic
  * document model used by the terminal. Code remains distinct from prose so
@@ -129,7 +191,11 @@ const parseBlocks = (text: string): ParsedBlocks => {
     }
   };
   let sourceEnd = 0;
-  for (const token of marked.lexer(text, { gfm: true, breaks: false })) {
+  // Block tokens only: every field read above is the block lexer's. The
+  // inline pass marked.lexer adds was thrown away here, then done again when
+  // the block was drawn -- on a streaming answer, twice a frame.
+  const lexer = new Lexer({ ...marked.defaults, gfm: true, breaks: false });
+  for (const token of lexer.blockTokens(text.replace(/\r\n|\r/g, '\n'))) {
     const sourceStart = sourceEnd;
     sourceEnd += token.raw.length;
     if (token.type === 'space') {
