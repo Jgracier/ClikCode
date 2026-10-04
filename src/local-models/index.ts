@@ -33,7 +33,7 @@ import { footprintKey, latestMeasurement, machineKey, measureServer, readFootpri
 import { ensureModelFile, missingBytes } from './models.js';
 import { footprintsFile, preferencesFile, serversDir } from './paths.js';
 import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.js';
-import { prefixCacheDir } from './prefix-cache.js';
+import { enforcePrefixCacheBudget, prefixCacheDir } from './prefix-cache.js';
 import { pidIsAlive } from '../session/store/locks.js';
 
 export { LOCAL_MODEL_CATALOG, localModelLabel, resolveLocalModelId } from './catalog.js';
@@ -87,6 +87,12 @@ const DEFAULT_IDLE_MINUTES = 15;
 function idleMs(minutes: number | undefined): number {
   const configured = minutes ?? Number(process.env.CLIKCODE_LOCAL_IDLE_MINUTES ?? DEFAULT_IDLE_MINUTES);
   return Number.isFinite(configured) && configured > 0 ? configured * 60_000 : 0;
+}
+
+/** The model's weights are on this machine (a deleted model's are not). */
+async function downloaded(modelId: string): Promise<boolean> {
+  const model = catalogModel(modelId);
+  return Boolean(model) && await missingBytes([model!.weights]) === 0;
 }
 
 async function readPreference(): Promise<string | undefined> {
@@ -214,8 +220,14 @@ function shrinkSteps(model: CatalogModel, fit: Fit, cacheRamMib: number, vision:
 
 export async function ensureLocalModel(options: EnsureLocalModelOptions): Promise<LocalModelEndpoint> {
   const progress = options.progress ?? (() => {});
-  if (options.modelId) await setLocalModelPreference(options.modelId);
-  const pick = options.modelId ?? await readPreference();
+  // A pick becomes the default only once it can run here: chosen with
+  // consent to download it, or already downloaded. A chat still naming a
+  // model whose files were deleted must not make that the default for every
+  // other chat -- each of those would then fail to start instead of
+  // choosing a model that is here.
+  if (options.modelId && (options.allowDownload || await downloaded(options.modelId))) await setLocalModelPreference(options.modelId);
+  const preferred = options.modelId ? undefined : await readPreference();
+  const pick = options.modelId ?? (preferred && await downloaded(preferred) ? preferred : undefined);
 
   // Already running: joined as it is, with no probe and no fit check (its
   // own memory would count against it). With no pick, any running catalog
@@ -300,7 +312,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
     if (!fit.fits) throw new Error(`${model.label} would exceed the memory this machine can spare: ${fit.reason}.`);
     startedFit = fit;
 
-    if (!options.allowDownload && await missingBytes([model.weights])) {
+    if (!options.allowDownload && await missingBytes([model.weights, ...(vision && model.projector ? [model.projector] : [])])) {
       throw new Error(`${model.label} is not downloaded. Open /model and confirm its download first.`);
     }
     const runtime = await ensureRuntime(view.build, (update) => progress({ stage: 'runtime', ...update }));
@@ -318,6 +330,8 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
       // Sliding-window models cannot resume from a saved state (prefix-cache.ts).
       const prefixDir = model.kv.sliding ? undefined : prefixCacheDir(serverDir(model.id), fit.cacheType);
       if (prefixDir) await mkdir(prefixDir, { recursive: true });
+      // Every model's saved states share one budget (prefix-cache.ts).
+      await enforcePrefixCacheBudget().catch(() => undefined);
       const argsFor = (context: number, cacheRam: number): string[] => buildServerArgs({
         modelPath, ...(projectorPath ? { projectorPath } : {}), port, alias: model.id, fit: { ...fit, context },
         threads: threadPlan(view.hardware), cacheRamMib: cacheRam, ...(prefixDir ? { slotSavePath: prefixDir } : {}),
