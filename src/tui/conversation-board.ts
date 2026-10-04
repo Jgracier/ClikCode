@@ -176,6 +176,10 @@ export interface ConversationBoardSettings {
   conversations: () => readonly PickerOption<string>[];
   commands: readonly PickerOption<string>[];
   refresh?: Promise<unknown> | readonly Promise<unknown>[];
+  /** Registers the board's redraw, for the list to call when its rows
+   * change (a turn starting or ending in any window). The board does not
+   * tick to find out. */
+  listChanged?: (redraw: () => void) => void;
   onAction?: (value: string, action: string) => Promise<void>;
   /** The row the cursor starts on: the conversation this window is in, so
    * Right or Enter goes straight back to it. Absent or not listed (a new,
@@ -244,28 +248,42 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       wasWorking = anyWorking;
       if (!ready || !settings.onSessionsSettled?.()) return false;
       finished = true;
-      clearInterval(spin);
+      stopSpin();
       stopInput();
       return true;
     };
-    // No spinner at all under reduced motion: the glyph is the same each frame.
-    // The same tick is what notices a running chat finish, reduced motion or
-    // not -- otherwise a still spinner would never look again.
-    const spin = setInterval(() => {
+    // The board ticks only while there is something to tick for: a running
+    // row's spinner, or a finish still waiting to be acted on. No spinner at
+    // all under reduced motion (the glyph is the same each frame), but the
+    // same tick is what notices a running chat finish, so it runs regardless.
+    // Idle, nothing is rebuilt or drawn until a key or the list changes.
+    let spin: NodeJS.Timeout | undefined;
+    const stopSpin = (): void => { clearInterval(spin); spin = undefined; };
+    const tick = (): void => {
       if (finished || aside) return;
       const anyWorking = rows().some((row) => row.working);
       const hadWorking = wasWorking;
       if (settled(anyWorking)) return;
       // One more draw after the last running row finishes, or its spinner
       // stays on screen until a key is pressed.
-      if (!anyWorking && !hadWorking) return;
+      if (!anyWorking && !hadWorking) {
+        if (!pendingSettle) stopSpin();
+        return;
+      }
       if (!reducedMotion()) frame += 1;
       draw();
-    }, SPIN_MS);
-    spin?.unref();
+    };
     state.selected = boardStartRow(rows(), settings.initial);
+    /** The rows and draft the last frame showed, so a refresh that changed
+     * nothing draws nothing. */
+    let drawn: { rows: readonly PickerOption<string>[]; key: string } | undefined;
     const draw = (): void => {
       const showing = rows();
+      drawn = { rows: showing, key: drawKey() };
+      if (!spin && showing.some((row) => row.working)) {
+        spin = setInterval(tick, SPIN_MS);
+        spin.unref();
+      }
       if (state.selected >= showing.length) state.selected = showing.length - 1;
       // The whole page: the list takes every row the composer does not.
       const capacity = Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
@@ -274,10 +292,17 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       })),
         state.selected, '› ', state.draft.length, { capacity, headings: true, hint: boardHint(state, showing) });
     };
+    const drawKey = (): string => `${state.draft}\u0000${state.selected}\u0000${state.finding ?? ''}\u0000${state.query ?? ''}\u0000${frame}\u0000${output.rows}`;
+    /** A redraw for something outside the board: only if what it shows moved. */
+    const redraw = (): void => {
+      if (finished || aside) return;
+      if (drawn && drawn.rows === rows() && drawn.key === drawKey()) return;
+      draw();
+    };
     const finish = (result: BoardResult | undefined): void => {
       if (finished) return;
       finished = true;
-      clearInterval(spin);
+      stopSpin();
       host.setSelecting(false);
       stopInput();
       host.clearFrame();
@@ -327,6 +352,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       }
     };
     listen();
-    redrawOnRefresh(settings.refresh, () => { if (!finished) draw(); });
+    redrawOnRefresh(settings.refresh, redraw);
+    settings.listChanged?.(redraw);
   });
 }
