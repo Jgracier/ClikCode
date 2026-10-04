@@ -30,25 +30,28 @@ export function transcriptOf(session: HarnessSession): SessionTranscript {
 }
 
 /** Each file's history with its parent references resolved, by the parsed
- * file it came from. A loaded file object stands for one version of the file
- * (records.ts replaces it when the file changes), and a parent's shared
- * prefix never changes under a child (keepsHistory), so the result holds for
- * as long as the object does. Never mutated: readers clone. */
-const materialized = new WeakMap<SessionFile, TranscriptMessage[] | undefined>();
+ * file it came from, valid while its parent's resolved history is the very
+ * array it was built from. A loaded file object stands for one version of
+ * the file (records.ts replaces it when the file changes), and resolving
+ * returns the cached array while nothing up the chain changed -- so one stat
+ * per hop decides, and a parent edited in place by anything is still seen.
+ * Never mutated: readers clone. */
+const materialized = new WeakMap<SessionFile, { from: readonly TranscriptMessage[] | undefined; messages: TranscriptMessage[] }>();
 
 async function materializedMessages(file: SessionFile, seen: Set<string>, walk = { cycle: false }): Promise<TranscriptMessage[] | undefined> {
   const ref = file.transcriptRef;
   if (!ref) return file.messages;
-  if (materialized.has(file)) return materialized.get(file);
-  let inherited: TranscriptMessage[] = [];
+  let parentMessages: TranscriptMessage[] | undefined;
   if (!seen.has(ref.sessionId)) {
     seen.add(ref.sessionId);
     const parent = await loadSessionFile(ref.sessionId);
-    inherited = ((parent ? await materializedMessages(parent, seen, walk) : undefined) ?? []).slice(0, ref.uptoIndex);
+    parentMessages = parent ? await materializedMessages(parent, seen, walk) : undefined;
   } else walk.cycle = true;
-  const messages = [...inherited, ...(file.messages ?? [])];
+  const cached = materialized.get(file);
+  if (cached && !walk.cycle && cached.from === parentMessages) return cached.messages;
+  const messages = [...(parentMessages ?? []).slice(0, ref.uptoIndex), ...(file.messages ?? [])];
   // A walk cut short by a cycle is that walk's answer, not the file's.
-  if (!walk.cycle) materialized.set(file, messages);
+  if (!walk.cycle) materialized.set(file, { from: parentMessages, messages });
   return messages;
 }
 
@@ -197,11 +200,11 @@ export async function writeSessionTranscript(_held: StateLockHeld, id: string, n
   if (next === verbatim) storedFrom.set(file, verbatim);
 }
 
-/** How much of a parent's history a child's messages share, by the parent
- * file and the child's history array: a streaming checkpoint stores the same
+/** How much of a parent's history a child's messages share, by the parent's
+ * resolved history and the child's history array: a streaming checkpoint stores the same
  * history again and again, and comparing it with the parent's every time was
  * a walk over both whole conversations per write. */
-const sharedWith = new WeakMap<readonly TranscriptMessage[], { parent: SessionFile; shared: number }>();
+const sharedWith = new WeakMap<readonly TranscriptMessage[], { parent: readonly TranscriptMessage[]; shared: number }>();
 
 /** `next` stored as a reference into `parentId`'s history, when that shares
  * enough of it and cannot form a cycle. `frozen`: next's arrays never change
@@ -215,12 +218,13 @@ async function referenceInto(parentId: string, id: string, next: SessionTranscri
     if (hop.sessionId === id || guard > 64) return undefined;
     hop = (await loadSessionFile(hop.sessionId))?.transcriptRef;
   }
+  const parentMessages = await materializedMessages(parent, new Set([parentId])) ?? [];
   const known = frozen ? sharedWith.get(next.messages) : undefined;
   let shared: number;
-  if (known?.parent === parent) shared = known.shared;
+  if (known?.parent === parentMessages) shared = known.shared;
   else {
-    shared = commonPrefixLength(await materializedMessages(parent, new Set([parentId])) ?? [], next.messages);
-    if (frozen) sharedWith.set(next.messages, { parent, shared });
+    shared = commonPrefixLength(parentMessages, next.messages);
+    if (frozen) sharedWith.set(next.messages, { parent: parentMessages, shared });
   }
   if (shared < MIN_SHARED_MESSAGES) return undefined;
   return {
