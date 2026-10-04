@@ -67,15 +67,15 @@ export class BroadcastObserver implements TurnObserver {
    * waits). The worker records it beside its runtime record, so another
    * process can say a conversation is waiting on the user without
    * attaching to it. */
-  onAwaitingApproval?: (approval: { title: string; since: string } | undefined) => void;
+  onAwaitingApproval?: (approval: { title: string; since: string } | undefined) => Promise<void> | void;
   private awaitingSince = new Map<string, string>();
 
-  private announceAwaiting(): void {
+  private announceAwaiting(): Promise<void> | void {
     const first = this.pendingApprovals.entries().next();
-    if (first.done) { this.onAwaitingApproval?.(undefined); return; }
+    if (first.done) return this.onAwaitingApproval?.(undefined);
     const [id, pending] = first.value;
     const title = pending.event.type === 'approval-request' ? pending.event.title : 'approval';
-    this.onAwaitingApproval?.({ title, since: this.awaitingSince.get(id) ?? new Date().toISOString() });
+    return this.onAwaitingApproval?.({ title, since: this.awaitingSince.get(id) ?? new Date().toISOString() });
   }
 
   attach(socket: Socket): void {
@@ -189,8 +189,11 @@ export class BroadcastObserver implements TurnObserver {
     return new Promise((resolveApproval) => {
       this.pendingApprovals.set(id, { resolve: resolveApproval, event });
       this.awaitingSince.set(id, new Date().toISOString());
-      this.broadcast(event);
-      this.announceAwaiting();
+      // Recorded before anyone is asked: once a window sees the question,
+      // the record already says the turn waits on it.
+      const recorded = this.announceAwaiting();
+      if (recorded instanceof Promise) void recorded.then(() => { if (this.pendingApprovals.has(id)) this.broadcast(event); });
+      else this.broadcast(event);
     });
   }
 

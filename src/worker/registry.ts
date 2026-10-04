@@ -154,8 +154,12 @@ export async function listWorkerRecords(): Promise<WorkerRuntimeRecord[]> {
   return records;
 }
 
-export async function writeWorkerRecord(record: WorkerRuntimeRecord): Promise<void> {
-  await mkdir(workersDirectory(), { recursive: true, mode: 0o700 });
+/** `existing`: only rewrite a record that is there -- never recreate the
+ * directory, which would bring back a state home that was deleted. */
+export async function writeWorkerRecord(record: WorkerRuntimeRecord, options: { existing?: boolean } = {}): Promise<void> {
+  if (options.existing) {
+    if (!await stat(recordPath(record.sessionId)).then(() => true, () => false)) return;
+  } else await mkdir(workersDirectory(), { recursive: true, mode: 0o700 });
   const target = recordPath(record.sessionId);
   const temporary = `${target}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
   try {

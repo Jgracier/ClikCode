@@ -758,8 +758,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   await writeWorkerRecord(record);
   observer.onAwaitingApproval = (awaitingApproval) => {
     recordWrite = recordWrite
-      .then(() => writeWorkerRecord({ ...record, ...(awaitingApproval ? { awaitingApproval } : {}) }))
+      .then(() => writeWorkerRecord({ ...record, ...(awaitingApproval ? { awaitingApproval } : {}) }, { existing: true }))
       .catch(() => undefined);
+    return recordWrite;
   };
   process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
   process.on('SIGINT', () => { void shutdown('SIGINT'); });
