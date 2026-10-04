@@ -4,7 +4,7 @@
 import type { HarnessSession } from '../model.js';
 import { cloneData, sameData } from './data.js';
 import type { StateLockHeld } from './locks.js';
-import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, type SessionFile } from './records.js';
+import { listStoredSessionIds, loadSessionFile, removeSessionFile, storeSessionFile, storeSessionTurn, type SessionFile } from './records.js';
 
 type TranscriptMessage = NonNullable<HarnessSession['messages']>[number];
 
@@ -198,6 +198,22 @@ export async function writeSessionTranscript(_held: StateLockHeld, id: string, n
   // A merged write stored something other than the writer's copy: the next
   // write from that copy must merge again, not take the fast path.
   if (next === verbatim) storedFrom.set(file, verbatim);
+}
+
+/** A streaming turn's checkpoint: only the running turn's journal changed
+ * since `base`, which is exactly what this process last stored. Stores that
+ * journal on its own (records.ts) and returns true; returns false, having
+ * written nothing, for anything else -- history changed, a new turn, or a
+ * file someone else has written since -- which writeSessionTranscript then
+ * stores (and merges) in full. Under the caller's state lock. */
+export async function writeSessionTurn(_held: StateLockHeld, id: string, next: SessionTranscript, base: SessionTranscript): Promise<boolean> {
+  if (!next.pendingTurn || next.messages !== base.messages || next.pendingTurn.startedAt !== base.pendingTurn?.startedAt) return false;
+  const previous = await loadSessionFile(id);
+  if (!previous || storedFrom.get(previous) !== base) return false;
+  const file = await storeSessionTurn(id, next.pendingTurn);
+  if (!file) return false;
+  storedFrom.set(file, next);
+  return true;
 }
 
 /** How much of a parent's history a child's messages share, by the parent's

@@ -42,7 +42,11 @@ describe('a fork that shares its parent\'s history', () => {
       const stored = await raw('c');
       expect(stored.transcriptRef).toEqual({ sessionId: 'p', uptoIndex: 6 });
       expect(stored.messages).toEqual([{ role: 'user', content: 'forked' }]);
-      expect(stored.pendingTurn.response).toBe(child.pendingTurn.response);
+      // The streamed answer goes to the turn's own file; the transcript keeps
+      // the journal as the turn started.
+      expect(stored.pendingTurn.response).toBe('');
+      const turn = JSON.parse(await readFile(join(root, 'sessions', 'c.turn'), 'utf8'));
+      expect(turn.response).toBe(child.pendingTurn.response);
     }
     resetHarnessStateCaches();
     const read = (await readState()).sessions.find((item) => item.id === 'c')!;
