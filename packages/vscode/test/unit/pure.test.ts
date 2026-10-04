@@ -121,6 +121,37 @@ describe('chat model', () => {
     expect(trace.activities[0]?.offset).toBe(9);
   });
 
+  it("shows a saved turn's calls in a panel opened after it, from the saved turn itself", () => {
+    const saved = session({ messages: [
+      { role: 'user', content: 'run it' },
+      { role: 'assistant', content: 'Running. Done.', activities: [
+        { event: { kind: 'tool-done', id: 'b', label: 'Bash(npm test)', category: 'run', output: ['ok'] }, responseOffset: 9 },
+      ] },
+    ] });
+    const model = run([{ type: 'ready', version: '1', pid: 1 }, { type: 'session', session: saved }]);
+    expect(model.messages).toEqual([{ role: 'user', content: 'run it' }, { role: 'assistant', content: 'Running. Done.' }]);
+    expect(model.traces).toEqual([expect.objectContaining({ userIndex: 0, text: 'Running. Done.', saved: true })]);
+    expect(model.traces[0]!.activities).toEqual([expect.objectContaining({ key: 'b', kind: 'tool-done', label: 'Bash(npm test)', output: ['ok'], offset: 9 })]);
+    // The same snapshot again changes nothing the page would redraw.
+    expect(run([{ type: 'session', session: saved }], model).traces).toBe(model.traces);
+  });
+
+  it("takes a watched turn's calls from its saved copy, keeping what only this window saw", () => {
+    const watched = turn(
+      activity({ kind: 'thinking', id: 'r1', label: 'Plan it' }),
+      worker({ type: 'delta', text: 'Looking. ', mode: 'append' }),
+      activity({ kind: 'tool-start', id: 'b', label: 'Bash(npm test)', category: 'run' }),
+    );
+    const ended = run([worker({ type: 'snapshot', session: session({ messages: [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: 'Looking.', activities: [{ event: { kind: 'tool-done', id: 'b', label: 'Bash(npm test)', category: 'run', exitCode: 0 }, responseOffset: 8 }] },
+    ] }) }), worker({ type: 'waiting-stop' })], watched);
+    const trace = ended.traces.at(-1)!;
+    expect(trace).toMatchObject({ userIndex: 0, text: 'Looking.', saved: true });
+    expect(trace.activities).toEqual([expect.objectContaining({ kind: 'tool-done', exitCode: 0, offset: 8 })]);
+    expect(trace.reasoning?.[0]?.text).toBe('Plan it');
+  });
+
   it('keeps thoughts and calls in the order they happened when no text comes between them', () => {
     const model = turn(
       activity({ kind: 'thinking', id: 'r1', label: 'First, look' }),
