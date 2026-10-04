@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { realpathNearest } from './security.js';
+import { atomicWriteFile } from '../session/store/files.js';
 
 interface CheckpointEntry {
   path: string;
@@ -75,6 +76,12 @@ async function currentState(file: string): Promise<{ existed: boolean; hash?: st
   }
 }
 
+/** A crash leaves the old manifest or the new one, never a torn one; and
+ * two processes writing one turn's manifest never share a temporary. */
+function writeManifest(dir: string, manifest: CheckpointManifest): Promise<void> {
+  return atomicWriteFile(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+}
+
 export function newTurnId(now: Date = new Date()): string {
   // Sortable prefix keeps listTurns() chronological without reading manifests.
   return `${now.toISOString().replace(/[-:.]/g, '')}-${randomUUID().slice(0, 8)}`;
@@ -127,16 +134,17 @@ export class FileCheckpointStore {
           const content = await fs.readFile(target);
           const hash = createHash('sha256').update(content).digest('hex');
           const blob = path.join(dir, 'blobs', hash);
-          await fs.writeFile(blob, content, { mode: 0o600, flag: 'w' });
+          // Named by its content: one already there (an earlier path of this
+          // turn with the same bytes) is this blob. Written whole or not at
+          // all, before the manifest that points at it.
+          if ((await fs.stat(blob).catch(() => undefined))?.size !== content.length) await atomicWriteFile(blob, content);
           entry = { path: target, existed: true, mode: stat.mode & 0o7777, hash, size: content.length };
         }
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
       manifest.entries.push(entry);
-      const manifestPath = path.join(dir, 'manifest.json');
-      await fs.writeFile(`${manifestPath}.tmp`, JSON.stringify(manifest, null, 2), { mode: 0o600 });
-      await fs.rename(`${manifestPath}.tmp`, manifestPath);
+      await writeManifest(dir, manifest);
     });
   }
 
@@ -147,9 +155,7 @@ export class FileCheckpointStore {
       const manifest = await this.readManifest(sessionId, turnId);
       if (!manifest?.entries.length) return;
       for (const entry of manifest.entries) entry.after = await currentState(entry.path);
-      const manifestPath = path.join(this.turnDir(sessionId, turnId), 'manifest.json');
-      await fs.writeFile(`${manifestPath}.tmp`, JSON.stringify(manifest, null, 2), { mode: 0o600 });
-      await fs.rename(`${manifestPath}.tmp`, manifestPath);
+      await writeManifest(this.turnDir(sessionId, turnId), manifest);
     });
   }
 
@@ -206,11 +212,7 @@ export class FileCheckpointStore {
         // files it could not: those that were restored are done, and must
         // not read as "changed since" on the next try.
         if (!kept.length) await fs.rm(dir, { recursive: true, force: true });
-        else if (kept.length < manifest.entries.length) {
-          const manifestPath = path.join(dir, 'manifest.json');
-          await fs.writeFile(`${manifestPath}.tmp`, JSON.stringify({ ...manifest, entries: kept }, null, 2), { mode: 0o600 });
-          await fs.rename(`${manifestPath}.tmp`, manifestPath);
-        }
+        else if (kept.length < manifest.entries.length) await writeManifest(dir, { ...manifest, entries: kept });
       }
       const parts = result.turnIds.length
         ? [`Undid ${result.turnIds.length} turn${result.turnIds.length === 1 ? '' : 's'}: ${result.restored.length} file(s) restored, ${result.deleted.length} created file(s) removed.`]
