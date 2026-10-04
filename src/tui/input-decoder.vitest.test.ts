@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { TerminalInputDecoder } from './input-decoder';
+import { TerminalInputDecoder, waitingEnterAction } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
 
 describe('terminal input decoding', () => {
@@ -37,5 +37,22 @@ describe('terminal input decoding', () => {
     draft = editWaitingComposer(draft.value, draft.cursor, '!');
     expect(draft).toEqual({ value: 'nex!t', cursor: 4, changed: true });
     expect(editWaitingComposer(draft.value, draft.cursor, '\u007f')).toEqual({ value: 'next', cursor: 3, changed: true });
+  });
+});
+
+describe('Enter while a turn runs', () => {
+  it('delivers what is typed, whether or not a message is already waiting', () => {
+    expect(waitingEnterAction('also do this', false, true)).toBe('deliver');
+    expect(waitingEnterAction('  also do this ', true, true)).toBe('deliver');
+  });
+
+  it('is "enter again": nothing typed with a message waiting stops the turn and sends it', () => {
+    expect(waitingEnterAction('', true, true)).toBe('stop-and-send');
+    expect(waitingEnterAction('   ', true, true)).toBe('stop-and-send');
+  });
+
+  it('does nothing on an empty composer with nothing waiting, or a turn already stopping', () => {
+    expect(waitingEnterAction('', false, true)).toBeUndefined();
+    expect(waitingEnterAction('', true, false)).toBeUndefined();
   });
 });

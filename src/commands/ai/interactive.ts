@@ -452,12 +452,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           await followRunning(terminal, runningTurn.prompt, runningTurn.prompt ?? latest.pendingTurn?.prompt);
           continue;
         }
-        // Ctrl+S during the turn that just stopped: this message, now, ahead
-        // of anything queued.
-        const sendNow = terminal?.takeSendNow();
-        if (sendNow) {
-          line = sendNow;
-        } else if (resend) {
+        if (resend) {
           // The turn that ran out, carried on: it came before anything
           // queued behind it, which "Resume in" moved here with it.
           line = resend;

@@ -26,6 +26,15 @@ export function waitingInputAction(key: string): WaitingInputAction | undefined 
   return undefined;
 }
 
+/** Enter while a turn runs. Something typed is delivered -- into the turn or
+ * after it, by the send mode. Nothing typed, with a message already waiting
+ * (its row is on screen, so this is the SECOND Enter, never a doubled first),
+ * stops the turn and sends what waits as the next turn now. */
+export function waitingEnterAction(draft: string, waiting: boolean, canStop: boolean): 'deliver' | 'stop-and-send' | undefined {
+  if (draft.trim()) return 'deliver';
+  return waiting && canStop ? 'stop-and-send' : undefined;
+}
+
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */
 const FOCUS_EVENT = /^\u001b\[[IO]$/;
 

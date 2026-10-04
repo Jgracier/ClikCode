@@ -8,10 +8,11 @@
 export const ACTIONS = {
   /** End the running turn. Esc, the stop button, the palette's command. */
   stop: { verb: 'stop', key: 'Esc' },
-  /** Mid-turn: stop it and send what is typed (or queued) next, at once.
-   *  Says "stop": it ends the turn's sub-agents too. */
-  sendNow: { verb: 'stop & send', key: 'Ctrl+S' },
-  /** Send what is typed: steered into the turn or queued behind it. */
+  /** Mid-turn, nothing typed, a message already waiting: stop the turn and
+   *  send what waits next, at once. Enter AGAIN -- the first Enter is the one
+   *  that sent the message. Says "stop": it ends the turn's sub-agents too. */
+  sendNow: { verb: 'stop & send', key: 'Enter again' },
+  /** Send what is typed: steered into the turn or queued behind it (/send). */
   send: { verb: 'send', key: 'Enter' },
   /** Take the highlighted command from the palette. */
   apply: { verb: 'apply', key: 'Enter' },

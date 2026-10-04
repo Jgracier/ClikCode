@@ -137,7 +137,7 @@ by accident. (In the composer it moves the cursor, as you would expect.)
 | **→** | Open the command list, or select what is highlighted |
 | **←** | Back, one level |
 | **↑ ↓** | Move through a list; in an empty composer, your previous messages |
-| **Enter** | Send, or confirm the highlighted row |
+| **Enter** | Send, or confirm the highlighted row. While an answer runs, what you type goes into it or waits for it to end (`/send`); Enter again with nothing typed stops the answer and sends what is waiting now |
 | **Tab** | Complete the highlighted command |
 | **Delete** | In a picker, the destructive action on a row — remove an account, delete a conversation |
 | **Esc** | Stop the current answer, keeping what you typed (if you have scrolled back, the first press returns to the live end). Closes the command list and clears its filter |
