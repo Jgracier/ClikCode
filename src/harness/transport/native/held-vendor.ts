@@ -57,6 +57,15 @@ export interface HeldVendor {
 }
 
 const held = new Map<string, HeldVendor>();
+/** Who is waiting for a session's held process to be gone (the worker's
+ * idle exit). */
+const gone = new Map<string, Array<() => void>>();
+
+function forget(sessionId: string, vendor: HeldVendor): void {
+  if (held.get(sessionId) !== vendor) return;
+  held.delete(sessionId);
+  for (const resolve of gone.get(sessionId)?.splice(0) ?? []) resolve();
+}
 
 /** A record that begins work a background turn should show. */
 function opensBackgroundTurn(record: Json): boolean {
@@ -94,7 +103,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     quiet() { end('completed'); },
     async close() {
       closing = true;
-      if (held.get(options.sessionId) === vendor) held.delete(options.sessionId);
+      forget(options.sessionId, vendor);
       end('superseded');
       options.endInput();
       if (exited) return;
@@ -115,7 +124,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     clearTimeout(ceiling);
     options.background.dispose();
     end(outcome.timedOut ? 'idle-timeout' : options.background.settled ? 'completed' : 'closed');
-    if (held.get(options.sessionId) === vendor) held.delete(options.sessionId);
+    forget(options.sessionId, vendor);
     resolveExit();
   });
   if (!released) {
@@ -141,4 +150,16 @@ export async function releaseHeldVendorProcess(sessionId: string): Promise<boole
 /** Whether a finished turn left a process running for this session. */
 export function hasHeldVendorProcess(sessionId: string): boolean {
   return held.has(sessionId);
+}
+
+/** Resolves once no process is held for this session (at once if none is):
+ * the worker waits on this rather than idling out under a vendor that is
+ * still finishing work it was asked to do. */
+export function whenHeldVendorGone(sessionId: string): Promise<void> {
+  if (!held.has(sessionId)) return Promise.resolve();
+  return new Promise((resolve) => {
+    const waiting = gone.get(sessionId) ?? [];
+    waiting.push(resolve);
+    gone.set(sessionId, waiting);
+  });
 }

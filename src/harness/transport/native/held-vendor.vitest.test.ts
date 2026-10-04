@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createBackgroundWait, streamJsonUserMessage } from './background-wait.js';
-import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, type HeldVendor } from './held-vendor.js';
+import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
 import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease } from './turn.js';
 import { reportStructuredLine } from '../../events/structured.js';
 import { createStreamState } from '../../events/adapters.js';
@@ -112,5 +112,18 @@ describe('a Claude turn that leaves background tasks running', () => {
     const outcome = await turns[0]!.finished;
     expect(['completed', 'superseded']).toContain(outcome.ended);
     expect(hasHeldVendorProcess('held-c')).toBe(false);
+  });
+
+  it('tells whoever waits on it (the worker\'s idle exit) when the held process is gone', async () => {
+    await expect(whenHeldVendorGone('held-none')).resolves.toBeUndefined();
+    const { turns } = await runTurn('held-d', 300);
+    expect(hasHeldVendorProcess('held-d')).toBe(true);
+    let gone = false;
+    const waiting = whenHeldVendorGone('held-d').then(() => { gone = true; });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(gone, 'gone while its task still ran').toBe(false);
+    await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5_000 });
+    await waiting;
+    expect(hasHeldVendorProcess('held-d')).toBe(false);
   });
 });
