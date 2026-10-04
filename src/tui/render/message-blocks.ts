@@ -6,7 +6,7 @@ import { closeOpenHyperlink } from './hyperlinks.js';
 import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock, splitIntoBlocks } from './markdown.js';
 import { sanitizeTerminalText } from './text.js';
 import { terminalCellWidth } from './width.js';
-import { wrapCodeLine, wrapWords } from './wrap.js';
+import { wrapCodeLine, wrapWords, wrapWordsLive } from './wrap.js';
 import type { MessageBlock } from '../../harness/prompter.js';
 
 /** Rows for a run of parsed Markdown blocks, exactly as they appear in the
@@ -73,11 +73,11 @@ export function renderMessageBlocks(
     const structural = `${quotePrefix}${listPrefix}`;
     const hangIndent = ' '.repeat(terminalCellWidth(structural));
     const text = block.kind === 'heading' || block.kind === 'paragraph' || block.kind === 'list-item' ? block.text : '';
-    // The block still receiving tokens has a new text on every frame; the
-    // streaming renderer keeps an unterminated span from reflowing later.
+    // The block still receiving tokens has a new text on every frame: the
+    // live renderer and wrapper redo only what changed since the last one.
     const styled = (streaming ? renderInlineMarkdownLive : renderInlineMarkdown)(text || ' ');
     const budget = Math.max(1, width - terminalCellWidth(structural));
-    for (const [lineIndex, line] of wrapWords(styled, budget).entries()) {
+    for (const [lineIndex, line] of (streaming ? wrapWordsLive : wrapWords)(styled, budget).entries()) {
       const indentation = lineIndex === 0 ? structural : hangIndent;
       // wrapWords can hard-break a long underlined link label mid-span; close
       // underline (and OSC 8) here so later chat rows do not stay underlined.
