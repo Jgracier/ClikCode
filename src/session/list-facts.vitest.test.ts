@@ -25,4 +25,14 @@ describe('stampListFacts', () => {
     stampListFacts(running);
     expect((running as { listTurn?: unknown }).listTurn).toBeUndefined();
   });
+
+  it('previews the last thing the user asked, not a notice ClikCode sent', () => {
+    const row = session({ messages: [
+      { role: 'user', content: 'deploy it' }, { role: 'assistant', content: 'done' },
+      { role: 'user', content: '[ClikCode] Background work you started was stopped: a newer build.' }, { role: 'assistant', content: 'nothing to restart' },
+    ] });
+    markTranscriptLoaded(row);
+    stampListFacts(row);
+    expect(row.listPreview).toBe('deploy it');
+  });
 });
