@@ -131,13 +131,18 @@ export async function runVendorSessionAttempt(input: {
         // An ACP session id is not guaranteed to identify the same vendor
         // thread in the one-shot CLI. Only a new chat can safely switch
         // transports for this turn -- unless the two share one store.
-        if (session.nativeSessionId && !harness.acp?.sharedSessions) throw error;
-        session.nativeTransport = harness.turn.output === 'text' ? 'text-cli' : 'structured-cli';
-        await checkpoint.persistNow();
+        const shared = Boolean(harness.acp?.sharedSessions);
+        if (session.nativeSessionId && !shared) throw error;
+        // A thread the CLI starts belongs to the CLI from now on -- unless
+        // both share one store, when this turn alone takes the CLI.
+        if (!shared) {
+          session.nativeTransport = harness.turn.output === 'text' ? 'text-cli' : 'structured-cli';
+          await checkpoint.persistNow();
+        }
         prompter?.phase('using structured CLI fallback');
         try { result = await runCli(); }
         catch (cliError) {
-          if (!session.nativeSessionId) delete session.nativeTransport;
+          if (!session.nativeSessionId && !shared) delete session.nativeTransport;
           throw cliError;
         }
       }
