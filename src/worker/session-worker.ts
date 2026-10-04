@@ -11,6 +11,9 @@
 import { STOPPED } from '../harness/protocol/wording.js';
 import { spawn } from 'node:child_process';
 import { idleDecision, startsSuccessor } from './idle-decisions.js';
+import { createResumeWaiter } from './resume-wait.js';
+import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
+import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { createServer, type Socket } from 'node:net';
 import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
 import { existsSync } from 'node:fs';
@@ -189,6 +192,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (retireWhenIdle && !retireBlocker()) { void shutdown('replaced by a newer ClikCode build'); return; }
     if (leaveIfStaleBuild()) return;
     if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
+    // A turn parked for a quota reset: this worker is what sends it.
+    if (resumeWaiter.pending) return;
     // A vendor kept running for its own background work (held-vendor.ts):
     // idling out would close it and stop that work unreported. It is
     // bounded by its own ceiling; once it is gone the idle clock starts.
@@ -219,7 +224,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     idleTimer = undefined;
     const running = await persistentWorkRunning(sessionId);
     // Something happened meanwhile (a turn, a window): its own edge re-arms.
-    if (idleTimer || turnRunning || draining || observer.attachedCount > 0) return;
+    if (idleTimer || turnRunning || draining || observer.attachedCount > 0 || resumeWaiter.pending) return;
     const decision = idleDecision({ workRunning: running, workSince: vendorWorkSince, now: Date.now(), ceilingMs: ABANDONED_SHELL_MS });
     if (decision === 'recheck') {
       vendorWorkSince ??= Date.now();
@@ -279,6 +284,17 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   };
 
   const broadcastNotice = (message: string): void => observer.broadcast({ type: 'notice', message });
+
+  /** A turn parked until the quota resets (worker/resume-wait.ts): sent from
+   * here once it has, once. `resumingTurn` marks that turn for runTurn. */
+  let resumingTurn = false;
+  const resumeWaiter = createResumeWaiter({
+    sessionId, turnRunning: () => turnRunning || draining, notice: broadcastNotice, changed: () => scheduleIdleExit(),
+    send: (prompt) => {
+      resumingTurn = true;
+      if (!startTurn({ type: 'submit', text: prompt, echo: prompt !== INTERRUPTED_TURN_REQUEST })) resumingTurn = false;
+    },
+  });
 
   const broadcastQueueChanged = (): void => {
     observer.broadcast({ type: 'queue-changed' });
@@ -386,6 +402,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         return;
       }
     }
+    // A new message from the user replaces a turn parked for the reset.
+    if (!command.queuedTurnId) await resumeWaiter.cancel('Stopped waiting for the reset · a new message was sent');
     if (startTurn(command)) return;
     let queuedTurnId = command.queuedTurnId;
     if (!queuedTurnId) {
@@ -406,6 +424,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
 
   const runTurn = async (command: Extract<ClientCommand, { type: 'submit' }>): Promise<void> => {
     turnRunning = true;
+    const resumed = resumingTurn;
+    resumingTurn = false;
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
     const controller = new AbortController();
@@ -450,6 +470,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       } else {
         const message = error instanceof Error ? error.message : String(error);
         observer.broadcast({ type: 'turn-error', message });
+        // The one retry after the reset ran out too: it is not parked again.
+        if (resumed && isUsageExhaustedMessage(message)) broadcastNotice('Still out of usage after the reset · not retrying again');
         // A queued turn is consumed once its checkpoint starts; one that
         // failed before that is still at the head, and would be run again
         // straight after this -- and fail the same way, for ever. When it
@@ -490,6 +512,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       if (agentSession.notifications.length) void deliverNotifications();
       else void drainQueue().catch(reportDrainFailure).finally(scheduleIdleExit);
       scheduleIdleExit();
+      // Parked while this turn ran (another window's "Wait for reset").
+      void resumeWaiter.check();
     }
   };
 
@@ -530,6 +554,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') {
+      // What the window changed may be a turn parked for the reset.
+      void resumeWaiter.check();
       const { session: current, account } = await currentSessionAndAccount();
       observer.render(current, account);
       return;
@@ -581,7 +607,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (command.type === 'cancel') {
       // Nothing running is not an error -- a cancel racing the turn's own
       // natural completion is ordinary, not a client mistake to report.
-      if (!activeController) return;
+      // With none, it cancels a turn parked for the reset, if there is one.
+      if (!activeController) { await resumeWaiter.cancel('Stopped waiting for the reset'); return; }
       activeRestoreDraft = command.restoreDraft;
       activeController.abort();
       return;
@@ -702,7 +729,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // build, the 24-hour ceiling): a successor -- on whatever build is
     // installed now -- delivers it at once, instead of waiting for someone
     // to reopen the conversation. Stopped by a signal, it stays stopped.
-    if (startsSuccessor(owed, reason)) startSuccessor();
+    // A turn parked for the reset is owed too: the successor sends it.
+    resumeWaiter.stop();
+    if (startsSuccessor(owed || resumeWaiter.pending, reason)) startSuccessor();
     process.exit(0);
   };
   const startSuccessor = (): void => {
@@ -750,4 +779,6 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   buildWatch.unref();
   // A notification a previous worker recorded but never ran.
   void drainQueue().catch(reportDrainFailure);
+  // A turn parked for the reset by a window, or left by a worker before this.
+  void resumeWaiter.check();
 }

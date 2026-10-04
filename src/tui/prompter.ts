@@ -1282,6 +1282,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
+  /** Esc on an empty composer, while a turn is parked for the quota reset:
+   * the interactive loop's way to stop waiting (one press, then cleared). */
+  idleEscape?: () => void;
+
   usage(label?: string, resetLabel?: string): void {
     if (this.usageLabel === label && this.usageResetLabel === resetLabel) return;
     this.usageLabel = label;
@@ -2624,6 +2628,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return draw();
         }
         if (key === '\u001a') return this.suspendToShell();
+        // Esc on an empty composer, no panel open, stops a turn parked for
+        // the quota reset.
+        if (key === '\u001b' && !value && !this.panelState && this.idleEscape) { const stop = this.idleEscape; this.idleEscape = undefined; stop(); return; }
         if (!value && !matched.length && this.panelKey(key)) return draw();
         if (key === '\u0003') {
           // Ctrl+C clears a draft first. Leaving takes a second press, because

@@ -30,6 +30,7 @@ import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading } from '../harness/accounts/account-usage.js';
 import { usageResetLabel } from '../harness/accounts/usage-reading.js';
+import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { withSignIn } from '../commands/account.js';
 import { newConversation } from '../commands/ai/conversations.js';
@@ -280,7 +281,9 @@ export class IdeBridge {
     const session = state.sessions.find((item) => item.id === this.sessionId);
     if (!session) return;
     const reading = await nativeUsageReading(session, state);
-    this.channel.send({ type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(usageResetLabel(reading?.windows) ? { reset: usageResetLabel(reading?.windows) } : {}) });
+    // A turn parked for the reset says so instead of when it comes back.
+    const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);
+    this.channel.send({ type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(reset ? { reset } : {}) });
   }
 
   /** The conversation's route is ready before the first message: MCP servers
@@ -509,6 +512,13 @@ export class IdeBridge {
         await this.switchTo(next.moved.id);
         // No prompt: another window already carried this turn on there.
         if (next.moved.prompt !== undefined) await this.execute(next.moved.prompt, {});
+        return;
+      }
+      if (next.waiting) {
+        // The worker sends it at the reset; it hears of the parked turn now.
+        this.worker?.client.send({ type: 'refresh' });
+        this.channel.send({ type: 'notice', message: `${resumeWaitLabel(next.waiting)} · a new message cancels`, level: 'info' });
+        void this.refreshUsage().catch(() => undefined);
         return;
       }
       if (next.back.length) this.channel.send({ type: 'restore-draft', text: next.back.join('\n\n') });

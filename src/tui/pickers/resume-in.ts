@@ -14,10 +14,11 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
+import { writeState } from '../../session/state/write.js';
 import { moveQueuedTurns, newProviderConversation, takeQueuedMessages } from '../../commands/ai/conversations.js';
 import { preferredAccountId } from '../../commands/ai/preferred-account.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
-import { nextQuotaReset, quotaResetPhrase } from '../../turn/usage-exhausted.js';
+import { nextQuotaReset, quotaResetPhrase, type ResumeAt } from '../../turn/usage-exhausted.js';
 import { chooseOption } from './choose.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
@@ -55,11 +56,16 @@ export function resumeInCandidates(
     .sort((left, right) => rank(left.harness) - rank(right.harness) || left.harness.displayName.localeCompare(right.harness.displayName));
 }
 
-/** Returns the new conversation's id, or undefined when there is nowhere to
- * go or the user backs out (the chat then stays as it was). */
+/** The "Wait for reset" row's value: no harness command starts with a NUL. */
+const WAIT_FOR_RESET = '\u0000wait';
+
+/** Returns the new conversation's id, `{ waiting }` when the user chose to
+ * wait for this provider's reset (parked on the session; the worker sends it
+ * then), or undefined when there is nowhere to go or the user backs out (the
+ * chat then stays as it was). */
 export async function interactiveResumeInPicker(
-  rl: HarnessPrompter, id: string, prompt: string, sent = prompt,
-): Promise<ResumedIn | undefined> {
+  rl: HarnessPrompter, id: string, prompt: string, sent = prompt, now: number = Date.now(),
+): Promise<ResumedIn | { waiting: ResumeAt } | undefined> {
   // Index for every chat's last model; this chat's transcript is not needed
   // to list other harnesses with usage left.
   const state = await readState({ transcripts: [] });
@@ -68,16 +74,22 @@ export async function interactiveResumeInPicker(
   // Another provider is the answer only when this one has nothing left.
   if (sessionProviderHasUsage(state.accounts, session.provider)) return undefined;
   const candidates = resumeInCandidates(allLocalHarnesses().filter(harnessCanRunTurns), state.accounts, session.nativeHarness, harnessTierRank);
-  if (!candidates.length) return undefined;
   const spent = state.accounts.filter((account) => account.provider === session.provider);
-  const reset = nextQuotaReset(spent);
-  const title = `All accounts exhausted${reset ? ` · back ${quotaResetPhrase(reset)}` : ''} — resume in`;
+  const reset = nextQuotaReset(spent, now);
+  if (!candidates.length && !reset) return undefined;
+  const title = candidates.length
+    ? `All accounts exhausted${reset ? ` · back ${quotaResetPhrase(reset, now)}` : ''} — resume in`
+    : `All accounts exhausted · back ${quotaResetPhrase(reset!, now)}`;
   for (;;) {
-    const command = await chooseOption(rl, title, candidates.map(({ harness, accounts }): PickerOption<string> => ({
-      label: harness.displayName,
-      detail: `· ${accounts.slice(0, 2).map((account) => account.label).join(', ')}${accounts.length > 2 ? ` +${accounts.length - 2}` : ''}`,
-      value: harness.command,
-    })));
+    const command = await chooseOption(rl, title, [
+      ...candidates.map(({ harness, accounts }): PickerOption<string> => ({
+        label: harness.displayName,
+        detail: `· ${accounts.slice(0, 2).map((account) => account.label).join(', ')}${accounts.length > 2 ? ` +${accounts.length - 2}` : ''}`,
+        value: harness.command,
+      })),
+      ...(reset ? [{ label: `Wait for reset (${quotaResetPhrase(reset, now)})`, detail: '· sends it again here then', value: WAIT_FOR_RESET }] : []),
+    ]);
+    if (command === WAIT_FOR_RESET && reset) return { waiting: await waitForReset(id, reset, prompt, sent, now) };
     const chosen = candidates.find((candidate) => candidate.harness.command === command);
     if (!chosen) return undefined;
     const accountId = preferredAccountId(state, chosen.harness.provider, null,
@@ -90,6 +102,18 @@ export async function interactiveResumeInPicker(
     const model = lastUsedModel ?? state.providerSettings[chosen.harness.provider]?.model ?? catalog.configured ?? null;
     return resumeInBranch(id, chosen.harness, account.id, model, prompt, sent);
   }
+}
+
+/** Parks the turn on the session until `reset`: what to send then is decided
+ * now, against the interrupted turn on record (resumePromptForPendingTurn). */
+export async function waitForReset(id: string, reset: Date, prompt: string, sent = prompt, now: number = Date.now()): Promise<ResumeAt> {
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const resumeAt: ResumeAt = { at: reset.toISOString(), prompt: resumePromptForPendingTurn(session.pendingTurn, prompt, sent), setAt: new Date(now).toISOString() };
+  session.resumeAt = resumeAt;
+  await writeState(state);
+  return resumeAt;
 }
 
 /** Where "Resume in" took the conversation. `prompt` is what to send there;
@@ -145,12 +169,15 @@ export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'
  *    looked, so the turn goes again here, once;
  *  - `moved`: "Resume in" branched the conversation to another provider,
  *    with what was queued behind the turn;
+ *  - `waiting`: parked until this provider's reset; the worker sends it then,
+ *    and what was queued behind it stays queued;
  *  - `stayed`: nothing carried it on; `queued` are the messages that were
  *    typed behind it, taken back for the composer when nothing here could
  *    run them (each would fail the same way and offer this again). */
 export type ExhaustedTurnNext =
   | { retry: string }
   | { moved: ResumedIn }
+  | { waiting: ResumeAt }
   | { stayed: string[] };
 
 /** The same-provider retry is at most once per interrupted turn. It is keyed
@@ -169,9 +196,22 @@ export async function carryOnAfterExhaustion(
     return { retry: continuation };
   }
   const moved = await interactiveResumeInPicker(rl, id, prompt, sent);
+  if (moved && 'waiting' in moved) return moved;
   if (moved) {
     await moveQueuedTurns(id, moved.id);
     return { moved };
   }
   return { stayed: await sameProviderCanTakeTurn(id) ? [] : await takeQueuedMessages(id) };
+}
+
+/** Takes a parked turn off the session ("Wait for reset" cancelled from a
+ * window). The conversation's worker learns of it on its next look; send it a
+ * `refresh` to have that be now. True when there was one. */
+export async function stopWaitingForReset(id: string): Promise<boolean> {
+  const state = await readState({ transcripts: [] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session?.resumeAt) return false;
+  delete session.resumeAt;
+  await writeState(state);
+  return true;
 }

@@ -27,6 +27,7 @@ import { livePendingTurns, liveWorkerSessions } from '../../session/liveness.js'
 import { watchConversationList } from '../../session/list-watch.js';
 import { conversationRows, recencySection, sectionRank, SECTION_TITLES, type ConversationRow, type ConversationSection } from '../../session/conversation-rows.js';
 import { activityGlyph, subagentOptions, turnPace, workingDetail } from './conversation-activity.js';
+import { resumeWaitLabel } from '../../turn/usage-exhausted.js';
 import { conversationIdFor, conversationOption, isBlankConversation } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
@@ -319,6 +320,8 @@ export async function interactiveSessionPicker(
         option.detail = `${workingDetail(pending, openedAt)} ${option.detail ?? ''}`;
         if (pending.subagents?.length) option.inner = { title: 'Subagents', options: subagentOptions(pending, option.value, openedAt) };
       }
+      // A turn parked for the quota reset says so, and when.
+      else if (row.latest.resumeAt) option.detail = `· ${resumeWaitLabel(row.latest.resumeAt, openedAt)} ${option.detail ?? ''}`;
       if (row.latest.id !== currentId && sessionClaimIsLive(row.latest)) {
         option.detail = `${option.detail ?? ''} · active in another terminal`;
       }
