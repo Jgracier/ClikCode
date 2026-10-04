@@ -1,5 +1,6 @@
+import { stdin } from 'node:process';
 import { describe, expect, it } from 'vitest';
-import { TerminalInputDecoder, waitingEnterAction } from './input-decoder';
+import { KEEP_STDIN_FLOWING, TerminalInputDecoder, takeTerminalKeys, waitingEnterAction } from './input-decoder';
 import { editWaitingComposer } from './composer-edit';
 
 describe('terminal input decoding', () => {
@@ -54,5 +55,39 @@ describe('Enter while a turn runs', () => {
   it('does nothing on an empty composer with nothing waiting, or a turn already stopping', () => {
     expect(waitingEnterAction('', false, true)).toBeUndefined();
     expect(waitingEnterAction('', true, false)).toBeUndefined();
+  });
+});
+
+describe('keys typed between one reader and the next', () => {
+  it('go to the next reader, once, in order', async () => {
+    const tick = (): Promise<void> => new Promise((resolve) => process.nextTick(resolve));
+    stdin.on('data', KEEP_STDIN_FLOWING);
+    try {
+      const first: string[] = [];
+      const stopFirst = takeTerminalKeys((key) => first.push(key));
+      stdin.emit('data', Buffer.from('pl'));
+      stopFirst();
+      // A sign-in's wait has gone and the prompt has not opened yet.
+      stdin.emit('data', Buffer.from('ea'));
+      stdin.emit('data', Buffer.from('se'));
+      const second: string[] = [];
+      const stopSecond = takeTerminalKeys((key) => second.push(key));
+      await tick();
+      stdin.emit('data', Buffer.from('!'));
+      stopSecond();
+      expect(first).toEqual(['p', 'l']);
+      expect(second).toEqual(['e', 'a', 's', 'e', '!']);
+      // A reader that goes before it was handed them leaves them for the next.
+      stdin.emit('data', Buffer.from('x'));
+      takeTerminalKeys(() => { throw new Error('not this one'); })();
+      const third: string[] = [];
+      const stopThird = takeTerminalKeys((key) => third.push(key));
+      await tick();
+      stopThird();
+      expect(third).toEqual(['x']);
+    } finally {
+      stdin.off('data', KEEP_STDIN_FLOWING);
+      stdin.pause();
+    }
   });
 });

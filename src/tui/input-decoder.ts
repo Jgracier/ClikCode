@@ -41,9 +41,23 @@ const FOCUS_EVENT = /^\u001b\[[IO]$/;
 /** `CSI ? ... c`: the terminal answering Primary DA. Never a keystroke. */
 const DEVICE_ATTRIBUTES_REPLY = /^\u001b\[\?[0-9;]*c$/;
 
+/** Readers attached now (listenForTerminalKeys), and what the terminal sent
+ * while there were none: kept for the next one. */
+let readers = 0;
+let unread: (Buffer | string)[] = [];
+let unreadBytes = 0;
+const UNREAD_LIMIT = 64 * 1024;
+
 /** Attached for the life of the prompter so stdin never falls back to paused
- * mode between readers. It reads nothing; presence is the whole point. */
-export const KEEP_STDIN_FLOWING = (): void => {};
+ * mode between readers. Between readers -- one screen closing and the next
+ * opening, a sign-in's wait giving way to the prompt -- it keeps what arrives
+ * for the next reader. Dropping it lost the keys typed in that moment: a
+ * message typed as a sign-in finished was sent as "heck the commit". */
+export const KEEP_STDIN_FLOWING = (chunk?: Buffer | string): void => {
+  if (readers > 0 || chunk === undefined || unreadBytes + chunk.length > UNREAD_LIMIT) return;
+  unread.push(chunk);
+  unreadBytes += chunk.length;
+};
 
 /** `CSI code ; modifiers u` and `CSI 27 ; modifiers ; code ~` back to the bytes
  * a legacy terminal would have sent, or undefined to leave the key alone. */
@@ -288,7 +302,25 @@ function listenForTerminalKeys(onKey: (key: string) => void): () => void {
     }
   };
   input.on('data', onData);
+  readers += 1;
+  let attached = true;
+  // What came while nobody was reading goes to this reader first -- on the
+  // next tick, once whoever attached it has finished setting up. Anything
+  // the terminal sends meanwhile is an I/O event, so it cannot come first.
+  // A reader gone by then leaves them for the one after.
+  if (unread.length) {
+    process.nextTick(() => {
+      if (!attached || !unread.length) return;
+      const pending = unread;
+      unread = [];
+      unreadBytes = 0;
+      for (const chunk of pending) onData(chunk);
+    });
+  }
   return () => {
+    if (!attached) return;
+    attached = false;
+    readers -= 1;
     if (flushTimer) clearTimeout(flushTimer);
     flushTimer = undefined;
     input.off('data', onData);
