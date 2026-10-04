@@ -14,6 +14,7 @@ import { skillTool } from './skill.js';
 import { taskTool } from './task.js';
 import { todoWriteTool } from './todo-write.js';
 import { webFetchTool } from './web-fetch.js';
+import { waitTool } from './wait.js';
 import { webSearchTool } from './web-search.js';
 import { writeFileTool } from './write-file.js';
 
@@ -21,7 +22,7 @@ export function defaultTools(): ToolDefinition[] {
   return [
     readFileTool, listDirTool, globTool, grepTool,
     writeFileTool, editFileTool, multiEditTool, notebookEditTool,
-    bashTool, bashOutputTool, killBashTool,
+    bashTool, bashOutputTool, killBashTool, waitTool,
     webFetchTool, webSearchTool, todoWriteTool, exitPlanModeTool, skillTool,
     taskTool, askUserTool,
   ];
