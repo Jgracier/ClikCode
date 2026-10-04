@@ -9,6 +9,7 @@
  * this is meant to eventually make deletable, commands/ai/interactive.ts).
  */
 import { createServer, type Socket } from 'node:net';
+import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { runSessionTurn } from '../turn/session-turn.js';
@@ -144,6 +145,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const retireBlocker = (): string | undefined => {
     if (turnRunning || draining) return 'a turn is running';
     if (vendorBackground.busy) return 'vendor background work is running';
+    if (hasHeldVendorProcess(sessionId)) return 'a vendor is still finishing its background work';
     if (runningShellCount(agentSession) > 0) return 'a background shell is running';
     if (agentSession.notifications.length) return 'a notification is on its way to the model';
     return undefined;
@@ -164,6 +166,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     return true;
   };
 
+  let awaitingHeldVendor = false;
   const scheduleIdleExit = (): void => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
@@ -172,6 +175,16 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (retireWhenIdle && !retireBlocker()) { void shutdown('replaced by a newer ClikCode build'); return; }
     if (leaveIfStaleBuild()) return;
     if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
+    // A vendor kept running for its own background work (held-vendor.ts):
+    // idling out would close it and stop that work unreported. It is
+    // bounded by its own ceiling; once it is gone the idle clock starts.
+    if (hasHeldVendorProcess(sessionId)) {
+      if (!awaitingHeldVendor) {
+        awaitingHeldVendor = true;
+        void whenHeldVendorGone(sessionId).then(() => { awaitingHeldVendor = false; scheduleIdleExit(); });
+      }
+      return;
+    }
     if (runningShellCount(agentSession) > 0) {
       const oldest = Math.min(...[...agentSession.shells.values()].filter((shell) => shell.status === 'running').map((shell) => shell.startedAt));
       idleTimer = setTimeout(stopAbandonedShells, Math.max(0, oldest + ABANDONED_SHELL_MS - Date.now()));
