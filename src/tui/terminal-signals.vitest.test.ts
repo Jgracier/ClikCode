@@ -5,11 +5,12 @@ import {
 } from './terminal-signals.js';
 
 describe('what the terminal around the UI is told', () => {
-  it('titles the window with the spinner and activity while a turn runs, the conversation when idle', () => {
-    expect(windowTitle({ running: true, glyph: '⣿', activity: 'running tests', name: 'Fix the parser' })).toBe('⣿ running tests');
+  it('titles the window with the conversation, and whether a turn is working or waiting on the user', () => {
+    expect(windowTitle({ running: true, name: 'Fix the parser' })).toBe('working · Fix the parser');
+    expect(windowTitle({ running: true, asking: true, name: 'Fix the parser' })).toBe('waiting for you · Fix the parser');
     expect(windowTitle({ running: false, name: 'Fix the parser' })).toBe('Fix the parser');
     expect(windowTitle({ running: false })).toBe('ClikCode');
-    expect(windowTitle({ running: true })).toBe('working');
+    expect(windowTitle({ running: true })).toBe('working · ClikCode');
   });
 
   it('never lets text end the sequence early or start another', () => {
