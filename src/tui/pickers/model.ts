@@ -16,6 +16,7 @@ import { aiSessionCommand } from '../slash/handlers.js';
 import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
+import { SLOW_WAIT_MS } from '../../harness/protocol/timings.js';
 
 /** Prefix of a row for a model this machine cannot run: listed, so the
  * catalog is honest about what exists and why it is out of reach, but
@@ -105,7 +106,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     // milliseconds, and starting and stopping one flashed a spinner and an
     // empty composer between Settings and the list.
     let spinning = false;
-    const spinner = setTimeout(() => { spinning = true; waiting?.startWaiting(`finding ${harness.displayName} models…`); }, 250);
+    const spinner = setTimeout(() => { spinning = true; waiting?.startWaiting(`finding ${harness.displayName} models…`); }, SLOW_WAIT_MS);
     try { catalog = await nativeModelCatalogForPicker(harness, account); }
     finally { clearTimeout(spinner); if (spinning) waiting?.stopWaiting(); }
   }

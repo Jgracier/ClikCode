@@ -38,6 +38,7 @@ import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
+import { NOTICE_MS, PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
 import { paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
@@ -1361,7 +1362,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * all arrive in the same few milliseconds. One shared scheduler collapses
    * those signals into a single atomic frame instead of queueing competing
    * terminal writes that briefly expose half-updated cursor/footer state. */
-  private schedulePaint(delay = 32): void {
+  private schedulePaint(delay = PAINT_COALESCE_MS): void {
     if (this.responsePaintTimer || this.closed || this.suspended || this.selecting || this.paletteActive) return;
     this.responsePaintTimer = setTimeout(() => {
       this.responsePaintTimer = undefined;
@@ -2282,7 +2283,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.redrawSelection();
     if (!text) return;
     void copyToClipboard(text).catch((error: unknown) => {
-      this.showTransientNotice(`Could not copy: ${error instanceof Error ? error.message : String(error)}`, 4000, () => this.redrawSelection());
+      this.showTransientNotice(`Could not copy: ${error instanceof Error ? error.message : String(error)}`, NOTICE_MS, () => this.redrawSelection());
       this.redrawSelection();
     });
   }
@@ -2379,7 +2380,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   notice(text: string): void {
-    this.showTransientNotice(text, 4000, () => this.repaint());
+    this.showTransientNotice(text, NOTICE_MS, () => this.repaint());
     this.repaint();
   }
 

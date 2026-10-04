@@ -9,6 +9,7 @@ import { visibleSlice } from '../../tui/render/width.js';
 import { compactCount } from '../../tui/render/usage-line.js';
 import { TOOL_CATEGORY } from './tool-category.js';
 import { isAgentToolName } from './tools.js';
+import { SPIN_MS } from './timings.js';
 
 /** How much of a tool's work a transcript row shows. Enough to recognise the
  * edit or command at a glance without the trail crowding out the answer. */
@@ -280,8 +281,6 @@ export function openToolsStatus(activeTools: ReadonlyMap<string, OpenTool>): { p
   };
 }
 
-/** How often the spinner moves while work is arriving. */
-export const SPIN_MS = 300;
 
 /** A fixed 4x4 field of identical tiny dots. Four diagonal phases move through
  * the same compact shape without changing its dimensions. */
