@@ -1,7 +1,7 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AiCustomAcpHarnessInput, AiLocalHarnessDefinition } from './definition.js';
 import {
   addCustomAcpHarness, customAcpConfigPath, parseCustomAcpConfig, readCustomAcpConfig,
@@ -65,5 +65,29 @@ describe('custom ACP harness file', () => {
     await writeCustomAcpConfig([]);
     reloadCustomAcpHarnesses(catalog);
     expect(seen.at(-1)).toEqual([]);
+  });
+
+  it('looks at the file at most once a second; its own writes at once', async () => {
+    const seen: AiLocalHarnessDefinition[][] = [];
+    const catalog = {
+      customAcpHarness: (definition: AiCustomAcpHarnessInput) => ({ command: definition.command, binary: definition.binary }) as AiLocalHarnessDefinition,
+      registerCustomHarnesses: (definitions: readonly AiLocalHarnessDefinition[]) => { seen.push([...definitions]); return definitions; },
+    };
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      reloadCustomAcpHarnesses(catalog);
+      // Another process adds one.
+      await writeFile(customAcpConfigPath(), JSON.stringify({ harnesses: [{ command: 'theirs', binary: 'theirs' }] }));
+      reloadCustomAcpHarnesses(catalog);
+      expect(seen).toEqual([]);
+      vi.setSystemTime(Date.now() + 1001);
+      reloadCustomAcpHarnesses(catalog);
+      expect(seen.at(-1)?.[0]).toMatchObject({ command: 'theirs' });
+      await writeCustomAcpConfig([{ command: 'mine', binary: 'mine', argv: [] }]);
+      reloadCustomAcpHarnesses(catalog);
+      expect(seen.at(-1)?.[0]).toMatchObject({ command: 'mine' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
