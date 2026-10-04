@@ -74,10 +74,10 @@ const EXIT_CONFIRM_MS = 2000;
  * (flow control is off) and nothing else here uses it. */
 const SEND_NOW_KEY = '\u0013';
 
-/** How long a resize burst is given to finish before the screen is redrawn.
- * A phone dismissing its keyboard emits several SIGWINCHes a few tens of
- * milliseconds apart; this is longer than that gap and shorter than a frame a
- * reader would notice missing. */
+/** How long a resize burst is given to finish before the settled redraw. A
+ * phone dismissing its keyboard emits several SIGWINCHes a few tens of
+ * milliseconds apart; this is longer than that gap. The first size of a
+ * burst is drawn at once (onResize); this only decides when the burst is over. */
 const RESIZE_SETTLE_MS = 120;
 
 /** The least a pending scroll moves in one frame, so a drain always finishes.
@@ -520,7 +520,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // settled repaint carries the phone's resize sequence (redrawPreamble)
       // inside its frame. Written here, the modes went out interleaved with
       // frames in flight, once per intermediate size.
+      const first = !this.resizePaintTimer;
       this.requestRedraw('resize');
+      // The first size of a burst is drawn at once, rows only: waiting out
+      // the settle left the old layout on a resized screen for 120ms. The
+      // phone's sequence still goes out once, with the settled frame.
+      if (first && !this.suspended) {
+        this.provisionalFrame = true;
+        try {
+          this.rewrapIfWidthChanged();
+          this.repaint();
+        } finally {
+          this.provisionalFrame = false;
+        }
+      }
       // No height probe here: it jumps the cursor to the bottom-right corner
       // and asks, at exactly the moment a swipe is being recognised. The size
       // the terminal announces is what the layout uses.
@@ -557,12 +570,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the size has stopped changing. Short enough not to be seen, long enough to
    * land after the client has finished. */
   private resizePaintTimer?: NodeJS.Timeout;
+  /** The frame being drawn is a resize's immediate one: it leaves the
+   * pending resize preamble to the settled frame. */
+  private provisionalFrame = false;
   private repaintAfterResize(): void {
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = setTimeout(() => {
       this.resizePaintTimer = undefined;
       if (this.closed || this.suspended) return;
       this.rewrapIfWidthChanged();
+      // Whole, whatever the immediate frame already drew: the preamble this
+      // frame carries clears the screen.
+      this.forgetScreenPosition();
       this.repaint();
     }, RESIZE_SETTLE_MS);
     this.resizePaintTimer.unref();
@@ -2184,8 +2203,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!updates.length && !modes && !signals && park === this.lastPark && showCursor === this.cursorShown) return;
     // The preamble goes with rows, never alone: a clear with nothing after
     // it would only blank the screen, so a resize or repair waits for them.
-    const draw = updates.length ? `${redrawPreamble(this.pendingRedraw)}${updates.join('')}` : '';
-    if (updates.length) this.pendingRedraw = undefined;
+    const draw = updates.length ? `${redrawPreamble(this.provisionalFrame ? undefined : this.pendingRedraw)}${updates.join('')}` : '';
+    if (updates.length && !this.provisionalFrame) this.pendingRedraw = undefined;
     const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
       : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
     // One synchronized update (DEC 2026): a terminal that supports it shows
