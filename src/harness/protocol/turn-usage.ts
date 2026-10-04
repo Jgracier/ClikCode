@@ -7,7 +7,7 @@ import { asRecord, parseJsonDocument, parseJsonLines, type JsonRecord } from './
 /** Why a turn ended, in ClikCode's words. Only the reasons a user has to be
  * told about are distinguished; a vendor reason not listed here is dropped
  * rather than guessed at. */
-export type TurnStopReason = 'completed' | 'max-tokens' | 'max-turns' | 'refusal' | 'cancelled' | 'failed';
+export type TurnStopReason = 'completed' | 'max-tokens' | 'max-turns' | 'refusal' | 'stopped' | 'failed';
 
 /** What a turn cost, as far as its harness says. Every field is optional: a
  * count the vendor did not publish stays absent, never an invented zero.
@@ -48,7 +48,7 @@ const STOP_REASONS: Readonly<Record<string, TurnStopReason>> = {
   max_tokens: 'max-tokens', length: 'max-tokens', max_output_tokens: 'max-tokens',
   max_turns: 'max-turns', error_max_turns: 'max-turns', max_turn_requests: 'max-turns', 'max-steps': 'max-turns',
   refusal: 'refusal', content_filter: 'refusal', 'content-filter': 'refusal',
-  cancelled: 'cancelled', interrupted: 'cancelled',
+  cancelled: 'stopped', interrupted: 'stopped', stopped: 'stopped',
   failed: 'failed',
 };
 

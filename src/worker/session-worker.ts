@@ -8,6 +8,7 @@
  * single-process design this replaces needed (see the SIGHUP/SIGINT block
  * this is meant to eventually make deletable, commands/ai/interactive.ts).
  */
+import { STOPPED } from '../harness/protocol/wording.js';
 import { spawn } from 'node:child_process';
 import { idleDecision, startsSuccessor } from './idle-decisions.js';
 import { createServer, type Socket } from 'node:net';
@@ -442,7 +443,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
           await discardInterruptedTurn(sessionId, command.text);
           if (activeRestoreDraft) observer.broadcast({ type: 'restore-draft', text: command.text });
         }
-        broadcastNotice(outputStarted ? 'Stopped' : activeRestoreDraft ? 'Stopped · draft restored' : 'Stopped');
+        broadcastNotice(!outputStarted && activeRestoreDraft ? `${STOPPED} · draft restored` : STOPPED);
       } else {
         const message = error instanceof Error ? error.message : String(error);
         observer.broadcast({ type: 'turn-error', message });

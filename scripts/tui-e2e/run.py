@@ -218,7 +218,7 @@ SCENARIOS = {
         'cols': 70, 'rows': 56, 'env': {'FAKE_TOOL_MS': '1500'},
         'turns': [{'tools_first': 10, 'blocks': ['All ten parts pass.']}],
         'steps': [
-            ('type', 'run every part'), ('wait_for', 'esc to interrupt', 30), ('settle', 4),
+            ('type', 'run every part'), ('wait_for', 'esc to stop', 30), ('settle', 4),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'),
@@ -236,7 +236,7 @@ SCENARIOS = {
             ('type', 'say something short'), ('wait_for', 'A short first answer.', 30), ('settle', 2),
             # A new conversation, started from the board by typing.
             ('keys', '\x1b[D'), ('settle', 2),
-            ('type', 'run every part'), ('wait_for', 'esc to interrupt', 30), ('settle', 4),
+            ('type', 'run every part'), ('wait_for', 'esc to stop', 30), ('settle', 4),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'), ('settle', 2.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
@@ -278,7 +278,7 @@ SCENARIOS = {
             ('type', 'second conversation question'), ('wait_for', 'BETA answer lives here.', 30), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'ALPHA answer lives here.', 10), ('settle', 1),
-            ('type', 'run every part'), ('wait_for', 'esc to interrupt', 30), ('settle', 3),
+            ('type', 'run every part'), ('wait_for', 'esc to stop', 30), ('settle', 3),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'BETA answer lives here.', 10), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
@@ -331,7 +331,7 @@ SCENARIOS = {
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15),
                   ('wait_for', 'signed in to', 15), ('settle', 1)],
-        'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'esc to interrupt'],
+        'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'esc to stop'],
         'final_contains': ['signed in to'], 'never': ['Confirm this code in your browser', 'Waiting for authorization', 'not a tty'],
     },
     # A sign-in that asks for a key: asked under ClikCode's band, typed
@@ -429,7 +429,7 @@ SCENARIOS = {
                   {'blocks': ['Sent now and answered.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('keys', 'do this instead'), ('wait_for', 'ctrl+s stop & send', 5), ('keys', '\x13'),
+            ('keys', 'do this instead'), ('wait_for', 'ctrl+s to stop & send', 5), ('keys', '\x13'),
             ('wait_for', 'Sent now and answered.', 40), ('settle', 3),
         ],
         'watch': ['start the long job', 'do this instead', 'Sent now and answered.'],
@@ -442,7 +442,7 @@ SCENARIOS = {
                   {'blocks': ['The queued one answered now.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('type', 'then do this'), ('wait_for', 'ctrl+s stop & send', 10), ('keys', '\x13'),
+            ('type', 'then do this'), ('wait_for', 'ctrl+s to stop & send', 10), ('keys', '\x13'),
             ('wait_for', 'The queued one answered now.', 40), ('settle', 3),
         ],
         'watch': ['start the long job', 'then do this', 'The queued one answered now.'],
@@ -767,7 +767,7 @@ def run(name, spec, entry, keep):
             return max(found) if found else None
         def bottom(name):
             lines = [line.rstrip() for line in snaps.get(name, [])]
-            band = next((i for i, line in enumerate(lines) if 'esc to interrupt' in line), len(lines))
+            band = next((i for i, line in enumerate(lines) if 'esc to stop' in line), len(lines))
             return [line for line in lines[max(0, band - 12):band] if line.strip() and not regex.search(r'\(\d+s\)|\d+m \d+s', line)]
         before, scrolled, back = newest('before'), newest('scrolled'), newest('back')
         if before is None: problems.append('scroll check: nothing matching the pattern on screen before scrolling')

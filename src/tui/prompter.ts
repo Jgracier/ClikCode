@@ -61,6 +61,7 @@ import { estimatedTokens, formatTurnUsage } from './render/usage-line.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { appendThought, composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
 import { formatElapsed } from '../harness/protocol/format.js';
+import { keyHint } from '../harness/protocol/wording.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
@@ -299,7 +300,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!this.pendingApproval && this.handleScrollKey(key)) return;
     // Escape backs out one level, as it does everywhere else. Scrolled back
     // mid-turn it returns to the live edge; pressed again -- now at the edge,
-    // where the band that says "esc to interrupt" is the thing being looked
+    // where the band that says "esc to stop" is the thing being looked
     // at -- it interrupts.
     //
     // It used to interrupt on the first press regardless, which was a fair
@@ -1338,9 +1339,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // "send", not "steer or queue": which of the two happens depends on the
     // harness, and each submission's own row says which it was.
     const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
-      + `${turn.cancel && !this.pendingApproval ? ' · esc to interrupt' : ''}`
+      + `${turn.cancel && !this.pendingApproval ? ` · ${keyHint('stop')}` : ''}`
       + `${turn.leave && !this.pendingApproval && !turn.draft ? ' · ← conversations' : ''}`
-      + `${turn.submit ? (turn.draft.trim() && turn.cancel && !this.pendingApproval ? ` · enter to send · ${STEER_WORDS.stopAndSend}` : ' · type and press Enter to send') : ''}`;
+      + `${turn.submit ? (turn.draft.trim() && turn.cancel && !this.pendingApproval ? ` · ${keyHint('send')} · ${STEER_WORDS.stopAndSend}` : ' · type and press Enter to send') : ''}`;
     // What the agent is doing is essential and stays at full contrast; only the
     // counters and key hints after it are dimmed.
     const split = status.label.length;
@@ -1398,7 +1399,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.paint(turn.draft, matches, 0, '› ', turn.cursor, {
       capacity: Math.min(matches.length, 8) + 2,
-      hint: '↵ apply · esc interrupts',
+      hint: `${keyHint('apply')} · ${keyHint('stop')}`,
     });
   }
 
