@@ -240,7 +240,7 @@ function readRadio(lines: readonly string[]): Drawn | undefined {
  * last box on screen says `Enter to submit`, and its first line says what
  * goes in it. */
 function readInputBox(lines: readonly string[]): Drawn | undefined {
-  const hint = (line: string): boolean => /\benter to (?:submit|save|confirm|continue)\b/i.test(line);
+  const hint = (line: string): boolean => /\benter to (?:submit|save|confirm|continue)\b|↵\s*submit\b/i.test(line);
   let at = -1;
   for (let index = lines.length - 1; index >= 0; index -= 1) if (hint(lines[index]!)) { at = index; break; }
   if (at < 0) return undefined;
@@ -265,12 +265,17 @@ function readInputBox(lines: readonly string[]): Drawn | undefined {
     const prompt = parts.length > 1 ? `${parts[0]}: ${field}` : field;
     return { prompt: { kind: 'input', prompt, secret: isSecret(field) || (inside.length <= 1 && isSecret(inside[0] ?? '')) }, at: top };
   }
-  // Unboxed (Pi): the question, a `>` line to type on, then the hint.
-  if (!lines.slice(Math.max(0, at - 4), at).some((line) => /^\s*>/.test(line))) return undefined;
+  // Unboxed: the question, a `>` (Pi) or `❭` (Devin) line to type on --
+  // perhaps holding a placeholder that says more -- then the hint.
+  const typing = lines.slice(Math.max(0, at - 4), at).find((line) => /^\s*[>❭]/.test(line));
+  if (typing === undefined) return undefined;
+  const placeholder = typing.replace(/^\s*[>❭]\s*/, '').trim();
   for (let index = at - 1; index >= 0; index -= 1) {
     const line = lines[index]!.trim();
-    if (!line || line.startsWith('>')) continue;
-    return { prompt: { kind: 'input', prompt: line, secret: isSecret(line) }, at: index };
+    if (!line || /^[>❭]/.test(line)) continue;
+    const label = line.replace(/\s*:$/, '');
+    const prompt = placeholder.length > label.length && /[A-Za-z]{3}/.test(placeholder) ? placeholder : label;
+    return { prompt: { kind: 'input', prompt, secret: isSecret(prompt) || isSecret(label) }, at: index };
   }
   return undefined;
 }

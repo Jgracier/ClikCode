@@ -89,6 +89,9 @@ describe('reading what a vendor screen waits on, from real screens', () => {
     // A one-line box under its label, the hint below it (Cline).
     expect(readScreenPrompt('      Mistral\n\n  API key\n  ╭──────────╮\n  │ Paste your API key here... │\n  ╰──────────╯\n\n     Enter to save, Esc to go back, Ctrl+C to exit\n'))
       .toEqual({ kind: 'input', prompt: 'API key', secret: true });
+    // Devin's: a label, a `❭` line holding a placeholder that says more.
+    expect(readScreenPrompt('Visit https://app.devin.ai/auth/cli/continue?state=x to sign in, then copy the code and paste it below.\n\nCode:\n❭ Paste the code from the sign-in page\n↵ submit · esc cancel\n'))
+      .toEqual({ kind: 'input', prompt: 'Paste the code from the sign-in page', secret: false });
     // Unboxed, as Pi draws it.
     expect(readScreenPrompt(' Enter Anthropic API key\n\n>\n\n (escape/ctrl+c to cancel, enter to submit)\n'))
       .toEqual({ kind: 'input', prompt: 'Enter Anthropic API key', secret: true });
