@@ -10,9 +10,9 @@ import { sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript } from '../store/transcripts.js';
 import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
-import { HarnessStateVersionError, loadIndex, storeIndex } from './index-file.js';
+import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
-import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
+import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, baselineSession, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from './secrets.js';
 
@@ -46,13 +46,13 @@ async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData
 /** Applies this process's changes to whatever is on disk now, rather than
  * making the files equal the caller's copy.
  *
- * Callers legitimately hold one state object across a whole turn -- the turn
- * checkpoint rewrites its snapshot every 250ms while a response streams. Each
- * record is diffed against the snapshot the caller last agreed with: untouched
- * records are left alone on disk, a changed transcript rewrites that one
- * session file, and the index is rewritten only if its merged content differs
- * from what is already there. A streamed checkpoint is therefore one small
- * file write regardless of how much history exists. */
+ * Callers legitimately hold one state object across a whole turn. Each
+ * record is diffed against the snapshot the caller last agreed with:
+ * untouched records are left alone on disk, a changed transcript rewrites
+ * that one session file, and the index is rewritten only if its merged
+ * content differs from what is already there. A streaming turn's 250ms
+ * checkpoints do not come here at all: they use writeTranscriptCheckpoint,
+ * which never touches the index. */
 export async function writeState(state: HarnessState): Promise<void> {
   const baseline = (state as BaselinedState)[STATE_BASELINE];
   let written: StateBaselineData | undefined;
@@ -118,7 +118,7 @@ export async function writeState(state: HarnessState): Promise<void> {
     }
 
     // 2. The index, only when its content really differs.
-    if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: true });
+    if (!disk || !sameData(next, disk)) await storeIndex(next, { backup: indexStructureChanged(disk, next) });
 
     // 3. Deliberate deletions last, children materialized before the parent goes.
     const remaining = new Set(next.sessions.map((session) => session.id));
@@ -145,4 +145,42 @@ export async function writeState(state: HarnessState): Promise<void> {
   // Later writes from this same object diff from what this one stored, not
   // from the original read -- nor from the object as it looks now.
   rememberBaseline(state, written);
+}
+
+/** A streaming turn's checkpoint: one session's transcript, and nothing else.
+ *
+ * The index is the list -- titles, dates, accounts -- shared by every
+ * process, and nothing on it changes while an answer streams. Rewriting it
+ * (with a backup) four times a second per worker was most of what ClikCode
+ * wrote to disk. Here only the transcript is merged and stored, and only the
+ * transcript part of the baseline moves forward: any field of the record the
+ * turn changed meanwhile (its date, its last usage) is still a difference the
+ * next full writeState stores, at the turn's end at the latest.
+ *
+ * Returns false, having written nothing, when this is not a plain transcript
+ * update -- the session is not stored (yet, or any more), or this copy never
+ * read it. The caller then does a full writeState, which handles those. */
+export async function writeTranscriptCheckpoint(state: HarnessState, sessionId: string): Promise<boolean> {
+  const baseline = (state as BaselinedState)[STATE_BASELINE];
+  const before = baseline?.sessions.get(sessionId);
+  const session = state.sessions?.find((item) => item.id === sessionId);
+  if (!baseline || !before || !session) return false;
+  return withStateLock(async (held) => {
+    const disk = await loadIndex();
+    if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
+    if (!disk?.sessions.some((item) => item.id === sessionId)) return false;
+    const now = baselineSession(session, before);
+    if (now.transcript !== before.transcript) {
+      await writeSessionTranscript(held, sessionId, now.transcript, { parentSessionId: session.parentSessionId, frozen: true, base: before.transcript });
+    }
+    // The current baseline object: a full write may have replaced it while
+    // this one waited for the lock, and that one is what later writes diff from.
+    const current = (state as BaselinedState)[STATE_BASELINE]?.sessions;
+    const entry = current?.get(sessionId);
+    if (entry) {
+      const { messagesFrom: _from, ...rest } = entry;
+      current!.set(sessionId, { ...rest, transcript: now.transcript, ...(now.messagesFrom ? { messagesFrom: now.messagesFrom } : {}) });
+    }
+    return true;
+  });
 }
