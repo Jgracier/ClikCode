@@ -7,6 +7,8 @@
  * need live beside this file, one concern each.
  */
 
+import { searchConversations } from '../../search/engine.js';
+import { searchResultsText } from '../../search/navigate.js';
 import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService, ROUTE_CHOICES_TEXT } from '../../session/route.js';
 import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
 import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
@@ -186,6 +188,19 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // Same as /model: the reported mode described the previous request.
     if (session.reported?.permissionMode) delete session.reported.permissionMode;
     return saveSettings(state, session);
+  },
+  search: async ({ args }) => {
+    if (!args.trim()) throw new Error('usage: /search <words>');
+    const result = await searchConversations(args);
+    if (!result) throw new Error('usage: /search <words>');
+    return emitHarnessOutput({
+      panel: 'search', query: result.query.text, text: searchResultsText(result),
+      results: result.hits.map((hit) => ({
+        conversationId: hit.conversationId, sessionId: hit.sessionId, title: hit.title, provider: hit.provider, model: hit.model,
+        updatedAt: hit.updatedAt, mentions: hit.mentions.length, exact: hit.exactCount,
+        first: hit.mentions[0] ? { sessionId: hit.mentions[0].sessionId, messageIndex: hit.mentions[0].messageIndex } : undefined,
+      })),
+    });
   },
   history: async ({ session }) => {
     return emitHarnessOutput({ panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)) });

@@ -74,6 +74,18 @@ describe('one dispatch for every client', () => {
     expect(host.panels.map(([kind]) => kind)).toEqual(['capabilities']);
   });
 
+  it('walks /search where the host can, and lists the results where it cannot', async () => {
+    await writeState(stateWith(chat({ workspace, messages: [{ role: 'user', content: 'the okapi migration plan' }] })));
+    const browseSearch = vi.fn(async () => ({ id: 's1' }));
+    expect(await dispatchLine(recordingHost({ browseSearch }), 's1', '/search okapi migration')).toEqual({ id: 's1' });
+    expect(browseSearch).toHaveBeenCalledWith('okapi migration');
+    const listing = recordingHost();
+    await dispatchLine(listing, 's1', '/search okapi migration');
+    expect(listing.panels).toEqual([['search', '"okapi migration" — 1 conversation']]);
+    expect(await dispatchLine(recordingHost(), 's1', '/search quokka')).toEqual({ notice: 'No conversation mentions "quokka"' });
+    await expect(dispatchLine(recordingHost(), 's1', '/search')).rejects.toThrow('usage: /search <words>');
+  });
+
   it('lets the host answer a command first', async () => {
     const outcome = await dispatchLine(recordingHost({ intercept: (route) => (route.entry.name === 'new' ? { notice: 'use the board' } : undefined) }), 's1', '/new');
     expect(outcome).toEqual({ notice: 'use the board' });

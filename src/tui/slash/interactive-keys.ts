@@ -9,7 +9,7 @@ import { type SlashHandlerKey } from './registry.js';
  * HEADLESS_SLASH_HANDLERS with its output shown in a panel. */
 const INTERACTIVE_SLASH_HANDLER_KEYS = [
   'exit', 'new', 'redraw', 'provider', 'accounts', 'model', 'effort', 'permissions', 'swarm', 'options', 'capabilities',
-  'settings', 'sessions', 'resume', 'rename', 'archive', 'delete', 'mention', 'review', 'init', 'native', 'compact',
+  'settings', 'sessions', 'resume', 'search', 'rename', 'archive', 'delete', 'mention', 'review', 'init', 'native', 'compact',
   'export', 'memory', 'doctor', 'login', 'logout', 'fork',
 ] as const satisfies readonly SlashHandlerKey[];
 
