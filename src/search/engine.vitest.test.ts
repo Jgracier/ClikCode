@@ -151,19 +151,28 @@ describe('the transcript cache', () => {
     expect(corpusBuilds()).toBe(built + 1);
   });
 
-  it('notices a change by mtime even at the same size, and through a fork reference', async () => {
+  it('notices a change by mtime even at the same size', async () => {
+    await store(chat('same-size', [user('alpha one')]));
+    await sessionDoc('same-size');
+    const path = sessionFilePath('same-size');
+    await writeFile(path, (await readFile(path, 'utf8')).replace('alpha one', 'omega one'));
+    const later = new Date(Date.now() + 5000);
+    await utimes(path, later, later);
+    expect((await sessionDoc('same-size'))!.messages[0]!.text).toBe('omega one');
+  });
+
+  it('keys a fork on its parent file too', async () => {
     const shared = [user('alpha one'), assistant('beta two')];
     await store(chat('parent', shared, { conversationId: 'parent' }));
     await store(chat('child', [...shared, user('gamma')], { conversationId: 'parent', parentSessionId: 'parent' }));
     await sessionDoc('child');
-    const parentPath = sessionFilePath('parent');
-    const raw = await readFile(parentPath, 'utf8');
-    // Same length, different word, in the parent's shared history.
-    await writeFile(parentPath, raw.replace('alpha one', 'omega one'));
+    const built = corpusBuilds();
+    await sessionDoc('child');
+    expect(corpusBuilds()).toBe(built);
     const later = new Date(Date.now() + 5000);
-    await utimes(parentPath, later, later);
-    const doc = await sessionDoc('child');
-    expect(doc!.messages[0]!.text).toBe('omega one');
+    await utimes(sessionFilePath('parent'), later, later);
+    expect((await sessionDoc('child'))!.messages.map((message) => message.text)).toEqual(['alpha one', 'beta two', 'gamma']);
+    expect(corpusBuilds()).toBe(built + 1);
   });
 });
 
