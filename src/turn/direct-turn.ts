@@ -4,6 +4,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
+import { textTranscript } from './turn-activities.js';
 import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
@@ -32,7 +33,7 @@ export async function sendDirectApiTurn(input: {
   const prompter = run.prompter;
   if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
-  const baseMessages = sessionTranscriptMessages(session);
+  const baseMessages = textTranscript(sessionTranscriptMessages(session));
   // No harness on this path writes its own titles, so the first turns of a
   // conversation ask the model for one and the answer is stripped of it.
   const directTitle = prepareSessionTitle(session, turnText);

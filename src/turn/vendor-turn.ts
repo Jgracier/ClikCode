@@ -37,6 +37,7 @@ import { prepareAttachments } from '../session/attachments.js';
 import { addTurnUsage, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
+import { textTranscript } from './turn-activities.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -176,7 +177,7 @@ export async function sendVendorTurn(input: {
   // mid-conversation case; this covers every other route into a fresh
   // native thread with history already behind it.
   if ((!session.nativeSessionId || session.nativeSessionPreallocated) && baseMessages.length > 0) {
-    turnText = failoverPrompt(baseMessages, turnText);
+    turnText = failoverPrompt(textTranscript(baseMessages), turnText);
   }
   // Bounded to one attempt: this is a reactive fallback for exactly the
   // case aiHarnessSelect's own proactive check can't catch -- a harness

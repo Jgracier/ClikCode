@@ -6,6 +6,7 @@ import { writeState } from '../../session/state/write.js';
 import { closePersistentTransport } from '../../turn/vendor-process.js';
 import { conversationIdFor, hasConversationContent } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
+import { textTranscript } from '../../turn/turn-activities.js';
 import { newConversationSession } from '../../commands/ai/conversations.js';
 import { sessionHarness } from './context.js';
 import { AGENT_COMPACTS_ITSELF, isClikCodeAgent } from '../../session/route.js';
@@ -33,7 +34,7 @@ export async function compactConversation(
   const state = await readState();
   const source = state.sessions.find((item) => item.id === id);
   if (!source) throw new Error(`AI session "${id}" was not found`);
-  const summary = [...sessionTranscriptMessages(source)].reverse().find((message) => message.role === 'assistant')?.content.trim();
+  const summary = [...textTranscript(sessionTranscriptMessages(source))].reverse().find((message) => message.role === 'assistant')?.content.trim();
   if (!summary) throw new Error('The provider returned no summary; the conversation was left as it was.');
   const compacted: HarnessSession = {
     ...newConversationSession(state, source),

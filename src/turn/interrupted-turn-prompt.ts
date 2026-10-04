@@ -1,6 +1,7 @@
 /** Rehydrate an interrupted request from its durable checkpoint. */
 import { sessionTranscriptMessages, type PendingTurnWithHints } from './checkpoint.js';
 import type { HarnessSession } from '../session/model.js';
+import { textTranscript } from './turn-activities.js';
 import { failoverPrompt, INTERRUPTED_TURN_REQUEST, type FailoverPromptOptions } from './failover-prompt.js';
 
 /** Rehydration prompt for a turn that was cut off mid-flight, including the
@@ -16,5 +17,5 @@ export function interruptedTurnFailoverPrompt(
   const pending = session.pendingTurn;
   const touchedFiles = promptOptions.touchedFiles ?? (pending as PendingTurnWithHints | undefined)?.touchedFiles;
   const retold = pending && requestContext ? { ...session, pendingTurn: { ...pending, prompt: `${pending.prompt}${requestContext}` } } : session;
-  return failoverPrompt(sessionTranscriptMessages(retold), request, { ...promptOptions, ...(touchedFiles ? { touchedFiles } : {}) });
+  return failoverPrompt(textTranscript(sessionTranscriptMessages(retold)), request, { ...promptOptions, ...(touchedFiles ? { touchedFiles } : {}) });
 }

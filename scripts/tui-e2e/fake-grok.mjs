@@ -120,9 +120,21 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       await sleep(ms ?? 800);
       update({ sessionUpdate: 'tool_call_update', toolCallId: 'long_1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: lines.join('\n') } }] });
     }
+    // `intro`: a paragraph before any call, so a turn's prose and its calls
+    // alternate the way a real agent's do.
+    if (turn.intro && !cancelled) {
+      for (const piece of turn.intro.match(/\S+\s*/g) ?? []) {
+        await sleep(Number(process.env.FAKE_DELAY_MS ?? 120));
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
+      }
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: '\n\n' } });
+    }
     for (let index = 0; index < (turn.tools_first ?? 0) && !cancelled; index += 1) {
       await tool(`lead_${index}`, `npx vitest run part${index}`, `part${index} ok`, Number(process.env.FAKE_TOOL_MS ?? 600));
     }
+    // `hold_ms`: one more call that runs that long with nothing new arriving,
+    // so a test can look at a running turn whose screen holds still.
+    if (turn.hold_ms && !cancelled) await tool('hold_1', 'sleep 30', 'held call done', turn.hold_ms);
     // `streamed_tool`: a command printing a line at a time while it runs, then
     // completing with no content -- how ACP agents report a long build.
     if (turn.streamed_tool) {

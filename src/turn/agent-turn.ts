@@ -16,6 +16,7 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
+import { textTranscript } from './turn-activities.js';
 import { runPlatformAssistantTurn } from './platform-assistant-turn.js';
 import { recordInvocation, showStopReason } from './turn-output.js';
 
@@ -58,7 +59,7 @@ export async function runAgentTurn(input: {
   try { modelClient = await modelClientForSession(session, config, localHooks); }
   finally { localHooks?.done(); }
   const startedAt = Date.now();
-  const baseMessages = sessionTranscriptMessages(session);
+  const baseMessages = textTranscript(sessionTranscriptMessages(session));
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
   /** Text the title filter held back and now owes: to the saved turn and to
    * the screen alike, like every streamed delta. */
