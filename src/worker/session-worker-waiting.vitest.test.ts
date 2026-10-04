@@ -281,6 +281,40 @@ describe('a session worker waits for what it should', () => {
     await processExit(pid, 8_000);
   }, 30_000);
 
+  it('idle-exits even when its home was deleted under it (a test run ending)', async () => {
+    const session = await gatewaySession('bypass', 1_000);
+    const client = await attach(session.id);
+    const pid = workerPids[0]!;
+    client.close();
+    clients.splice(0);
+    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true });
+    await processExit(pid, 10_000);
+  }, 30_000);
+
+  it('leaves when its home is deleted while a turn waits on an approval nobody can answer', async () => {
+    process.env.CLIKCODE_WORKER_BUILD_WATCH_MS = '100';
+    const session = await gatewaySession('ask');
+    const client = await attach(session.id);
+    const pid = workerPids[0]!;
+    const asked = eventsUntil(client, 'approval-request');
+    client.send({ type: 'submit', text: 'write it', echo: true });
+    (await gateway!.next()).respond(call('bash', { command: 'touch made-by-test' }));
+    await asked;
+    client.close();
+    clients.splice(0);
+    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true });
+    await processExit(pid, 10_000);
+  }, 30_000);
+
+  it('idle-exits when its window vanished without saying goodbye', async () => {
+    const session = await gatewaySession('bypass', 1_000);
+    const client = await attach(session.id);
+    const pid = workerPids[0]!;
+    (client as unknown as { socket: import('node:net').Socket }).socket.destroy();
+    clients.splice(0);
+    await processExit(pid, 10_000);
+  }, 30_000);
+
   it('records a shell it stops on shutdown as a queued notification for the next worker', async () => {
     const session = await gatewaySession();
     const client = await attach(session.id);

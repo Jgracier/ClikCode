@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { idleDecision, startsSuccessor } from './idle-decisions.js';
 import { createServer, type Socket } from 'node:net';
 import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
+import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { runSessionTurn } from '../turn/session-turn.js';
@@ -57,6 +58,8 @@ const ABANDONED_SHELL_MS = 24 * 60 * 60 * 1000;
  * still running between turns (a process's exit gives no event to another
  * process's parent). */
 const VENDOR_WORK_RECHECK_MS = 30 * 1000;
+/** The longest a shutdown may take before the process exits regardless. */
+const SHUTDOWN_DEADLINE_MS = 15 * 1000;
 
 interface ConnectionState {
   socket: Socket;
@@ -640,7 +643,15 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   /** Once: a second signal while the first shutdown is still recording
    * what it stopped must not exit underneath that write. */
   let shuttingDown: Promise<void> | undefined;
-  const shutdown = (reason: string): Promise<void> => (shuttingDown ??= shutdownOnce(reason));
+  const shutdown = (reason: string): Promise<void> => {
+    if (!shuttingDown) {
+      // Whatever a step below does -- a vendor that ignores its close, a
+      // write that never returns -- the process goes.
+      setTimeout(() => process.exit(0), SHUTDOWN_DEADLINE_MS).unref();
+      shuttingDown = shutdownOnce(reason).catch(() => process.exit(0));
+    }
+    return shuttingDown;
+  };
   const shutdownOnce = async (reason: string): Promise<void> => {
     // Background shells the agent tools started are spawned DETACHED on
     // everything but Windows, so they outlive this process rather than dying
@@ -711,7 +722,13 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // worker would wait out the full idle timeout before noticing. This checks
   // the build only: re-arming the idle timer here would restart it every
   // tick, and it would never fire.
-  const buildWatch = setInterval(() => { leaveIfStaleBuild(); }, BUILD_WATCH_MS);
+  const buildWatch = setInterval(() => {
+    // A home that is gone (a test run's, cleaned up) has no conversation to
+    // serve or save: whatever this worker was waiting on, it leaves. Two
+    // workers lived for days this way, each holding its MCP servers.
+    if (!existsSync(stateDirectory())) { void shutdown('its ClikCode home was removed'); return; }
+    leaveIfStaleBuild();
+  }, BUILD_WATCH_MS);
   buildWatch.unref();
   // A notification a previous worker recorded but never ran.
   void drainQueue().catch(reportDrainFailure);
