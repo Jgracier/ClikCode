@@ -460,6 +460,10 @@ describe('a session worker waits for what it should', () => {
   }, 60_000);
 });
 
+/** A prompt still open after a few seconds is one the bridge did not wake. */
+const promptWithin = <T>(prompt: Promise<T>): Promise<T | 'still at its prompt'> =>
+  Promise.race([prompt, new Promise<'still at its prompt'>((resolve) => setTimeout(() => resolve('still at its prompt'), 5_000).unref())]);
+
 /** A window's prompt that waits for a key that never comes, until the bridge interrupts it. */
 const idlePrompt = (signal?: AbortSignal): Promise<string> => new Promise((_resolve, reject) => {
   signal?.addEventListener('abort', () => reject(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' })), { once: true });
@@ -497,11 +501,8 @@ describe('a window at its prompt', () => {
   it('is interrupted by a turn the worker starts itself, and by a change to the queue', async () => {
     const session = await gatewaySession();
     const other = await attach(session.id);
-    // This window's own connection first, and the queue as it read it: a
-    // steer sent while that connection was still being made was reported to
-    // nobody, and the prompt waited for it forever (seen under load).
-    await questionOrWorker(session.id, async () => 'typed');
-    const mark = workerQueueMark(session.id);
+    // The queue as this window read it (taking the mark attaches it).
+    const mark = await workerQueueMark(session.id);
     // Idle window: the typed-as-the-turn-ended race queues a message.
     const queued = questionOrWorker(session.id, idlePrompt, mark);
     other.send({ type: 'steer', text: 'queued while idle', id: 'late-1' });
@@ -521,16 +522,39 @@ describe('a window at its prompt', () => {
   it('does not miss a queue change that landed before its prompt opened', async () => {
     const session = await gatewaySession();
     const other = await attach(session.id);
-    // A first prompt attaches this window's own connection.
-    await questionOrWorker(session.id, async () => 'typed');
-    const mark = workerQueueMark(session.id);
+    const mark = await workerQueueMark(session.id);
     const answered = new Promise<void>((resolve) => other.once('event', () => resolve()));
     other.send({ type: 'steer', text: 'queued before the prompt', id: 'late-2' });
     await answered;
     // Wait until this window's connection has seen it too, then open the prompt.
     const deadline = Date.now() + 10_000;
-    while (workerQueueMark(session.id) === mark && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    while (await workerQueueMark(session.id) === mark && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
     await expect(questionOrWorker(session.id, idlePrompt, mark)).resolves.toEqual({ woke: 'queue' });
+  }, 60_000);
+
+  it('does not miss a queue change made while its first prompt was still connecting', async () => {
+    const session = await gatewaySession();
+    const other = await attach(session.id);
+    // The window's first pass: the mark, then the queue read from state --
+    // all before this window had any connection of its own.
+    const mark = await workerQueueMark(session.id);
+    const answered = new Promise<void>((resolve) => other.once('event', () => resolve()));
+    other.send({ type: 'steer', text: 'queued while connecting', id: 'late-3' });
+    await answered;
+    await expect(promptWithin(questionOrWorker(session.id, idlePrompt, mark))).resolves.toEqual({ woke: 'queue' });
+  }, 60_000);
+
+  it('does not miss a queue change on a worker started after its mark', async () => {
+    const session = await gatewaySession();
+    // No worker yet when the mark is taken; another window starts one and queues.
+    const mark = await workerQueueMark(session.id);
+    const other = await attach(session.id);
+    const answered = new Promise<void>((resolve) => other.once('event', () => resolve()));
+    other.send({ type: 'steer', text: 'queued on a new worker', id: 'late-4' });
+    await answered;
+    await expect(promptWithin(questionOrWorker(session.id, idlePrompt, mark))).resolves.toEqual({ woke: 'queue' });
+    // Read again, the next mark is this connection's: the prompt waits for a key.
+    await expect(questionOrWorker(session.id, async () => 'typed', await workerQueueMark(session.id))).resolves.toEqual({ line: 'typed' });
   }, 60_000);
 
   it('answers a key normally when nothing happens', async () => {
