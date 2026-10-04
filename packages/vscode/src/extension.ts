@@ -1,4 +1,5 @@
 /** ClikCode for VS Code: every coding agent ClikCode runs, in the editor. */
+import { userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import { appendFileSync } from 'node:fs';
 import { PANEL_TYPE, VIEW_IDS, WebviewSurface } from './chat-view';
@@ -281,7 +282,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       const target = active();
       let commands;
       try { commands = await target.slashCommands(); } catch (error) {
-        void vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+        void vscode.window.showErrorMessage(userError('list the slash commands', error));
         return;
       }
       const items: Array<vscode.QuickPickItem & { command?: string }> = [];

@@ -2,6 +2,7 @@
  * only asks for the fields and runs `clikcode acp`. The provider list rereads
  * that file, so the next menu shows the change. */
 
+import { userError } from '../../../src/harness/protocol/errors';
 import { spawn } from 'node:child_process';
 import * as vscode from 'vscode';
 import { resolveRuntime } from './runtime';
@@ -24,10 +25,6 @@ async function clikcode(args: readonly string[]): Promise<string> {
   });
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function registerCustomAcpCommands(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('clikcode.addAcpHarness', async () => {
@@ -45,7 +42,7 @@ export function registerCustomAcpCommands(context: vscode.ExtensionContext): voi
         await clikcode(argv);
         void vscode.window.showInformationMessage(`${name?.trim() || command.trim()} is in the provider list.`);
       } catch (error) {
-        void vscode.window.showErrorMessage(messageOf(error));
+        void vscode.window.showErrorMessage(userError(`add ${name?.trim() || command.trim()}`, error));
       }
     }),
     vscode.commands.registerCommand('clikcode.removeAcpHarness', async () => {
@@ -55,7 +52,7 @@ export function registerCustomAcpCommands(context: vscode.ExtensionContext): voi
         const parsed = JSON.parse(out) as { harnesses?: { command?: string; displayName?: string }[] };
         listed = parsed.harnesses ?? [];
       } catch (error) {
-        void vscode.window.showErrorMessage(messageOf(error));
+        void vscode.window.showErrorMessage(userError('list the ACP harnesses', error));
         return;
       }
       if (!listed.length) {
@@ -72,7 +69,7 @@ export function registerCustomAcpCommands(context: vscode.ExtensionContext): voi
         await clikcode(['acp', 'remove', pick.command]);
         void vscode.window.showInformationMessage(`${pick.label} was removed.`);
       } catch (error) {
-        void vscode.window.showErrorMessage(messageOf(error));
+        void vscode.window.showErrorMessage(userError(`remove ${pick.label}`, error));
       }
     }),
   );
