@@ -23,7 +23,7 @@ import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { ensureLocalModelForTurn } from '../commands/ai/local-model.js';
 import { releaseQueuedTurn } from '../commands/ai/conversations.js';
-import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
+import { isUsageExhaustedMessage, type ResumeAt } from '../turn/usage-exhausted.js';
 import { carryOnAfterExhaustion, type ExhaustionRetryGuard, type ResumedIn } from '../tui/pickers/resume-in.js';
 import type { HarnessPrompter } from '../harness/prompter.js';
 
@@ -155,7 +155,7 @@ export function turnWasCancelled(error: unknown): boolean {
 
 /** What follows a turn that failed: send it again here, carry it on in the
  * chat "Resume in" moved it to, or hand text back to the composer. */
-export type TurnFailureNext = { cancelled: boolean } & ({ retry: string } | { moved: ResumedIn } | { back: string[] });
+export type TurnFailureNext = { cancelled: boolean } & ({ retry: string } | { moved: ResumedIn } | { back: string[]; waiting?: ResumeAt });
 
 /** A turn failed -- one this client sent (`line`, and `sent` when a slash
  * command expanded it), one it took from the queue (`queuedTurnId`), or one
@@ -179,5 +179,7 @@ export async function afterTurnFailure(
   if (cancelled || !prompter || !turn.line || !isUsageExhaustedMessage(message)) return { cancelled, back };
   const next = await carryOnAfterExhaustion(prompter, id, turn.line, turn.guard, turn.sent ?? turn.line);
   if ('stayed' in next) return { cancelled, back: [...back, ...next.stayed] };
+  // Parked for the reset: nothing goes back to the composer -- it is sent then.
+  if ('waiting' in next) return { cancelled, back: [], waiting: next.waiting };
   return { cancelled, ...next };
 }

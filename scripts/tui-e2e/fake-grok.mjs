@@ -87,6 +87,9 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     const received = /pasted row 1\n[\s\S]*pasted row 12/.test(said) && !said.includes('[Pasted text') ? 'whole' : 'missing';
     const turn = nextTurn();
     cancelled = false;
+    // `refuse`: the vendor turns the prompt away with this message (a quota
+    // refusal, say), as an error answer to session/prompt.
+    if (turn.refuse) { send({ id, error: { code: -32000, message: turn.refuse } }); return; }
     running = true;
     steered = [];
     const tool = async (toolCallId, command, result, ms) => {

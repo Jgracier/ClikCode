@@ -12,7 +12,7 @@ import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { reconcileLocalModelLeases } from './local-model.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
-import { isUsageExhaustedMessage } from '../../turn/usage-exhausted.js';
+import { isUsageExhaustedMessage, resumeWaitLabel } from '../../turn/usage-exhausted.js';
 import { isShellCommandLine, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
 import { createInterface } from 'node:readline/promises';
@@ -44,7 +44,7 @@ import { newConversation } from './conversations.js';
 import { runShellLine } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor } from '../../tui/slash/context.js';
 import { dispatchLine, type SlashHost } from '../../tui/slash/dispatch.js';
-import { type ExhaustionRetryGuard } from '../../tui/pickers/resume-in.js';
+import { stopWaitingForReset, type ExhaustionRetryGuard } from '../../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
 import { interactiveEffortPicker } from '../../tui/pickers/effort.js';
@@ -219,7 +219,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   const refreshUsage = (target: HarnessSession, targetState: HarnessState): void => {
     if (!terminal) return;
     void nativeUsageReading(target, targetState).then((reading) => {
-      if (TERMINAL.active === terminal) terminal.usage(reading?.label, usageResetLabel(reading?.windows));
+      // A turn parked for the reset says so instead of when it comes back.
+      if (TERMINAL.active === terminal) terminal.usage(reading?.label, target.resumeAt ? resumeWaitLabel(target.resumeAt) : usageResetLabel(reading?.windows));
     }).catch(() => { /* Usage is optional provider metadata. */ });
   };
   refreshUsage(session, state);
@@ -328,6 +329,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return; }
     if ('retry' in next) { resend = next.retry; return; }
     if ('moved' in next) { id = next.moved.id; resend = next.moved.prompt; return; }
+    if (next.waiting) {
+      // The worker sends it at the reset; it hears of the parked turn now.
+      notice = `${resumeWaitLabel(next.waiting)} · Esc or a new message cancels`;
+      refreshSessionWorker(id);
+      const parkedState = await readState({ transcripts: [] });
+      const parked = parkedState.sessions.find((item) => item.id === id);
+      if (parked) refreshUsage(parked, parkedState);
+      return;
+    }
     notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
     if (next.back.length) terminal.restoreDraft(next.back.join('\n\n'));
   };
@@ -375,6 +385,19 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         shownSettings = settingsKey;
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
+        // A turn parked for the quota reset: Esc on an empty composer stops it.
+        if (terminal) {
+          const parkedId = latest.id;
+          terminal.idleEscape = latest.resumeAt ? () => {
+            void stopWaitingForReset(parkedId).then((stopped) => {
+              if (!stopped) return;
+              refreshSessionWorker(parkedId);
+              delete latest.resumeAt;
+              terminal.render(latest, account, 'Stopped waiting for the reset', { running: false });
+              refreshUsage(latest, latestState);
+            }).catch(() => undefined);
+          } : undefined;
+        }
         /** The turn the worker is running, followed to its end and shown as
          * this window shows its own turns: the prompt as the pending message
          * over the conversation, then the answer. `resendText` is what running

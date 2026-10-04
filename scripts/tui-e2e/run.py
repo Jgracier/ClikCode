@@ -544,6 +544,22 @@ SCENARIOS = {
         'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
         'never': ['Interrupted turn activity'],
     },
+    # Out of usage on the only account: the Resume-in picker offers to wait
+    # for the reset; chosen, the status line says so until Esc stops it.
+    'wait-for-reset': {
+        'turns': [{'refuse': 'The monthly usage limit has been reached. Try again in 2 hours.', 'blocks': ['unused']}],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'Wait for reset (', 30), ('settle', 1),
+            ('keys', '\r'), ('wait_for', 'waiting for reset ·', 15), ('settle', 1), ('snap', 'waiting'),
+            ('keys', '\x1b'), ('wait_for', 'Stopped waiting for the reset', 10), ('settle', 3), ('mark',), ('settle', 16),
+        ],
+        # Stopped: neither the status line nor a redraw brings it back.
+        'never_after_mark': ['waiting for reset ·'],
+        'watch': [],
+        'ever': ['All accounts exhausted · back', 'Esc or a new message cancels'],
+        'snap_contains': {'waiting': ['waiting for reset ·']},
+        'final_contains': ['Stopped waiting for the reset'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],

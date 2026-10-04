@@ -136,6 +136,9 @@ export interface HarnessSession {
      * turn if that turn ends first. Meaningless once that turn is over. */
     heldForTurn?: string;
   }>;
+  /** A turn that ran out of usage everywhere, parked until the provider's
+   * quota resets ("Wait for reset"); the worker sends it then. */
+  resumeAt?: import('../turn/usage-exhausted.js').ResumeAt;
   attachments?: string[];
   /** Output the user's `!<command>` runs produced between turns. Injected into
    * the next turn the way attachments are (see shellContextBlock and
