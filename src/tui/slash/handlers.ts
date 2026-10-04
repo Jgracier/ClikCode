@@ -55,7 +55,7 @@ import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
 import { customCommandsFor, sessionHarness, slashExtrasFor, slashRouteContextFor } from './context.js';
 import { contextUsageText } from './cost.js';
-import { usageReport } from './usage-report.js';
+import { usageReport, usageReportAll } from './usage-report.js';
 import { exportTranscript } from './export-transcript.js';
 import { nativeManagerListing } from './native-manager.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
@@ -403,7 +403,11 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       controls: ['sessions list', 'sessions open <id>', 'sessions close <id>'],
     });
   },
-  usage: async ({ state, session }) => {
+  usage: async ({ state, session, words }) => {
+    if (words[0]?.toLowerCase() === 'all') {
+      const report = usageReportAll(state, session, { providerName: (provider) => localHarnessForProvider(provider)?.displayName ?? provider });
+      return emitHarnessOutput({ panel: 'usage', text: report.text });
+    }
     const harness = sessionHarness(session);
     const report = usageReport(state, session, {
       ...(harness ? { providerName: harness.displayName, providerId: harness.provider } : {}),

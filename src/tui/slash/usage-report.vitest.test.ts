@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { usageReport } from './usage-report.js';
+import { usageDays, usageReport, usageReportAll } from './usage-report.js';
+import { STATE_ROLLUPS } from '../../session/state/invocations.js';
 
 const NOW = Date.parse('2026-09-21T12:00:00');
 const LATER = new Date(NOW + 3_600_000).toISOString();
@@ -62,5 +63,41 @@ describe('/usage report', () => {
     expect(report.text).toContain('grok-login · current');
     expect(report.text).not.toContain('claude-login');
     expect(report.totals.accounts).toBe(1);
+  });
+});
+
+describe('/usage all', () => {
+  const at = (daysBack: number): string => new Date(NOW - daysBack * 86_400_000).toISOString();
+  const invocations: HarnessState['invocations'] = [
+    { id: 'a', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: at(0), inputTokens: 1000, outputTokens: 500, costUsd: 0.25, latencyMs: 1 },
+    { id: 'b', accountId: 'g1', provider: 'xai', sessionId: 'other', at: at(0), inputTokens: 200, outputTokens: 100, latencyMs: 1 },
+    { id: 'c', accountId: 'g1', provider: 'xai', sessionId: 'other', at: at(2), inputTokens: 300, outputTokens: 0, latencyMs: 1 },
+    { id: 'd', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: at(9), inputTokens: 999, outputTokens: 1, costUsd: 9, latencyMs: 1 },
+  ];
+  const all = usageReportAll(state([account('full'), account('g1', { provider: 'xai' })], invocations), session('full'), {
+    now: NOW, providerName: (provider) => ({ anthropic: 'Claude Code', xai: 'Grok Build' })[provider] ?? provider,
+  });
+
+  it('lists every provider with its accounts and totals, cost unknown where none was recorded', () => {
+    expect(all.text).toContain('Claude Code\n  full · current\n  2 turns · 2.5k · $9.25');
+    expect(all.text).toContain('Grok Build\n  g1\n  2 turns · 600 · cost unknown');
+    expect(all.text).not.toContain('$0.00');
+  });
+
+  it('adds a seven-day table, newest first, a day with nothing as a dash', () => {
+    const week = all.text.slice(all.text.indexOf('Last 7 days')).split('\n').slice(1);
+    expect(week).toHaveLength(7);
+    expect(week[0]).toMatch(/^ {2}Mon Sep 21 +1.8k · 2 turns · \$0\.25 \+ unknown$/);
+    expect(week[1]).toMatch(/—$/);
+    expect(week[2]).toMatch(/300 · 1 turn · cost unknown$/);
+  });
+
+  it('counts folded rollups as tokens of unknown cost', () => {
+    const folded = state([], []);
+    (folded as unknown as Record<symbol, unknown>)[STATE_ROLLUPS] = {
+      k: { day: '2026-09-20', accountId: 'x', provider: 'xai', calls: 3, inputTokens: 30, outputTokens: 3, latencyMs: 0 },
+    };
+    const days = usageDays(folded, NOW);
+    expect(days[1]).toMatchObject({ day: '2026-09-20', turns: 3, tokens: 33, unknownCostTurns: 3 });
   });
 });
