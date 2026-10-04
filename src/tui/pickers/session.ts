@@ -260,10 +260,11 @@ export async function interactiveSessionPicker(
   const refreshes = [early, discovery, slow];
   let listRevision = 0;
   let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;
-  /** Re-check workers and the turns they are generating. The board redraws
-   * while any row still has `working`, so the next frame picks this up and
-   * the spinner stops when the turn is over. */
+  /** Re-check workers and the turns they are generating, and have the board
+   * draw what changed: a spinner starts, or stops when the turn is over. */
   let activityRefresh: Promise<void> | undefined;
+  /** The board's redraw: it draws a changed list without ticking for it. */
+  let listChanged: (() => void) | undefined;
   const refreshActivity = (): void => {
     if (activityRefresh) return;
     activityRefresh = (async () => {
@@ -272,7 +273,7 @@ export async function interactiveSessionPicker(
       fillActivity();
       listRevision += 1;
       built = undefined;
-    })().finally(() => { activityRefresh = undefined; });
+    })().finally(() => { activityRefresh = undefined; listChanged?.(); });
   };
   // Conversations written before the summary existed get one after the list
   // is already up. The redraw copies the new previews onto the rows it holds.
@@ -431,6 +432,7 @@ export async function interactiveSessionPicker(
       })?.value;
       const result = await rl.board!({
         conversations: buildOptions, commands: boardCommands!, refresh: refreshes, onAction: manage,
+        listChanged: (redraw) => { listChanged = redraw; },
         ...(initial ? { initial } : {}),
         ...(hooks?.onSessionsSettled ? { onSessionsSettled: hooks.onSessionsSettled } : {}),
       });
