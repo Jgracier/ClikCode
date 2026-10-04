@@ -26,10 +26,6 @@ import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } fro
 import { usesFallbackTurn, vendorBackgroundTurnHandlerFor } from './vendor-process.js';
 import { turnCancelledError } from '../agent/cancellation.js';
 
-/** With no session worker to show a background turn, let finished turns wait
- * briefly on their still-running background tasks. */
-const UNHELD_BACKGROUND_GRACE_MS = 60_000;
-
 function insideGitRepository(folder: string): boolean {
   for (let directory = resolve(folder); ; directory = dirname(directory)) {
     if (existsSync(join(directory, '.git'))) return true;
@@ -122,8 +118,11 @@ export async function runVendorCliAttempt(input: {
   // A successful answer with background tasks still running ends this
   // turn at once; the process is kept, and what it says when a task
   // finishes becomes a background turn (held-vendor.ts). With nobody to
-  // show that (no session worker), the turn waits a bounded while
-  // instead, then lets the tasks go.
+  // show that (no session worker: `clikcode send`), the turn stays open
+  // until the tasks finish and their result is in it -- ClikCode does not
+  // cut short work it was asked for. Each running task gives the idle
+  // watchdog its tool budget, so a server that never ends is still bounded,
+  // and a turn that had already answered ends normally then.
   const backgroundHandler = heldInput ? vendorBackgroundTurnHandlerFor(session.id) : undefined;
   const release = backgroundHandler ? createTurnRelease() : undefined;
   let held: HeldVendor | undefined;
@@ -142,7 +141,6 @@ export async function runVendorCliAttempt(input: {
       idle.toolFinished(`background:${id}`);
       if (!held) prompter?.activity(chalk.dim(`background task ${status}`));
     },
-    ...(backgroundHandler ? {} : { resultGraceMs: UNHELD_BACKGROUND_GRACE_MS }),
   }) : undefined;
   if (heldInput && background) {
     run.liveInput?.setSteerHandler(async (steerText, submission) => {
