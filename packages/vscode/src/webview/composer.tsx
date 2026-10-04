@@ -9,6 +9,7 @@ import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
 import { compactCount } from '../../../../src/harness/protocol/format';
+import { buttonTitle } from '../../../../src/harness/protocol/wording';
 import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
@@ -482,7 +483,7 @@ export function Composer(props: {
             onClick={() => { const spacer = text && !/\s$/.test(text) ? ' ' : ''; update(`${text}${spacer}@`); }}><Icon name="mention" /></button>
           <button type="button" class="icon-button" aria-label="Commands" title="Commands (/)" disabled={!connected} onClick={() => update('/')}><span class="slash-glyph" aria-hidden="true">/</span></button>
           {model.running ? (
-            <button type="button" id="stop-button" class="send stop" aria-label="Stop (Esc)" title="Stop (Esc)" onClick={() => post({ type: 'cancel', restoreDraft: !text })}><Icon name="debug-stop" /></button>
+            <button type="button" id="stop-button" class="send stop" aria-label={buttonTitle('stop')} title={buttonTitle('stop')} onClick={() => post({ type: 'cancel', restoreDraft: !text })}><Icon name="debug-stop" /></button>
           ) : null}
           {!model.running || text.trim() ? (
             <button type="button" id="send-button" class="send" aria-label={model.running ? 'Send into the running turn' : 'Send (Enter)'} title={model.running ? 'Steer (Enter)' : 'Send (Enter)'}

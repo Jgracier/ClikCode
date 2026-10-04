@@ -7,6 +7,7 @@
  * unwinding of all of that on exit -- including exits it did not choose, like
  * a mobile SSH connection dropping mid-turn.
  */
+import { STOPPED } from '../../harness/protocol/wording.js';
 import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { reconcileLocalModelLeases } from './local-model.js';
@@ -323,7 +324,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   const handleTurnFailure = async (error: unknown, failed: { line?: string; sent?: string; queuedTurnId?: string }): Promise<void> => {
     const message = error instanceof Error ? error.message : String(error);
     const next = await afterTurnFailure(terminal, id, error, { ...failed, guard: exhaustionGuard });
-    if (next.cancelled && terminal) { notice = 'Stopped'; return; }
+    if (next.cancelled && terminal) { notice = STOPPED; return; }
     if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return; }
     if ('retry' in next) { resend = next.retry; return; }
     if ('moved' in next) { id = next.moved.id; resend = next.moved.prompt; return; }

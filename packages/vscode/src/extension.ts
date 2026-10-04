@@ -157,7 +157,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     const { text, tooltip } = statusText(state);
     status.text = text;
     status.tooltip = tooltip;
-    // "Stop Current Turn" is offered in the command palette only while there is one.
+    // "Stop Turn" is offered in the command palette only while there is one.
     if (state.running !== running) { running = state.running; void vscode.commands.executeCommand('setContext', 'clikcode.running', running); }
   }
   paint();

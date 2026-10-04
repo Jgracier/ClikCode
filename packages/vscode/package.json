@@ -235,7 +235,7 @@
       },
       {
         "command": "clikcode.cancel",
-        "title": "Stop Current Turn",
+        "title": "Stop Turn",
         "category": "ClikCode",
         "icon": "$(debug-stop)"
       },
