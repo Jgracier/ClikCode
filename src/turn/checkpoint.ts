@@ -257,8 +257,12 @@ export function recordPendingSteer(
   pending.updatedAt = now;
 }
 
+/** Queue a turn. A notification identical to one still waiting is not
+ * queued again: each one runs a model turn, and the model is owed the news
+ * once (a worker retired seven times while one was undelivered queued seven). */
 export function enqueueSessionTurn(session: HarnessSession, submission: NonNullable<HarnessSession['queuedTurns']>[number], now: string): void {
-  if ((session.queuedTurns ?? []).some((item) => item.id === submission.id)) return;
+  if ((session.queuedTurns ?? []).some((item) => item.id === submission.id
+    || (submission.kind === 'notification' && item.kind === 'notification' && item.text === submission.text))) return;
   session.queuedTurns = [...(session.queuedTurns ?? []), submission];
   session.updatedAt = now;
 }
