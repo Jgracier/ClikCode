@@ -28,11 +28,12 @@ describe('harness turn transports', () => {
   it('keeps native conversations on the transport that created their vendor session', () => {
     const openCode = catalog('opencode');
     expect(sessionTurnTransport(openCode, {})).toBe('acp');
-    for (const command of ['claude', 'gemini', 'opencode', 'goose', 'kiro', 'qwen', 'kilo', 'auggie', 'cursor']) {
+    for (const command of ['gemini', 'goose', 'kiro', 'qwen', 'auggie', 'cursor']) {
       expect(sessionTurnTransport(catalog(command), { nativeSessionId: 'old-cli-thread' }), command).toBe('structured-cli');
     }
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'new-acp-thread', nativeTransport: 'acp' })).toBe('acp');
-    expect(sessionTurnTransport(openCode, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' })).toBe('structured-cli');
+    const cursor = catalog('cursor');
+    expect(sessionTurnTransport(cursor, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' })).toBe('structured-cli');
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'locally-minted', nativeSessionPreallocated: true })).toBe('acp');
   });
 
@@ -41,10 +42,13 @@ describe('harness turn transports', () => {
     // --resume` continues an ACP one (verified live both ways). A chat once
     // pinned to the one-shot CLI by a single fallback turn kept no process
     // alive between turns, so subagents it started died with each turn.
-    const grok = catalog('grok');
-    expect(sessionTurnTransport(grok, { nativeSessionId: 'old-cli-thread' })).toBe('acp');
-    expect(sessionTurnTransport(grok, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' })).toBe('acp');
-    expect(sessionTurnTransport(grok, { nativeSessionId: 'acp-thread', nativeTransport: 'acp' })).toBe('acp');
+    // Claude Code, OpenCode and Kilo verified the same way.
+    for (const command of ['grok', 'claude', 'opencode', 'kilo']) {
+      const shared = catalog(command);
+      expect(sessionTurnTransport(shared, { nativeSessionId: 'old-cli-thread' }), command).toBe('acp');
+      expect(sessionTurnTransport(shared, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' }), command).toBe('acp');
+      expect(sessionTurnTransport(shared, { nativeSessionId: 'acp-thread', nativeTransport: 'acp' }), command).toBe('acp');
+    }
   });
 
   it('decides from the declaration, not the command name', () => {
