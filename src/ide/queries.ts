@@ -34,6 +34,7 @@ import { compareProviders, integrationLabel, isBlankConversation, optionForHarne
 import { livePendingTurns, liveWorkerSessions } from '../session/liveness.js';
 import { conversationRows } from '../session/conversation-rows.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { textTranscript } from '../turn/turn-activities.js';
 import { sessionModelLabel } from '../harness/output.js';
 import { modelRow } from '../tui/pickers/model.js';
 import { swarmIsOn } from '../swarm/policy.js';
@@ -155,7 +156,7 @@ export async function conversationList(state: HarnessState, currentId: string | 
   return conversationRows(sessions, { workerIsLive: live, pending, ...(currentId ? { currentId } : {}) }).map((row): IdeConversation => {
     const latest = row.latest;
     const opened = transcriptWasLoaded(latest) || latest.messages !== undefined || latest.pendingTurn !== undefined;
-    const messages = opened ? sessionTranscriptMessages(latest) : [];
+    const messages = opened ? textTranscript(sessionTranscriptMessages(latest)) : [];
     const last = opened ? messages.at(-1)?.content.replace(/\s+/g, ' ').trim() : conversationPreview(latest, 140);
     const titled = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim()
       || (opened ? messages.find((message) => message.role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) : latest.listPreview)

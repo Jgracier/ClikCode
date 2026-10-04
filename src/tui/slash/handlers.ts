@@ -45,6 +45,7 @@ import { impliedHarnessCommand } from './infer-provider.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
+import { textTranscript } from '../../turn/turn-activities.js';
 import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { aiSessionClose, aiSessionLeave, applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel, chooseGatewayModel } from '../../commands/ai/sessions.js';
@@ -185,10 +186,10 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return saveSettings(state, session);
   },
   history: async ({ session }) => {
-    return emitHarnessOutput({ panel: 'history', messages: sessionTranscriptMessages(session) });
+    return emitHarnessOutput({ panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)) });
   },
   copy: async ({ session }) => {
-    const last = sessionTranscriptMessages(session).reverse().find((message) => message.role === 'assistant');
+    const last = textTranscript(sessionTranscriptMessages(session)).reverse().find((message) => message.role === 'assistant');
     if (!last) throw new Error('There is no assistant response to copy yet.');
     const via = await copyToClipboard(last.content);
     return emitHarnessOutput({ panel: 'copied', text: via === 'osc52' ? 'Last response sent to your terminal clipboard (OSC 52).' : 'Last response copied to the clipboard.' });

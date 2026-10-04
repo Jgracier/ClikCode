@@ -4,6 +4,21 @@
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute } from '../harness/definition.js';
 import type { ShellNote } from '../commands/ai/shell-run.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
+import type { HarnessActivityEvent } from '../harness/prompter.js';
+
+/** One tool call of a turn: the harness's own event, merged frame by frame
+ * into one record per call (activity-view.ts mergeActivity), and how much of
+ * the message's text had been written when it began -- where it sits between
+ * the paragraphs. The running turn keeps them in `pendingTurn.activities`;
+ * the turn's assistant message keeps them once it has ended, so a reopened
+ * chat draws every call where it happened. Bounded by size, not by count
+ * (turn/turn-activities.ts). */
+export type TurnActivity = { event: HarnessActivityEvent; responseOffset: number };
+
+/** A message of the conversation. `activities` only on an assistant message,
+ * with `responseOffset` into this message's `content`; absent on anything
+ * saved before they were kept (and on turns that called nothing). */
+export type TranscriptMessage = { role: 'user' | 'assistant'; content: string; activities?: TurnActivity[] };
 
 export interface HarnessSession {
   id: string;
@@ -83,7 +98,7 @@ export interface HarnessSession {
    * `automatic`, or one whose vendor silently substituted, showed the request
    * and not the answer. `permissionMode` is the mode it applied. */
   reported?: { at: string; model?: string; permissionMode?: string };
-  messages?: Array<{ role: 'user' | 'assistant'; content: string }>;
+  messages?: TranscriptMessage[];
   /** Last thing asked, for the conversation list. Written when the transcript
    * changes, so the list does not open the transcript. */
   listPreview?: string;
@@ -97,7 +112,10 @@ export interface HarnessSession {
   pendingTurn?: {
     prompt: string;
     response?: string;
-    activities?: string[];
+    /** The turn's tool calls so far, offsets into `response`. Journals
+     * written before this held one-line strings ("completed Bash"); read
+     * them through readTurnActivities, never directly. */
+    activities?: TurnActivity[];
     /** Additional user instructions accepted by a provider's active-turn
      * steering protocol. They are part of this turn, not future prompts. */
     steers?: Array<{ text: string; submittedAt: string; responseOffset?: number; id?: string }>;

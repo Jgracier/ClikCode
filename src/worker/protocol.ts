@@ -9,7 +9,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { LineBuffer } from '../harness/protocol/json-lines.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import type { HarnessSession } from '../session/model.js';
+import type { HarnessSession, TurnActivity } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 
@@ -56,8 +56,9 @@ export type ClientCommand =
   | { type: 'retire' };
 
 /** One tool row of the running turn, and how much of its answer had streamed
- * when it happened -- where it sits between the answer's paragraphs. */
-export type LiveActivity = { event: HarnessActivityEvent; responseOffset: number };
+ * when it happened -- where it sits between the answer's paragraphs. The same
+ * shape a saved turn keeps its calls in (session/model.ts TurnActivity). */
+export type LiveActivity = TurnActivity;
 
 /** A thought is never a transcript row (the prompter shows only the latest
  * one, live), so a running turn keeps every activity but those. Both ends

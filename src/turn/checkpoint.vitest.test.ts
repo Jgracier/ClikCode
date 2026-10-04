@@ -5,10 +5,13 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
-  runningActivityLabel, sessionTranscriptMessages, settledTranscriptMessages, updatePendingResponse,
+  runningActivityLabel, sessionTranscriptMessages, settledTranscriptMessages, updatePendingResponse, type PendingTurnWithHints,
 } from './checkpoint.js';
+import { textTranscript } from './turn-activities.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import type { HarnessSession } from '../session/model.js';
+
+const stamp = (second: number): string => `2026-01-02T00:00:${String(second).padStart(2, '0')}.000Z`;
 
 function session(): HarnessSession {
   return {
@@ -107,10 +110,47 @@ describe('durable turn checkpoints', () => {
     recordPendingActivity(target, { kind: 'tool-start', label: 'inspect repository' }, '2026-01-02T00:00:01.000Z');
     recordPendingActivity(target, { kind: 'tool-done', label: 'inspect repository' }, '2026-01-02T00:00:02.000Z');
 
+    // The call itself is kept with the turn, one record per call -- drawn
+    // where it happened when the chat is opened again.
     expect(sessionTranscriptMessages(target).at(-1)).toEqual({
-      role: 'assistant',
-      content: 'Interrupted turn activity: started inspect repository; completed inspect repository. Inspect the current workspace before continuing.',
+      role: 'assistant', content: '',
+      activities: [{ event: { kind: 'tool-done', label: 'inspect repository' }, responseOffset: 0 }],
     });
+    // A text-only reader (a replay into another provider) is told of it.
+    expect(textTranscript(sessionTranscriptMessages(target)).at(-1)).toEqual({ role: 'assistant', content: 'Tool calls: inspect repository.' });
+  });
+
+  it('keeps every call of a long turn with its output, placed where it happened', () => {
+    const target = session();
+    beginPendingTurn(target, 'Run them', stamp(0));
+    updatePendingResponse(target, 'Running the parts.\n\n', 'append', stamp(1));
+    for (let index = 0; index < 30; index += 1) {
+      recordPendingActivity(target, { kind: 'tool-start', label: `$ part${index}`, id: `t${index}`, category: 'run' }, stamp(2));
+      recordPendingActivity(target, { kind: 'tool-done', label: `$ part${index}`, id: `t${index}`, output: [`part${index} ok`] }, stamp(3));
+    }
+    updatePendingResponse(target, 'All pass.', 'append', stamp(4));
+    finishPendingTurn(target, undefined, stamp(5));
+    const answer = target.messages!.at(-1)!;
+    expect(answer.content).toBe('Running the parts.\n\nAll pass.');
+    expect(answer.activities).toHaveLength(30);
+    expect(answer.activities![0]).toEqual({ event: { kind: 'tool-done', label: '$ part0', id: 't0', category: 'run', output: ['part0 ok'] }, responseOffset: 'Running the parts.\n\n'.length });
+    expect(target.pendingTurn).toBeUndefined();
+  });
+
+  it('splits a steered turn\'s calls between the messages it became', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', stamp(0));
+    updatePendingResponse(target, 'First part. ', 'append', stamp(1));
+    recordPendingActivity(target, { kind: 'tool-done', label: '$ one', id: 'a' }, stamp(2));
+    recordPendingSteer(target, 'also two', stamp(3), target.pendingTurn!.response!.length, stamp(3));
+    updatePendingResponse(target, 'Second part.', 'append', stamp(4));
+    recordPendingActivity(target, { kind: 'tool-done', label: '$ two', id: 'b' }, stamp(5));
+    finishPendingTurn(target, undefined, stamp(6));
+    expect(target.messages!.slice(-3)).toEqual([
+      { role: 'assistant', content: 'First part. ', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a' }, responseOffset: 12 }] },
+      { role: 'user', content: 'also two' },
+      { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b' }, responseOffset: 12 }] },
+    ]);
   });
 
   it('discards an unanswered checkpoint so Escape can restore the draft', () => {
@@ -219,7 +259,12 @@ describe('running sub-agents in the turn journal', () => {
     beginPendingTurn(target, 'Work', at(0));
     recordPendingActivity(target, { kind: 'tool-start', label: 'Task(Fix it)', id: 'a1' }, at(1));
     recordPendingActivity(target, { kind: 'tool-start', label: 'Edit(src/a.ts)', category: 'edit', id: 'e', parentId: 'a1' }, at(2));
-    expect(target.pendingTurn?.activities).toContain('started Edit(src/a.ts)');
+    // Not a row of its own: it counts toward the agent's, and the replay
+    // hints still say the workspace changed.
+    expect(target.pendingTurn?.activities?.map((item) => item.event.label)).toEqual(['Task(Fix it)']);
+    expect(target.pendingTurn?.activities?.[0]?.event.childTools).toBe(1);
+    expect((target.pendingTurn as PendingTurnWithHints).touchedFiles).toEqual(['src/a.ts']);
+    expect((target.pendingTurn as PendingTurnWithHints).mutatingActivity).toBe(true);
   });
 });
 
@@ -228,15 +273,23 @@ describe('joining a turn another window is running', () => {
     ...session(),
     pendingTurn: {
       prompt: 'continue', startedAt: '2026-01-02T00:00:00.000Z', updatedAt: '2026-01-02T00:10:00.000Z', outputStarted: true,
-      activities: ['started Bash(npx vitest)', 'completed tool', 'started Bash(node scripts/verify.mjs)'],
+      activities: [
+        { event: { kind: 'tool-done', label: 'Bash(npx vitest)', id: 'v' }, responseOffset: 0 },
+        { event: { kind: 'tool-start', label: 'Bash(node scripts/verify.mjs)', id: 'w' }, responseOffset: 0 },
+      ],
     },
+  });
+  /** A journal written before calls were kept as records. */
+  const legacy = (): HarnessSession => ({
+    ...running(),
+    pendingTurn: { ...running().pendingTurn!, activities: ['started Bash(npx vitest)', 'completed tool', 'started Bash(node scripts/verify.mjs)'] as never },
   });
 
   it('draws the conversation without the followed turn, which the live view draws', () => {
     // Folded in, it read "› continue / Interrupted turn activity: …" and then
     // the same prompt again live beneath it.
     expect(settledTranscriptMessages(running(), 'continue')).toEqual(session().messages);
-    expect(sessionTranscriptMessages(running()).at(-1)?.content).toMatch(/^Interrupted turn activity/);
+    expect(sessionTranscriptMessages(running()).at(-1)?.activities?.map((item) => item.event.label)).toEqual(['Bash(npx vitest)', 'Bash(node scripts/verify.mjs)']);
   });
 
   it('keeps an older interrupted turn that is not the one being followed', () => {
@@ -246,8 +299,25 @@ describe('joining a turn another window is running', () => {
   it('names the call the turn is running, and nothing once it completed', () => {
     expect(runningActivityLabel(running().pendingTurn)).toBe('running Bash(node scripts/verify.mjs)');
     const done = running();
-    done.pendingTurn!.activities!.push('completed tool');
+    recordPendingActivity(done, { kind: 'tool-done', label: 'tool', id: 'w' }, '2026-01-02T00:11:00.000Z');
     expect(runningActivityLabel(done.pendingTurn)).toBeUndefined();
+  });
+
+  it('reads a journal of one-line strings as calls, and never throws on one', () => {
+    expect(runningActivityLabel(legacy().pendingTurn)).toBe('running Bash(node scripts/verify.mjs)');
+    const messages = sessionTranscriptMessages(legacy());
+    expect(messages.at(-1)?.activities?.map((item) => [item.event.kind, item.event.label])).toEqual([
+      ['tool-done', 'Bash(npx vitest)'], ['tool-start', 'Bash(node scripts/verify.mjs)'],
+    ]);
+    const done = legacy();
+    (done.pendingTurn!.activities as unknown as string[]).push('completed tool');
+    expect(runningActivityLabel(done.pendingTurn)).toBeUndefined();
+    // A new call recorded onto an old journal converts it.
+    recordPendingActivity(done, { kind: 'tool-start', label: 'Read(a.ts)', id: 'r' }, '2026-01-02T00:12:00.000Z');
+    expect(done.pendingTurn!.activities!.map((item) => item.event.label)).toEqual(['Bash(npx vitest)', 'Bash(node scripts/verify.mjs)', 'Read(a.ts)']);
+    const junk = { ...session(), pendingTurn: { ...running().pendingTurn!, activities: [null, 7, { event: 'x' }, 'nonsense'] as never } };
+    expect(() => sessionTranscriptMessages(junk)).not.toThrow();
+    expect(runningActivityLabel(junk.pendingTurn)).toBeUndefined();
   });
 
   it('stores a continuation as the rest of the interrupted answer, never as a message the user typed', () => {

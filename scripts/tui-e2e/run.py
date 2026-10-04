@@ -22,6 +22,33 @@ import pyte
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 COLS, ROWS = 100, 50
 
+
+class Screen(pyte.Screen):
+    """pyte without the two sequences it lacks: SU and SD (`CSI n S`, `CSI n
+    T`), which scroll the region the margins set. A transcript scroll hands
+    its shift to the terminal with them; without them the emulator left every
+    row but the exposed ones where they were, which looks exactly like a
+    screen that does not scroll."""
+    def scroll_up(self, count=None, *_args, **_kwargs):
+        top, bottom = self.margins or pyte.screens.Margins(0, self.lines - 1)
+        saved = (self.cursor.x, self.cursor.y)
+        for _ in range(max(1, count or 1)):
+            self.cursor.y = bottom
+            self.index()
+        self.cursor.x, self.cursor.y = saved
+
+    def scroll_down(self, count=None, *_args, **_kwargs):
+        top, bottom = self.margins or pyte.screens.Margins(0, self.lines - 1)
+        saved = (self.cursor.x, self.cursor.y)
+        for _ in range(max(1, count or 1)):
+            self.cursor.y = top
+            self.reverse_index()
+        self.cursor.x, self.cursor.y = saved
+
+
+class ByteStream(pyte.ByteStream):
+    csi = {**pyte.ByteStream.csi, 'S': 'scroll_up', 'T': 'scroll_down'}
+
 TWO_BLOCKS = {'blocks': ['Checking the workspace first.', 'The final commit is live.']}
 
 # Each step: ('type', text) types and presses Enter; ('wait_for', text, secs)
@@ -436,6 +463,69 @@ SCENARIOS = {
         'raw_in_order': ['\x1b[?1004h', '\x1b[22;0t', '\x1b]9;4;3;\x07', 'the turn has finished\x07\x07',
                          '\x1b]9;4;0;\x07', '\x1b[?1004l', '\x1b[23;0t'],
     },
+    # A finished turn's tool calls are part of it: reopened -- from the board,
+    # or by a fresh process -- every call is drawn again where it happened,
+    # not a gap between paragraphs.
+    'reopen-finished-turn-shows-tools': {
+        'cols': 70, 'env': {'FAKE_TOOL_MS': '300', 'FAKE_DELAY_MS': '60'},
+        'turns': [{'intro': 'Running the parts first.', 'tools_first': 4,
+                   'blocks': ['The parts ran fine.', 'Then the commit was checked.']}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'Then the commit was checked.', 40), ('settle', 3),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 2.5), ('snap', 'board-and-back'),
+            ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\r'), ('settle', 2.5),
+        ],
+        'watch': [],
+        'snap_contains': {'board-and-back': ['Running the parts first.', 'part0 ok', 'part3 ok', 'abc123 fix', 'Then the commit was checked.']},
+        'final_contains': ['Running the parts first.', 'part0 ok', 'part1 ok', 'part2 ok', 'part3 ok', 'abc123 fix', 'Then the commit was checked.'],
+        'final_once': ['part0 ok', 'part3 ok', 'abc123 fix'],
+        'never': ['Interrupted turn activity'],
+    },
+    # The same turn opened by a fresh process while it runs: the calls it has
+    # already made are on screen with the paragraph before them.
+    'reopen-mid-turn-shows-tools': {
+        'cols': 70, 'env': {'FAKE_TOOL_MS': '300', 'FAKE_DELAY_MS': '60'},
+        'turns': [{'intro': 'Running the parts first.', 'tools_first': 4, 'hold_ms': 12000,
+                   'blocks': ['The parts ran fine.', 'Then the commit was checked.']}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1),
+            ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\r'), ('settle', 2.5), ('snap', 'rejoined'),
+            ('wait_for', 'Then the commit was checked.', 40), ('settle', 3),
+        ],
+        'watch': [],
+        'snap_contains': {'rejoined': ['Running the parts first.', 'part0 ok', 'part3 ok']},
+        'final_contains': ['Running the parts first.', 'part0 ok', 'part3 ok', 'held call done', 'abc123 fix', 'Then the commit was checked.'],
+        'final_once': ['part0 ok', 'part3 ok', 'held call done'],
+        'never': ['Interrupted turn activity'],
+    },
+    # A long turn whose rows overflow the screen: a wheel notch back moves the
+    # WHOLE transcript area -- its newest rows leave at the bottom -- and Esc
+    # brings them back. It used to move only the top rows.
+    'long-turn-scroll-moves-whole-screen': {
+        'cols': 70, 'rows': 40, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
+        'turns': [{'intro': 'Running every part now.', 'tools_first': 30, 'hold_ms': 25000, 'blocks': ['All thirty parts pass.']}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1.5), ('snap', 'before'),
+            *[step for _ in range(5) for step in (('keys', '\x1b[<64;35;20M'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
+            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'),
+        ],
+        'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
+        'never': ['Interrupted turn activity'],
+    },
+    # The same in a window that joined the running turn (out to the board and
+    # back), where the whole turn so far arrives at once.
+    'joined-turn-scroll-moves-whole-screen': {
+        'cols': 70, 'rows': 40, 'env': {'FAKE_TOOL_MS': '150', 'FAKE_DELAY_MS': '40'},
+        'turns': [{'intro': 'Running every part now.', 'tools_first': 30, 'hold_ms': 25000, 'blocks': ['All thirty parts pass.']}],
+        'steps': [
+            ('type', 'run every part'), ('wait_for', 'sleep 30', 40), ('settle', 1),
+            ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 2.5), ('snap', 'before'),
+            *[step for _ in range(5) for step in (('keys', '\x1b[<64;35;20M'), ('settle', 0.4))], ('settle', 1), ('snap', 'scrolled'),
+            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'back'),
+        ],
+        'watch': [], 'scroll_moves': {'pattern': r'part(\d+) ok'},
+        'never': ['Interrupted turn activity'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -475,15 +565,21 @@ def run(name, spec, entry, keep):
         'SSH_CONNECTION': '127.0.0.1 1 127.0.0.1 22',
     }
     if spec.get('classic'): env['CLIKCODE_TUI'] = 'classic'
-    pid, fd = pty.fork()
-    if pid == 0:
-        os.chdir(workspace)
-        os.execve(node, ['node', entry], env)
     cols = spec.get('cols', COLS)
     rows = spec.get('rows', ROWS)
-    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
-    screen = pyte.Screen(cols, rows)
-    stream = pyte.ByteStream(screen)
+
+    def launch():
+        child, terminal = pty.fork()
+        if child == 0:
+            os.chdir(workspace)
+            os.execve(node, ['node', entry], env)
+        fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
+        return child, terminal
+
+    pid, fd = launch()
+    screen = Screen(cols, rows)
+    stream = ByteStream(screen)
+    snaps = {}
     raw, frames = bytearray(), []
     start = time.time()
 
@@ -521,6 +617,25 @@ def run(name, spec, entry, keep):
         elif step[0] == 'mark':
             # Where 'never_after_mark' starts looking.
             marked_at = len(frames)
+        elif step[0] == 'snap':
+            # The screen as it is now, kept under a name for the checks below.
+            snaps[step[1]] = list(screen.display)
+        elif step[0] == 'restart':
+            # The window closes (its terminal hangs up) and a fresh process
+            # opens on a fresh screen. Workers it started keep running.
+            try: os.kill(pid, signal.SIGHUP)
+            except ProcessLookupError: pass
+            deadline = time.time() + 5
+            while time.time() < deadline:
+                try:
+                    if os.waitpid(pid, os.WNOHANG)[0] == pid: break
+                except ChildProcessError: break
+                pump(0.05)
+            try: os.close(fd)
+            except OSError: pass
+            pid, fd = launch()
+            screen.reset()
+            pump(step[1] if len(step) > 1 else 5)
         elif step[0] == 'touch_entry':
             os.utime(entry, None)
         elif step[0] == 'damage_and_redraw':
@@ -624,6 +739,29 @@ def run(name, spec, entry, keep):
     for left, right in spec.get('never_together', []):
         both = [t for t, text in frames if left in text and right in text]
         if both: problems.append(f'{left!r} and {right!r} on screen together in {len(both)} frame(s), first at {both[0]:.2f}s')
+    # Scrolling back moves the whole transcript area: the newest rows leave
+    # it at the bottom, and Esc brings exactly them back.
+    if 'scroll_moves' in spec:
+        import re as regex
+        pattern = regex.compile(spec['scroll_moves']['pattern'])
+        def newest(name):
+            found = [int(m.group(1)) for line in snaps.get(name, []) for m in pattern.finditer(line)]
+            return max(found) if found else None
+        def bottom(name):
+            lines = [line.rstrip() for line in snaps.get(name, [])]
+            band = next((i for i, line in enumerate(lines) if 'esc to interrupt' in line), len(lines))
+            return [line for line in lines[max(0, band - 12):band] if line.strip() and not regex.search(r'\(\d+s\)|\d+m \d+s', line)]
+        before, scrolled, back = newest('before'), newest('scrolled'), newest('back')
+        if before is None: problems.append('scroll check: nothing matching the pattern on screen before scrolling')
+        elif scrolled is not None and scrolled >= before:
+            problems.append(f'scrolled back, the newest row is still on screen (newest {scrolled}, before {before}): the bottom of the transcript did not move')
+        if back != before: problems.append(f'after Esc the newest row is {back}, expected {before}')
+        if bottom('before') and bottom('before') == bottom('scrolled'):
+            problems.append('scrolled back, the bottom rows of the transcript area are unchanged: ' + ' | '.join(bottom('before')[-3:]))
+    for name, phrases in spec.get('snap_contains', {}).items():
+        shown = '\n'.join(snaps.get(name, []))
+        for phrase in phrases:
+            if phrase not in shown: problems.append(f'not on the {name!r} screen: {phrase!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     for phrase in spec.get('final_once', []):

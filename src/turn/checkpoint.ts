@@ -7,6 +7,7 @@ import { isAgentToolName } from '../harness/protocol/tools.js';
 import type { HarnessSession } from '../session/model.js';
 import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
 import type { LiveTurnSubmission } from './live-input.js';
+import { activitiesBetween, readTurnActivities, recordTurnActivity, runningTurnActivity } from './turn-activities.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
 
@@ -17,7 +18,8 @@ export type PendingTurnWithHints = NonNullable<HarnessSession['pendingTurn']> & 
   /** Files the interrupted turn is known to have started changing. */
   touchedFiles?: string[];
   /** Sticky: some recorded activity may have changed the workspace. Kept
-   * separately because `activities` is a rolling window of the newest 20. */
+   * separately because `activities` may have dropped its oldest calls to
+   * stay within its size (turn-activities.ts). */
   mutatingActivity?: boolean;
 };
 
@@ -71,11 +73,6 @@ function touchedFilesFromActivity(event: HarnessActivityEvent): string[] {
   return [target];
 }
 
-function activitySummary(activities: readonly string[], touchedFiles: readonly string[] = []): string {
-  const files = touchedFiles.length ? ` Files it started changing: ${touchedFiles.join(', ')}.` : '';
-  return `Interrupted turn activity: ${activities.join('; ')}.${files} Inspect the current workspace before continuing.`;
-}
-
 /** Steer offsets index the STREAMED response. When a different final text is
  * about to replace it, re-anchor each offset so the steer still lands where
  * the user interjected:
@@ -86,7 +83,7 @@ function activitySummary(activities: readonly string[], touchedFiles: readonly s
  *     hearing the steer (a vendor's "final answer only" result), so the steer
  *     precedes it. It is never placed after the reply: a transcript ending in
  *     a user message reads as an unanswered prompt to the next provider. */
-function remapSteerOffset(streamed: string, final: string, offset: number): number {
+function remapOffset(streamed: string, final: string, offset: number): number {
   const clamped = Math.max(0, Math.min(streamed.length, offset));
   if (streamed === final || clamped === 0) return Math.min(clamped, final.length);
   let shared = 0;
@@ -99,6 +96,18 @@ function remapSteerOffset(streamed: string, final: string, offset: number): numb
     if (at >= 0 && final.indexOf(context, at + 1) < 0) return at + context.length;
   }
   return 0;
+}
+
+/** Steers and calls both sit at an offset into the streamed answer; a
+ * replacement text moves them with it (remapOffset). */
+function remapPendingOffsets(pending: NonNullable<HarnessSession['pendingTurn']>, streamed: string, final: string): void {
+  if (pending.steers?.length) {
+    pending.steers = pending.steers.map((steer) => ({ ...steer, responseOffset: remapOffset(streamed, final, steer.responseOffset ?? 0) }));
+  }
+  const activities = readTurnActivities(pending.activities, streamed.length);
+  if (activities.length) {
+    pending.activities = activities.map((activity) => ({ ...activity, responseOffset: remapOffset(streamed, final, activity.responseOffset) }));
+  }
 }
 
 /** Materialize an in-flight turn without mutating the session. This is used by
@@ -114,25 +123,37 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   // follows the interrupted one directly.
   if (pending.prompt !== INTERRUPTED_TURN_REQUEST) messages.push({ role: 'user', content: pending.prompt });
   const response = pending.response ?? '';
+  // Each call goes with the part of the answer it happened in: a steer
+  // splits the answer into messages, and a call's offset is re-anchored to
+  // the message it lands in.
+  const activities = readTurnActivities(pending.activities, response.length);
+  let first = true;
+  const assistant = (start: number, end: number | undefined): Message | undefined => {
+    const text = response.slice(start, end);
+    const content = text.trim() ? text : '';
+    const own = activitiesBetween(activities, start, end, content.length, first);
+    first = false;
+    if (!content && !own.length) return undefined;
+    return { role: 'assistant', content, ...(own.length ? { activities: own } : {}) };
+  };
   let responseOffset = 0;
   for (const steer of [...(pending.steers ?? [])].sort((left, right) => (left.responseOffset ?? 0) - (right.responseOffset ?? 0))) {
     const steerOffset = Math.max(responseOffset, Math.min(response.length, steer.responseOffset ?? 0));
-    const beforeSteer = response.slice(responseOffset, steerOffset);
-    if (beforeSteer.trim()) messages.push({ role: 'assistant', content: beforeSteer });
+    const before = assistant(responseOffset, steerOffset);
+    if (before) messages.push(before);
     messages.push({ role: 'user', content: steer.text });
     responseOffset = steerOffset;
   }
-  const remaining = response.slice(responseOffset);
-  if (remaining.trim()) messages.push({ role: 'assistant', content: remaining });
-  else if (!response.trim() && pending.activities?.length) messages.push({ role: 'assistant', content: activitySummary(pending.activities, (pending as PendingTurnWithHints).touchedFiles) });
+  const remaining = assistant(responseOffset, undefined);
+  if (remaining) messages.push(remaining);
   return messages;
 }
 
 /** The conversation as it stands BEFORE a turn a worker is still running.
  *
  * sessionTranscriptMessages folds an in-flight journal in as if it had ended
- * -- its prompt, then "Interrupted turn activity: …" -- which is right for a
- * turn nothing is running. For a running turn it drew that turn twice: once
+ * -- its prompt, then what it wrote and called -- which is right for a turn
+ * nothing is running. For a running turn it drew that turn twice: once
  * folded in, once live beneath it (see the prompter's transcriptMessages).
  * `runningPrompt` is the running turn's prompt; a journal for any other
  * prompt is an older interrupted turn and stays. */
@@ -147,8 +168,8 @@ export function settledTranscriptMessages(session: HarnessSession, runningPrompt
  * mid-way sees only what happens after it joined, so a twenty-minute command
  * already running showed as a bare "thinking" -- which reads as stuck. */
 export function runningActivityLabel(pending: HarnessSession['pendingTurn']): string | undefined {
-  const last = pending?.activities?.at(-1);
-  return last?.startsWith('started ') ? `running ${last.slice('started '.length)}` : undefined;
+  const open = runningTurnActivity(readTurnActivities(pending?.activities, pending?.response?.length ?? 0));
+  return open ? `running ${open.label}` : undefined;
 }
 
 /** Starting another turn commits an older interrupted checkpoint first. */
@@ -163,10 +184,7 @@ export function updatePendingResponse(
 ): void {
   const pending = session.pendingTurn;
   if (!pending || (!text && mode === 'append')) return;
-  if (mode === 'replace' && pending.steers?.length && (pending.response ?? '') !== text) {
-    const streamed = pending.response ?? '';
-    pending.steers = pending.steers.map((steer) => ({ ...steer, responseOffset: remapSteerOffset(streamed, text, steer.responseOffset ?? 0) }));
-  }
+  if (mode === 'replace' && (pending.response ?? '') !== text) remapPendingOffsets(pending, pending.response ?? '', text);
   if (!text) delete pending.response;
   else pending.response = mode === 'replace' ? text : `${pending.response ?? ''}${text}`;
   pending.outputStarted = Boolean(text || pending.activities?.length);
@@ -207,22 +225,20 @@ function trackSubagent(pending: NonNullable<HarnessSession['pendingTurn']>, even
 export function recordPendingActivity(session: HarnessSession, event: HarnessActivityEvent, now: string): void {
   const pending = session.pendingTurn;
   if (!pending || event.kind === 'thinking') return;
-  // Before the de-duplication below, which would skip a repeated step.
+  // Before the calls, which leave a sub-agent's own steps out.
   trackSubagent(pending, event, now);
   const hints = pending as PendingTurnWithHints;
-  // Hints first: the de-duplication below must not skip them, and they must
-  // outlive the 20-entry activity window.
+  // Hints first: they must outlive a call the size bound later drops.
   for (const touched of touchedFilesFromActivity(event)) {
     if (!hints.touchedFiles?.includes(touched)) hints.touchedFiles = [...(hints.touchedFiles ?? []), touched].slice(-MAX_TOUCHED_FILES);
   }
   // A completion is reported under a generic label by some vendors ("tool");
   // its start already carried the real identity.
   if (Boolean(event.diff) || (!(event.kind !== 'tool-start' && event.label === 'tool') && !activityLabelIsReadOnly(event.label))) hints.mutatingActivity = true;
-  const verb = event.kind === 'tool-error' ? 'failed'
-    : event.kind === 'tool-done' ? 'completed' : event.kind === 'tool-start' ? 'started' : 'thinking';
-  const summary = `${verb} ${event.label}`.trim();
-  if (!summary || pending.activities?.[pending.activities.length - 1] === summary) return;
-  pending.activities = [...(pending.activities ?? []).slice(-19), summary];
+  const activities = readTurnActivities(pending.activities, pending.response?.length ?? 0);
+  const next = recordTurnActivity(activities, event, pending.response?.length ?? 0);
+  if (next === pending.activities || (!next.length && !pending.activities)) return;
+  pending.activities = next;
   pending.outputStarted = true;
   pending.updatedAt = now;
   session.updatedAt = now;
@@ -292,9 +308,7 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
     const pending = session.pendingTurn;
     const streamed = pending.response ?? '';
     const final = durableAnswer(streamed, response ?? '');
-    if (pending.steers?.length && streamed !== final) {
-      pending.steers = pending.steers.map((steer) => ({ ...steer, responseOffset: remapSteerOffset(streamed, final, steer.responseOffset ?? 0) }));
-    }
+    if (streamed !== final) remapPendingOffsets(pending, streamed, final);
     pending.response = final;
     pending.outputStarted = true;
   }

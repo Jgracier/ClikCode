@@ -7,6 +7,7 @@ import type { HarnessSession } from '../../session/model.js';
 import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { decodeAttachmentPath, expandHomePath } from '../../session/attachments.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
+import { textTranscript } from '../../turn/turn-activities.js';
 
 function transcriptMarkdown(session: HarnessSession): string {
   const title = session.name ?? `ClikCode conversation ${session.id.slice(0, 8)}`;
@@ -20,7 +21,7 @@ function transcriptMarkdown(session: HarnessSession): string {
     `- Workspace: ${session.workspace ?? process.cwd()}`,
     `- Exported: ${new Date().toISOString()}`, '',
   ];
-  const body = sessionTranscriptMessages(session).flatMap((message) => [`## ${message.role === 'assistant' ? 'Assistant' : 'You'}`, '', message.content.trim(), '']);
+  const body = textTranscript(sessionTranscriptMessages(session)).flatMap((message) => [`## ${message.role === 'assistant' ? 'Assistant' : 'You'}`, '', message.content.trim(), '']);
   return `${[...header, ...body].join('\n').trimEnd()}\n`;
 }
 

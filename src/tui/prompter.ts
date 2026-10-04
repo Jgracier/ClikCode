@@ -22,12 +22,13 @@ import { stripRepeatedTitles } from '../session/title.js';
 import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
+import { readTurnActivities } from '../turn/turn-activities.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
-import type { HarnessSession } from '../session/model.js';
+import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, openToolsStatus, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
@@ -691,7 +692,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The conversation as the transcript writes it outside a turn's own view.
    *
    * A journal nothing runs is an interrupted turn, folded in as one (its
-   * prompt, then its text or "Interrupted turn activity: …"). A journal a
+   * prompt, then its text and calls). A journal a
    * worker is still running is NOT: the live view owns that turn. Folded, it
    * went into scrollback -- which cannot be taken back -- above the same turn
    * drawn live, a second copy for every trip to the board and back; and its
@@ -1676,10 +1677,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         return row.done && !group.done ? { ...row, done: false } : row;
       });
     };
-    /** A turn's own tool calls: anchored at the message count when it began,
-     * which is at or before the index its answer lands at. */
-    const turnEntries = (from: number, to = from): ActivityEntry[] => this.activityEntries.filter((entry) =>
-      entry.anchor >= from && entry.anchor <= to && entry.responseOffset !== undefined && !entry.event?.parentId);
+    /** The running turn's own tool calls: anchored at the message count when
+     * it began, which is at or before the index its answer lands at. */
+    const turnEntries = (anchor: number): ActivityEntry[] => this.activityEntries.filter((entry) =>
+      entry.anchor === anchor && entry.responseOffset !== undefined && !entry.event?.parentId);
+    /** A saved message's calls, as rows: folded into entries by the same
+     * upsert the running turn's events go through, and grouped and drawn by
+     * the same functions, so a reopened turn looks as it did live. */
+    const savedTools = (message: TranscriptMessage, index: number): SettlingTool[] => {
+      const saved = readTurnActivities(message.activities, message.content.length);
+      if (!saved.length) return [];
+      let entries: ActivityEntry[] = [];
+      for (const [position, activity] of saved.entries()) {
+        entries = upsertActivityEvent(entries, index, Math.min(activity.responseOffset, message.content.length), activity.event, position + 1, 0);
+      }
+      return groupedRows(entries, true, new ExploreGrouping());
+    };
     const turnTools = (ended: boolean): SettlingTool[] => {
       const tools: SettlingTool[] = groupedRows(turnEntries(this.activityAnchor)
         // An anchor is reused: the next turn's assistant occupies the same
@@ -1745,11 +1758,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
 
     emit(standaloneActivity(firstUnwritten));
-    let turnStart = firstUnwritten;
+    // The turn this window drew live has all its calls on screen already: a
+    // steer splits its saved answer into several messages, and the ones after
+    // the first must not draw those calls a second time.
+    let drewLiveTurn = false;
     for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
       const message = persistedMessages[index]!;
-      const pastTools = reseeding && message.role === 'assistant' && index !== liveAssistant ? turnEntries(turnStart, index) : [];
-      if (message.role === 'assistant') turnStart = index + 1;
+      const pastTools = message.role === 'assistant' && index !== liveAssistant && !drewLiveTurn ? savedTools(message, index) : [];
       if (index === liveAssistant && message.role === 'assistant') {
         // The answer that just streamed. Its rows are already in scrollback and
         // the transcript knows exactly which blocks it still owes, so a
@@ -1760,10 +1775,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           content: sanitizeTerminalText(message.content), tools: turnTools(true), turnEnded: true, renderBlocks,
         }).finished);
       } else if (pastTools.length) {
-        // An earlier turn of this window, written again at a new width: its
-        // tool rows go back where they happened, as they did the first time.
+        // A saved turn: its calls go back where they happened, between the
+        // paragraphs, as they were drawn while it ran.
         emit(new TurnTranscript().advance({
-          content: sanitizeTerminalText(message.content), tools: groupedRows(pastTools, true, new ExploreGrouping()),
+          content: sanitizeTerminalText(stripRepeatedTitles(message.content)), tools: pastTools,
           turnEnded: true, renderBlocks,
         }).finished);
       } else {
@@ -1784,6 +1799,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (index === liveAssistant) {
         this.emitted.liveAnswerSettled();
         liveAssistant = undefined;
+        drewLiveTurn = true;
         this.turnTranscript.reset();
       }
       this.emitted.wrote(message);

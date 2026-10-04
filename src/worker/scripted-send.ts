@@ -14,6 +14,7 @@ import { takeConversation } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import { runSessionTurn } from '../turn/session-turn.js';
 import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { textTranscript } from '../turn/turn-activities.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
@@ -91,7 +92,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
       if (stopping) { finish(() => rejectTurn(turnCancelledError())); return; }
       const state = await readState();
       const session = state.sessions.find((item) => item.id === sessionId);
-      const answer = session ? sessionTranscriptMessages(session).at(-1) : undefined;
+      const answer = session ? textTranscript(sessionTranscriptMessages(session)).at(-1) : undefined;
       const invocation = state.invocations.filter((item) => item.sessionId === sessionId && item.at >= startedAt).at(-1);
       emitHarnessOutput({
         session, text: answer?.role === 'assistant' ? answer.content : '',
