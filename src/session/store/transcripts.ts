@@ -29,16 +29,27 @@ export function transcriptOf(session: HarnessSession): SessionTranscript {
   };
 }
 
-async function materializedMessages(file: SessionFile, seen: Set<string>): Promise<TranscriptMessage[] | undefined> {
+/** Each file's history with its parent references resolved, by the parsed
+ * file it came from. A loaded file object stands for one version of the file
+ * (records.ts replaces it when the file changes), and a parent's shared
+ * prefix never changes under a child (keepsHistory), so the result holds for
+ * as long as the object does. Never mutated: readers clone. */
+const materialized = new WeakMap<SessionFile, TranscriptMessage[] | undefined>();
+
+async function materializedMessages(file: SessionFile, seen: Set<string>, walk = { cycle: false }): Promise<TranscriptMessage[] | undefined> {
   const ref = file.transcriptRef;
   if (!ref) return file.messages;
+  if (materialized.has(file)) return materialized.get(file);
   let inherited: TranscriptMessage[] = [];
   if (!seen.has(ref.sessionId)) {
     seen.add(ref.sessionId);
     const parent = await loadSessionFile(ref.sessionId);
-    inherited = ((parent ? await materializedMessages(parent, seen) : undefined) ?? []).slice(0, ref.uptoIndex);
-  }
-  return [...inherited, ...(file.messages ?? [])];
+    inherited = ((parent ? await materializedMessages(parent, seen, walk) : undefined) ?? []).slice(0, ref.uptoIndex);
+  } else walk.cycle = true;
+  const messages = [...inherited, ...(file.messages ?? [])];
+  // A walk cut short by a cycle is that walk's answer, not the file's.
+  if (!walk.cycle) materialized.set(file, messages);
+  return messages;
 }
 
 /** Reads one conversation's transcript with any parent reference resolved. The
@@ -158,21 +169,27 @@ const MIN_SHARED_MESSAGES = 2;
  * state lock around both kept from deadlocking. */
 export async function writeSessionTranscript(_held: StateLockHeld, id: string, next: SessionTranscript, options: TranscriptWriteOptions = {}): Promise<void> {
   const previous = await loadSessionFile(id);
-  const previousMessages = previous ? await materializedMessages(previous, new Set([id])) : undefined;
   const verbatim = next;
-  if (options.base && previous && storedFrom.get(previous) !== options.base) {
+  // What is stored is exactly the writer's base: no merge, and history the
+  // writer still holds by identity is history unchanged (a checkpoint).
+  const storedBase = previous && options.base && storedFrom.get(previous) === options.base;
+  let previousMessages: TranscriptMessage[] | undefined;
+  const previousHistory = async (): Promise<TranscriptMessage[] | undefined> => (
+    previousMessages ??= previous ? await materializedMessages(previous, new Set([id])) : undefined);
+  if (options.base && previous && !storedBase) {
     next = mergeTranscripts(options.base, next, {
-      ...(previousMessages !== undefined ? { messages: previousMessages } : {}),
+      ...(await previousHistory() !== undefined ? { messages: previousMessages } : {}),
       ...(previous.pendingTurn !== undefined ? { pendingTurn: previous.pendingTurn } : {}),
     });
   }
-  if (previous && !keepsHistory(previousMessages, next.messages)) await materializeChildrenOf(id);
+  const historyUnchanged = storedBase && next.messages === options.base!.messages;
+  if (previous && !historyUnchanged && !keepsHistory(await previousHistory(), next.messages)) await materializeChildrenOf(id);
   if (transcriptIsEmpty(next)) {
     await removeSessionFile(id);
     return;
   }
   const parentId = options.parentSessionId ?? previous?.transcriptRef?.sessionId;
-  const built: SessionFile = (parentId && await referenceInto(parentId, id, next)) || { v: 1 as const, id, ...next };
+  const built: SessionFile = (parentId && await referenceInto(parentId, id, next, options.frozen === true)) || { v: 1 as const, id, ...next };
   const file = options.frozen ? built : cloneData(built);
   await storeSessionFile(id, file);
   // A merged write stored something other than the writer's copy: the next
@@ -180,9 +197,16 @@ export async function writeSessionTranscript(_held: StateLockHeld, id: string, n
   if (next === verbatim) storedFrom.set(file, verbatim);
 }
 
+/** How much of a parent's history a child's messages share, by the parent
+ * file and the child's history array: a streaming checkpoint stores the same
+ * history again and again, and comparing it with the parent's every time was
+ * a walk over both whole conversations per write. */
+const sharedWith = new WeakMap<readonly TranscriptMessage[], { parent: SessionFile; shared: number }>();
+
 /** `next` stored as a reference into `parentId`'s history, when that shares
- * enough of it and cannot form a cycle. */
-async function referenceInto(parentId: string, id: string, next: SessionTranscript): Promise<SessionFile | undefined> {
+ * enough of it and cannot form a cycle. `frozen`: next's arrays never change
+ * (see TranscriptWriteOptions), so what they share may be remembered. */
+async function referenceInto(parentId: string, id: string, next: SessionTranscript, frozen: boolean): Promise<SessionFile | undefined> {
   if (parentId === id || !next.messages || next.messages.length < MIN_SHARED_MESSAGES) return undefined;
   const parent = await loadSessionFile(parentId);
   if (!parent) return undefined;
@@ -191,8 +215,13 @@ async function referenceInto(parentId: string, id: string, next: SessionTranscri
     if (hop.sessionId === id || guard > 64) return undefined;
     hop = (await loadSessionFile(hop.sessionId))?.transcriptRef;
   }
-  const parentMessages = await materializedMessages(parent, new Set([parentId]));
-  const shared = commonPrefixLength(parentMessages ?? [], next.messages);
+  const known = frozen ? sharedWith.get(next.messages) : undefined;
+  let shared: number;
+  if (known?.parent === parent) shared = known.shared;
+  else {
+    shared = commonPrefixLength(await materializedMessages(parent, new Set([parentId])) ?? [], next.messages);
+    if (frozen) sharedWith.set(next.messages, { parent, shared });
+  }
   if (shared < MIN_SHARED_MESSAGES) return undefined;
   return {
     v: 1 as const, id, transcriptRef: { sessionId: parentId, uptoIndex: shared },
