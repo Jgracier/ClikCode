@@ -76,6 +76,7 @@ export function assertCustomAcpAvailable(definition: AiCustomAcpHarnessInput): A
 export async function writeCustomAcpConfig(records: readonly AiCustomAcpHarnessInput[]): Promise<void> {
   await atomicWriteFile(customAcpConfigPath(), storedShape(records));
   loadedSignature = undefined;
+  lastCheck = undefined;
 }
 
 export async function readCustomAcpConfig(): Promise<AiCustomAcpHarnessInput[]> {
@@ -123,30 +124,40 @@ export async function removeCustomAcpHarness(command: string): Promise<boolean> 
 
 let loadedSignature: string | undefined;
 
+/** The file is looked at no more often than this. Every catalog lookup
+ * comes through here -- several a frame while an answer streams -- and each
+ * was a stat, and for the usual missing file a thrown ENOENT error built and
+ * caught. Another process's add (VS Code's provider list) shows within it;
+ * this process's own add shows at once (writeCustomAcpConfig). */
+const CHECK_MS = 1000;
+let lastCheck: { path: string; at: number } | undefined;
+
 /** Test isolation: the next catalog read loads the file again. */
 export function resetCustomAcpLoadForTests(): void {
   loadedSignature = undefined;
+  lastCheck = undefined;
 }
 
 /** Reread the file when it changed and register the result on `catalog`.
  * Called from the one catalog bundle the process actually uses. */
 export function reloadCustomAcpHarnesses(catalog: CustomAcpCatalog): void {
   const path = customAcpConfigPath();
+  const now = Date.now();
+  if (lastCheck?.path === path && now - lastCheck.at < CHECK_MS) return;
+  lastCheck = { path, at: now };
   let signature: string;
   let text: string;
   try {
-    const stat = statSync(path);
-    signature = `${stat.mtimeMs}:${stat.size}`;
-    if (signature === loadedSignature) return;
-    text = readFileSync(path, 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return;
-    if (loadedSignature === undefined || loadedSignature === 'missing') {
+    const stat = statSync(path, { throwIfNoEntry: false });
+    if (!stat) {
+      if (loadedSignature !== undefined && loadedSignature !== 'missing') catalog.registerCustomHarnesses([]);
       loadedSignature = 'missing';
       return;
     }
-    catalog.registerCustomHarnesses([]);
-    loadedSignature = 'missing';
+    signature = `${stat.mtimeMs}:${stat.size}`;
+    if (signature === loadedSignature) return;
+    text = readFileSync(path, 'utf8');
+  } catch {
     return;
   }
   let records: AiCustomAcpHarnessInput[];
