@@ -8,6 +8,8 @@
  * single-process design this replaces needed (see the SIGHUP/SIGINT block
  * this is meant to eventually make deletable, commands/ai/interactive.ts).
  */
+import { spawn } from 'node:child_process';
+import { idleDecision, startsSuccessor } from './idle-decisions.js';
 import { createServer, type Socket } from 'node:net';
 import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
 import { unlink } from 'node:fs/promises';
@@ -211,20 +213,18 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     const running = await persistentWorkRunning(sessionId);
     // Something happened meanwhile (a turn, a window): its own edge re-arms.
     if (idleTimer || turnRunning || draining || observer.attachedCount > 0) return;
-    if (running) {
+    const decision = idleDecision({ workRunning: running, workSince: vendorWorkSince, now: Date.now(), ceilingMs: ABANDONED_SHELL_MS });
+    if (decision === 'recheck') {
       vendorWorkSince ??= Date.now();
-      if (Date.now() - vendorWorkSince < ABANDONED_SHELL_MS) {
-        idleTimer = setTimeout(() => { void idleReached(); }, VENDOR_WORK_RECHECK_MS);
-        idleTimer.unref();
-        return;
-      }
-      vendorWorkSince = undefined;
-      // shutdown tells the model the work was stopped, and why.
-      void shutdown('the work was still running 24 hours after it started, with no ClikCode window open');
+      idleTimer = setTimeout(() => { void idleReached(); }, VENDOR_WORK_RECHECK_MS);
+      idleTimer.unref();
       return;
     }
+    vendorWorkSince = undefined;
+    // Past the ceiling: shutdown tells the model the work was stopped, and why.
+    if (decision === 'stop-work') { void shutdown('the work was still running 24 hours after it started, with no ClikCode window open'); return; }
     // The work just ended: a whole idle period from now, not what was left.
-    if (vendorWorkSince !== undefined) { vendorWorkSince = undefined; scheduleIdleExit(); return; }
+    if (decision === 'fresh-idle') { scheduleIdleExit(); return; }
     void shutdown('idle timeout');
   };
 
@@ -654,10 +654,14 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // each shell this stops -- is recorded as a queued turn first, so the
     // next worker for the conversation delivers it.
     const undelivered = disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
+    let owed = undelivered.length > 0;
     await recordNotifications(undelivered).catch(() => undefined);
     // The same for work a persistent vendor left running: closing the child
     // below stops it.
-    if (await persistentWorkRunning(sessionId)) await recordVendorWorkStopped(`ClikCode's worker for this conversation stopped (${reason})`).catch(() => undefined);
+    if (await persistentWorkRunning(sessionId)) {
+      owed = true;
+      await recordVendorWorkStopped(`ClikCode's worker for this conversation stopped (${reason})`).catch(() => undefined);
+    }
     // Codex app-server and ACP children are spawned detached too, and were
     // orphaned the same way.
     await closePersistentTransport().catch(() => undefined);
@@ -671,7 +675,19 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     await removeWorkerRecord(sessionId, token).catch(() => undefined);
     if (await hold.held()) await unlink(socketPath).catch(() => undefined);
     await hold.release().catch(() => undefined);
+    // Owed the model something and stopped by nobody's choice (a newer
+    // build, the 24-hour ceiling): a successor -- on whatever build is
+    // installed now -- delivers it at once, instead of waiting for someone
+    // to reopen the conversation. Stopped by a signal, it stays stopped.
+    if (startsSuccessor(owed, reason)) startSuccessor();
     process.exit(0);
+  };
+  const startSuccessor = (): void => {
+    try {
+      const child = spawn(process.execPath, [process.argv[1]!, 'session-worker', sessionId], { stdio: 'ignore', detached: true, windowsHide: true });
+      child.on('error', () => undefined);
+      child.unref();
+    } catch { /* fail-open-ok: the queued notification waits for the next open */ }
   };
 
   try {
