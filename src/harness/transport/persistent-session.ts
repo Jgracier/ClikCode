@@ -10,7 +10,7 @@ import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, VendorBackgroundTurnHandler } from './background-turn.js';
 import { createTurnWatchdog, type TurnWatchdog } from './turn-watchdog.js';
-import { processGroupMembers } from './process-group.js';
+import { processGroup, processGroupMembers, toolCallWork } from './process-group.js';
 
 /** How long a cancelled turn gets to unwind before its child is killed. */
 export const CANCEL_SETTLE_MS = 2000;
@@ -61,8 +61,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   /** The child's process group when the current turn's prompt went out
    * (promptSent): what was already running -- the vendor, its MCP servers. */
   private atPrompt?: Promise<Set<number>>;
-  /** Processes a turn started and left running after it: the vendor's
-   * background work (a `run_in_background` shell, a dev server). */
+  /** Processes a turn started and left running after it. Only some are the
+   * vendor's background work (a `run_in_background` shell, a dev server):
+   * the rest are helpers it started lazily (MCP servers). toolCallWork
+   * (process-group.ts) tells them apart. */
   private readonly leftRunning = new Set<number>();
 
   constructor(options: PersistentSessionOptions, private readonly label: string) {
@@ -87,16 +89,20 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.atPrompt = pid ? Promise.resolve(await processGroupMembers(pid).catch(() => new Set<number>())) : undefined;
   }
 
-  /** Whether the vendor is still doing work between turns -- tracked by its
-   * protocol, or processes a turn left running. The session worker stays
-   * up for it (session-worker.ts) instead of closing the child under it. */
+  /** Whether the vendor is still doing work between turns: what its
+   * protocol reports still running (Codex items, tools an ACP background
+   * turn follows), or what a tool call left running (toolCallWork) -- never
+   * the vendor's own helpers. The session worker stays up for it
+   * (session-worker.ts) instead of closing the child under it, and reports
+   * it stopped when it must close it. */
   async backgroundWorkRunning(): Promise<boolean> {
     if (this.isClosed || !this.live || this.live.peer.closed) return false;
     if (this.pendingCount() > 0) return true;
-    if (!this.leftRunning.size || !this.live.pid) return false;
-    const members = await processGroupMembers(this.live.pid);
-    for (const pid of this.leftRunning) if (!members.has(pid)) this.leftRunning.delete(pid);
-    return this.leftRunning.size > 0;
+    const root = this.live.pid;
+    if (!this.leftRunning.size || !root) return false;
+    const group = await processGroup(root);
+    for (const pid of this.leftRunning) if (!group.has(pid)) this.leftRunning.delete(pid);
+    return toolCallWork(group, root, this.leftRunning).size > 0;
   }
 
   private async noteLeftRunning(): Promise<void> {
