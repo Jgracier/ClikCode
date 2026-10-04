@@ -240,6 +240,8 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .notice.warning .codicon { color: var(--warn); }
 .notice.error { border-color: var(--vscode-inputValidation-errorBorder, var(--err)); }
 .notice.error .codicon { color: var(--err); }
+.notice.clikcode-notice { color: var(--vscode-descriptionForeground); }
+.notice.clikcode-notice .notice-label { font-weight: 600; }
 .panel-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--subtle); overflow: hidden; }
 .panel-title { display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: none; padding: 7px 10px; font-weight: 600; text-align: left; }
 .panel-title:hover { background: var(--hover); }

@@ -1,6 +1,7 @@
 /** The message box: text with / commands and @ files, attached selections
  * and images, and the footer that chooses provider·model, effort and
  * permissions for this chat. */
+import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
 import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
@@ -64,7 +65,8 @@ export function paletteEntry(item: IdeSlashCommand): PaletteEntry {
 export function promptHistory(messages: ReadonlyArray<{ role: string; content: string }>): string[] {
   const prompts: string[] = [];
   for (const message of messages) {
-    const typed = message.role === 'user' ? splitEditorContext(message.content).text : '';
+    // A notice ClikCode sent in the user's place is not something they typed.
+    const typed = message.role === 'user' && !isClikCodeNotice(message.content) ? splitEditorContext(message.content).text : '';
     if (!typed.trim()) continue;
     if (prompts[prompts.length - 1] !== typed) prompts.push(typed);
   }
@@ -427,8 +429,9 @@ export function Composer(props: {
       {model.queued.length ? (
         <div class="queued" aria-label="Queued messages">
           {model.queued.map((item, index) => item.notification ? (
-            // A background task's result the agent is owed: not the user's to edit.
-            <div key={item.id} class="queued-item"><Icon name="bell" /><span class="queued-text">Background task finished</span><span class="muted">next turn</span></div>
+            // A notice ClikCode owes the agent (a background task's result,
+            // work that was stopped): not the user's to edit.
+            <div key={item.id} class="queued-item clikcode-notice"><Icon name="bell" /><span class="queued-text" title={clikCodeNoticeBody(item.text)}>ClikCode notice</span><span class="muted">next turn</span></div>
           ) : (
             <div key={item.id} class="queued-item">
               <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>

@@ -8,6 +8,7 @@ import { sanitizeTerminalText } from './text.js';
 import { terminalCellWidth } from './width.js';
 import { wrapCodeLine, wrapWords, wrapWordsLive } from './wrap.js';
 import type { MessageBlock } from '../../harness/prompter.js';
+import { clikCodeNoticeBody } from '../../session/clikcode-notice.js';
 
 /** Rows for a run of parsed Markdown blocks, exactly as they appear in the
  * transcript.
@@ -117,5 +118,19 @@ export function messageRows(content: string, marker: string, width: number): rea
   const rows = renderMessageBlocks(splitIntoBlocks(sanitizeTerminalText(content)), marker, width);
   cache.set(content, rows);
   if (cache.size > MESSAGE_ROWS_KEPT) cache.delete(cache.keys().next().value!);
+  return rows;
+}
+
+/** A notice ClikCode sent the model as a turn (session/clikcode-notice.ts):
+ * muted, under its own label, never the user's marker -- the user did not
+ * write it. Plain text, wrapped line by line: it is ClikCode's wording and a
+ * shell's output tail, not Markdown. */
+export function noticeRows(content: string, width: number): readonly string[] {
+  const budget = Math.max(1, width - 2);
+  const lines = sanitizeTerminalText(clikCodeNoticeBody(content)).split('\n');
+  const rows = [`${chalk.dim('◇')} ${chalk.dim('ClikCode notice')}`];
+  for (const line of lines) {
+    for (const wrapped of line.trim() ? wrapWords(line, budget) : ['']) rows.push(wrapped ? `  ${chalk.dim(wrapped)}` : '  ');
+  }
   return rows;
 }

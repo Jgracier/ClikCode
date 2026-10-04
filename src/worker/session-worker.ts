@@ -28,6 +28,7 @@ import { consumeQueuedTurn } from './consume-queued.js';
 import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { deliverTyped } from '../turn/send-mode.js';
+import { CLIKCODE_NOTICE_TAG } from '../session/clikcode-notice.js';
 import { closePersistentTransport, persistentWorkRunning, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
@@ -275,7 +276,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     const submittedAt = new Date().toISOString();
     enqueueSessionTurn(found, {
       id: randomUUID(), submittedAt, kind: 'notification',
-      text: `[ClikCode] Background work you started in an earlier turn (a background command or server) was stopped: ${reason}. Check whether it finished, and start it again if it is still needed.`,
+      text: `${CLIKCODE_NOTICE_TAG}Background work you started in an earlier turn (a background command or server) was stopped: ${reason}. Check whether it finished, and start it again if it is still needed.`,
     }, submittedAt);
     await writeState(latest);
   };

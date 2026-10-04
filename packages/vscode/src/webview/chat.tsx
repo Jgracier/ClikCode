@@ -7,6 +7,7 @@ import {
   ACTIVITY_PREVIEW_LINES, activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, liveWaitKind,
   outputPreview, previewLinesFor, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
+import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
 import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
@@ -76,7 +77,17 @@ function LiveMarkdown({ text }: { text: string }): JSX.Element {
   );
 }
 
+/** A notice ClikCode sent the model in the user's place (a background
+ * shell's exit, vendor work a stopped worker ended): muted and labelled as
+ * ClikCode's, not a bubble the user wrote (session/clikcode-notice.ts). */
+const ClikCodeNotice = ({ text }: { text: string }): JSX.Element => (
+  <div class="notice clikcode-notice" role="note" aria-label="ClikCode notice">
+    <Icon name="info" /><span><span class="notice-label">ClikCode notice</span>{'\n'}{clikCodeNoticeBody(text)}</span>
+  </div>
+);
+
 const UserMessage = memo(({ text: content }: { text: string }): JSX.Element => {
+  if (isClikCodeNotice(content)) return <ClikCodeNotice text={content} />;
   const { text, file, problems, selections } = splitEditorContext(content);
   return (
     <div class="message user" role="article" aria-label="You">
