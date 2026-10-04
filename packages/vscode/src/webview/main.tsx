@@ -1,6 +1,7 @@
 /** The chat webview: renders the ChatModel the extension posts, and turns
  * clicks and keys into messages back. Holds no conversation state of its own
  * beyond the composer and which menu is open. */
+import { COPIED_MS, NOTICE_MS } from '../../../../src/harness/protocol/timings';
 import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, type ChatModel } from '../model';
@@ -169,7 +170,7 @@ class DrawGuard extends Component<{ model: ChatModel; children: ComponentChildre
 }
 
 function Toast({ message, onClose }: { message: string; onClose: () => void }): JSX.Element {
-  useEffect(() => { const timer = setTimeout(onClose, 8000); return () => clearTimeout(timer); }, [message]);
+  useEffect(() => { const timer = setTimeout(onClose, NOTICE_MS); return () => clearTimeout(timer); }, [message]);
   return <div class="toast" role="alert"><Icon name="error" /><span>{message}</span><IconButton icon="close" label="Dismiss" onClick={onClose} /></div>;
 }
 
@@ -271,7 +272,7 @@ function App(): JSX.Element {
         const code = copy.closest('.codeblock')?.querySelector('code')?.textContent ?? '';
         void navigator.clipboard?.writeText(code).then(() => {
           copy.classList.add('copied');
-          setTimeout(() => copy.classList.remove('copied'), 1200);
+          setTimeout(() => copy.classList.remove('copied'), COPIED_MS);
         });
       }
     };

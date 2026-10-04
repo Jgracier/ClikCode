@@ -2,6 +2,7 @@
  * feeds, and the webviews showing it. The side bar is one chat; every editor
  * tab is another, each with its own bridge, so each shows its own
  * conversation -- the bridge is one conversation at a time, like a terminal. */
+import { PAINT_COALESCE_MS } from '../../../src/harness/protocol/timings';
 import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import { homedir, tmpdir } from 'node:os';
@@ -20,8 +21,6 @@ import { DiffDocuments, fileNameIn, openSignInLink, runInTerminal } from './ui';
 import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
 import { mentionFromUri, pastedReference, searchWorkspaceFiles } from './mentions';
 import type { Mention } from './webview-protocol';
-
-const POST_INTERVAL_MS = 40;
 
 export interface ControllerHost {
   log: vscode.OutputChannel;
@@ -143,13 +142,14 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
-  /** Coalesced: a stream of deltas repaints at most every 40 ms. */
+  /** Coalesced: a stream of deltas repaints at most every PAINT_COALESCE_MS,
+   * as the terminal paints. */
   private schedulePost(): void {
     if (this.postTimer) return;
     this.postTimer = setTimeout(() => {
       this.postTimer = undefined;
       for (const surface of this.surfaces) this.postModel(surface);
-    }, POST_INTERVAL_MS);
+    }, PAINT_COALESCE_MS);
   }
 
   /** The model to one page: whole the first time, then only what changed

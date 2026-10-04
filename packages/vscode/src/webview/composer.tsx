@@ -1,6 +1,7 @@
 /** The message box: text with / commands and @ files, attached selections
  * and images, and the footer that chooses provider·model, effort and
  * permissions for this chat. */
+import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
@@ -560,7 +561,7 @@ function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): J
           <span class="muted">Confirm this code there</span>
           <code data-code>{signIn.code}</code>
           <button type="button" class="icon-button tiny" title={copied ? 'Copied' : 'Copy code'} aria-label={copied ? 'Copied' : 'Copy code'}
-            onClick={() => { void navigator.clipboard?.writeText(signIn.code ?? '').then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); }); }}>
+            onClick={() => { void navigator.clipboard?.writeText(signIn.code ?? '').then(() => { setCopied(true); setTimeout(() => setCopied(false), COPIED_MS); }); }}>
             <Icon name={copied ? 'check' : 'copy'} />
           </button>
         </div>

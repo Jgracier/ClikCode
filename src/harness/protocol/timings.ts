@@ -25,8 +25,12 @@ export function shimmerCycleMs(length: number): number {
 /** Bursts of streamed output inside this window are painted once. */
 export const PAINT_COALESCE_MS = 32;
 
-/** How long a transient notice ("Copied", "Could not copy: …") stays up. */
+/** How long a transient notice ("Could not copy: …", a VS Code error toast)
+ * stays up. */
 export const NOTICE_MS = 4000;
+
+/** How long a copy button shows its tick after copying. */
+export const COPIED_MS = 1200;
 
 /** A wait shorter than this shows nothing; past it a spinner or a "looking
  * for…" row appears. Most lookups answer in milliseconds, and a spinner that
