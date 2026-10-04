@@ -163,16 +163,17 @@ describe('a scripted send', () => {
     expect(printed.join('')).toContain('second answer');
   }, 60_000);
 
-  it('with no worker, runs here holding the conversation, so a worker cannot start mid-turn', async () => {
+  it('with no worker, starts one and runs through it, so what the turn leaves running has an owner', async () => {
     const session = await gatewaySession();
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const scripted = sendScriptedTurn(config(), session.id, 'nobody else is here');
     const asked = await request(1);
-    expect(await conversationHolder(session.id)).toMatchObject({ kind: 'turn', pid: process.pid });
+    const worker = await readWorkerRecord(session.id);
+    expect(worker, 'a worker runs it').toBeDefined();
+    expect(worker!.pid).not.toBe(process.pid);
     asked.answer('done here');
     await scripted;
-    expect(await conversationHolder(session.id)).toBeUndefined();
-    expect(await readWorkerRecord(session.id)).toBeUndefined();
     expect((await stored(session.id)).messages?.map((message) => message.content)).toEqual(['nobody else is here', 'done here']);
+    try { process.kill(worker!.pid, 'SIGTERM'); } catch { /* already gone */ }
   }, 60_000);
 });
