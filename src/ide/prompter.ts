@@ -6,6 +6,7 @@
  * picker -- its rows, its checks, its follow-up questions -- and not a second
  * copy of that logic that could drift from it.
  */
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import type { HarnessPrompter, PickerOption, PickerSettings } from '../harness/prompter.js';
@@ -35,7 +36,16 @@ export class IdePrompter implements HarnessPrompter {
   /** Sign-ins whose card the panel shows, by id: its Cancel aborts one. */
   private readonly signIns = new Map<string, AbortController>();
 
+  /** The bridge's queued job a sign-in opens inside: it lets the queue go
+   * (see IdeBridge.enqueue). */
+  private readonly queueHolder = new AsyncLocalStorage<(() => void) | undefined>();
+
   constructor(private readonly channel: IdeChannel) {}
+
+  /** Runs `work`; a sign-in opening anywhere inside it calls `release`. */
+  holding<T>(release: (() => void) | undefined, work: () => Promise<T>): Promise<T> {
+    return this.queueHolder.run(release, work);
+  }
 
   /** A vendor sign-in in the panel: a card with its link and code (which
    * the extension opens on the editor's machine) and Cancel; a code or key
@@ -45,6 +55,7 @@ export class IdePrompter implements HarnessPrompter {
     const id = randomUUID();
     const controller = new AbortController();
     this.signIns.set(id, controller);
+    this.queueHolder.getStore()?.();
     this.channel.send({ type: 'busy', label: `signing in to ${name}…` });
     this.channel.send({ type: 'sign-in-link', id, name });
     return {
