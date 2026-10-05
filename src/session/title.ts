@@ -103,11 +103,10 @@ const CLOSE = '</clikcode-title>';
 
 /** Appended to the first turn of an unnamed chat, and to no other turn. */
 function titleRequest(): string {
-  return `\n\n${OPEN}Before anything else, on its very first line, reply with `
-    + `${OPEN}a title${CLOSE} — at most ${SESSION_TITLE_MAX} characters, naming what this `
-    + `conversation is about (not what it literally says). Then answer normally. `
-    + `The line is removed before the user sees your reply. This is asked once: `
-    + `do this in this reply only, and never start any later reply with a title.${CLOSE}`;
+  return `\n\n${OPEN}Start this reply only with a first line `
+    + `${OPEN}a title${CLOSE} of at most ${SESSION_TITLE_MAX} characters naming what this `
+    + `conversation is about (not what it literally says), then answer normally. `
+    + `The user never sees that line. Never start a later reply with a title.${CLOSE}`;
 }
 
 export function withTitleRequest(prompt: string): string {
