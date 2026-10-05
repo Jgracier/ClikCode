@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ampUsageLabel, commandCodeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
+import { ampUsageLabel, auggieUsageLabel, commandCodeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
 
 const NOW = Date.parse('2026-09-30T04:42:49.300Z');
 
@@ -55,6 +55,18 @@ describe('credit balances', () => {
   it('kilo profile', () => {
     expect(kiloProfileLabel('Name: Someone\nEmail: someone@example.com\nTeam: Personal\nBalance: $0.00\n')).toBe('$0 credits left');
     expect(kiloProfileLabel('Balance: $1,204.50')).toBe('$1204.50 credits left');
+  });
+
+  it('auggie account status', () => {
+    const status = (amountRemaining: unknown, usageUnit: unknown = 'usd') => JSON.stringify({
+      planName: 'Free Plan', usageUnit, amountRemaining, amountIncludedPerCycle: '0', billingCycleEndDate: '2026-10-21T19:55:49Z',
+    });
+    expect(auggieUsageLabel(status('12.5'))).toBe('$12.50 credits left');
+    expect(auggieUsageLabel(status('7'))).toBe('$7 credits left');
+    expect(auggieUsageLabel(status('0'))).toBe('Out Of Credits');
+    expect(auggieUsageLabel(status('40', 'credits'))).toBe('40 credits credits left');
+    expect(auggieUsageLabel(status('n/a'))).toBeUndefined();
+    expect(auggieUsageLabel('not json')).toBeUndefined();
   });
 });
 
