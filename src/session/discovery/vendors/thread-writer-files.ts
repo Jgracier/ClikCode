@@ -8,7 +8,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
 import type { NativeThreadWriteContext } from '../stores.js';
 
@@ -63,6 +63,12 @@ export function inputString(call: CanonicalToolCall, ...keys: string[]): string 
   return undefined;
 }
 
+/** `path` made absolute against the workspace, for vendors whose file tools
+ * take absolute paths only. */
+export function absolutePath(workspace: string, path: string): string {
+  return isAbsolute(path) ? path : join(workspace, path);
+}
+
 /** The path a file call acted on. */
 export function callPath(call: CanonicalToolCall): string | undefined {
   return inputString(call, 'file_path', 'path', 'filePath', 'absolute_path', 'filename', 'file')
@@ -103,7 +109,8 @@ export function callResultText(call: CanonicalToolCall): string {
   }
   if (call.exitCode !== undefined && call.exitCode !== 0) lines.push(`(exit code ${call.exitCode})`);
   if (call.status === 'unfinished') lines.push('(this call did not finish; no result was recorded)');
-  else if (!lines.length) lines.push(call.status === 'failed' ? '(failed)' : '(done)');
+  else if (call.status === 'failed' && (call.exitCode === undefined || call.exitCode === 0)) lines.push('(failed)');
+  else if (!lines.length) lines.push('(done)');
   return lines.join('\n');
 }
 
