@@ -8,6 +8,11 @@ export const codex = {
   provider: 'codex',
   displayName: 'Codex',
   surface: 'terminal',
+  tier: 'primary',
+  transport: 'structured-cli',
+  parser: 'codex-items',
+  memoryFile: 'AGENTS.md',
+  nativeSlashPassthrough: false,
   localAuth: ['vendor-cli'],
   binary: 'codex',
   turn: {
