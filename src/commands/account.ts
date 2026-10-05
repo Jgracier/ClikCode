@@ -17,7 +17,7 @@ import { loginNativeHarness, withSignInScreen } from '../harness/transport/nativ
 import { accountVerification, verificationNotice } from '../turn/failover.js';
 import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
-import { harnessStatePath } from '../session/state/paths.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
@@ -233,7 +233,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   }
   const accountId = randomUUID();
   const profilePath = harness.profileEnv
-    ? join(harnessStatePath(), '..', 'profiles', harness.command, accountId)
+    ? join(stateDirectory(), 'profiles', harness.command, accountId)
     : undefined;
   if (profilePath) {
     touched.add(profilePath);
@@ -264,7 +264,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   const captureCredential = vendorCredentialCapture(harness);
   if (captureCredential && profilePath && harness.profileEnv) {
     for (const previous of state.accounts.filter((account) => account.provider === harness.provider && !account.nativeProfile)) {
-      const previousPath = join(harnessStatePath(), '..', 'profiles', harness.command, previous.id);
+      const previousPath = join(stateDirectory(), 'profiles', harness.command, previous.id);
       touched.add(previousPath);
       await mkdir(previousPath, { recursive: true, mode: 0o700 });
       if (await captureCredential(previousPath)) previous.nativeProfile = { env: harness.profileEnv, path: previousPath };

@@ -160,10 +160,6 @@ export async function prepareTurn(
   return { state, active };
 }
 
-export function turnWasCancelled(error: unknown): boolean {
-  return isTurnCancelled(error) || (error as Error | null)?.name === 'AbortError';
-}
-
 /** What follows a turn that failed: send it again here, carry it on in the
  * chat "Resume in" moved it to, or hand text back to the composer. */
 export type TurnFailureNext = { cancelled: boolean } & ({ retry: string } | { moved: ResumedIn } | { back: string[]; waiting?: ResumeAt });
@@ -182,7 +178,7 @@ export async function afterTurnFailure(
   prompter: HarnessPrompter | undefined, id: string, error: unknown,
   turn: { line?: string; sent?: string; queuedTurnId?: string; guard: ExhaustionRetryGuard },
 ): Promise<TurnFailureNext> {
-  const cancelled = turnWasCancelled(error);
+  const cancelled = isTurnCancelled(error);
   const queued = Boolean(turn.queuedTurnId && !cancelled);
   if (queued) await releaseQueuedTurn(id, turn.queuedTurnId!).catch(() => undefined);
   const back = queued && turn.line ? [turn.line] : [];

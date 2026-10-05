@@ -18,7 +18,7 @@ import type { NativeThreadWriteContext } from '../stores.js';
 import { piProjectDirectoryName, piSessionStore, piThreadLines } from './pi-store.js';
 import { sequentialIds } from './thread-writer-files.js';
 import { aiderHistoryMarkdown, aiderSessionStore } from './aider-store.js';
-import { harnessStatePath } from '../../state/paths.js';
+import { stateDirectory } from '../../store/paths.js';
 import { copilotSessionStore, copilotThreadFiles } from './copilot-store.js';
 import { geminiProjectSlug, geminiSessionStore, geminiThreadLines } from './gemini-store.js';
 import { qwenProjectDirectoryName, qwenSessionStore, qwenThreadLines } from './qwen-store.js';
@@ -257,7 +257,7 @@ describe('aider thread writer', () => {
     const ctx = context('aider', {}, 'aider 0.86.2');
     expect(await writer.versionOk(ctx)).toBe(true);
     const written = await writer.write(fixtureRecord(), ctx);
-    const directory = join(dirname(harnessStatePath()), 'native', 'aider');
+    const directory = join(stateDirectory(), 'native', 'aider');
     expect(dirname(written!.nativeId)).toBe(directory);
     expect(written!.nativeId).toMatch(/\.history\.md$/);
     expect(await readFile(written!.nativeId, 'utf8')).toContain('#### Remember the codeword PELICAN-73.');

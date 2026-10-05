@@ -15,7 +15,8 @@ import { join } from 'node:path';
 import type Conf from 'conf';
 import { emitResult } from '../cli/structured-output.js';
 import { isAllowedLoopbackHost } from './host-allowlist.js';
-import { harnessCommand, harnessStatePath } from '../session/state/paths.js';
+import { harnessCommand } from '../session/state/paths.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView, deviceManifest } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
@@ -97,7 +98,7 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
   // the OS so ClikCode never competes with another local tool.
   const port = options.port === undefined ? 0 : Number(options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('port must be an integer from 0 to 65535');
-  const runtimeDirectory = join(harnessStatePath(), '..');
+  const runtimeDirectory = stateDirectory();
   await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
   const runtimePath = join(runtimeDirectory, 'runtime.json');
   const lockPath = join(runtimeDirectory, 'runtime.lock');
@@ -181,7 +182,7 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
 }
 
 export async function aiStatus(): Promise<void> {
-  const runtimePath = join(harnessStatePath(), '..', 'runtime.json');
+  const runtimePath = join(stateDirectory(), 'runtime.json');
   try {
     const runtime = JSON.parse(await readFile(runtimePath, 'utf8')) as { pid?: unknown; port?: unknown; host?: unknown; installationId?: unknown; startedAt?: unknown };
     let running = false;
@@ -196,7 +197,7 @@ export async function aiStatus(): Promise<void> {
 }
 
 export async function aiStop(): Promise<void> {
-  const runtimePath = join(harnessStatePath(), '..', 'runtime.json');
+  const runtimePath = join(stateDirectory(), 'runtime.json');
   const state = await readState({ transcripts: [] });
   let runtime: { pid?: unknown; installationId?: unknown };
   try {
