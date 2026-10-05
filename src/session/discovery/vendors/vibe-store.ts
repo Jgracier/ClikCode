@@ -24,7 +24,10 @@
  * replayed the prompt with the word (an id never carried: "Session not
  * found"); A unchanged. Both prompts got Mistral HTTP 429 (rate_limited,
  * retried until timeout) on three different accounts, so the recall itself
- * is unproved.
+ * is unproved. Retried later that day on four more FREE-plan keys and on
+ * mistral-small-latest: still 429 (code 1300), and a direct API request
+ * showed why -- `x-ratelimit-limit-req-minute: 0`, a key with no request
+ * allowance at all, not a busy one.
  */
 
 import { randomUUID } from 'node:crypto';
