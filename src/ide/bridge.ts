@@ -95,8 +95,9 @@ export class IdeBridge {
   /** Open conversations lists in the editor, and the watch behind them. */
   private listWatchers = 0;
   private listWatch: ListWatch | undefined;
-  /** A setting chosen in the editor's own widget is on screen there already:
-   * its "Model set to …" confirmation is not said again in the chat. */
+  /** A choice made in the editor's own widgets is on screen there already:
+   * its confirmation ("Model set to …", "Renamed to …", an account removed)
+   * is not said again in the chat. Errors still are. */
   quietOutput = 0;
 
   private readonly slashHost: SlashHost;
@@ -661,18 +662,18 @@ export class IdeBridge {
   private async choose(requestId: string, choice: IdeChoice): Promise<void> {
     const done = (data?: unknown): void => this.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
     const failed = (error: unknown): void => this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
+    const quietly = async <T>(job: () => Promise<T>): Promise<T> => {
+      this.quietOutput += 1;
+      try { return await job(); } finally { this.quietOutput -= 1; }
+    };
     const setting = async (line: string): Promise<void> => {
       const id = this.requireSession();
-      this.quietOutput += 1;
-      try {
-        if (this.workerTurnRunning) await commandDuringTurn(id, line);
-        else await aiSessionCommand(id, line);
-      } finally { this.quietOutput -= 1; }
+      await quietly(async () => { if (this.workerTurnRunning) await commandDuringTurn(id, line); else await aiSessionCommand(id, line); });
       await this.emitSession();
     };
     const queued = (job: () => Promise<unknown>): void => {
       this.enqueue(async () => {
-        try { done(await job()); } catch (error) { failed(error); }
+        try { done(await quietly(job)); } catch (error) { failed(error); }
       });
     };
     try {
@@ -709,15 +710,12 @@ export class IdeBridge {
           queued(async () => {
             const id = this.requireSession();
             const selected = choice.provider === GATEWAY_ID ? '__gateway__' : choice.provider === LOCAL_ID ? '__clikcode_local__' : choice.provider;
-            this.quietOutput += 1;
-            try {
-              const moved = await selectProviderConversation(this.config, this.prompter, id, selected);
-              if (moved !== this.sessionId) await this.switchTo(moved);
-              if (choice.model) {
-                const { session } = await this.current();
-                await aiSessionCommand(session.id, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
-              } else await resolveSessionModel(this.requireSession());
-            } finally { this.quietOutput -= 1; }
+            const moved = await selectProviderConversation(this.config, this.prompter, id, selected);
+            if (moved !== this.sessionId) await this.switchTo(moved);
+            if (choice.model) {
+              const { session } = await this.current();
+              await aiSessionCommand(session.id, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
+            } else await resolveSessionModel(this.requireSession());
             await this.prepareRoute().catch(() => undefined);
             await this.emitSession();
             void this.refreshUsage().catch(() => undefined);

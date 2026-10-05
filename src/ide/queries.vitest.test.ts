@@ -201,6 +201,18 @@ describe('the bridge\'s revision-2 requests', () => {
     expect(bridge.quietOutput).toBe(0);
   });
 
+  it('says nothing in the chat about a rename made in the conversations list', async () => {
+    const { bridge, inner, result } = bridgeFor();
+    inner.sessionId = 's1';
+    let quietWhileRenaming = 0;
+    sessionCommand.mockImplementationOnce(async (id: string) => { quietWhileRenaming = bridge.quietOutput; return id; });
+    bridge.handle({ type: 'choose', requestId: 'r', choice: { kind: 'conversation', action: 'rename', sessionId: 's2', name: 'Plans' } });
+    expect(await result('r')).toMatchObject({ ok: true });
+    expect(sessionCommand).toHaveBeenCalledWith('s2', '/rename Plans');
+    expect(quietWhileRenaming, 'its "Renamed to" confirmation is the list itself').toBe(1);
+    expect(bridge.quietOutput).toBe(0);
+  });
+
   it('tells an open conversations list when the state changes, and stops when the last one closes', async () => {
     const { bridge, sent } = bridgeFor();
     const root = await mkdtemp(join(tmpdir(), 'clikcode-ide-watch-'));
