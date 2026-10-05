@@ -49,9 +49,10 @@ export type NativeSessionCarry = {
  *    them). Almost every vendor. Carrying is then a copy the caller performs,
  *    and the same path is also what a title read opens.
  *  - `carry` -- the conversation is not separable as a path, so only the
- *    vendor's own store knows how to move it. Hermes is the one so far: every
- *    conversation lives as rows in one shared SQLite database that also holds
- *    the account's other sessions, so copying the file would overwrite them.
+ *    vendor's own store knows how to move it. Hermes, OpenCode/Kilo, Goose,
+ *    Devin and MiniMax Code: every conversation lives as rows in one shared
+ *    SQLite database that also holds the account's other sessions, so
+ *    copying the file would overwrite them (vendors/sqlite-carry.ts).
  *
  *  `root` is required either way: it is what tells two accounts apart, and a
  *  shared root already means the conversation never moved. */

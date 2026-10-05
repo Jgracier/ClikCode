@@ -44,11 +44,11 @@
  * history has none has to be seen on a real model turn. */
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import type { NativeSessionEnvironment, NativeSessionStore, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
+import type { NativeSessionEnvironment, NativeSessionFile, NativeSessionStore, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
 } from './thread-writer-files.js';
@@ -381,9 +381,33 @@ export const cursorThreadWriter: NativeThreadWriter = {
   },
 };
 
-/** Cursor has no `locate`: carrying a session across accounts is not wired
- *  (a store with only a root falls back to re-seeding exactly as before). */
+/** An ACP session is its own directory, `<root>/<agentId>/` (meta.json and
+ *  a store.db holding only that session), not rows in a shared database -- so
+ *  it carries the way Copilot's does: carry.ts copies the directory, newest
+ *  wins. Never a `carry` of rows: copying one session's store.db cannot touch
+ *  another's. */
+export async function locateCursorSession(root: string, nativeId: string): Promise<NativeSessionFile | undefined> {
+  if (!/^[\w-]+$/.test(nativeId)) return undefined;
+  const path = join(root, nativeId);
+  const [directory, store] = await Promise.all([
+    stat(path).then((entry) => entry.isDirectory(), () => false),
+    stat(join(path, 'store.db')).then((entry) => entry.isFile(), () => false),
+  ]);
+  return directory && store ? { path, root } : undefined;
+}
+
+/** OFF, with the writer and for the same reason: no Cursor model turn has run
+ *  on a session that was not made in its own profile -- every account was
+ *  out of quota. `session/load` replays a store written elsewhere (the
+ *  writer's check), but whether another ACCOUNT's model turn accepts a
+ *  session another account started (its agentId, its blobEncryptionKey) is
+ *  unseen. Turn on once one carried session answers a model turn there:
+ *  `locateCursorSession` is the whole of what this enables. */
+export const CURSOR_CARRY_VERIFIED: boolean = false;
+
+/** Until then a failover re-seeds, exactly as before. */
 export const cursorSessionStore: NativeSessionStore = {
   root: cursorAcpSessionsRoot,
+  ...(CURSOR_CARRY_VERIFIED ? { locate: locateCursorSession } : {}),
   writer: cursorThreadWriter,
 };
