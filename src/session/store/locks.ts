@@ -4,7 +4,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { readlinkSync } from 'node:fs';
-import { link, open, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
+import { link, open, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
@@ -129,10 +129,26 @@ export async function breakStaleLock(lockPath: string, observedRaw: string, stil
     const taken = await stat(aside).catch(() => undefined);
     if (!taken || taken.ino !== judged.ino) await link(aside, lockPath).catch(() => undefined);
     await unlink(aside).catch(() => undefined);
+    await sweepOrphanTemps(lockPath);
   } finally {
     await unlink(breaking).catch(() => undefined);
   }
 }
+
+/** Owner temp files (createLock) and set-aside copies a killed process left
+ * beside this lock. A kill is what makes a lock stale, so its break is when
+ * to look; a live attempt's temp lives for milliseconds, so a minute's age
+ * never touches one in use. */
+async function sweepOrphanTemps(lockPath: string): Promise<void> {
+  const prefix = `${basename(lockPath)}.`;
+  const names = await readdir(dirname(lockPath)).catch(() => [] as string[]);
+  await Promise.all(names.filter((name) => name.startsWith(prefix) && /\.\d+\.[0-9a-f]+\.(new|stale)$/.test(name)).map(async (name) => {
+    const path = join(dirname(lockPath), name);
+    const age = await stat(path).then((info) => Date.now() - info.mtimeMs).catch(() => undefined);
+    if (age !== undefined && age > ORPHAN_TEMP_MS) await unlink(path).catch(() => undefined);
+  }));
+}
+const ORPHAN_TEMP_MS = 60_000;
 
 /** Cross-process mutual exclusion on `lockPath`, serialized in-process first so
  * one process never contends with itself. Not re-entrant: code that needs a
