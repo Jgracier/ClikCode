@@ -250,6 +250,16 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   const startupBuild = currentWorkerBuild();
   let updateSeen = false;
   let usageInterval: ReturnType<typeof setInterval> | undefined;
+  /** Let go on both ways out: leaving, and handing over to a newer build. */
+  const releaseWindow = async (): Promise<void> => {
+    if (usageInterval) clearInterval(usageInterval);
+    clearInterval(claimInterval);
+    await closeAllWorkerClients().catch(() => undefined);
+    await closePersistentTransport().catch(() => undefined);
+    // Nothing it showed keeps a local model up, even if this process lives
+    // on (the exit hook covers a hard exit).
+    await reconcileLocalModelLeases(undefined).catch(() => undefined);
+  };
   const newerBuild = (): boolean => Boolean(startupBuild && currentWorkerBuild() !== startupBuild);
   const beginBuildReplace = (): Promise<void> | undefined => {
     if (!terminal || !newerBuild()) return undefined;
@@ -258,11 +268,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       sessionId,
       closeUi: () => terminal.close(),
       release: async () => {
-        if (usageInterval) clearInterval(usageInterval);
-        clearInterval(claimInterval);
-        await closeAllWorkerClients().catch(() => undefined);
-        await closePersistentTransport().catch(() => undefined);
-        await reconcileLocalModelLeases(undefined).catch(() => undefined);
+        await releaseWindow();
         // The chat stays. Discarding a blank one here would make the new
         // process's `sessions resume` miss it.
         await releaseConversationClaim(sessionId).catch(() => undefined);
@@ -683,13 +689,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       }
     }
   } finally {
-    if (usageInterval) clearInterval(usageInterval);
-    if (claimInterval) clearInterval(claimInterval);
-    await closeAllWorkerClients().catch(() => undefined);
-    await closePersistentTransport().catch(() => undefined);
-    // The terminal is leaving: nothing it showed keeps a local model up,
-    // even if this process lives on (the exit hook covers a hard exit).
-    await reconcileLocalModelLeases(undefined).catch(() => undefined);
+    await releaseWindow();
     // Hand the conversation back so the next terminal can resume it, and do
     // not store one closed without ever being started. Best effort: a failed
     // release only means the claim expires on its own TTL.
