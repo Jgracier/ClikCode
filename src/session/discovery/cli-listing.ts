@@ -134,6 +134,14 @@ function sessionsFromRecords(records: readonly unknown[], workspace?: string): D
   return sessions;
 }
 
+/** The folder a listing is remembered under. One that covers every folder
+ * (`discoverAllFolders`: Hermes, Goose, OpenClaw) is the same answer wherever
+ * it is asked, so it is kept once -- keyed per folder, each folder ClikCode
+ * opened in spawned the same listing again. */
+function listedFolder(harness: AiLocalHarnessDefinition, workspace: string | undefined): string | undefined {
+  return harness.session?.discoverAllFolders ? undefined : workspace;
+}
+
 /** Never installs anything for a passive scan (only harnesses already found on
  * PATH are queried), and never throws — a harness that isn't installed, has
  * no discovery command, or returns something this parser doesn't recognize
@@ -155,13 +163,14 @@ export async function discoverNativeSessions(
   // to return zero. A recent answer from this build is the answer: "nothing
   // here" for five minutes, a list for two. Opening the board does not spawn
   // the CLI again until that expires.
-  const fresh = await freshListing(harness.command, workspace, profile, Date.now(), build);
+  const folder = listedFolder(harness, workspace);
+  const fresh = await freshListing(harness.command, folder, profile, Date.now(), build);
   if (fresh) return fresh;
   try {
     const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
     const format = harness.session.discoverFormat ?? 'json';
     const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
-    await rememberListing(harness.command, workspace, profile, found, Date.now(), build);
+    await rememberListing(harness.command, folder, profile, found, Date.now(), build);
     return found;
   } catch {
     // fail-open-ok: passive discovery must not break the picker when an
@@ -170,8 +179,8 @@ export async function discoverNativeSessions(
     // down again, for the same lifetime as an answer: unremembered, a CLI
     // that fails or times out (every one of them, on a machine at load 250)
     // was spawned again at every board open in every window.
-    const last = await lastSeenListing(harness.command, workspace, profile);
-    await rememberListing(harness.command, workspace, profile, last, Date.now(), build);
+    const last = await lastSeenListing(harness.command, folder, profile);
+    await rememberListing(harness.command, folder, profile, last, Date.now(), build);
     return last;
   }
 }
@@ -183,5 +192,5 @@ export async function lastSeenNativeSessions(
   harness: AiLocalHarnessDefinition, workspace: string | undefined, profile?: string,
 ): Promise<DiscoveredNativeSession[]> {
   if (!harness.session?.discoverArgv) return [];
-  return lastSeenListing(harness.command, workspace, profile);
+  return lastSeenListing(harness.command, listedFolder(harness, workspace), profile);
 }

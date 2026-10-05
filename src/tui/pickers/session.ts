@@ -41,24 +41,15 @@ type AdoptableNativeSession = {
   accountId?: string;
 };
 
-/** Conversations that exist only inside a vendor's own history — never opened
- * through ClikCode — are otherwise invisible in /resume entirely, which only
- * ever looked at ClikCode's own tracked sessions. Two independent mechanisms
- * feed this, because vendors expose their own history in genuinely different
- * ways: a machine-readable CLI listing via discoverArgv (confirmed live:
- * opencode, Hermes; confirmed only against docs/source, not installed here:
- * Qwen Code, Crush; declared but with an unconfirmed JSON shape: Goose,
- * Kilo Code; a real command with no JSON mode at all, needing its own
- * numbered-list parser: Gemini CLI) — or, for harnesses that publish no
- * listing command whatsoever, reading their own on-disk session files
- * directly (confirmed live: Claude Code, Codex, Cursor Agent; docs-only,
- * unverified against a real install: Pi). GitHub Copilot CLI, Aider, Amp,
- * Factory Droid, Kiro CLI, Cline CLI, and Command Code are deliberately not
- * wired in at all: each either has no local listing mechanism (Aider, Amp's
- * canonical store is server-side), an undocumented on-disk format (Copilot
- * CLI, Factory Droid, Kiro CLI, Cline CLI), or an unresolved identity
- * mismatch between this catalog's entry and the only public docs found for
- * its name (Command Code) — none of these are guessed at.
+/** Conversations that exist only inside a vendor's own history -- never
+ * opened through ClikCode -- are otherwise invisible in /resume, which only
+ * ever looked at ClikCode's own tracked sessions. Two mechanisms feed this,
+ * because vendors expose their history in different ways: the vendor CLI's
+ * own listing, for each harness whose catalog entry declares `discoverArgv`
+ * (OpenCode, Kilo, Qwen Code, Goose, Kiro, Hermes, OpenClaw today), or its
+ * on-disk session files read directly, for each harness in
+ * FS_SESSION_DISCOVERY (Claude Code, Codex, Cursor, Pi). Neither list is
+ * repeated here so it cannot go stale: a harness is wired by adding it there.
  *
  * Every one of those spawns a real vendor CLI (up to a 4s timeout each, once
  * per account profile) or walks a vendor's on-disk store, so this is slower
