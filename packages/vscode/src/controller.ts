@@ -11,7 +11,7 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, conversationAttention, emptyModel, localNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, conversationAttention, emptyModel, localNote, takenBackText, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -42,6 +42,9 @@ export class ClikCodeController implements vscode.Disposable {
   private readonly panelQuestions = new Map<string, WebviewSurface>();
   /** Approvals whose change is open in a diff editor. */
   private readonly shownDiffs = new Set<string>();
+  /** Queued messages being taken back to edit, by id: their text goes back in
+   * the composer when the worker answers `removed`. */
+  private readonly takingBack = new Map<string, string>();
   private readonly surfaces = new Set<WebviewSurface>();
   private starting: Promise<void> | undefined;
   private restartingForBuild = false;
@@ -456,7 +459,11 @@ export class ClikCodeController implements vscode.Disposable {
       }
       return;
     }
-    if (event.type === 'unqueued') return;
+    if (event.type === 'unqueued') {
+      const text = takenBackText(this.takingBack, event);
+      if (text !== undefined) this.post({ type: 'insert', text });
+      return;
+    }
     if (event.type === 'restore-draft') this.post({ type: 'setDraft', text: event.text });
     // A message typed during the turn that could not be sent comes back to
     // the composer, as the terminal restores it for editing.
@@ -733,8 +740,12 @@ export class ClikCodeController implements vscode.Disposable {
       case 'cancel':
         this.cancel(message.restoreDraft);
         return;
-      case 'unqueue':
+      case 'unqueue': {
+        const text = message.edit ? this.model.queued.find((item) => item.id === message.id)?.text : undefined;
+        if (text !== undefined) this.takingBack.set(message.id, text);
         this.bridge?.send({ type: 'unqueue', id: message.id });
+        return;
+      }
         return;
       case 'approve':
         this.approve(message.id, message.approved);

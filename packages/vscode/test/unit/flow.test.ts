@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, queuedRowLabel, stopAndSendReady, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { applyEvent, emptyModel, queuedRowLabel, stopAndSendReady, takenBackText, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -64,6 +64,18 @@ describe("a turn's changes, together", () => {
   it('is not whole when the file changed since, or is gone', () => {
     expect(unwindChanges('top\nedited by hand', [edit('a.ts', 'x', 'y')]).whole).toBe(false);
     expect(unwindChanges(undefined, [edit('a.ts', 'x', 'y')]).whole).toBe(false);
+  });
+});
+
+describe('esc / edit: taking a waiting message back', () => {
+  it('puts its text back only when the worker says it left the queue', () => {
+    const taking = new Map([['a', 'first'], ['b', 'second']]);
+    expect(takenBackText(taking, { type: 'unqueued', id: 'a', outcome: 'removed' })).toBe('first');
+    // Already steered in, or the turn running now: it stays sent, once.
+    expect(takenBackText(taking, { type: 'unqueued', id: 'b', outcome: 'running' })).toBeUndefined();
+    expect(taking.size).toBe(0);
+    // A plain remove asked for no text.
+    expect(takenBackText(taking, { type: 'unqueued', id: 'c', outcome: 'removed' })).toBeUndefined();
   });
 });
 
