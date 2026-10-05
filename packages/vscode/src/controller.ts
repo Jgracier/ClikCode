@@ -338,18 +338,15 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
-  /** The bridge cannot drive this extension: stop it, say why, and offer the
-   * update that fixes it. */
+  /** The bridge cannot drive this extension: stop it, and say why in the
+   * chat's banner, which offers the update that fixes it. Not a toast as
+   * well: it said the banner's words again, once for every open chat. */
   private incompatible(bridge: BridgeClient, message: string, remedy: Exclude<Remedy, 'install'>): void {
     if (this.bridge !== bridge) return;
     this.bridge = undefined;
     bridge.dispose();
     this.host.log.appendLine(message);
     this.setModel({ ...this.model, connection: 'error', running: false, connectionError: message, remedy });
-    const action = remedy === 'update-clikcode' ? 'Update ClikCode' : 'Update Extension';
-    void vscode.window.showErrorMessage(message, action).then((choice) => {
-      if (choice) void vscode.commands.executeCommand(remedy === 'update-clikcode' ? 'clikcode.update' : 'clikcode.updateExtension');
-    });
   }
 
   async restart(): Promise<void> {
@@ -475,7 +472,10 @@ export class ClikCodeController implements vscode.Disposable {
   private onWorkerEvent(event: WorkerEvent): void {
     if (event.type === 'approval-request') {
       if (event.preview?.diff?.length && vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.viewDiff(event.id);
-      if (!this.visible || !vscode.window.state.focused) {
+      // Only a chat out of sight asks in a toast: one on screen shows the
+      // question already, and a toast for it was the same question twice
+      // when the user came back to the window.
+      if (!this.visible) {
         void vscode.window.showInformationMessage(`ClikCode asks: ${event.title}`, 'Allow', 'Show').then((choice) => {
           if (choice === 'Allow') this.approve(event.id, true);
           else if (choice) void this.host.reveal(this);
@@ -618,7 +618,6 @@ export class ClikCodeController implements vscode.Disposable {
     }
     if (!(await vscode.workspace.applyEdit(edit))) { void vscode.window.showErrorMessage(userError(`undo the change to ${names}`)); return; }
     await Promise.all(files.filter((item) => !item.created).map(async (item) => (await vscode.workspace.openTextDocument(vscode.Uri.file(item.path!))).save()));
-    this.note(`Undid the change to ${names}`);
   }
 
   // ---- what the user does --------------------------------------------------------
