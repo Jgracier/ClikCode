@@ -276,14 +276,4 @@ export class BroadcastObserver implements TurnObserver {
     if (error) pending.reject(new Error(error));
     else pending.resolve();
   }
-
-  /** A worker has no terminal of its own to hand over; the windows show that
-   * the turn is waiting on theirs. */
-  async suspend(): Promise<void> {
-    this.broadcast({ type: 'suspend' });
-  }
-
-  resume(): void {
-    this.broadcast({ type: 'resume' });
-  }
 }
