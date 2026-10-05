@@ -350,12 +350,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           else this.updateWaiting();
           return;
         }
-        const edited = editWaitingComposer(turn.draft, turn.cursor, key);
-        if (edited.changed) {
-          turn.draft = edited.value;
-          turn.cursor = edited.cursor;
-          this.updateWaiting();
-        }
+        this.editTurnDraft(turn, key);
         return;
       }
       // Otherwise the draft is never edited from here: every key is either an
@@ -447,14 +442,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // A sign-in's wait keeps what is typed under it too: the composer that
       // opens after it starts with that text (stopWaiting hands it on), where
       // dropping it lost the start of a message typed as a sign-in finished.
-      const edited = editWaitingComposer(turn.draft, turn.cursor, key);
-      if (edited.changed) {
-        turn.draft = edited.value;
-        turn.cursor = edited.cursor;
-        this.updateWaiting();
-      }
+      this.editTurnDraft(turn, key);
     }
   };
+
+  /** A key typed into the waiting composer. */
+  private editTurnDraft(turn: WaitingTurn, key: string): void {
+    const edited = editWaitingComposer(turn.draft, turn.cursor, key);
+    if (!edited.changed) return;
+    turn.draft = edited.value;
+    turn.cursor = edited.cursor;
+    this.updateWaiting();
+  }
 
   /** `/send steer|queue`, from the setting (the loop) or the command. */
   setSendMode(mode: SendMode): void {
