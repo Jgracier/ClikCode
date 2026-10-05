@@ -9,7 +9,7 @@ import { CLIKCODE_USER_AGENT } from '../../version.js';
 import { modelLabel } from '../../harness/model-label.js';
 
 export async function aiModelsList(): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   emitResult({
     models: state.accounts.flatMap((account) => account.models.map((model) => ({
       accountId: account.id,
@@ -24,7 +24,7 @@ export async function aiModelsList(): Promise<void> {
 }
 
 export async function aiUsage(): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const totals = state.invocations.reduce(
     (sum, invocation) => ({
       calls: sum.calls + 1,
