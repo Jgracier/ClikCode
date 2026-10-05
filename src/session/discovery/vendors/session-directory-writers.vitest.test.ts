@@ -1,5 +1,5 @@
 /** Golden output of the thread writers whose vendor resumes a session from a
- * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw, Droid, Auggie), for one
+ * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw, Droid, Auggie, Vibe), for one
  * conversation: a codeword, a Codex shell call, a Claude Edit and a Claude
  * Grep.
  *
@@ -26,6 +26,7 @@ import { mcodeSessionRelativeDir, mcodeThreadLines } from './mcode-store.js';
 import { openClawCall } from './openclaw-store.js';
 import { droidProjectDirectoryName, droidThreadLines } from './droid-store.js';
 import { auggieSession } from './auggie-store.js';
+import { vibeSessionDirectoryName, vibeThreadFiles } from './vibe-store.js';
 import { piThreadLines } from './pi-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
@@ -347,5 +348,37 @@ describe('auggie thread writer', () => {
     const written = await writer.write(fixtureRecord(), ctx);
     expect(await readdir(join(home, '.augment', 'sessions'))).toEqual([`${written!.nativeId}.json`]);
     expect(await writer.versionOk(context('auggie', {}, '0.37.0 (commit x)'))).toBe(false);
+  });
+});
+
+describe('vibe thread writer', () => {
+  it('writes the golden messages and session metadata', async () => {
+    const files = vibeThreadFiles(fixtureRecord(), {
+      sessionId: '182a60e3-add0-4988-989a-6aa74de5df7b', workspace: WORKSPACE, now: NOW, messageId: sequentialIds('m-'),
+    });
+    await golden('vibe.messages.jsonl', files.messages);
+    expect(JSON.parse(files.meta)).toMatchObject({
+      session_id: '182a60e3-add0-4988-989a-6aa74de5df7b', environment: { working_directory: WORKSPACE }, origin_directory: WORKSPACE,
+      total_messages: files.messages.trimEnd().split('\n').length,
+    });
+  });
+
+  it('names the session directory as vibe does', () => {
+    expect(vibeSessionDirectoryName('c148cd9a-16f7-6ff0-3fb0-310cac9a4e77', new Date('2026-10-05T03:52:54.512Z')))
+      .toBe('session_20261005_035254_c148cd9a');
+  });
+
+  it('writes under the taking-over VIBE_HOME, declines a moved store and other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'vibe-writer-'));
+    const writer = NATIVE_SESSION_STORES.vibe!.writer!;
+    const ctx = context('vibe', { HOME: home }, 'vibe 2.25.7');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    const [directory] = await readdir(join(home, '.vibe', 'logs', 'session'));
+    expect(directory).toMatch(new RegExp(`^session_\\d{8}_\\d{6}_${written!.nativeId.slice(0, 8)}$`));
+    const vibeHome = await mkdtemp(join(tmpdir(), 'vibe-home-'));
+    await writeFile(join(vibeHome, 'config.toml'), '[session_logging]\nsave_dir = "/elsewhere"\n');
+    expect(await writer.write(fixtureRecord(), context('vibe', { HOME: home, VIBE_HOME: vibeHome }, 'vibe 2.25.7'))).toBeUndefined();
+    expect(await writer.versionOk(context('vibe', {}, 'vibe 2.26.0'))).toBe(false);
   });
 });
