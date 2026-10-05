@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { captureMistralVibeCredential, mistralVibeAccountEmail } from './mistral-vibe-identity.js';
+import { droidAccountEmail } from './droid-identity.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -345,6 +346,7 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   antigravity: (_harness, profilePath) => antigravityEmail(profilePath),
   kimi: (_harness, profilePath) => kimiEmail(profilePath),
   mcode: (_harness, profilePath) => miniMaxEmail(profilePath),
+  droid: (_harness, profilePath) => droidAccountEmail(profilePath),
 };
 
 /** Harnesses whose login can leave the API key outside the account's own
