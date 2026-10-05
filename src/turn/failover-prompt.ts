@@ -62,16 +62,26 @@ export function failoverPromptRequest(text: string): string | undefined {
  * this is never stored, shown or replayed as something they typed. */
 export const INTERRUPTED_TURN_REQUEST = 'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.';
 
+/** The line a written native thread opens each provider switch with
+ * (session/canonical.ts markProviderBoundaries). Plumbing too: read back out
+ * of a vendor's transcript, it is stripped. */
+export const providerBoundaryNote = (label: string): string => `[ClikCode: the following turns ran on ${label}]`;
+const PROVIDER_BOUNDARY_NOTE = /^\[ClikCode: the following turns ran on [^\n]*\](?:\s*\n|\s*$)\s*/;
+
 /** Replace any rehydration prompt in an imported transcript with the request
- * it carried, and drop a bare INTERRUPTED_TURN_REQUEST. Idempotent: the
- * result no longer begins with the preamble. A prompt with nothing
- * recoverable is dropped rather than left blank. */
+ * it carried, drop a bare INTERRUPTED_TURN_REQUEST, and strip a provider
+ * boundary note. Idempotent: the result no longer begins with the preamble
+ * or a note. A prompt with nothing recoverable is dropped rather than left
+ * blank. */
 export function normalizeImportedTranscript<T extends { role: string; content: string }>(
   messages: readonly T[],
 ): T[] {
   const normalized: T[] = [];
-  for (const message of messages) {
-    if (message.role !== 'user') { normalized.push(message); continue; }
+  for (const original of messages) {
+    if (original.role !== 'user') { normalized.push(original); continue; }
+    const content = original.content.replace(PROVIDER_BOUNDARY_NOTE, '');
+    if (content !== original.content && !content.trim()) continue;
+    const message = content === original.content ? original : { ...original, content };
     if (message.content.trim() === INTERRUPTED_TURN_REQUEST) continue;
     const request = failoverPromptRequest(message.content);
     if (request === undefined) normalized.push(message);

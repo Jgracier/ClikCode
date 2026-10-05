@@ -15,7 +15,8 @@
  *
  * Built from what is stored, never from a vendor's files: those belong to the
  * vendor, and a branch's messages already hold everything its native thread
- * said that ClikCode saw (synchronizeNativeTranscript pulls the rest in). */
+ * said that ClikCode saw (synchronizeNativeTranscript pulls in what was said
+ * in the vendor's own CLI, when the conversation is opened). */
 
 import type { FileDiff } from '../agent/line-diff.js';
 import { asFileDiffs } from '../agent/line-diff.js';
@@ -24,6 +25,7 @@ import type { HarnessPlanEntry } from '../harness/events/turn-observer.js';
 import type { HarnessSession, TranscriptMessage } from './model.js';
 import { sessionTranscriptMessages, touchedFilesFromActivity, type PendingTurnWithHints } from '../turn/checkpoint.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
+import { providerBoundaryNote } from '../turn/failover-prompt.js';
 import { conversationIdFor } from './options.js';
 
 export const CANONICAL_RECORD_VERSION = 1;
@@ -348,7 +350,7 @@ export function markProviderBoundaries(
     const boundary = key !== previous;
     previous = key;
     const { providerNote: _stale, ...rest } = turn;
-    return boundary ? { ...rest, providerNote: `[ClikCode: the following turns ran on ${originLabel(turn.origin, displayName)}]` } : rest;
+    return boundary ? { ...rest, providerNote: providerBoundaryNote(originLabel(turn.origin, displayName)) } : rest;
   });
   return { ...record, turns };
 }

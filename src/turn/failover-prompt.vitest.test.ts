@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { failoverPromptRequest, INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
+import { failoverPromptRequest, INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript, providerBoundaryNote } from './failover-prompt.js';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { conversationTitle } from '../session/discovery/conversation-title.js';
@@ -129,5 +129,23 @@ describe('a stored or imported continuation request', () => {
     ])).toEqual([
       { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half' },
     ]);
+  });
+});
+
+describe('a provider boundary note read back out of a written thread', () => {
+  it('is stripped from the request it opens, and a note-only message is dropped', () => {
+    const note = providerBoundaryNote('Kilo Code CLI (kilo/cohere/north-mini-code:free)');
+    const imported = [
+      { role: 'user', content: `${note}\n\nFix the parser` }, { role: 'assistant', content: 'Fixed.' },
+      { role: 'user', content: note }, { role: 'assistant', content: 'Carried on.' },
+    ];
+    const expected = [
+      { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Fixed.' }, { role: 'assistant', content: 'Carried on.' },
+    ];
+    expect(normalizeImportedTranscript(imported)).toEqual(expected);
+    expect(normalizeImportedTranscript(expected)).toEqual(expected);
+    // Merged against ClikCode's own copy, which never had the note, it overlaps.
+    expect(mergeNativeTranscript([{ role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Fixed.' }], imported as never))
+      .toEqual(expected);
   });
 });
