@@ -115,7 +115,7 @@ export async function discoverClaudeFsSessions(workspace: string, environment: N
  * {role, content} message shape, so adopting a Claude Code chat shows its
  * real prior conversation instead of starting the ClikCode view blank while
  * only the native thread underneath actually remembers anything. Capped to
- * the most recent messages for the same reason failoverPrompt caps replay:
+ * the most recent messages:
  * an adoption is a one-time read, not something that should scale with a
  * session's total lifetime size. */
 export async function readClaudeFsTranscript(nativeId: string, workspace: string, environment: NativeSessionEnvironment = {}): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {

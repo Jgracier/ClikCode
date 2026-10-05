@@ -19,6 +19,9 @@ import { createHandoffBranch } from './handoff.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { runSessionTurn } from './session-turn.js';
 import { resumePromptForPendingTurn } from '../tui/pickers/resume-in.js';
+import { NATIVE_SESSION_STORES } from '../session/discovery/registry.js';
+import type { NativeSessionStore, NativeThreadWriteContext } from '../session/discovery/stores.js';
+import type { CanonicalRecord } from '../session/canonical.js';
 
 const saved = { ...process.env };
 let root: string;
@@ -62,7 +65,13 @@ async function handedOff(pendingTurn?: HarnessSession['pendingTurn'], fields: Pa
     id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: 'anthropic', model: null,
     nativeHarness: 'claude', nativeSessionId: randomUUID(), workspace: root,
     effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
-    messages: [{ role: 'user', content: 'rename the parser' }, { role: 'assistant', content: 'renamed it to Reader' }],
+    messages: [
+      { role: 'user', content: 'rename the parser', attachments: [join(root, 'spec.md')] },
+      { role: 'assistant', content: 'renamed it to Reader', activities: [
+        { responseOffset: 0, event: { kind: 'tool-done', label: 'Edit src/parser.ts', category: 'edit', call: { name: 'Edit', input: { file_path: 'src/parser.ts' } } } },
+        { responseOffset: 20, event: { kind: 'tool-error', label: '$ npm test', category: 'run', exitCode: 1, output: ['1 failing'] } },
+      ] },
+    ],
     ...(pendingTurn ? { pendingTurn } : {}), ...fields,
   };
   const branch = createHandoffBranch({
@@ -88,6 +97,42 @@ describe("a handoff branch's first vendor turn", () => {
     expect(wire).toContain('renamed it to Reader');
     expect(wire).toContain('now run the focused test');
     expect(wire!.indexOf('renamed it to Reader')).toBeLessThan(wire!.indexOf('now run the focused test'));
+    // The transfer, not a bare replay: every request, the calls of a turn
+    // that also wrote text, the files it changed, what was attached.
+    expect(wire).toContain('<requests>\n1. rename the parser');
+    expect(wire).toMatch(/<tool_digest>[\s\S]*edit src\/parser\.ts; run npm test \(failed, exit 1\)/);
+    expect(wire).toMatch(/<touched_files>[\s\S]*- src\/parser\.ts/);
+    expect(wire).toMatch(/<attachments>[\s\S]*spec\.md/);
+  }, 30_000);
+
+  it('writes the conversation as the vendor\'s own thread where a writer exists, and sends only the request', async () => {
+    const writes: Array<{ record: CanonicalRecord; context: NativeThreadWriteContext }> = [];
+    const stores = NATIVE_SESSION_STORES as Record<string, NativeSessionStore>;
+    stores.cn = {
+      root: () => join(root, 'cn-store'),
+      writer: {
+        testedVersions: ['1.0.0'],
+        versionOk: (context) => context.version === '1.0.0',
+        write: async (record, context) => { writes.push({ record, context }); return { nativeId: 'written-thread' }; },
+      },
+    };
+    try {
+      const id = await handedOff();
+      await runSessionTurn({} as never, id, 'now run the focused test');
+      const [wire] = await sentPrompts();
+      // The request as the turn sends it (an unnamed chat also asks for a
+      // title); nothing of the history is retold.
+      expect(wire!.startsWith('now run the focused test')).toBe(true);
+      expect(wire).not.toContain('rename the parser');
+      expect(writes).toHaveLength(1);
+      expect(writes[0]!.record.turns.map((turn) => turn.user)).toEqual(['rename the parser']);
+      expect(writes[0]!.record.turns[0]!.tools.map((call) => call.name)).toEqual(['Edit', 'shell']);
+      expect(writes[0]!.context).toMatchObject({ workspace: root, version: '1.0.0' });
+      const state = await readState();
+      expect(state.sessions.find((item) => item.id === id)?.nativeSessionId).toBe('written-thread');
+    } finally {
+      delete stores.cn;
+    }
   }, 30_000);
 
   it('carries an interrupted request and its partial answer into "Resume in"', async () => {

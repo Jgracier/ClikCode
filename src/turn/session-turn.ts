@@ -90,7 +90,7 @@ async function runAccountTurn(
   const prepared = await prepareAttachments(session.attachments ?? []);
   let turnText = `${text}${prepared.textContext}`;
   // A resumed native-harness thread never replays ClikCode's own transcript
-  // (see failoverPrompt and the attachment envelope: the vendor process keeps
+  // (see turn/thread-start.ts and the attachment envelope: the vendor process keeps
   // its own session and ClikCode's `messages` are not passed back in). So `!`
   // output has to ride in like an attachment -- injected here and cleared
   // beside session.attachments, so a resumed vendor still learns what the
