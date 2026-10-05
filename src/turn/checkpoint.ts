@@ -56,7 +56,7 @@ export function activityLabelIsReadOnly(label: string): boolean {
 }
 
 /** Files an activity is changing, when its label or diff says so. */
-function touchedFilesFromActivity(event: HarnessActivityEvent): string[] {
+export function touchedFilesFromActivity(event: HarnessActivityEvent): string[] {
   const text = event.label.trim();
   const row = TOOL_ROW.exec(text);
   if (row && /^(?:Edit|Write)$/.test(row[1]!)) {
@@ -121,7 +121,9 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   if (!pending) return messages;
   // A continuation's prompt is ClikCode's, not the user's: its answer
   // follows the interrupted one directly.
-  if (pending.prompt !== INTERRUPTED_TURN_REQUEST) messages.push({ role: 'user', content: pending.prompt });
+  if (pending.prompt !== INTERRUPTED_TURN_REQUEST) {
+    messages.push({ role: 'user', content: pending.prompt, ...(pending.attachments?.length ? { attachments: [...pending.attachments] } : {}) });
+  }
   const response = pending.response ?? '';
   // Each call goes with the part of the answer it happened in: a steer
   // splits the answer into messages, and a call's offset is re-anchored to
@@ -179,7 +181,10 @@ export function runningActivityLabel(pending: HarnessSession['pendingTurn']): st
  * an answer streams (writeTranscriptCheckpoint). */
 export function beginPendingTurn(session: HarnessSession, prompt: string, now: string): void {
   if (session.pendingTurn) session.messages = sessionTranscriptMessages(session);
-  session.pendingTurn = { prompt, startedAt: now, updatedAt: now, outputStarted: false };
+  session.pendingTurn = {
+    prompt, ...(session.attachments?.length ? { attachments: [...session.attachments] } : {}),
+    startedAt: now, updatedAt: now, outputStarted: false,
+  };
   session.updatedAt = now;
 }
 

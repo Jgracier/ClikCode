@@ -27,8 +27,14 @@ const MAX_LABEL_CHARS = 400;
 /** Characters of one output or diff line kept. Rows are clipped to the
  * screen long before this. */
 const MAX_LINE_CHARS = 400;
-/** Lines of output a call keeps: more than any preview shows. */
-const MAX_OUTPUT_LINES = 40;
+/** Lines of output a call keeps: more than any preview shows, and what
+ * another provider taking the conversation over is shown of the call
+ * (session/canonical.ts). Measured on 1,749 stored calls: half print at most
+ * 5 lines, 90% at most 73, 95% at most 127. At the producer's former 20 a
+ * quarter of all calls were cut; 60 keeps the whole output of ~88% of them,
+ * at a median 53 characters a line ~3 KB a call. The per-turn bound below
+ * still applies (oldest calls trimmed first), so a turn costs no more. */
+export const MAX_OUTPUT_LINES = 60;
 /** Diff lines kept per file, and files kept with their lines. */
 const MAX_DIFF_LINES = 200;
 const MAX_DIFF_FILES = 20;
@@ -90,10 +96,12 @@ function shrink(activity: TurnActivity, bare: boolean): TurnActivity {
   const diff = asFileDiffs(rawDiff);
   if (bare) {
     const lines = (activity.event.output?.length ?? 0) + (activity.event.outputOmitted ?? 0);
+    const { call, ...withoutCall } = rest;
     return {
       ...activity,
       event: {
-        ...rest,
+        ...withoutCall,
+        ...(call ? { call: { name: call.name } } : {}),
         ...(lines ? { output: [], outputOmitted: lines } : {}),
         ...(diff?.length ? { diff: boundDiff(diff, 0, 0) } : {}),
       },

@@ -17,8 +17,11 @@ export type TurnActivity = { event: HarnessActivityEvent; responseOffset: number
 
 /** A message of the conversation. `activities` only on an assistant message,
  * with `responseOffset` into this message's `content`; absent on anything
- * saved before they were kept (and on turns that called nothing). */
-export type TranscriptMessage = { role: 'user' | 'assistant'; content: string; activities?: TurnActivity[] };
+ * saved before they were kept (and on turns that called nothing).
+ * `attachments` only on a user message: the files sent with it, by path
+ * (`content` is only what was typed), so a provider taking the conversation
+ * over later still learns what an earlier request was about. */
+export type TranscriptMessage = { role: 'user' | 'assistant'; content: string; activities?: TurnActivity[]; attachments?: string[] };
 
 export interface HarnessSession {
   id: string;
@@ -111,6 +114,8 @@ export interface HarnessSession {
    * provider retry cannot accidentally submit the same user prompt twice. */
   pendingTurn?: {
     prompt: string;
+    /** The files attached to this request (`attachments` when it began). */
+    attachments?: string[];
     response?: string;
     /** The turn's tool calls so far, offsets into `response`. Journals
      * written before this held one-line strings ("completed Bash"); read
@@ -151,6 +156,9 @@ export interface HarnessSession {
   /** Swarm is off until this conversation turns it on. A saved preset list
    * from before the single switch still means on. */
   swarm?: boolean | string[];
+  /** The plan (todo list) the provider last published, and when. Kept so a
+   * provider taking the conversation over learns what was still open. */
+  plan?: { entries: Array<{ content: string; status?: string; priority?: string }>; at: string };
   /** Set on a clerk run that was stored by mistake. Those rows are not chats. */
   clerkOf?: string;
 }

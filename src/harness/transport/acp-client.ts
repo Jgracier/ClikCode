@@ -12,7 +12,7 @@ import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, commandText, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
-import { activityOutput, editDiffFromInput } from '../protocol/activity-events.js';
+import { activityOutput, editDiffFromInput, toolCall } from '../protocol/activity-events.js';
 import { classifyAccountFailure } from '../../turn/failover.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
@@ -155,6 +155,7 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
     kind: status === 'failed' ? 'tool-error' : completed ? 'tool-done' : 'tool-start',
     label: acpToolLabel(update, classified),
     ...classified,
+    ...acpToolCall(update),
     ...(typeof update.toolCallId === 'string' ? { id: update.toolCallId } : {}),
     ...(acpParentToolId(update) ? { parentId: acpParentToolId(update)! } : {}),
     ...output,
@@ -162,6 +163,16 @@ export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined
     ...(completed ? commandOutcome(rawOutput) : {}),
     ...(typeof exitCode === 'number' ? { exitCode } : {}),
   };
+}
+
+/** The call as the agent described it: ACP has no tool name, only a title
+ * ("Read config") whose first word stands in for one, and the raw input. */
+function acpToolCall(update: Json): Pick<HarnessActivityEvent, 'call'> {
+  const raw = update.rawInput && typeof update.rawInput === 'object' && !Array.isArray(update.rawInput) ? update.rawInput as Record<string, unknown> : undefined;
+  if (!raw || !Object.keys(raw).length) return {};
+  const title = typeof (update.title ?? update.name) === 'string' ? String(update.title ?? update.name).trim() : '';
+  const name = (typeof update.name === 'string' && update.name.trim()) || title.split(/[\s:(]/, 1)[0] || String(update.kind ?? 'tool');
+  return { call: toolCall(name, raw) };
 }
 
 /** The row an ACP call gets. Its title is the agent's own sentence ("Read
