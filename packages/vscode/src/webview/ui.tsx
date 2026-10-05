@@ -113,6 +113,13 @@ export function KeyList(props: {
   );
 }
 
+/** Moves the keyboard within the page only while the page has it. A
+ * question or an approval arriving while the user types in an editor took
+ * the keyboard from it, and the next keys -- Enter, y, n -- answered it. */
+export function focusHere(element: HTMLElement | null | undefined): void {
+  if (element && document.hasFocus()) element.focus();
+}
+
 /** A floating panel over the composer; closes on Escape or a click outside. */
 export function Popover(props: { onClose: () => void; children: ComponentChildren; label: string; class?: string; id?: string }): JSX.Element {
   const ref = useRef<HTMLDivElement>(null);

@@ -345,6 +345,31 @@ export function chatSuite(): void {
       await screenshot('edited');
     });
 
+    it('brings a question up beside the editor without taking the keyboard from it', async () => {
+      await until(api, (state) => state.connection === 'ready' && !state.running, 'an idle chat', 60_000);
+      const [folder] = vscode.workspace.workspaceFolders ?? [];
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder!.uri, 'hello.ts'));
+      await vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar');
+      await vscode.window.showTextDocument(document, { preserveFocus: false });
+      await sleep(500);
+      const before = document.getText();
+      // What the check below relies on: a key typed now reaches this editor.
+      await vscode.commands.executeCommand('default:type', { text: 'z' });
+      assert.notStrictEqual(document.getText(), before, 'typing reaches the focused editor');
+      await vscode.commands.executeCommand('workbench.action.files.revert');
+      // A question the bridge asks while the user is in the editor.
+      void api.send('/settings');
+      await waitFor(api, '.sheet', 'the question in the chat', 30_000);
+      await screenshot('question-beside-editor', 500);
+      // The next key still lands in the editor, not in the question.
+      await vscode.commands.executeCommand('default:type', { text: 'z' });
+      const typed = document.getText();
+      await vscode.commands.executeCommand('workbench.action.files.revert');
+      await key(api, '.sheet', 'Escape');
+      await waitFor(api, '#composer-input', 'back to the chat');
+      assert.notStrictEqual(typed, before, 'the editor kept the keyboard');
+    });
+
     it('reconnects on its own when ClikCode stops underneath it', async () => {
       const session = api.state.sessionId;
       const bridges = (): number[] => {

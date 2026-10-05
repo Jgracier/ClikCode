@@ -28,8 +28,8 @@ export interface ControllerHost {
   diffs: DiffDocuments;
   /** Opens a conversation (or a new one) in an editor tab of its own. */
   openInTab(sessionId?: string): Promise<void>;
-  /** Where the surface was, for notifications ("Show"). */
-  reveal(controller: ClikCodeController): Promise<void>;
+  /** Brings the chat on screen; `keepFocus` leaves the keyboard where it is. */
+  reveal(controller: ClikCodeController, keepFocus?: boolean): Promise<void>;
   /** Every open chat: the side bar's and each tab's. */
   chats(): readonly ClikCodeController[];
 }
@@ -457,9 +457,11 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   /** A terminal picker, drawn in the chat as a sheet: the chat is brought
-   * on screen first when it is out of sight. */
+   * on screen first when it is out of sight -- without the keyboard, which
+   * stays in the editor the user is typing in (a question arriving mid-word
+   * took the next keys, Enter included, as its answer). */
   private async ask(id: string, request: IdeUiRequest): Promise<void> {
-    if (!this.front()?.visible) await this.host.reveal(this);
+    if (!this.front()?.visible) await this.host.reveal(this, true);
     const surface = this.front();
     if (!surface) {
       this.bridge?.send({ type: 'ui-response', id, result: { cancelled: true } });

@@ -17,7 +17,7 @@ import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-con
 import { post, request, save, saved, uid } from './bus';
 import { estimatedTokens, formatTurnUsage, titleCase } from './format';
 import { AccountMenu, choose, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
-import { Icon, KeyList, type ListRow } from './ui';
+import { focusHere, Icon, KeyList, type ListRow } from './ui';
 
 type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefined;
 
@@ -133,9 +133,11 @@ export function Composer(props: {
     setText(value);
     save({ draft: value });
     setCaret(at);
+    // A draft the bridge restores (a turn that failed) can arrive while the
+    // user is in an editor: the caret is placed, the keyboard left alone.
     requestAnimationFrame(() => {
-      const element = textarea.current;
-      if (element) { element.focus(); element.setSelectionRange(at, at); }
+      focusHere(textarea.current);
+      textarea.current?.setSelectionRange(at, at);
     });
   };
 

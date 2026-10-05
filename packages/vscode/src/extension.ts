@@ -70,9 +70,13 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
   const host: ControllerHost = {
     log, diffs,
     openInTab: async (sessionId) => { openTab(sessionId ? { mode: 'resume', sessionId } : { mode: 'new' }); },
-    reveal: async (controller) => {
-      if (controller === sidebar) { await revealSidebar(); return; }
-      for (const [panel, owner] of tabs) if (owner === controller) panel.reveal(panel.viewColumn, false);
+    reveal: async (controller, keepFocus = false) => {
+      if (controller === sidebar) {
+        if (keepFocus && sidebarView) sidebarView.show(true);
+        else await revealSidebar();
+        return;
+      }
+      for (const [panel, owner] of tabs) if (owner === controller) panel.reveal(panel.viewColumn, keepFocus);
     },
     chats: () => all(),
   };
@@ -105,11 +109,14 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     return { surface, dispose: () => { attached.dispose(); surface.dispose(); } };
   }
 
+  /** The side bar's view while it exists: shown without taking focus. */
+  let sidebarView: vscode.WebviewView | undefined;
   const sidebarProvider: vscode.WebviewViewProvider = {
     resolveWebviewView(view) {
+      sidebarView = view;
       const { surface, dispose } = surfaceFor(sidebar, view.webview, 'sidebar', () => view.visible);
       const shown = view.onDidChangeVisibility(() => surface.post({ type: 'visible', visible: view.visible }));
-      view.onDidDispose(() => { shown.dispose(); dispose(); });
+      view.onDidDispose(() => { if (sidebarView === view) sidebarView = undefined; shown.dispose(); dispose(); });
     },
   };
 
