@@ -401,6 +401,18 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       segments.push(note);
       return result({ stopReason: 'completed', isError: true, errorKind: 'other' });
     }
+    /** Compacts the conversation in place; false when there was nothing to
+     * compact. Saved, and its own model usage counted, like any step. */
+    const compact = async (system: string, targetTokens?: number): Promise<boolean> => {
+      input.onPhase?.('compacting context');
+      const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, ...(targetTokens !== undefined ? { targetTokens } : {}) }), signal);
+      if (compacted.stage === 'none') return false;
+      items = compacted.items;
+      lastStepUsage = undefined;
+      if (compacted.stage === 'summarized') await store.appendCompaction(compacted.summary!, compacted.kept!);
+      if (compacted.usage) ledger = recordUsage(ledger, { step: steps, usage: compacted.usage });
+      return true;
+    };
     for (;;) {
       throwIfAborted();
       if (steerQueue.length) await append(...steerQueue.splice(0).map((text): ConversationItem => ({ type: 'text', role: 'user', text })));
@@ -415,14 +427,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
       const system = session.plan.active ? `${baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : baseSystem;
       if (shouldCompact(estimateContextTokens(system, items, lastStepUsage, items.slice(itemsAtLastUsage)), window)) {
-        input.onPhase?.('compacting context');
-        const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, targetTokens: compactionThreshold(window) * 0.75 }), signal);
-        if (compacted.stage !== 'none') {
-          items = compacted.items;
-          lastStepUsage = undefined;
-          if (compacted.stage === 'summarized') await store.appendCompaction(compacted.summary!, compacted.kept!);
-          if (compacted.usage) ledger = recordUsage(ledger, { step: steps, usage: compacted.usage });
-        }
+        await compact(system, compactionThreshold(window) * 0.75);
       }
 
       const finalOnly = stalledCall !== undefined;
@@ -457,17 +462,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         const recovery = streamedThisStep ? undefined : stepRecovery(error);
         if (recovery === 'compact' && !compactedForSize) {
           compactedForSize = true;
-          input.onPhase?.('compacting context');
           // No size target: the Gateway measured the real model and said it
           // does not fit, which outranks this side's estimate of whether it does.
-          const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system }), signal);
-          if (compacted.stage !== 'none') {
-            items = compacted.items;
-            lastStepUsage = undefined;
-            if (compacted.stage === 'summarized') await store.appendCompaction(compacted.summary!, compacted.kept!);
-            if (compacted.usage) ledger = recordUsage(ledger, { step: steps, usage: compacted.usage });
-            continue;
-          }
+          if (await compact(system)) continue;
         }
         if (recovery === 'retry' && stepRetries < MAX_STEP_RETRIES) {
           stepRetries++;
