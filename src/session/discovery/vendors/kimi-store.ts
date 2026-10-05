@@ -24,10 +24,11 @@
  */
 
 import { createHash, randomUUID } from 'node:crypto';
+import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
+import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
   sequentialIds, testedVersion,
@@ -51,6 +52,12 @@ export function kimiWorkDirKey(workDir: string): string {
   const slug = trim(trim((normalized.split('/').pop() ?? normalized).toLowerCase().replace(/[^a-z0-9._-]+/g, '-')).slice(0, 40));
   const name = slug === '' || slug === '.' || slug === '..' ? 'workspace' : slug;
   return `wd_${name}_${createHash('sha256').update(normalized).digest('hex').slice(0, 12)}`;
+}
+
+/** One session's directory, under a workdir bucket: the path the writer
+ *  writes and locate looks for. */
+function kimiSessionDirectory(root: string, workDirKey: string, sessionId: string): string {
+  return join(root, workDirKey, sessionId);
 }
 
 /** Kimi's own tool for a call (the tool snapshot Kimi 2.0.2 sends): Bash,
@@ -168,14 +175,33 @@ export const kimiThreadWriter: NativeThreadWriter = {
   async write(record, context) {
     if (!record.turns.length) return undefined;
     const sessionId = `session_${randomUUID()}`;
-    const directory = join(kimiRoot(context.environment), kimiWorkDirKey(context.workspace), sessionId);
+    const directory = kimiSessionDirectory(kimiRoot(context.environment), kimiWorkDirKey(context.workspace), sessionId);
     const files = kimiThreadFiles(record, { sessionId, workspace: context.workspace, directory, now: new Date() });
     await writeDirectoryAtomic(directory, { 'state.json': files.state, 'agents/main/wire.jsonl': files.wire });
     return { nativeId: sessionId, transport: 'acp' };
   },
 };
 
+/** A session is a directory, filed under its workdir's bucket -- the
+ * conversation's workspace first, then any other bucket (a chat whose folder
+ * moved) -- and is one once state.json is in it. Carried whole. Nothing needs
+ * reconciling after the copy: the index files are repaired by Kimi itself (see
+ * above), and the absolute `agents.<id>.homedir` in state.json is not where a
+ * load reads the wire from -- agent-core-v2 derives that from its own home and
+ * the session's bucket, and re-registers the agent's homedir as it runs. */
+async function locateKimiSession(root: string, nativeId: string, workspace: string): Promise<NativeSessionFile | undefined> {
+  const isSession = (path: string): Promise<boolean> => stat(join(path, 'state.json')).then((entry) => entry.isFile(), () => false);
+  const bucket = kimiWorkDirKey(workspace);
+  const others = (await readdir(root).catch(() => [] as string[])).filter((name) => name !== bucket);
+  for (const key of [bucket, ...others]) {
+    const path = kimiSessionDirectory(root, key, nativeId);
+    if (await isSession(path)) return { path, root };
+  }
+  return undefined;
+}
+
 export const kimiSessionStore: NativeSessionStore = {
   root: kimiRoot,
+  locate: locateKimiSession,
   writer: kimiThreadWriter,
 };
