@@ -1,0 +1,310 @@
+{
+  "info": {
+    "id": "ses_ef936f9ffffe00000000000001",
+    "slug": "00000001",
+    "projectID": "global",
+    "directory": "/ws",
+    "title": "Remember this codeword for later: MARMALADE-COMET-31. Jus...",
+    "version": "1.18.32",
+    "time": {
+      "created": 1791115200000,
+      "updated": 1791115200019
+    }
+  },
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1791115200002
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "big-pickle"
+        },
+        "id": "msg_106c9060100100000000000002",
+        "sessionID": "ses_ef936f9ffffe00000000000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "Remember this codeword for later: MARMALADE-COMET-31. Just acknowledge it.",
+          "id": "prt_106c9060200100000000000003",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060100100000000000002"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_106c9060100100000000000002",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/ws",
+          "root": "/ws"
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "modelID": "big-pickle",
+        "providerID": "opencode",
+        "time": {
+          "created": 1791115200004,
+          "completed": 1791115200007
+        },
+        "finish": "stop",
+        "id": "msg_106c9060300100000000000004",
+        "sessionID": "ses_ef936f9ffffe00000000000001"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_106c9060400100000000000005",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060300100000000000004"
+        },
+        {
+          "type": "text",
+          "text": "Noted: the codeword is MARMALADE-COMET-31.",
+          "time": {
+            "start": 1791115200005,
+            "end": 1791115200005
+          },
+          "id": "prt_106c9060500100000000000006",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060300100000000000004"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "cost": 0,
+          "id": "prt_106c9060600100000000000007",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060300100000000000004"
+        }
+      ]
+    },
+    {
+      "info": {
+        "role": "user",
+        "time": {
+          "created": 1791115200008
+        },
+        "agent": "build",
+        "model": {
+          "providerID": "opencode",
+          "modelID": "big-pickle"
+        },
+        "id": "msg_106c9060700100000000000008",
+        "sessionID": "ses_ef936f9ffffe00000000000001"
+      },
+      "parts": [
+        {
+          "type": "text",
+          "text": "List the files here, then change the color in notes.txt from blue to green.",
+          "id": "prt_106c9060800100000000000009",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060700100000000000008"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_106c9060700100000000000008",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/ws",
+          "root": "/ws"
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "modelID": "big-pickle",
+        "providerID": "opencode",
+        "time": {
+          "created": 1791115200010,
+          "completed": 1791115200015
+        },
+        "finish": "tool-calls",
+        "id": "msg_106c9060900100000000000010",
+        "sessionID": "ses_ef936f9ffffe00000000000001"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_106c9060a00100000000000011",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060900100000000000010"
+        },
+        {
+          "type": "text",
+          "text": "Let me look at the folder first.",
+          "time": {
+            "start": 1791115200011,
+            "end": 1791115200011
+          },
+          "id": "prt_106c9060b00100000000000012",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060900100000000000010"
+        },
+        {
+          "type": "tool",
+          "tool": "bash",
+          "callID": "call_00000000000013",
+          "state": {
+            "status": "completed",
+            "input": {
+              "command": "ls -1",
+              "description": "Runs ls -1"
+            },
+            "output": "notes.txt",
+            "title": "ls -1",
+            "metadata": {},
+            "time": {
+              "start": 1791115200012,
+              "end": 1791115200012
+            }
+          },
+          "id": "prt_106c9060c00100000000000014",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060900100000000000010"
+        },
+        {
+          "type": "tool",
+          "tool": "edit",
+          "callID": "call_00000000000015",
+          "state": {
+            "status": "completed",
+            "input": {
+              "filePath": "/ws/notes.txt",
+              "oldString": "color = blue",
+              "newString": "color = green"
+            },
+            "output": "Success. Updated the following files:\nM /ws/notes.txt",
+            "title": "/ws/notes.txt",
+            "metadata": {},
+            "time": {
+              "start": 1791115200013,
+              "end": 1791115200013
+            }
+          },
+          "id": "prt_106c9060d00100000000000016",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060900100000000000010"
+        },
+        {
+          "reason": "tool-calls",
+          "type": "step-finish",
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "cost": 0,
+          "id": "prt_106c9060e00100000000000017",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060900100000000000010"
+        }
+      ]
+    },
+    {
+      "info": {
+        "parentID": "msg_106c9060700100000000000008",
+        "role": "assistant",
+        "mode": "build",
+        "agent": "build",
+        "path": {
+          "cwd": "/ws",
+          "root": "/ws"
+        },
+        "cost": 0,
+        "tokens": {
+          "input": 0,
+          "output": 0,
+          "reasoning": 0,
+          "cache": {
+            "read": 0,
+            "write": 0
+          }
+        },
+        "modelID": "big-pickle",
+        "providerID": "opencode",
+        "time": {
+          "created": 1791115200016,
+          "completed": 1791115200019
+        },
+        "finish": "stop",
+        "id": "msg_106c9060f00100000000000018",
+        "sessionID": "ses_ef936f9ffffe00000000000001"
+      },
+      "parts": [
+        {
+          "type": "step-start",
+          "id": "prt_106c9061000100000000000019",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060f00100000000000018"
+        },
+        {
+          "type": "text",
+          "text": "Done: notes.txt now says color = green (it was blue).",
+          "time": {
+            "start": 1791115200017,
+            "end": 1791115200017
+          },
+          "id": "prt_106c9061100100000000000020",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060f00100000000000018"
+        },
+        {
+          "reason": "stop",
+          "type": "step-finish",
+          "tokens": {
+            "input": 0,
+            "output": 0,
+            "reasoning": 0,
+            "cache": {
+              "read": 0,
+              "write": 0
+            }
+          },
+          "cost": 0,
+          "id": "prt_106c9061200100000000000021",
+          "sessionID": "ses_ef936f9ffffe00000000000001",
+          "messageID": "msg_106c9060f00100000000000018"
+        }
+      ]
+    }
+  ]
+}
