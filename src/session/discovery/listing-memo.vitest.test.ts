@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, freshListing, lastSeenListing, rememberListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
 } from './cache.js';
@@ -64,6 +64,19 @@ describe('the empty-listing memo', () => {
     const now = Date.now();
     await rememberListing('kilo', '/work', undefined, [], now, 'kilo-1');
     expect(await freshListing('kilo', '/work', undefined, now + 1_000, 'kilo-2')).toBeUndefined();
+  });
+
+  it('is shared with a process that was already running when it was written', async () => {
+    // A second module instance stands for another ClikCode window: it read
+    // the cache before this answer existed, and must still see it.
+    vi.resetModules();
+    const other = await import('./cache.js');
+    expect(await other.freshListing('hermes', '/work', undefined)).toBeUndefined();
+    await rememberListing('hermes', '/work', undefined, [{ nativeId: 'h1' }]);
+    expect(await other.freshListing('hermes', '/work', undefined)).toEqual([{ nativeId: 'h1' }]);
+    // And its own answer does not drop this one when it writes.
+    await other.rememberListing('opencode', '/work', undefined, []);
+    expect(await freshListing('hermes', '/work', undefined)).toEqual([{ nativeId: 'h1' }]);
   });
 
   it('survives a restart, which is the point of writing it down', async () => {

@@ -41,10 +41,14 @@ interface CachedListing {
 interface DiscoveryCacheFile {
   v: 1;
   directories: Record<string, CachedDirectory>;
-  /** The last answer each vendor CLI gave, per workspace and profile. (An
-   * older `listings` field held the empty answers apart; it is ignored.) */
-  seen?: Record<string, CachedListing>;
 }
+
+/** The last answer each vendor CLI gave, per workspace and profile. Its own
+ * file, read from disk at every lookup rather than held: every ClikCode
+ * process on the machine shares one answer. Held per process (as it was,
+ * inside the directory cache above), each window asked every CLI for itself,
+ * and N windows opening the board ran N `hermes sessions list` per expiry. */
+interface ListingCacheFile { v: 1; seen: Record<string, CachedListing> }
 
 /** Enough recent answers for every CLI, account and folder in use. */
 const DISCOVERY_CACHE_MAX_SEEN = 120;
@@ -62,8 +66,17 @@ const DISCOVERY_CACHE_MAX_DIRECTORIES = 400;
 const memo = jsonMemo<DiscoveryCacheFile>('cache/native-discovery.json', () => ({ v: 1, directories: {} }), (parsed) => {
   const file = parsed as DiscoveryCacheFile;
   if (file.v !== 1 || !file.directories || typeof file.directories !== 'object') return undefined;
-  return { v: 1, directories: file.directories, ...(file.seen ? { seen: file.seen } : {}) };
+  return { v: 1, directories: file.directories };
 });
+
+const listings = jsonMemo<ListingCacheFile>('cache/native-listings.json', () => ({ v: 1, seen: {} }), (parsed) => {
+  const file = parsed as ListingCacheFile;
+  return file.v === 1 && file.seen && typeof file.seen === 'object' ? file : undefined;
+});
+
+async function readListings(): Promise<ListingCacheFile> {
+  return (await listings.read()) ?? { v: 1, seen: {} };
+}
 
 /** Codex session id -> rollout file, filled by discovery so reading a transcript
  * is a lookup instead of a second walk of the whole tree. */
@@ -82,24 +95,12 @@ export async function saveDiscoveryCache(): Promise<void> {
     // Date-named vendor directories sort oldest first; drop those.
     data.directories = Object.fromEntries(entries.sort(([left], [right]) => right.localeCompare(left)).slice(0, DISCOVERY_CACHE_MAX_DIRECTORIES));
   }
-  // Expired answers are dropped rather than accumulating one key per
-  // workspace per account for the life of the install. An expired entry is
-  // already ignored on read, so this only keeps the file honest about its size.
-  const seen = data.seen;
-  if (seen) {
-    const now = Date.now();
-    for (const [key, entry] of Object.entries(seen)) {
-      if (now - entry.at >= listingLifetime(entry)) delete seen[key];
-    }
-  }
-  if (seen && Object.keys(seen).length > DISCOVERY_CACHE_MAX_SEEN) {
-    data.seen = Object.fromEntries(Object.entries(seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN));
-  }
   await memo.save();
 }
 
 export function resetNativeSessionDiscoveryCache(): void {
   memo.reset();
+  listings.reset();
   codexPathById.clear();
 }
 
@@ -137,14 +138,15 @@ function listingLifetime(entry: CachedListing): number {
   return entry.sessions.length ? SEEN_LISTING_TTL_MS : EMPTY_LISTING_TTL_MS;
 }
 
-/** Keep what a vendor CLI listed, empty or not. */
+/** Keep what a vendor CLI listed, empty or not. Read, changed and written
+ * back in one go, so an answer another process wrote meanwhile is kept. */
 export async function rememberListing(
   command: string, workspace: string | undefined, profile: string | undefined, sessions: readonly DiscoveredNativeSession[], now = Date.now(), build?: string,
 ): Promise<void> {
-  const cache = await loadDiscoveryCache();
-  cache.seen ??= {};
-  cache.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
-  memo.changed();
+  const file = await readListings();
+  file.seen[listingKey(command, workspace, profile)] = { at: now, sessions: [...sessions], ...(build ? { build } : {}) };
+  const newest = Object.entries(file.seen).sort(([, left], [, right]) => right.at - left.at).slice(0, DISCOVERY_CACHE_MAX_SEEN);
+  await listings.write({ v: 1, seen: Object.fromEntries(newest) });
 }
 
 /** The last answer, when it is recent enough to skip the CLI and came from
@@ -152,16 +154,15 @@ export async function rememberListing(
 export async function freshListing(
   command: string, workspace: string | undefined, profile: string | undefined, now = Date.now(), build?: string,
 ): Promise<DiscoveredNativeSession[] | undefined> {
-  const cache = await loadDiscoveryCache();
-  const entry = cache.seen?.[listingKey(command, workspace, profile)];
+  const entry = (await readListings()).seen[listingKey(command, workspace, profile)];
   if (!entry || entry.build !== build || now - entry.at >= listingLifetime(entry)) return undefined;
   return entry.sessions;
 }
 
-/** What a vendor CLI listed last time, or nothing when it never has. */
+/** What a vendor CLI listed last time, however long ago, or nothing when it
+ * never has. */
 export async function lastSeenListing(
   command: string, workspace: string | undefined, profile: string | undefined,
 ): Promise<DiscoveredNativeSession[]> {
-  const cache = await loadDiscoveryCache();
-  return cache.seen?.[listingKey(command, workspace, profile)]?.sessions ?? [];
+  return (await readListings()).seen[listingKey(command, workspace, profile)]?.sessions ?? [];
 }
