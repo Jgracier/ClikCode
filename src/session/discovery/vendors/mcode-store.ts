@@ -265,7 +265,18 @@ function historyDirectory(db: CarryDb, schema: CarrySchema, sessionId: string): 
  *  index). A session the writer made has none of it and resumes (live, 0.5.10),
  *  so the carried thread is at least that.
  *
- *  Progress is the lines of `messages.jsonl`: a resume only appends. */
+ *  Progress is the lines of `messages.jsonl`: a resume only appends.
+ *
+ *  Verified against mcode 0.5.10 (2026-10-05, vendor-sandbox, ACP as ClikCode
+ *  drives it, a custom provider pointed at a local stub model that answers
+ *  only from the history it is sent -- both MiniMax sign-ins had expired, see
+ *  below): a session made in profile A ("Remember the word HERONF8") was
+ *  carried into a profile B holding its own session ('carried'; A and B's own
+ *  session unchanged); the ACP resume in B sent both user turns and got
+ *  HERONF8. After a second turn in B ("remember the number 200") it was
+ *  carried back, and A's resume sent all four user turns: "HERONF8 200".
+ *  Not yet seen on a MiniMax model: mcode 0.5.10 reports "Sign in to MiniMax
+ *  to use Agent features" once its token expires (it did not refresh one). */
 export const mcodeCarry: SqliteCarrySpec = {
   database: (environment) => join(mcodeDataDir(environment), 'v2', 'sqlite', 'runtime-state.sqlite'),
   session: { table: 'local_runtime_sessions', key: 'session_id', identity: ['created_at_ms'], omit: ['project_id'], parent: 'parent_session_id' },
