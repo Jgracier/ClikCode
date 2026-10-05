@@ -9,6 +9,7 @@
  * this is meant to eventually make deletable, commands/ai/interactive.ts).
  */
 import { STOPPED } from '../harness/protocol/wording.js';
+import { turnWasCancelled } from '../session/attach.js';
 import { spawn } from 'node:child_process';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { idleDecision, startsSuccessor, vendorIdleDecision } from './idle-decisions.js';
@@ -519,7 +520,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         ...(command.queuedTurnId ? { queuedTurnId: command.queuedTurnId } : {}),
       });
     } catch (error) {
-      const cancelled = (error as NodeJS.ErrnoException).code === 'ERR_TURN_CANCELLED' || (error as Error).name === 'AbortError';
+      const cancelled = turnWasCancelled(error);
       turnOutcome = cancelled ? 'cancelled' : `error: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`;
       if (cancelled) {
         // Same distinction interactive.ts's own catch makes today: something
