@@ -159,6 +159,23 @@ describe('a lock left without its owner', () => {
     expect(await readFile(path, 'utf8')).toBe(live);
   });
 
+  it('a stale lock\'s break also clears what a killed holder left beside it, never a fresh attempt\'s temp', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'g.lock');
+    const dead = owner({});
+    await writeFile(path, dead);
+    const orphan = join(root, 'g.lock.4194311.a1b2c3d4e5f6.new');
+    const aside = join(root, 'g.lock.4194311.0011223344aa.stale');
+    const fresh = join(root, 'g.lock.4194311.ffeeddccbbaa.new');
+    for (const leftover of [orphan, aside, fresh]) await writeFile(leftover, dead);
+    await age(orphan, 120_000);
+    await age(aside, 120_000);
+    await writeFile(join(root, 'other.lock.4194311.a1b2c3d4e5f6.new'), dead);
+    await age(join(root, 'other.lock.4194311.a1b2c3d4e5f6.new'), 120_000);
+    await breakStaleLock(path, dead);
+    expect((await readdir(root)).sort()).toEqual(['g.lock.4194311.ffeeddccbbaa.new', 'other.lock.4194311.a1b2c3d4e5f6.new']);
+  });
+
   it('the lock file carries its owner from the moment it exists, and no temp file is left', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
     const path = join(root, 'l.lock');
