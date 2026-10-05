@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { matchingVendorAccount } from './labels.js';
 import {
-  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseMiniMaxUserInfo, parseAugmentModels, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
+  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseMiniMaxUserInfo, parseAugmentModels, parseCommandCodeApiWhoami, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser, vendorAccountEmail,
 } from './vendor-identity.js';
 
@@ -200,5 +200,10 @@ describe('vendor account email', () => {
     } finally {
       rmSync(profile, { recursive: true, force: true });
     }
+  });
+
+  it('reads the Command Code /alpha/whoami user', () => {
+    expect(parseCommandCodeApiWhoami('{"success":true,"user":{"id":"1","name":"N","email":"a@example.com","userName":"n"},"org":null}')).toBe('a@example.com');
+    expect(parseCommandCodeApiWhoami('{"success":false}')).toBeUndefined();
   });
 });

@@ -254,6 +254,27 @@ async function augmentEmail(profilePath: string | undefined): Promise<string | u
   return response.ok ? parseAugmentModels(await response.text()) : undefined;
 }
 
+/** Command Code `GET /alpha/whoami` -- the API its own `cmdc whoami` reads,
+ * which prints only the name -- answers {success, user:{id, name, email,
+ * userName}, org}. */
+export function parseCommandCodeApiWhoami(text: string): string | undefined {
+  return email((json(text) as { user?: { email?: unknown } } | undefined)?.user?.email);
+}
+
+/** $HOME/.commandcode/auth.json's apiKey: a long-lived key, nothing refreshed. */
+async function commandCodeEmail(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
+  const auth = json(await readFile(join(profilePath ?? homedir(), '.commandcode', 'auth.json'), 'utf8').catch(() => '')) as { apiKey?: unknown } | undefined;
+  if (typeof auth?.apiKey === 'string' && auth.apiKey) {
+    const response = await fetch('https://api.commandcode.ai/alpha/whoami', {
+      headers: { Authorization: `Bearer ${auth.apiKey}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    }).catch(() => undefined);
+    const found = response?.ok ? parseCommandCodeApiWhoami(await response.text()) : undefined;
+    if (found) return found;
+  }
+  return parseCommandCodeWhoami(await capture(harness, profilePath, ['whoami']));
+}
+
 /** Codex's auth.json id_token is a standard OIDC JWT whose payload carries an
  * `email` claim. Decoding the payload to read a claim is not verifying the
  * signature, and need not be: this is display of a claim from a credential
@@ -343,7 +364,7 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   kiro: ask(['whoami', '--format', 'json'], parseKiroWhoami),
   kilo: ask(['profile', '--json'], parseKiloProfile),
   amp: ask(['usage'], parseAmpUsage),
-  command: ask(['whoami'], parseCommandCodeWhoami),
+  command: commandCodeEmail,
   devin: ask(['auth', 'status'], parseDevinAuthStatus),
   codex: read((profilePath) => [join(under(profilePath, '.codex'), 'auth.json')], codexIdTokenEmail),
   // google_accounts.json names the signed-in Google account in `active`.
