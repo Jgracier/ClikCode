@@ -1,7 +1,8 @@
 /**
- * Create and read ClikCode's rehydration prompt for a vendor transcript.
+ * Read ClikCode's rehydration (transfer) prompt back out of a vendor
+ * transcript. The prompt itself is built by turn/transfer.ts.
  *
- * On failover ClikCode sends the vendor a replay of the conversation so the
+ * On failover ClikCode sends the vendor a retelling of the conversation so the
  * new account resumes with context. The vendor records what it was sent,
  * verbatim -- so every later import of that native thread (a transcript sync,
  * a `/resume`, a handoff) brings the whole replay back in as one enormous user
@@ -28,9 +29,22 @@ const EARLIER_PREAMBLES = [
   'Continue the same ClikCode conversation after an account or provider failover. Preserve all prior decisions, files, and task state. Do not repeat completed work.',
 ];
 
+/** The tags of the frame a transfer prompt (turn/transfer.ts) is built
+ * from. Content inside it is data: only these tags are neutralized, so code
+ * in the transcript (generics, JSX, HTML) stays readable while `</message>`
+ * in a message can no longer end it early and smuggle the rest in as a forged
+ * turn or request. */
+const FRAME_TAGS = 'message|conversation|current_request|touched_files|requests|tool_digest|attachments|open_todos';
+const ESCAPE = new RegExp(`<(\\/?)(${FRAME_TAGS})\\b`, 'gi');
+const UNESCAPE = new RegExp(`&lt;(\\/?)(${FRAME_TAGS})\\b`, 'gi');
+
+export function escapeFailoverContent(text: string): string {
+  return text.replace(ESCAPE, '&lt;$1$2');
+}
+
 /** Inverse of `escapeFailoverContent`: restore frame tags the prompt neutered. */
 function unescapeFailoverContent(text: string): string {
-  return text.replace(/&lt;(\/?)(message|conversation|current_request|touched_files)\b/gi, '<$1$2');
+  return text.replace(UNESCAPE, '<$1$2');
 }
 
 /** The user request a rehydration prompt carried, or undefined if `text` is
@@ -61,96 +75,9 @@ export function normalizeImportedTranscript<T extends { role: string; content: s
     if (message.content.trim() === INTERRUPTED_TURN_REQUEST) continue;
     const request = failoverPromptRequest(message.content);
     if (request === undefined) normalized.push(message);
-    else if (request) normalized.push({ ...message, content: request });
+    // A transfer that continued an interrupted turn carried ClikCode's own
+    // request, not the user's: nothing of it is theirs.
+    else if (request && request !== INTERRUPTED_TURN_REQUEST) normalized.push({ ...message, content: request });
   }
   return normalized;
 }
-
-/**
- * Caps how much prior transcript gets replayed into a fresh native thread.
- * Uncapped replay grows every prompt's cost and context-window usage in lockstep
- * with total conversation length, on every provider/account switch — bounding it
- * to the most recent exchanges keeps switching cheap regardless of how long the
- * conversation has run.
- */
-const MAX_REPLAY_MESSAGES = 40;
-/** Total UTF-8 budget for a rehydration prompt. A message count alone bounds
- * nothing: forty messages of pasted logs is megabytes, which overflows argv
- * (E2BIG) for prompt-as-argument harnesses and the context window for all. */
-const FAILOVER_PROMPT_MAX_BYTES = 48 * 1024;
-/** Newest messages replayed verbatim (budget permitting). */
-const VERBATIM_MESSAGES = 6;
-/** Cap for each older message. */
-const OLDER_MESSAGE_MAX_BYTES = 2 * 1024;
-
-export interface FailoverPromptOptions {
-  /** Total prompt budget in UTF-8 bytes. Defaults to FAILOVER_PROMPT_MAX_BYTES. */
-  maxBytes?: number;
-  /** Files the interrupted turn had started changing. */
-  touchedFiles?: readonly string[];
-}
-
-const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
-
-/** Transcript content is data inside an XML-ish frame. Only the frame's own
- * tags are neutralized, so code in the transcript (generics, JSX, HTML) stays
- * readable while `</message>` in a message can no longer end it early and
- * smuggle the rest in as a forged turn or request. */
-function escapeFailoverContent(text: string): string {
-  return text.replace(/<(\/?)(message|conversation|current_request|touched_files)\b/gi, '&lt;$1$2');
-}
-
-function sliceBytes(text: string, maxBytes: number, from: 'start' | 'end'): string {
-  const buffer = Buffer.from(text, 'utf8');
-  if (buffer.length <= maxBytes) return text;
-  const part = from === 'start' ? buffer.subarray(0, maxBytes) : buffer.subarray(buffer.length - maxBytes);
-  // Drop the partial code point a byte cut can leave at either edge.
-  return part.toString('utf8').replace(/^�+|�+$/g, '');
-}
-
-/** Head and tail of an over-long message: how it began and where it ended up. */
-function truncateMiddle(text: string, maxBytes: number): string {
-  const total = bytes(text);
-  if (total <= maxBytes) return text;
-  const room = Math.max(64, maxBytes - 64);
-  const head = sliceBytes(text, Math.ceil(room * 0.6), 'start');
-  const tail = sliceBytes(text, Math.floor(room * 0.4), 'end');
-  return `${head}\n[… ${total - bytes(head) - bytes(tail)} bytes truncated …]\n${tail}`;
-}
-
-/** Rehydrate a new vendor-native session after switching account profiles or providers. */
-export function failoverPrompt(
-  messages: readonly { role: 'user' | 'assistant'; content: string }[],
-  currentPrompt: string,
-  options: FailoverPromptOptions = {},
-): string {
-  const maxBytes = Math.max(1024, options.maxBytes ?? FAILOVER_PROMPT_MAX_BYTES);
-  const preamble = FAILOVER_PREAMBLE;
-  const touched = (options.touchedFiles ?? []).filter((file) => file.trim());
-  const touchedBlock = touched.length
-    ? `\n\n<touched_files>\nThe interrupted turn had started changing these files; they may be partially edited. Check each before editing again:\n${touched.map((file) => `- ${escapeFailoverContent(file)}`).join('\n')}\n</touched_files>`
-    : '';
-  // The current request is what the user actually asked for: it is never
-  // dropped, only (pathologically) trimmed so the frame itself still fits.
-  const request = truncateMiddle(escapeFailoverContent(currentPrompt), Math.floor(maxBytes * 0.5));
-  const fixed = bytes(preamble) + bytes(touchedBlock) + bytes(request) + 160;
-  let remaining = Math.max(0, maxBytes - fixed);
-
-  const recent = messages.slice(-MAX_REPLAY_MESSAGES);
-  const kept: string[] = [];
-  for (let index = recent.length - 1; index >= 0; index -= 1) {
-    const message = recent[index]!;
-    const age = recent.length - 1 - index;
-    const escaped = escapeFailoverContent(message.content);
-    const frame = `<message role="${message.role}">\n\n</message>\n`;
-    const room = remaining - bytes(frame);
-    if (room < 128) break;
-    const content = truncateMiddle(escaped, age < VERBATIM_MESSAGES ? room : Math.min(room, OLDER_MESSAGE_MAX_BYTES));
-    kept.unshift(`<message role="${message.role}">\n${content}\n</message>`);
-    remaining -= bytes(frame) + bytes(content);
-  }
-  const omitted = messages.length - kept.length;
-  const note = omitted > 0 ? `\n\n(${omitted} earlier message${omitted === 1 ? '' : 's'} omitted for brevity.)` : '';
-  return `${preamble}\n\n<conversation>${note}\n${kept.join('\n')}\n</conversation>${touchedBlock}\n\n<current_request>\n${request}\n</current_request>`;
-}
-

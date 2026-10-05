@@ -9,8 +9,15 @@ import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDe
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
 import { classifyAccountFailure } from './failover.js';
-import { failoverPrompt, INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
-import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
+import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
+import { startConversationThread } from './thread-start.js';
+import { targetContextWindow } from './transfer.js';
+import { loadCanonicalRecord } from '../session/canonical.js';
+import { nativeSessionStore } from '../session/discovery/registry.js';
+import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
+import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
+import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { carryNativeSession } from '../session/carry.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
@@ -36,7 +43,6 @@ import { prepareAttachments } from '../session/attachments.js';
 import { addTurnUsage, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
-import { textTranscript } from './turn-activities.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
 import { conversationsMcpEntry } from '../search/mcp-entry.js';
@@ -154,6 +160,44 @@ export async function sendVendorTurn(input: {
     checkpoint.response(RETRY_EDITS[edit][0], RETRY_EDITS[edit][1]);
     prompter?.response(RETRY_EDITS[edit][0], RETRY_EDITS[edit][1]);
   };
+  /** The conversation, taken up by this harness without a live thread of its
+   * own (thread-start.ts): written as its native thread where a writer for it
+   * exists, else retold as a transfer. Returns what to send. `interrupted`:
+   * the request continues the newest turn, whose journal (`withJournal`) or
+   * copy holds the answer so far; `requestContext` is what that turn's
+   * request carried besides its words (attached files), which the journal
+   * does not keep. */
+  const takeUp = async (request: string, options: { interrupted: boolean; withJournal: boolean; requestContext?: string }): Promise<string> => {
+    const view = options.withJournal ? session : { ...session, pendingTurn: undefined };
+    const record = await loadCanonicalRecord(view, state.sessions);
+    const last = record.turns.at(-1);
+    if (options.interrupted && options.requestContext && last) last.user = `${last.user}${options.requestContext}`;
+    const transport = sessionTurnTransport(harness, session);
+    const argvBound = (transport === 'structured-cli' || transport === 'text-cli') && harness.turn?.promptInput !== 'stdin';
+    const contextWindow = await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(() => undefined);
+    const writer = nativeSessionStore(harness)?.writer;
+    const start = await startConversationThread({
+      record, request, interrupted: options.interrupted, harness, model,
+      workspace: session.workspace ?? process.cwd(), environment: turnEnvironment(harness, account),
+      ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}),
+      ...(writer ? { writer } : {}),
+      version: async () => (await inspectNativeHarness(harness)).version,
+      displayName: (command) => localHarnessForCommand(command)?.displayName,
+      onFallback: (reason) => lifecycle('thread.writer-fallback', { harness: harness.command, reason }),
+    });
+    lifecycle('thread.take-up', {
+      harness: harness.command, how: start.kind, turns: record.turns.length, interrupted: options.interrupted,
+      ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : {}),
+    });
+    if (start.kind === 'native') {
+      session.nativeSessionId = start.written.nativeId;
+      delete session.nativeSessionPreallocated;
+      if (start.written.transport) session.nativeTransport = start.written.transport;
+      else delete session.nativeTransport;
+      await checkpoint.persistNow();
+    }
+    return start.prompt;
+  };
   const accounts = turnAccounts({
     state, session, prompter, matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
@@ -169,15 +213,12 @@ export async function sendVendorTurn(input: {
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode
   // messages already on the session means this conversation is continuing
   // under a different native identity than whatever produced those messages
-  // — a cross-provider /resume, most commonly. ClikCode's own transcript
-  // shows continuity either way, but the vendor process about to start has
-  // no memory of any of it unless it's carried in the prompt itself; without
-  // this, "continuing under Claude Code" is cosmetic in the UI only. The
-  // quota-failover retry below does its own version of this for the
-  // mid-conversation case; this covers every other route into a fresh
-  // native thread with history already behind it.
+  // -- a provider switch, a switch back, a fork, "Resume in". The vendor
+  // process about to start has no memory of any of it unless it is given
+  // it: takeUp writes it as the vendor's own thread, or transfers it. The
+  // failover retries below take the same path mid-turn.
   if ((!session.nativeSessionId || session.nativeSessionPreallocated) && baseMessages.length > 0) {
-    turnText = failoverPrompt(textTranscript(baseMessages), turnText);
+    turnText = await takeUp(turnText, { interrupted: text === INTERRUPTED_TURN_REQUEST, withJournal: false });
   }
   // Bounded to one attempt: this is a reactive fallback for exactly the
   // case aiHarnessSelect's own proactive check can't catch -- a harness
@@ -274,7 +315,13 @@ export async function sendVendorTurn(input: {
     onResponseDelta: sink.response,
     onPhase: (phase: string) => prompter?.phase(phase),
     onNotice: (message: string) => prompter?.activity(chalk.yellow(message)),
-    onPlan: (entries: readonly HarnessPlanEntry[]) => prompter?.setPlan(entries),
+    onPlan: (entries: readonly HarnessPlanEntry[]) => {
+      // Kept on the session too: a provider taking the conversation over is
+      // told the todos still open (session/canonical.ts).
+      session.plan = { entries: entries.map((entry) => ({ ...entry })), at: new Date().toISOString() };
+      checkpoint.touch();
+      prompter?.setPlan(entries);
+    },
     // A native harness runs its OWN tools, so ClikCode has no rule to
     // remember on its behalf -- and with no rule offered the prompter never
     // returns 'always' anyway. Collapsed to a boolean here so that boundary
@@ -460,7 +507,7 @@ export async function sendVendorTurn(input: {
         nativeThreadRetried = true;
         await closePersistentTransport(session.id);
         forgetNativeThread(session);
-        turnText = interruptedTurnFailoverPrompt(session, { requestContext });
+        turnText = await takeUp(INTERRUPTED_TURN_REQUEST, { interrupted: true, withJournal: true, requestContext });
         editAnswer('clear');
         continue;
       }
@@ -493,7 +540,7 @@ export async function sendVendorTurn(input: {
         // rehydration prompt tells the next account to finish without
         // repeating, so clearing here made the first half vanish and the
         // retry look like a fresh start from the original prompt.
-        turnText = interruptedTurnFailoverPrompt(session, { requestContext });
+        turnText = await takeUp(INTERRUPTED_TURN_REQUEST, { interrupted: true, withJournal: true, requestContext });
         const partial = session.pendingTurn?.response ?? '';
         if (partial.trim()) {
           if (!/\n\s*\n\s*$/.test(partial)) editAnswer('new-paragraph');

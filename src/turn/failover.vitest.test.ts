@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, quotaRetryHint } from './failover';
-import { failoverPrompt } from './failover-prompt.js';
+import { transferPrompt } from './transfer.js';
+import { canonicalRecord } from '../session/canonical.js';
+import type { HarnessSession } from '../session/model.js';
+
+const failoverPrompt = (messages: HarnessSession['messages'], request: string, maxBytes?: number): string =>
+  transferPrompt(canonicalRecord({ id: 's', messages } as HarnessSession), request, maxBytes ? { maxBytes } : {});
 
 describe('ClikCode account failover', () => {
   it('does not confuse temporary throttling with exhausted quota', () => {
@@ -40,17 +45,18 @@ describe('ClikCode account failover', () => {
     expect(prompt).toContain('now run the focused test');
   });
 
-  it('caps replay to the most recent messages instead of growing unbounded with conversation length', () => {
+  it('keeps every request but retells only what fits, condensing older answers', () => {
     const messages = Array.from({ length: 60 }, (_, index) => ({
-      role: (index % 2 === 0 ? 'user' : 'assistant') as const,
-      content: `message-${index}`,
+      role: (index % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+      content: index % 2 === 0 ? `request-${index}` : `answer-${index} begins here. ${'Then a middle step. '.repeat(100)}answer-${index} ends here.`,
     }));
-    const prompt = failoverPrompt(messages, 'continue');
-    expect(prompt).not.toContain('message-0\n');
-    expect(prompt).not.toContain('message-19\n');
-    expect(prompt).toContain('message-20\n');
-    expect(prompt).toContain('message-59');
-    expect(prompt).toContain('20 earlier messages omitted for brevity');
+    const prompt = failoverPrompt(messages, 'continue', 16 * 1024);
+    expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(16 * 1024);
+    for (let index = 0; index < 60; index += 2) expect(prompt).toContain(`${index / 2 + 1}. request-${index}`);
+    // The newest answer whole, older ones by their first and last sentences.
+    expect(prompt).toContain(messages[59]!.content);
+    expect(prompt).toContain('answer-41 begins here. … answer-41 ends here.');
+    expect(prompt).not.toContain('Then a middle step. Then a middle step. Then a middle step. answer-41');
   });
 });
 

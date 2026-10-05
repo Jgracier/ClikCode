@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest';
-import { failoverPrompt, failoverPromptRequest, INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
-import { interruptedTurnFailoverPrompt } from './interrupted-turn-prompt.js';
+import { failoverPromptRequest, INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
+import { transferPrompt } from './transfer.js';
+import { canonicalRecord } from '../session/canonical.js';
 import { conversationTitle } from '../session/discovery/conversation-title.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import type { HarnessSession } from '../session/model.js';
+
+/** The transfer as a provider taking the conversation up is sent it. */
+const failoverPrompt = (messages: HarnessSession['messages'], request: string): string =>
+  transferPrompt(canonicalRecord({ id: 's', messages } as HarnessSession), request);
+/** The same, continuing an interrupted turn; `requestContext` is what its
+ * request carried besides its words. */
+const interruptedTurnFailoverPrompt = (session: HarnessSession, options: { requestContext?: string } = {}): string => {
+  const record = canonicalRecord({ id: 's', ...session });
+  const last = record.turns.at(-1)!;
+  if (options.requestContext) last.user += options.requestContext;
+  return transferPrompt(record, INTERRUPTED_TURN_REQUEST, { interrupted: true });
+};
 
 const history = [
   { role: 'user' as const, content: 'use clikdeploy cli to see what we have connected' },
