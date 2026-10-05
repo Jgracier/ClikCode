@@ -21,8 +21,8 @@ export const askUserTool = defineTool<AskUserArgs>({
   parameters: {
     type: 'object', additionalProperties: false, required: ['question'],
     properties: {
-      question: { type: 'string', description: 'The question, complete enough to answer without scrolling back.' },
-      options: { type: 'array', items: { type: 'string' }, maxItems: 6, description: 'The choices, when the answer is one of a few.' },
+      question: { type: 'string', description: 'The question.' },
+      options: { type: 'array', items: { type: 'string' }, maxItems: 6, description: 'The choices, if any.' },
       multiSelect: { type: 'boolean', description: 'True when more than one option may be chosen.' },
     },
   },

@@ -19,13 +19,13 @@ const MAX_SECONDS = 1800;
 export const waitTool = defineTool<WaitArgs>({
   name: 'wait',
   class: 'read',
-  description: 'Wait until something happens, then continue in the same turn: a background shell exits (shell_ids; empty with no path means any running background shell), a file or directory changes (path), or the time runs out (seconds, default 300, max 1800) -- whichever comes first. Woken by the event itself, so use this instead of sleep loops or polling bash_output. If you have nothing to do until a background shell finishes and do not need to continue in this turn, end your turn instead: its exit arrives as a new message.',
+  description: 'Wait until something happens, then continue in the same turn: a background shell exits (shell_ids; empty with no path means any running background shell), a file or directory changes (path), or the time runs out (seconds, default 300) -- whichever comes first. Use it instead of sleep loops or polling bash_output.',
   parameters: {
     type: 'object', additionalProperties: false,
     properties: {
-      shell_ids: { type: 'array', items: { type: 'string' }, description: 'Background shells to wait for (e.g. ["bash_1"]); the first to exit wakes the wait.' },
-      path: { type: 'string', description: 'A file or directory to wait on: any change to it (created, written, renamed, deleted) wakes the wait.' },
-      seconds: { type: 'integer', minimum: 1, maximum: MAX_SECONDS, description: 'The longest to wait, in seconds.' },
+      shell_ids: { type: 'array', items: { type: 'string' }, description: 'Background shells (e.g. ["bash_1"]); the first to exit wakes the wait.' },
+      path: { type: 'string', description: 'A file or directory; any change to it wakes the wait.' },
+      seconds: { type: 'integer', minimum: 1, maximum: MAX_SECONDS, description: 'The longest to wait.' },
     },
   },
   label: (args) => `Wait${args.shell_ids?.length ? ` for ${args.shell_ids.join(', ')}` : ''}${args.path ? ` for ${args.path}` : ''} (≤${args.seconds ?? DEFAULT_SECONDS}s)`,

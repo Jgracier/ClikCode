@@ -137,7 +137,7 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
 export const bashTool = defineTool<BashArgs>({
   name: 'bash',
   class: 'exec',
-  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs: you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. bash_output reads the output of a background shell so far. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Commands are non-interactive: never start editors or prompts.',
+  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs: you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Commands are non-interactive: never start editors or prompts.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['command'],
     properties: {
