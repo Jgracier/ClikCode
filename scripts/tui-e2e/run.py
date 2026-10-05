@@ -780,6 +780,14 @@ SCENARIOS = {
         'watch': [], 'ever': ['1  edit the notes', 'Turn 1 · edit the notes', '- beta'],
         'file_contains': {'notes.txt': 'alpha\nbeta\n'},
     },
+    # `!<command>`: its output is a transcript message, drawn once, with no
+    # notice repeating how it exited.
+    'shell-line-in-transcript': {
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
+                  ('type', '!echo shell-out-$((40+2))'), ('wait_for', 'shell-out-42', 10), ('settle', 2)],
+        'watch': ['shell-out-42'], 'final_contains': ['!echo shell-out-$((40+2))', 'exit 0'], 'never': ['rides into the next request'],
+    },
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],

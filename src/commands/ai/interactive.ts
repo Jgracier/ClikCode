@@ -14,7 +14,7 @@ import { isClikCodeAgent } from '../../session/route.js';
 import { reconcileLocalModelLeases } from './local-model.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { isUsageExhaustedMessage, resumeWaitLabel } from '../../turn/usage-exhausted.js';
-import { isShellCommandLine, type ShellNote } from './shell-run.js';
+import { isShellCommandLine, shellMessageContent, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
@@ -626,9 +626,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           } finally {
             terminal?.stopWaiting();
           }
-          notice = result.exitCode === 0
-            ? `Ran \`!${command}\` (exit 0) — its output rides into the next request`
-            : `\`!${command}\` ended with ${result.exitCode === null ? 'no exit code (killed or cancelled)' : `exit ${result.exitCode}`}`;
+          // The run is a transcript message -- command, output, exit -- which
+          // the terminal draws with the conversation; a notice repeating its
+          // exit said it twice. Without a terminal nothing draws it.
+          if (!terminal) emitHarnessOutput({ panel: 'shell', text: shellMessageContent(result) });
           continue;
         }
         const host: SlashHost = {
