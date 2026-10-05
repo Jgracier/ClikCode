@@ -4,7 +4,7 @@
 import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspect.js';
 import type { HarnessState } from '../session/model.js';
 import { compactPath } from '../harness/protocol/labels.js';
-import { harnessStatePath } from '../session/state/paths.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { allLocalHarnesses, harnessCanRunTurns } from '../runtime/lazy-bridge.js';
 import { integrationLabel } from '../session/options.js';
 import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
@@ -21,6 +21,6 @@ export async function doctorSummary(state: HarnessState): Promise<string> {
     `Accounts (${state.accounts.length})`,
     ...(state.accounts.length ? state.accounts.map((account) => `  ${account.label} · ${account.provider} · ${account.status === 'needs_login' ? 'needs reauthentication' : account.status}${accountQuotaSpent(account) ? ' · quota exhausted' : ''}${account.verification ? ' · needs verification' : ''}`) : ['  none yet — /provider adds one']),
     '',
-    `State: ${compactPath(harnessStatePath())}`,
+    `State: ${compactPath(stateDirectory())}`,
   ].join('\n');
 }

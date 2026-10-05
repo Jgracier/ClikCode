@@ -13,12 +13,12 @@
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { harnessStatePath } from '../../state/paths.js';
+import { stateDirectory } from '../../store/paths.js';
 import type { NativeSessionStore, NativeThreadWriter } from '../stores.js';
 import { callResultText, requestText, testedVersion, writeFileAtomic } from './thread-writer-files.js';
 
 function aiderRoot(): string {
-  return join(harnessStatePath(), '..', 'native', 'aider');
+  return join(stateDirectory(), 'native', 'aider');
 }
 
 /** A line Aider would not read back as the assistant's: `# ` lines are

@@ -7,7 +7,7 @@ import { homedir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { homeRedirectEnvironment } from '../../runtime/lazy-bridge.js';
-import { harnessStatePath } from '../../session/state/paths.js';
+import { stateDirectory } from '../../session/store/paths.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 
 /** The environment a vendor process runs under for this account: its isolated
@@ -25,7 +25,7 @@ export function profileEnvironment(
 /** Root of every profile directory ClikCode itself created. Nothing outside it
  * is ever deleted by account removal or garbage collection. */
 function clikcodeProfilesRoot(): string {
-  return resolve(join(harnessStatePath(), '..', 'profiles'));
+  return resolve(join(stateDirectory(), 'profiles'));
 }
 
 /** Resolves `profilePath` to a directory that is safe to delete, or explains

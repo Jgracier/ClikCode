@@ -21,7 +21,7 @@ import { createBackgroundWait, streamJsonUserMessage } from '../harness/transpor
 import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
 import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
-import { harnessStatePath } from '../session/state/paths.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { usesFallbackTurn, vendorBackgroundTurnHandlerFor } from './vendor-process.js';
 import { turnCancelledError } from '../agent/cancellation.js';
@@ -77,7 +77,7 @@ export async function runVendorCliAttempt(input: {
     session.nativeSessionPreallocated = true;
     createdHere = true;
   } else if (!session.nativeSessionId && cliHarness.session?.idKind === 'history-file' && turn.createIdPrefix) {
-    const nativeDirectory = join(harnessStatePath(), '..', 'native', cliHarness.command);
+    const nativeDirectory = join(stateDirectory(), 'native', cliHarness.command);
     await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
     session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
     session.nativeSessionPreallocated = true;
