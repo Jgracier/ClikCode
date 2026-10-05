@@ -71,7 +71,7 @@ describe('"Resume in" from two windows at once', () => {
     expect(moved.nativeHarness).toBe('codex');
     // The interrupted turn is history now, its answer still Claude's.
     expect(moved.pendingTurn).toBeUndefined();
-    expect(moved.messages).toEqual([{ role: 'user', content: 'fix the parser' }, expect.objectContaining({ content: 'half', origin: expect.objectContaining({ harness: 'claude' }) })]);
+    expect(moved.messages).toEqual([expect.objectContaining({ role: 'user', content: 'fix the parser' }), expect.objectContaining({ content: 'half', origin: expect.objectContaining({ harness: 'claude' }) })]);
   });
 
   it('moves it again when a later turn runs out there', async () => {

@@ -18,6 +18,8 @@ import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js';
 import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission } from './settings.js';
 import { writeState } from './write.js';
+import { foldHandoffBranches, hasUnfoldedHandoffs } from './fold-handoffs.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 
 function sessionClaimView(claim: SessionClaim): NonNullable<HarnessSession['claim']> {
   return { pid: claim.pid, host: claim.host, startedAt: claim.startedAt, heartbeatAt: claim.heartbeatAt };
@@ -135,6 +137,10 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
     index = await loadIndex();
     if (!index) throw new Error('local AI harness state could not be created');
   }
+  if (!folding && index.version <= HARNESS_STATE_VERSION && hasUnfoldedHandoffs(index.sessions as HarnessSession[])) {
+    await foldStoredHandoffs();
+    index = await loadIndex() ?? index;
+  }
   let secrets = await readSecretsFile();
   // The loopback bearer must survive the first process exit; otherwise a
   // runtime registration would be valid only for the process that created it.
@@ -150,6 +156,24 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
   if (index.version > HARNESS_STATE_VERSION) return withDrafts(normalized);
   if (!sameData(normalized, raw)) await writeState(normalized);
   return withDrafts(normalized);
+}
+
+/** Set while the fold below reads and writes the state itself. */
+let folding = false;
+
+/** Conversations stored as a branch per provider switch become one
+ * conversation (fold-handoffs.ts). Once; again only for a branch an older
+ * build made since. */
+async function foldStoredHandoffs(): Promise<void> {
+  folding = true;
+  try {
+    const state = await readState();
+    const report = foldHandoffBranches(state.sessions);
+    await writeState(state);
+    lifecycle('state.fold-handoffs', { ...report });
+  } finally {
+    folding = false;
+  }
 }
 
 /** Drafts this process has not stored yet. They are not part of the baseline:

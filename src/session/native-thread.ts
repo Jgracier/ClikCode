@@ -14,15 +14,14 @@ export function forgetNativeThread(session: HarnessSession): void {
 }
 
 /** What a conversation sheds when another provider takes it up in place.
- * Every answer so far keeps who gave it (an unstamped one is the provider
+ * Every message so far keeps whose it was (an unstamped one is the provider
  * leaving's), a turn left in the journal becomes history for the next
  * provider to continue, and everything that described the old provider's
  * thread goes: the next turn starts the new one from the record
  * (turn/thread-start.ts). */
 export function leaveProvider(session: HarnessSession): void {
   const origin = messageOrigin(session);
-  session.messages = sessionTranscriptMessages(session)
-    .map((message) => (message.role === 'assistant' && !message.origin ? { ...message, origin } : message));
+  session.messages = sessionTranscriptMessages(session).map((message) => (message.origin ? message : { ...message, origin }));
   delete session.pendingTurn;
   forgetNativeThread(session);
   for (const key of ['reported', 'effortRefused', 'lastUsage', 'resumeAt', 'harnessOptions', 'gatewayConfirmed'] as const) delete session[key];
