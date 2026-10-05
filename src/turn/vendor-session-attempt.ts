@@ -43,6 +43,8 @@ export async function runVendorSessionAttempt(input: {
   effort?: string;
   onSessionId: (id: string) => Promise<void>;
   onAuthenticated?: () => Promise<void>;
+  /** MCP servers to hand an ACP session, beside the swarm's. */
+  mcpServers?: readonly Record<string, unknown>[];
   runCli: () => Promise<NativeTurnResult>;
 }): Promise<NativeTurnResult> {
   const { harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, onAuthenticated, runCli } = input;
@@ -98,6 +100,7 @@ export async function runVendorSessionAttempt(input: {
       if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
         throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
       }
+      const mcpServers = [...input.mcpServers ?? [], ...(swarmIsOn(session) ? swarmAcpMcpServers() : [])];
       const acpInput: AcpTurnInput = {
         binary: launch.binary, command: harness.command, prompt: turnText,
         argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
@@ -115,7 +118,7 @@ export async function runVendorSessionAttempt(input: {
         // would otherwise start a second copy of the agent to read.
         onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
         environment, signal, images, onSessionId,
-        ...(swarmIsOn(session) ? { mcpServers: swarmAcpMcpServers() } : {}),
+        ...(mcpServers.length ? { mcpServers } : {}),
         ...sharedObserver,
         onSteerReady,
       };

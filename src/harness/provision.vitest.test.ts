@@ -8,7 +8,7 @@ import type { AiHarnessAccount } from './definition.js';
 import { provisionChosenHarness, skillRoot } from './provision.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
-import { conversationsMcpEntry } from '../search/mcp-entry.js';
+import { conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
 
 const cursor = allLocalHarnesses().find((item) => item.command === 'cursor')!;
 const grok = allLocalHarnesses().find((item) => item.command === 'grok')!;
@@ -86,6 +86,23 @@ describe('provisioning the harness that was chosen', () => {
       install: async (_harness, entry) => { entries.push(entry.target); return { harness: 'cursor', ok: true }; },
     });
     expect(entries).toEqual(['mine']);
+  });
+
+  it('hands the conversation server to the ACP session of a vendor whose config cannot take it', async () => {
+    // opencode adds only remote servers; the real install declines a local
+    // one without running anything, so the session carries it instead.
+    const opencode = allLocalHarnesses().find((item) => item.command === 'opencode')!;
+    const { home, state, workspace } = await layout();
+    const builtin = conversationsMcpEntry('/opt/clikcode/bin/clikcode', '/usr/bin/node', 'linux', () => true)!;
+    const provisioned = await provisionChosenHarness({
+      harness: opencode, account: { ...account(home), provider: 'opencode' }, workspace, stateDir: state, home, builtins: [builtin],
+    });
+    expect(provisioned.mcpSkipped).toEqual(['clikcode-conversations']);
+    expect(conversationsForAcpSession(builtin, provisioned.mcpSkipped, { CLIKCODE_SESSION_ID: 's1' })).toEqual([
+      { name: 'clikcode-conversations', command: '/opt/clikcode/bin/clikcode', args: ['conversations-mcp'], env: [{ name: 'CLIKCODE_SESSION_ID', value: 's1' }] },
+    ]);
+    // Given through the vendor's own config: not handed over a second time.
+    expect(conversationsForAcpSession(builtin, [], { CLIKCODE_SESSION_ID: 's1' })).toEqual([]);
   });
 
   it('does not write into an MCP file it cannot parse', async () => {

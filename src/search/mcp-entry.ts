@@ -44,3 +44,15 @@ export function conversationsMcpEntry(
   const launcher = clikcodeLauncher(script, execPath, platform, isExecutable);
   return launcher && { name: CONVERSATIONS_MCP_NAME, target: launcher.target, args: [...launcher.args, CONVERSATIONS_MCP_COMMAND] };
 }
+
+/** The server as an ACP session's `mcpServers` entry (stdio), for a vendor
+ * whose own configuration could not be given it: opencode and Kilo add only
+ * remote servers, and several ACP agents have no add at all. Without this
+ * those agents were blind to the user's other conversations. `env` is
+ * stated, not inherited: ACP leaves a server's environment to the client. */
+export function conversationsForAcpSession(
+  entry: McpServerEntry | undefined, notProvisioned: readonly string[], env: Readonly<Record<string, string>>,
+): Array<{ name: string; command: string; args: string[]; env: Array<{ name: string; value: string }> }> {
+  if (!entry || !notProvisioned.includes(entry.name)) return [];
+  return [{ name: entry.name, command: entry.target, args: [...entry.args ?? []], env: Object.entries(env).map(([name, value]) => ({ name, value })) }];
+}

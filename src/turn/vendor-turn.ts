@@ -44,7 +44,7 @@ import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
-import { builtClikcodeLauncher, conversationsMcpEntry } from '../search/mcp-entry.js';
+import { builtClikcodeLauncher, conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
@@ -345,6 +345,10 @@ export async function sendVendorTurn(input: {
     // Which conversation this is, for ClikCode's conversation MCP server the
     // vendor starts (search/mcp.ts): it leaves this one out of its answers.
     const environment = { ...turnEnvironment(harness, account, session.permissionMode ?? 'ask'), CLIKCODE_SESSION_ID: session.id };
+    // A vendor whose config could not take the conversation server gets it
+    // with its ACP session instead (a CLI turn has no such channel).
+    const sessionMcpServers = conversationsForAcpSession(conversations, provisioned.mcpSkipped,
+      { CLIKCODE_SESSION_ID: session.id, ...(process.env.CLIKCODE_HOME ? { CLIKCODE_HOME: process.env.CLIKCODE_HOME } : {}) });
     const transport = sessionTurnTransport(harness, session);
     activeTransport = transport;
     // A fresh native thread with prior ClikCode messages: see above. Also
@@ -374,7 +378,7 @@ export async function sendVendorTurn(input: {
       } else {
         result = await runVendorSessionAttempt({
           harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint,
-          sharedObserver, effort: turnEffort(), onSessionId,
+          sharedObserver, effort: turnEffort(), onSessionId, mcpServers: sessionMcpServers,
           onAuthenticated: async () => {
             account = await syncAccountIdentityAfterLogin(harness, account, state);
             session.accountId = account.id;
