@@ -16,7 +16,7 @@
  * always works, so nothing here can fail the turn. */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
-import type { CanonicalRecord } from '../session/canonical.js';
+import { markProviderBoundaries, type CanonicalRecord } from '../session/canonical.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { transferBudget, transferPrompt } from './transfer.js';
 
@@ -64,7 +64,9 @@ async function written(input: ThreadStartInput): Promise<NativeThreadWritten | u
       input.onFallback?.(`${input.harness.command} ${context.version ?? '(version unknown)'} is not a build its thread writer was verified against (${writer.testedVersions.join(', ') || 'none'})`);
       return undefined;
     }
-    const result = await writer.write(input.record, context);
+    // Which provider ran which turns, said once per switch (the transfer
+    // says it in its own preamble).
+    const result = await writer.write(markProviderBoundaries(input.record, input.harness.command, input.displayName), context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
     return result?.nativeId ? result : undefined;
   } catch (error) {

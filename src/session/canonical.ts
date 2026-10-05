@@ -98,6 +98,10 @@ export interface CanonicalTurn {
    * still in its journal). Whoever takes it over continues it. */
   interrupted: boolean;
   origin: CanonicalOrigin;
+  /** Set only on a record about to be written as a native thread, at a
+   * provider boundary (markProviderBoundaries): the line a writer puts before
+   * this turn's request (withProviderNote). */
+  providerNote?: string;
 }
 
 export interface CanonicalRecord {
@@ -315,4 +319,43 @@ export async function loadCanonicalRecord(
 async function defaultTranscriptReader(id: string): Promise<Pick<HarnessSession, 'messages' | 'pendingTurn'>> {
   const { readSessionTranscript } = await import('./store/transcripts.js');
   return readSessionTranscript(id);
+}
+
+/** Who produced a turn, as a note names it: `Kilo Code CLI
+ * (kilo/cohere/north-mini-code:free)`. */
+export function originLabel(origin: CanonicalOrigin, displayName?: (harness: string) => string | undefined): string {
+  const name = origin.harness ? displayName?.(origin.harness) ?? origin.harness : origin.route ?? origin.provider ?? 'ClikCode';
+  return `${name}${origin.model ? ` (${origin.model})` : ''}`;
+}
+
+function originKey(origin: CanonicalOrigin): string {
+  return origin.harness ?? `${origin.route}:${origin.provider ?? ''}`;
+}
+
+/** `record` with a providerNote on every turn where the provider changes:
+ * the first turn when it ran somewhere other than `receiving` (the harness
+ * command taking the thread up), and every later turn whose provider differs
+ * from the one before it -- including the switch back to `receiving`. A
+ * native thread reads as the receiving model's own history, so without these
+ * it took another provider's turns for its own and denied the other existed;
+ * one line per switch keeps the rest of the history its own. */
+export function markProviderBoundaries(
+  record: CanonicalRecord, receiving: string, displayName?: (harness: string) => string | undefined,
+): CanonicalRecord {
+  let previous = receiving;
+  const turns = record.turns.map((turn) => {
+    const key = originKey(turn.origin);
+    const boundary = key !== previous;
+    previous = key;
+    const { providerNote: _stale, ...rest } = turn;
+    return boundary ? { ...rest, providerNote: `[ClikCode: the following turns ran on ${originLabel(turn.origin, displayName)}]` } : rest;
+  });
+  return { ...record, turns };
+}
+
+/** A turn's request as a writer puts it in the user message: the provider
+ * note, if the turn has one, on its own line first. */
+export function withProviderNote(turn: Pick<CanonicalTurn, 'providerNote'>, request: string): string {
+  if (!turn.providerNote) return request;
+  return request.trim() ? `${turn.providerNote}\n\n${request}` : turn.providerNote;
 }

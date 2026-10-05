@@ -217,13 +217,13 @@ export function codexRolloutRecords(record: CanonicalRecord, options: CodexRollo
     runtime_workspace_roots: [workspace], originator: 'clikcode', cli_version: options.cliVersion,
     source: 'vscode', model_provider: 'openai', history_mode: 'paginated',
   });
-  const turns = record.turns.filter((turn) => turn.user.trim() || turn.attachments.length || turn.parts.length);
+  const turns = record.turns.filter((turn) => turn.user.trim() || turn.attachments.length || turn.parts.length || turn.providerNote);
   turns.forEach((turn: CanonicalTurn, position) => {
     const turnId = makeId(ms);
     const started = Math.floor(ms / 1000);
     const startedMs = ms;
     push('event_msg', { type: 'task_started', turn_id: turnId, started_at: started, collaboration_mode_kind: 'default' });
-    const request = [turn.user, ...(turn.attachments.length ? [`Attached files:\n${turn.attachments.map((file) => `- ${file}`).join('\n')}`] : [])]
+    const request = [turn.providerNote ?? '', turn.user, ...(turn.attachments.length ? [`Attached files:\n${turn.attachments.map((file) => `- ${file}`).join('\n')}`] : [])]
       .filter((part) => part.trim()).join('\n\n');
     if (request) {
       push('response_item', { type: 'message', id: `msg_${makeId(ms)}`, role: 'user', content: [{ type: 'input_text', text: request }] });

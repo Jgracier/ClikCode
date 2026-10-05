@@ -25,7 +25,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
-import type { CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
+import { withProviderNote, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
 
 /** The harness command whose calls are already Claude Code's own. */
 const CLAUDE_ORIGIN = 'claude';
@@ -37,7 +37,10 @@ export interface ClaudeThreadOptions {
   sessionId: string;
   /** The folder the thread resumes in (absolute). */
   cwd: string;
-  /** Recorded on each assistant message; the resume picks its own model. */
+  /** Recorded on assistant messages whose turn has no model of its own; the
+   *  resume picks its own model. A turn's producing model is recorded on its
+   *  messages, whoever produced it (Claude Code 2.1.288 resumed a thread
+   *  whose messages named a GPT model). */
   model: string | null;
   /** The Claude Code build the records claim to come from. */
   version: string;
@@ -297,7 +300,7 @@ function textLine(call: CanonicalToolCall): string {
 }
 
 function userText(turn: CanonicalTurn): string {
-  return turn.attachments.length ? `${turn.user}\n\nAttached files: ${turn.attachments.join(', ')}` : turn.user;
+  return withProviderNote(turn, turn.attachments.length ? `${turn.user}\n\nAttached files: ${turn.attachments.join(', ')}` : turn.user);
 }
 
 type Block =
@@ -308,16 +311,17 @@ type Block =
 export function claudeThreadRecords(record: CanonicalRecord, options: ClaudeThreadOptions): Record<string, unknown>[] {
   const uuid = options.uuid ?? randomUUID;
   const compact = (): string => uuid().replace(/-/g, '');
-  type Pending = { blocks: Block[] } | { results: { id: string; content: string; isError: boolean }[] } | { user: string };
+  type Pending = { blocks: Block[]; model: string } | { results: { id: string; content: string; isError: boolean }[] } | { user: string };
   const entries: Pending[] = [];
   const model = options.model ?? DEFAULT_MODEL;
 
   record.turns.forEach((turn, index) => {
-    if (turn.user.trim() || turn.attachments.length) entries.push({ user: userText(turn) });
+    if (turn.user.trim() || turn.attachments.length || turn.providerNote) entries.push({ user: userText(turn) });
     else if (!entries.length) entries.push({ user: '(continued)' });
+    const turnModel = turn.origin.model ?? model;
     let blocks: Block[] = [];
     const flushBlocks = (): void => {
-      if (blocks.length) entries.push({ blocks });
+      if (blocks.length) entries.push({ blocks, model: turnModel });
       blocks = [];
     };
     for (const part of turn.parts) {
@@ -353,7 +357,7 @@ export function claudeThreadRecords(record: CanonicalRecord, options: ClaudeThre
     // prompt continues it.
     const last = index === record.turns.length - 1;
     const previous = entries.at(-1);
-    if (!last && previous && 'user' in previous) entries.push({ blocks: [{ type: 'text', text: '(No answer was recorded.)' }] });
+    if (!last && previous && 'user' in previous) entries.push({ blocks: [{ type: 'text', text: '(No answer was recorded.)' }], model: turnModel });
   });
 
   const count = entries.reduce((sum, entry) => sum + ('blocks' in entry ? entry.blocks.length : 1), 0);
@@ -384,7 +388,7 @@ export function claudeThreadRecords(record: CanonicalRecord, options: ClaudeThre
       const stop = entry.blocks.at(-1)?.type === 'tool_use' ? 'tool_use' : 'end_turn';
       for (const block of entry.blocks) {
         push('assistant', {
-          id: messageId, type: 'message', role: 'assistant', model, content: [block],
+          id: messageId, type: 'message', role: 'assistant', model: entry.model, content: [block],
           stop_reason: stop, stop_sequence: null, usage: { input_tokens: 0, output_tokens: 0 },
         });
       }

@@ -31,7 +31,10 @@
  * kilo 7.7.6 (kilo/cohere/north-mini-code:free): a Codex-made record (a
  * codeword, an exec_command `ls`, an apply_patch edit) written here, then a
  * ClikCode turn over ACP (session/load) and a CLI `run --session` both
- * recalled the codeword, the listed files and the edit.
+ * recalled the codeword, the listed files and the edit. Assistant messages
+ * name the provider/model that produced them: an OpenCode -> Kilo -> OpenCode
+ * conversation (2026-10-04) resumed natively on both, and OpenCode, asked
+ * what it did on the other provider, named Kilo Code CLI and its turn.
  *
  * Accounts of these harnesses share the user's own data directory (no
  * profile variable), so the thread lands where every OpenCode turn ClikCode
@@ -227,6 +230,19 @@ function callAsText(call: CanonicalToolCall): string {
   return `[Called ${call.name}${args}${state}]${output ? `\n${output}` : ''}`;
 }
 
+/** The provider/model an assistant message names: the one that produced the
+ *  turn (`kilo/cohere/north-mini-code:free` on an OpenCode thread), so the
+ *  resumed model sees another provider's turns as that provider's. User
+ *  messages keep the receiving model: OpenCode resumes on the last user
+ *  message's model. A turn with no recorded model is the receiving one's. */
+function producingModel(turn: CanonicalTurn, providerID: string, modelID: string): { providerID: string; modelID: string } {
+  const model = turn.origin.model?.trim();
+  if (!model) return { providerID, modelID };
+  const slash = model.indexOf('/');
+  if (slash > 0) return { providerID: model.slice(0, slash), modelID: model.slice(slash + 1) };
+  return { providerID: turn.origin.provider ?? turn.origin.harness ?? providerID, modelID: model };
+}
+
 /** What a write needs besides the record; fixed in tests for golden output. */
 export interface OpenCodeExportOptions {
   workspace: string;
@@ -256,13 +272,14 @@ export function openCodeExport(record: CanonicalRecord, options: OpenCodeExportO
   const created = options.startMs;
   const messages: Array<{ info: Json; parts: Json[] }> = [];
   const workspace = options.workspace;
-  const turns = record.turns.filter((turn) => turn.user.trim() || turn.attachments.length || turn.parts.length);
+  const turns = record.turns.filter((turn) => turn.user.trim() || turn.attachments.length || turn.parts.length || turn.providerNote);
   const zeroTokens = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
 
   turns.forEach((turn: CanonicalTurn, position) => {
     const interrupted = turn.interrupted && position === turns.length - 1;
-    const request = [turn.user, ...(turn.attachments.length ? [`Attached files:\n${turn.attachments.map((file) => `- ${file}`).join('\n')}`] : [])]
+    const request = [turn.providerNote ?? '', turn.user, ...(turn.attachments.length ? [`Attached files:\n${turn.attachments.map((file) => `- ${file}`).join('\n')}`] : [])]
       .filter((part) => part.trim()).join('\n\n') || '(continued)';
+    const produced = producingModel(turn, providerID, modelID);
     const userID = id('msg');
     messages.push({
       info: { role: 'user', time: { created: ms }, agent: 'build', model: { providerID, modelID }, id: userID, sessionID },
@@ -312,7 +329,7 @@ export function openCodeExport(record: CanonicalRecord, options: OpenCodeExportO
       messages.push({
         info: {
           parentID: userID, role: 'assistant', mode: 'build', agent: 'build', path: { cwd: workspace, root: workspace },
-          cost: 0, tokens: zeroTokens, modelID, providerID,
+          cost: 0, tokens: zeroTokens, modelID: produced.modelID, providerID: produced.providerID,
           time: open ? { created: start } : { created: start, completed: ms },
           ...(finish && !open ? { finish } : {}),
           ...(open ? { error: { name: 'MessageAbortedError', data: { message: 'Aborted' } } } : {}),

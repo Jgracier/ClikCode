@@ -9,7 +9,7 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
+import { withProviderNote, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
 import type { NativeThreadWriteContext } from '../stores.js';
 
 /** `0.87.0` out of whatever first line a vendor's `--version` prints
@@ -41,11 +41,11 @@ export async function writeFileAtomic(path: string, content: string): Promise<vo
   }
 }
 
-/** The request as the vendor's user message: the text, then the files it
- * attached, by path. */
+/** The request as the vendor's user message: the provider note at a
+ * boundary, the text, then the files it attached, by path. */
 export function requestText(turn: CanonicalTurn): string {
   const attached = turn.attachments.length ? `\n\nAttached files:\n${turn.attachments.map((path) => `- ${path}`).join('\n')}` : '';
-  return `${turn.user}${attached}`;
+  return withProviderNote(turn, `${turn.user}${attached}`);
 }
 
 /** Whether a call wrote a whole file rather than editing one in place. */

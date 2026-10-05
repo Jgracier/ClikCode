@@ -12,6 +12,8 @@ I'll read the notes.
 notes.txt says the launch window is Thursday. Codeword PELICAN-73 noted.
 
 
+#### [ClikCode: the following turns ran on Claude Code (claude-sonnet-4-6)]  
+#### <blank>  
 #### Fix the typo in src/app.ts  
 
 [Edit src/app.ts]
