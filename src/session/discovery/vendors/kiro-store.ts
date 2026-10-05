@@ -8,6 +8,11 @@
  * (session `nativeTransport`). This writer writes the ACP pair and pins the
  * thread to ACP.
  *
+ * No `locate`: an ACP session is two sibling files in a directory shared
+ * with every other session, not one path, so the single-path copy in
+ * session/carry.ts cannot carry it, and a failover re-seeds. Carrying Kiro
+ * needs a store `carry` that copies both, the conversation first.
+ *
  * Observed (vendor-sandbox, kiro-cli 2.23.1, a real `session/new` turn and
  * then hand-written files loaded with `session/load`, which replays what it
  * parsed and costs nothing):
