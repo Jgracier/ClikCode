@@ -11,7 +11,11 @@
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { serveStdioMcp } from '../harness/mcp-stdio-server.js';
+import { resetCorpusCache } from './corpus.js';
+import { resetSessionStoreCache } from '../session/store/records.js';
 import { CONVERSATIONS_MCP_NAME } from './mcp-entry.js';
 import { CONVERSATION_TOOLS, CONVERSATION_TOOLS_NOTE, conversationTool, type ConversationToolContext } from './tools.js';
 
@@ -98,10 +102,48 @@ export async function answerMcp(message: RpcMessage, context: ConversationToolCo
   return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } };
 }
 
+/** How long the server keeps every transcript's text after its last
+ * request. The vendor keeps this process for the whole session, and a
+ * searched corpus is ~100 MB that a session asking once an hour should not
+ * hold; reading it again costs ~120 ms. Memory only: the cache's validity
+ * never depends on a clock (corpus.ts). */
+export const CORPUS_IDLE_MS = 3 * 60_000;
+
+/** Calls `release` once `idleMs` pass without a `touch`. The timer never
+ * keeps the process alive. */
+export function idleRelease(release: () => void, idleMs: number): { touch(): void } {
+  let timer: NodeJS.Timeout | undefined;
+  return {
+    touch() {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { timer = undefined; release(); }, idleMs);
+      timer.unref();
+    },
+  };
+}
+
+/** Drops the corpus -- the indexed text and the parsed session files it
+ * was read from -- and returns its pages to the system. Dropping alone
+ * frees nothing visible: an idle process allocates nothing, so V8 never
+ * collects, and an ordinary collection keeps the 64 MB young generation the
+ * search grew. The last-resort flavour shrinks it (measured: 169 -> 66 MB;
+ * 53 MB fresh). */
+function releaseCorpus(): void {
+  resetCorpusCache();
+  resetSessionStoreCache();
+  try {
+    setFlagsFromString('--expose-gc');
+    (runInNewContext('gc') as (options: object) => void)({ type: 'major', execution: 'sync', flavor: 'last-resort' });
+  } catch { /* fail-open-ok: the memory is then freed by the next collection instead. */ }
+}
+
 /** Stdio MCP, answered in whichever framing the client used. */
 export function serveConversationsMcp(): Promise<void> {
   const context: ConversationToolContext = {};
   const current = currentConversationSession();
   if (current) context.currentSessionId = current;
-  return serveStdioMcp((message) => answerMcp(message as RpcMessage, context));
+  const idle = idleRelease(releaseCorpus, CORPUS_IDLE_MS);
+  return serveStdioMcp(async (message) => {
+    try { return await answerMcp(message as RpcMessage, context); } finally { idle.touch(); }
+  });
 }

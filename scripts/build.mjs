@@ -1,14 +1,18 @@
 /**
- * ClikCode build. Produces four files in dist/:
+ * ClikCode build. Produces five files in dist/:
  *
  *   index.js               The entry (bin): turns on Node's compile cache, then
- *                          loads cli.js. Rewritten on every build, since its
- *                          mtime and size are the build a worker records.
+ *                          loads cli.js -- or conversations-mcp.js for that one
+ *                          command. Rewritten on every build, since its mtime
+ *                          and size are the build a worker records.
  *   cli.js                 The program (ESM). Small pure-JS dependencies are inlined
  *                          so startup is one file read instead of a node_modules walk.
  *   harness-catalog.cjs    The pure harness catalog (no AI SDKs); cheap to load.
  *   ai-router-runtime.cjs  streamAiChatTurn (`ai` + @ai-sdk providers);
  *                          only needed for local API-key model turns.
+ *   conversations-mcp.js   `clikcode conversations-mcp` alone (search + stdio
+ *                          MCP, no packages). Every vendor session keeps one
+ *                          running, so it must not carry the whole program.
  *
  * Flags:
  *   --analyze   Print a metafile report: top inputs by bytes, runtime externals,
@@ -117,8 +121,17 @@ import { join } from 'node:path';
 try {
   module.enableCompileCache?.(join(process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache'), 'clikcode', 'node-compile-cache'));
 } catch { /* fail-open-ok: no cache is only a slower start. */ }
-await import('./cli.js');
+// Vendors start \`<this file> conversations-mcp\` once per session and keep it
+// for the session's life: that one command loads only its own bundle.
+await import(process.argv[2] === 'conversations-mcp' ? './conversations-mcp.js' : './cli.js');
 `);
+
+const conversationsMcp = await build({
+  ...common,
+  entryPoints: ['src/search/mcp-main.ts'],
+  format: 'esm',
+  outfile: 'dist/conversations-mcp.js',
+});
 
 const catalog = await build({
   ...common,
@@ -167,6 +180,8 @@ for (const name of Object.keys(pkg.dependencies ?? {})) {
 const catalogDependencies = Object.keys(catalog.metafile.inputs).filter((path) => /(^|\/)node_modules\//.test(path));
 if (catalogDependencies.length) failures.push(`harness-catalog.cjs must be dependency-free, but bundles: ${catalogDependencies.slice(0, 5).join(', ')}`);
 if (runtimeExternals(catalog.metafile, 'dist/harness-catalog.cjs').length) failures.push('harness-catalog.cjs must not import packages at runtime');
+const mcpDependencies = Object.keys(conversationsMcp.metafile.inputs).filter((path) => /(^|\/)node_modules\//.test(path));
+if (mcpDependencies.length) failures.push(`conversations-mcp.js must stay dependency-free, but bundles: ${mcpDependencies.slice(0, 5).join(', ')}`);
 
 // Load it the way harness-runtime.ts will: it must evaluate standalone and carry the catalog.
 {

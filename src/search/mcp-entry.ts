@@ -1,6 +1,10 @@
 /** How a vendor harness starts ClikCode's conversation MCP server: the
  * installed `clikcode` itself, `clikcode conversations-mcp`. Kept apart from
- * the server so provisioning does not load it. */
+ * the server so provisioning does not load it.
+ *
+ * dist/index.js loads only dist/conversations-mcp.js for that command, so
+ * the entry every vendor config already holds is the lean one too: nothing
+ * written into a vendor's config has to be found and rewritten. */
 import { accessSync, constants } from 'node:fs';
 import type { McpServerEntry } from '../harness/mcp-registry.js';
 

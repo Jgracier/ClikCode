@@ -1,11 +1,11 @@
 /** The conversation tools over stdio MCP, from the built CLI, as a vendor
  * starts them. */
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { HarnessSession } from '../session/model.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { workerSessionFromArgv } from './mcp.js';
+import { idleRelease, workerSessionFromArgv } from './mcp.js';
 
 function chat(id: string, name: string, content: string): HarnessSession {
   const at = new Date().toISOString();
@@ -104,5 +104,24 @@ describe('clikcode conversations-mcp', () => {
   it('finds the conversation from a worker argv', () => {
     expect(workerSessionFromArgv(['/usr/bin/node', '/x/clikcode', 'session-worker', 'abc-123'])).toBe('abc-123');
     expect(workerSessionFromArgv(['/usr/bin/node', '/x/clikcode', 'chat'])).toBeUndefined();
+  });
+
+  it('lets the corpus go only after a quiet spell, counted from the last request', () => {
+    vi.useFakeTimers();
+    try {
+      const release = vi.fn();
+      const idle = idleRelease(release, 1000);
+      idle.touch();
+      vi.advanceTimersByTime(900);
+      idle.touch();
+      vi.advanceTimersByTime(900);
+      expect(release).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(100);
+      expect(release).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(5000);
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
