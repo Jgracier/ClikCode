@@ -125,8 +125,9 @@ async function fileIdentity(path: string): Promise<string> {
 }
 
 /** `--help` parses, per harness, tied to the binary they were read from and
- * kept across runs: every start asked each harness for its help again. Read
- * from the file, not held, so another process's answer counts too. */
+ * kept across runs: every start asked each harness for its help again. The
+ * memo stays in step with the file and merges on save, so another process's
+ * answer counts too and neither overwrites the other's. */
 interface HelpMemo { v: 1; harnesses: Record<string, { identity: string; values: string[] }> }
 
 const helpMemo = jsonMemo<HelpMemo>('cache/effort-help.json', () => ({ v: 1, harnesses: {} }), (parsed) => {
@@ -140,23 +141,17 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
   if (!flag) return undefined;
   const identity = await harnessBinaryIdentity(harness.binary);
   if (!identity) return undefined;
-  const key = `help:${harness.command}`;
-  const cached = cache.get(key);
-  if (cached?.identity === identity) return cached.result.values.length ? cached.result.values : undefined;
-  const remembered = (await helpMemo.read())?.harnesses[harness.command];
+  const memo = await helpMemo.load();
+  const remembered = memo.harnesses[harness.command];
+  if (remembered?.identity === identity) return remembered.values.length ? remembered.values : undefined;
   let values: string[] = [];
-  if (remembered?.identity === identity) values = remembered.values;
-  else {
-    try {
-      const helpArgv = harness.command === 'hermes' ? ['chat', '--help'] : ['--help'];
-      values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}, 8_000), flag);
-    } catch { /* fail-open-ok: no help text is the catalog's cue, not an error. */ }
-    // Re-read just before writing: another process may have added a harness.
-    const latest = (await helpMemo.read()) ?? { v: 1, harnesses: {} };
-    latest.harnesses[harness.command] = { identity, values };
-    await helpMemo.write(latest);
-  }
-  cache.set(key, { identity, result: { values, source: 'vendor-help' } });
+  try {
+    const helpArgv = harness.command === 'hermes' ? ['chat', '--help'] : ['--help'];
+    values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}, 8_000), flag);
+  } catch { /* fail-open-ok: no help text is the catalog's cue, not an error. */ }
+  memo.harnesses[harness.command] = { identity, values };
+  helpMemo.changed();
+  await helpMemo.save();
   return values.length ? values : undefined;
 }
 
