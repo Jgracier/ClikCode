@@ -44,16 +44,16 @@ export function reportedRoom(state: HarnessState, account: AiHarnessAccount, now
   return Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPct)));
 }
 
-/** The account a failover moves to: same provider and transport, signed in,
- * not held for verification, not out of quota, not already tried -- most
- * reported room first, an account with no figure after those. Reads stored
- * state only (a live probe per candidate is what made a switch take minutes)
- * and writes nothing. */
 function resetPassed(account: AiHarnessAccount, now: number): boolean {
   const at = account.quotaRetryAt ? Date.parse(account.quotaRetryAt) : Number.NaN;
   return Number.isFinite(at) && at <= now;
 }
 
+/** The account a failover moves to: same provider and transport, signed in,
+ * not held for verification, not out of quota, not already tried -- most
+ * reported room first, an account with no figure after those. Reads stored
+ * state only (a live probe per candidate is what made a switch take minutes)
+ * and writes nothing. */
 export function nextUsableFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
@@ -119,6 +119,9 @@ export interface FailoverTally {
   lastOtherFailure?: unknown;
 }
 
+/** Failures another account can fix. */
+const ACCOUNT_FAILURES: ReadonlySet<AccountFailureKind> = new Set(['quota-exhausted', 'temporarily-throttled', 'authentication-required', 'account-ineligible']);
+
 /** The one failover step, after an attempt failed on `account`: the account
  * that takes the turn next, or the error that ends it.
  *
@@ -138,9 +141,6 @@ export interface FailoverTally {
  * the model only repeated the retelling. Those are surfaced as the vendor
  * worded them (the caller has already retried once in place). Only a quota
  * refusal marks the account spent. */
-/** Failures another account can fix. */
-const ACCOUNT_FAILURES: ReadonlySet<AccountFailureKind> = new Set(['quota-exhausted', 'temporarily-throttled', 'authentication-required', 'account-ineligible']);
-
 export async function accountAfterFailure(input: {
   state: HarnessState;
   session: HarnessSession;
