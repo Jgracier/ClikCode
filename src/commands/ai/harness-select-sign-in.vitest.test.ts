@@ -64,4 +64,17 @@ describe('choosing a provider', () => {
     expect(vendor.logins).toBe(1);
     expect(state.accounts.find((item) => item.id === state.sessions[0]!.accountId)?.status).toBe('ready');
   });
+
+  it("a vendor that answers signed out (OpenCode's free models): never signed in first, picked or not", async () => {
+    for (const options of [{ prompter: signer() as never }, { signIn: false }]) {
+      const state = await readState();
+      state.accounts = [];
+      Object.assign(state.sessions[0]!, { nativeHarness: undefined, accountId: null });
+      await writeState(state);
+      await aiHarnessSelect('opencode', 's1', { emit: false, ...options });
+      const after = await readState();
+      expect(vendor.logins).toBe(0);
+      expect(after.accounts.find((item) => item.id === after.sessions[0]!.accountId)?.status).toBe('ready');
+    }
+  });
 });

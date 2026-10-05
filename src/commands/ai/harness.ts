@@ -121,9 +121,11 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     // one it has is signed out. A fresh install of the CLI is a reason only
     // for the first of those -- reinstalling does not sign anyone out of the
     // accounts ClikCode keeps. Signing in on purpose is /login or /accounts.
+    // A vendor that answers signed out (signInOptional) is never signed in
+    // ahead of a turn: the vendor-turn signs in if one is refused.
     const shouldCheckLogin = !account
       || account.status !== 'ready'
-      || (accountJustCreated && (freshInstall
+      || (accountJustCreated && !harness.signInOptional && (freshInstall
         || (!harness.statusArgv && !hasAuthEvidence(harness))
         || await harnessNeedsLogin(harness, environment)));
     if (shouldCheckLogin && !signIn) {
