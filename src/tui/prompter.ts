@@ -141,6 +141,12 @@ type WaitingTurn = {
   /** Drawn before the turn's own controls exist (turnStarting): what is
    * typed is kept for it, and an interrupt is passed on once it can be. */
   early?: { interrupt?: { restoreDraft: boolean } };
+  /** Told when this turn's display ends, by whoever ends it: the follow of a
+   * worker's turn (worker/turn-bridge.ts) lives exactly as long as the
+   * display it drives. When the two could disagree, the display ended and the
+   * follow kept waiting for the worker -- nothing read a key until the
+   * worker's turn ended, an hour on with sub-agents running. */
+  ended?: () => void;
 };
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -823,9 +829,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // screen twice (saved and live); dropping the live copy without retiring
     // it made the last block vanish. Both were seen, in that order, across
     // two fixes that each chose one arrival order. See scripts/tui-e2e.
-    if (this.turn && this.currentSession?.id === session.id && !session.pendingTurn
+    // Only a snapshot that says the turn is over: one taken while it still
+    // runs (a worker's carries `live`) never ends it, whatever its record
+    // holds.
+    if (this.turn && !this.journal.running && this.currentSession?.id === session.id && !session.pendingTurn
       && (session.messages?.length ?? 0) > this.activityAnchor) {
-      this.stopWaiting(false);
+      this.stopWaiting(false, 'saved');
     }
     if (!this.turn) this.waitingSubmissions = [];
     this.currentSession = session;
@@ -1248,9 +1257,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaiting();
   }
 
-  stopWaiting(refresh = true): void {
+  /** The turn showing now drives it, if a follow does (see WaitingTurn.ended). */
+  onWaitingEnded(ended: () => void): void {
+    if (this.turn) this.turn.ended = ended;
+  }
+
+  stopWaiting(refresh = true, why?: string): void {
     const turn = this.turn;
-    if (turn) lifecycle('window.turn.end', { cancelled: turn.cancelled });
+    if (turn) lifecycle('window.turn.end', { cancelled: turn.cancelled, ...(why ? { why } : {}) });
     if (turn) {
       if (turn.timer) clearTimeout(turn.timer);
       turn.timer = undefined;
@@ -1283,6 +1297,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // client's copy any longer would draw it twice.
     this.submittedPrompt = undefined;
     if (refresh && !this.closed) this.repaint({ keepPalette: false });
+    turn?.ended?.();
   }
 
   /** Back from a hand-over (a `!` command, a picker that left the screen,

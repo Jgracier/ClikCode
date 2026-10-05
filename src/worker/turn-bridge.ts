@@ -11,6 +11,7 @@
  * single-process model. rl cannot tell the difference (see turn/observer.ts
  * for why that is true by construction, not by care taken here).
  */
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
@@ -289,9 +290,10 @@ async function driveWorkerTurn(
       // itself moments earlier. waiting-stop is the one true end-of-turn
       // signal; a recorded error is only ever surfaced once it arrives.
       let pendingError: Error | undefined;
-      const finish = (fn: () => void): void => {
+      const finish = (why: string, fn: () => void): void => {
         if (settled) return;
         settled = true;
+        lifecycle('window.follow.end', { why });
         client.off('event', onEvent);
         client.off('close', onClose);
         fn();
@@ -367,7 +369,7 @@ async function driveWorkerTurn(
             pendingError = new Error(event.message);
             return;
           case 'waiting-stop':
-            finish(() => (pendingError ? rejectTurn(pendingError) : resolveTurn()));
+            finish('waiting-stop', () => (pendingError ? rejectTurn(pendingError) : resolveTurn()));
             return;
           case 'attach-rejected':
             // Unreachable through this listener in practice: WorkerClient's
@@ -376,10 +378,10 @@ async function driveWorkerTurn(
             // runTurnThroughWorker to reach this switch with. Handled
             // anyway so this remains an exhaustive match on WorkerEvent,
             // not a silent fallthrough if that guarantee ever changes.
-            finish(() => rejectTurn(new Error(`worker rejected this connection: ${event.reason}`)));
+            finish('attach-rejected', () => rejectTurn(new Error(`worker rejected this connection: ${event.reason}`)));
             return;
           case 'shutdown':
-            finish(() => rejectTurn(new Error(`session worker exited mid-turn: ${event.reason}`)));
+            finish('shutdown', () => rejectTurn(new Error(`session worker exited mid-turn: ${event.reason}`)));
             return;
           case 'submit-queued':
             // Another turn was already running; this message waits behind it
@@ -392,7 +394,7 @@ async function driveWorkerTurn(
             // the turn itself never shown. A turn that already ended (its
             // waiting-stop came first) leaves nothing to follow.
             if (tracker.running) { rl.submitted?.(tracker.prompt); return; }
-            finish(() => resolveTurn());
+            finish('queued-after-end', () => resolveTurn());
             return;
           case 'queue-changed':
           case 'retire-declined':
@@ -404,7 +406,7 @@ async function driveWorkerTurn(
         }
       };
       const onClose = (): void => {
-        finish(() => rejectTurn(new Error('session worker connection closed unexpectedly')));
+        finish('closed', () => rejectTurn(new Error('session worker connection closed unexpectedly')));
       };
       client.on('event', onEvent);
       client.on('close', onClose);
@@ -441,7 +443,7 @@ async function driveWorkerTurn(
         // Stepping away ends this window's following, not the turn: the
         // worker runs it to the end either way, and the connection stays
         // open, so coming back (or another window) picks it up mid-stream.
-        () => { left = true; finish(() => resolveTurn()); },
+        () => { left = true; finish('left', () => resolveTurn()); },
         // Esc on a waiting message: the worker owns the queue and the hold,
         // and says whether it was still the user's to take.
         async (id) => {
@@ -452,11 +454,15 @@ async function driveWorkerTurn(
           } finally { pendingTakeBacks.delete(id); }
         },
       );
+      // This follow lasts exactly as long as the display it drives: ended
+      // by anything else, the loop asks the worker again -- it follows the
+      // turn afresh or opens the prompt, and is never left with neither.
+      rl.onWaitingEnded?.(() => finish('display-ended', () => resolveTurn()));
       begin();
       for (const event of tracker.unanswered.splice(0)) onEvent(event);
       // Following a turn that ended while this was being set up: its
       // waiting-stop has already gone by.
-      if (stillRunning && !stillRunning()) finish(() => resolveTurn());
+      if (stillRunning && !stillRunning()) finish('already-ended', () => resolveTurn());
     });
   } finally {
     tracker.driving = false;
