@@ -121,9 +121,29 @@ import { join } from 'node:path';
 try {
   module.enableCompileCache?.(join(process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache'), 'clikcode', 'node-compile-cache'));
 } catch { /* fail-open-ok: no cache is only a slower start. */ }
-// Vendors start \`<this file> conversations-mcp\` once per session and keep it
-// for the session's life: that one command loads only its own bundle.
-await import(process.argv[2] === 'conversations-mcp' ? './conversations-mcp.js' : './cli.js');
+const command = process.argv[2];
+if (command === 'npx-mcp') {
+  // \`npx-mcp <bin> <where its arguments start> <npx command…>\`, the form
+  // harness/npx-bin.ts gives a vendor for a user's npx MCP server: the bin,
+  // in this process, while it is there; once it is gone (a cleared npm
+  // cache) the user's npx command exactly as they wrote it.
+  const [bin, start, target, ...original] = process.argv.slice(3);
+  const { existsSync } = await import('node:fs');
+  if (existsSync(bin)) {
+    process.argv = [process.argv[0], bin, ...original.slice(Number(start))];
+    module.runMain(bin);
+  } else {
+    const { spawn } = await import('node:child_process');
+    const child = spawn(target, original, { stdio: 'inherit', shell: process.platform === 'win32' });
+    child.on('error', () => process.exit(127));
+    child.on('exit', (code, signal) => (signal ? process.kill(process.pid, signal) : process.exit(code ?? 1)));
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal));
+  }
+} else {
+  // Vendors start \`<this file> conversations-mcp\` once per session and keep
+  // it for the session's life: that one command loads only its own bundle.
+  await import(command === 'conversations-mcp' ? './conversations-mcp.js' : './cli.js');
+}
 `);
 
 const conversationsMcp = await build({

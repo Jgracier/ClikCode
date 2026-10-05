@@ -1,10 +1,10 @@
-/** `npx -y <pkg> args…` as `node <its bin> args…`, for what ClikCode writes
- * into a vendor's MCP config.
+/** `npx -y <pkg> args…` as the bin npx installed, for what ClikCode writes
+ * into a vendor's MCP config (see withoutNpx for the form).
  *
  * A vendor starts each MCP server once per session and keeps it, and an npx
- * entry is two processes for the life of that session: npm's own (~50 MB,
- * which only waits on its child) and the server. Naming the bin npx already
- * installed runs the same code as one process.
+ * entry is npm's exec process and a shell, which only wait on the server,
+ * for the life of that session. Running the bin npx already installed runs
+ * the same code as one process.
  *
  * Only what npx itself would run is substituted: the npx cache directory
  * made for exactly this package spec (npm records it in `_npx.packages`),
@@ -112,10 +112,21 @@ export async function resolveNpxBin(wanted: NpxSpec, roots: NpxRoots): Promise<s
   return undefined;
 }
 
-/** `entry` with npx replaced by the bin it would run, or `entry` itself. */
-export async function withoutNpx(entry: McpServerEntry, roots: () => Promise<NpxRoots>): Promise<McpServerEntry> {
-  const wanted = parseNpxCommand(entry.target, entry.args ?? []);
+/** `entry` as `<clikcode> npx-mcp <bin> <where its arguments start> <the
+ * npx command…>`, or `entry` itself when there is no such bin. The launcher
+ * (dist/index.js) runs the bin in its own process while the bin is there,
+ * and the user's npx command once it is gone: a cache that is cleared or
+ * moves can never leave a vendor with a server that does not start, with no
+ * record to keep and no vendor config to rewrite -- most vendors have no way
+ * to replace an entry. Not `node -e`: a positional `mcp add` grammar would
+ * read `-e` as its own flag (Gemini's and Qwen's `--env`). */
+export async function withoutNpx(
+  entry: McpServerEntry, roots: () => Promise<NpxRoots>, launcher: { target: string; args: readonly string[] },
+): Promise<McpServerEntry> {
+  const args = entry.args ?? [];
+  const wanted = parseNpxCommand(entry.target, args);
   if (!wanted) return entry;
   const bin = await resolveNpxBin(wanted, await roots()).catch(() => undefined);
-  return bin ? { ...entry, target: 'node', args: [bin, ...wanted.rest] } : entry;
+  if (!bin) return entry;
+  return { ...entry, target: launcher.target, args: [...launcher.args, 'npx-mcp', bin, String(args.length - wanted.rest.length), entry.target, ...args] };
 }
