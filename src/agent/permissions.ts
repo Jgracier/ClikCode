@@ -6,7 +6,7 @@ import path from 'node:path';
 import { matchGlob } from './glob-match.js';
 import { classifyCommand } from './command-classifier.js';
 import {
-  OUTPUT_CAPS, readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath,
+  readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath,
 } from './security.js';
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';

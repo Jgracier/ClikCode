@@ -19,7 +19,7 @@ import path from 'node:path';
 import type { FileDiff } from '../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { withFileLock } from './store/locks.js';
-import { safeRecordFileName, stateDirectory } from './store/paths.js';
+import { safeRecordFileName } from './store/paths.js';
 
 export type TurnChangeStore = 'agent' | 'reported';
 
@@ -125,14 +125,6 @@ export class TurnChangeCollector {
     this.order.length = 0;
     return out;
   }
-}
-
-/** Forgets a conversation's turn log (session/store/forget.ts calls this when
- * the conversation goes). */
-export async function removeTurnChanges(sessionId: string, stateDir: string = stateDirectory()): Promise<void> {
-  const file = logPath(stateDir, sessionId);
-  await fs.rm(file, { force: true });
-  await fs.rm(`${file}.lock`, { recursive: true, force: true });
 }
 
 // ---------------------------------------------------------------------------

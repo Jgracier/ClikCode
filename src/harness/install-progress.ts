@@ -11,8 +11,6 @@
  * when it finishes. A failure is the exception -- then the tail is printed,
  * because an install that did not work is exactly when the log matters.
  */
-import { spawnPortable as spawn } from './transport/spawn.js';
-
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const FRAME_MS = 80;
 /** Enough of npm's log to explain a failure, not enough to be another dump. */
@@ -48,19 +46,4 @@ export function startSpinner(label: string, write: (text: string) => void = (tex
       write(`\r\u001b[2K${finalLine ? `${finalLine}\n` : ''}`);
     },
   };
-}
-
-interface CapturedRun { code: number | null; output: string }
-
-/** Run a command with its output captured rather than inherited. */
-export function runCaptured(command: string, args: readonly string[]): Promise<CapturedRun> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, [...args], { stdio: ['ignore', 'pipe', 'pipe'] });
-    let output = '';
-    const collect = (chunk: Buffer): void => { output += chunk.toString(); };
-    child.stdout?.on('data', collect);
-    child.stderr?.on('data', collect);
-    child.on('error', reject);
-    child.on('close', (code) => resolve({ code, output }));
-  });
 }

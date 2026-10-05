@@ -167,11 +167,6 @@ export function verificationNotice(verification: { url?: string }): string {
     : `Verification needed: ${verification.url}`;
 }
 
-export function accountVerificationHint(error: unknown): string | undefined {
-  const verification = accountVerification(error);
-  return verification ? verificationNotice(verification) : undefined;
-}
-
 /** One account switch, worded the same way wherever it happens.
  *
  * There are four switch sites -- native and api-key, each with a pre-turn

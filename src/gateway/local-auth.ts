@@ -99,14 +99,4 @@ export function writeCanonicalAuth(record: CanonicalAuthRecord): void {
   fs.writeFileSync(apiKeyPath, record.apiKey, { mode: 0o600 });
 }
 
-function clearCanonicalAuth(): void {
-  const { authJsonPath, apiKeyPath } = getCanonicalAuthPaths();
-  for (const p of [authJsonPath, apiKeyPath]) {
-    try {
-      if (fs.existsSync(p)) fs.unlinkSync(p);
-    } catch {
-      // ignore
-    }
-  }
-}
 

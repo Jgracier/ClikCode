@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerificationHint, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerification, verificationNotice, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, quotaRetryHint } from './failover';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -217,7 +217,12 @@ describe('classifying what a vendor actually says when it runs out', () => {
   });
 });
 
-describe('accountVerificationHint', () => {
+const accountVerificationHint = (error: unknown): string | undefined => {
+  const verification = accountVerification(error);
+  return verification ? verificationNotice(verification) : undefined;
+};
+
+describe('the verification notice for an ineligible account', () => {
   it('surfaces the vendor verification link for an ineligible account', () => {
     const error = Object.assign(new Error('exit 1'), {
       stderrTail: 'Eligibility check failed: Verify your account to continue.\nhttps://accounts.google.com/signin/continue?sarp=1&x=2\n',

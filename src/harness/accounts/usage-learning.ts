@@ -258,12 +258,6 @@ export interface LearnedWindow {
   refusals: number;
 }
 
-function hintMs(hit: QuotaRefusal): number | undefined {
-  const at = Date.parse(hit.at);
-  const retry = Date.parse(hit.retryAt ?? '');
-  return Number.isFinite(at) && Number.isFinite(retry) && retry > at ? retry - at : undefined;
-}
-
 function circularDistance(left: number, right: number, period: number): number {
   const delta = Math.abs(left - right) % period;
   return Math.min(delta, period - delta);

@@ -6,7 +6,6 @@ import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
 import type { HarnessSession, MessageOrigin } from '../session/model.js';
 import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
-import type { LiveTurnSubmission } from './live-input.js';
 import { activitiesBetween, readTurnActivities, recordTurnActivity, runningTurnActivity } from './turn-activities.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];

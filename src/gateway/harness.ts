@@ -13,7 +13,6 @@
  */
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { McpServerSpec } from '../agent/mcp/config.js';
-import { stdout as output } from 'node:process';
 import { ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
