@@ -194,3 +194,26 @@ export async function lastSeenNativeSessions(
   if (!harness.session?.discoverArgv) return [];
   return lastSeenListing(harness.command, listedFolder(harness, workspace), profile);
 }
+
+const MINTED_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** A harness that resumes by its own id what ClikCode created under a name
+ * (`session.idByName`, Goose): a stored name -- the UUID ClikCode minted, on
+ * the turn just run or in a chat from before -- becomes the id the vendor's
+ * listing gives that name. Never cached: the session may be seconds old.
+ * True when the id changed; a listing that fails or lacks the name leaves it. */
+export async function adoptListedNativeId(
+  harness: AiLocalHarnessDefinition,
+  session: { nativeSessionId?: string; nativeSessionPreallocated?: true; workspace?: string },
+  environment: Readonly<Record<string, string>>,
+): Promise<boolean> {
+  const name = session.nativeSessionId;
+  const listing = harness.session;
+  if (!listing?.idByName || !listing.discoverArgv || !name || session.nativeSessionPreallocated || !MINTED_ID.test(name)) return false;
+  const raw = await captureNativeHarnessOutput(harness, listing.discoverArgv, environment, 15_000, session.workspace).catch(() => '');
+  const found = parseDiscoveredSessionsStructured(raw, listing.discoverFormat === 'json-lines' ? 'json-lines' : 'json')
+    .find((item) => item.title === name && item.nativeId !== name);
+  if (!found) return false;
+  session.nativeSessionId = found.nativeId;
+  return true;
+}

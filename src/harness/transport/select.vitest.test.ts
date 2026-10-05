@@ -28,7 +28,7 @@ describe('harness turn transports', () => {
   it('keeps native conversations on the transport that created their vendor session', () => {
     const openCode = catalog('opencode');
     expect(sessionTurnTransport(openCode, {})).toBe('acp');
-    for (const command of ['gemini', 'goose', 'kiro', 'qwen', 'auggie', 'cursor']) {
+    for (const command of ['gemini', 'kiro', 'qwen', 'auggie', 'cursor']) {
       expect(sessionTurnTransport(catalog(command), { nativeSessionId: 'cli-thread', nativeTransport: 'structured-cli' }), command).toBe('structured-cli');
     }
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'new-acp-thread', nativeTransport: 'acp' })).toBe('acp');
@@ -42,9 +42,9 @@ describe('harness turn transports', () => {
     // --resume` continues an ACP one (verified live both ways). A chat once
     // pinned to the one-shot CLI by a single fallback turn kept no process
     // alive between turns, so subagents it started died with each turn.
-    // Claude Code, OpenCode, Kilo and Copilot verified the same way
+    // Claude Code, OpenCode, Kilo, Copilot and Goose verified the same way
     // (scripts/verify-shared-sessions.mjs).
-    for (const command of ['grok', 'claude', 'opencode', 'kilo', 'copilot']) {
+    for (const command of ['grok', 'claude', 'opencode', 'kilo', 'copilot', 'goose']) {
       const shared = catalog(command);
       expect(sessionTurnTransport(shared, { nativeSessionId: 'old-cli-thread' }), command).toBe('acp');
       expect(sessionTurnTransport(shared, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' }), command).toBe('acp');
@@ -55,7 +55,7 @@ describe('harness turn transports', () => {
   it('pins a CLI-born thread to the CLI only where ACP keeps its own store', () => {
     expect(cliThreadTransport(catalog('gemini'))).toBe('structured-cli');
     expect(cliThreadTransport(catalog('hermes'))).toBe(catalog('hermes').turn?.output === 'text' ? 'text-cli' : 'structured-cli');
-    for (const command of ['grok', 'claude', 'opencode', 'kilo', 'copilot', 'codex', 'aider', 'pi']) {
+    for (const command of ['grok', 'claude', 'opencode', 'kilo', 'copilot', 'goose', 'codex', 'aider', 'pi']) {
       expect(cliThreadTransport(catalog(command)), command).toBeUndefined();
     }
   });

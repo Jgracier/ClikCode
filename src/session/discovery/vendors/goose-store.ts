@@ -6,9 +6,10 @@
  * is not a per-conversation path. A failover `carry`s the session's rows
  * instead (gooseCarry). The writer: Goose imports a Claude Code transcript
  * (`goose session import <file>`), printing `Session imported:` and then
- * `<id> - <name>`, and `goose run --resume --name <id>` -- the catalog's
- * resume argv -- continues that session by id (verified: no new session, the
- * imported one grew). */
+ * `<id> - <name>`, and the catalog's resume argv continues that session by
+ * id (verified with `--resume --name <id>`: no new session, the imported one
+ * grew; the catalog now says `--resume --session-id <id>`, which takes only
+ * an id). */
 
 import { homedir } from 'node:os';
 import { join } from 'node:path';
