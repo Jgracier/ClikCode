@@ -5,7 +5,7 @@
 
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { lifecycleProcess, setLifecycleRole } from '../runtime/lifecycle-log.js';
-import { homedir } from 'node:os';
+import { stateDirectory } from '../session/store/paths.js';
 import { join } from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -49,7 +49,7 @@ const CLIKCODE_BANNER = bannerBox('⚡ ClikCode', 'Local-first AI coding runtime
  */
 function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error: unknown): void {
   try {
-    const dir = join(homedir(), '.clikcode');
+    const dir = stateDirectory();
     mkdirSync(dir, { recursive: true, mode: 0o700 });
     const detail = error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
     appendFileSync(join(dir, 'crash.log'), `[${new Date().toISOString()}] ${kind} (pid ${process.pid})\n${detail}\n\n`, { encoding: 'utf8', mode: 0o600 });
