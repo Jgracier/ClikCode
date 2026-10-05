@@ -1328,6 +1328,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     turn?.ended?.();
   }
 
+  /** The screen back from whoever had it (the shell after Ctrl+Z, a vendor
+   * login): the alternate screen, the transcript rewrapped if they resized
+   * it -- a phone's keyboard does -- and the next frame drawn whole. */
+  private retakeScreen(): void {
+    this.suspended = false;
+    if (!terminalModes.alternateScreen) {
+      output.write(ENTER_ALTERNATE_SCREEN);
+      terminalModes.alternateScreen = true;
+    }
+    this.rewrapIfWidthChanged();
+    this.forgetScreenPosition();
+    this.retakeTerminalSignals();
+  }
+
   /** Back from a hand-over (a `!` command, a picker that left the screen,
    * Ctrl+Z): every session mode on again, the title taken, and the next
    * frame drawn as after a resize -- the screen may well have changed size,
@@ -2720,15 +2734,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   private readonly onContinue = (): void => {
     if (this.closed) return;
-    this.suspended = false;
-    if (!terminalModes.alternateScreen) {
-      output.write(ENTER_ALTERNATE_SCREEN);
-      terminalModes.alternateScreen = true;
-    }
-    // The shell may have resized the terminal while it had it.
-    this.rewrapIfWidthChanged();
-    this.forgetScreenPosition();
-    this.retakeTerminalSignals();
+    this.retakeScreen();
     this.resumeInput?.();
     if (this.turn) this.paint(this.turn.draft, [], 0, '› ', this.turn.cursor);
     else this.repaint();
@@ -3161,16 +3167,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   resume(): void {
     if (this.closed) return;
     lifecycle('window.resume');
-    // A vendor login can resize a mobile terminal while it owns the TTY; the
-    // transcript is written again at the new width when control returns.
-    this.suspended = false;
-    if (!terminalModes.alternateScreen) {
-      output.write(ENTER_ALTERNATE_SCREEN);
-      terminalModes.alternateScreen = true;
-    }
-    this.rewrapIfWidthChanged();
-    this.forgetScreenPosition();
-    this.retakeTerminalSignals();
+    this.retakeScreen();
     if (input.isTTY) input.resume();
     this.repaint({ keepPalette: false });
   }
