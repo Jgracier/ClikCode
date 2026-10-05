@@ -115,7 +115,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     const resulting = await aiSessionCommand(id, text);
     return resulting !== id ? { id: resulting } : {};
   };
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const workspace = session.workspace ?? process.cwd();
