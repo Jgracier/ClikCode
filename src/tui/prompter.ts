@@ -3141,17 +3141,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     input.pause();
     // Remove the composer and footer before handing over, so the vendor's
     // output continues directly under the conversation instead of being typed
-    // across this UI's status rows.
-    output.write(sessionModesOff(false));
-    // Best-effort mitigation, not a confirmed root cause: a vendor login's
-    // own paste handling erroring right after handoff is plausibly a race
-    // between the terminal actually finishing its mode switch (raw -> cooked,
-    // bracketed paste off) and the child process starting to read --
-    // both writes above are fire-and-forget from Node's side, with no way to
-    // know when the terminal itself has caught up. A short settle window
-    // before the caller spawns anything costs nothing on the success path
-    // and closes the gap if that race is real.
-    await new Promise((resolveSettle) => setTimeout(resolveSettle, 50));
+    // across this UI's status rows. Handed over once the modes are written --
+    // where a TTY write is asynchronous (Windows) the child must not start
+    // ahead of them -- rather than after a guessed 50ms.
+    await new Promise<void>((resolveWritten) => { output.write(sessionModesOff(false), () => resolveWritten()); });
   }
 
   resume(): void {
