@@ -4,7 +4,7 @@
  * terminal; this is how a report becomes a diagnosis. */
 
 import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
-import { homedir } from 'node:os';
+import { stateDirectory } from '../session/store/paths.js';
 import { join } from 'node:path';
 
 /** A short, bounded record of what the terminal actually did with the cursor,
@@ -55,7 +55,7 @@ export function logCursorEvent(line: string): void {
     cursorLogLines += 1;
   }
   try {
-    const dir = join(homedir(), '.clikcode');
+    const dir = stateDirectory();
     mkdirSync(dir, { recursive: true });
     rotateIfLarge(join(dir, 'cursor.log'));
     appendFileSync(join(dir, 'cursor.log'), `[${new Date().toISOString()}] pid ${process.pid} ${line}\n`, { encoding: 'utf8', mode: 0o600 });
