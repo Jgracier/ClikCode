@@ -494,7 +494,7 @@ describe('local harness catalog', () => {
   });
 
   it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
-    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, ...opencode } = localHarnessForCommand('opencode')!;
     const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, authFiles: _kaf, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
