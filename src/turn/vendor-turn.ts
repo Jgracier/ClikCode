@@ -434,6 +434,10 @@ export async function sendVendorTurn(input: {
         // wording; a thrown transport error carries its own stderr/streams.
         ...(caughtTurnFailure ? {} : { isResultError: true }),
       });
+      lifecycle('worker.turn.attempt-failed', {
+        kind: failureKind, transport, account: account.id.slice(0, 8),
+        message: (failure instanceof Error ? failure.message : String(failure)).replace(/\s+/g, ' ').slice(0, 240),
+      });
       // A reasoning level the model does not take. Which levels a model
       // takes is often only stated by the refusal itself ("Unknown effort
       // \"medium\". Supported: high, max." -- Command Code, where it varies
