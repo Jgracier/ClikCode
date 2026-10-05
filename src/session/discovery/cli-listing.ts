@@ -149,10 +149,14 @@ export async function discoverNativeSessions(
     return found;
   } catch {
     // fail-open-ok: passive discovery must not break the picker when an
-    // optional vendor command fails. Deliberately NOT memoized: a failure is
-    // not evidence that there is nothing here, and remembering it would keep
-    // a harness dark long after whatever broke was fixed.
-    return [];
+    // optional vendor command fails. A failure is not evidence that there is
+    // nothing here, so the last answer stands in for it -- but it is written
+    // down again, for the same lifetime as an answer: unremembered, a CLI
+    // that fails or times out (every one of them, on a machine at load 250)
+    // was spawned again at every board open in every window.
+    const last = await lastSeenListing(harness.command, workspace, profile);
+    await rememberListing(harness.command, workspace, profile, last, Date.now(), build);
+    return last;
   }
 }
 
