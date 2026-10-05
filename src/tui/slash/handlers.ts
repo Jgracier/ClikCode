@@ -483,31 +483,12 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (value === 'gateway' || value === 'clikcode-local') applyClikCodeAgentSessionPolicy(session, value);
       else if (isClikCodeAgent(session)) applyFreshLocalSessionPolicy(state, session);
       else session.route = 'local';
-    } else if (setting === 'account') {
-      // One way to switch accounts, with /account's checks -- this copy of it
-      // had none, and moved a conversation with content to another harness.
-      return aiSessionCommand(id, `/accounts use ${value}`);
-    } else if (setting === 'model' && session.route === 'clikcode-local') {
-      return localModelCommand(session, value);
-    } else if (setting === 'model') {
-      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-      if (!(harness?.modelArgvPrefix !== undefined || harness?.acp?.listsModels)) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
-      const modelAccount = state.accounts.find((item) => item.id === session.accountId);
-      const asked = normalizeModelWord(value);
-      const requestedModel = asked ? await assertRealModel(harness, modelAccount, asked) : asked;
-      // Same rule as the /model handler above: clear-words resolve, never null.
-      const resolvedModel = requestedModel ?? await resolveNativeModel(harness, modelAccount) ?? null;
-      if (!resolvedModel) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
-      session.model = resolvedModel;
-    } else if (setting === 'effort') {
-      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-      if (!harness) throw new Error('Choose a provider before setting effort.');
-      const effortAccount = state.accounts.find((item) => item.id === session.accountId);
-      setSessionHarnessOption(session, harness, 'effort', value, (await effortChoicesFor(harness, effortAccount, session.model)).values);
-    } else if (setting === 'permissions' || setting === 'permission') {
-      const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-      if (!harness) throw new Error('Choose a provider before setting permissions.');
-      setSessionHarnessOption(session, harness, 'permissions', value);
+    } else if (setting === 'account' || setting === 'model' || setting === 'effort' || setting === 'permissions' || setting === 'permission') {
+      // One way to set each, with that command's checks. The copies here had
+      // fewer: /settings account moved a conversation with content to another
+      // harness, and /settings model kept an effort the new model rejects.
+      const command = setting === 'account' ? 'accounts use' : setting === 'permission' ? 'permissions' : setting;
+      return aiSessionCommand(id, `/${command} ${value}`);
     } else if (setting === 'option') {
       const [optionId, ...optionValue] = value.split(/\s+/);
       const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
