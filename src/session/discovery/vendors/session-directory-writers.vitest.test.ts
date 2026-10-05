@@ -19,6 +19,7 @@ import { NATIVE_SESSION_STORES } from '../registry.js';
 import type { NativeThreadWriteContext } from '../stores.js';
 import { sequentialIds } from './thread-writer-files.js';
 import { grokThreadFiles, grokWorkspaceDirectoryName } from './grok-store.js';
+import { clineThreadFiles } from './cline-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
 const WORKSPACE = '/home/user/projects/app';
@@ -118,5 +119,42 @@ describe('grok thread writer', () => {
 
     expect(await writer.versionOk(context('grok', {}, 'grok 1.0.47 (abc) [stable]'))).toBe(false);
     expect(await writer.versionOk(context('grok', {}, undefined))).toBe(false);
+  });
+});
+
+describe('cline thread writer', () => {
+  it('writes the golden messages and session record', async () => {
+    const files = clineThreadFiles(fixtureRecord(), {
+      sessionId: '1791160000000_abcde', workspace: WORKSPACE, model: 'anthropic/claude-sonnet-5', now: NOW,
+      messagesPath: '/home/user/.cline/data/sessions/1791160000000_abcde/1791160000000_abcde.messages.json',
+      callId: sequentialIds('toolu_clikcode_'), messageId: sequentialIds('msg_clikcode_'),
+    });
+    await golden('cline.messages.json', files.messages);
+    await golden('cline.session.json', files.session);
+  });
+
+  it('never records an empty model, which Cline cannot load', () => {
+    const files = clineThreadFiles(fixtureRecord(), { sessionId: 'x', workspace: WORKSPACE, model: null, now: NOW, messagesPath: '/m' });
+    expect(JSON.parse(files.session).model).toBe('claude-sonnet-4-6');
+  });
+
+  it('writes both files under the taking-over profile, pinned to ACP, and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'cline-writer-'));
+    const writer = NATIVE_SESSION_STORES.cline!.writer!;
+    const ctx = context('cline', { HOME: home }, '3.0.68');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(written?.transport).toBe('acp');
+    expect(written!.nativeId).toMatch(/^\d{13}_[a-z0-9]{5}$/);
+    const directory = join(home, '.cline', 'data', 'sessions', written!.nativeId);
+    expect((await readdir(directory)).sort()).toEqual([`${written!.nativeId}.json`, `${written!.nativeId}.messages.json`]);
+    const session = JSON.parse(await readFile(join(directory, `${written!.nativeId}.json`), 'utf8'));
+    expect(session).toMatchObject({ session_id: written!.nativeId, cwd: WORKSPACE, messages_path: join(directory, `${written!.nativeId}.messages.json`) });
+
+    const data = await mkdtemp(join(tmpdir(), 'cline-data-'));
+    const again = await writer.write(fixtureRecord(), context('cline', { HOME: home, CLINE_DATA_DIR: data }, '3.0.68'));
+    expect(await readdir(join(data, 'sessions'))).toEqual([again!.nativeId]);
+
+    expect(await writer.versionOk(context('cline', {}, '3.0.69'))).toBe(false);
   });
 });
