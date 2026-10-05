@@ -8,7 +8,7 @@ import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
 import { firstUsefulLine } from '../../protocol/stderr-line.js';
 import { LineBuffer } from '../../protocol/json-lines.js';
-import { configuredIdleMs, PERSISTENT_TOOL_IDLE_MS } from '../turn-watchdog.js';
+import { createTurnWatchdog, type TurnWatchdog } from '../turn-watchdog.js';
 
 interface NativeHarnessTurnOutput {
   stdout: string;
@@ -24,7 +24,9 @@ interface NativeHarnessTurnOutput {
 
 /** Lets the caller tell the idle watchdog what it has learned from the stream.
  * A harness running a long silent build says nothing for many minutes, yet is
- * not hung: the caller saw the tool start and has not seen it finish. */
+ * not hung: the caller saw the tool start and has not seen it finish. Created
+ * by the caller, bound by the turn to its watchdog (turn-watchdog.ts, the
+ * same one the persistent transports use). */
 interface NativeTurnIdleController {
   /** Any externally observed sign of life; restarts the idle countdown. */
   noteActivity(): void;
@@ -33,8 +35,6 @@ interface NativeTurnIdleController {
   toolStarted(id?: string): void;
   /** A tool finished or failed. */
   toolFinished(id?: string): void;
-  /** Number of tools believed to be running right now. */
-  readonly runningTools: number;
   /** The vendor wrote its end-of-turn record. A successful one means the
    * answer is complete: silence after it is the process lingering, not a
    * hang, and running out the idle budget then ends the turn normally. */
@@ -44,32 +44,19 @@ interface NativeTurnIdleController {
 }
 
 interface BoundIdleController extends NativeTurnIdleController {
-  bind(listener: (() => void) | undefined): void;
+  bind(watchdog: TurnWatchdog | undefined): void;
 }
 
 export function createTurnIdleController(): NativeTurnIdleController {
-  const running = new Set<string>();
-  let anonymous = 0;
   let succeeded = false;
-  let listener: (() => void) | undefined;
+  let watchdog: TurnWatchdog | undefined;
   const controller: BoundIdleController = {
-    noteActivity: () => listener?.(),
-    noteResult: (outcome) => { succeeded = outcome === 'success'; listener?.(); },
+    noteActivity: () => watchdog?.activity(),
+    noteResult: (outcome) => { succeeded = outcome === 'success'; watchdog?.activity(); },
     get succeeded() { return succeeded; },
-    toolStarted: (id) => {
-      if (id) running.add(id);
-      else anonymous += 1;
-      listener?.();
-    },
-    toolFinished: (id) => {
-      // A completion whose start was never seen (or carries no id) still
-      // settles one outstanding tool rather than leaving the long budget armed.
-      if (id && running.delete(id)) { /* paired */ } else if (anonymous > 0) anonymous -= 1;
-      else if (!id && running.size > 0) running.delete(running.values().next().value as string);
-      listener?.();
-    },
-    get runningTools() { return running.size + anonymous; },
-    bind: (next) => { listener = next; },
+    toolStarted: (id) => watchdog?.toolStarted(id),
+    toolFinished: (id) => watchdog?.toolFinished(id),
+    bind: (next) => { watchdog = next; },
   };
   return controller;
 }
@@ -167,12 +154,9 @@ interface NativeHarnessTurnOptions {
   onStdoutLine?: (line: string) => void;
   onStderrLine?: (line: string) => void;
   /** Milliseconds of complete silence -- no stdout, no stderr, no exit --
-   * after which the harness is treated as hung. Zero or negative disables it. */
+   * after which the harness is treated as hung. Zero or negative disables it.
+   * Default: configuredIdleMs(). */
   idleTimeoutMs?: number;
-  /** Silence budget while `idleController` reports a running tool. Defaults to
-   * DEFAULT_TOOL_IDLE_TIMEOUT_MS; zero or negative disables the watchdog for
-   * as long as a tool is running. */
-  toolIdleTimeoutMs?: number;
   /** See NativeTurnIdleController. Create with createTurnIdleController(). */
   idleController?: NativeTurnIdleController;
   /** See createTurnRelease. */
@@ -181,14 +165,6 @@ interface NativeHarnessTurnOptions {
    * a line callback. Defaults to TURN_OUTPUT_TAIL_LIMIT. */
   retainTailLimit?: number;
 }
-
-/** Deliberately an *idle* timeout rather than a wall-clock cap: a legitimate
- * agentic turn can run for a very long time, but it narrates while it does.
- * A harness that has said nothing at all for this long is wedged, and without
- * this the turn blocks forever with only Ctrl+C to break it. The budgets and
- * CLIKCODE_TURN_IDLE_TIMEOUT_MS are the persistent transports' own
- * (turn-watchdog.ts): one policy, one definition. */
-const DEFAULT_TOOL_IDLE_TIMEOUT_MS = PERSISTENT_TOOL_IDLE_MS;
 
 /** Hard cap on retained output when nothing streams it away. */
 const TURN_OUTPUT_LIMIT = 16 * 1024 * 1024;
@@ -257,16 +233,12 @@ export async function captureNativeHarnessTurn(
     let truncated = false;
     let interrupted = false;
     let settled = false;
-    let exited = false;
     const stdoutLines = new LineBuffer();
     const stderrLines = new LineBuffer();
     const stopTimers: NodeJS.Timeout[] = [];
-    let idleTimer: NodeJS.Timeout | undefined;
     let closeGraceTimer: NodeJS.Timeout | undefined;
     let timedOut = false;
     let timedOutAfterMs = 0;
-    const idleLimit = options.idleTimeoutMs ?? configuredIdleMs();
-    const toolIdleLimit = options.toolIdleTimeoutMs ?? DEFAULT_TOOL_IDLE_TIMEOUT_MS;
     const controller = options.idleController as BoundIdleController | undefined;
     const tailLimit = Math.max(1024, options.retainTailLimit ?? TURN_OUTPUT_TAIL_LIMIT);
     const forward = (signal: NodeJS.Signals): void => killProcessTreePortable(child, signal, true);
@@ -275,28 +247,23 @@ export async function captureNativeHarnessTurn(
       timer.unref();
       stopTimers.push(timer);
     };
-    const noteActivity = (): void => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = undefined;
-      if (settled || timedOut || exited) return;
-      // The tool budget only ever lengthens the deadline: a caller who disabled
-      // or raised the ordinary budget must not have it shortened by a tool.
-      const toolRunning = (controller?.runningTools ?? 0) > 0;
-      const budget = idleLimit <= 0 ? idleLimit
-        : toolRunning ? (toolIdleLimit <= 0 ? toolIdleLimit : Math.max(idleLimit, toolIdleLimit)) : idleLimit;
-      if (budget <= 0) return;
-      idleTimer = setTimeout(() => {
+    // Deliberately an *idle* timeout rather than a wall-clock cap: a
+    // legitimate agentic turn can run for a very long time, but it narrates
+    // while it does. One that has said nothing at all for this long is
+    // wedged, and without this the turn blocks forever with only Ctrl+C.
+    const watchdog = createTurnWatchdog({
+      ...(options.idleTimeoutMs !== undefined ? { idleMs: options.idleTimeoutMs } : {}),
+      onIdle: (afterMs) => {
         timedOut = true;
-        timedOutAfterMs = budget;
+        timedOutAfterMs = afterMs;
         forward('SIGTERM');
         later(2_000, 'SIGKILL');
-      }, budget);
-      idleTimer.unref();
-    };
+      },
+    });
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
     const collect = (target: 'stdout' | 'stderr', chunk: string): void => {
-      noteActivity();
+      watchdog.activity();
       const callback = target === 'stdout' ? options.onStdoutLine : options.onStderrLine;
       if (target === 'stdout') stdout += chunk;
       else stderr += chunk;
@@ -345,12 +312,7 @@ export async function captureNativeHarnessTurn(
       }
     }
     const onInterrupt = () => { interrupted = true; forward('SIGINT'); later(1_000, 'SIGTERM'); later(3_000, 'SIGKILL'); };
-    const onAbort = () => {
-      interrupted = true;
-      forward('SIGINT');
-      later(1_000, 'SIGTERM');
-      later(3_000, 'SIGKILL');
-    };
+    const onAbort = onInterrupt;
     // Terminating or hanging up is stopping, as much as Ctrl+C is: the turn is
     // cancelled, never read as a vendor failure for failover to retry.
     const onTerminate = () => { interrupted = true; forward('SIGTERM'); later(2_000, 'SIGKILL'); };
@@ -361,18 +323,17 @@ export async function captureNativeHarnessTurn(
       if (process.platform !== 'win32') process.off('SIGHUP', onHangup);
       options.signal?.removeEventListener('abort', onAbort);
       for (const timer of stopTimers.splice(0)) clearTimeout(timer);
-      if (idleTimer) clearTimeout(idleTimer);
+      watchdog.stop();
       if (closeGraceTimer) clearTimeout(closeGraceTimer);
-      controller?.bind?.(undefined);
+      controller?.bind(undefined);
       options.input?.end();
     };
     process.once('SIGINT', onInterrupt);
     process.once('SIGTERM', onTerminate);
     if (process.platform !== 'win32') process.once('SIGHUP', onHangup);
     options.signal?.addEventListener('abort', onAbort, { once: true });
-    controller?.bind?.(noteActivity);
+    controller?.bind(watchdog);
     if (options.signal?.aborted) onAbort();
-    noteActivity();
     const tails = () => ({ stderrTail: stderr.trim().slice(-4000), stdoutTail: stdout.trim().slice(-4000) });
     const finish = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (settled) return;
@@ -445,8 +406,7 @@ export async function captureNativeHarnessTurn(
     // 'close' fires once the streams have ended too.
     child.once('close', (code, signal) => finish(code, signal));
     child.once('exit', (code, signal) => {
-      exited = true;
-      if (idleTimer) clearTimeout(idleTimer);
+      watchdog.stop();
       closeGraceTimer = setTimeout(() => finish(code, signal), STDIO_CLOSE_GRACE_MS);
       closeGraceTimer.unref();
     });
