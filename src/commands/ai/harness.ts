@@ -42,7 +42,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   // Installed now, while the user watches it happen (install.ts shows it on
   // whatever surface this is), rather than as a surprise on the first turn.
   const freshInstall = await ensureNativeHarness(harness);
-  const state = await readState();
+  const state = await readState({ transcripts: [sessionId] });
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
   const sameHarness = session.nativeHarness === harness.command;
@@ -215,7 +215,7 @@ export async function signInBeforeUse(id: string): Promise<boolean> {
  * `send` and `sessions create`, which each failed with "no account selected"
  * until a separate `accounts add` and `sessions set`. */
 export async function ensureChatReady(id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const session = state.sessions.find((item) => item.id === id);
   // ClikCode's own agent has no vendor harness or account to bind.
   if (!session || isClikCodeAgent(session) || session.accountId) return;
@@ -229,7 +229,7 @@ export async function ensureChatReady(id: string): Promise<void> {
 /** A chat named on the command line: its id, the start of one, its name, or
  * `last`. */
 export async function resolveChat(ref: string): Promise<string> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   if (state.sessions.some((item) => item.id === ref)) return ref;
   const { chatNamed } = await import('../../session/options.js');
   const id = chatNamed(state.sessions, ref, '');
@@ -247,7 +247,7 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
   if (options.chat) id = await resolveChat(options.chat);
   else {
     const { launchSession } = await import('./sessions.js');
-    const state = await readState();
+    const state = await readState({ transcripts: [] });
     const session = launchSession(state, process.cwd());
     state.sessions.push(session);
     await writeState(state);
@@ -256,7 +256,7 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
   if (options.harness) {
     const harness = localHarnessForCommand(options.harness) ?? localHarnessForProvider(options.harness);
     if (!harness) throw new Error(`unknown harness "${options.harness}"`);
-    const state = await readState();
+    const state = await readState({ transcripts: [] });
     const session = state.sessions.find((item) => item.id === id);
     if (session?.nativeHarness !== harness.command) {
       // A chat with history moves there with what it carries; a new one
@@ -269,7 +269,7 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
   await ensureChatReady(id);
   if (options.permissions) await setChatPermissions(id, options.permissions);
   if (options.model) {
-    const state = await readState();
+    const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
     const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (session && harness) {
@@ -286,7 +286,7 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
  * a real flag is refused rather than stored and silently ignored. */
 async function setChatPermissions(id: string, mode: string): Promise<void> {
   const { sessionPermissionModes, setSessionHarnessOption } = await import('../../session/options.js');
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const harness = !isClikCodeAgent(session) && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
@@ -306,7 +306,8 @@ async function setChatPermissions(id: string, mode: string): Promise<void> {
  * there, with the model and approval mode asked for. */
 async function startOrResumeAgentChat(options: { route: 'clikcode-local' | 'gateway'; chat?: string; model?: string; permissions?: string }): Promise<string> {
   const { applyClikCodeAgentSessionPolicy, launchSession } = await import('./sessions.js');
-  const state = await readState();
+  // Settings only: no history is read or changed here.
+  const state = await readState({ transcripts: [] });
   let session: HarnessSession | undefined;
   if (options.chat) {
     const id = await resolveChat(options.chat);

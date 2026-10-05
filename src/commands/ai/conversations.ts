@@ -56,7 +56,7 @@ export function newConversationSession(
 /** Drop a queued turn that could not start, so a permanent failure cannot
  * replay forever at the head of the queue. */
 export async function releaseQueuedTurn(id: string, queuedTurnId: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (session && consumeSessionTurn(session, queuedTurnId)) await writeState(state);
 }
@@ -66,7 +66,7 @@ export async function releaseQueuedTurn(id: string, queuedTurnId: string): Promi
  * move it, so each would only fail the same way and ask again. They go back
  * to the composer instead. Commands and notifications stay queued. */
 export async function takeQueuedMessages(id: string): Promise<string[]> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   const taken = (session?.queuedTurns ?? []).filter((item) => !item.kind);
   if (!session || !taken.length) return [];
@@ -84,7 +84,8 @@ export async function newConversation(
    * default: the conversation board starts in exactly what it shows. */
   options: { sameModel?: boolean } = {},
 ): Promise<string> {
-  const state = await readState();
+  // The new chat copies the current one's settings, never its history.
+  const state = await readState({ transcripts: [] });
   const current = state.sessions.find((item) => item.id === currentId);
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
   const created = newConversationSession(state, current);
