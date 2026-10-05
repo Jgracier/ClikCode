@@ -173,3 +173,39 @@ describe('the editor bridge shutting down', () => {
   });
 });
 
+describe('the editor bridge running a `!` line', () => {
+  it('shows its output once: as the transcript message, not also as an output card', async () => {
+    const { readState } = await import('../session/state/read.js');
+    const { writeState } = await import('../session/state/write.js');
+    const state = await readState();
+    const now = new Date().toISOString();
+    state.sessions.push({
+      id: 'shell', conversationId: 'shell', route: 'local', accountId: null, provider: 'anthropic', model: null, nativeHarness: 'claude',
+      effort: 'medium', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', workspace: process.cwd(), messages: [],
+    } as never);
+    await writeState(state);
+    const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+    const inner = bridge as unknown as { sessionId: string; dispatch(line: string, fromQueuedCommand: boolean): Promise<unknown> };
+    inner.sessionId = 'shell';
+    // What reaches the editor: runIdeBridge turns each JSON line on stdout
+    // into an `output` event, and drops it while the bridge is quiet.
+    const reaching: unknown[] = [];
+    const previousMode = process.env.CLIKCODE_OUTPUT_MODE;
+    process.env.CLIKCODE_OUTPUT_MODE = 'json';
+    const original = process.stdout.write;
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      let payload: unknown;
+      try { payload = JSON.parse(String(chunk)); } catch { payload = undefined; }
+      if (payload && !bridge.quietOutput) reaching.push(payload);
+      return true;
+    }) as typeof process.stdout.write;
+    try { await inner.dispatch('!echo shell-once', false); } finally {
+      process.stdout.write = original;
+      if (previousMode === undefined) delete process.env.CLIKCODE_OUTPUT_MODE; else process.env.CLIKCODE_OUTPUT_MODE = previousMode;
+    }
+    const after = (await readState({ transcripts: ['shell'] })).sessions.find((item) => item.id === 'shell')!;
+    expect(after.messages?.at(-1)?.content).toContain('shell-once');
+    expect(reaching.filter((payload) => (payload as { panel?: unknown }).panel === 'shell'), 'the transcript already shows it').toEqual([]);
+  });
+});
+
