@@ -95,10 +95,21 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
     // fail-open-ok: malformed optional session-list output cannot yield trustworthy resumable ids.
     return [];
   }
+  return sessionsFromRecords(records);
+}
+
+function sessionsFromRecords(records: readonly unknown[], workspace?: string): DiscoveredNativeSession[] {
   const sessions: DiscoveredNativeSession[] = [];
   for (const record of records) {
     if (!record || typeof record !== 'object') continue;
     const item = record as Record<string, unknown>;
+    // Kiro CLI's `--list-sessions --format json` is one envelope per folder,
+    // `{"cwd": ..., "sessions": [{"sessionId", "title", "updatedAt", ...}]}`
+    // (verified on kiro-cli 2.23): its rows are the sessions, in that folder.
+    if (Array.isArray(item.sessions)) {
+      sessions.push(...sessionsFromRecords(item.sessions, typeof item.cwd === 'string' && item.cwd ? item.cwd : workspace));
+      continue;
+    }
     // Crush's own `uuid` (the full resumable id) must win over its `id` (a
     // 7-char display-only hash) when both are present on the same record.
     // OpenClaw's `sessions --json` row calls the resumable id `key`
@@ -113,6 +124,7 @@ function parseDiscoveredSessionsStructured(raw: string, format: 'json' | 'json-l
       nativeId,
       title: typeof title === 'string' ? title : undefined,
       updatedAt: typeof updatedAt === 'string' ? updatedAt : typeof updatedAt === 'number' ? new Date(updatedAt).toISOString() : undefined,
+      ...(workspace ? { workspace } : {}),
     });
   }
   return sessions;
