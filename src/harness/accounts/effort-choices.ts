@@ -26,8 +26,7 @@ import { readFile, stat } from 'node:fs/promises';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { harnessBinaryIdentity } from '../transport/native/version-memo.js';
-import { atomicWriteFile } from '../../session/store/files.js';
-import { stateDirectory } from '../../session/store/paths.js';
+import { jsonMemo } from '../../session/store/json-memo.js';
 
 export interface EffortChoices {
   values: string[];
@@ -126,21 +125,14 @@ async function fileIdentity(path: string): Promise<string> {
 }
 
 /** `--help` parses, per harness, tied to the binary they were read from and
- * kept across runs: every start asked each harness for its help again. */
-type HelpMemo = Record<string, { identity: string; values: string[] }>;
+ * kept across runs: every start asked each harness for its help again. Read
+ * from the file, not held, so another process's answer counts too. */
+interface HelpMemo { v: 1; harnesses: Record<string, { identity: string; values: string[] }> }
 
-function helpMemoPath(): string | undefined {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return undefined;
-  const directory = stateDirectory();
-  return directory ? join(directory, 'cache', 'effort-help.json') : undefined;
-}
-
-async function readHelpMemo(path: string): Promise<HelpMemo> {
-  try {
-    const parsed = JSON.parse(await readFile(path, 'utf8')) as { v?: number; harnesses?: HelpMemo };
-    return parsed?.v === 1 && parsed.harnesses && typeof parsed.harnesses === 'object' ? parsed.harnesses : {};
-  } catch { return {}; } // fail-open-ok: no memo, or a damaged one, costs one --help.
-}
+const helpMemo = jsonMemo<HelpMemo>('cache/effort-help.json', () => ({ v: 1, harnesses: {} }), (parsed) => {
+  const file = parsed as HelpMemo;
+  return file.v === 1 && file.harnesses && typeof file.harnesses === 'object' ? file : undefined;
+});
 
 /** The help text is read once per binary, not once per model, session or run. */
 async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] | undefined> {
@@ -151,8 +143,7 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
   const key = `help:${harness.command}`;
   const cached = cache.get(key);
   if (cached?.identity === identity) return cached.result.values.length ? cached.result.values : undefined;
-  const path = helpMemoPath();
-  const remembered = path ? (await readHelpMemo(path))[harness.command] : undefined;
+  const remembered = (await helpMemo.read())?.harnesses[harness.command];
   let values: string[] = [];
   if (remembered?.identity === identity) values = remembered.values;
   else {
@@ -160,12 +151,10 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
       const helpArgv = harness.command === 'hermes' ? ['chat', '--help'] : ['--help'];
       values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}, 8_000), flag);
     } catch { /* fail-open-ok: no help text is the catalog's cue, not an error. */ }
-    if (path) {
-      // Re-read just before writing: another process may have added a harness.
-      const latest = await readHelpMemo(path);
-      latest[harness.command] = { identity, values };
-      await atomicWriteFile(path, JSON.stringify({ v: 1, harnesses: latest })).catch(() => undefined);
-    }
+    // Re-read just before writing: another process may have added a harness.
+    const latest = (await helpMemo.read()) ?? { v: 1, harnesses: {} };
+    latest.harnesses[harness.command] = { identity, values };
+    await helpMemo.write(latest);
   }
   cache.set(key, { identity, result: { values, source: 'vendor-help' } });
   return values.length ? values : undefined;
