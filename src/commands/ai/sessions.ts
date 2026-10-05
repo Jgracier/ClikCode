@@ -175,7 +175,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   // `--provider claude` means Claude Code, the same name /claude and
   // `accounts login claude` take; the provider id (`anthropic`) still works.
   const named = options.provider ? localHarnessForCommand(options.provider) : undefined;
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const account = options.account ? findAccount(state, options.account, named?.provider ?? options.provider) : undefined;
   if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
   // The same guard aiSessionSet already applied. Without it, a label that
@@ -230,11 +230,13 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   // Bound to an account now, as the app binds one, so the next command can
   // send; without it every created chat failed "no account selected".
   if (options.route === 'local') await (await import('./harness.js')).ensureChatReady(id);
-  emitResult({ session: (await readState()).sessions.find((item) => item.id === id) ?? session });
+  emitResult({ session: (await readState({ transcripts: [id] })).sessions.find((item) => item.id === id) ?? session });
 }
 
 export async function aiSessionsList(): Promise<void> {
-  const state = await readState();
+  // The index: a listing is each chat's facts (title, preview, message
+  // count), not every chat's history -- `sessions show <id>` has that.
+  const state = await readState({ transcripts: [] });
   // `live` is computed here rather than read off the record, because nothing
   // stores it: a session is live when a claim or a worker says so, and both
   // expire on their own. This replaced a `status` the worker wrote and a sweep
@@ -289,7 +291,7 @@ export function launchSession(
 }
 
 export async function aiSessionShow(id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   emitResult({ session });
@@ -310,7 +312,7 @@ export async function aiSessionShow(id: string): Promise<void> {
  * next launch, without changing its provider-owned session identity.
  */
 async function endSession(id: string, intent: 'close' | 'leave'): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const announce = (): void => {
@@ -355,7 +357,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (options.route !== undefined && !isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
   if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   if (options.permissions !== undefined && !VALID_PERMISSION_MODES.includes(options.permissions)) throw new Error('permissions must be ask, bypass, or auto');
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const index = state.sessions.findIndex((item) => item.id === id);
   if (index < 0) throw new Error(`AI session "${id}" was not found`);
   const current = state.sessions[index];
