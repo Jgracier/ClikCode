@@ -236,7 +236,7 @@ function freshFor(model: ChatModel): ChatModel {
 
 /** A note goes where it happened: during a turn, after the prompt that
  * started it (the prompt is not in the transcript yet), else at the end. */
-function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
+export function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
   const after = model.running && model.turnUserIndex !== undefined ? model.turnUserIndex + 1 : model.messages.length;
   return { ...model, notes: [...model.notes, { ...note, after }].slice(-MAX_NOTES) };
 }
@@ -585,11 +585,6 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
   }
 }
 
-/** Enter on an empty message box while a turn runs, with a message of the
- * user's already waiting (its row is in the queue): "enter again" -- stop the
- * turn, and what waits goes next, the queue's head first, as the bridge sends
- * it whenever a turn ends. A background task's notice is not the user's
- * message and never makes Enter stop anything. */
 /** The text of a queued message taken back to edit, once the worker's answer
  * says it left the queue -- and only then: one that was already steered into
  * the turn, or is the turn running now, stays sent, and putting its text in
@@ -601,6 +596,11 @@ export function takenBackText(takingBack: Map<string, string>, event: Extract<Wo
   return event.outcome === 'removed' ? text : undefined;
 }
 
+/** Enter on an empty message box while a turn runs, with a message of the
+ * user's already waiting (its row is in the queue): "enter again" -- stop the
+ * turn, and what waits goes next, the queue's head first, as the bridge sends
+ * it whenever a turn ends. A background task's notice is not the user's
+ * message and never makes Enter stop anything. */
 export function stopAndSendReady(model: Pick<ChatModel, 'queued' | 'running'>): boolean {
   return model.running && model.queued.some((item) => !item.notification && !item.command);
 }
@@ -619,10 +619,6 @@ export function answeredApproval(model: ChatModel, id: string): ChatModel {
 
 export function typedDuringTurn(model: ChatModel, id: string, text: string): ChatModel {
   return { ...model, submissions: [...model.submissions, { id, text }] };
-}
-
-export function localNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
-  return withNote(model, note);
 }
 
 export type TurnMark = { offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string };

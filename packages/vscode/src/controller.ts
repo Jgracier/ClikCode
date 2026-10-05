@@ -12,7 +12,7 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, conversationAttention, emptyModel, localNote, takenBackText, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, conversationAttention, emptyModel, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -222,7 +222,7 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   private note(text: string, level: 'info' | 'warning' | 'error' = 'info'): void {
-    this.setModel(localNote(this.model, { kind: 'notice', level, text }));
+    this.setModel(withNote(this.model, { kind: 'notice', level, text }));
   }
 
   private workspaceFolder(): string {
