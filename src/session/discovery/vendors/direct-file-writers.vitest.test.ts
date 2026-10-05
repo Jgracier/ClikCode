@@ -17,6 +17,8 @@ import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import type { NativeThreadWriteContext } from '../stores.js';
 import { piProjectDirectoryName, piSessionStore, piThreadLines } from './pi-store.js';
 import { sequentialIds } from './thread-writer-files.js';
+import { aiderHistoryMarkdown, aiderSessionStore } from './aider-store.js';
+import { harnessStatePath } from '../../state/paths.js';
 import { copilotSessionStore, copilotThreadFiles } from './copilot-store.js';
 import { geminiProjectSlug, geminiSessionStore, geminiThreadLines } from './gemini-store.js';
 import { qwenProjectDirectoryName, qwenSessionStore, qwenThreadLines } from './qwen-store.js';
@@ -229,5 +231,31 @@ describe('copilot thread writer', () => {
     expect(await readFile(join(home, 'session-state', written!.nativeId, 'workspace.yaml'), 'utf8'))
       .toContain(`id: ${written!.nativeId}\ncwd: "${WORKSPACE}"\n`);
     expect(await writer.versionOk(context('copilot', {}, 'GitHub Copilot CLI 1.0.92.'))).toBe(false);
+  });
+});
+
+describe('aider thread writer', () => {
+  it('writes the golden history', async () => {
+    // Local time, as Aider's own heading is.
+    await golden('aider.history.md', aiderHistoryMarkdown(fixtureRecord(), new Date(2026, 9, 4, 12, 0, 0)));
+  });
+
+  it('keeps every assistant line the assistant\'s', () => {
+    const record = fixtureRecord();
+    record.turns = [{ ...record.turns[0]!, parts: [{ type: 'text', text: '# Heading\n> quoted\n#### not a request' }] }];
+    const text = aiderHistoryMarkdown(record, new Date(2026, 9, 4, 12, 0, 0));
+    expect(text).toContain('\n # Heading\n > quoted\n #### not a request\n');
+  });
+
+  it('writes a new history file in ClikCode\'s own aider directory, never the workspace', async () => {
+    const writer = aiderSessionStore.writer!;
+    const ctx = context('aider', {}, 'aider 0.86.2');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    const directory = join(dirname(harnessStatePath()), 'native', 'aider');
+    expect(dirname(written!.nativeId)).toBe(directory);
+    expect(written!.nativeId).toMatch(/\.history\.md$/);
+    expect(await readFile(written!.nativeId, 'utf8')).toContain('#### Remember the codeword PELICAN-73.');
+    expect(await writer.versionOk(context('aider', {}, 'aider 0.87.0'))).toBe(false);
   });
 });

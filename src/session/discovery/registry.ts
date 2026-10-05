@@ -23,6 +23,7 @@ import { piSessionStore } from './vendors/pi-store.js';
 import { copilotSessionStore } from './vendors/copilot-store.js';
 import { qwenSessionStore } from './vendors/qwen-store.js';
 import { commandSessionStore } from './vendors/command-store.js';
+import { aiderSessionStore } from './vendors/aider-store.js';
 import { hermesSessionStore } from './vendors/hermes-store.js';
 import { gooseSessionStore } from './vendors/goose-store.js';
 import { kiloSessionStore, openCodeSessionStore } from './vendors/opencode-writer.js';
@@ -75,6 +76,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   copilot: copilotSessionStore,
   qwen: qwenSessionStore,
   command: commandSessionStore,
+  aider: aiderSessionStore,
   hermes: hermesSessionStore,
   goose: gooseSessionStore,
   opencode: openCodeSessionStore,
