@@ -12,4 +12,10 @@ describe('a harness turn\'s environment', () => {
     const { AI_LOCAL_HARNESSES } = await import('../../packages/clikrouter/src/ai-local-harness.js');
     expect(AI_LOCAL_HARNESSES.find((h) => h.command === 'claude')?.turnEnv).toEqual({ CLAUDE_CODE_ENABLE_TODO_TOOLS: '1' });
   });
+
+  it('runs Cline\'s session in its own process, never in a hub daemon that outlives the chat', async () => {
+    const { AI_LOCAL_HARNESSES } = await import('../../packages/clikrouter/src/ai-local-harness.js');
+    const cline = AI_LOCAL_HARNESSES.find((h) => h.command === 'cline')!;
+    expect(turnEnvironment(cline as never, undefined, 'ask')).toMatchObject({ CLINE_SESSION_BACKEND_MODE: 'local' });
+  });
 });
