@@ -1,5 +1,5 @@
 /** Golden output of the thread writers whose vendor resumes a session from a
- * directory or a pair of files (Grok, Kiro, Cline, Kimi), for one
+ * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code), for one
  * conversation: a codeword, a Codex shell call, a Claude Edit and a Claude
  * Grep.
  *
@@ -9,7 +9,7 @@
  * `UPDATE_GOLDEN=1`. */
 
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,6 +22,7 @@ import { grokThreadFiles, grokWorkspaceDirectoryName } from './grok-store.js';
 import { clineThreadFiles } from './cline-store.js';
 import { kimiThreadFiles, kimiWorkDirKey } from './kimi-store.js';
 import { kiroThreadFiles } from './kiro-store.js';
+import { mcodeSessionRelativeDir, mcodeThreadLines } from './mcode-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
 const WORKSPACE = '/home/user/projects/app';
@@ -217,5 +218,49 @@ describe('kiro thread writer', () => {
     expect((await readdir(join(home, '.kiro', 'sessions', 'cli'))).sort())
       .toEqual([`${written!.nativeId}.json`, `${written!.nativeId}.jsonl`]);
     expect(await writer.versionOk(context('kiro', {}, 'kiro-cli 2.24.0'))).toBe(false);
+  });
+});
+
+describe('mcode thread writer', () => {
+  it('writes the golden messages.jsonl', async () => {
+    const text = mcodeThreadLines(fixtureRecord(), {
+      sessionId: 'mvs_0f2184cbcb8c4aed97f39c7de65b3416', now: NOW,
+      messageId: sequentialIds('id'), turnId: sequentialIds('turn_clikcode_'),
+    });
+    await golden('mcode.messages.jsonl', text);
+  });
+
+  it('names the session directory as mcode does (UTC, unpadded base64 id)', () => {
+    expect(mcodeSessionRelativeDir('mvs_5d7e0850e9e7473880433ff242ee9bcb', new Date('2026-10-05T03:22:02.883Z')))
+      .toBe('2026/10/05/03-22-02-883-session_bXZzXzVkN2UwODUwZTllNzQ3Mzg4MDQzM2ZmMjQyZWU5YmNi');
+  });
+
+  it('registers the thread in the database mcode made, and writes nothing without one', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'mcode-writer-'));
+    const writer = NATIVE_SESSION_STORES.mcode!.writer!;
+    const ctx = context('mcode', { HOME: home }, '0.5.10');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    expect(await writer.write(fixtureRecord(), ctx)).toBeUndefined();
+    await expect(readdir(join(home, '.minimax', 'v2', 'sessions'))).rejects.toThrow();
+
+    const sqliteDir = join(home, '.minimax', 'v2', 'sqlite');
+    await mkdir(sqliteDir, { recursive: true });
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(sqliteDir, 'runtime-state.sqlite'));
+    db.exec(`CREATE TABLE local_runtime_sessions (session_id TEXT PRIMARY KEY, record_json TEXT, updated_at_ms INTEGER,
+      columnar_version INTEGER, agent_name TEXT, runtime TEXT, session_type TEXT, status TEXT, archived INTEGER, visibility TEXT,
+      session_kind TEXT, workspace_dir TEXT, project_workspace_dir TEXT, is_default_workspace INTEGER, title TEXT,
+      created_at_ms INTEGER, extra_data_json TEXT, history_relative_dir TEXT, project_id INTEGER)`);
+    db.exec(`CREATE TABLE local_runtime_pi_history_file_migrations (session_id TEXT PRIMARY KEY, migrated_at_ms INTEGER,
+      source TEXT, message_count INTEGER, target_revision TEXT)`);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(written?.nativeId).toMatch(/^mvs_[0-9a-f]{32}$/);
+    const row = db.prepare('SELECT workspace_dir, title, history_relative_dir FROM local_runtime_sessions WHERE session_id = ?').get(written!.nativeId) as Record<string, string>;
+    expect(row).toMatchObject({ workspace_dir: WORKSPACE, title: 'Remember the codeword PELICAN-73. Then check what is in notes.txt.' });
+    const text = await readFile(join(home, '.minimax', 'v2', 'sessions', row.history_relative_dir!, 'messages.jsonl'), 'utf8');
+    expect(text).toContain('PELICAN-73');
+    expect(db.prepare('SELECT source, message_count FROM local_runtime_pi_history_file_migrations').get()).toEqual({ source: 'empty', message_count: 0 });
+    db.close();
+    expect(await writer.versionOk(context('mcode', {}, '0.5.11'))).toBe(false);
   });
 });
