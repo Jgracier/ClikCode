@@ -6,9 +6,9 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { keepsVendorAfter, runVendorSessionAttempt } from './vendor-session-attempt.js';
+import { runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { closePersistentTransport } from './vendor-process.js';
-import { turnCancelledError } from '../agent/cancellation.js';
+import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 
@@ -84,11 +84,11 @@ describe('a cancelled ACP turn', () => {
   });
 });
 
-describe('keepsVendorAfter', () => {
+describe('isTurnCancelled (what keeps the warm vendor child)', () => {
   it('is a cancel or an abort, nothing else', () => {
-    expect(keepsVendorAfter(turnCancelledError())).toBe(true);
-    expect(keepsVendorAfter(Object.assign(new Error('x'), { name: 'AbortError' }))).toBe(true);
-    expect(keepsVendorAfter(new Error('boom'))).toBe(false);
-    expect(keepsVendorAfter(undefined)).toBe(false);
+    expect(isTurnCancelled(turnCancelledError())).toBe(true);
+    expect(isTurnCancelled(Object.assign(new Error('x'), { name: 'AbortError' }))).toBe(true);
+    expect(isTurnCancelled(new Error('boom'))).toBe(false);
+    expect(isTurnCancelled(undefined)).toBe(false);
   });
 });

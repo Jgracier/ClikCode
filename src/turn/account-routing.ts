@@ -157,8 +157,8 @@ export async function accountAfterFailure(input: {
   const { state, session, account, failure, kind, tally } = input;
   // Stopped, not failed: whatever the attempt died of, it died because it was
   // cancelled, and no other account is owed the request.
-  if (input.signal?.aborted || isTurnCancelled(failure) || (failure as Error | undefined)?.name === 'AbortError') {
-    throw isTurnCancelled(failure) ? failure : turnCancelledError();
+  if (input.signal?.aborted || isTurnCancelled(failure)) {
+    throw turnCancelledError();
   }
   if (kind === 'authentication-required') account.status = 'needs_login';
   if (!ACCOUNT_FAILURES.has(kind) || (failure as { reason?: unknown } | undefined)?.reason === 'idle-timeout') {
