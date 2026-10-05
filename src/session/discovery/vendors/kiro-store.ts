@@ -1,17 +1,35 @@
-/** Kiro CLI over ACP: `<HOME>/.kiro/sessions/cli/<id>.json` + `<id>.jsonl`.
+/** Kiro CLI: `<HOME>/.kiro/sessions/cli/<id>.json` + `<id>.jsonl` (ACP), and
+ *  `<HOME>/.kiro/sessions/<sha256(cwd)[:16]>/<id>/` (the one-shot CLI).
  *
  * Kiro keeps two stores. `kiro-cli acp` (the v2 agent engine, ClikCode's
  * transport for Kiro) writes the flat `sessions/cli/` pair; the one-shot
- * CLI ClikCode falls back to (`chat --agent-engine v3`) writes
- * `sessions/<sha256(cwd)[:16]>/sess_<id>/` with its own index -- which is
- * why Kiro threads are pinned to the transport that made them
+ * CLI ClikCode falls back to (`chat --agent-engine v3`) writes a directory
+ * per session, `sessions/<sha256(cwd)[:16]>/sess_<uuid>/` (`session.json`,
+ * `messages.jsonl`), plus an append-only `session-index/<hash>.jsonl` --
+ * which is why Kiro threads are pinned to the transport that made them
  * (session `nativeTransport`). This writer writes the ACP pair and pins the
  * thread to ACP.
  *
  * No `locate`: an ACP session is two sibling files in a directory shared
  * with every other session, not one path, so the single-path copy in
- * session/carry.ts cannot carry it. The store carries the pair itself
- * (`carry`), the conversation first, as the writer writes it.
+ * session/carry.ts cannot carry it. The store carries itself (`carry`): the
+ * ACP pair, the conversation first, as the writer writes it; or, for a
+ * one-shot thread (its id is the `sess_<uuid>` directory name), that
+ * session's directory under the same workspace hash. The index is left
+ * alone: observed on kiro-cli 2.23.1, `--resume-id` finds the directory
+ * with no index entry (also under an already-migrated, empty index) and
+ * Kiro appends the entry itself on that resume.
+ *
+ * Carry verified live against kiro-cli 2.23.1 (2026-10-05, temp homes A and
+ * B with the same Kiro sign-in, auto model), both stores: a session started
+ * in A ("Remember the word <W>. Reply OK."), carried by carryNativeSession
+ * ('carried'), then asked for the word in B. ACP (`session/new`, then
+ * `session/load` + `session/prompt` in B) answered "MAPLE31"; the one-shot
+ * CLI (`chat --agent-engine v3 --output-format stream-json`, then
+ * `--resume-id sess_<uuid>` in B) answered "COBALT21". A's files were
+ * byte-identical afterwards. Without the carry, B's ACP load fails "Session
+ * not found", and B's CLI resume silently starts a fresh thread under the
+ * same id ("I don't have any record of a word").
  *
  * Observed (vendor-sandbox, kiro-cli 2.23.1, a real `session/new` turn and
  * then hand-written files loaded with `session/load`, which replays what it
@@ -33,19 +51,43 @@
  *     Calls with none of those shapes (fetch, MCP, ...) are told as text.
  */
 
-import { randomUUID } from 'node:crypto';
-import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { copyFile, mkdir, realpath, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
+import { placeArtifact } from '../../carry-artifact.js';
 import { nativeDataRoot, type NativeSessionCarry, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText, sequentialIds, testedVersion,
   writeFileAtomic, type VendorCall,
 } from './thread-writer-files.js';
 
+/** Both of Kiro's session stores live under this one directory. */
+function kiroSessionsRoot(environment: NativeSessionEnvironment): string {
+  return join(nativeDataRoot(environment, 'HOME', homedir()), '.kiro', 'sessions');
+}
+
+/** The ACP agent's store. */
 function kiroRoot(environment: NativeSessionEnvironment): string {
-  return join(nativeDataRoot(environment, 'HOME', homedir()), '.kiro', 'sessions', 'cli');
+  return join(kiroSessionsRoot(environment), 'cli');
+}
+
+/** A one-shot CLI session's directory, `sessions/<sha256(cwd)[:16]>/<id>`,
+ *  the id being Kiro's own `sess_<uuid>`. The cwd is hashed exactly as Kiro
+ *  saw it (see kiroOneShotWorkspaces). */
+export function kiroOneShotSessionDirectory(
+  environment: NativeSessionEnvironment, workspace: string, sessionId: string,
+): string {
+  const project = createHash('sha256').update(workspace).digest('hex').slice(0, 16);
+  return join(kiroSessionsRoot(environment), project, sessionId);
+}
+
+/** The cwd strings Kiro may have hashed for `workspace`: as given, and the
+ *  real path its process reports when the workspace is reached by a symlink. */
+async function kiroOneShotWorkspaces(workspace: string): Promise<string[]> {
+  const real = await realpath(workspace).catch(() => workspace);
+  return [...new Set([workspace, real])];
 }
 
 /** One ACP session's two files, in the order they are written and carried:
@@ -229,12 +271,29 @@ async function measureKiroSession(files: { conversation: string; session: string
   };
 }
 
-/** Copies one session's pair into `to`, touching no other session. Both are
- * staged under temporary names first, so a failed copy changes nothing; then
- * renamed into place conversation first, as the writer writes them. A copy
- * already there that is as long and as recent stays (carry.ts's rule: the
- * transcript is append-only, so the newer, longer one is current). */
+/** Carries one session into `to`, touching no other session: the ACP pair
+ *  when that is what `from` holds, else the one-shot CLI's directory. */
 async function carryKiroSession(input: NativeSessionCarry): Promise<boolean> {
+  // An id names files and a directory: one that is not a plain name is no
+  // session of Kiro's, and must never become a path outside the store.
+  if (!/^[\w-]+$/.test(input.nativeId)) return false;
+  if (await measureKiroSession(kiroSessionFiles(kiroRoot(input.from), input.nativeId))) return carryKiroPair(input);
+  for (const workspace of await kiroOneShotWorkspaces(input.workspace)) {
+    const source = kiroOneShotSessionDirectory(input.from, workspace, input.nativeId);
+    if (!(await stat(join(source, 'session.json')).then((entry) => entry.isFile(), () => false))) continue;
+    // Under the same cwd string in the account taking over: that is what Kiro
+    // hashes when it resumes there.
+    return placeArtifact(source, kiroOneShotSessionDirectory(input.to, workspace, input.nativeId));
+  }
+  return false;
+}
+
+/** Copies one ACP session's pair into `to`. Both are staged under temporary
+ * names first, so a failed copy changes nothing; then renamed into place
+ * conversation first, as the writer writes them. A copy already there that is
+ * as long and as recent stays (carry-artifact.ts's rule: the transcript is
+ * append-only, so the newer, longer one is current). */
+async function carryKiroPair(input: NativeSessionCarry): Promise<boolean> {
   const source = kiroSessionFiles(kiroRoot(input.from), input.nativeId);
   const target = kiroSessionFiles(kiroRoot(input.to), input.nativeId);
   const [there, here] = await Promise.all([measureKiroSession(source), measureKiroSession(target)]);
