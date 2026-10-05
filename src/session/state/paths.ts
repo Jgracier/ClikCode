@@ -1,7 +1,5 @@
-/** Where ClikCode's state lives on disk, and the two questions everything
- * else asks about it: does a file exist, and what time is it now. */
+/** Where ClikCode's state files live on disk. */
 
-import { stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { stateDirectory } from '../store/paths.js';
 
@@ -11,9 +9,7 @@ export const HARNESS_STATE_VERSION = 2;
 export const LOCAL_HARNESS_PROTOCOL = 1;
 
 /** Path of the version-1 single-file state. Callers use its directory as the
- * state root; since version 2 nothing is stored at this exact path (a file
- * found here is migrated and renamed aside). It held secrets, so it was never
- * "non-secret state" as an earlier comment claimed. */
+ * state root; since version 2 nothing reads or writes this exact path. */
 export function harnessStatePath(): string {
   return join(stateDirectory(), 'harness-state.json');
 }
@@ -28,8 +24,4 @@ export function harnessSecretsPath(): string {
 
 export function harnessCommand(): string {
   return 'clikcode';
-}
-
-export async function exists(path: string): Promise<boolean> {
-  return stat(path).then(() => true, () => false);
 }

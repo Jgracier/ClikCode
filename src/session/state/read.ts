@@ -1,6 +1,7 @@
 /** Assembling one HarnessState from the index, the secrets file and the
  * per-session transcripts. */
 
+import { randomUUID } from 'node:crypto';
 import { normalizeLearning } from '../../harness/accounts/usage-learning.js';
 import type { HarnessSession, HarnessState } from '../model.js';
 import { ephemeralSessions } from '../ephemeral.js';
@@ -9,11 +10,10 @@ import { cloneData, sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { readSessionTranscript } from '../store/transcripts.js';
 import { readSessionClaims, type SessionClaim } from '../claims.js';
-import { StateIndex, loadIndex } from './index-file.js';
+import { StateIndex, loadIndex, storeIndex } from './index-file.js';
 import { InvocationRollup, STATE_ROLLUPS } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, baselineOf, rememberBaseline } from './merge.js';
 import { hidden } from '../store/data.js';
-import { ensureLayout, ensureLayoutLocked } from './migrate.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js';
 import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission } from './settings.js';
@@ -121,6 +121,24 @@ function normalizedState(raw: HarnessState): HarnessState {
     (raw as HarnessState & { [STATE_ROLLUPS]?: Record<string, InvocationRollup> })[STATE_ROLLUPS] ?? {});
 }
 
+/** A first run: the empty index, made once under the state lock -- another
+ * process may be making it too. */
+async function createIndex(): Promise<StateIndex> {
+  await withStateLock(async () => {
+    if (await loadIndex()) return;
+    await storeIndex({
+      version: HARNESS_STATE_VERSION,
+      installationId: randomUUID(),
+      accounts: [], sessions: [], invocations: [], invocationRollups: {},
+      globalSettings: { ...HARNESS_DEFAULT_SETTINGS },
+      providerSettings: {},
+    }, { backup: true });
+  });
+  const index = await loadIndex();
+  if (!index) throw new Error('local AI harness state could not be created');
+  return index;
+}
+
 export interface ReadStateOptions {
   /** Which transcripts to open. The default is every one, which is what a
    * turn needs. An empty list reads the index only: titles, previews, dates. */
@@ -130,14 +148,7 @@ export interface ReadStateOptions {
 export async function readState(options?: ReadStateOptions): Promise<HarnessState> {
   const transcripts = options?.transcripts ?? 'all';
   const wanted = transcripts === 'all' ? 'all' as const : new Set(transcripts);
-  await ensureLayout();
-  let index = await loadIndex();
-  if (!index) {
-    // Removed between the check and the read (tests, manual cleanup).
-    await withStateLock((held) => ensureLayoutLocked(held));
-    index = await loadIndex();
-    if (!index) throw new Error('local AI harness state could not be created');
-  }
+  let index = await loadIndex() ?? await createIndex();
   if (!folding && index.version <= HARNESS_STATE_VERSION && hasLooseBranches(index.sessions as HarnessSession[])) {
     await foldStoredHandoffs();
     index = await loadIndex() ?? index;

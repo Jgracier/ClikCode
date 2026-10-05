@@ -12,26 +12,27 @@ afterEach(() => {
   else process.env.CLIKCODE_HOME = previousHome;
 });
 
+/** Stores an index as an older build left it: what readState normalizes. */
+async function storedIndex(root: string, index: { accounts?: unknown[]; sessions?: unknown[] }): Promise<void> {
+  await writeFile(join(root, 'index.json'), `${JSON.stringify({
+    version: 2, installationId: 'install', devicePublicKey: { kty: 'OKP' },
+    accounts: [], sessions: [], invocations: [], invocationRollups: {},
+    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+    ...index,
+  }, null, 2)}\n`);
+}
+
 describe('harness state normalization', () => {
   it('keeps a Gateway session\'s approval setting, which its local agent honours', async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
     process.env.CLIKCODE_HOME = root;
     const now = new Date().toISOString();
-    await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-      version: 1,
-      installationId: 'install',
-      localApiToken: 'token',
-      devicePrivateKeyPem: 'private',
-      devicePublicKey: { kty: 'OKP' },
-      accounts: [],
+    await storedIndex(root, {
       sessions: [
         { id: 'gateway', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
         { id: 'local', route: 'local', accountId: null, provider: null, model: null, effort: 'medium', permissionMode: 'workspace-write', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
       ],
-      invocations: [],
-      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' },
-      providerSettings: {},
-    }, null, 2)}\n`);
+    });
     try {
       const state = await readState();
       expect(state.sessions.find((session) => session.id === 'gateway')?.permissionMode).toBe('bypass');
@@ -51,9 +52,7 @@ describe('harness state normalization', () => {
       id, route: 'local', accountId: null, provider: 'x', model: null, effort: 'medium', permissionMode: 'ask', accountFailover: 'never',
       createdAt: now, updatedAt: now, status: 'active', ...fields,
     });
-    await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-      version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
-      accounts: [],
+    await storedIndex(root, {
       sessions: [
         session('old-gemini', { nativeHarness: 'gemini', nativeSessionId: 'cli-thread' }),
         session('acp-gemini', { nativeHarness: 'gemini', nativeSessionId: 'acp-thread', nativeTransport: 'acp' }),
@@ -61,8 +60,7 @@ describe('harness state normalization', () => {
         session('fresh', { nativeHarness: 'cursor' }),
         session('droid', { nativeHarness: 'droid', nativeSessionId: 'droid-thread' }),
       ],
-      invocations: [], globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-    }, null, 2)}\n`);
+    });
     try {
       const transports = async () => Object.fromEntries((await readState()).sessions.map((item) => [item.id, item.nativeTransport]));
       const expected = { 'old-gemini': 'structured-cli', 'acp-gemini': 'acp', minted: undefined, fresh: undefined, droid: undefined };
@@ -78,17 +76,14 @@ describe('harness state normalization', () => {
     process.env.CLIKCODE_HOME = root;
     const now = new Date().toISOString();
     const base = { provider: 'openai', authKind: 'vendor-cli', models: [], status: 'ready' };
-    await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-      version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
+    await storedIndex(root, {
       accounts: [
         { ...base, id: 'estimated', label: 'estimated', credentialRef: 'native:e', usageLearning: { highWater: { weekly: 1 }, hits: [] },
           usage: { at: now, label: 'Weekly 0% left', learned: true, windows: [{ name: 'weekly', usedPct: 100 }] } },
         { ...base, id: 'vendor', label: 'vendor', credentialRef: 'native:v',
           usage: { at: now, label: '5h 99% left', windows: [{ name: '5h', usedPct: 1 }] } },
       ],
-      sessions: [], invocations: [],
-      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-    }, null, 2)}\n`);
+    });
     try {
       const state = await readState();
       const estimated = state.accounts.find((account) => account.id === 'estimated') as Record<string, unknown> | undefined;
@@ -105,13 +100,10 @@ describe('harness state normalization', () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
     process.env.CLIKCODE_HOME = root;
     const now = Date.now();
-    await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-      version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
+    await storedIndex(root, {
       accounts: [{ id: 'a', provider: 'antigravity', label: 'a', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:a',
         usageLearning: { turns: [[now - 60_000, 100]], hits: [] } }],
-      sessions: [], invocations: [],
-      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-    }, null, 2)}\n`);
+    });
     try {
       // Two windows read the same account, each records something, each saves.
       const first = await readState();
@@ -124,53 +116,6 @@ describe('harness state normalization', () => {
       const learning = (await readState()).accounts[0]!.usageLearning!;
       expect(learning.hits.map((hit) => hit.at)).toEqual([at]);
       expect(learning.turns).toHaveLength(2);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe('single-file state migration', () => {
-  it('keeps one legacy copy however often an older build rewrites the file', async () => {
-    const { readdir } = await import('node:fs/promises');
-    const { resetHarnessStateCaches } = await import('./index-file.js');
-    const root = await mkdtemp(join(tmpdir(), 'clikcode-legacy-'));
-    process.env.CLIKCODE_HOME = root;
-    const legacy = (installationId: string) => `${JSON.stringify({
-      version: 1, installationId, accounts: [], sessions: [], invocations: [],
-      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-    })}\n`;
-    try {
-      for (const id of ['first', 'second', 'third']) {
-        await writeFile(join(root, 'harness-state.json'), legacy(id));
-        resetHarnessStateCaches();
-        await readState();
-      }
-      const names = await readdir(root);
-      expect(names.filter((name) => name.startsWith('harness-state.'))).toEqual(['harness-state.legacy.json']);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('a legacy file written after the split is folded in by the next read, not by writes', async () => {
-    const { resetHarnessStateCaches } = await import('./index-file.js');
-    const root = await mkdtemp(join(tmpdir(), 'clikcode-legacy-'));
-    process.env.CLIKCODE_HOME = root;
-    const now = new Date().toISOString();
-    try {
-      const state = await readState();
-      await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-        version: 1, installationId: 'old', accounts: [], invocations: [],
-        sessions: [{ id: 'from-old-build', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content: 'hi' }] }],
-        globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-      })}\n`);
-      state.globalSettings.effort = 'high';
-      await writeState(state);
-      resetHarnessStateCaches();
-      const after = await readState();
-      expect(after.globalSettings.effort).toBe('high');
-      expect(after.sessions.find((session) => session.id === 'from-old-build')?.messages).toEqual([{ role: 'user', content: 'hi' }]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
