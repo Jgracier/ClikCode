@@ -3,6 +3,7 @@ import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
+import { harnessCommand } from '../session/state/paths.js';
 import chalk from 'chalk';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
@@ -226,6 +227,32 @@ export async function sendVendorTurn(input: {
   // turn itself failing. Retrying more than once would risk a loop if
   // login genuinely doesn't fix it (wrong account, network issue, etc.).
   let authRetried = false;
+  /** Sign in to the account this turn runs on, once per turn: true when it
+   * worked and the account is ready. */
+  const signInForTurn = async (environment: Readonly<Record<string, string>>): Promise<boolean> => {
+    // A multi-provider harness signs in to the provider the model runs on
+    // (`hermes auth add opencode-free`), not the whole harness.
+    const signInArgv = harnessLoginArgvForModel(harness, model);
+    if (!prompter || !signInArgv) return false;
+    authRetried = true;
+    await closePersistentTransport(session.id);
+    const signIn = { ...harness, loginArgv: signInArgv };
+    const signInName = signInArgv === harness.loginArgv ? harness.displayName : `${harness.displayName} › ${model ? modelProvider(harness, model) : ''}`;
+    // A worker has no terminal: its client runs the sign-in and says when it
+    // is done. Without that the vendor's login ran here, in a detached
+    // process, and could never finish.
+    const signedIn = await (prompter.signIn
+      ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName })
+      : withSignIn(prompter, signInName, () => loginNativeHarness(signIn, environment)))
+      .then(() => true, (error: unknown) => {
+        prompter.activity(chalk.yellow(`sign-in to ${signInName} did not finish: ${error instanceof Error ? error.message : String(error)}`));
+        return false;
+      });
+    if (!signedIn) return false;
+    account = await syncAccountIdentityAfterLogin(harness, account, state);
+    await accounts.recordAccount(account);
+    return true;
+  };
   let effortRetried = false;
   /** A fresh native thread gets one recovery attempt per account. */
   let nativeThreadRetried = false;
@@ -345,6 +372,12 @@ export async function sendVendorTurn(input: {
     // Which conversation this is, for ClikCode's conversation MCP server the
     // vendor starts (search/mcp.ts): it leaves this one out of its answers.
     const environment = { ...turnEnvironment(harness, account, session.permissionMode ?? 'ask'), CLIKCODE_SESSION_ID: session.id };
+    // A provider with no signed-in account is signed in to when it is used
+    // -- here, as its turn starts -- never when it is merely chosen (opening
+    // ClikCode picks one without asking anything).
+    if (account.status === 'needs_login' && !authRetried && !await signInForTurn(environment)) {
+      throw new Error(`${harness.displayName} is not signed in. Run \`${harnessCommand()} accounts login ${harness.command}\`.`);
+    }
     // A vendor whose config could not take the conversation server gets it
     // with its ACP session instead (a CLI turn has no such channel).
     const sessionMcpServers = conversationsForAcpSession(conversations, provisioned.mcpSkipped,
@@ -473,33 +506,10 @@ export async function sendVendorTurn(input: {
         // N: {...}" message with no attempt to actually fix it. Same
         // suspend/login/resume mechanism aiHarnessSelect uses, triggered
         // here instead of only at provider-switch time.
-        // A multi-provider harness signs in to the provider the model runs
-        // on (`hermes auth add opencode-free`), not the whole harness.
-        const signInArgv = harnessLoginArgvForModel(harness, model);
-        if (!authRetried && prompter && signInArgv) {
-          authRetried = true;
-          await closePersistentTransport(session.id);
-          const signIn = { ...harness, loginArgv: signInArgv };
-          const signInName = signInArgv === harness.loginArgv ? harness.displayName : `${harness.displayName} › ${model ? modelProvider(harness, model) : ''}`;
-          // A worker has no terminal: its client runs the sign-in and says
-          // when it is done. Without that the vendor's login ran here, in a
-          // detached process, and could never finish.
-          const signedIn = await (prompter.signIn
-            ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName })
-            : withSignIn(prompter, signInName, () => loginNativeHarness(signIn, environment)))
-            .then(() => true, (error: unknown) => {
-              // The turn then ends on its own authentication error, which
-              // says what to do; this says why the sign-in did not fix it.
-              prompter.activity(chalk.yellow(`sign-in to ${signInName} did not finish: ${error instanceof Error ? error.message : String(error)}`));
-              return false;
-            });
-          if (signedIn) {
-            account = await syncAccountIdentityAfterLogin(harness, account, state);
-            await accounts.recordAccount(account);
-            // The failed reply may already be on screen; the retry replaces it.
-            editAnswer('clear');
-            continue;
-          }
+        if (!authRetried && await signInForTurn(environment)) {
+          // The failed reply may already be on screen; the retry replaces it.
+          editAnswer('clear');
+          continue;
         }
       }
       if (failureKind === 'native-thread-invalid' && !nativeThreadRetried) {

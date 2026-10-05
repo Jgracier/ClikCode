@@ -1,5 +1,6 @@
 /** `clikcode harness`: choosing which harness a session runs on. */
 
+import type { HarnessPrompter } from '../../harness/prompter.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { randomUUID } from 'node:crypto';
 import { ensureNativeHarness } from '../../harness/transport/native/inspect.js';
@@ -33,7 +34,7 @@ import { harnessCommand } from '../../session/state/paths.js';
  * isn't authenticated yet. The goal: every harness either works immediately
  * or ClikCode gets you to "working" itself, instead of erroring and telling
  * you to go run something separately. */
-export async function aiHarnessSelect(harnessCommandName: string, sessionId: string, options: { emit?: boolean } = {}): Promise<void> {
+export async function aiHarnessSelect(harnessCommandName: string, sessionId: string, options: { emit?: boolean; signIn?: boolean; prompter?: HarnessPrompter } = {}): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
   if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
@@ -105,7 +106,15 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     }
   }
   let account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  if (TERMINAL.active && harness.loginArgv) {
+  // `signIn: false` -- chosen without the user asking (opening ClikCode, a
+  // command-line send): an account that needs a sign-in is marked so, and
+  // its first turn signs in (vendor-turn.ts). Only a provider the user
+  // picked signs in here.
+  const signIn = options.signIn !== false;
+  // Where a sign-in shows: the surface the user chose from (the VS Code
+  // panel passes its own), else the terminal.
+  const signer = options.prompter ?? TERMINAL.active;
+  if (harness.loginArgv && (signer || !signIn)) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     // Only when the provider has no signed-in account: none existed (the one
     // just made is a placeholder until the vendor says otherwise), or every
@@ -117,8 +126,14 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       || (accountJustCreated && (freshInstall
         || (!harness.statusArgv && !hasAuthEvidence(harness))
         || await harnessNeedsLogin(harness, environment)));
-    if (shouldCheckLogin) {
-      await withSignIn(TERMINAL.active, harness.displayName, () => loginNativeHarness(harness, environment));
+    if (shouldCheckLogin && !signIn) {
+      account ??= state.accounts.find((item) => item.provider === harness.provider && turnBackendForAccount(item) === 'vendor');
+      if (account) {
+        if (account.status === 'ready') account.status = 'needs_login';
+        session.accountId = account.id;
+      }
+    } else if (shouldCheckLogin && signer) {
+      await withSignIn(signer, harness.displayName, () => loginNativeHarness(harness, environment));
       // Same identity check /account's "add another account" flow uses --
       // a plain /provider login deserves the real dedup-by-identity logic,
       // not a weaker "only rename if it still looks like a placeholder"
@@ -193,7 +208,7 @@ export async function ensureChatReady(id: string): Promise<void> {
   if (!session || isClikCodeAgent(session) || session.accountId) return;
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness)
     : session.provider ? localHarnessForProvider(session.provider) : undefined;
-  if (harness) return aiHarnessSelect(harness.command, id, { emit: false });
+  if (harness) return aiHarnessSelect(harness.command, id, { emit: false, signIn: false });
   const { autoSelectSessionHarness } = await import('../../tui/pickers/engine.js');
   if (!await autoSelectSessionHarness(id)) throw new Error('no harness is installed -- install one, e.g. npm i -g @anthropic-ai/claude-code');
 }

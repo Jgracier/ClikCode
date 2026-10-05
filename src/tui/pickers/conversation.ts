@@ -52,6 +52,6 @@ async function moveToAgentRoute(
 export async function selectProviderConversation(config: Conf, rl: HarnessPrompter, id: string, selected: string): Promise<string> {
   if (selected === '__gateway__') return moveToAgentRoute(config, rl, id, 'gateway');
   if (selected === '__clikcode_local__') return moveToAgentRoute(config, rl, id, 'clikcode-local');
-  await moveToProvider(id, selected);
+  await moveToProvider(id, selected, { prompter: rl });
   return id;
 }
