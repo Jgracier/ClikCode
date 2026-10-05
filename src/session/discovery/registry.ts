@@ -37,6 +37,7 @@ import { openClawSessionStore } from './vendors/openclaw-store.js';
 import { droidSessionStore } from './vendors/droid-store.js';
 import { auggieSessionStore } from './vendors/auggie-store.js';
 import { vibeSessionStore } from './vendors/vibe-store.js';
+import { devinSessionStore } from './vendors/devin-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -98,6 +99,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   droid: droidSessionStore,
   auggie: auggieSessionStore,
   vibe: vibeSessionStore,
+  devin: devinSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
