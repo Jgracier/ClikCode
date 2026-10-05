@@ -23,10 +23,11 @@ export type TurnActivity = { event: HarnessActivityEvent; responseOffset: number
  * over later still learns what an earlier request was about. */
 export type TranscriptMessage = {
   role: 'user' | 'assistant'; content: string; activities?: TurnActivity[]; attachments?: string[];
-  /** Who wrote an assistant message, stamped when its turn is committed
-   * (checkpoint.ts sessionTranscriptMessages): a conversation changes
-   * provider in place, so the session's own harness says only who answers
-   * NEXT. Absent on messages from before the stamp, which are the session's. */
+  /** Whose turn a message was: an answer is stamped when its turn is
+   * committed (checkpoint.ts sessionTranscriptMessages), every message when
+   * the conversation moves to another provider (leaveProvider). The
+   * session's own harness says only who answers NEXT; an unstamped message
+   * is that harness's. */
   origin?: MessageOrigin;
 };
 
@@ -172,6 +173,10 @@ export interface HarnessSession {
   plan?: { entries: Array<{ content: string; status?: string; priority?: string }>; at: string };
   /** Set on a clerk run that was stored by mistake. Those rows are not chats. */
   clerkOf?: string;
+  /** A branch from before provider switches happened in place, whose whole
+   * history the named session carries on (state/fold-handoffs.ts). Kept,
+   * never listed. */
+  foldedInto?: string;
 }
 
 export interface HarnessDefaultSettings {

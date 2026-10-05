@@ -59,6 +59,11 @@ export async function openConversation(
     if (!ref) throw new Error('resume needs a conversation id');
     const id = state.sessions.some((item) => item.id === ref) ? ref : chatNamed(state.sessions, ref, '');
     session = id ? state.sessions.find((item) => item.id === id) : undefined;
+    // A folded branch's conversation goes on in the branch it was folded into.
+    for (let into = session?.foldedInto; into;) {
+      session = state.sessions.find((item) => item.id === into) ?? session;
+      into = session?.id === into ? session.foldedInto : undefined;
+    }
     if (!session) throw new Error(`no chat matches "${ref}" -- use its name, the start of its id, or last`);
   } else if (mode === 'continue') {
     const candidates = options.sameWorkspace

@@ -81,7 +81,7 @@ export function conversationRows(sessions: readonly HarnessSession[], facts: Con
   const workerIsLive = facts.workerIsLive ?? (() => false);
   const groups = new Map<string, HarnessSession[]>();
   for (const session of sessions) {
-    if (session.clerkOf) continue;
+    if (session.clerkOf || session.foldedInto) continue;
     const root = conversationIdFor(session);
     const group = groups.get(root);
     if (group) group.push(session);

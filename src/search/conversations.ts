@@ -36,8 +36,9 @@ export async function conversationGroups(): Promise<ConversationGroup[]> {
     // As readState normalizes it: a record from before lifecycle state was
     // open at the time, so it is active.
     const session = raw.status === 'closed' || raw.status === 'archived' || raw.status === 'active' ? raw : { ...raw, status: 'active' as const };
-    // A swarm's helper chat is part of its host's turn, never a conversation.
-    if (session.clerkOf) continue;
+    // A swarm's helper chat is part of its host's turn, never a conversation;
+    // a folded branch's history is all in the branch it was folded into.
+    if (session.clerkOf || session.foldedInto) continue;
     const root = conversationIdFor(session);
     const list = groups.get(root);
     if (list) list.push(session);
