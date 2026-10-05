@@ -13,6 +13,7 @@
  * Multi-provider harnesses (OpenCode, Aider, Goose, Pi, Hermes, OpenClaw,
  * Continue, Deep Agents) have no single account to name. */
 
+import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -171,6 +172,63 @@ async function kimiEmail(profilePath: string | undefined): Promise<string | unde
   return undefined;
 }
 
+/** MiniMax Code `GET /v1/api/user/info` -- the account-identity call its own
+ * CLI makes (`fetchAccountIdentity`) -- answers {data:{userInfo:{...}}}; the
+ * CLI takes the email from any of these four keys, and so does this. */
+export function parseMiniMaxUserInfo(text: string): string | undefined {
+  const parsed = json(text) as Record<string, any> | undefined;
+  const info = parsed?.data?.userInfo ?? parsed?.data?.user_info ?? parsed?.userInfo ?? parsed?.user_info;
+  if (!info || typeof info !== 'object') return undefined;
+  for (const key of ['userEmail', 'email', 'userMail', 'user_email']) {
+    const found = email(info[key]);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+const md5 = (value: string): string => createHash('md5').update(value).digest('hex');
+
+/** MiniMax Code keeps its OAuth record under
+ * $HOME/.minimax/auth/<env>/<region>/<client>/auth.json. Its access token
+ * lives one hour and a refresh bumps the record's generation (rotating it), so
+ * like Kimi this uses only a token still fresh -- right after sign-in -- and
+ * never refreshes. The request is signed the way the CLI signs it (md5 of the
+ * path and time with the CLI's fixed salts); a request it no longer accepts
+ * just names no one. */
+async function miniMaxEmail(profilePath: string | undefined): Promise<string | undefined> {
+  const root = join(profilePath ?? homedir(), '.minimax', 'auth', 'prod');
+  for (const region of ['en', 'cn'] as const) {
+    const clients = await readdir(join(root, region)).catch(() => [] as string[]);
+    for (const client of clients) {
+      const file = json(await readFile(join(root, region, client, 'auth.json'), 'utf8').catch(() => '')) as { records?: Record<string, { accessToken?: unknown; expiresAtMs?: unknown }> } | undefined;
+      for (const record of Object.values(file?.records ?? {})) {
+        const token = record?.accessToken;
+        if (typeof token !== 'string' || typeof record.expiresAtMs !== 'number' || record.expiresAtMs < Date.now() + 30_000) continue;
+        const now = Date.now();
+        const url = new URL('/v1/api/user/info', region === 'cn' ? 'https://agent.minimaxi.com' : 'https://agent.minimax.io');
+        const lang = region === 'cn' ? 'zh' : 'en';
+        url.search = new URLSearchParams({
+          device_platform: 'mcode', biz_id: '3', app_id: '3001', version_code: '22201', unix: String(now),
+          timezone_offset: String(-new Date().getTimezoneOffset() * 60), sys_language: lang, lang, device_id: '0',
+          os_name: process.platform, browser_name: 'mcode', user_id: '0', client: 'mcode',
+        }).toString();
+        const seconds = Math.floor(now / 1000);
+        const response = await fetch(url, {
+          headers: {
+            Accept: 'application/json', 'User-Agent': 'MiniMaxCode', Authorization: `Bearer ${token}`,
+            yy: md5(`${encodeURIComponent(`${url.pathname}${url.search}`)}_{}${md5(String(now))}ooui`),
+            'x-timestamp': String(seconds), 'x-signature': md5(`${seconds}I*7Cf%WZ#S&%1RlZJ&C2`),
+          },
+          signal: AbortSignal.timeout(15_000),
+        });
+        const found = response.ok ? parseMiniMaxUserInfo(await response.text()) : undefined;
+        if (found) return found;
+      }
+    }
+  }
+  return undefined;
+}
+
 /** Codex's auth.json id_token is a standard OIDC JWT whose payload carries an
  * `email` claim. Decoding the payload to read a claim is not verifying the
  * signature, and need not be: this is display of a claim from a credential
@@ -286,6 +344,7 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   vibe: (_harness, profilePath) => mistralVibeAccountEmail(profilePath),
   antigravity: (_harness, profilePath) => antigravityEmail(profilePath),
   kimi: (_harness, profilePath) => kimiEmail(profilePath),
+  mcode: (_harness, profilePath) => miniMaxEmail(profilePath),
 };
 
 /** Harnesses whose login can leave the API key outside the account's own

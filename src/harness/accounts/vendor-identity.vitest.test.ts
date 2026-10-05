@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { matchingVendorAccount } from './labels.js';
 import {
-  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
+  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseMiniMaxUserInfo, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser, vendorAccountEmail,
 } from './vendor-identity.js';
 
@@ -150,6 +150,30 @@ describe('vendor account email', () => {
       globalThis.fetch = (async () => { called = true; return new Response('{}'); }) as typeof fetch;
       try {
         expect(await vendorAccountEmail({ command: 'kimi' } as AiLocalHarnessDefinition, profile)).toBeUndefined();
+      } finally { globalThis.fetch = original; }
+      expect(called).toBe(false);
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the MiniMax Code account identity from any key its CLI reads', () => {
+    expect(parseMiniMaxUserInfo('{"base_resp":{"status_code":0},"data":{"userInfo":{"realUserID":"1","userEmail":"a@example.com"}}}')).toBe('a@example.com');
+    expect(parseMiniMaxUserInfo('{"data":{"user_info":{"real_user_id":"1","user_email":"b@example.com"}}}')).toBe('b@example.com');
+    expect(parseMiniMaxUserInfo('{"data":{"userInfo":{"realUserID":"1"}}}')).toBeUndefined();
+    expect(parseMiniMaxUserInfo('{"error":"invalid access token"}')).toBeUndefined();
+  });
+  it('never sends an expired MiniMax access token anywhere', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'clikcode-mcode-identity-'));
+    try {
+      const dir = join(profile, '.minimax', 'auth', 'prod', 'en', 'mcode-public');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'auth.json'), JSON.stringify({ schemaVersion: 1, records: { key: { accessToken: 'redacted', expiresAtMs: 1 } } }));
+      const original = globalThis.fetch;
+      let called = false;
+      globalThis.fetch = (async () => { called = true; return new Response('{}'); }) as typeof fetch;
+      try {
+        expect(await vendorAccountEmail({ command: 'mcode' } as AiLocalHarnessDefinition, profile)).toBeUndefined();
       } finally { globalThis.fetch = original; }
       expect(called).toBe(false);
     } finally {
