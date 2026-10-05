@@ -13,10 +13,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
+import { type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText, sequentialIds,
   testedVersion, writeFileAtomic,
@@ -24,6 +25,11 @@ import {
 
 function auggieRoot(environment: NativeSessionEnvironment): string {
   return join(environment.HOME?.trim() || homedir(), '.augment', 'sessions');
+}
+
+/** One session's file: the path the writer writes and locate looks for. */
+function auggieSessionPath(root: string, sessionId: string): string {
+  return join(root, `${sessionId}.json`);
 }
 
 /** Augment's own tools: launch-process, view, str-replace-editor, save-file,
@@ -117,13 +123,21 @@ export const auggieThreadWriter: NativeThreadWriter = {
   async write(record, context) {
     if (!record.turns.length) return undefined;
     const sessionId = randomUUID();
-    await writeFileAtomic(join(auggieRoot(context.environment), `${sessionId}.json`),
+    await writeFileAtomic(auggieSessionPath(auggieRoot(context.environment), sessionId),
       auggieSession(record, { sessionId, workspace: context.workspace, now: new Date() }));
     return { nativeId: sessionId };
   },
 };
 
+/** Flat, not per workspace: the id alone places the file, and with no index
+ * beside it the copy is the whole thread. */
+async function locateAuggieSession(root: string, nativeId: string): Promise<NativeSessionFile | undefined> {
+  const path = auggieSessionPath(root, nativeId);
+  return await stat(path).then((entry) => (entry.isFile() ? { path, root } : undefined), () => undefined);
+}
+
 export const auggieSessionStore: NativeSessionStore = {
   root: auggieRoot,
+  locate: locateAuggieSession,
   writer: auggieThreadWriter,
 };
