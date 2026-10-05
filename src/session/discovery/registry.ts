@@ -17,6 +17,7 @@ export { nativeDataRoot };
 import { claudeSessionStore } from './vendors/claude-store.js';
 import { codexSessionStore } from './vendors/codex-store.js';
 import { codexThreadWriter } from './vendors/codex-writer.js';
+import { cursorSessionStore } from './vendors/cursor-writer.js';
 import { antigravitySessionStore } from './vendors/antigravity-store.js';
 import { geminiSessionStore } from './vendors/gemini-store.js';
 import { piSessionStore } from './vendors/pi-store.js';
@@ -72,6 +73,8 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   // The writer lives beside the store, not in it: it uses the store's
   // reconcile, and a cycle between the two modules would leave one undefined.
   codex: { ...codexSessionStore, writer: codexThreadWriter },
+  // Registered but disabled until a model turn proves it (cursor-writer.ts).
+  cursor: cursorSessionStore,
   antigravity: antigravitySessionStore,
   gemini: geminiSessionStore,
   pi: piSessionStore,
