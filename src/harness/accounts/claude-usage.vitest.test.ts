@@ -67,3 +67,12 @@ it("reads the rate limits claude-agent-acp forwards on a turn's usage_update", a
   } finally { await session.close(); }
   expect(readings.map((reading) => reading.label)).toEqual(['5h 96% left · Weekly 18% left']);
 });
+
+describe('the /usage probe argv', () => {
+  it('starts no MCP server: --strict-mcp-config with no --mcp-config', async () => {
+    const { CLAUDE_USAGE_PROBE_ARGV } = await import('./usage-probes.js');
+    expect(CLAUDE_USAGE_PROBE_ARGV).toContain('--strict-mcp-config');
+    expect(CLAUDE_USAGE_PROBE_ARGV).not.toContain('--mcp-config');
+    expect(CLAUDE_USAGE_PROBE_ARGV.slice(0, 2)).toEqual(['-p', '/usage']);
+  });
+});
