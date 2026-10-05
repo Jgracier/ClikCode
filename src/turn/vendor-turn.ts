@@ -196,8 +196,13 @@ export async function sendVendorTurn(input: {
    * in a new paragraph. Returns what to send. */
   const retellInterrupted = async (edit: keyof typeof RETRY_EDITS): Promise<string> => {
     const prompt = await takeUp(INTERRUPTED_TURN_REQUEST, { interrupted: true, withJournal: true, requestContext });
-    if (edit === 'clear' || !/\n\s*\n\s*$/.test(session.pendingTurn?.response ?? '')) editAnswer(edit);
+    continueAnswer(edit);
     return prompt;
+  };
+  /** A retry's answer: cleared, or continued in a new paragraph unless it
+   * already ends in one. */
+  const continueAnswer = (edit: keyof typeof RETRY_EDITS): void => {
+    if (edit === 'clear' || !/\n\s*\n\s*$/.test(session.pendingTurn?.response ?? '')) editAnswer(edit);
   };
   const accounts = turnAccounts({
     state, session, prompter, matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
@@ -539,31 +544,23 @@ export async function sendVendorTurn(input: {
       const carriedThread = await moveThreadToAccount(session, harness, account, fallback);
       await accounts.switchTo(fallback, failureKind);
       nativeThreadRetried = false;
+      // The answer on screen stays: the next account is told to carry on
+      // without repeating it, so clearing it made the first half of the
+      // answer vanish and a continuation appear in its place. The
+      // continuation starts a new paragraph instead of running into it.
+      const edit = session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear';
       if (carriedThread) {
         // The same thread, under a new account: it holds the conversation,
         // the interrupted request and every tool call it had already made.
-        // All it is owed is the word to carry on.
-        //
-        // 'present' counts here as much as 'carried'. It means the thread
-        // never had to move, because both accounts run this harness against
-        // the same vendor home.
+        // All it is owed is the word to carry on. ('present' counts as much
+        // as 'carried': both accounts run this harness against one vendor
+        // home, so the thread never had to move.)
         turnText = INTERRUPTED_TURN_REQUEST;
-        // And the answer on screen stays. The thread already contains what
-        // the first account wrote, and the next one is told to carry on
-        // without repeating it -- so clearing it here made the first half of
-        // the answer vanish and a continuation appear in its place. The
-        // continuation starts a new paragraph instead of running into it.
-        const partial = session.pendingTurn?.response ?? '';
-        if (partial.trim() && !/\n\s*\n\s*$/.test(partial)) {
-          editAnswer('new-paragraph');
-        }
+        continueAnswer(edit);
       } else {
         // Built while the interrupted attempt's touched-file hints are still
-        // on the checkpoint. Keep any real progress already on screen: the
-        // rehydration prompt tells the next account to finish without
-        // repeating, so clearing here made the first half vanish and the
-        // retry look like a fresh start from the original prompt.
-        turnText = await retellInterrupted(session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear');
+        // on the checkpoint.
+        turnText = await retellInterrupted(edit);
       }
       continue;
     }
