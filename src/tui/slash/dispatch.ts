@@ -273,8 +273,6 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       const name = args || (await host.ask('Conversation name')).trim();
       if (name) await aiSessionCommand(id, `/rename ${name}`);
     },
-    // No "[y/N]": archiving is undone by resuming it. A confirmation earns
-    // its keypress only for what cannot be taken back -- /delete keeps its own.
     // `/fork` with nothing after it, where a picker can be shown: which of
     // the user's messages to fork after, newest first.
     fork: async () => {
@@ -285,6 +283,8 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       // Said here too: the panel is drawn on the conversation being left.
       return at === undefined ? outcome : { ...outcome, notice: `Forked after message ${at} · files on disk are not rewound: /changes lists each turn's edits, /undo takes them back` };
     },
+    // No "[y/N]": archiving is undone by resuming it. A confirmation earns
+    // its keypress only for what cannot be taken back -- /delete keeps its own.
     archive: async () => { await aiSessionCommand(id, '/archive'); return { exit: true }; },
     delete: async () => {
       // The same confirmation every delete uses: Cancel first.
