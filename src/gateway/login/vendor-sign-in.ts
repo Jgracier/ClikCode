@@ -51,7 +51,7 @@ export interface SignInScreen extends SignInUi {
 
 /** A screen no reader knows, answered from the catalog: when the vendor's
  * text since the last answer shows `when` (compared without colours, spaces
- * or case), send `send` (keys: {enter} {down} {up} {tab} {esc} {space} {ctrl-c} {ctrl-d}), or
+ * or case), send `send` (keys: {enter} {down} {up} {right} {left} {tab} {esc} {space} {ctrl-c} {ctrl-d}), or
  * ask the user and send the answer with Enter. Whichever matches first: a
  * vendor's screens depend on what the user chose. One still on screen two
  * seconds later fires again (its key was dropped). */
@@ -92,7 +92,7 @@ function isSecret(prompt: string): boolean {
   return SECRET_WORDS.test(prompt.replace(/\([^)]*\)/g, ''));
 }
 const KEYS: Readonly<Record<string, string>> = {
-  '{enter}': '\r', '{down}': '\u001b[B', '{up}': '\u001b[A', '{tab}': '\t', '{esc}': '\u001b', '{space}': ' ',
+  '{enter}': '\r', '{down}': '\u001b[B', '{up}': '\u001b[A', '{right}': '\u001b[C', '{left}': '\u001b[D', '{tab}': '\t', '{esc}': '\u001b', '{space}': ' ',
   '{ctrl-c}': '\u0003', '{ctrl-d}': '\u0004',
 };
 
