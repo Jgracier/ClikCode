@@ -8,7 +8,7 @@
  * regenerated with `UPDATE_GOLDEN=1`. */
 
 import { describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,6 +17,7 @@ import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import type { NativeThreadWriteContext } from '../stores.js';
 import { piProjectDirectoryName, piSessionStore, piThreadLines } from './pi-store.js';
 import { sequentialIds } from './thread-writer-files.js';
+import { geminiProjectSlug, geminiSessionStore, geminiThreadLines } from './gemini-store.js';
 import { qwenProjectDirectoryName, qwenSessionStore, qwenThreadLines } from './qwen-store.js';
 import { commandProjectSlug, commandSessionStore, commandThreadLines } from './command-store.js';
 
@@ -159,5 +160,46 @@ describe('qwen thread writer', () => {
     const first = JSON.parse((await readFile(join(directory, `${written!.nativeId}.jsonl`), 'utf8')).split('\n')[0]!);
     expect(first).toMatchObject({ sessionId: written!.nativeId, parentUuid: null, type: 'user', cwd: WORKSPACE, version: '0.24.3' });
     expect(await writer.versionOk(context('qwen', {}, '0.25.0'))).toBe(false);
+  });
+});
+
+describe('gemini thread writer', () => {
+  it('writes the golden thread', async () => {
+    await golden('gemini.jsonl', geminiThreadLines(fixtureRecord(), {
+      sessionId: '33333333-4444-4555-8666-777777777777', workspace: WORKSPACE, model: 'm', now: NOW, messageId: sequentialIds('g-'),
+    }));
+  });
+
+  it('slugs a project folder as Gemini does', () => {
+    expect(geminiProjectSlug('/home/user/My Project.v2')).toBe('my-project-v2');
+    expect(geminiProjectSlug('/')).toBe('project');
+  });
+
+  it('is not enabled for any build: ClikCode cannot resume it yet', async () => {
+    const writer = geminiSessionStore.writer!;
+    expect(writer.testedVersions).toEqual([]);
+    expect(await writer.versionOk(context('gemini', {}, '0.62.0'))).toBe(false);
+  });
+
+  it('registers the project as Gemini would and writes where locate finds it', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'gemini-writer-'));
+    const gemini = join(home, '.gemini');
+    // Another folder already owns the plain slug: the next one is taken.
+    await mkdir(join(gemini, 'tmp', 'app'), { recursive: true });
+    await writeFile(join(gemini, 'projects.json'), JSON.stringify({ projects: { '/elsewhere/app': 'app' } }), 'utf8');
+    const written = await geminiSessionStore.writer!.write(fixtureRecord(), context('gemini', { GEMINI_CLI_HOME: home }, '0.62.0'));
+    expect(JSON.parse(await readFile(join(gemini, 'projects.json'), 'utf8')).projects)
+      .toEqual({ '/elsewhere/app': 'app', [WORKSPACE]: 'app-1' });
+    await expect(readFile(join(gemini, 'tmp', 'app-1', '.project_root'), 'utf8')).resolves.toBe(WORKSPACE);
+    await expect(readFile(join(gemini, 'history', 'app-1', '.project_root'), 'utf8')).resolves.toBe(WORKSPACE);
+    const located = await geminiSessionStore.locate!(join(gemini, 'tmp'), written!.nativeId, WORKSPACE, {});
+    expect(located?.path).toMatch(new RegExp(`/tmp/app-1/chats/session-\\d{4}-\\d\\d-\\d\\dT\\d\\d-\\d\\d-${written!.nativeId.slice(0, 8)}\\.jsonl$`));
+    await expect(readdir(join(gemini))).resolves.not.toContain('projects.json.lock');
+  });
+
+  it('declines while Gemini holds its registry lock', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'gemini-writer-'));
+    await mkdir(join(home, '.gemini', 'projects.json.lock'), { recursive: true });
+    await expect(geminiSessionStore.writer!.write(fixtureRecord(), context('gemini', { GEMINI_CLI_HOME: home }, '0.62.0'))).resolves.toBeUndefined();
   });
 });
