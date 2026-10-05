@@ -5,6 +5,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../session/state/paths.js';
 import chalk from 'chalk';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
@@ -575,7 +576,9 @@ export async function sendVendorTurn(input: {
       const waited = pendingContinuationDelayMs(pendingContinuations);
       pendingContinuations += 1;
       prompter?.phase('waiting on background command');
-      await new Promise((resolve) => setTimeout(resolve, waited));
+      // Stopping ends the wait at once, not when its backoff (up to two
+      // minutes) runs out.
+      await sleep(waited, undefined, signal ? { signal } : {}).catch(() => undefined);
       if (signal?.aborted) throw turnCancelledError();
       prompter?.activity(chalk.dim('continuing after background command'));
       carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
