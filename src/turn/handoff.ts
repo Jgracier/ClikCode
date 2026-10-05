@@ -7,7 +7,36 @@ import { sessionTranscriptMessages } from './checkpoint.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
-import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
+
+/** The settings a conversation keeps when another harness takes it up. The
+ * user chose an effort and a permission mode for this conversation, not for
+ * a provider: they carry over wherever the target takes them, and fall back
+ * to the target's defaults only where it does not. `efforts` is the levels
+ * the target offers (effortChoicesFor), when known; unknown, the vendor's own
+ * refusal decides (vendor-turn.ts isEffortRefusal). */
+export function carriedHandoffSettings(
+  source: Pick<HarnessSession, 'effort' | 'permissionMode' | 'accountFailover'>, target: AiLocalHarnessDefinition,
+  defaults: HarnessDefaultSettings, efforts?: readonly string[],
+): HarnessDefaultSettings {
+  const effort = source.effort && harnessSupportsEffort(target) && (!efforts?.length || efforts.includes(source.effort))
+    ? source.effort : defaults.effort;
+  const permissionMode = source.permissionMode && harnessSupportsPermissionMode(target, source.permissionMode)
+    ? source.permissionMode : defaults.permissionMode;
+  return { ...defaults, effort, permissionMode, accountFailover: source.accountFailover ?? defaults.accountFailover };
+}
+
+/** The model a conversation runs on another harness: the one it ran here,
+ * when the target offers it too (the same model through another vendor's
+ * CLI); otherwise `fallback` -- the target's last-used or default model. */
+export function carriedHandoffModel(
+  source: Pick<HarnessSession, 'model' | 'reported'>, targetModels: readonly string[], fallback: string | null,
+): string | null {
+  for (const model of [source.model, source.reported?.model]) {
+    if (model && targetModels.includes(model)) return model;
+  }
+  return fallback;
+}
 
 /** Create a portable child branch. The source keeps its provider-owned
  * identity; the child carries the ClikCode-owned transcript into its target. */
