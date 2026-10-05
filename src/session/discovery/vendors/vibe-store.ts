@@ -10,15 +10,20 @@
  * without `last_message_fingerprint` vibe rewrites the whole log on its next
  * save instead of appending, which is what a session it did not write wants.
  * A `session_logging.save_dir` in config.toml moves the store; that layout is
- * not written (a transfer).
+ * not written (a transfer), and a carry into it counts as failed.
+ *
+ * Carrying needs nothing beyond the copy: the resume finds the directory by
+ * that glob, and the `.session_index.json` listing cache beside it re-reads
+ * any session directory whose meta.json it has not seen
+ * (SessionIndex._reconcile).
  */
 
 import { randomUUID } from 'node:crypto';
-import { readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
+import { type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText, sequentialIds,
   testedVersion, writeFileAtomic,
@@ -30,6 +35,12 @@ function vibeHome(environment: NativeSessionEnvironment): string {
 
 function vibeRoot(environment: NativeSessionEnvironment): string {
   return join(vibeHome(environment), 'logs', 'session');
+}
+
+/** Whether config.toml moves the store away from vibeRoot. */
+async function vibeStoreMoved(environment: NativeSessionEnvironment): Promise<boolean> {
+  const config = await readFile(join(vibeHome(environment), 'config.toml'), 'utf8').catch(() => '');
+  return /^\s*save_dir\s*=/m.test(config);
 }
 
 /** Vibe's own tools: bash, read_file, write_file, edit, grep, web_fetch. */
@@ -67,10 +78,15 @@ export interface VibeThreadOptions {
   messageId?: () => string;
 }
 
+/** `session_<stamp>_<first 8 of id>`: the stamp is the start time, so a
+ *  lookup has only the rest -- all vibe's own resume globs by. */
+const vibeSessionDirectoryPrefix = 'session_';
+const vibeSessionDirectorySuffix = (sessionId: string): string => `_${sessionId.slice(0, 8)}`;
+
 /** `session_20261005_035254_c148cd9a`, as vibe names a session (UTC). */
 export function vibeSessionDirectoryName(sessionId: string, now: Date): string {
   const stamp = now.toISOString().slice(0, 19).replace(/-|:/g, '').replace('T', '_');
-  return `session_${stamp}_${sessionId.slice(0, 8)}`;
+  return `${vibeSessionDirectoryPrefix}${stamp}${vibeSessionDirectorySuffix(sessionId)}`;
 }
 
 /** `messages.jsonl` and `meta.json` as vibe 2.25 writes them. */
@@ -118,8 +134,7 @@ export const vibeThreadWriter: NativeThreadWriter = {
   versionOk: testedVersion(['2.25.7']),
   async write(record, context) {
     if (!record.turns.length) return undefined;
-    const config = await readFile(join(vibeHome(context.environment), 'config.toml'), 'utf8').catch(() => '');
-    if (/^\s*save_dir\s*=/m.test(config)) return undefined;
+    if (await vibeStoreMoved(context.environment)) return undefined;
     const sessionId = randomUUID();
     const now = new Date();
     const directory = join(vibeRoot(context.environment), vibeSessionDirectoryName(sessionId, now));
@@ -136,7 +151,23 @@ export const vibeThreadWriter: NativeThreadWriter = {
   },
 };
 
+/** A session is a directory named for its start time and short id, flat, not
+ * per workspace; of the directories the short id matches, the one whose
+ * meta.json names the whole id. Carried whole. */
+async function locateVibeSession(root: string, nativeId: string): Promise<NativeSessionFile | undefined> {
+  for (const name of await readdir(root).catch(() => [] as string[])) {
+    if (!name.startsWith(vibeSessionDirectoryPrefix) || !name.endsWith(vibeSessionDirectorySuffix(nativeId))) continue;
+    const meta = await readFile(join(root, name, 'meta.json'), 'utf8').then((text) => JSON.parse(text) as unknown, () => undefined);
+    if ((meta as { session_id?: unknown } | undefined)?.session_id === nativeId) return { path: join(root, name), root };
+  }
+  return undefined;
+}
+
 export const vibeSessionStore: NativeSessionStore = {
   root: vibeRoot,
+  locate: locateVibeSession,
+  // Only a resumable copy counts: an account whose config moved the store
+  // would never look where the copy went.
+  reconcile: async ({ environment }) => !await vibeStoreMoved(environment),
   writer: vibeThreadWriter,
 };
