@@ -23,15 +23,22 @@
  * The CLI cannot resume one: `cline --id <id>` forces the interactive TUI
  * and refuses `--json` ("JSON output mode requires a prompt argument"), so
  * a written thread is pinned to ACP.
+ * A session is one directory, flat under `<sessions>`. Carried to another
+ * account it still names the first account's files: a resume reads and
+ * appends to the record's `messages_path` (and `compaction_path`) before the
+ * path it would derive (`U.messages_path || l` in @cline/core), so the copy's
+ * record is pointed at the copy's own files (reconcile).
  */
 
 import { randomBytes } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
+import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, requestText, sequentialIds, testedVersion,
+  writeFileAtomic,
 } from './thread-writer-files.js';
 import { writeDirectoryAtomic } from './thread-writer-directory.js';
 
@@ -41,6 +48,12 @@ function clineRoot(environment: NativeSessionEnvironment): string {
   const data = environment.CLINE_DATA_DIR?.trim()
     || join(environment.CLINE_DIR?.trim() || join(nativeDataRoot(environment, 'HOME', homedir()), '.cline'), 'data');
   return join(data, 'sessions');
+}
+
+/** One session's directory: the path the writer writes and locate looks
+ *  for. It holds `<id>.json` (the record) and `<id>.messages.json`. */
+function clineSessionDirectory(root: string, sessionId: string): string {
+  return join(root, sessionId);
 }
 
 /** A session id as Cline makes one: `<epoch ms>_<5 of [a-z0-9]>`. */
@@ -163,7 +176,7 @@ export const clineThreadWriter: NativeThreadWriter = {
     if (!record.turns.length) return undefined;
     const now = new Date();
     const sessionId = clineSessionId(now);
-    const directory = join(clineRoot(context.environment), sessionId);
+    const directory = clineSessionDirectory(clineRoot(context.environment), sessionId);
     const messagesPath = join(directory, `${sessionId}.messages.json`);
     const files = clineThreadFiles(record, { sessionId, workspace: context.workspace, model: context.model, now, messagesPath });
     await writeDirectoryAtomic(directory, {
@@ -174,7 +187,35 @@ export const clineThreadWriter: NativeThreadWriter = {
   },
 };
 
+/** Flat, not per workspace: the id alone places the directory, and it is a
+ * session once its record is in it. */
+async function locateClineSession(root: string, nativeId: string): Promise<NativeSessionFile | undefined> {
+  const path = clineSessionDirectory(root, nativeId);
+  return await stat(join(path, `${nativeId}.json`)).then((entry) => (entry.isFile() ? { path, root } : undefined), () => undefined);
+}
+
+/** Points a carried record's file paths at the copy (see above). A path whose
+ * file is not in the copied directory is left as it was: only what was carried
+ * is redirected. */
+async function reconcileClineSession(input: { nativeId: string; path: string }): Promise<boolean> {
+  const recordPath = join(input.path, `${input.nativeId}.json`);
+  const record = JSON.parse(await readFile(recordPath, 'utf8')) as Record<string, unknown>;
+  let changed = false;
+  for (const key of ['messages_path', 'compaction_path']) {
+    const named = record[key];
+    if (typeof named !== 'string' || !named) continue;
+    const own = join(input.path, basename(named));
+    if (named === own || !await stat(own).then((entry) => entry.isFile(), () => false)) continue;
+    record[key] = own;
+    changed = true;
+  }
+  if (changed) await writeFileAtomic(recordPath, `${JSON.stringify(record, null, 2)}\n`);
+  return true;
+}
+
 export const clineSessionStore: NativeSessionStore = {
   root: clineRoot,
+  locate: locateClineSession,
+  reconcile: reconcileClineSession,
   writer: clineThreadWriter,
 };
