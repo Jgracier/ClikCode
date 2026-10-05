@@ -62,9 +62,11 @@ import { watchSwarmActivity } from '../swarm/spool.js';
 /** A vendor refusing the reasoning level itself, in the words the CLIs use. */
 const EFFORT_REJECTED = /\b(?:unknown|invalid|unsupported|not supported)\b[^\n]{0,40}\b(?:reasoning[ _-]?)?effort\b|\beffort\b[^\n]{0,40}\b(?:is not supported|not supported|unsupported|invalid)\b/i;
 
-/** Whether a failed turn is the vendor refusing the reasoning level: read
- * from its message and the stderr it carries, never from a model's reply. */
+/** Whether a failed turn is the vendor refusing the reasoning level: an ACP
+ * session that offers no such level (acp-client.ts), or a CLI saying so in
+ * its message or stderr -- never read from a model's reply. */
 export function isEffortRefusal(failure: Error): boolean {
+  if ((failure as { acpUnsupportedEffort?: unknown }).acpUnsupportedEffort === true) return true;
   const stderr = (failure as { stderrTail?: unknown }).stderrTail;
   return EFFORT_REJECTED.test([failure.message, typeof stderr === 'string' ? stderr : ''].join('\n'));
 }
