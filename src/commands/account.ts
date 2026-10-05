@@ -14,7 +14,6 @@ import { captureNativeHarnessOutput } from '../harness/transport/native/command.
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
 import { loginNativeHarness, withSignInScreen } from '../harness/transport/native/login.js';
-import { accountVerification, verificationNotice } from '../turn/failover.js';
 import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -271,23 +270,7 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
     }
     await writeState(state);
   }
-  let loginError: unknown;
-  try {
-    await loginNativeHarness(harness, profileEnvironment(harness, { nativeProfile }));
-  } catch (error) {
-    // Antigravity has no login command; ClikCode signs in by running
-    // `-p /help`, which answers locally and stores no conversation (a real
-    // 'hi' turn used to leave one per account). Any failure after the sign-in
-    // (quota, rate limit, a transient error) still exits non-zero and looks
-    // identical to authentication itself having failed.
-    // Discarding a login this eagerly threw away real, successful OAuth
-    // sessions whenever the account happened to be rate-limited. Hold the
-    // error and check independently, via the log Antigravity itself writes
-    // on successful auth, whether authentication actually succeeded despite
-    // the verification turn failing -- only surface the error if it didn't.
-    if (!harness.loginVerifiedByIdentity || !profilePath) throw error;
-    loginError = error;
-  }
+  await loginNativeHarness(harness, profileEnvironment(harness, { nativeProfile }));
   if (captureCredential && profilePath && !await captureCredential(profilePath)) {
     throw new Error(`${harness.displayName} login completed, but ClikCode could not save its API key into this account’s isolated profile. The account was not added.`);
   }
@@ -295,7 +278,6 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   // a label. Skipping this for explicit labels created duplicate sign-ins of
   // one email under different names.
   const derived = await deriveAccountLabel(harness, profilePath);
-  if (!derived && loginError) throw loginError;
   if (derived) {
     const existingMatch = await matchingVendorAccount(state.accounts, harness, derived);
     if (existingMatch) {
@@ -307,21 +289,16 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
         existingMatch.nativeProfile = nativeProfile;
       }
       existingMatch.verification = undefined;
-      const verifyNotice = recordVerification(existingMatch, loginError);
       await writeState(state);
       emitHarnessOutput({ status: 'connected', harness: harness.command, account: existingMatch.label, credentialBoundary: 'local-only' });
-      if (verifyNotice) emitHarnessOutput({ panel: 'error', message: verifyNotice });
       return existingMatch.label;
     }
     accountLabel = nameAccount(state.accounts, harness, derived);
   } else accountLabel = nameAccount(state.accounts, harness, accountLabel);
-  let verifyNotice: string | undefined;
   const created: AiHarnessAccount = { id: accountId, provider: harness.provider, label: accountLabel, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${harness.binary}`, ...(nativeProfile ? { nativeProfile } : {}) };
-  verifyNotice = recordVerification(created, loginError);
   state.accounts.push(created);
   await writeState(state);
   emitHarnessOutput({ status: 'connected', harness: harness.command, account: accountLabel, credentialBoundary: 'local-only' });
-  if (verifyNotice) emitHarnessOutput({ panel: 'error', message: verifyNotice });
   return accountLabel;
 }
 
@@ -387,17 +364,6 @@ export async function signOutAccount(labelOrId: string): Promise<AiHarnessAccoun
   delete account.signedInAt;
   await writeState(state);
   return account;
-}
-
-/** A login can succeed while the vendor still refuses to serve the account
- * until it is verified (agy: "Verify your account to continue"). The sign-in
- * is kept, but "connected" alone leaves the user to discover the block on the
- * first turn, so record it on the account and say what to do about it now. */
-function recordVerification(account: AiHarnessAccount, loginError: unknown): string | undefined {
-  const verification = loginError ? accountVerification(loginError) : undefined;
-  if (!verification) return undefined;
-  account.verification = { ...verification, at: new Date().toISOString() };
-  return verificationNotice(verification);
 }
 
 const loginStatusCache = new Map<string, { at: number; needsLogin: boolean }>();
