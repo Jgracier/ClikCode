@@ -29,6 +29,7 @@ import { auggieSession } from './auggie-store.js';
 import { vibeSessionDirectoryName, vibeThreadFiles } from './vibe-store.js';
 import { devinMessages } from './devin-store.js';
 import { piThreadLines } from './pi-store.js';
+import { HERMES_IMPORT_SPEC, hermesThreadRows } from './hermes-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
 const WORKSPACE = '/home/user/projects/app';
@@ -85,6 +86,26 @@ function fixtureRecord(workspace = WORKSPACE): CanonicalRecord {
     version: 1, conversationId: 'conv-1', sessionId: 's-claude', workspace, turns,
     touchedFiles: ['src/app.ts'], attachments: [], pendingAttachments: [], openTodos: [],
   }, 'codex', (command) => localHarnessForCommand(command)?.displayName);
+}
+
+/** fixtureRecord plus a turn that reads one file and writes another, for
+ * the writers that map read/write calls natively (Hermes, Kiro). */
+function fixtureRecordAllTools(workspace = WORKSPACE): CanonicalRecord {
+  const record = fixtureRecord(workspace);
+  const read: CanonicalToolCall = {
+    id: 'toolu_3', category: 'read', name: 'Read', input: { file_path: 'config.ini' },
+    label: 'Read config.ini', target: 'config.ini', status: 'done', output: ['port=8417'], files: [],
+  };
+  const write: CanonicalToolCall = {
+    id: 'toolu_4', category: 'edit', name: 'Write', input: { file_path: 'TODO.md', content: '- ship Thursday\n' },
+    label: 'Write TODO.md', target: 'TODO.md', status: 'done', files: ['TODO.md'],
+  };
+  const from = record.turns[1]!.origin;
+  record.turns.push(turn(2, 'Read config.ini and write a TODO.md', [
+    { type: 'tool', call: read }, { type: 'tool', call: write },
+    { type: 'text', text: 'config.ini sets port 8417. Wrote TODO.md.' },
+  ], from));
+  return record;
 }
 
 function context(command: string, environment: Record<string, string>, version: string | undefined): NativeThreadWriteContext {
@@ -416,5 +437,66 @@ describe('devin thread writer', () => {
     expect(nodes.at(-1)).toEqual({ node_id: nodes.length - 1, parent_node_id: nodes.length - 2 });
     db.close();
     expect(await writer.versionOk(context('devin', {}, 'devin 3000.12.0 (x)'))).toBe(false);
+  });
+});
+
+const sqlite = await import('node:sqlite').then((module) => module, () => undefined);
+
+describe('hermes thread writer', () => {
+  it('writes the golden session and message rows', async () => {
+    const rows = hermesThreadRows(fixtureRecordAllTools(), {
+      sessionId: '0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', workspace: WORKSPACE, model: 'm', now: NOW, callId: sequentialIds('call_clikcode_'),
+    });
+    await golden('hermes.json', `${JSON.stringify(rows, null, 2)}\n`);
+  });
+
+  /** Hermes' tables trimmed to what a written thread fills, with the
+   * required-column checks of the real schema. */
+  async function hermesHome(extraSessionColumns = 'model TEXT, model_config TEXT, cwd TEXT, last_activity_at REAL, tool_call_count INTEGER DEFAULT 0,'): Promise<string> {
+    const home = await mkdtemp(join(tmpdir(), 'hermes-writer-'));
+    const db = new (sqlite as any).DatabaseSync(join(home, 'state.db'));
+    db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT NOT NULL, ${extraSessionColumns} title TEXT,
+      started_at REAL NOT NULL, message_count INTEGER DEFAULT 0)`);
+    db.exec(`CREATE TABLE messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id),
+      role TEXT NOT NULL, content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL NOT NULL,
+      finish_reason TEXT, active INTEGER NOT NULL DEFAULT 1)`);
+    db.exec(`INSERT INTO sessions (id, source, started_at) VALUES ('mine', 'cli', 1)`);
+    db.exec(`INSERT INTO messages (session_id, role, content, timestamp) VALUES ('mine', 'user', 'keep me', 1)`);
+    db.close();
+    return home;
+  }
+
+  it.skipIf(!sqlite)('adds an ACP-source session to the account database, unpinned, beside its own sessions', async () => {
+    const home = await hermesHome();
+    const writer = NATIVE_SESSION_STORES.hermes!.writer!;
+    const ctx = context('hermes', { HERMES_HOME: home }, 'Hermes Agent v0.20.5 (2026.8.19)');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecordAllTools(), ctx);
+    expect(written).toEqual({ nativeId: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+    const db = new (sqlite as any).DatabaseSync(join(home, 'state.db'));
+    try {
+      expect(db.prepare('SELECT id, source, model, message_count, tool_call_count FROM sessions ORDER BY rowid').all().map((row: object) => ({ ...row })))
+        .toEqual([
+          { id: 'mine', source: 'cli', model: null, message_count: 0, tool_call_count: 0 },
+          { id: written!.nativeId, source: 'acp', model: 'm', message_count: 14, tool_call_count: 5 },
+        ]);
+      const roles = db.prepare('SELECT role, tool_name FROM messages WHERE session_id = ? ORDER BY id').all(written!.nativeId)
+        .map((row: { role: string; tool_name: string | null }) => row.tool_name ? `${row.role}:${row.tool_name}` : row.role);
+      expect(roles).toEqual(['user', 'assistant', 'tool:terminal', 'assistant', 'user', 'assistant', 'tool:patch', 'tool:search_files', 'assistant',
+        'user', 'assistant', 'tool:read_file', 'tool:write_file', 'assistant']);
+      expect(db.prepare(`SELECT content FROM messages WHERE session_id = 'mine'`).all().map((row: { content: string }) => row.content)).toEqual(['keep me']);
+    } finally { db.close(); }
+    expect(await writer.versionOk(context('hermes', {}, 'Hermes Agent v0.20.6'))).toBe(false);
+  });
+
+  it.skipIf(!sqlite)('declines a database without the columns it was verified on', async () => {
+    const home = await hermesHome('');
+    expect(await NATIVE_SESSION_STORES.hermes!.writer!.write(fixtureRecordAllTools(), context('hermes', { HERMES_HOME: home }, '0.20.5'))).toBeUndefined();
+  });
+
+  it('falls back to the import, pinned to the CLI, with the import argv Hermes takes', () => {
+    expect(HERMES_IMPORT_SPEC.argv('/t/x.jsonl')).toEqual(['sessions', 'import', '--from', 'claude', '/t/x.jsonl']);
+    expect(HERMES_IMPORT_SPEC.parse('✓ Imported Claude Code session as 20261004_1_abc')).toBe('20261004_1_abc');
+    expect(HERMES_IMPORT_SPEC.transport).toBe('text-cli');
   });
 });

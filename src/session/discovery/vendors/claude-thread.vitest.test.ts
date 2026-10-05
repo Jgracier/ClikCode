@@ -8,10 +8,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
 import { markProviderBoundaries, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
 import { claudeToolUses, claudeThreadJsonl, claudeThreadRecords } from './claude-thread.js';
-import { claudeImportWriter, testedBuild, versionNumber } from './claude-import.js';
+import { claudeImportWriter, importClaudeThread, testedBuild, versionNumber } from './claude-import.js';
 import { claudeSessionStore } from './claude-store.js';
 import { gooseSessionStore } from './goose-store.js';
-import { hermesSessionStore } from './hermes-store.js';
+import { HERMES_IMPORT_SPEC, hermesSessionStore } from './hermes-store.js';
 
 const cwd = '/w';
 const call = (fields: Partial<CanonicalToolCall>): CanonicalToolCall => ({ name: 'tool', label: 'tool', status: 'done', files: [], ...fields });
@@ -179,8 +179,9 @@ describe('writers', () => {
     const fake = join(dir, 'fake-hermes');
     await writeFile(fake, `#!/bin/sh\nprintf '%s\\n' "$@" > "${dir}/argv"\ncp "$5" "${dir}/seen.jsonl"\necho "home=$HERMES_HOME" > "${dir}/env"\necho "✓ Imported Claude Code session as 20261004_1_abc"\n`);
     await chmod(fake, 0o755);
-    const written = await hermesSessionStore.writer!.write(record, context(
-      { command: 'hermes', binary: fake, displayName: 'Hermes' }, { HERMES_HOME: '/profiles/h2' }, 'Hermes Agent v0.20.5', dir));
+    // Hermes' importer: its writer's fallback where node:sqlite is missing.
+    const written = await importClaudeThread(record, context(
+      { command: 'hermes', binary: fake, displayName: 'Hermes' }, { HERMES_HOME: '/profiles/h2' }, 'Hermes Agent v0.20.5', dir), HERMES_IMPORT_SPEC);
     expect(written).toEqual({ nativeId: '20261004_1_abc', transport: 'text-cli' });
     const argv = (await readFile(join(dir, 'argv'), 'utf8')).trim().split('\n');
     expect(argv.slice(0, 4)).toEqual(['sessions', 'import', '--from', 'claude']);
