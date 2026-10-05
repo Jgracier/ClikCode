@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerification, verificationNotice, accountSwitchNotice, accountSwitchPhase, classifyAccountFailure, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerification, verificationNotice, accountSwitchNotice, classifyAccountFailure, quotaRetryHint } from './failover';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -170,10 +170,6 @@ describe('one wording for an account switch, wherever it happens', () => {
     expect(accountSwitchNotice('temporarily-throttled', 'acct-b')).toBe('rate limited, switching to acct-b');
     expect(accountSwitchNotice('authentication-required', 'acct-b')).toBe('sign-in needed, switching to acct-b');
   });
-
-  it('phrases the status line as a switch too', () => {
-    expect(accountSwitchPhase('acct-b')).toBe('switching to acct-b');
-  });
 });
 
 describe('classifying what a vendor actually says when it runs out', () => {
@@ -266,7 +262,29 @@ describe('when a quota refusal says it ends', () => {
     expect(quotaRetryHint(new Error("You've hit your usage limit. Try again in 2 days 3 hours 5 minutes."), now)).toBe(at(((2 * 24 + 3) * 60 + 5) * 60_000));
     expect(quotaRetryHint(new Error('quota exceeded, retry after 3600 seconds'), now)).toBe(at(3_600_000));
   });
-  it('says nothing for a refusal with no duration or a zone-less wall-clock time', () => {
+  it("reads Codex's wall-clock time as its next occurrence, here", () => {
+    // Captured from a real refusal (2026-10-05).
+    const codex = (time: string) => new Error(`You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at ${time}.`);
+    const local = (hours: number, minutes: number, dayOffset = 0) => {
+      const at = new Date(now); at.setSeconds(0, 0); at.setHours(hours, minutes); at.setDate(at.getDate() + dayOffset); return at.toISOString();
+    };
+    const later = new Date(now + 2 * 3_600_000);
+    const earlier = new Date(now - 2 * 3_600_000);
+    const twelve = (date: Date) => `${(date.getHours() % 12) || 12}:${String(date.getMinutes()).padStart(2, '0')} ${date.getHours() < 12 ? 'AM' : 'PM'}`;
+    expect(quotaRetryHint(codex(twelve(later)), now)).toBe(local(later.getHours(), later.getMinutes(), later.getDate() === new Date(now).getDate() ? 0 : 1));
+    // Already past today: tomorrow, never a time behind us.
+    expect(Date.parse(quotaRetryHint(codex(twelve(earlier)), now)!)).toBeGreaterThan(now);
+    expect(Date.parse(quotaRetryHint(codex(twelve(earlier)), now)!) - now).toBeLessThan(24 * 3_600_000);
+    expect(quotaRetryHint(new Error('try again at 25:99'), now)).toBeUndefined();
+  });
+
+  it('reads a dated wall-clock time on that date', () => {
+    const at = Date.parse(quotaRetryHint(new Error('try again at Oct 7th, 2026 9:00 AM'), now)!);
+    const expected = new Date(2026, 9, 7, 9, 0, 0, 0).getTime();
+    expect(at).toBe(expected);
+  });
+
+  it('says nothing for a refusal with no duration or a bare hour', () => {
     expect(quotaRetryHint(new Error('You have exceeded your monthly quota'), now)).toBeUndefined();
     expect(quotaRetryHint(new Error('usage limit reached, resets 8pm'), now)).toBeUndefined();
   });

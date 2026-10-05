@@ -143,9 +143,10 @@ const DURATION_UNIT_MS: Record<string, number> = { d: 86_400_000, h: 3_600_000, 
  *
  * The forms seen in real refusals: Antigravity's 'Resets in 76h57m39s.',
  * Codex's 'try again in 2 days 3 hours 5 minutes', and the common
- * 'retry after 3600 seconds'. A refusal that names a wall-clock time without a
- * date or zone ("resets 8pm") is left alone: guessing its day is how an
- * account gets parked for a day it did not need. */
+ * 'retry after 3600 seconds', and Codex's wall clock 'try again at 10:38 AM'
+ * (clockTimeHint). A wall-clock time is read as its NEXT occurrence: the
+ * earliest it can mean, so an account is at worst tried early and refused
+ * again -- never parked for a day it did not need. */
 export function quotaRetryHint(error: unknown, now: number = Date.now()): string | undefined {
   const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
   const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
@@ -157,7 +158,36 @@ export function quotaRetryHint(error: unknown, now: number = Date.now()): string
   }
   const stamp = /(?:resets?|try again|retry(?: again)?)\s+(?:at|after)\s+(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/i.exec(text)?.[1];
   const at = stamp ? Date.parse(stamp) : Number.NaN;
-  return Number.isFinite(at) && at > now ? new Date(at).toISOString() : undefined;
+  if (Number.isFinite(at) && at > now) return new Date(at).toISOString();
+  return clockTimeHint(text, now);
+}
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
+
+/** "try again at 10:38 AM" / "at Oct 6th, 2026 9:00 AM" / "at 14:05" -- a
+ * wall-clock time, as Codex words it: the vendor CLI runs here, so the time is
+ * this machine's local time, and without a date it is the next time the clock
+ * reads that. Codex's whole refusal used to be read as no reset at all, so a
+ * turn gave up on an account a minute before it came back. */
+function clockTimeHint(text: string, now: number): string | undefined {
+  const match = /(?:resets?|try again|retry(?: again)?)\s+(?:at|after)\s+(?:([a-z]{3})[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(?:(\d{4}),?\s+)?)?(\d{1,2}):(\d{2})\s*(am|pm)?(?![\w:])/i.exec(text);
+  if (!match) return undefined;
+  const [, month, day, year, hourText, minuteText, meridiem] = match;
+  let hour = Number(hourText);
+  const minute = Number(minuteText);
+  if (minute > 59 || hour > 23 || (meridiem && (hour < 1 || hour > 12))) return undefined;
+  if (meridiem) hour = (hour % 12) + (meridiem.toLowerCase() === 'pm' ? 12 : 0);
+  const at = new Date(now);
+  at.setSeconds(0, 0);
+  at.setHours(hour, minute);
+  if (month) {
+    const index = MONTHS.indexOf(month.toLowerCase());
+    if (index < 0) return undefined;
+    at.setMonth(index, Number(day));
+    if (year) at.setFullYear(Number(year));
+    else if (at.getTime() <= now) at.setFullYear(at.getFullYear() + 1);
+  } else if (at.getTime() <= now) at.setDate(at.getDate() + 1);
+  return at.getTime() > now ? at.toISOString() : undefined;
 }
 
 export function verificationNotice(verification: { url?: string }): string {
@@ -184,11 +214,6 @@ export function accountSwitchNotice(kind: AccountFailureKind, to: string): strin
   return kind === 'quota-exhausted'
     ? `out of usage, switching to ${to}`
     : `${accountFailureReason(kind)}, switching to ${to}`;
-}
-
-/** The status line while the switch happens. */
-export function accountSwitchPhase(to: string): string {
-  return `switching to ${to}`;
 }
 
 export function classifyAccountFailure(error: unknown, signals: AccountFailureSignals = {}): AccountFailureKind {
