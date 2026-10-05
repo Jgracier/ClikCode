@@ -1,4 +1,5 @@
 import { activityOutput } from '../protocol/activity-events.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
@@ -418,7 +419,10 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     if (!wanted || live.threadId !== wanted) {
       const params = { cwd: input.cwd, model: input.model ?? null, ...settings, ...overrides };
       const threadResult = wanted
-        ? await peer.request('thread/resume', { threadId: wanted, ...params }, { ...setup, idleReset: true })
+        // Only the thread is wanted; its history is already ClikCode's.
+        // Without excludeTurns Codex sends every turn back and says the
+        // full-history hydration is deprecated (0.155.1).
+        ? await peer.request('thread/resume', { threadId: wanted, excludeTurns: true, ...params }, { ...setup, idleReset: true })
         : await peer.request('thread/start', params, setup);
       stillRunning();
       const thread = (threadResult.thread as JsonObject | undefined) ?? {};
@@ -626,10 +630,12 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         observer.onActivity?.({ kind: 'tool-start', id: itemId, ...fileChangeActivity(params.changes) });
       }
     } else if (/^(warning|configWarning|deprecationNotice|guardianWarning)$/.test(method)) {
-      // Codex's own word to the user: a misconfiguration, a deprecation, a
-      // safety warning. It was dropped.
+      // Codex's own word: a misconfiguration or a safety warning is the
+      // user's; a deprecation is about how ClikCode drives the protocol, so it
+      // is ClikCode's to fix and goes to the lifecycle log, not the chat.
       const message = [params.message, params.summary, params.details].find((value): value is string => typeof value === 'string' && value.trim().length > 0);
-      if (message) observer.onNotice?.(`Codex: ${message.trim()}`);
+      if (message && method === 'deprecationNotice') lifecycle('vendor.deprecation', { harness: 'codex', message: message.trim().slice(0, 300) });
+      else if (message) observer.onNotice?.(`Codex: ${message.trim()}`);
     } else if (method === 'item/mcpToolCall/progress' && typeof params.message === 'string') {
       this.progress(target, String(params.itemId ?? ''), { output: [String(params.message)] });
     } else if (method === 'turn/diff/updated') {
