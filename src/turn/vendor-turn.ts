@@ -241,7 +241,11 @@ export async function sendVendorTurn(input: {
     // A multi-provider harness signs in to the provider the model runs on
     // (`hermes auth add opencode-free`), not the whole harness.
     const signInArgv = harnessLoginArgvForModel(harness, model);
-    if (!prompter || !signInArgv) return false;
+    // With no one watching, the sign-in is the plain terminal's (login.ts
+    // plainSignInScreen: the link printed, questions read from stdin) -- the
+    // console with no alternate screen, a send from a shell. Only with a
+    // person at that terminal: a piped send fails as not signed in.
+    if (!signInArgv || (!prompter && !process.stdin.isTTY)) return false;
     authRetried = true;
     await closePersistentTransport(session.id);
     const signIn = { ...harness, loginArgv: signInArgv };
@@ -249,17 +253,17 @@ export async function sendVendorTurn(input: {
     // A worker has no terminal: its client runs the sign-in and says when it
     // is done. Without that the vendor's login ran here, in a detached
     // process, and could never finish.
-    const signedIn = await (prompter.signIn
+    const signedIn = await (prompter?.signIn
       ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName })
       : withSignIn(prompter, signInName, () => loginNativeHarness(signIn, environment)))
       .then(() => true, (error: unknown) => {
-        prompter.activity(chalk.yellow(`sign-in to ${signInName} did not finish: ${error instanceof Error ? error.message : String(error)}`));
+        prompter?.activity(chalk.yellow(`sign-in to ${signInName} did not finish: ${error instanceof Error ? error.message : String(error)}`));
         return false;
       });
     if (!signedIn) return false;
     // Said by the turn, as its failure is: a window's own line for it is
     // drawn under a turn that owns the screen, and was lost.
-    if (prompter.signIn) prompter.activity(`${chalk.green('signed in to')} ${chalk.dim(signInName)}`);
+    if (prompter?.signIn) prompter.activity(`${chalk.green('signed in to')} ${chalk.dim(signInName)}`);
     account = await syncAccountIdentityAfterLogin(harness, account, state);
     await accounts.recordAccount(account);
     return true;
