@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { bindGlobalFlags } from './flags.js';
+import { bindGlobalFlags } from './output-mode.js';
 import { emitResult } from './structured-output.js';
 
 describe('a command result', () => {
