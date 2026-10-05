@@ -1484,7 +1484,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // then says whether the agent took it) or queue. With nothing typed and
     // a message waiting, Enter again stops the turn and sends it.
     const enterHint = turn.draft.trim() ? ` · enter to ${this.sendMode}`
-      : turn.cancel && !turn.cancelled && this.messageWaiting() ? ` · ${STEER_WORDS.stopAndSend} · ${keyHint('takeBack')}`
+      : turn.cancel && !turn.cancelled && this.messageWaiting() ? ` · ${STEER_WORDS.stopAndSend}`
         : ` · type and press Enter to ${this.sendMode}`;
     const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
       + `${turn.cancel && !this.pendingApproval ? ` · ${keyHint('stop')}` : ''}`
@@ -1657,7 +1657,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // While a turn runs a waiting message can be sent at once -- Enter again,
     // with nothing typed -- by stopping the turn, which the hint says: it ends
     // sub-agents too. Not while something is typed: Enter then delivers that.
-    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled && !this.turn.draft.trim() ? ` · ${STEER_WORDS.stopAndSend}` : '';
+    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled && !this.turn.draft.trim() ? ` · ${STEER_WORDS.stopAndSend} · ${keyHint('takeBack')}` : '';
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.

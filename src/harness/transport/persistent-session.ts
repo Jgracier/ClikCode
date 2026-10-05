@@ -257,6 +257,11 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
    * not surfaced. `prime` readies its watchdog before the owner sees it. */
   protected openBackgroundRun(create: () => B, prime?: (watchdog: TurnWatchdog) => void): B | undefined {
     if (!this.onBackgroundTurn || this.isClosed) return undefined;
+    // A stopped turn still unwinding: what the vendor says now is that turn's
+    // tail (a chunk already on its way when the stop landed), not new work.
+    // Opened as a background turn it showed "thinking" after Ctrl+C, with
+    // nothing left to end it but the idle ceiling.
+    if (this.settling) return undefined;
     if (this.background && !this.background.channel.done) return this.background;
     const run = create();
     const watchdog = this.watchdog(() => {

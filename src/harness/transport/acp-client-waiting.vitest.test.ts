@@ -94,6 +94,22 @@ describe('updates an ACP agent sends between prompts', () => {
     } finally { await session.close(); }
   });
 
+  it('open nothing for the tail of a stopped turn still unwinding', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
+    const controller = new AbortController();
+    try {
+      const stopped = session.runTurn(input([[
+        { update: chunk('one') },
+        // Already on its way when the stop lands, then the cancelled answer.
+        { after: 300, update: chunk('tail') }, { after: 50, answer: { stopReason: 'cancelled' } },
+      ]], { signal: controller.signal, onResponseDelta: () => controller.abort() })).catch((error: Error) => error);
+      expect(await stopped).toBeInstanceOf(Error);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+      expect(turns).toHaveLength(0);
+    } finally { await session.close(); }
+  });
+
   it('keep a background turn open while a tool it started runs, and close it when that tool settles', async () => {
     const turns: VendorBackgroundTurn[] = [];
     const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
