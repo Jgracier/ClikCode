@@ -21,7 +21,18 @@ export type TurnActivity = { event: HarnessActivityEvent; responseOffset: number
  * `attachments` only on a user message: the files sent with it, by path
  * (`content` is only what was typed), so a provider taking the conversation
  * over later still learns what an earlier request was about. */
-export type TranscriptMessage = { role: 'user' | 'assistant'; content: string; activities?: TurnActivity[]; attachments?: string[] };
+export type TranscriptMessage = {
+  role: 'user' | 'assistant'; content: string; activities?: TurnActivity[]; attachments?: string[];
+  /** Who wrote an assistant message, stamped when its turn is committed
+   * (checkpoint.ts sessionTranscriptMessages): a conversation changes
+   * provider in place, so the session's own harness says only who answers
+   * NEXT. Absent on messages from before the stamp, which are the session's. */
+  origin?: MessageOrigin;
+};
+
+/** The harness (or, for ClikCode's own agent, the route) and model that
+ * produced a message. */
+export interface MessageOrigin { harness?: string; route: AiHarnessRoute; provider: string | null; model: string | null }
 
 export interface HarnessSession {
   id: string;

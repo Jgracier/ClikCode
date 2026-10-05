@@ -11,6 +11,9 @@ import { textTranscript } from './turn-activities.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import type { HarnessSession } from '../session/model.js';
 
+/** Who answers in session(): every committed answer carries it. */
+const by = { origin: { route: 'local' as const, provider: 'openai', model: null } };
+
 const stamp = (second: number): string => `2026-01-02T00:00:${String(second).padStart(2, '0')}.000Z`;
 
 function session(): HarnessSession {
@@ -39,7 +42,7 @@ describe('durable turn checkpoints', () => {
       const { readState } = await import('../session/state/read.js');
       const saved = (await readState()).sessions.find((item) => item.id === target.id);
       expect(saved?.name).toBe('Parser Repair');
-      expect(saved?.messages?.at(-1)).toEqual({ role: 'assistant', content: 'Fixed it.' });
+      expect(saved?.messages?.at(-1)).toEqual({ role: 'assistant', content: 'Fixed it.', ...by });
       expect(saved?.attachments).toEqual([]);
       expect(saved?.pendingTurn).toBeUndefined();
     } finally {
@@ -57,7 +60,7 @@ describe('durable turn checkpoints', () => {
 
     expect(sessionTranscriptMessages(target).slice(-2)).toEqual([
       { role: 'user', content: 'Continue the work' },
-      { role: 'assistant', content: 'Partial answer' },
+      { role: 'assistant', content: 'Partial answer', ...by },
     ]);
     expect(target.messages).toHaveLength(2);
   });
@@ -72,7 +75,7 @@ describe('durable turn checkpoints', () => {
     expect(target.pendingTurn).toBeUndefined();
     expect(target.messages?.slice(-2)).toEqual([
       { role: 'user', content: 'Continue' },
-      { role: 'assistant', content: 'Partial -- and the final answer' },
+      { role: 'assistant', content: 'Partial -- and the final answer', ...by },
     ]);
   });
 
@@ -114,7 +117,7 @@ describe('durable turn checkpoints', () => {
     // where it happened when the chat is opened again.
     expect(sessionTranscriptMessages(target).at(-1)).toEqual({
       role: 'assistant', content: '',
-      activities: [{ event: { kind: 'tool-done', label: 'inspect repository' }, responseOffset: 0 }],
+      activities: [{ event: { kind: 'tool-done', label: 'inspect repository' }, responseOffset: 0 }], ...by,
     });
     // A text-only reader (a replay into another provider) is told of it.
     expect(textTranscript(sessionTranscriptMessages(target)).at(-1)).toEqual({ role: 'assistant', content: 'Tool calls: inspect repository.' });
@@ -147,9 +150,9 @@ describe('durable turn checkpoints', () => {
     recordPendingActivity(target, { kind: 'tool-done', label: '$ two', id: 'b' }, stamp(5));
     finishPendingTurn(target, undefined, stamp(6));
     expect(target.messages!.slice(-3)).toEqual([
-      { role: 'assistant', content: 'First part. ', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a' }, responseOffset: 12 }] },
+      { role: 'assistant', content: 'First part. ', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a' }, responseOffset: 12 }], ...by },
       { role: 'user', content: 'also two' },
-      { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b' }, responseOffset: 12 }] },
+      { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b' }, responseOffset: 12 }], ...by },
     ]);
   });
 
@@ -168,7 +171,7 @@ describe('durable turn checkpoints', () => {
 
     expect(target.messages?.slice(-2)).toEqual([
       { role: 'user', content: 'First' },
-      { role: 'assistant', content: 'Partial' },
+      { role: 'assistant', content: 'Partial', ...by },
     ]);
     expect(target.pendingTurn?.prompt).toBe('Second');
   });
@@ -180,9 +183,9 @@ describe('durable turn checkpoints', () => {
     recordPendingSteer(target, 'Prioritize tests', '2026-01-02T00:00:01.000Z', 8, '2026-01-02T00:00:01.000Z');
     expect(sessionTranscriptMessages(target).slice(-4)).toEqual([
       { role: 'user', content: 'Initial request' },
-      { role: 'assistant', content: 'Before. ' },
+      { role: 'assistant', content: 'Before. ', ...by },
       { role: 'user', content: 'Prioritize tests' },
-      { role: 'assistant', content: 'After.' },
+      { role: 'assistant', content: 'After.', ...by },
     ]);
   });
 
@@ -343,7 +346,7 @@ describe('joining a turn another window is running', () => {
     updatePendingResponse(resumed, 'The other half', 'append', '2026-01-01T00:00:02.000Z');
     finishPendingTurn(resumed, undefined, '2026-01-01T00:00:03.000Z');
     expect(resumed.messages).toEqual([
-      { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half' },
+      { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half', ...by },
     ]);
   });
 });
