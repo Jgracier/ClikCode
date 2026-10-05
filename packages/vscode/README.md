@@ -97,7 +97,7 @@ and its tools and MCP servers. Every slash command works from the message box.
 | --- | --- | --- |
 | `clikcode.path` | *(PATH)* | The `clikcode` executable or its `dist/index.js`. |
 | `clikcode.nodePath` | *(PATH, then VS Code's)* | Node.js 22.12+ to run ClikCode with. |
-| `clikcode.openDiffOnApproval` | `true` | Open proposed changes in a diff editor. |
+| `clikcode.openDiffOnApproval` | `true` | Open a proposed change to one file in a diff editor (several files: the approval's diff button). |
 | `clikcode.startWith` | `continue` | Continue the workspace's latest chat, or start a new one. |
 
 ## What stays in the terminal
