@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { idleDecision, startsSuccessor } from './idle-decisions.js';
+import { idleDecision, startsSuccessor, vendorIdleDecision, type VendorIdleState } from './idle-decisions.js';
 
 const HOUR = 3_600_000;
 
@@ -26,5 +26,29 @@ describe('a stopping worker', () => {
     expect(startsSuccessor(true, 'SIGTERM')).toBe(false);
     expect(startsSuccessor(true, 'SIGINT')).toBe(false);
     expect(startsSuccessor(false, 'idle timeout')).toBe(false);
+  });
+});
+
+describe('a persistent vendor with no turn for a while', () => {
+  const MINUTE = 60_000;
+  const quiet: VendorIdleState = {
+    transportOpen: true, turnRunning: false, backgroundTurn: false, vendorWork: false, pendingRequests: 0,
+    idleForMs: 15 * MINUTE, closeAfterMs: 15 * MINUTE,
+  };
+
+  it('is closed once the time has passed with nothing using it, window or not', () => {
+    expect(vendorIdleDecision(quiet)).toBe('close');
+    expect(vendorIdleDecision({ ...quiet, idleForMs: 14 * MINUTE })).toBe('later');
+  });
+
+  it('is never closed under a turn, background work, or a question to the user', () => {
+    expect(vendorIdleDecision({ ...quiet, turnRunning: true })).toBe('none');
+    expect(vendorIdleDecision({ ...quiet, backgroundTurn: true })).toBe('later');
+    expect(vendorIdleDecision({ ...quiet, vendorWork: true })).toBe('later');
+    expect(vendorIdleDecision({ ...quiet, pendingRequests: 1 })).toBe('later');
+  });
+
+  it('has nothing to do when no vendor is open', () => {
+    expect(vendorIdleDecision({ ...quiet, transportOpen: false })).toBe('none');
   });
 });

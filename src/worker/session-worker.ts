@@ -11,7 +11,7 @@
 import { STOPPED } from '../harness/protocol/wording.js';
 import { spawn } from 'node:child_process';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { idleDecision, startsSuccessor } from './idle-decisions.js';
+import { idleDecision, startsSuccessor, vendorIdleDecision } from './idle-decisions.js';
 import { createResumeWaiter } from './resume-wait.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
@@ -29,7 +29,7 @@ import { randomUUID } from 'node:crypto';
 import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { deliverTyped } from '../turn/send-mode.js';
 import { CLIKCODE_NOTICE_TAG } from '../session/clikcode-notice.js';
-import { closePersistentTransport, persistentWorkRunning, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
+import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
 import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
@@ -65,6 +65,12 @@ const ABANDONED_SHELL_MS = 24 * 60 * 60 * 1000;
  * still running between turns (a process's exit gives no event to another
  * process's parent). */
 const VENDOR_WORK_RECHECK_MS = 30 * 1000;
+/** No turn for this long: the persistent vendor (Codex app-server, an ACP
+ * agent) and the MCP servers it started are closed, even with a window
+ * open -- they are most of a conversation's memory. The worker stays; the
+ * next turn starts the vendor again and resumes its thread natively.
+ * CLIKCODE_VENDOR_IDLE_CLOSE_MS overrides it for tests. */
+const VENDOR_IDLE_CLOSE_MS = Number(process.env.CLIKCODE_VENDOR_IDLE_CLOSE_MS) > 0 ? Number(process.env.CLIKCODE_VENDOR_IDLE_CLOSE_MS) : 15 * 60 * 1000;
 
 interface ConnectionState {
   socket: Socket;
@@ -144,7 +150,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // turn, saveSuperseded() and userTurnEnded() in runTurn's finally, and
   // `vendorBackground.busy` in scheduleIdleExit.
   const vendorBackground = createVendorBackgroundRunner({
-    sessionId, observer, userTurnRunning: () => turnRunning, changed: () => scheduleIdleExit(),
+    sessionId, observer, userTurnRunning: () => turnRunning, changed: () => { vendorUsed(); scheduleIdleExit(); },
   });
   setVendorBackgroundTurnHandler(sessionId, vendorBackground.handle);
   // -------------------------------------------------------------------------
@@ -238,6 +244,35 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     }
     idleTimer = setTimeout(() => { void idleReached(); }, IDLE_EXIT_MS);
     idleTimer.unref();
+  };
+
+  /** When a turn -- the user's or the vendor's own -- last ended, for the
+   * vendor's idle close (VENDOR_IDLE_CLOSE_MS). */
+  let vendorUsedAt = Date.now();
+  let vendorIdleTimer: NodeJS.Timeout | undefined;
+  const armVendorIdle = (delayMs: number): void => {
+    if (vendorIdleTimer) clearTimeout(vendorIdleTimer);
+    vendorIdleTimer = setTimeout(() => { vendorIdleTimer = undefined; void vendorIdleReached(); }, delayMs);
+    vendorIdleTimer.unref();
+  };
+  const vendorUsed = (): void => {
+    vendorUsedAt = Date.now();
+    armVendorIdle(VENDOR_IDLE_CLOSE_MS);
+  };
+  const vendorIdleReached = async (): Promise<void> => {
+    const work = await persistentWorkRunning(sessionId);
+    // Read after the wait: a turn may have started meanwhile.
+    const idleForMs = Date.now() - vendorUsedAt;
+    const decision = vendorIdleDecision({
+      transportOpen: hasPersistentTransport(sessionId), turnRunning: turnRunning || draining, backgroundTurn: vendorBackground.busy,
+      vendorWork: work || hasHeldVendorProcess(sessionId), pendingRequests: observer.pendingRequestCount,
+      idleForMs, closeAfterMs: VENDOR_IDLE_CLOSE_MS,
+    });
+    // A turn's end arms it again; nothing to close leaves it unarmed.
+    if (decision === 'none') return;
+    if (decision === 'later') { armVendorIdle(idleForMs < VENDOR_IDLE_CLOSE_MS ? VENDOR_IDLE_CLOSE_MS - idleForMs : VENDOR_WORK_RECHECK_MS); return; }
+    lifecycle('vendor.idle-close', { idleMs: idleForMs, clients: observer.attachedCount });
+    await closePersistentTransport(sessionId);
   };
 
   /** When the vendor's background work began to hold this worker up. */
@@ -534,6 +569,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       observer.endTurn(ended.session, ended.account);
       turnRunning = false;
       lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
+      vendorUsed();
       activeQueuedTurnId = undefined;
       // Vendor work that arrived while this turn was finishing.
       vendorBackground.userTurnEnded();

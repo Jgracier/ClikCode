@@ -78,6 +78,10 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
   return created;
 }
 
+export function hasPersistentTransport(sessionId: string): boolean {
+  return persistentTransports.has(sessionId);
+}
+
 /** Whether this session's persistent vendor is still doing work between
  * turns: its worker stays up for it rather than closing the child under it. */
 export async function persistentWorkRunning(sessionId: string): Promise<boolean> {
