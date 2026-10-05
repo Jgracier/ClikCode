@@ -290,10 +290,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // Without this tick, usage only ever refreshed at session-open and right after
   // each submitted message -- fine for a quick back-and-forth, but a long
   // turn or an idle stretch between messages left the number sitting there
-  // stale for however long that gap was, well past nativeUsageReading's own
-  // 30s cache window (which bounds *how often this can update*, not
-  // *whether anything ever asks it to*). This is what actually asks.
-  // It also notices a newer build.
+  // stale for however long that gap was. nativeUsageReading decides whether
+  // asking costs anything: it reuses a reading until a window it describes
+  // resets or a turn starts on the account (in any terminal), and holds a
+  // balance or a failed probe briefly. This is what asks. It also notices a
+  // newer build.
   usageInterval = terminal ? setInterval(() => {
     noteNewerBuild();
     void readState({ transcripts: [] }).then((latestState) => {
@@ -304,9 +305,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       // someone happened to open the picker, and read as spent for hours.
       return recheckRecoveredAccounts(latestState);
     }).catch(() => { /* Usage is optional provider metadata. */ });
-    // Half the usage window, so every other tick finds the reading expired and
-    // refreshes it. A tick longer than the window would land inside it and
-    // silently halve the real refresh rate.
+    // How soon the status line shows a turn another terminal ran on this
+    // account, or a window that reset.
   }, 15_000) : undefined;
   /** A message to send next, without asking: the one that ran out of usage,
    * after "Resume in" moved the chat to a harness that has some. */
