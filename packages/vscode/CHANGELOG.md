@@ -22,8 +22,8 @@ ClikCode in VS Code, rebuilt as a finished product: everything ClikCode is, in t
   *Remove ACP Harness* register any other agent that speaks ACP.
 
 - **Effort and permissions** (Ask / Auto / Bypass, plan mode, Gateway fast mode) in the footer.
-- **Conversations**: search, resume, rename, fork, archive, delete, open in a new tab, or continue
-  in the terminal (`clikcode sessions resume`) — the same list as the CLI, running ones first.
+- **Conversations**: search, resume, rename, fork, archive, delete, or open in a new tab — the same
+  list as the CLI, running ones first.
 - **Accounts & usage**: every account per provider with 5-hour and weekly meters, sign in again,
   sign out, add accounts, switch the chat's account, automatic account switching on or off, and
   the ClikDeploy Gateway credit balance with *Buy credit*.
@@ -38,7 +38,9 @@ ClikCode in VS Code, rebuilt as a finished product: everything ClikCode is, in t
 - Editor integration: *Add to ClikCode Chat* on the editor, editor tab and explorer context menus;
   `Alt+K` adds the selection; `Ctrl+Esc` (`Cmd+Esc`) moves focus between editor and chat;
   `Ctrl+N` (`Cmd+N`) starts a new chat in a focused chat; a *Get started* walkthrough.
-- Notifications when a turn finishes or asks for approval while the chat is out of sight.
+- A notification only when a turn asks for approval while its chat is out of sight; a turn that
+  finishes out of sight marks its tab and its row in Conversations unread instead. A question
+  the chat asks while you type in an editor comes up beside it and leaves the keyboard there.
 - Themed entirely from VS Code's colours (dark, light, high contrast), keyboard navigable with
   ARIA roles, and still with reduced motion.
 - **Tidy and consistent**: Conversations and Accounts take over the panel's header (back arrow,
