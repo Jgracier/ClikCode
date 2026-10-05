@@ -179,6 +179,25 @@ describe('a vendor CLI listing', () => {
     ]);
   });
 
+  it('asks a listing that covers every folder once, not once per folder', async () => {
+    // Hermes, Goose and OpenClaw list every folder's sessions; keyed per
+    // folder, each folder opened spawned the same listing again.
+    const log = join(home, 'asked.log');
+    const harness = await fakeCli('hermes-fake', '[]');
+    await writeFile(join(home, 'bin', 'hermes-fake'), `#!/bin/sh\necho asked >> ${log}\necho '[{"id":"h1"}]'\n`);
+    const everywhere = { ...harness, session: { ...harness.session, discoverAllFolders: true } } as AiLocalHarnessDefinition;
+    expect(await discoverNativeSessions(everywhere, {}, home)).toEqual([{ nativeId: 'h1' }]);
+    expect(await discoverNativeSessions(everywhere, {}, join(home, 'bin'))).toEqual([{ nativeId: 'h1' }]);
+    expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
+    // And the last answer is there to show at once from any folder.
+    const { lastSeenNativeSessions } = await import('./cli-listing.js');
+    expect(await lastSeenNativeSessions(everywhere, '/third')).toEqual([{ nativeId: 'h1' }]);
+    // A folder-scoped listing is still asked per folder.
+    await discoverNativeSessions(harness, {}, home);
+    await discoverNativeSessions(harness, {}, join(home, 'bin'));
+    expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(3);
+  });
+
   it('keeps the last answer through a failure, and does not ask again at once', async () => {
     const harness = await fakeCli('flaky-fake', undefined);
     const log = join(home, 'asked.log');
