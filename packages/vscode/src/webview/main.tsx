@@ -15,7 +15,7 @@ import { relativeTime, tildePath } from './format';
 import { choose } from './picker';
 import { HistoryMenu } from './screens';
 import { Sheet, type OpenQuestion } from './sheet';
-import { Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
+import { focusHere, Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
 
 const REMEDY: Record<NonNullable<ChatModel['remedy']>, { command: string; label: string }> = {
   'install': { command: 'clikcode.install', label: 'Install ClikCode' },
@@ -318,14 +318,14 @@ function App(): JSX.Element {
     const active = document.activeElement as HTMLElement | null;
     const typing = active?.id === 'composer-input' && composer.current?.hasText();
     if (!typing && (!active || active === document.body || active.id === 'composer-input')) {
-      document.querySelector<HTMLElement>(`[data-approval="${firstApproval}"]`)?.focus();
+      focusHere(document.querySelector<HTMLElement>(`[data-approval="${firstApproval}"]`));
     }
   }, [firstApproval]);
 
   // A sheet closing hands the keyboard back to the composer.
   const hadQuestion = useRef(false);
   useEffect(() => {
-    if (hadQuestion.current && !questions.length) requestAnimationFrame(() => composer.current?.focus());
+    if (hadQuestion.current && !questions.length && document.hasFocus()) requestAnimationFrame(() => composer.current?.focus());
     hadQuestion.current = questions.length > 0;
   }, [questions.length]);
 

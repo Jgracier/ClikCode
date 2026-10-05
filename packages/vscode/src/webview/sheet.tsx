@@ -10,7 +10,7 @@ import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { IdePickItem, IdeUiRequest, IdeUiResult } from '../protocol';
 import { clean } from './format';
-import { Icon, KeyList, type ListRow } from './ui';
+import { focusHere, Icon, KeyList, type ListRow } from './ui';
 
 export interface OpenQuestion { id: string; request: IdeUiRequest }
 
@@ -50,7 +50,7 @@ export function Sheet(props: { question: OpenQuestion; items?: readonly IdePickI
 function InputSheet(props: { prompt: string; secret?: boolean; answer: (result: IdeUiResult) => void }): JSX.Element {
   const [text, setText] = useState('');
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { input.current?.focus(); }, []);
+  useEffect(() => { focusHere(input.current); }, []);
   const secret = props.secret ?? /key|token|secret|password/i.test(props.prompt);
   return (
     <form class="input-sheet" onSubmit={(event) => { event.preventDefault(); props.answer({ text }); }}>
@@ -69,7 +69,7 @@ function PickSheet(props: { title: string; items: readonly IdePickItem[]; canGoB
   const [search, setSearch] = useState('');
   const [confirming, setConfirming] = useState<number>();
   const input = useRef<HTMLInputElement>(null);
-  useEffect(() => { input.current?.focus(); }, [props.title]);
+  useEffect(() => { focusHere(input.current); }, [props.title]);
   const query = search.trim().toLowerCase();
   const long = props.items.length > 4;
 
