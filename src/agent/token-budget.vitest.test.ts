@@ -276,8 +276,10 @@ describe('context profiles', () => {
     const full = measure(await runSession(heavy('full')));
     // Measured: minimal 3,078 / lean 4,098 / full 13,807 first-step tokens.
     expect(minimal.firstStep.total).toBeLessThan(lean.firstStep.total - 900);
-    // Minimal: no tool-usage sections, shorter and fewer skills...
-    expect(lean.firstStep.system - minimal.firstStep.system).toBeGreaterThan(700);
+    // Minimal: no tool-usage sections, shorter and fewer skills (the
+    // sections lost what repeated the tool descriptions, so the gap is
+    // mostly the skills now)...
+    expect(lean.firstStep.system - minimal.firstStep.system).toBeGreaterThan(550);
     // ...and schemas without additionalProperties:false, terser rare tools.
     expect(lean.firstStep.tools - minimal.firstStep.tools).toBeGreaterThan(200);
     // Full: the 76 MCP schemas (~7,900 tokens) go up front instead of the loader...

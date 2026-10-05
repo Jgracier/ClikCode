@@ -13,7 +13,7 @@ const MAX_READ_BYTES = 20 * 1024 * 1024;
 export const readFileTool = defineTool<ReadFileArgs>({
   name: 'read_file',
   class: 'read',
-  description: 'Read a text file. Returns numbered lines (`N\\tline`). Reads up to 2000 lines from the start by default; use offset (1-based line) and limit for large files. Always read a file before editing it.',
+  description: 'Read a text file. Returns numbered lines (`N\\tline`). Reads up to 2000 lines from the start by default; use offset (1-based line) and limit for large files.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['path'],
     properties: {
