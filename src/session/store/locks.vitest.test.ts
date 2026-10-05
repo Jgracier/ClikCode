@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { readlinkSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -131,4 +131,41 @@ describe('judging a lock someone else holds', () => {
       for (const result of results) expect(result, result.stderr).toMatchObject({ code: 0 });
     }
   }, 120_000);
+});
+
+describe('a lock left without its owner', () => {
+  it('an empty lock older than a second is broken in about that, not staleMs', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'j.lock');
+    for (const raw of ['', '{"pid":']) {
+      await writeFile(path, raw);
+      // Just written: an older build may be between creating and writing it.
+      expect(await lockLooksStale(path, raw)).toBe(false);
+      await age(path, 1_500);
+      const started = Date.now();
+      expect(await withFileLock(path, async () => 'ran')).toBe('ran');
+      expect(Date.now() - started).toBeLessThan(1_000);
+    }
+  });
+
+  it('a lock written by a live holder is never broken, however long it is waited on', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'k.lock');
+    Object.assign(LOCK_TUNING, { waitMs: 1_500 });
+    const live = owner({ pid: process.pid, ...(ourPidns ? { pidns: ourPidns } : {}) });
+    await writeFile(path, live);
+    await age(path, 2_000); // Past ownerlessStaleMs, well inside staleMs.
+    await expect(withFileLock(path, async () => 'ran')).rejects.toThrow(/could not lock/);
+    expect(await readFile(path, 'utf8')).toBe(live);
+  });
+
+  it('the lock file carries its owner from the moment it exists, and no temp file is left', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'l.lock');
+    await withFileLock(path, async () => {
+      expect(JSON.parse(await readFile(path, 'utf8'))).toMatchObject({ pid: process.pid });
+      expect(await readdir(root!)).toEqual(['l.lock']);
+    });
+    expect(await readdir(root)).toEqual([]);
+  });
 });
