@@ -244,11 +244,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // session worker's is (registry.ts). The terminal cannot hot-swap the code
   // it has loaded. When a newer build is on disk, this process re-execs onto
   // the same chat at a quiet moment: an idle composer, or the board after
-  // running chats finish. Until then, one notice. Workers already step down
-  // on their own (idle now, busy when the turn ends).
+  // running chats finish. Nothing is said until then: a build landing is not
+  // the user's news, and the re-exec keeps the screen. Workers already step
+  // down on their own (idle now, busy when the turn ends).
   const startupBuild = currentWorkerBuild();
   let updateSeen = false;
-  let updateAnnounced = false;
   let usageInterval: ReturnType<typeof setInterval> | undefined;
   const newerBuild = (): boolean => Boolean(startupBuild && currentWorkerBuild() !== startupBuild);
   const beginBuildReplace = (): Promise<void> | undefined => {
@@ -279,14 +279,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       // picker) -- is reached only by this ask.
       void retireStaleWorkers().catch(() => undefined);
     }
-    if (terminal?.idleForBuildReplace()) {
-      void beginBuildReplace();
-      return;
-    }
-    if (!updateAnnounced) {
-      updateAnnounced = true;
-      if (!notice) notice = 'A newer ClikCode build will load when nothing is running.';
-    }
+    if (terminal?.idleForBuildReplace()) void beginBuildReplace();
   };
   // Without this tick, usage only ever refreshed at session-open and right after
   // each submitted message -- fine for a quick back-and-forth, but a long
