@@ -23,6 +23,8 @@ export interface NativeHarnessSpec {
   loginRemoteArgv?: readonly string[];
   /** See the catalog (packages/clikrouter/src/ai-local-harness.ts). */
   loginKeyCommand?: { providersArgv: readonly string[]; setArgv: readonly string[] };
+  /** See the catalog. */
+  loginKeyRoutes?: AiLocalHarnessDefinition['loginKeyRoutes'];
   versionArgv?: readonly string[];
   /** Where the vendor keeps its credential: a sign-in is over once it is
    * written there, whatever the vendor's own screen goes on to do. */

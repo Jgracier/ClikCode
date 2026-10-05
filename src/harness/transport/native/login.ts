@@ -6,7 +6,7 @@
 import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createInterface } from 'node:readline/promises';
-import { runVendorSignIn, type SignInScreen } from '../../../gateway/login/vendor-sign-in.js';
+import { runVendorSignIn, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
 import { NativeHarnessSpec } from './binary.js';
 import { captureNativeHarnessOutput } from './command.js';
@@ -74,7 +74,7 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
       args: !local && spec.loginRemoteArgv ? spec.loginRemoteArgv : spec.loginArgv ?? [],
       env: envOverrides, displayName: spec.displayName, local,
       ...(spec.loginSteps ? { steps: spec.loginSteps } : {}),
-      ui: screen,
+      ui: spec.loginKeyRoutes ? await keyRoutedScreen(spec, spec.loginKeyRoutes, screen) : screen,
     });
   } finally { if (!own) screen.stop(); }
 }
@@ -97,3 +97,50 @@ async function signInWithKey(
   const argv = command.setArgv.map((part) => part.replace('{provider}', providers[index]!));
   await captureNativeHarnessOutput(spec, argv, env, 30_000, undefined, `${key}\n`);
 }
+
+/** The key asked first, alone; then the vendor's menus answered from the
+ * route that accepts it (catalog loginKeyRoutes). A menu the route does not
+ * name, or any other screen, still goes to the user. */
+export async function keyRoutedScreen(
+  spec: NativeHarnessSpec, routes: NonNullable<NativeHarnessSpec['loginKeyRoutes']>, screen: SignInScreen,
+): Promise<SignInUi> {
+  const key = (await screen.ask(`${spec.displayName} API key`, true)).trim();
+  if (!key || screen.signal.aborted) throw new Error(`sign-in to ${spec.displayName} was cancelled`);
+  const accepted = await Promise.all(routes.map((route) => acceptsKey(route.url, key, screen.signal)));
+  const route = routes[accepted.indexOf(true)];
+  if (!route) throw new Error(`no ${spec.displayName} endpoint accepts that key -- check it was copied whole`);
+  const labels = [...route.choose];
+  let keyGiven = false;
+  return {
+    signal: screen.signal,
+    show: (link) => screen.show(link),
+    choose: async (title, choices) => {
+      const at = labels.length ? choices.findIndex((choice) => choice.toLowerCase().includes(labels[0]!.toLowerCase())) : -1;
+      if (at < 0) return screen.choose(title, choices);
+      labels.shift();
+      return at;
+    },
+    ask: async (prompt, secret) => {
+      if (secret && !keyGiven) { keyGiven = true; return key; }
+      return screen.ask(prompt, secret);
+    },
+  };
+}
+
+/** Whether `url` takes `key`: a request with no messages is refused either
+ * for the key (401/403) or for being empty -- the key's answer, no model run. */
+async function acceptsKey(url: string, key: string, signal: AbortSignal): Promise<boolean> {
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'probe', messages: [] }),
+      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+    });
+    await response.body?.cancel();
+    return response.status !== 401 && response.status !== 403;
+  } catch {
+    return false;
+  }
+}
+
