@@ -1,17 +1,24 @@
 /** Signed-in email for the harnesses whose vendor answers "who is this?" --
- * by a command of its own, a field in its own login file, its own log
- * (Antigravity), or (OpenHands, Mistral Vibe) the same user endpoint its own
- * CLI calls. Each source below was verified live against a real signed-in
- * account. Every reader returns
- * undefined rather than guess: a numbered placeholder beats a wrong name.
+ * by a command of its own, a field or a JWT claim in its own login file
+ * (Codex, Antigravity, Hermes's Nous login, Droid's decrypted login), its own
+ * log (Antigravity fallback), or the same user endpoint its own CLI calls
+ * (OpenHands, Mistral Vibe, Auggie's get-models, Command Code's
+ * /alpha/whoami, Kimi's /me, MiniMax's /v1/api/user/info). Every reader is
+ * read-only: nothing refreshes a token, so Kimi and MiniMax -- whose access
+ * tokens live 15 minutes / 1 hour and whose refresh rotates the stored token
+ * -- answer only while the token from sign-in is still fresh. Each source was
+ * verified live against a real signed-in account, except the email field of
+ * Kimi's and MiniMax's endpoints (2026-10-05: route and auth confirmed, but no
+ * fresh token existed to read it without rotating the user's). Every reader
+ * returns undefined rather than guess: a numbered placeholder beats a wrong
+ * name.
  *
- * Harnesses with no entry here were checked too and keep no email anywhere
- * ClikCode can reach: Copilot keeps only a GitHub login (used as its name
- * below), Kimi's token carries a
- * user id only, MiniMax and Qwen store bare tokens, Droid keeps its login in
- * the OS keyring, and Auggie's account status names a plan, not a person.
- * Multi-provider harnesses (OpenCode, Aider, Goose, Pi, Hermes, OpenClaw,
- * Continue, Deep Agents) have no single account to name. */
+ * Checked and not readable: Copilot's token (keyring, `copilot-cli`) has
+ * read:user but not user:email, so GET /user shows a private email as null and
+ * /user/emails is 404 -- it keeps its GitHub login as its name below. Qwen's
+ * API keys name no person. Multi-provider harnesses (OpenCode, Aider, Goose,
+ * Pi, OpenClaw, Continue, Crush, Deep Agents) have no single account to name;
+ * Hermes is named only by its Nous Portal login. */
 
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
