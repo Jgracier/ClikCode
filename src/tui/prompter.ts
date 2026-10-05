@@ -195,6 +195,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * keys after it: typed into the prompt that opens next, as if typed there,
    * so it is sent -- the wait has no turn to send it to. */
   private typedAhead: string[] = [];
+  /** A sign-in's wait just ended: what was typed under it goes on into the
+   * turn that starts next (startWaiting). */
+  private signedInJustNow = false;
   /** The turn this window stepped out of (leaveTurn), still running in its
    * worker. What it already wrote to scrollback is remembered here, nothing
    * more of it is drawn while away, and following the same turn again
@@ -417,13 +420,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.signInInput.submit(text);
       this.updateWaiting();
     } else if (this.signingIn && !turn.submit && (key === '\r' || this.typedAhead.length)) {
-      if (key === '\r' && !this.typedAhead.length) {
-        if (!turn.draft.trim()) return;
-        this.typedAhead.push(...Array.from(turn.draft));
-        turn.draft = '';
-        turn.cursor = 0;
-        this.updateWaiting();
-      }
+      // Sent under a sign-in: the message stays in the composer, on screen,
+      // and only its Enter waits -- for the turn or prompt that comes next,
+      // which the draft is handed on to.
+      if (key === '\r' && !this.typedAhead.length && !turn.draft.trim()) return;
       this.typedAhead.push(key);
     } else if (key === '\r') {
       const continued = turn.submit ? backslashNewline(turn.draft, turn.cursor) : undefined;
@@ -856,7 +856,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // composer here would draw it over the list being used; the state is kept
     // and the frame repaints with it when the picker closes.
     if (this.selecting) return;
-    this.paint('', [], 0, '› ', 0);
+    // A running turn's composer is its draft, not empty.
+    this.paint(this.turn?.draft ?? '', [], 0, '› ', this.turn?.cursor ?? 0);
   }
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {
@@ -1086,7 +1087,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.signInInput = undefined;
         putBack();
         this.signingIn = false;
-        if (!turn) { if (this.turn) this.stopWaiting(); return; }
+        // Not repainted here: the outcome line withSignIn writes next paints,
+        // and a paint between them drew the composer empty for a frame
+        // while a message sent under the sign-in waited for its turn.
+        if (!turn) { this.signedInJustNow = true; if (this.turn) this.stopWaiting(false); return; }
         if (this.turn !== turn) { this.schedulePaint(); return; }
         turn.label = saved!.label;
         turn.cancel = saved!.cancel;
@@ -1115,6 +1119,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The same turn, drawn early: it carries on, its clock and draft with it.
     const early = this.turn?.early ? { ...this.turn } : undefined;
     if (early) this.turn!.draft = '';
+    // Typed under the sign-in that opened as this message was sent (a
+    // provider's first use): it belongs to the turn starting now -- in its
+    // composer, and sent once the turn can take messages if Enter was
+    // pressed (typedAhead, replayed below). Handed to the composer after the
+    // turn instead, it vanished until the turn ended.
+    const underSignIn = !early && this.signedInJustNow ? this.queuedDraft : undefined;
+    this.signedInJustNow = false;
+    if (underSignIn !== undefined) this.queuedDraft = undefined;
     this.stopWaiting(false);
     this.submittedPrompt = submittedPrompt;
     // A summary its turn never got to write (it ended with no answer) is
@@ -1144,7 +1156,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     const turn: WaitingTurn = {
       label: message, clock: early?.clock ?? startTurnClock(Date.now()), thinkingSince: early?.thinkingSince ?? Date.now(),
-      draft: early?.draft ?? '', cursor: early?.cursor ?? 0, cancelled: false,
+      draft: early?.draft ?? underSignIn ?? '', cursor: early?.cursor ?? underSignIn?.length ?? 0, cancelled: false,
       ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
       ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
       ...(onTakeBack ? { takeBack: onTakeBack } : {}),
@@ -1177,8 +1189,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       listen();
       this.resumeInput = () => { turn.stopInput?.(); listen(); };
     }
-    this.paint('', [], 0, '› ', 0);
+    // With the draft it carried in (an early start's, or one typed under a
+    // sign-in): painted empty, it vanished until the next keystroke or tick.
+    this.paint(turn.draft, [], 0, '› ', turn.cursor);
     this.scheduleWaitingTick();
+    const keys = onSubmit ? this.typedAhead.splice(0) : [];
+    if (keys.length) setImmediate(() => { for (const key of keys) if (this.turn === turn) this.onWaitingKey(key); });
     const interrupt = early?.early?.interrupt;
     if (interrupt && onCancel) {
       turn.cancelled = true;
@@ -2732,6 +2748,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return new Promise((resolveQuestion, rejectQuestion) => {
       let value = this.queuedDraft ?? '';
       this.queuedDraft = undefined;
+      this.signedInJustNow = false;
       let cursor = value.length;
       let selected = 0;
       let historyIndex = this.history.length;
