@@ -333,6 +333,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
    * the turn another window carried on). */
   const handleTurnFailure = async (error: unknown, failed: { line?: string; sent?: string; queuedTurnId?: string }): Promise<void> => {
     const message = error instanceof Error ? error.message : String(error);
+    // A prompt held for a turn that never started is not drawn on.
+    terminal?.submitted(undefined);
     const next = await afterTurnFailure(terminal, id, error, { ...failed, guard: exhaustionGuard });
     if (next.cancelled && terminal) { notice = STOPPED; return; }
     if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return; }
@@ -515,6 +517,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
        * prompts (/review, /init, /compact) are not shown as if typed. */
       const runInteractiveTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> => {
         sentPrompt = promptText;
+        // The submitted prompt is the prompter's for the whole turn, not a
+        // message and not part of any snapshot: it is not a message yet, and
+        // put in `messages` it lived somewhere the worker's next snapshot
+        // overwrote -- which is what made the message the user had just sent
+        // appear and then vanish. See tui/render/pending-prompt.ts. Held from
+        // here, so a sign-in before the turn does not hide it either.
+        terminal?.submitted(turn.echo && promptText !== INTERRUPTED_TURN_REQUEST ? promptText : undefined);
         // Using a provider no account is signed in to is when its sign-in
         // opens -- here, before the turn, so it shows on its own and its
         // outcome stays in the transcript. Nothing signed in at launch.
@@ -526,12 +535,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const { state: activeState, active } = await prepareTurn(targetId);
         const activeAccount = active?.accountId ? activeState.accounts.find((item) => item.id === active.accountId)?.label : undefined;
         if (active && terminal) {
-          // The submitted prompt is the prompter's for the whole turn, not a
-          // message and not part of this snapshot: it is not a message yet, and
-          // put in `messages` it lived somewhere the worker's next snapshot
-          // overwrote -- which is what made the message the user had just sent
-          // appear and then vanish. See tui/render/pending-prompt.ts.
-          terminal.submitted(turn.echo && promptText !== INTERRUPTED_TURN_REQUEST ? promptText : undefined);
           const pending: HarnessSession = {
             ...active,
             messages: sessionTranscriptMessages(active),
