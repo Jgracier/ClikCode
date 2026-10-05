@@ -196,6 +196,19 @@ async function ensureHermesTurboFit(harness: AiLocalHarnessDefinition, environme
   finally { TERMINAL.active?.stopWaiting(); }
 }
 
+/** About to send on a chat whose provider has no signed-in account (marked
+ * by a pick nobody asked for -- opening ClikCode): sign in now, the way an
+ * explicit pick does; true when it did. A no-op for anything else. */
+export async function signInBeforeUse(id: string): Promise<boolean> {
+  const state = await readState({ transcripts: [] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session?.nativeHarness || session.route !== 'local') return false;
+  const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  if (account?.status !== 'needs_login') return false;
+  await aiHarnessSelect(session.nativeHarness, id, { emit: false });
+  return true;
+}
+
 /** A chat ready for a turn from the command line: bound to a harness and an
  * account the way the app binds one on launch -- its provider's, else the
  * installed harness the user is signed in to. Used by `sessions send`,

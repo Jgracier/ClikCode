@@ -42,6 +42,7 @@ import { activateSession, afterTurnFailure, claimConversation, leaveConversation
 import { slashControls, slashHelpText, slashPalette } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversation } from './conversations.js';
+import { signInBeforeUse } from './harness.js';
 import { runShellLine } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor } from '../../tui/slash/context.js';
 import { dispatchLine, type SlashHost } from '../../tui/slash/dispatch.js';
@@ -515,6 +516,12 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
        * prompts (/review, /init, /compact) are not shown as if typed. */
       const runInteractiveTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> => {
         sentPrompt = promptText;
+        // Using a provider no account is signed in to is when its sign-in
+        // opens -- here, before the turn, so it shows on its own and its
+        // outcome stays in the transcript. Nothing signed in at launch.
+        // The turn's wait goes up the moment it finishes, taking whatever was
+        // typed under the sign-in, so that is never drawn missing between.
+        if (terminal && await signInBeforeUse(targetId)) terminal.turnStarting();
         // A draft is written now, because this message is what makes the chat
         // a conversation; the waiting line says what a local model is doing.
         const { state: activeState, active } = await prepareTurn(targetId);

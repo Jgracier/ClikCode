@@ -369,7 +369,9 @@ SCENARIOS = {
     # The same from a Mac or iPhone, whose "delete" key sends Backspace.
     'account-backspace-disconnects': {
         'turns': [TWO_BLOCKS],
-        'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+        # Signed in by the first message: nothing signs in at launch.
+        'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
+                  ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x7f'), ('wait_for', 'Cancel', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
         'watch': [], 'ever': ['Del disconnect', 'Cancel'], 'final_contains': ['reauth'],
@@ -389,34 +391,41 @@ SCENARIOS = {
     'account-add-key-sign-in': {
         'turns': [TWO_BLOCKS],
         'env': {'FAKE_LOGIN_KEY': 'sk-test-42'},
-        # With no account selected the sign-in starts at launch.
-        'steps': [('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
-                  ('keys', 'sk-test-42'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 15), ('settle', 1)],
+        # Signed out: the first message signs in, then is answered.
+        'steps': [('type', 'please check the commit'), ('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
+                  ('keys', 'sk-test-42'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 15),
+                  ('wait_for', 'The final commit is live.', 40), ('settle', 1)],
         'watch': [], 'ever': ['Paste your API key · type it and press Enter', '••••••••••'],
-        'final_contains': ['signed in to'], 'never': ['sk-test-42', 'Paste your API key: ', 'did not finish'],
+        'final_contains': ['signed in to', 'The final commit is live.'], 'never': ['sk-test-42', 'Paste your API key: ', 'did not finish'],
     },
-    # A message typed while the sign-in at launch is still finishing: every
-    # key of it lands in the composer that opens after, once. They used to go
-    # nowhere, and the message was sent as "heck the commit".
-    'type-during-sign-in': {
+    # Nothing signs in at launch: a signed-out provider waits for its first
+    # message.
+    'no-sign-in-at-launch': {
         'turns': [TWO_BLOCKS],
-        'startup': 0.5,
-        'steps': [('wait_for', 'waiting for you to sign in', 30),
+        'steps': [('settle', 6)],
+        'watch': [], 'never': ['waiting for you to sign in', 'signed in to', 'Sign in to'],
+    },
+    # A message typed while the first message's sign-in is still finishing:
+    # every key of it arrives, once. They used to go nowhere, and the message
+    # was sent as "heck the commit".
+    'type-during-sign-in': {
+        'turns': [TWO_BLOCKS, {'blocks': ['The second one is answered.']}],
+        'steps': [('type', 'start the work'), ('wait_for', 'waiting for you to sign in', 30),
                   ('type_slow', 'please check the commit', 0.2),
-                  ('wait_for', 'The final commit is live.', 30), ('settle', 2)],
-        'watch': ['please check the commit', 'The final commit is live.'],
+                  ('wait_for', 'The second one is answered.', 60), ('settle', 2)],
+        'watch': ['please check the commit', 'The second one is answered.'],
         'ever': ['signed in to'],
     },
     # The same message sent (Enter) while the sign-in is still waiting on the
     # browser: it is sent once the sign-in has finished, not dropped.
     'send-during-sign-in': {
-        'turns': [TWO_BLOCKS],
-        'startup': 0.5, 'hold_sign_in': True,
-        'steps': [('wait_for', 'waiting for you to sign in', 30), ('settle', 0.3),
+        'turns': [TWO_BLOCKS, {'blocks': ['The second one is answered.']}],
+        'hold_sign_in': True,
+        'steps': [('type', 'start the work'), ('wait_for', 'waiting for you to sign in', 30), ('settle', 0.3),
                   ('type', 'please check the commit'), ('settle', 1),
                   ('release_sign_in',),
-                  ('wait_for', 'The final commit is live.', 30), ('settle', 2)],
-        'watch': ['please check the commit', 'The final commit is live.'],
+                  ('wait_for', 'The second one is answered.', 60), ('settle', 2)],
+        'watch': ['please check the commit', 'The second one is answered.'],
         'ever': ['signed in to'],
     },
     # Back from a sub-menu lands on the row it was opened from, with no
@@ -432,7 +441,7 @@ SCENARIOS = {
     # line that stays.
     'sign-in-outcome': {
         'turns': [TWO_BLOCKS],
-        'steps': [('settle', 1)],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1)],
         'watch': [], 'final_contains': ['signed in to Grok Build'], 'never': ['signing in to Grok Build'],
     },
     # A command that prints while it runs: its newest lines show under the

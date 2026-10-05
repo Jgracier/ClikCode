@@ -249,6 +249,9 @@ export async function sendVendorTurn(input: {
         return false;
       });
     if (!signedIn) return false;
+    // Said by the turn, as its failure is: a window's own line for it is
+    // drawn under a turn that owns the screen, and was lost.
+    if (prompter.signIn) prompter.activity(`${chalk.green('signed in to')} ${chalk.dim(signInName)}`);
     account = await syncAccountIdentityAfterLogin(harness, account, state);
     await accounts.recordAccount(account);
     return true;
