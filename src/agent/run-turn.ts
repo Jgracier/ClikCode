@@ -12,6 +12,7 @@ import { formatShellNotifications, sessionState, takeShellNotifications } from '
 import { discoverSkills, SKILL_TOOL, skillsPromptSection } from './skills.js';
 import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
 import { exposeTools } from './mcp/deferred.js';
+import { gateNotebookTool, workspaceHasNotebooks } from './tools/notebook-gate.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
 import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
@@ -160,7 +161,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     : exposure.all;
   const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
-  const [loaded, savedRules, baseSystem] = await abortable(Promise.all([
+  const [loaded, savedRules, baseSystem, notebooksOnDisk] = await abortable(Promise.all([
     store.load(),
     input.permissionRules ? Promise.resolve(input.permissionRules.current) : loadPermissionRules(cwd),
     // A sub-agent keeps its own short prompt. Skills are listed only when the
@@ -171,7 +172,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
           cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir,
           skillsSection: skillsPromptSection(catalog.skills, profile), toolUsageGuidance: profile.toolUsageGuidance,
         })),
+    workspaceHasNotebooks([cwd, ...addDirs]),
   ]), signal);
+  // What the model is offered this step (tools/notebook-gate.ts).
+  const advertised = (current: readonly ConversationItem[]): ToolDefinition[] => gateNotebookTool(exposure.advertised(current), current, notebooksOnDisk);
   // One rule set for the whole turn, its sub-agents included: an "always"
   // answered for one call already covers the calls queued behind it.
   const turnRules = input.permissionRules ?? { current: savedRules };
@@ -297,7 +301,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       return { ...result, output: capHeadTail(result.output, toolOutputCap(contextWindow, profile.toolOutputBytes), 'narrow the request to see the middle').text };
     };
     if (!tool) {
-      return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(exposure.advertised(items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
+      return finish({ output: `Unknown tool "${call.name}". Available tools: ${visibleTools(advertised(items), session.plan.active).map((entry) => entry.name).join(', ')}.`, isError: true });
     }
     if (call.argumentsError) {
       return finish({ output: `The arguments for ${tool.name} were not a valid JSON object (${call.argumentsError}). Call the tool again with a single JSON object.`, isError: true });
@@ -429,7 +433,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       try {
         step = await abortable(input.modelClient.step({
           system, items, signal,
-          tools: profile.shapeSpecs(toolSpecs(visibleTools(exposure.advertised(items), session.plan.active))),
+          tools: profile.shapeSpecs(toolSpecs(visibleTools(advertised(items), session.plan.active))),
           ...(finalOnly ? { toolChoice: 'none' as const } : {}),
           onTextDelta: (text) => {
             if (!text || signal?.aborted) return;
