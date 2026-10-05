@@ -18,7 +18,7 @@
  * `--link .config/cursor/auth.json`). */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -138,7 +138,21 @@ const proved = answer.includes(codeword);
 console.log(proved
   ? `PROOF: ${command} ${version} recalled ${codeword} -- add '${version}' to the writer's testedVersions`
   : `NOT PROVED: the answer did not contain ${codeword}`);
-process.exit(proved ? 0 : 1);
+finish(proved ? 0 : 1);
+
+/** Exits once nothing started under the profile is left running: an agent
+ *  may leave a daemon behind (cursor-agent's `worker-server`), which would
+ *  outlive the sandbox and keep writing into it. Found by its HOME (Linux
+ *  /proc; elsewhere nothing to scan). */
+function finish(status) {
+  for (const pid of existsSync('/proc') ? readdirSync('/proc').filter((name) => /^\d+$/.test(name)) : []) {
+    if (Number(pid) === process.pid) continue;
+    try {
+      if (readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes(`HOME=${profile}`)) process.kill(Number(pid), 'SIGKILL');
+    } catch { /* gone, or not ours */ }
+  }
+  process.exit(status);
+}
 
 function cliTurn() {
   if (argv.includes('--replay-only')) { console.error('--replay-only needs an ACP agent'); process.exit(2); }
@@ -200,8 +214,7 @@ async function acpTurn() {
     console.log(`  codeword in replay: ${replayed.includes(codeword) ? 'yes' : 'NO'}`);
     if (argv.includes('--replay-only')) {
       console.log(replayed.includes(codeword) && tools.length >= 2 ? 'REPLAYED: the written thread loads; no model turn was run' : 'NOT REPLAYED');
-      child.kill();
-      process.exit(replayed.includes(codeword) && tools.length >= 2 ? 0 : 1);
+      finish(replayed.includes(codeword) && tools.length >= 2 ? 0 : 1);
     }
     const model = option('--model');
     if (model) await request('session/set_model', { sessionId: written.nativeId, modelId: model }).catch((error) => console.error(`set_model: ${error.message}`));
