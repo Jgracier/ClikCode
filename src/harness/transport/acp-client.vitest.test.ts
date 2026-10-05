@@ -286,3 +286,32 @@ describe('an agent that is retrying a rate-limited call', () => {
     expect(result.text).toBe('PONG');
   });
 });
+
+describe('the models a session offers', () => {
+  const agent = `
+    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+    let buf = '';
+    process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+      const models = { availableModels: [{ modelId: 'a' }, { modelId: 'b' }], currentModelId: 'a' };
+      if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+      else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1', models } });
+      else if (m.method === 'session/load') send({ id: m.id, result: { models: { ...models, currentModelId: 'b' } } });
+      else if (m.method === 'session/prompt') {
+        send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'PONG' } } } });
+        send({ id: m.id, result: { stopReason: 'end_turn' } });
+      }
+    } });
+  `;
+  const input = (seen: unknown[], nativeSessionId?: string) => ({
+    binary: process.execPath, command: 'fake', argv: ['-e', agent], cwd: process.cwd(), prompt: 'PONG?',
+    environment: {}, permissionMode: 'ask' as const, ...(nativeSessionId ? { nativeSessionId } : {}),
+    onSessionModels: (answer: Record<string, unknown>, fresh: boolean) => { seen.push([(answer.models as { currentModelId: string }).currentModelId, fresh]); },
+  });
+
+  it('are reported from session/new as fresh and from session/load as not', async () => {
+    const seen: unknown[] = [];
+    await runAcpTurn(input(seen));
+    await runAcpTurn(input(seen, 's1'));
+    expect(seen).toEqual([['a', true], ['b', false]]);
+  });
+});

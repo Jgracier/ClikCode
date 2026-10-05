@@ -88,4 +88,9 @@ export interface HarnessTurnObserver {
   onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) => void;
   /** Slash commands the agent offers for this session. */
   onAvailableCommands?: (commands: readonly HarnessAvailableCommand[]) => void;
+  /** The session/new or session/load answer, with the models the agent
+   * offers: the same list model discovery would otherwise spawn the agent to
+   * read. `fresh` is a new session, whose current model is the agent's
+   * default; a loaded one reports the model that chat last used. */
+  onSessionModels?: (answer: Readonly<Record<string, unknown>>, fresh: boolean) => void;
 }

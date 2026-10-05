@@ -109,9 +109,9 @@ export async function sendVendorTurn(input: {
   // A headless send -- `sessions send`, and every member of a fan-out --
   // never goes through the interactive open path, so it recorded no model
   // at all: the invocation landed with the field absent and usage could
-  // not be attributed to anything. Cheap to call (the catalog is cached
-  // for five minutes) and persisted, so the next turn on this session
-  // finds it already there.
+  // not be attributed to anything. Cheap to call (the catalog is cached,
+  // and an ACP session keeps it current) and persisted, so the next turn
+  // on this session finds it already there.
   if (!model) {
     model = await resolveNativeModel(harness, account) ?? null;
     if (model) session.model = model;
