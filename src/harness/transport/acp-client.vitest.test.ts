@@ -216,10 +216,10 @@ describe('shared ACP adapter contract', () => {
    * (harnessAcpLaunch) on every turn. One description of a harness, and it is
    * the catalog. */
   it('assembles the launch the catalog handed it, and refuses without one', () => {
-    expect(acpSpawnArgv({ command: 'droid', argv: ['exec', '--output-format', 'acp'], optionPlacement: 'after', extraArgv: ['--model', 'm'] }))
+    expect(acpSpawnArgv({ argv: ['exec', '--output-format', 'acp'], optionPlacement: 'after', extraArgv: ['--model', 'm'] }))
       .toEqual(['exec', '--output-format', 'acp', '--model', 'm']);
-    expect(acpSpawnArgv({ command: 'kimi', argv: ['--acp'], extraArgv: ['--model', 'k2'] })).toEqual(['--model', 'k2', '--acp']);
-    expect(acpSpawnArgv({ command: 'cursor' }), 'a harness with no catalog ACP launch cannot be spawned').toBeUndefined();
+    expect(acpSpawnArgv({ argv: ['--acp'], extraArgv: ['--model', 'k2'] })).toEqual(['--model', 'k2', '--acp']);
+    expect(acpSpawnArgv({}), 'a harness with no catalog ACP launch cannot be spawned').toBeUndefined();
   });
 
   it('resolves a chosen model to the agent\'s own id', () => {

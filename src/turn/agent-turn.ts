@@ -34,14 +34,10 @@ export async function runAgentTurn(input: {
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
   const prepared = await prepareAttachments(session.attachments ?? []);
-  // No image refusal here any more, and it was not a limit: the gateway route
-  // runs ClikCode's own agent loop on this machine, runGatewayHarnessSessionTurn
-  // takes `images`, and run-turn.ts names the attached files for the agent to
-  // read with its own file tools. This threw twenty lines above the call that
-  // passes them, so the capability the code below implements was unreachable.
-  // (The platform-assistant fallback further down cannot read local files at
-  // all -- it says so in its own notice -- so images are simply not part of
-  // that request, exactly as before.)
+  // Images are not refused: the agent loop runs on this machine and reads the
+  // attached files with its own tools (run-turn.ts names them). The
+  // platform-assistant fallback below cannot read local files and says so in
+  // its notice, so its request carries none.
   // The first turns of a conversation carry the title request here too: the
   // gateway's coding agent and the platform assistant both answer as a
   // model, and neither writes a title of its own anywhere ClikCode can read.

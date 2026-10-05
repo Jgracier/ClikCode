@@ -286,16 +286,11 @@ function acpPermissionPlan(mode: AiHarnessPermissionMode, params: Json): AcpPerm
 }
 
 /** Full child argv for one ACP launch, or undefined without an adapter.
- *
- * The argv comes from the catalog (`harnessAcpLaunch`), which already derives
- * the mode flag, the model flag, the effort flag and the permission flags from
- * the harness's own entry. A second copy of those flags lived here as a
- * fallback for callers that passed no argv -- four harnesses' worth of
- * `command === 'cline' ? ['--thinking', effort]`, drifting from the catalog
- * entry describing the same flag. There is one description of a harness now,
- * and it is the catalog. */
+ * The argv comes from the catalog (`harnessAcpLaunch`), which derives the
+ * mode, model, effort and permission flags from the harness's own entry; no
+ * per-harness flag is known here, so none can drift from the catalog. */
 export function acpSpawnArgv(
-  input: Pick<AcpTurnInput, 'command' | 'argv' | 'optionPlacement' | 'extraArgv'>,
+  input: Pick<AcpTurnInput, 'argv' | 'optionPlacement' | 'extraArgv'>,
 ): string[] | undefined {
   const argv = input.argv;
   if (!argv) return undefined;
