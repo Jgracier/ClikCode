@@ -4,7 +4,6 @@
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
 import { freshListing, lastSeenListing, rememberListing } from './cache.js';
 import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
-import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
 
@@ -131,14 +130,15 @@ export async function discoverNativeSessions(
   profile?: string,
 ): Promise<DiscoveredNativeSession[]> {
   if (!harness.session?.discoverArgv) return [];
-  const inspection = await inspectNativeHarness(harness, 800);
-  if (!inspection.installed) return [];
+  // Installed is a PATH walk and a stat. A full inspection would also run
+  // `--version`, which nothing here reads.
+  const build = await harnessBinaryIdentity(harness.binary);
+  if (!build) return [];
   // Each of these is a subprocess, and most of them find nothing: /resume
   // spent 2.5s spawning six CLIs here, of which two took 2.16s between them
   // to return zero. A recent answer from this build is the answer: "nothing
   // here" for five minutes, a list for two. Opening the board does not spawn
   // the CLI again until that expires.
-  const build = await harnessBinaryIdentity(harness.binary);
   const fresh = await freshListing(harness.command, workspace, profile, Date.now(), build);
   if (fresh) return fresh;
   try {
