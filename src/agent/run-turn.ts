@@ -67,14 +67,14 @@ function classifyModelError(error: unknown): { kind: HarnessErrorKind; retryAfte
  * its own words for these are "Please retry" (turn-stream.ts). */
 const RETRYABLE_STEP_CODES = new Set(['MODEL_ERROR', 'INTERNAL_ERROR', 'MODEL_RATE_LIMITED', 'RATE_LIMIT_EXCEEDED', 'incomplete_stream']);
 
+/** How many times Stop hooks may send the agent back to work in one turn. */
+const MAX_STOP_HOOK_CONTINUES = 3;
+
 /** What to do about a model step that failed before streaming anything.
  * `compact`: the request did not fit the model (the Gateway's
  * CONTEXT_TOO_LARGE, "Compact and retry"). `retry`: a transient failure --
  * a retryable code, a 5xx, or no response at all. Everything else -- credit,
  * sign-in, a rejected request, no model, the kill switch -- is the answer. */
-/** How many times Stop hooks may send the agent back to work in one turn. */
-const MAX_STOP_HOOK_CONTINUES = 3;
-
 export function stepRecovery(error: unknown): 'compact' | 'retry' | undefined {
   const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown };
   const code = typeof record.code === 'string' ? record.code : undefined;

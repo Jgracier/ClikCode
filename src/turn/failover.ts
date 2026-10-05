@@ -58,6 +58,16 @@ const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|faile
 // payment method to continue" (action `payment`).
 const QUOTA_TEXT = /(?:\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|\bPROMOTION_MODEL_LIMIT_REACHED\b|UsageLimitError\b|quota (?:has been |is )?(?:exceeded|exhausted|reached|used up)|quota\b[^.\n]{0,40}\bused up|quota to reset|(?:weekly|monthly|daily) (?:\w+ )?limit (?:has been )?reached|\bacu limit|usage (?:limit )?exceeded|usage (?:is )?(?:paused|frozen)|paused usage|insufficient[_ ](?:\w+ )?(?:balance|funds|credits?)|not enough credits|no credits|credits? (?:is |are )?(?:exhausted|depleted)|billing (?:issue|error)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit)|upgrade your (?:plan|account) to continue|add a payment method to continue)/i;
 const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|temporar(?:y|ily) throttled)/i;
+/** The account is real and signed in, but the vendor will not serve it --
+ *  a plan or verification problem rather than a credential one. Confirmed
+ *  verbatim from agy 1.2.7 on a refreshed, valid token:
+ *    "Eligibility check failed: Your current account is not eligible for
+ *     Antigravity. Verify your account to continue."
+ *  It matched none of the patterns above, so it classified as 'other' and
+ *  the user was told "account failed" -- true but useless, since it names
+ *  neither the problem nor the fix. Signing in again cannot help, which is
+ *  why this is distinct from authentication-required. */
+const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
  * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity
@@ -71,16 +81,6 @@ const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|tem
  * each pointless attempt cost a 60-second interactive-auth timeout. Kept to
  * wording a CLI uses for its own flag validation; nothing here matches a
  * model or plan entitlement problem, which IS account-specific. */
-/** The account is real and signed in, but the vendor will not serve it --
- *  a plan or verification problem rather than a credential one. Confirmed
- *  verbatim from agy 1.2.7 on a refreshed, valid token:
- *    "Eligibility check failed: Your current account is not eligible for
- *     Antigravity. Verify your account to continue."
- *  It matched none of the patterns above, so it classified as 'other' and
- *  the user was told "account failed" -- true but useless, since it names
- *  neither the problem nor the fix. Signing in again cannot help, which is
- *  why this is distinct from authentication-required. */
-const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available)/i;
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
@@ -90,13 +90,6 @@ function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
   return undefined;
 }
 
-/** Classify only signals strong enough to justify changing credentials.
- *
- * Order of trust: explicit structured signals, then status codes, then the
- * wording of vendor *diagnostics*. Wording is only ever read from stderr (the
- * `stderrTail` that captureNativeHarnessTurn attaches, or `signals.stderrText`)
- * or from an error the caller did not mark as model text -- never from a
- * turn's stdout, where "I hit the rate limit handling code" is just prose. */
 /** What to tell someone when a turn moves to another account.
  *
  * The message used to be one of two words -- "quota reached" or the catch-all
@@ -216,6 +209,13 @@ export function accountSwitchNotice(kind: AccountFailureKind, to: string): strin
     : `${accountFailureReason(kind)}, switching to ${to}`;
 }
 
+/** Classify only signals strong enough to justify changing credentials.
+ *
+ * Order of trust: explicit structured signals, then status codes, then the
+ * wording of vendor *diagnostics*. Wording is only ever read from stderr (the
+ * `stderrTail` that captureNativeHarnessTurn attaches, or `signals.stderrText`)
+ * or from an error the caller did not mark as model text -- never from a
+ * turn's stdout, where "I hit the rate limit handling code" is just prose. */
 export function classifyAccountFailure(error: unknown, signals: AccountFailureSignals = {}): AccountFailureKind {
   const carried = (error ?? {}) as {
     statusCode?: unknown; response?: { status?: unknown }; errorKind?: unknown; rateLimitStatus?: unknown;
