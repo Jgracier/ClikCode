@@ -1,0 +1,20 @@
+{"type":"metadata","protocol_version":"1.5","created_at":1791115200000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"Remember the codeword PELICAN-73. Then check what is in notes.txt."}],"toolCalls":[],"origin":{"kind":"user"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.begin","uuid":"uuid-0001","turnId":"0","step":1},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","uuid":"uuid-0002","turnId":"0","step":1,"stepUuid":"uuid-0001","part":{"type":"text","text":"I'll read the notes."}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.call","uuid":"uuid-0003","turnId":"0","step":1,"stepUuid":"uuid-0001","toolCallId":"call_clikcode_0001","name":"Bash","args":{"command":"cat notes.txt"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.result","parentUuid":"uuid-0003","toolCallId":"call_clikcode_0001","result":{"output":"launch window: Thursday"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.end","uuid":"uuid-0001","turnId":"0","step":1,"finishReason":"tool_use"},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.begin","uuid":"uuid-0004","turnId":"0","step":2},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","uuid":"uuid-0005","turnId":"0","step":2,"stepUuid":"uuid-0004","part":{"type":"text","text":"notes.txt says the launch window is Thursday. Codeword PELICAN-73 noted."}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.end","uuid":"uuid-0004","turnId":"0","step":2,"finishReason":"end_turn"},"time":1791115200000}
+{"type":"context.append_message","agentId":"main","message":{"role":"user","content":[{"type":"text","text":"Fix the typo in src/app.ts"}],"toolCalls":[],"origin":{"kind":"user"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.begin","uuid":"uuid-0006","turnId":"1","step":1},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.call","uuid":"uuid-0007","turnId":"1","step":1,"stepUuid":"uuid-0006","toolCallId":"call_clikcode_0002","name":"Edit","args":{"path":"/home/user/projects/app/src/app.ts","old_string":"cosnt x = 1;","new_string":"const x = 1;"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.call","uuid":"uuid-0008","turnId":"1","step":1,"stepUuid":"uuid-0006","toolCallId":"call_clikcode_0003","name":"Grep","args":{"pattern":"cosnt"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.result","parentUuid":"uuid-0007","toolCallId":"call_clikcode_0002","result":{"output":"--- src/app.ts\n-cosnt x = 1;\n+const x = 1;"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"tool.result","parentUuid":"uuid-0008","toolCallId":"call_clikcode_0003","result":{"output":"(no matches)"}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.end","uuid":"uuid-0006","turnId":"1","step":1,"finishReason":"tool_use"},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.begin","uuid":"uuid-0009","turnId":"1","step":2},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"content.part","uuid":"uuid-0010","turnId":"1","step":2,"stepUuid":"uuid-0009","part":{"type":"text","text":"Fixed the typo in src/app.ts; no other occurrences."}},"time":1791115200000}
+{"type":"context.append_loop_event","agentId":"main","event":{"type":"step.end","uuid":"uuid-0009","turnId":"1","step":2,"finishReason":"end_turn"},"time":1791115200000}
