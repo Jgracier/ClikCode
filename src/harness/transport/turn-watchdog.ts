@@ -1,5 +1,5 @@
-/** The silence ceiling for a turn on a persistent transport (Codex
- * app-server, ACP). Same policy as a one-shot CLI turn (native/turn.ts): a
+/** The silence ceiling for a turn, on every transport: the persistent ones
+ * (Codex app-server, ACP) and a one-shot CLI turn (native/turn.ts). A
  * turn ends on the vendor's own completion event, and this is only the
  * safety net for a vendor that has gone quiet for good. Every message from
  * the vendor restarts the countdown; while a tool it started is still
@@ -25,8 +25,13 @@ export interface TurnWatchdogOptions {
 export interface TurnWatchdog {
   /** Any sign of life from the vendor. */
   activity(): void;
-  toolStarted(id: string): void;
-  toolFinished(id: string): void;
+  /** A tool began; while any is running the tool budget applies. A CLI
+   * stream may give no id. */
+  toolStarted(id?: string): void;
+  /** A tool finished or failed. One whose start was never seen (or that
+   * carries no id) still settles one id-less start, so the long budget is
+   * not left armed by a vendor that names only one end of the pair. */
+  toolFinished(id?: string): void;
   readonly runningTools: number;
   /** Stop counting until the returned function is called (an approval the
    * user has not answered yet). Nested pauses are counted. */
@@ -48,6 +53,7 @@ export function createTurnWatchdog(options: TurnWatchdogOptions): TurnWatchdog {
   const idleMs = options.idleMs ?? configuredIdleMs();
   const toolIdleMs = options.toolIdleMs ?? PERSISTENT_TOOL_IDLE_MS;
   const running = new Set<string>();
+  let anonymous = 0;
   let timer: NodeJS.Timeout | undefined;
   let paused = 0;
   let stopped = false;
@@ -58,7 +64,7 @@ export function createTurnWatchdog(options: TurnWatchdogOptions): TurnWatchdog {
     if (timer) clearTimeout(timer);
     timer = undefined;
     if (stopped || paused > 0 || idleMs <= 0) return;
-    const budget = running.size > 0 ? Math.max(idleMs, toolIdleMs) : idleMs;
+    const budget = running.size + anonymous > 0 ? Math.max(idleMs, toolIdleMs) : idleMs;
     const mine = armed;
     timer = setTimeout(() => {
       timer = undefined;
@@ -79,9 +85,17 @@ export function createTurnWatchdog(options: TurnWatchdogOptions): TurnWatchdog {
   arm();
   return {
     activity: arm,
-    toolStarted: (id) => { running.add(id); arm(); },
-    toolFinished: (id) => { running.delete(id); arm(); },
-    get runningTools() { return running.size; },
+    toolStarted: (id) => {
+      if (id) running.add(id);
+      else anonymous += 1;
+      arm();
+    },
+    toolFinished: (id) => {
+      if (id && running.delete(id)) { /* paired */ } else if (anonymous > 0) anonymous -= 1;
+      else if (!id && running.size > 0) running.delete(running.values().next().value as string);
+      arm();
+    },
+    get runningTools() { return running.size + anonymous; },
     pause: () => {
       paused += 1;
       arm();
