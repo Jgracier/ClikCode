@@ -91,4 +91,14 @@ describe('ACP model catalog refresh', () => {
     expect((await nativeModelCatalog(harness, account(['m1', 'm2', 'custom']))).models).toContain('custom');
     expect(queryAcp).toHaveBeenCalledTimes(2);
   });
+
+  it('starts the discovery child with the vendor switch that keeps MCP servers off', async () => {
+    const harness = {
+      command: 'test-acp-probe-argv', binary: 'missing-test-acp-probe-argv', transport: 'acp',
+      acp: { argv: ['--acp'], probeArgv: ['--allowed-mcp-server-names', 'none'] },
+    } as unknown as AiLocalHarnessDefinition;
+    queryAcp.mockImplementation(async () => ({ models: ['m'], labels: {} }));
+    await nativeModelCatalog(harness);
+    expect(queryAcp.mock.calls[0]![1]).toEqual(['--acp', '--allowed-mcp-server-names', 'none']);
+  });
 });

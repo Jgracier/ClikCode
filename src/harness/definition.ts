@@ -39,6 +39,7 @@ export interface AiHarnessAcpDefinition {
   effortArgvPrefix?: readonly string[];
   permissionArgv?: Readonly<Partial<Record<'bypass' | 'auto', readonly string[]>>>;
   listsModels?: boolean;
+  probeArgv?: readonly string[];
   usageTotals?: 'session';
   cumulativeChunks?: boolean;
   usageFile?: { path: string; field: readonly string[] };
