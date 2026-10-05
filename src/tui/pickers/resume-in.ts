@@ -5,7 +5,7 @@
  * them runs out, the chat used to stop at "All accounts exhausted" and the
  * user had to know that `/<harness>` would carry it elsewhere. This offers
  * the harnesses with an account that has usage left, then that harness's
- * models; choosing a model hands the conversation over (the same branch
+ * models; choosing a model moves the conversation there (the same move
  * `/<harness>` makes) and the caller resends the message that ran out. */
 
 import { join } from 'node:path';
@@ -15,7 +15,7 @@ import { nativeModelCatalogForPicker } from '../../harness/accounts/model-catalo
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import { moveQueuedTurns, newProviderConversation, takeQueuedMessages } from '../../commands/ai/conversations.js';
+import { moveToProvider, takeQueuedMessages } from '../../commands/ai/conversations.js';
 import { preferredAccountId } from '../../commands/ai/preferred-account.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { nextQuotaReset, quotaResetPhrase, type ResumeAt } from '../../turn/usage-exhausted.js';
@@ -100,7 +100,7 @@ export async function interactiveResumeInPicker(
       .filter((item) => item.nativeHarness === chosen.harness.command && item.model)
       .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
     const model = lastUsedModel ?? state.providerSettings[chosen.harness.provider]?.model ?? catalog.configured ?? null;
-    return resumeInBranch(id, chosen.harness, account.id, model, prompt, sent);
+    return resumeIn(id, chosen.harness, account.id, model, prompt, sent, session.nativeHarness);
   }
 }
 
@@ -117,30 +117,28 @@ export async function waitForReset(id: string, reset: Date, prompt: string, sent
 }
 
 /** Where "Resume in" took the conversation. `prompt` is what to send there;
- * absent when another window already carried this turn on in that branch,
- * which is then only followed. */
+ * absent when another window already carried this turn on, which is then
+ * only followed. */
 export type ResumedIn = { id: string; prompt?: string };
 
-export async function resumeInBranch(
+export async function resumeIn(
   id: string, harness: AiLocalHarnessDefinition, accountId: string, model: string | null, prompt: string, sent: string,
+  /** The harness the turn ran out on: the conversation still being there is
+   * what says no other window has moved it on yet. */
+  from: string | undefined,
 ): Promise<ResumedIn> {
-  // Under a lock of its own: two windows following one turn that ran out
-  // both offer "Resume in", and each used to make its own branch and send
-  // the request again there. Not the source's session lock -- writing the
-  // branch shares the source's transcript and takes that lock itself, so
-  // holding it here waited on itself forever.
+  // Two windows following one turn that ran out both offer "Resume in"; the
+  // first to choose moves the conversation, the other follows it there.
   return withFileLock(join(sessionsDirectory(), `${safeRecordFileName(id)}.resume-in.lock`), async () => {
     const state = await readState({ transcripts: [id] });
-    const pending = state.sessions.find((item) => item.id === id)?.pendingTurn;
-    const turn = pending?.startedAt;
-    const joined = turn ? state.sessions.find((item) => item.handoff?.fromSessionId === id && item.handoff.turn === turn) : undefined;
-    if (joined) return { id: joined.id };
-    // The branch carries the interrupted request and all progress recorded for
-    // it. Asking the new provider to continue avoids running that request a
-    // second time and preserves the partial answer and tool activity.
-    const nextPrompt = resumePromptForPendingTurn(pending, prompt, sent);
-    const nextId = await newProviderConversation(id, harness.command, { accountId, model, ...(turn ? { turn } : {}) });
-    return { id: nextId, prompt: nextPrompt };
+    const session = state.sessions.find((item) => item.id === id);
+    if (session?.nativeHarness !== from) return { id };
+    // The interrupted request and all progress recorded for it stay in the
+    // conversation. Asking the new provider to continue avoids running that
+    // request a second time and preserves the partial answer and tool activity.
+    const nextPrompt = resumePromptForPendingTurn(session?.pendingTurn, prompt, sent);
+    await moveToProvider(id, harness.command, { accountId, model });
+    return { id, prompt: nextPrompt };
   });
 }
 
@@ -149,7 +147,7 @@ export async function resumeInBranch(
 export async function interruptedTurnResumePrompt(id: string, prompt: string, sent = prompt): Promise<string> {
   // The interrupted turn is kept in the conversation's transcript file: read
   // without it there was never a pending turn, the original words were sent
-  // again, and the branch -- which carries that turn -- ran the request twice.
+  // again, and the provider taking the turn over ran the request twice.
   const state = await readState({ transcripts: [id] });
   const pending = state.sessions.find((item) => item.id === id)?.pendingTurn;
   return resumePromptForPendingTurn(pending, prompt, sent);
@@ -167,7 +165,7 @@ export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'
 /** What carries a turn on after it ran out of usage on every account:
  *  - `retry`: an account of this provider got its quota back after failover
  *    looked, so the turn goes again here, once;
- *  - `moved`: "Resume in" branched the conversation to another provider,
+ *  - `moved`: "Resume in" moved the conversation to another provider,
  *    with what was queued behind the turn;
  *  - `waiting`: parked until this provider's reset; the worker sends it then,
  *    and what was queued behind it stays queued;
@@ -197,10 +195,7 @@ export async function carryOnAfterExhaustion(
   }
   const moved = await interactiveResumeInPicker(rl, id, prompt, sent);
   if (moved && 'waiting' in moved) return moved;
-  if (moved) {
-    await moveQueuedTurns(id, moved.id);
-    return { moved };
-  }
+  if (moved) return { moved };
   return { stayed: await sameProviderCanTakeTurn(id) ? [] : await takeQueuedMessages(id) };
 }
 

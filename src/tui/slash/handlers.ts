@@ -38,7 +38,7 @@ import { TERMINAL } from '../active-terminal.js';
 import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../session/attachments.js';
-import { conversationIdFor, normalizeModelWord, requiresProviderHandoff, sessionPermissionModes, setSessionHarnessOption } from '../../session/options.js';
+import { conversationIdFor, normalizeModelWord, sessionPermissionModes, setSessionHarnessOption } from '../../session/options.js';
 import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
@@ -49,7 +49,7 @@ import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinitio
 import { customCommandPrompt } from '../../session/custom-commands.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { textTranscript } from '../../turn/turn-activities.js';
-import { newConversationSession, newProviderConversation } from '../../commands/ai/conversations.js';
+import { moveToProvider, newConversationSession } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { aiSessionClose, aiSessionLeave, applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel, chooseGatewayModel } from '../../commands/ai/sessions.js';
 import { gatewayModelDetail, gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
@@ -558,20 +558,13 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (session.nativeHarness) {
         const selectedHarness = localHarnessForCommand(session.nativeHarness);
         const accountCommand = localHarnessForProvider(account.provider)?.command ?? account.provider;
-        // Naming an account of another provider names the provider too, and
-        // the switch below already knows how to follow it. The refusal is
-        // only right where the move would take a conversation with real
-        // content to a different provider -- that always branches, and
-        // branching is /<harness>'s decision to make, not a side effect of
-        // choosing an account. An empty conversation has nothing to branch,
-        // so it simply moves.
-        // A conversation with content moves to another harness as a branch
-        // -- the one /<harness> makes -- on the account named.
-        if (selectedHarness && selectedHarness.provider !== account.provider
-          && requiresProviderHandoff(session, accountCommand)) {
-          const next = await newProviderConversation(id, accountCommand);
-          await aiSessionCommand(next, `/accounts use ${account.id}`);
-          return next;
+        // Naming an account of another provider names the provider too: the
+        // conversation moves there -- the move /<harness> makes -- and then
+        // takes the account named.
+        if (selectedHarness && selectedHarness.provider !== account.provider) {
+          await moveToProvider(id, accountCommand);
+          await aiSessionCommand(id, `/accounts use ${account.id}`);
+          return id;
         }
       }
       const accountHarness = localHarnessForProvider(account.provider);
@@ -794,15 +787,11 @@ export async function aiSessionCommand(id: string, input: string, options: { inf
     return typeof moved === 'string' ? moved : id;
   }
   if (route.kind === 'harness') {
-    // `/<harness> [request]`: a conversation with content hands off to a new
-    // branch. The caller must follow the returned id -- the interactive loop
-    // adopts it; the turn, if any, runs on THAT session.
-    const targetId = requiresProviderHandoff(session, route.command)
-      ? await newProviderConversation(id, route.command)
-      : id;
-    if (targetId === id) await aiHarnessSelect(route.command, targetId);
-    if (route.args) await sendSessionTurn(targetId, route.args);
-    return targetId;
+    // `/<harness> [request]`: the conversation moves there, and the request
+    // runs there.
+    await moveToProvider(id, route.command);
+    if (route.args) await sendSessionTurn(id, route.args);
+    return id;
   }
   if (route.kind === 'manager') {
     const listing = await nativeManagerListing(state, session, route.name);

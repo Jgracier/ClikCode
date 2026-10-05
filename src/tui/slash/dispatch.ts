@@ -24,7 +24,7 @@ import { turnEnvironment } from '../../turn/turn-environment.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { harnessModelLabel } from '../../harness/accounts/model-catalog.js';
 import { aiSessionLeave } from '../../commands/ai/sessions.js';
-import { newConversation, newProviderConversation } from '../../commands/ai/conversations.js';
+import { moveToProvider, newConversation } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { settingLabel } from '../pickers/setting-scope.js';
 import { chooseOption } from '../pickers/choose.js';
@@ -147,9 +147,10 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     return slashRouteTurn(route, session, harness) ?? {};
   }
   if (route.kind === 'harness') {
-    // `/<harness> [request]`: hand off, and the request runs on the branch.
-    const selected = await newProviderConversation(id, route.command);
-    return { id: selected, ...(route.args ? { prompt: route.args, echo: true } : {}) };
+    // `/<harness> [request]`: the conversation moves there, and the request
+    // runs there.
+    await moveToProvider(id, route.command);
+    return route.args ? { prompt: route.args, echo: true } : {};
   }
   if (route.kind === 'manager') {
     const manager = harness ? (localHarnessCapabilityManifest(harness).managers as Record<string, ManagerSpec | undefined> | undefined)?.[route.name] : undefined;

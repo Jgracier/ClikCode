@@ -4,10 +4,27 @@
  * thread the vendor no longer knows -- clears every field that describes it,
  * so the next turn starts fresh and carries the conversation in its prompt. */
 import type { HarnessSession } from './model.js';
+import { messageOrigin, sessionTranscriptMessages } from '../turn/checkpoint.js';
 
 export function forgetNativeThread(session: HarnessSession): void {
   session.nativeSessionId = undefined;
   delete session.nativeTransport;
   session.nativeStartedAt = undefined;
   delete session.nativeSessionPreallocated;
+}
+
+/** What a conversation sheds when another provider takes it up in place.
+ * Every answer so far keeps who gave it (an unstamped one is the provider
+ * leaving's), a turn left in the journal becomes history for the next
+ * provider to continue, and everything that described the old provider's
+ * thread goes: the next turn starts the new one from the record
+ * (turn/thread-start.ts). */
+export function leaveProvider(session: HarnessSession): void {
+  const origin = messageOrigin(session);
+  session.messages = sessionTranscriptMessages(session)
+    .map((message) => (message.role === 'assistant' && !message.origin ? { ...message, origin } : message));
+  delete session.pendingTurn;
+  forgetNativeThread(session);
+  for (const key of ['reported', 'effortRefused', 'lastUsage', 'resumeAt', 'harnessOptions', 'gatewayConfirmed'] as const) delete session[key];
+  session.updatedAt = new Date().toISOString();
 }
