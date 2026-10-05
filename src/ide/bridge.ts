@@ -578,8 +578,13 @@ export class IdeBridge {
     // `!<command>`: run here, its output a transcript message for next turn.
     if (isShellCommandLine(line)) {
       return this.withBusy(line, async () => {
-        const resulting = await aiSessionCommand(id, line);
-        return resulting !== id ? { id: resulting } : {};
+        // Quiet: its result payload repeats the transcript message the chat
+        // already shows, and would be drawn a second time as an output card.
+        this.quietOutput += 1;
+        try {
+          const resulting = await aiSessionCommand(id, line);
+          return resulting !== id ? { id: resulting } : {};
+        } finally { this.quietOutput -= 1; }
       });
     }
     return dispatchLine(this.slashHost, id, line, { fromQueuedCommand });
