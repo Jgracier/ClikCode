@@ -120,6 +120,9 @@ export function Composer(props: {
   const pastes = useRef(0);
   const history = useMemo(() => promptHistory(model.messages), [model.messages]);
   const connected = model.connection === 'ready' && Boolean(model.sessionId);
+  /** Sent while ClikCode was reconnecting or moving to a new build (a second
+   * or so): the message stays in the box and goes once the chat is ready. */
+  const [held, setHeld] = useState(false);
 
   const autosize = (): void => {
     const element = textarea.current;
@@ -238,9 +241,11 @@ export function Composer(props: {
     // Enter again: nothing typed, a message already waiting in the queue --
     // stop the turn, and what waits is sent next at once.
     if (!text.trim() && !attachments.length && stopAndSendReady(model)) { post({ type: 'cancel', restoreDraft: false }); return; }
-    if (!text.trim() && !attachments.length) return;
+    if (!text.trim() && !attachments.length) { setHeld(false); return; }
     const message = composeMessage(text, attachments);
-    if (!message || !connected) return;
+    if (!message) return;
+    if (!connected) { setHeld(true); return; }
+    setHeld(false);
     post({ type: 'send', text: message, id: uid() });
     recall.current = undefined;
     pastes.current = 0;
@@ -249,6 +254,8 @@ export function Composer(props: {
     save({ draft: '' });
     setSuggestions([]);
   };
+
+  useEffect(() => { if (connected && held) send(); }, [connected]);
 
   // Esc during a turn (stop, or deny a pending approval) is the page's
   // (main.tsx): it bubbles there unless the suggestions took it.
@@ -473,7 +480,7 @@ export function Composer(props: {
           </div>
         ) : null}
         <textarea id="composer-input" ref={textarea} rows={1} value={text} placeholder={placeholder} aria-label="Message ClikCode"
-          aria-autocomplete="list" aria-controls={showSuggestions ? 'suggestions' : undefined} disabled={!connected}
+          aria-autocomplete="list" aria-controls={showSuggestions ? 'suggestions' : undefined}
           onInput={(event) => { const element = event.target as HTMLTextAreaElement; recall.current = undefined; setText(element.value); setCaret(element.selectionStart); save({ draft: element.value }); setDismissedToken(undefined); }}
           onKeyUp={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
           onClick={(event) => setCaret((event.target as HTMLTextAreaElement).selectionStart)}
@@ -498,8 +505,9 @@ export function Composer(props: {
             <button type="button" id="send-button" class="send" data-stop-and-send="true" aria-label={buttonTitle('sendNow')} title={buttonTitle('sendNow')}
               disabled={!connected} onClick={send}><Icon name="debug-step-over" /></button>
           ) : !model.running || text.trim() ? (
-            <button type="button" id="send-button" class="send" aria-label={model.running ? 'Send into the running turn' : 'Send (Enter)'} title={model.running ? 'Steer (Enter)' : 'Send (Enter)'}
-              disabled={!connected || (!text.trim() && !attachments.length)} onClick={send}><Icon name={model.running ? 'debug-step-into' : 'arrow-up'} /></button>
+            <button type="button" id="send-button" class="send" aria-label={model.running ? 'Send into the running turn' : 'Send (Enter)'}
+              title={held ? 'Sends once ClikCode is connected' : model.running ? 'Steer (Enter)' : 'Send (Enter)'} data-held={held ? 'true' : undefined}
+              disabled={!text.trim() && !attachments.length} onClick={send}><Icon name={model.running ? 'debug-step-into' : 'arrow-up'} /></button>
           ) : null}
         </div>
       </div>

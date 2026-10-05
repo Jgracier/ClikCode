@@ -236,9 +236,14 @@ export class ClikCodeController implements vscode.Disposable {
   /** Started on first use and restarted on demand; concurrent callers share
    * one start. */
   ensureStarted(): Promise<void> {
+    // A start under way -- a reconnect, a move to a new build -- is waited
+    // out: its bridge runs before it has opened the chat, and a message sent
+    // to it then was lost.
+    if (this.starting) return this.starting;
     if (this.bridge?.running) return Promise.resolve();
-    this.starting ??= this.start().finally(() => { this.starting = undefined; });
-    return this.starting;
+    const starting = this.start().finally(() => { if (this.starting === starting) this.starting = undefined; });
+    this.starting = starting;
+    return starting;
   }
 
   private async start(sessionToResume?: string): Promise<void> {
@@ -354,8 +359,9 @@ export class ClikCodeController implements vscode.Disposable {
     const previous = this.bridge;
     this.bridge = undefined;
     previous?.dispose();
-    this.starting = this.start(session).finally(() => { this.starting = undefined; });
-    await this.starting;
+    const starting = this.start(session).finally(() => { if (this.starting === starting) this.starting = undefined; });
+    this.starting = starting;
+    await starting;
   }
 
   /** ClikCode was reinstalled since the bridge started: move onto the new
