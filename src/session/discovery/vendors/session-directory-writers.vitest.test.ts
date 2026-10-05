@@ -1,5 +1,5 @@
 /** Golden output of the thread writers whose vendor resumes a session from a
- * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw), for one
+ * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw, Droid), for one
  * conversation: a codeword, a Codex shell call, a Claude Edit and a Claude
  * Grep.
  *
@@ -24,6 +24,7 @@ import { kimiThreadFiles, kimiWorkDirKey } from './kimi-store.js';
 import { kiroThreadFiles } from './kiro-store.js';
 import { mcodeSessionRelativeDir, mcodeThreadLines } from './mcode-store.js';
 import { openClawCall } from './openclaw-store.js';
+import { droidProjectDirectoryName, droidThreadLines } from './droid-store.js';
 import { piThreadLines } from './pi-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
@@ -299,5 +300,31 @@ describe('openclaw thread writer', () => {
 
     expect(await writer.write(fixtureRecord(), { ...ctx, environment: { HOME: home, OPENCLAW_PROFILE: 'work' } })).toBeUndefined();
     expect(await writer.versionOk(context('openclaw', {}, 'OpenClaw 2026.9.7 (abc)'))).toBe(false);
+  });
+});
+
+describe('droid thread writer', () => {
+  it('writes the golden session file', async () => {
+    const text = droidThreadLines(fixtureRecord(), {
+      sessionId: '0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', workspace: WORKSPACE, now: NOW, messageId: sequentialIds('m-'),
+    });
+    await golden('droid.jsonl', text);
+  });
+
+  it('names the project directory as droid does', () => {
+    expect(droidProjectDirectoryName('/var/tmp/probe3/W s_x.y+z')).toBe('-var-tmp-probe3-W s_x.y+z');
+  });
+
+  it('writes under the taking-over profile and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'droid-writer-'));
+    const writer = NATIVE_SESSION_STORES.droid!.writer!;
+    const ctx = context('droid', { HOME: home }, '0.223.0');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(await readdir(join(home, '.factory', 'sessions', '-home-user-projects-app'))).toEqual([`${written!.nativeId}.jsonl`]);
+    const factory = await mkdtemp(join(tmpdir(), 'droid-factory-'));
+    const again = await writer.write(fixtureRecord(), context('droid', { HOME: home, FACTORY_HOME_OVERRIDE: factory }, '0.223.0'));
+    expect(await readdir(join(factory, 'sessions', '-home-user-projects-app'))).toEqual([`${again!.nativeId}.jsonl`]);
+    expect(await writer.versionOk(context('droid', {}, '0.224.0'))).toBe(false);
   });
 });
