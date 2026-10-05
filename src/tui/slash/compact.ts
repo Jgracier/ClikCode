@@ -32,7 +32,7 @@ export async function compactConversation(
     return;
   }
   await send(id, `${COMPACT_PROMPT}${focus ? `\nPay particular attention to: ${focus}` : ''}`);
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const source = state.sessions.find((item) => item.id === id);
   if (!source) throw new Error(`AI session "${id}" was not found`);
   const summary = [...textTranscript(sessionTranscriptMessages(source))].reverse().find((message) => message.role === 'assistant')?.content.trim();

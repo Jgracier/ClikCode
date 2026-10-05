@@ -115,7 +115,7 @@ async function localModelCommand(session: HarnessSession, value: string): Promis
   await localModelChosen(session.id, model);
   // Re-read: loading a model can take a minute, and the turn worker or
   // another command may have written the state since this command read it.
-  const state = await readState();
+  const state = await readState({ transcripts: [session.id] });
   const current = state.sessions.find((item) => item.id === session.id);
   if (!current) throw new Error(`AI session "${session.id}" was not found`);
   current.model = model;
@@ -428,7 +428,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     }
     if (action === 'show' || action === 'open' || action === 'resume') {
       if (!targetId) throw new Error(`usage: /sessions ${action} <id>`);
-      const target = state.sessions.find((item) => item.id === targetId);
+      const target = (await readState({ transcripts: [targetId] })).sessions.find((item) => item.id === targetId);
       if (!target) throw new Error(`AI session "${targetId}" was not found`);
       return emitHarnessOutput({ panel: 'session', session: target, next: `${harnessCommand()} sessions open ${target.id}` });
     }
@@ -716,10 +716,10 @@ async function resolveLocalModelFor(
  * ClikCode's transcript, still does; see shellContextBlock in
  * turn/session-turn.ts). `signal` kills the command's process tree. */
 export async function runShellLine(id: string, command: string, signal?: AbortSignal): Promise<ShellNote> {
-  const workspace = (await readState()).sessions.find((item) => item.id === id)?.workspace ?? process.cwd();
+  const workspace = (await readState({ transcripts: [] })).sessions.find((item) => item.id === id)?.workspace ?? process.cwd();
   const result = await runShellCommand(command, workspace, signal);
   const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   session.messages = [...(session.messages ?? []), { role: 'user', content: shellMessageContent(note) }];
@@ -730,7 +730,9 @@ export async function runShellLine(id: string, command: string, signal?: AbortSi
 }
 
 export async function aiSessionCommand(id: string, input: string, options: { inferred?: boolean; signal?: AbortSignal } = {}): Promise<string> {
-  const state = await readState();
+  // Every command acts on this chat; any other chat is named by the index
+  // (/resume, /sessions) and read on its own when shown.
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   const text = input.trim();
