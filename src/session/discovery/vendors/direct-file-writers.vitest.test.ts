@@ -17,6 +17,7 @@ import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import type { NativeThreadWriteContext } from '../stores.js';
 import { piProjectDirectoryName, piSessionStore, piThreadLines } from './pi-store.js';
 import { sequentialIds } from './thread-writer-files.js';
+import { copilotSessionStore, copilotThreadFiles } from './copilot-store.js';
 import { geminiProjectSlug, geminiSessionStore, geminiThreadLines } from './gemini-store.js';
 import { qwenProjectDirectoryName, qwenSessionStore, qwenThreadLines } from './qwen-store.js';
 import { commandProjectSlug, commandSessionStore, commandThreadLines } from './command-store.js';
@@ -201,5 +202,32 @@ describe('gemini thread writer', () => {
     const home = await mkdtemp(join(tmpdir(), 'gemini-writer-'));
     await mkdir(join(home, '.gemini', 'projects.json.lock'), { recursive: true });
     await expect(geminiSessionStore.writer!.write(fixtureRecord(), context('gemini', { GEMINI_CLI_HOME: home }, '0.62.0'))).resolves.toBeUndefined();
+  });
+});
+
+describe('copilot thread writer', () => {
+  it('writes the golden session', async () => {
+    const files = copilotThreadFiles(fixtureRecord(), {
+      sessionId: '44444444-5555-4666-8777-888888888888', workspace: WORKSPACE, model: 'm', version: '1.0.91', now: NOW,
+      uuid: sequentialIds('c-'),
+    });
+    await golden('copilot.events.jsonl', files.events);
+    await golden('copilot.workspace.yaml', files.workspace);
+  });
+
+  it('writes the session directory under the taking-over COPILOT_HOME, and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'copilot-writer-'));
+    const writer = copilotSessionStore.writer!;
+    const ctx = context('copilot', { COPILOT_HOME: home }, 'GitHub Copilot CLI 1.0.91.');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(written?.transport).toBeUndefined();
+    expect(await readdir(join(home, 'session-state'))).toEqual([written!.nativeId]);
+    expect((await readdir(join(home, 'session-state', written!.nativeId))).sort()).toEqual(['events.jsonl', 'workspace.yaml']);
+    expect((await copilotSessionStore.locate!(join(home, 'session-state'), written!.nativeId, WORKSPACE, {}))?.path)
+      .toBe(join(home, 'session-state', written!.nativeId));
+    expect(await readFile(join(home, 'session-state', written!.nativeId, 'workspace.yaml'), 'utf8'))
+      .toContain(`id: ${written!.nativeId}\ncwd: "${WORKSPACE}"\n`);
+    expect(await writer.versionOk(context('copilot', {}, 'GitHub Copilot CLI 1.0.92.'))).toBe(false);
   });
 });
