@@ -1,0 +1,234 @@
+{
+  "metaFile": {
+    "schemaVersion": 1,
+    "cwd": "/home/user/projects/app",
+    "title": "Remember the codeword PELICAN-73. Then check what is in n..."
+  },
+  "meta": {
+    "agentId": "00000000-0000-4000-8000-000000000001",
+    "latestRootBlobId": "f553baddd7b43870a7612e79ecab86cc460e63204a23ad4fbb803eaa0c5c8cc8",
+    "name": "Remember the codeword PELICAN-73. Then check what is in n...",
+    "mode": "default",
+    "isRunEverything": false,
+    "createdAt": 1791115200000,
+    "blobEncryptionKey": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "rootId": "f553baddd7b43870a7612e79ecab86cc460e63204a23ad4fbb803eaa0c5c8cc8",
+  "blobs": [
+    {
+      "id": "5debed371c4a44b579af87c0ae145613683d59c3e575d3106e227b9cbea32ee7",
+      "json": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<user_query>\n[ClikCode: the following turns ran on Codex (gpt-5.5)]\n\nRemember the codeword PELICAN-73. Then check what is in notes.txt.\n</user_query>"
+          }
+        ],
+        "providerOptions": {
+          "cursor": {
+            "requestId": "id-0001"
+          }
+        }
+      }
+    },
+    {
+      "id": "bf243b177b867610af67ff6d5fdbcc1aee3ebe2553e63d6887a6c480eb02b647",
+      "json": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "I'll read the notes."
+          },
+          {
+            "type": "tool-call",
+            "toolCallId": "call-id-0002",
+            "toolName": "Shell",
+            "args": {
+              "command": "cat notes.txt"
+            }
+          }
+        ],
+        "id": "msg_id-0003"
+      }
+    },
+    {
+      "id": "dc9fcc0d1699f2cecc5cb7ac91436f3816d0141c5b66f4227a56cd0be5e216f1",
+      "pb": "0a1d0a1449276c6c207265616420746865206e6f7465732e10818ca4b69034"
+    },
+    {
+      "id": "67ebf4b96f638a6a2025335188899fde7ed63044f315755e563c94ba15d0e5a3",
+      "json": {
+        "role": "tool",
+        "content": [
+          {
+            "type": "tool-result",
+            "toolCallId": "call-id-0002",
+            "toolName": "Shell",
+            "result": "Exit code: 0\n\nCommand output:\n\n```\nlaunch window: Thursday\n```",
+            "experimental_content": [
+              {
+                "type": "text",
+                "text": "Exit code: 0\n\nCommand output:\n\n```\nlaunch window: Thursday\n```"
+              }
+            ]
+          }
+        ],
+        "id": "call-id-0002"
+      }
+    },
+    {
+      "id": "aae08d83dd029fce5a335b5e862e10efca8a7227fd8327a435bc428a69f69dae",
+      "pb": "1285010a640a1d0a0d636174206e6f7465732e747874220c63616c6c2d69642d3030303212430a410a0d636174206e6f7465732e7478742a176c61756e63682077696e646f773a20546875727364617952176c61756e63682077696e646f773a205468757273646179ca030c63616c6c2d69642d30303032d803828ca4b69034e003838ca4b69034"
+    },
+    {
+      "id": "786aafceb9e131d13d63b5525e1c727995c7dcbf2fcdb6ccfa1f3940541b8088",
+      "json": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "notes.txt says the launch window is Thursday. Codeword PELICAN-73 noted."
+          }
+        ],
+        "id": "msg_id-0004"
+      }
+    },
+    {
+      "id": "c52719888ef28861c914bcf3f8fa8c0485ee1d6a0a3a542c7697a895432adb97",
+      "pb": "0a510a486e6f7465732e747874207361797320746865206c61756e63682077696e646f772069732054687572736461792e20436f6465776f72642050454c4943414e2d3733206e6f7465642e10848ca4b69034"
+    },
+    {
+      "id": "547985f626de75b5cf386a1270bd779c51f6b67c5072d49cd4d80529f1b01117",
+      "pb": "0a7a5b436c696b436f64653a2074686520666f6c6c6f77696e67207475726e732072616e206f6e20436f64657820286770742d352e35295d0a0a52656d656d6265722074686520636f6465776f72642050454c4943414e2d37332e205468656e20636865636b207768617420697320696e206e6f7465732e7478742e120769642d3030303120018a010769642d30303031c801808ca4b69034d001808ca4b69034"
+    },
+    {
+      "id": "a2400d29025f28f68afd80c429552b464f311ecb0dcc5d6a2257851cc48f840f",
+      "pb": "0a9c010a20547985f626de75b5cf386a1270bd779c51f6b67c5072d49cd4d80529f1b011171220dc9fcc0d1699f2cecc5cb7ac91436f3816d0141c5b66f4227a56cd0be5e216f11220aae08d83dd029fce5a335b5e862e10efca8a7227fd8327a435bc428a69f69dae1220c52719888ef28861c914bcf3f8fa8c0485ee1d6a0a3a542c7697a895432adb971a0769642d303030352800520769642d30303031"
+    },
+    {
+      "id": "1c6a8387e5e77c6a49e35300c693e7585e63907182127897b7976f375ffcc458",
+      "json": {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "<user_query>\n[ClikCode: the following turns ran on Claude Code (claude-sonnet-4-6)]\n\nFix the typo in src/app.ts\n</user_query>"
+          }
+        ],
+        "providerOptions": {
+          "cursor": {
+            "requestId": "id-0006"
+          }
+        }
+      }
+    },
+    {
+      "id": "6a923349136ae518a68f3ff743fb4afb9df7b4c88ef23ca8c693edd696e824e6",
+      "json": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "tool-call",
+            "toolCallId": "call-id-0007",
+            "toolName": "StrReplace",
+            "args": {
+              "path": "/home/user/projects/app/src/app.ts",
+              "old_string": "cosnt x = 1;",
+              "new_string": "const x = 1;"
+            }
+          },
+          {
+            "type": "tool-call",
+            "toolCallId": "call-id-0008",
+            "toolName": "Grep",
+            "args": {
+              "pattern": "cosnt"
+            }
+          }
+        ],
+        "id": "msg_id-0010"
+      }
+    },
+    {
+      "id": "2eb75135246ce31e2303c7e43113bf13d8317b220d496c66271ba5e68f390d1e",
+      "json": {
+        "role": "tool",
+        "content": [
+          {
+            "type": "tool-result",
+            "toolCallId": "call-id-0007",
+            "toolName": "StrReplace",
+            "result": "The file /home/user/projects/app/src/app.ts has been updated.",
+            "experimental_content": [
+              {
+                "type": "text",
+                "text": "The file /home/user/projects/app/src/app.ts has been updated."
+              }
+            ]
+          }
+        ],
+        "id": "call-id-0007"
+      }
+    },
+    {
+      "id": "093db731ceea3cf543ebeb4d916015e6af21f750337c30395c4933bb87162bb4",
+      "pb": "12bd01629b010a320a222f686f6d652f757365722f70726f6a656374732f6170702f7372632f6170702e7473320c636f6e73742078203d20313b12650a630a222f686f6d652f757365722f70726f6a656374732f6170702f7372632f6170702e7473423d5468652066696c65202f686f6d652f757365722f70726f6a656374732f6170702f7372632f6170702e747320686173206265656e20757064617465642eca030c63616c6c2d69642d30303037d803868ca4b69034e003878ca4b69034"
+    },
+    {
+      "id": "e5710162e5da1dfdba306c8fab7dabc97f362fa66738d9891dfedd687511119a",
+      "json": {
+        "role": "tool",
+        "content": [
+          {
+            "type": "tool-result",
+            "toolCallId": "call-id-0008",
+            "toolName": "Grep",
+            "result": "(no matches)",
+            "experimental_content": [
+              {
+                "type": "text",
+                "text": "(no matches)"
+              }
+            ]
+          }
+        ],
+        "id": "call-id-0008"
+      }
+    },
+    {
+      "id": "dcc068ee554bb8b0a2f850a1ec34c5aa9351e72c69f34353ffb5bb9f590ee33c",
+      "pb": "124c2a2b0a150a05636f736e74720c63616c6c2d69642d3030303812120a100a05636f736e741a07636f6e74656e74ca030c63616c6c2d69642d30303038d803888ca4b69034e003898ca4b69034"
+    },
+    {
+      "id": "822f6005cd263b1ba815db3370a1a305914dcb9a2a980e8b05adba0027353ac1",
+      "json": {
+        "role": "assistant",
+        "content": [
+          {
+            "type": "text",
+            "text": "[Fetch https://example.com]\n> Example Domain\n\nFixed the typo in src/app.ts; no other occurrences."
+          }
+        ],
+        "id": "msg_id-0011"
+      }
+    },
+    {
+      "id": "09d524f7201b47f609a147f21acb70ce91a070c9e93a01cc186db62dedef1c89",
+      "pb": "0a6a0a615b46657463682068747470733a2f2f6578616d706c652e636f6d5d0a3e204578616d706c6520446f6d61696e0a0a466978656420746865207479706f20696e207372632f6170702e74733b206e6f206f74686572206f6363757272656e6365732e108a8ca4b69034"
+    },
+    {
+      "id": "020438782d233d08d31fb77e13d1087bf0a5bd846463b88819a69a0f53ac94d4",
+      "pb": "0a625b436c696b436f64653a2074686520666f6c6c6f77696e67207475726e732072616e206f6e20436c6175646520436f64652028636c617564652d736f6e6e65742d342d36295d0a0a46697820746865207479706f20696e207372632f6170702e7473120769642d3030303620018a010769642d30303036c801858ca4b69034d001858ca4b69034"
+    },
+    {
+      "id": "9f852c27c83115e6a363d06468f4a0435e93d9a456c51db3016d92d20b0ddb91",
+      "pb": "0a9c010a20020438782d233d08d31fb77e13d1087bf0a5bd846463b88819a69a0f53ac94d41220093db731ceea3cf543ebeb4d916015e6af21f750337c30395c4933bb87162bb41220dcc068ee554bb8b0a2f850a1ec34c5aa9351e72c69f34353ffb5bb9f590ee33c122009d524f7201b47f609a147f21acb70ce91a070c9e93a01cc186db62dedef1c891a0769642d303031322800520769642d30303036"
+    },
+    {
+      "id": "f553baddd7b43870a7612e79ecab86cc460e63204a23ad4fbb803eaa0c5c8cc8",
+      "pb": "0a205debed371c4a44b579af87c0ae145613683d59c3e575d3106e227b9cbea32ee70a20bf243b177b867610af67ff6d5fdbcc1aee3ebe2553e63d6887a6c480eb02b6470a2067ebf4b96f638a6a2025335188899fde7ed63044f315755e563c94ba15d0e5a30a20786aafceb9e131d13d63b5525e1c727995c7dcbf2fcdb6ccfa1f3940541b80880a201c6a8387e5e77c6a49e35300c693e7585e63907182127897b7976f375ffcc4580a206a923349136ae518a68f3ff743fb4afb9df7b4c88ef23ca8c693edd696e824e60a202eb75135246ce31e2303c7e43113bf13d8317b220d496c66271ba5e68f390d1e0a20e5710162e5da1dfdba306c8fab7dabc97f362fa66738d9891dfedd687511119a0a20822f6005cd263b1ba815db3370a1a305914dcb9a2a980e8b05adba0027353ac14220a2400d29025f28f68afd80c429552b464f311ecb0dcc5d6a2257851cc48f840f42209f852c27c83115e6a363d06468f4a0435e93d9a456c51db3016d92d20b0ddb914a1e66696c653a2f2f2f686f6d652f757365722f70726f6a656374732f6170705001aa01190a172f686f6d652f757365722f70726f6a656374732f617070b20103636c69d001808ca4b69034da0103555443b80200"
+    }
+  ]
+}
