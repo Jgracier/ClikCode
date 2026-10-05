@@ -26,8 +26,11 @@ export function backfillListFacts(
   if (backfill) return backfill.then(() => undefined);
   const pass = (async () => {
     const index = indexed ?? await readState({ transcripts: [] });
-    if (index.sessions.every((session) => session.listChecked || isBlankConversation(session))) return undefined;
-    const state = await readState();
+    const unchecked = index.sessions.filter((session) => !session.listChecked && !isBlankConversation(session));
+    if (!unchecked.length) return undefined;
+    // Only the rows still to summarize: a summarized one is judged blank or
+    // not from its index facts, like everywhere else.
+    const state = await readState({ transcripts: unchecked.map((session) => session.id) });
     let changed = false;
     for (const session of state.sessions) if (stampListFacts(session)) changed = true;
     // Only stored empty chats nothing could be about to use: the one
