@@ -187,8 +187,18 @@ export class IdeBridge {
     }
   }
 
-  async shutdown(): Promise<void> {
-    if (this.closed) return;
+  private stopping: Promise<void> | undefined;
+
+  /** One shutdown, however many ask: the editor sends `close` and then
+   * disconnects at once, and the disconnect's exit used to land while the
+   * close was still writing the state -- a lock file left empty, which every
+   * other ClikCode then waited 30 s to judge stale (an open stood that long). */
+  shutdown(): Promise<void> {
+    this.stopping ??= this.stop();
+    return this.stopping;
+  }
+
+  private async stop(): Promise<void> {
     this.closed = true;
     this.listWatch?.stop();
     this.listWatch = undefined;

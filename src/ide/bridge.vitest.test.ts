@@ -131,3 +131,12 @@ describe('the editor bridge draining a stuck queue', () => {
   });
 });
 
+describe('the editor bridge shutting down', () => {
+  it('is one shutdown however many ask, so an exit waits for the close already writing', async () => {
+    const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+    const first = bridge.shutdown();
+    expect(bridge.shutdown(), 'the disconnect after `close` waits on the same work').toBe(first);
+    await first;
+  });
+});
+
