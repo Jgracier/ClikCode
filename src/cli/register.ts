@@ -51,7 +51,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('permissions [mode]').description('Choose Ask, Bypass, or Auto approval behavior for the active chat')
     .action((mode?: string) => aiPermissions(mode));
   const accounts = program.command('accounts').alias('account').description('Manage local provider accounts');
-  accounts.command('list').alias('ls').description('List local accounts without credential material').action(aiAccountsList);
+  accounts.command('list').alias('ls').description('List local accounts and the usage left on each')
+    .option('--models', 'Include each account\'s model list').action((options: { models?: boolean }) => aiAccountsList(options));
   accounts.command('providers').description('List supported local harnesses and login kinds').action(aiAccountProviders);
   accounts.command('login <harness>').description('Install if necessary, then run the harness’s official local login flow')
     .option('--label <label>', 'Local account label')

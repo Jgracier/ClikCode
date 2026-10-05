@@ -21,7 +21,8 @@ import { harnessStatePath } from '../session/state/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
-import { accountUsageLabel } from '../harness/accounts/account-usage.js';
+import { accountUsageLabel, accountUsageReading } from '../harness/accounts/account-usage.js';
+import { accountCanTakeTurn, usageResetLabel } from '../harness/accounts/usage-reading.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harness/accounts/labels.js';
@@ -39,18 +40,35 @@ let emitHarnessOutput: EmitHarnessOutput = () => {};
 
 export function setEmitHarnessOutput(fn: EmitHarnessOutput): void { emitHarnessOutput = fn; }
 
-export async function aiAccountsList(): Promise<void> {
+/** What happens at an account's limit, said once with the list. */
+export const ACCOUNT_LIMIT_NOTE = 'At an account\'s usage limit, ClikCode moves the chat to another account of the same provider that has usage left (`fallbacks`), and the turn carries on. With none left, it offers another provider.';
+
+/** Each account and what is left on it -- what a person, or an agent
+ * checking accounts, wants from this list. The model catalog is long and
+ * rarely the question, so it comes only with `--models`. */
+export async function aiAccountsList(options: { models?: boolean } = {}): Promise<void> {
   const state = await readState();
-  const accounts = await Promise.all(state.accounts.map(async (account) => ({
-    ...accountView(account), usage: await accountUsageLabel(account, state),
-    // An account kept from a harness the catalog has since retired (Crush)
-    // can run nothing. Its stored status is the user's, so it stays; this
-    // says what it is worth.
-    ...(localHarnessForProvider(account.provider) ? {} : {
-      supported: false, note: `${account.provider} is no longer a supported tool; remove this account with \`clikcode accounts remove ${account.id}\``,
-    }),
-  })));
-  emitResult({ accounts });
+  const ready = (account: AiHarnessAccount): boolean => account.status === 'ready' && accountCanTakeTurn(account);
+  const accounts = await Promise.all(state.accounts.map(async (account) => {
+    const reading = await accountUsageReading(account, state);
+    const resets = usageResetLabel(reading?.windows);
+    const { models: _models, nativeProfile: _profile, ...brief } = accountView(account);
+    const fallbacks = state.accounts.filter((other) => other.id !== account.id && other.provider === account.provider && ready(other)).length;
+    return {
+      ...(options.models ? accountView(account) : brief),
+      usage: reading?.label ?? 'not reported',
+      ...(resets ? { resets } : {}),
+      canTakeTurn: ready(account),
+      fallbacks,
+      // An account kept from a harness the catalog has since retired (Crush)
+      // can run nothing. Its stored status is the user's, so it stays; this
+      // says what it is worth.
+      ...(localHarnessForProvider(account.provider) ? {} : {
+        supported: false, note: `${account.provider} is no longer a supported tool; remove this account with \`clikcode accounts remove ${account.id}\``,
+      }),
+    };
+  }));
+  emitResult({ accounts, onLimit: ACCOUNT_LIMIT_NOTE });
 }
 
 /** Lists the normalized local account surfaces without probing provider credentials. */
