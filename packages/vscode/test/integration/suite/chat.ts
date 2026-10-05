@@ -377,11 +377,20 @@ export function chatSuite(): void {
       };
       const [pid] = bridges();
       assert.ok(pid, 'the side bar bridge is a child of the extension host');
+      const asked = api.state.messages.filter((message) => message.role === 'user').length;
       process.kill(pid!, 'SIGKILL');
       await until(api, (state) => state.connection !== 'ready', 'the chat to notice', 30_000);
+      // Typed and sent while it reconnects: the box takes it, and the message
+      // waits in it until the chat is back.
+      assert.ok(!(await query(api, '#composer-input')).disabled, 'the box takes typing while it reconnects');
+      await type(api, '#composer-input', 'Reply with exactly the word PONG and nothing else.');
+      await click(api, '#send-button');
       const back = await until(api, (state) => state.connection === 'ready' && Boolean(state.sessionId), 'the chat to reconnect', 90_000);
       assert.strictEqual(back.sessionId, session, 'it came back to the same conversation');
       assert.notStrictEqual(bridges()[0], pid, 'on a new bridge');
+      await until(api, (state) => state.running || state.messages.filter((message) => message.role === 'user').length > asked, 'the held message to go out', 30_000);
+      await until(api, (state) => !state.running, 'its turn to finish', 240_000);
+      await waitFor(api, '#composer-input', 'the box emptied by the send', 10_000, (found) => !found.value);
       await waitFor(api, '.banner', 'no error banner', 10_000, (found) => found.count === 0);
     });
 

@@ -339,6 +339,7 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
   background: var(--vscode-button-background); color: var(--vscode-button-foreground); margin-left: 2px;
 }
 .send:hover:not(:disabled) { background: var(--vscode-button-hoverBackground); }
+.send[data-held="true"] { opacity: 0.6; }
 .send:disabled { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); opacity: 0.6; }
 .send.stop .codicon { font-size: 13px; }
 .attachments { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 8px 0; }
