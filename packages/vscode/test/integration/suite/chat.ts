@@ -3,7 +3,7 @@
  * free model) and back, driven through the page the way a user drives it. */
 import * as assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import * as vscode from 'vscode';
@@ -358,6 +358,34 @@ export function chatSuite(): void {
       assert.strictEqual(back.sessionId, session, 'it came back to the same conversation');
       assert.notStrictEqual(bridges()[0], pid, 'on a new bridge');
       await waitFor(api, '.banner', 'no error banner', 10_000, (found) => found.count === 0);
+    });
+
+    it('moves onto a new build while idle, so a message is never held up by the move', async () => {
+      const bridges = (): number[] => {
+        try { return execFileSync('pgrep', ['-P', String(process.pid), '-f', 'ide-bridge'], { encoding: 'utf8' }).split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
+      };
+      await until(api, (state) => state.connection === 'ready' && !state.running, 'an idle chat', 60_000);
+      const before = bridges();
+      // A reinstall: the entry the bridge runs changes on disk.
+      const entry = vscode.workspace.getConfiguration('clikcode').get<string>('path')!;
+      const now = new Date();
+      utimesSync(entry, now, now);
+      const deadline = Date.now() + 30_000;
+      while (Date.now() < deadline && bridges().every((pid) => before.includes(pid))) await sleep(250);
+      assert.ok(bridges().some((pid) => !before.includes(pid)), 'the bridge moved onto the new build by itself');
+      await until(api, (state) => state.connection === 'ready', 'the chat ready on the new build', 60_000);
+      // A send now goes straight out: no restart stands in front of it.
+      const asked = api.state.messages.filter((message) => message.role === 'user').length;
+      await type(api, '#composer-input', 'Reply with exactly the word PING and nothing else.');
+      await waitFor(api, '#send-button', 'enabled Send button', 10_000, (found) => found.count > 0 && !found.disabled);
+      const sentAt = Date.now();
+      await click(api, '#send-button');
+      // Out: running, or (a reply this short) already answered.
+      await until(api, (state) => state.running || state.messages.filter((message) => message.role === 'user').length > asked, 'the message to go out', 10_000);
+      assert.ok(Date.now() - sentAt < 10_000, `the message went out in ${Date.now() - sentAt} ms`);
+      await until(api, (state) => !state.running && state.messages.some((message) => message.role === 'assistant' && /PING/.test(message.content)), 'the answer', 240_000);
+      // Finished in view: nothing popped up about it.
+      await waitFor(api, '.banner', 'no banner', 5_000, (found) => found.count === 0);
     });
 
     it('offers an update when ClikCode is too old for the extension, or the extension for ClikCode', async () => {
