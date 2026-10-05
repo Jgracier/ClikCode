@@ -212,8 +212,14 @@ export class IdeBridge {
     if (this.sessionId) await leaveConversation(this.sessionId);
   }
 
+  /** One job at a time, in order -- until a job opens a vendor sign-in. That
+   * waits on a browser for as long as the user likes, and every open, send
+   * and choice behind it waited too; the job carries on by itself from there,
+   * and the queue moves on. */
   private enqueue(job: () => Promise<void>): void {
-    this.work = this.work.then(job).catch((error: unknown) => this.report(error));
+    this.work = this.work.then(() => new Promise<void>((release) => {
+      void this.prompter.holding(release, job).catch((error: unknown) => this.report(error)).finally(release);
+    }));
   }
 
   private report(error: unknown): void {
@@ -362,12 +368,14 @@ export class IdeBridge {
       case 'sign-in-request':
         // The worker has no terminal; the editor has one. The worker retries
         // the turn once this answers.
-        // The sign-in runs here and shows in the panel, like every other.
-        void withSignIn(this.prompter, event.name, async () => {
+        // The sign-in runs here and shows in the panel, like every other. It
+        // is the turn's, which holds the queue anyway: not the job that
+        // happened to attach this worker.
+        void this.prompter.holding(undefined, () => withSignIn(this.prompter, event.name, async () => {
           const harness = localHarnessForCommand(event.command);
           if (!harness) throw new Error(`unknown harness ${event.command}`);
           await loginNativeHarness({ ...harness, loginArgv: event.argv }, event.environment);
-        })
+        }))
           .then(() => client.send({ type: 'sign-in-response', id: event.id }),
             (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: messageOf(error) }));
         return;
@@ -711,11 +719,14 @@ export class IdeBridge {
             const id = this.requireSession();
             const selected = choice.provider === GATEWAY_ID ? '__gateway__' : choice.provider === LOCAL_ID ? '__clikcode_local__' : choice.provider;
             const moved = await selectProviderConversation(this.config, this.prompter, id, selected);
-            if (moved !== this.sessionId) await this.switchTo(moved);
             if (choice.model) {
-              const { session } = await this.current();
-              await aiSessionCommand(session.id, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
-            } else await resolveSessionModel(this.requireSession());
+              const { session } = await this.current(moved);
+              await aiSessionCommand(moved, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
+            } else await resolveSessionModel(moved);
+            // A sign-in let the queue go: the user may have opened another
+            // chat meanwhile, and keeps it.
+            if (this.sessionId !== id) return { sessionId: moved };
+            if (moved !== id) await this.switchTo(moved);
             await this.prepareRoute().catch(() => undefined);
             await this.emitSession();
             void this.refreshUsage().catch(() => undefined);

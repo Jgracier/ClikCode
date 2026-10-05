@@ -131,6 +131,39 @@ describe('the editor bridge draining a stuck queue', () => {
   });
 });
 
+describe('the editor bridge and a pending sign-in', () => {
+  type Queue = { enqueue(job: () => Promise<void>): void; work: Promise<void> };
+
+  it('lets the queue move on while a sign-in waits, and carries on after it', async () => {
+    const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+    const inner = bridge as unknown as Queue;
+    const order: string[] = [];
+    let finishSignIn!: () => void;
+    inner.enqueue(async () => {
+      const screen = bridge.prompter.signInScreen('Vendor');
+      await new Promise<void>((resolve) => { finishSignIn = resolve; });
+      screen.stop();
+      order.push('signed in');
+    });
+    inner.enqueue(async () => { order.push('next request'); });
+    await inner.work;
+    expect(order, 'the request behind the sign-in ran').toEqual(['next request']);
+    finishSignIn();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(order).toEqual(['next request', 'signed in']);
+  });
+
+  it('still runs jobs one at a time otherwise', async () => {
+    const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+    const inner = bridge as unknown as Queue;
+    const order: string[] = [];
+    inner.enqueue(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); order.push('first'); });
+    inner.enqueue(async () => { order.push('second'); });
+    await inner.work;
+    expect(order).toEqual(['first', 'second']);
+  });
+});
+
 describe('the editor bridge shutting down', () => {
   it('is one shutdown however many ask, so an exit waits for the close already writing', async () => {
     const bridge = new IdeBridge({} as Conf, { send: () => undefined });
