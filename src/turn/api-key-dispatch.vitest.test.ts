@@ -12,10 +12,10 @@ const isDirectModelProvider = (provider: string): boolean => Boolean(getAiProvid
  * Every harness that offers an API key must have some way to actually serve a
  * turn with one.
  *
- * Seventeen harnesses advertise `api-key` in localAuth. Only five of them
- * name a provider that is a real model API (anthropic, openai, google, xai,
- * nous); the other twelve name THEMSELVES -- aider, cline, continue, goose,
- * kilo, kimi, kiro, opencode, openhands, pi, qwen, mistral-vibe -- and there
+ * Many harnesses advertise `api-key` in localAuth. Only five of them name a
+ * provider that is a real model API (anthropic, openai, google, xai, nous);
+ * the rest name THEMSELVES -- aider, cline, goose, kilo, kimi, kiro,
+ * opencode, pi, mistral-vibe and more -- and there
  * is no aider endpoint to POST to. drive.ts used to fork on
  * `authKind === 'vendor-cli'`, so those twelve fell through to a direct HTTP
  * turn and threw a raw `unknown AI provider: aider` from inside the registry,
