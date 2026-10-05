@@ -17,6 +17,7 @@ import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import type { NativeThreadWriteContext } from '../stores.js';
 import { piProjectDirectoryName, piSessionStore, piThreadLines } from './pi-store.js';
 import { sequentialIds } from './thread-writer-files.js';
+import { qwenProjectDirectoryName, qwenSessionStore, qwenThreadLines } from './qwen-store.js';
 import { commandProjectSlug, commandSessionStore, commandThreadLines } from './command-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
@@ -133,5 +134,30 @@ describe('command code thread writer', () => {
     expect((await commandSessionStore.locate!(root, written!.nativeId, WORKSPACE, {}))?.path)
       .toBe(join(root, 'home-user-projects-app', `${written!.nativeId}.jsonl`));
     expect(await writer.versionOk(context('command', {}, '1.75.0'))).toBe(false);
+  });
+});
+
+describe('qwen thread writer', () => {
+  it('writes the golden thread', async () => {
+    await golden('qwen.jsonl', qwenThreadLines(fixtureRecord(), {
+      sessionId: '22222222-3333-4444-8555-666666666666', workspace: WORKSPACE, model: 'm', version: '0.24.3', now: NOW,
+      uuid: sequentialIds('u-'),
+    }));
+  });
+
+  it('writes under the taking-over QWEN_HOME, where locate finds it, and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'qwen-writer-'));
+    const writer = qwenSessionStore.writer!;
+    const ctx = context('qwen', { QWEN_HOME: home }, '0.24.3');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(written?.transport).toBeUndefined();
+    const directory = join(home, 'projects', qwenProjectDirectoryName(WORKSPACE), 'chats');
+    expect(await readdir(directory)).toEqual([`${written!.nativeId}.jsonl`]);
+    expect((await qwenSessionStore.locate!(qwenSessionStore.root({ QWEN_HOME: home })!, written!.nativeId, WORKSPACE, {}))?.path)
+      .toBe(join(directory, `${written!.nativeId}.jsonl`));
+    const first = JSON.parse((await readFile(join(directory, `${written!.nativeId}.jsonl`), 'utf8')).split('\n')[0]!);
+    expect(first).toMatchObject({ sessionId: written!.nativeId, parentUuid: null, type: 'user', cwd: WORKSPACE, version: '0.24.3' });
+    expect(await writer.versionOk(context('qwen', {}, '0.25.0'))).toBe(false);
   });
 });
