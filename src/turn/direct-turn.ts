@@ -1,5 +1,4 @@
 /** One turn through a directly addressable model API. */
-import chalk from 'chalk';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
@@ -72,15 +71,6 @@ export async function sendDirectApiTurn(input: {
     } catch (error) {
       const failureKind = classifyAccountFailure(error);
       await accounts.switchTo(await accounts.after(error, failureKind, signal), failureKind);
-    }
-  }
-  if (prompter && Array.isArray(turn.toolCalls)) {
-    for (const call of turn.toolCalls) {
-      const name = call && typeof call.name === 'string' ? call.name : 'tool';
-      // The tool's own name, with nothing in front of it -- the same rule the
-      // native-harness rows follow. This is the Gateway/direct-API path, and
-      // it was the one place still prepending a status word.
-      prompter.activity(chalk.dim(name));
     }
   }
   const invocation = recordInvocation(state, {
