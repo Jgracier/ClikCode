@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { bindGlobalFlags } from '../../cli/flags.js';
+import { bindGlobalFlags } from '../../cli/output-mode.js';
 
 vi.mock('../../gateway/credentials.js', () => ({
   getApiUrl: () => 'https://clikdeploy.com',
