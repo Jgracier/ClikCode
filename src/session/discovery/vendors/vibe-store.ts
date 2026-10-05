@@ -16,6 +16,15 @@
  * that glob, and the `.session_index.json` listing cache beside it re-reads
  * any session directory whose meta.json it has not seen
  * (SessionIndex._reconcile).
+ *
+ * Carry checked live against vibe 2.25.7 (2026-10-05, two VIBE_HOMEs with
+ * the same Mistral key), short of the model's answer: a session started
+ * over ACP in A ("Remember the word <W>. Reply OK."), carried by
+ * carryNativeSession ('carried'), then `session/load` in B succeeded and
+ * replayed the prompt with the word (an id never carried: "Session not
+ * found"); A unchanged. Both prompts got Mistral HTTP 429 (rate_limited,
+ * retried until timeout) on three different accounts, so the recall itself
+ * is unproved.
  */
 
 import { randomUUID } from 'node:crypto';

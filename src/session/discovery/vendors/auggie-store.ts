@@ -10,6 +10,14 @@
  * text node and `tool_use` nodes; auggie sends the nodes and blanks the
  * plain-text copies). A resume (`--resume <id>`, ACP `session/load`) reads
  * the file; there is no other index.
+ *
+ * Carry checked live against auggie 0.36.0 (2026-10-05, temp homes A and B
+ * with the same Augment sign-in), short of the model's answer: a session
+ * started over ACP in A ("Remember the word <W>. Reply OK."), carried by
+ * carryNativeSession ('carried'), then `session/load` in B succeeded and
+ * replayed the prompt with the word (an id never carried: "Session not
+ * found"); A unchanged. The prompts were answered "You have run out of
+ * usage for <account>", so the recall itself is unproved.
  */
 
 import { randomUUID } from 'node:crypto';
