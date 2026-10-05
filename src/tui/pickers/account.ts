@@ -116,7 +116,7 @@ export async function interactiveAccountPicker(
  * as a starting point for the env var prompt below. Falls back to a
  * generic <PROVIDER>_API_KEY guess for anything not in this short list. */
 const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = {
-  anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GOOGLE_API_KEY', qwen: 'DASHSCOPE_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY', openai: 'OPENAI_API_KEY', google: 'GOOGLE_API_KEY',
   // Each read out of the installed binary rather than guessed, because the
   // generic <PROVIDER>_API_KEY fallback gets every one of these wrong:
   // "factory" is not FACTORY's provider word in its own env, and command-code
