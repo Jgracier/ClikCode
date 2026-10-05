@@ -8,7 +8,8 @@ import { cachedDirectory, discoveryCacheChanged, saveDiscoveryCache } from '../c
 import { newestFiles, readFilePrefix, readFileSuffix } from '../files.js';
 import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { conversationTitle } from '../conversation-title.js';
-import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, visibleNativeUserText } from '../transcript.js';
+import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, leadingText, visibleNativeUserText } from '../transcript.js';
+import { isClikCodeOpening } from '../../../turn/failover-prompt.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Claude Code names a project folder by replacing EVERY non-alphanumeric
@@ -47,7 +48,7 @@ async function claudeSessionCwd(path: string): Promise<string | undefined> {
  * Reads the tail as well as the head: Claude writes its ai-title record a turn
  * or two in, which on real transcripts sat as far as 66KB from the start --
  * past this prefix -- while the newest copy is always near the end. */
-async function claudeSessionTitle(path: string): Promise<{ title?: string; generated?: boolean }> {
+async function claudeSessionTitle(path: string): Promise<{ title?: string; generated?: boolean; byClikCode: boolean }> {
   const tail = await readFileSuffix(path, 64_000).catch(() => '');
   let generated: string | undefined;
   for (const line of tail.split('\n')) {
@@ -57,24 +58,39 @@ async function claudeSessionTitle(path: string): Promise<{ title?: string; gener
       if (record.type === 'ai-title' && typeof record.aiTitle === 'string' && record.aiTitle.trim()) generated = record.aiTitle.trim();
     } catch { /* a partial line at the window edge is not a record. */ }
   }
-  if (generated) return { title: generated, generated: true };
   const prefix = await readFilePrefix(path, 8_000).catch(() => '');
-  let title: string | undefined;
+  // The first user message, for the title; and the first thing sent, whose
+  // opening says whose thread this is -- that can be a queued prompt Claude
+  // records before the message itself.
+  let first: string | undefined;
+  let opening: string | undefined;
   for (const line of prefix.split('\n')) {
     if (!line.trim()) continue;
-    let record: Record<string, unknown>;
-    try { record = JSON.parse(line); } catch { continue; }
-    const message = record.message as { content?: unknown } | undefined;
-    if (!title && record.type === 'user') {
-      const text = visibleNativeUserText(extractMessageText(message?.content));
-      // Claude Code also injects synthetic wrapper turns (e.g. a
-      // "<local-command-caveat>" note about a slash command's own output) as
-      // literal role:"user" messages — the same reason Codex's fallback below
-      // skips anything starting with "<".
-      if (text) title = conversationTitle(text);
+    let text: string;
+    let queued = false;
+    try {
+      const record = JSON.parse(line) as Record<string, unknown>;
+      queued = record.type === 'queue-operation' && record.operation === 'enqueue';
+      if (record.type !== 'user' && !queued) continue;
+      text = visibleNativeUserText(queued ? (typeof record.content === 'string' ? record.content : '') : extractMessageText((record.message as { content?: unknown } | undefined)?.content));
+    } catch {
+      // A transfer prompt is the whole conversation in one line, cut off by
+      // the prefix; its opening is still in the cut line.
+      queued = /"type"\s*:\s*"queue-operation"/.test(line) && line.includes('"enqueue"');
+      if (!queued && !/"type"\s*:\s*"user"|"role"\s*:\s*"user"/.test(line)) continue;
+      text = visibleNativeUserText(leadingText(line) ?? '');
     }
+    // Claude Code also injects synthetic wrapper turns (e.g. a
+    // "<local-command-caveat>" note about a slash command's own output) as
+    // literal role:"user" messages — the same reason Codex's fallback
+    // skips anything starting with "<".
+    if (!text) continue;
+    opening ??= text;
+    if (!queued) { first = text; break; }
   }
-  return { title };
+  const byClikCode = !!opening && isClikCodeOpening(opening);
+  if (generated) return { title: generated, generated: true, byClikCode };
+  return { ...(first ? { title: conversationTitle(first) } : {}), byClikCode };
 }
 
 export async function discoverClaudeFsSessions(workspace: string, environment: NativeSessionEnvironment = {}): Promise<DiscoveredNativeSession[]> {
@@ -89,16 +105,17 @@ export async function discoverClaudeFsSessions(workspace: string, environment: N
       const facts = listing.files[name] ?? {};
       // A title can appear after the first scan (the ai-title record is written
       // once Claude has named the chat), so it is keyed to the file's mtime.
-      if (facts.mtimeMs !== file.mtimeMs || (everywhere && facts.cwd === undefined)) {
+      if (facts.mtimeMs !== file.mtimeMs || (everywhere && facts.cwd === undefined) || facts.byClikCode === undefined) {
         const read = await claudeSessionTitle(file.path);
         const cwd = everywhere ? await claudeSessionCwd(file.path) : facts.cwd;
-        listing.files[name] = { title: read.title, generated: read.generated, mtimeMs: file.mtimeMs, ...(cwd ? { cwd } : {}) };
+        listing.files[name] = { title: read.title, generated: read.generated, byClikCode: read.byClikCode, mtimeMs: file.mtimeMs, ...(cwd ? { cwd } : {}) };
         discoveryCacheChanged();
       }
       const known = listing.files[name]!;
       sessions.push({
         nativeId: name.replace(/\.jsonl$/, ''), title: known.title,
         ...(known.generated ? { titleIsGenerated: true } : {}),
+        ...(known.byClikCode ? { byClikCode: true } : {}),
         updatedAt: new Date(file.mtimeMs).toISOString(), updatedAtMs: file.mtimeMs,
         ...(known.cwd ? { workspace: known.cwd } : {}),
       });

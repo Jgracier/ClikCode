@@ -40,6 +40,7 @@
  * profile variable), so the thread lands where every OpenCode turn ClikCode
  * runs lands: in the history the account already uses. */
 
+import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -408,6 +409,11 @@ function openCodeFamilyStore(name: string, writer: NativeThreadWriter): NativeSe
   return {
     root: (environment) => join(nativeDataRoot(environment, 'XDG_DATA_HOME', join(environment.HOME?.trim() || homedir(), '.local', 'share')), name),
     writer,
+    // A message's text is its parts; the user's first text part (observed
+    // on opencode 1.18.32).
+    openings: (root, nativeIds) => sqliteOpenings(join(root, `${name}.db`), nativeIds,
+      "SELECT p.data AS text FROM part p JOIN message m ON m.id = p.message_id WHERE p.session_id = ? AND json_extract(m.data, '$.role') = 'user' AND json_extract(p.data, '$.type') = 'text' ORDER BY p.time_created, p.id LIMIT 1",
+      jsonPartText),
   };
 }
 

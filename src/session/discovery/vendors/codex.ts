@@ -7,7 +7,8 @@ import { CachedSessionFacts, cachedDirectory, codexPathById, discoveryCacheChang
 import { readFilePrefix, sortedSubdirectories } from '../files.js';
 import { type NativeSessionEnvironment, nativeDataRoot } from '../stores.js';
 import { conversationTitle } from '../conversation-title.js';
-import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, visibleNativeUserText } from '../transcript.js';
+import { ADOPTED_TRANSCRIPT_LIMIT, extractMessageText, leadingText, visibleNativeUserText } from '../transcript.js';
+import { isClikCodeOpening } from '../../../turn/failover-prompt.js';
 import { DiscoveredNativeSession } from '../discovered-session.js';
 
 /** Codex writes one `rollout-<timestamp>-<uuid>.jsonl` file per session under
@@ -33,10 +34,17 @@ const CODEX_MAX_DAY_DIRECTORIES = 180;
  * filename ends in. */
 function parseCodexSessionHead(prefix: string, fileName: string): CachedSessionFacts {
   const facts: CachedSessionFacts = {};
+  // The first message the user is shown as having typed says whose thread
+  // this is. A transfer prompt is the whole conversation in one line, so it
+  // is usually cut off by the prefix: its opening is read from the cut line.
+  const opening = (text: string): void => {
+    if (facts.byClikCode === undefined && text) facts.byClikCode = isClikCodeOpening(text);
+  };
   for (const line of prefix.split('\n')) {
     if (!line.trim()) continue;
     let record: Record<string, unknown>;
     try { record = JSON.parse(line); } catch {
+      if (line.includes('"response_item"') && /"role"\s*:\s*"user"/.test(line)) opening(visibleNativeUserText(leadingText(line) ?? ''));
       if (!facts.id && line.includes('"session_meta"')) {
         const id = /"(?:session_id|id)"\s*:\s*"([^"\\]+)"/.exec(line)?.[1];
         const cwd = /"cwd"\s*:\s*("(?:[^"\\]|\\.)*")/.exec(line)?.[1];
@@ -51,11 +59,13 @@ function parseCodexSessionHead(prefix: string, fileName: string): CachedSessionF
         : typeof payload?.session_id === 'string' && payload.session_id ? payload.session_id : undefined;
       if (id) facts.id = id;
       if (typeof payload?.cwd === 'string') facts.cwd = payload.cwd;
-    } else if (!facts.title && record.type === 'response_item' && payload?.role === 'user') {
+    } else if (record.type === 'response_item' && payload?.role === 'user') {
       const text = visibleNativeUserText(extractMessageText(payload.content));
-      if (text) facts.title = conversationTitle(text);
+      opening(text);
+      if (text && !facts.title) facts.title = conversationTitle(text);
     }
   }
+  facts.byClikCode ??= false;
   if (!facts.id) {
     const fromName = /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i.exec(fileName)?.[1];
     if (fromName) facts.id = fromName;
@@ -88,7 +98,7 @@ export async function discoverCodexFsSessions(workspace: string, environment: Na
       let facts = listing.files[name]!;
       // The head of a rollout never changes; only a still-missing title (a
       // session listed before its first message) is worth another look.
-      if (!facts.id || !facts.title) {
+      if (!facts.id || !facts.title || facts.byClikCode === undefined) {
         facts = parseCodexSessionHead(await readFilePrefix(path, 64_000).catch(() => ''), name);
         listing.files[name] = facts;
         discoveryCacheChanged();
@@ -101,7 +111,7 @@ export async function discoverCodexFsSessions(workspace: string, environment: Na
       // Only files that survive the filter are stat-ed at all.
       const info = await stat(path).catch(() => undefined);
       if (!info) continue;
-      matches.push({ nativeId: facts.id, title: facts.title, updatedAt: new Date(info.mtimeMs).toISOString(), updatedAtMs: info.mtimeMs, ...(facts.cwd ? { workspace: facts.cwd } : {}) });
+      matches.push({ nativeId: facts.id, title: facts.title, ...(facts.byClikCode ? { byClikCode: true } : {}), updatedAt: new Date(info.mtimeMs).toISOString(), updatedAtMs: info.mtimeMs, ...(facts.cwd ? { workspace: facts.cwd } : {}) });
     }
   }
   await saveDiscoveryCache();

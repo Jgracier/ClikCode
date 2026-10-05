@@ -14,6 +14,8 @@
  * ClikCode's own plumbing and belongs nowhere near the transcript.
  */
 
+import { carriesTitleRequest } from '../session/title.js';
+
 /** Opening line of every rehydration prompt; the marker that identifies one.
  *
  * Written as context, not as a task. The earlier wording ("Continue the same
@@ -67,6 +69,20 @@ export const INTERRUPTED_TURN_REQUEST = 'Continue the interrupted latest request
  * of a vendor's transcript, it is stripped. */
 export const providerBoundaryNote = (label: string): string => `[ClikCode: the following turns ran on ${label}]`;
 const PROVIDER_BOUNDARY_NOTE = /^\[ClikCode: the following turns ran on [^\n]*\](?:\s*\n|\s*$)\s*/;
+
+/** Whether a vendor thread opening with `text` (its first user message, or a
+ * title made from it) is one ClikCode wrote: a conversation carried over as a
+ * transfer prompt, a written thread opening on a provider boundary note, or
+ * a first turn ClikCode asked for a title in (read whole).
+ * Leading quotes and space are not the opening: one vendor's CLI was handed
+ * the prompt quoted. */
+export function isClikCodeOpening(text: string): boolean {
+  const opening = text.replace(/^[\s"']+/, '');
+  return CLIKCODE_OPENINGS.some((start) => opening.startsWith(start)) || carriesTitleRequest(text);
+}
+
+/** Enough of each opening to know it, even from a title or a cut-off read. */
+const CLIKCODE_OPENINGS = [...[FAILOVER_PREAMBLE, ...EARLIER_PREAMBLES].map((preamble) => preamble.slice(0, 40)), providerBoundaryNote('').slice(0, -1)];
 
 /** Replace any rehydration prompt in an imported transcript with the request
  * it carried, drop a bare INTERRUPTED_TURN_REQUEST, and strip a provider

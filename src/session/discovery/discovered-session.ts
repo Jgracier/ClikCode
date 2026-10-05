@@ -23,4 +23,7 @@ export interface DiscoveredNativeSession {
   /** The folder the chat ran in, where the vendor records it. Discovery
    * across every folder shows it, and adopting the chat opens it there. */
   workspace?: string;
+  /** Its first user message is ClikCode's own (isClikCodeOpening): a thread
+   * ClikCode wrote or carried a conversation into, not a chat to adopt. */
+  byClikCode?: boolean;
 }

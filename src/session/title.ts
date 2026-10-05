@@ -113,6 +113,12 @@ export function withTitleRequest(prompt: string): string {
   return `${prompt}${titleRequest()}`;
 }
 
+/** Whether a message ends with a title request (any wording ClikCode used):
+ * one ClikCode sent. */
+export function carriesTitleRequest(text: string): boolean {
+  return new RegExp(`\\n\\n${OPEN}[\\s\\S]*${CLOSE}\\s*$`).test(text);
+}
+
 /** Collapsed, unquoted, and cut to the limit on a word boundary where there is
  * one, so a model that ignores the length still produces something readable. */
 export function normalizeSessionTitle(raw: string): string | undefined {

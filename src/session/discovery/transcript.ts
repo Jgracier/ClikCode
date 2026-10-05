@@ -73,6 +73,16 @@ export function visibleNativeUserText(text: string): string {
   return trimmed;
 }
 
+/** The first `"text"` or string `"content"` in a JSONL line, as far as the
+ * line goes: a bounded read cuts a long message -- a transfer prompt is the
+ * whole conversation -- off mid-string, and its opening is still there. */
+export function leadingText(line: string): string | undefined {
+  const match = /"(?:text|content)"\s*:\s*"((?:[^"\\]|\\.)*)/.exec(line);
+  if (!match) return undefined;
+  const escaped = match[1]!.replace(/\\u?[0-9a-fA-F]{0,3}$|\\$/, '');
+  try { return JSON.parse(`"${escaped}"`) as string; } catch { return escaped; }
+}
+
 // Large enough that an externally continued thread still overlaps ClikCode's
 // cached suffix; bounded so opening a years-long vendor history cannot bloat
 // the local state file without limit.

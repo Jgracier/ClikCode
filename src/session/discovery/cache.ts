@@ -8,7 +8,12 @@ import type { DiscoveredNativeSession } from './discovered-session.js';
 /** What discovery learned about one vendor file. Everything here comes from
  * the head of an append-only transcript, so it stays true for as long as the
  * file exists; only a missing title is ever looked up again. */
-export interface CachedSessionFacts { id?: string; cwd?: string; title?: string; generated?: boolean; mtimeMs?: number; size?: number }
+export interface CachedSessionFacts {
+  id?: string; cwd?: string; title?: string; generated?: boolean; mtimeMs?: number; size?: number;
+  /** The thread opens with ClikCode's own words (isClikCodeOpening): ClikCode
+   * wrote it. Unset in a listing from before this was read. */
+  byClikCode?: boolean;
+}
 
 /** One vendor directory's listing, valid while the directory's own mtime is
  * unchanged (a directory's mtime moves when entries are added or removed). */
