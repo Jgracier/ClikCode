@@ -2397,7 +2397,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * conversation is followed again at zero, which every new frame returns to
    * by itself once the reader lets go. Returns whether anything moved, so a
    * key that cannot scroll any further still means something to the caller. */
-  scrollTranscript(rows: number): boolean {
+  private scrollTranscript(rows: number): boolean {
     // Bounded by what the CURRENT screen can show -- see flushAlternateFrame.
     // Bounding it by the transcript's length instead let the offset run past
     // the end of what any frame would draw, and the rows a reader then had to
@@ -2453,11 +2453,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** Wheel notches go here, not straight to the viewport. */
-  queueScroll(rows: number): boolean {
+  private queueScroll(rows: number): void {
     this.pendingScroll += rows;
-    if (inKeyBatch()) { this.drainAtBatchEnd(); return true; }
-    this.drainScroll();
-    return true;
+    if (inKeyBatch()) this.drainAtBatchEnd();
+    else this.drainScroll();
   }
 
   private stopDrainBatch?: () => void;
@@ -2498,7 +2497,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** True while the reader is looking at something other than the live end. */
-  get scrolledBack(): boolean { return this.alternateScrollback > 0; }
+  private get scrolledBack(): boolean { return this.alternateScrollback > 0; }
 
   /** Keys that move the transcript rather than the draft, in the one place
    * both the prompt and the waiting band read them from. Reading back is
