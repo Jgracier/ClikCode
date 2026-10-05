@@ -23,8 +23,8 @@
  * conversation across a few files needs a store entry and nothing more.
  */
 
-import { cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { join, relative } from 'node:path';
+import { placeArtifact } from './carry-artifact.js';
 import { locateNativeSessionFile, nativeSessionRoot, nativeSessionStore, type NativeSessionEnvironment } from './discovery/registry.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
@@ -129,67 +129,13 @@ export async function carryNativeSession(input: CarryNativeSessionInput): Promis
   if (!source) return undefined;
   const destination = join(target, relative(source.root, source.path));
   try {
-    // A conversation that went A -> B -> A finds its own earlier copy waiting
-    // in A, one switch out of date: everything the thread said while B owned
-    // it is only in B's file. Returning the copy as-is would resume the older
-    // transcript and silently drop that work. A vendor transcript is an
-    // append-only log, so the newer, longer file is the current one, and it
-    // replaces what is there; an identical one is left alone.
-    const [here, there] = await Promise.all([measure(destination), measure(source.path)]);
-    if (!there) return undefined;
+    if (!await placeArtifact(source.path, destination)) return undefined;
     // The vendor's own index has to agree with the copy (NativeSessionStore
     // reconcile): Codex trusts a row over the file.
-    const reconciled = async (): Promise<CarryOutcome> => (
-      !store?.reconcile || await store.reconcile({ nativeId, path: destination, environment: input.to }).catch(() => false)
-        ? 'carried' : undefined);
-    if (here && here.size >= there.size && here.mtime >= there.mtime) return reconciled();
-    await mkdir(dirname(destination), { recursive: true });
-    // Through a temporary name in the destination directory: a half-copied
-    // transcript that a resume then read would be worse than no transcript.
-    const staged = `${destination}.clikcode-carry`;
-    await rm(staged, { recursive: true, force: true });
-    await cp(source.path, staged, { recursive: true });
-    // rename() replaces an existing destination atomically -- but only a file
-    // over a file. A non-empty directory refuses to be renamed over, so the
-    // one already there moves aside first and is deleted only once the new one
-    // is in place; a crash in between leaves the old copy recoverable rather
-    // than leaving no copy at all.
-    if (here?.directory) {
-      const displaced = `${destination}.clikcode-old`;
-      await rm(displaced, { recursive: true, force: true });
-      await rename(destination, displaced);
-      await rename(staged, destination);
-      await rm(displaced, { recursive: true, force: true });
-    } else {
-      await rename(staged, destination);
-    }
-    return reconciled();
+    return !store?.reconcile || await store.reconcile({ nativeId, path: destination, environment: input.to }).catch(() => false)
+      ? 'carried' : undefined;
   } catch {
     // fail-open-ok: carrying is an optimization over re-seeding, never a requirement.
     return undefined;
   }
-}
-
-/** Size and recency of an artifact, whether it is one transcript or a tree of
- *  them, so the "newer and longer wins" rule above reads the same for both.
- *
- *  A vendor transcript is append-only, so total bytes across the tree only
- *  grows as a conversation does, and the newest mtime in it is when the thread
- *  last spoke. Comparing the aggregate is therefore the same comparison a
- *  single file gets, not an approximation of it. */
-async function measure(
-  path: string,
-): Promise<{ size: number; mtime: number; directory: boolean } | undefined> {
-  const entry = await stat(path).catch(() => undefined);
-  if (!entry) return undefined;
-  if (!entry.isDirectory()) return { size: entry.size, mtime: entry.mtimeMs, directory: false };
-  let size = 0;
-  let mtime = entry.mtimeMs;
-  for (const child of await readdir(path, { withFileTypes: true })) {
-    const inner = await measure(join(path, child.name));
-    if (!inner) continue;
-    size += inner.size;
-    mtime = Math.max(mtime, inner.mtime);
-  }
-  return { size, mtime, directory: true };
 }
