@@ -99,7 +99,7 @@ async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
 
 async function turnInFlight(sessionId: string): Promise<boolean> {
   try {
-    const state = await readState();
+    const state = await readState({ transcripts: [sessionId] });
     return Boolean(state.sessions.find((item) => item.id === sessionId)?.pendingTurn);
   } catch {
     // Unreadable state is not evidence a turn is running, but it is not

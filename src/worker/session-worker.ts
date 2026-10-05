@@ -96,7 +96,7 @@ async function ownConversation(sessionId: string): Promise<ConversationHold | un
 
 export async function runSessionWorker(sessionId: string): Promise<void> {
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
-  const state = await readState();
+  const state = await readState({ transcripts: [sessionId] });
   const session = state.sessions.find((item) => item.id === sessionId);
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
 
@@ -305,7 +305,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   /** Tell the model, through the next worker for this conversation, that
    * work its vendor left running was stopped -- never stopped unsaid. */
   const recordVendorWorkStopped = async (reason: string): Promise<void> => {
-    const latest = await readState();
+    const latest = await readState({ transcripts: [sessionId] });
     const found = latest.sessions.find((item) => item.id === sessionId);
     if (!found) return;
     const submittedAt = new Date().toISOString();
@@ -327,7 +327,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   };
 
   const currentSessionAndAccount = async (): Promise<{ session: import('../session/model.js').HarnessSession; account?: string }> => {
-    const latest = await readState();
+    const latest = await readState({ transcripts: [sessionId] });
     const found = latest.sessions.find((item) => item.id === sessionId);
     if (!found) throw new Error(`AI session "${sessionId}" was not found`);
     const account = found.accountId ? latest.accounts.find((item) => item.id === found.accountId)?.label : undefined;
@@ -377,7 +377,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * one), and run through the same queue as a message typed during a turn. */
   const recordNotifications = async (notes: readonly ShellNotification[]): Promise<void> => {
     if (!notes.length) return;
-    const latest = await readState();
+    const latest = await readState({ transcripts: [sessionId] });
     const found = latest.sessions.find((item) => item.id === sessionId);
     if (!found) return;
     const submittedAt = new Date().toISOString();
@@ -470,7 +470,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     let queuedTurnId = command.queuedTurnId;
     if (!queuedTurnId) {
       queuedTurnId = randomUUID();
-      const latest = await readState();
+      const latest = await readState({ transcripts: [sessionId] });
       const found = latest.sessions.find((item) => item.id === sessionId);
       if (!found) throw new Error(`AI session "${sessionId}" was not found`);
       const submittedAt = new Date().toISOString();
@@ -659,7 +659,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // one already on its way into the turn is not the queue's any more.
       if (activeLiveInput?.withdraw(command.id) === false) { answer('running'); return; }
       try {
-        const state = await readState();
+        const state = await readState({ transcripts: [sessionId] });
         const found = state.sessions.find((item) => item.id === sessionId);
         if (!found || !consumeSessionTurn(found, command.id)) { answer('gone'); return; }
         await writeState(state);
@@ -692,7 +692,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // as the next turn, exactly as a queued message always is.
       if (!activeLiveInput) {
         try {
-          const state = await readState();
+          const state = await readState({ transcripts: [sessionId] });
           const session = state.sessions.find((item) => item.id === sessionId);
           if (!session) throw new Error('conversation not found');
           const submittedAt = new Date().toISOString();

@@ -9,11 +9,11 @@ import { consumeSessionTurn } from '../turn/checkpoint.js';
 import type { HarnessState } from '../session/model.js';
 
 export interface QueueStateIo {
-  readState: () => Promise<HarnessState>;
+  readState: (sessionId: string) => Promise<HarnessState>;
   writeState: (state: HarnessState) => Promise<void>;
 }
 
-const fileIo: QueueStateIo = { readState: () => readStateFile(), writeState: (state) => writeStateFile(state) };
+const fileIo: QueueStateIo = { readState: (sessionId) => readStateFile({ transcripts: [sessionId] }), writeState: (state) => writeStateFile(state) };
 
 /** `consumed`, or `gone` when it was no longer queued. Throws the last error
  * after `attempts` failed reads or writes. */
@@ -23,7 +23,7 @@ export async function consumeQueuedTurn(
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt++) {
     try {
-      const state = await io.readState();
+      const state = await io.readState(sessionId);
       const found = state.sessions.find((item) => item.id === sessionId);
       if (!found || !consumeSessionTurn(found, queuedTurnId)) return 'gone';
       await io.writeState(state);

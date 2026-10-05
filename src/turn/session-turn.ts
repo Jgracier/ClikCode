@@ -42,7 +42,7 @@ export interface TurnRunOptions {
 export async function runSessionTurn(
   config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
   // A session that left ClikCode Local lets go of the model this process

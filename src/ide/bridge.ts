@@ -606,7 +606,8 @@ export class IdeBridge {
   private async query(requestId: string, query: IdeQueryName, options: { provider?: string; network?: boolean }): Promise<void> {
     const answer = (data: unknown): void => this.channel.send({ type: 'result', requestId, ok: true, data });
     try {
-      const state = await readState(query === 'conversations' ? { transcripts: [] } : undefined);
+      // Every screen lists from the index; only the open chat's history is read.
+      const state = await readState({ transcripts: query === 'conversations' || !this.sessionId ? [] : [this.sessionId] });
       const session = this.sessionId ? state.sessions.find((item) => item.id === this.sessionId) : undefined;
       switch (query) {
         case 'slash-commands': {

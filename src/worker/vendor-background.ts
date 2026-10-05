@@ -74,7 +74,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
 
   const persist = (records: readonly string[]): Promise<HarnessSession | undefined> => {
     const write = saving.then(async () => {
-      const state = await readState();
+      const state = await readState({ transcripts: [deps.sessionId] });
       const session = state.sessions.find((item) => item.id === deps.sessionId);
       if (!session) return undefined;
       const now = new Date().toISOString();

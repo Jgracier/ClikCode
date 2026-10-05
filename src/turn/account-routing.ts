@@ -193,7 +193,7 @@ export function turnAccountRecorder(session: HarnessSession, persist: () => Prom
   let recorded = session.accountId;
   return async (to) => {
     if (to.id === recorded) return;
-    const stored = (await readState()).sessions.find((item) => item.id === session.id);
+    const stored = (await readState({ transcripts: [] })).sessions.find((item) => item.id === session.id);
     if (stored && stored.accountId !== recorded) return;
     session.accountId = to.id;
     recorded = to.id;
