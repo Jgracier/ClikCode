@@ -17,6 +17,7 @@ import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import type { NativeThreadWriteContext } from '../stores.js';
 import { piProjectDirectoryName, piSessionStore, piThreadLines } from './pi-store.js';
 import { sequentialIds } from './thread-writer-files.js';
+import { commandProjectSlug, commandSessionStore, commandThreadLines } from './command-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
 const WORKSPACE = '/home/user/projects/app';
@@ -110,5 +111,27 @@ describe('pi thread writer', () => {
     const writer = piSessionStore.writer!;
     expect(await writer.versionOk(context('pi', {}, '0.88.0'))).toBe(false);
     expect(await writer.versionOk(context('pi', {}, undefined))).toBe(false);
+  });
+});
+
+describe('command code thread writer', () => {
+  it('writes the golden thread', async () => {
+    await golden('command.jsonl', commandThreadLines(fixtureRecord(), {
+      sessionId: '11111111-2222-4333-8444-555555555555', workspace: WORKSPACE, model: 'm', now: NOW,
+      entryId: sequentialIds('e'), messageId: sequentialIds('m'),
+    }));
+  });
+
+  it('writes under the taking-over HOME, where locate finds it, and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'cmd-writer-'));
+    const writer = commandSessionStore.writer!;
+    const ctx = context('command', { HOME: home }, '1.74.1');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(await readdir(join(home, '.commandcode', 'projects', commandProjectSlug(WORKSPACE)))).toEqual([`${written!.nativeId}.jsonl`]);
+    const root = commandSessionStore.root({ HOME: home })!;
+    expect((await commandSessionStore.locate!(root, written!.nativeId, WORKSPACE, {}))?.path)
+      .toBe(join(root, 'home-user-projects-app', `${written!.nativeId}.jsonl`));
+    expect(await writer.versionOk(context('command', {}, '1.75.0'))).toBe(false);
   });
 });
