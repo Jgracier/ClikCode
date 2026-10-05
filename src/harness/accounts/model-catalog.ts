@@ -106,8 +106,11 @@ export function modelIdFromLabel(harness: AiLocalHarnessDefinition, models: read
  * away. So the key is those identities: any change and the entry simply does
  * not match, however recent it is; no change and it stays good indefinitely.
  *
- * The one input no file can witness is a vendor's model list over CLI or ACP,
- * which may change on its server. Those lists get a time limit. */
+ * The one input no file can witness is a vendor's model list, which may
+ * change on its server. A list read over ACP needs no clock: every session
+ * the agent opens reports it, and recordLiveModelCatalog keeps the entry
+ * current from there. A list only a `models` command prints gets a time
+ * limit. */
 interface CatalogMemoEntry {
   at: number;
   fingerprint: string;
@@ -137,11 +140,21 @@ export function resetModelCatalogMemo(): void {
   discoveries.clear();
 }
 
-/** How long a server-sourced CLI or ACP model list is trusted. */
+/** How long a model list printed by a vendor's `models` command is trusted. */
 const SERVER_LIST_TTL_MS = 300_000;
 
 function serverModelList(harness: AiLocalHarnessDefinition): boolean {
-  return Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false));
+  return !listsModelsLive(harness) && Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false));
+}
+
+/** The catalog is the list an ACP session offers, so each live session
+ * reports it and discovery has to start the agent only when none has yet.
+ * Not a harness with a `models` command, which is read from that instead
+ * (its ACP list can differ: OpenCode's `models` printed 8, its session 10),
+ * nor one that picks a provider first (Goose), whose session lists only
+ * that provider's models. */
+function listsModelsLive(harness: AiLocalHarnessDefinition): boolean {
+  return Boolean(harness.acp && harness.acp.listsModels !== false && !harness.acp.providerConfigId && !harness.modelDiscoveryArgv);
 }
 
 async function fileIdentity(path: string | undefined): Promise<string> {
@@ -386,13 +399,44 @@ async function discoverModelCatalog(
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead.
   if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider' || harness.acp)) return result;
+  await rememberCatalog(harness, account, fingerprint, result);
+  return result;
+}
+
+async function rememberCatalog(
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, fingerprint: string, result: ModelCatalogResult,
+): Promise<void> {
   (await memo.load()).entries[cacheKey(harness, account)] = { at: Date.now(), fingerprint, result };
   memo.changed();
   await memo.save();
   if (account?.id && result.models.length) {
     syncAccountModels(account.id, result.models).catch(() => undefined);
   }
-  return result;
+}
+
+/** The models a live ACP session just offered (its session/new or
+ * session/load answer), taken as this harness's catalog for this account:
+ * the same list discovery would start the agent to read, so with a session
+ * open nothing is spawned for it. Keyed like discovery, on the binary and
+ * sign-in it came from. A loaded session's current model is the one that
+ * chat last used, not the agent's default, so only a new session's is
+ * taken as `configured`. */
+export async function recordLiveModelCatalog(
+  harness: AiLocalHarnessDefinition,
+  account: AiHarnessAccount | undefined,
+  answer: Readonly<Record<string, unknown>>,
+  fresh: boolean,
+): Promise<void> {
+  if (!listsModelsLive(harness)) return;
+  const listed = acpSessionModels(answer);
+  if (!listed.models.length) return;
+  const fingerprint = await catalogFingerprint(harness, account);
+  const previous = (await memo.load()).entries[cacheKey(harness, account)];
+  const configured = fresh ? listed.current : previous?.fingerprint === fingerprint ? previous.result.configured : undefined;
+  const result = await nativeModelCatalogUncached(harness, account, { ...listed, current: configured });
+  rememberVendorModelNames(harness, result);
+  if (previous?.fingerprint === fingerprint && JSON.stringify(previous.result) === JSON.stringify(result)) return;
+  await rememberCatalog(harness, account, fingerprint, result);
 }
 
 /** Model identifiers in whatever a vendor's `models` command printed.
@@ -439,6 +483,8 @@ function discoveredModelsFrom(raw: string): string[] {
 async function nativeModelCatalogUncached(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
+  /** What a live session already offered: then no agent is started for it. */
+  liveListed?: { models: string[]; labels: Record<string, string>; current?: string },
 ): Promise<ModelCatalogResult> {
   const models = new Set(account?.models ?? []);
   const addDiscoveredModels = (raw: string): void => { for (const model of discoveredModelsFrom(raw)) models.add(model); };
@@ -574,7 +620,7 @@ async function nativeModelCatalogUncached(
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
   if (harness.acp && harness.acp.listsModels !== false && !harness.modelDiscoveryArgv) {
-    const listed = await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...(harness.acp.probeArgv ?? [])], nativeProfileEnvironment(account?.nativeProfile),
+    const listed = liveListed ?? await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...(harness.acp.probeArgv ?? [])], nativeProfileEnvironment(account?.nativeProfile),
       async (request, capabilities) => acpSessionModels(await acpDiscoverySession(request, capabilities, cacheKey(harness, account))), 30_000).catch(() => undefined);
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping

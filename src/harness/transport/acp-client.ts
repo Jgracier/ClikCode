@@ -608,6 +608,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         live.models = loaded?.models ?? { configOptions: loaded?.configOptions };
         live.modes = loaded?.modes;
         live.configOptions = loaded?.configOptions;
+        if (loaded) input.onSessionModels?.(loaded, false);
       }
       turn.sessionId = wanted;
     } else {
@@ -620,6 +621,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       live.models = started.models ?? { configOptions: started.configOptions };
       live.modes = started.modes;
       live.configOptions = started.configOptions;
+      input.onSessionModels?.(started, true);
       turn.sessionId = sessionId;
     }
     // Agents that publish a model list take the choice over the protocol; a

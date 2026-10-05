@@ -7,7 +7,7 @@ vi.mock('./acp-query.js', async (original) => ({
   queryAcp,
 }));
 
-const { nativeModelCatalog, resetModelCatalogMemo } = await import('./model-catalog.js');
+const { nativeModelCatalog, recordLiveModelCatalog, resetModelCatalogMemo } = await import('./model-catalog.js');
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -16,24 +16,67 @@ afterEach(() => {
 });
 
 describe('ACP model catalog refresh', () => {
-  it('refreshes a server-side model change even when the binary and account files do not change', async () => {
+  it('takes a live session\'s list as the catalog, and never re-reads it on a clock', async () => {
     const harness = {
       command: 'test-acp-model-refresh', binary: 'missing-test-acp-model-refresh', transport: 'acp',
       acp: { argv: [] },
     } as unknown as AiLocalHarnessDefinition;
-    let offered = 'model-one';
-    queryAcp.mockImplementation(async () => ({ models: [offered], labels: {} }));
+    queryAcp.mockImplementation(async () => ({ models: ['model-one'], labels: {} }));
     const start = Date.now();
     vi.spyOn(Date, 'now').mockReturnValue(start);
 
-    expect((await nativeModelCatalog(harness)).models).toContain('model-one');
-    offered = 'model-two';
-    expect((await nativeModelCatalog(harness)).models).toContain('model-one');
+    // No session yet and nothing cached: discovery starts the agent once.
+    expect((await nativeModelCatalog(harness)).models).toEqual(['model-one']);
     expect(queryAcp).toHaveBeenCalledTimes(1);
 
-    vi.spyOn(Date, 'now').mockReturnValue(start + 5 * 60_000);
-    expect((await nativeModelCatalog(harness)).models).toContain('model-two');
-    expect(queryAcp).toHaveBeenCalledTimes(2);
+    // Hours later the cached list is still the answer: no second spawn.
+    vi.spyOn(Date, 'now').mockReturnValue(start + 3 * 60 * 60_000);
+    expect((await nativeModelCatalog(harness)).models).toEqual(['model-one']);
+    expect(queryAcp).toHaveBeenCalledTimes(1);
+
+    // A live session offering a changed list replaces it, with no spawn.
+    await recordLiveModelCatalog(harness, undefined, {
+      models: { availableModels: [{ modelId: 'model-two', name: 'Model Two' }], currentModelId: 'model-two' },
+    }, true);
+    const catalog = await nativeModelCatalog(harness);
+    expect(catalog.models).toEqual(['model-two']);
+    expect(catalog.labels).toEqual({ 'model-two': 'Model Two' });
+    expect(catalog.configured).toBe('model-two');
+    expect(queryAcp).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts no agent at all when a live session reported first', async () => {
+    const harness = {
+      command: 'test-acp-live-first', binary: 'missing-test-acp-live-first', transport: 'acp',
+      acp: { argv: [], listsModels: true },
+    } as unknown as AiLocalHarnessDefinition;
+    await recordLiveModelCatalog(harness, undefined, {
+      configOptions: [{ id: 'model', currentValue: 'b', options: [{ value: 'a' }, { value: 'b' }] }],
+    }, true);
+    const catalog = await nativeModelCatalog(harness);
+    expect(catalog.models).toEqual(['a', 'b']);
+    expect(catalog.configured).toBe('b');
+    expect(queryAcp).not.toHaveBeenCalled();
+  });
+
+  it('keeps the default model when a loaded chat reports the model it last used', async () => {
+    const harness = {
+      command: 'test-acp-live-load', binary: 'missing-test-acp-live-load', transport: 'acp',
+      acp: { argv: [], listsModels: true },
+    } as unknown as AiLocalHarnessDefinition;
+    const answer = (current: string) => ({ models: { availableModels: [{ modelId: 'a' }, { modelId: 'b' }], currentModelId: current } });
+    await recordLiveModelCatalog(harness, undefined, answer('a'), true);
+    await recordLiveModelCatalog(harness, undefined, answer('b'), false);
+    expect((await nativeModelCatalog(harness)).configured).toBe('a');
+  });
+
+  it('leaves a harness with a models command to that command', async () => {
+    const harness = {
+      command: 'test-acp-live-cli-list', binary: 'missing-test-acp-live-cli-list', transport: 'acp',
+      acp: { argv: [] }, modelDiscoveryArgv: ['models'],
+    } as unknown as AiLocalHarnessDefinition;
+    await recordLiveModelCatalog(harness, undefined, { models: { availableModels: [{ modelId: 'from-acp' }] } }, true);
+    expect((await nativeModelCatalog(harness)).models).not.toContain('from-acp');
   });
 
   it('keeps ACP model lists separate for two logged-in profiles', async () => {

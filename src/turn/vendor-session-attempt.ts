@@ -19,6 +19,7 @@ import { swarmIsOn } from '../swarm/policy.js';
 import { swarmAcpMcpServers } from '../swarm/publish.js';
 import { closePersistentTransport, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
+import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
 /** Whether a turn that ended in `error` leaves its warm vendor child usable:
  * only a cancel does. */
@@ -110,6 +111,9 @@ export async function runVendorSessionAttempt(input: {
         // Claude Code's quota, carried by the turn itself: published like a
         // stream reading, so the composer and the account picker see it.
         onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
+        // The models this session offers are the catalog model discovery
+        // would otherwise start a second copy of the agent to read.
+        onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
         environment, signal, images, onSessionId,
         ...(swarmIsOn(session) ? { mcpServers: swarmAcpMcpServers() } : {}),
         ...sharedObserver,
