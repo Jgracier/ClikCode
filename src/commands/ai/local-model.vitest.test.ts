@@ -204,6 +204,15 @@ describe('the model on a session', () => {
     expect(vendor.model).toBeNull();
   });
 
+  it('sheds the vendor thread as ClikCode\'s own, so discovery does not offer it back', () => {
+    const vendor = session({ route: 'local', nativeHarness: 'codex', nativeSessionId: 't1', nativeTransport: 'cli' } as Partial<HarnessSession>);
+    applyClikCodeLocalSessionPolicy(vendor);
+    expect(vendor.ownedThreads).toEqual(['codex:t1']);
+    expect(vendor.nativeSessionId).toBeUndefined();
+    expect(vendor.nativeTransport).toBeUndefined();
+    expect(vendor.nativeHarness).toBeUndefined();
+  });
+
   it('can be set on create and set, and a wrong one is refused', async () => {
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     await aiSessionCreate({ route: 'clikcode-local', model: 'qwen3.5-4b' });
