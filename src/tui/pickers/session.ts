@@ -16,6 +16,7 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { cliThreadTransport } from '../../harness/transport/select.js';
 import { backfillListFacts } from '../../session/list-backfill.js';
 
 import { readState } from '../../session/state/read.js';
@@ -485,11 +486,14 @@ export async function interactiveSessionPicker(
     ? await transcriptReader(match.harness, nativeId, chatWorkspace, nativeProfileEnvironment(account?.nativeProfile)).catch(() => [])
     : [];
   const id = randomUUID();
+  // The vendor's own list is its CLI's: the chat stays on that CLI.
+  const pinned = cliThreadTransport(match.harness);
   const adopted: HarnessSession = {
     id, conversationId: id, route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
     model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
     createdAt: now, updatedAt: now, status: 'active',
     nativeHarness: match.harness.command, nativeSessionId: nativeId, nativeStartedAt: now,
+    ...(pinned ? { nativeTransport: pinned } : {}),
     // Named only from a title the harness itself wrote. The resume list also
     // shows the opening of the first message when there is no real title, and
     // writing THAT into `name` is what used to leave every adopted chat called

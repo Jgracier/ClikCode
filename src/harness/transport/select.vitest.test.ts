@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { AI_LOCAL_HARNESSES, harnessIntegrationLevel } from '@clikcode/router/ai-local-harness';
-import { harnessTurnTransport, sessionTurnTransport } from './select.js';
+import { cliThreadTransport, harnessTurnTransport, sessionTurnTransport } from './select.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 
 const catalog = (command: string): AiLocalHarnessDefinition => {
@@ -29,7 +29,7 @@ describe('harness turn transports', () => {
     const openCode = catalog('opencode');
     expect(sessionTurnTransport(openCode, {})).toBe('acp');
     for (const command of ['gemini', 'goose', 'kiro', 'qwen', 'auggie', 'cursor']) {
-      expect(sessionTurnTransport(catalog(command), { nativeSessionId: 'old-cli-thread' }), command).toBe('structured-cli');
+      expect(sessionTurnTransport(catalog(command), { nativeSessionId: 'cli-thread', nativeTransport: 'structured-cli' }), command).toBe('structured-cli');
     }
     expect(sessionTurnTransport(openCode, { nativeSessionId: 'new-acp-thread', nativeTransport: 'acp' })).toBe('acp');
     const cursor = catalog('cursor');
@@ -48,6 +48,14 @@ describe('harness turn transports', () => {
       expect(sessionTurnTransport(shared, { nativeSessionId: 'old-cli-thread' }), command).toBe('acp');
       expect(sessionTurnTransport(shared, { nativeSessionId: 'fallback-thread', nativeTransport: 'structured-cli' }), command).toBe('acp');
       expect(sessionTurnTransport(shared, { nativeSessionId: 'acp-thread', nativeTransport: 'acp' }), command).toBe('acp');
+    }
+  });
+
+  it('pins a CLI-born thread to the CLI only where ACP keeps its own store', () => {
+    expect(cliThreadTransport(catalog('gemini'))).toBe('structured-cli');
+    expect(cliThreadTransport(catalog('hermes'))).toBe(catalog('hermes').turn?.output === 'text' ? 'text-cli' : 'structured-cli');
+    for (const command of ['grok', 'claude', 'opencode', 'kilo', 'codex', 'aider', 'pi']) {
+      expect(cliThreadTransport(catalog(command)), command).toBeUndefined();
     }
   });
 

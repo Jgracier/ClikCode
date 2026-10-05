@@ -32,7 +32,6 @@ export interface AiHarnessAcpDefinition {
   npmPackage?: string;
   optionPlacement?: 'before' | 'after';
   inheritCliOptions?: boolean;
-  legacyCliSessions?: boolean;
   sharedSessions?: boolean;
   effortConfigId?: string;
   providerConfigId?: string;

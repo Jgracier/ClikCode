@@ -67,6 +67,7 @@ import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './wo
 import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from '../../commands/ai/shell-run.js';
 import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
+import { cliThreadTransport } from '../../harness/transport/select.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
 import { moveThreadToAccount } from '../../session/carry.js';
 import { undoTurnsBack } from '../../session/undo-turn.js';
@@ -530,6 +531,11 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       const selectedHarness = localHarnessForCommand(session.nativeHarness);
       if (!selectedHarness?.session?.resumeIdPrefix) throw new Error(`${selectedHarness?.displayName ?? session.nativeHarness} does not support exact session resume`);
       session.nativeSessionId = value;
+      delete session.nativeSessionPreallocated;
+      // An id given by hand is the vendor CLI's: the thread stays on it.
+      const pinned = cliThreadTransport(selectedHarness);
+      if (pinned) session.nativeTransport = pinned;
+      else delete session.nativeTransport;
     } else {
       throw new Error(`unknown setting: ${setting}`);
     }

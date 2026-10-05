@@ -43,6 +43,36 @@ describe('harness state normalization', () => {
     }
   });
 
+  it('marks a thread from before ACP with the CLI that made it, once, and nothing else', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    const session = (id: string, fields: object) => ({
+      id, route: 'local', accountId: null, provider: 'x', model: null, effort: 'medium', permissionMode: 'ask', accountFailover: 'never',
+      createdAt: now, updatedAt: now, status: 'active', ...fields,
+    });
+    await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
+      version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
+      accounts: [],
+      sessions: [
+        session('old-gemini', { nativeHarness: 'gemini', nativeSessionId: 'cli-thread' }),
+        session('acp-gemini', { nativeHarness: 'gemini', nativeSessionId: 'acp-thread', nativeTransport: 'acp' }),
+        session('minted', { nativeHarness: 'qwen', nativeSessionId: 'minted', nativeSessionPreallocated: true }),
+        session('fresh', { nativeHarness: 'cursor' }),
+        session('droid', { nativeHarness: 'droid', nativeSessionId: 'droid-thread' }),
+      ],
+      invocations: [], globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+    }, null, 2)}\n`);
+    try {
+      const transports = async () => Object.fromEntries((await readState()).sessions.map((item) => [item.id, item.nativeTransport]));
+      const expected = { 'old-gemini': 'structured-cli', 'acp-gemini': 'acp', minted: undefined, fresh: undefined, droid: undefined };
+      expect(await transports()).toEqual(expected);
+      expect(await transports()).toEqual(expected);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('drops a usage estimate an older build stored and its high-water limit, and keeps the vendor\'s own reading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
     process.env.CLIKCODE_HOME = root;

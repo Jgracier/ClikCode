@@ -197,7 +197,7 @@ describe('writers', () => {
     await writeFile(fake, '#!/bin/sh\necho "Detected format: Claude Code"\necho "Session imported:"\necho "20261005_3 - hi"\n');
     await chmod(fake, 0o755);
     expect(await gooseSessionStore.writer!.write(record, context({ command: 'goose', binary: fake, displayName: 'Goose' }, {}, '1.51.0', dir)))
-      .toEqual({ nativeId: '20261005_3' });
+      .toEqual({ nativeId: '20261005_3', transport: 'structured-cli' });
     const failing = claudeImportWriter({ testedVersions: ['1'], argv: () => [], parse: () => undefined });
     expect(await failing.write(record, context({ command: 'goose', binary: fake, displayName: 'Goose' }, {}, '1', dir))).toBeUndefined();
   });

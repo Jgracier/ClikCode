@@ -5,7 +5,7 @@
  * CLI ClikCode falls back to (`chat --agent-engine v3`) writes
  * `sessions/<sha256(cwd)[:16]>/sess_<id>/` with its own index -- which is
  * why Kiro threads are pinned to the transport that made them
- * (`acp.legacyCliSessions`). This writer writes the ACP pair and pins the
+ * (session `nativeTransport`). This writer writes the ACP pair and pins the
  * thread to ACP.
  *
  * Observed (vendor-sandbox, kiro-cli 2.23.1, a real `session/new` turn and
