@@ -20,6 +20,7 @@ import type { PlanEntry } from '../tui/render/plan-block.js';
 import { withSignIn } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import type { TakeBackOutcome } from '../turn/live-input.js';
 
 export interface WorkerTurnRequest {
   echo: boolean;
@@ -38,6 +39,8 @@ const clients = new Map<string, WorkerClient>();
  * answered rather than guessed. */
 const pendingSubmissions = new Map<string, (event: Extract<WorkerEvent, { type: 'submission' }>) => void>();
 const SUBMISSION_ANSWER_MS = 8_000;
+/** Messages being taken back (Esc), waiting for the worker's `unqueued`. */
+const pendingTakeBacks = new Map<string, (outcome: TakeBackOutcome) => void>();
 
 /** What this window knows of its worker, from a listener that stays on the
  * connection for its whole life: whether a turn is running (whoever started
@@ -106,6 +109,8 @@ function track(sessionId: string, client: WorkerClient): void {
       // and an answer for a message typed as the turn ended can come after
       // it -- which left the message's row waiting out the full timeout.
       pendingSubmissions.get(event.id)?.(event);
+    } else if (event.type === 'unqueued') {
+      pendingTakeBacks.get(event.id)?.(event.outcome);
     }
   });
   // A worker that exits (idle, retired) is attached afresh next time.
@@ -437,6 +442,15 @@ async function driveWorkerTurn(
         // worker runs it to the end either way, and the connection stays
         // open, so coming back (or another window) picks it up mid-stream.
         () => { left = true; finish(() => resolveTurn()); },
+        // Esc on a waiting message: the worker owns the queue and the hold,
+        // and says whether it was still the user's to take.
+        async (id) => {
+          const answered = new Promise<TakeBackOutcome>((resolveAnswer) => { pendingTakeBacks.set(id, resolveAnswer); });
+          client.send({ type: 'unqueue', id });
+          try {
+            return await Promise.race([answered, new Promise<TakeBackOutcome>((resolveLate) => { setTimeout(() => resolveLate('error'), SUBMISSION_ANSWER_MS).unref(); })]);
+          } finally { pendingTakeBacks.delete(id); }
+        },
       );
       begin();
       for (const event of tracker.unanswered.splice(0)) onEvent(event);

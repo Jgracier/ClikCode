@@ -217,6 +217,9 @@ function App(): JSX.Element {
   runningRef.current = Boolean(model?.running);
   const approvalRef = useRef<string>();
   approvalRef.current = model?.approvals[0]?.id;
+  /** The newest message of the user's still waiting -- what Esc takes back. */
+  const waitingRef = useRef<{ id: string; text: string }>();
+  waitingRef.current = model?.queued.filter((item) => !item.notification && !item.command).at(-1);
 
   const answer = (id: string, result: IdeUiResult): void => {
     setQuestions((items) => items.filter((item) => item.id !== id));
@@ -283,15 +286,16 @@ function App(): JSX.Element {
         post({ type: 'openFile', path: target.dataset.file!, ...(target.dataset.line ? { line: Number(target.dataset.line) } : {}) });
         return;
       }
-      // Esc stops the running turn from anywhere in the panel -- unless a
-      // menu, a sheet or the composer already took it (they preventDefault).
-      // With an approval pending it denies that call instead, as in the
-      // terminal: the turn goes on without it.
+      // Esc never stops the turn (the stop button does): as in the terminal
+      // it takes the newest waiting message back into the composer to edit,
+      // as its Edit button would -- unless a menu, a sheet or the composer
+      // already took it (they preventDefault). With an approval pending it
+      // denies that call instead: the turn goes on without it.
       if (event.key === 'Escape' && !event.defaultPrevented && runningRef.current) {
-        event.preventDefault();
         const pending = approvalRef.current;
-        if (pending) post({ type: 'approve', id: pending, approved: false });
-        else post({ type: 'cancel', restoreDraft: !composer.current?.hasText() });
+        const waiting = waitingRef.current;
+        if (pending) { event.preventDefault(); post({ type: 'approve', id: pending, approved: false }); }
+        else if (waiting) { event.preventDefault(); post({ type: 'unqueue', id: waiting.id }); composer.current?.insert(waiting.text); }
       }
     };
     document.addEventListener('click', onClick);

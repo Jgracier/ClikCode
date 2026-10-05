@@ -12,6 +12,7 @@ import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessSession, TurnActivity } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
+import type { TakeBackOutcome } from '../turn/live-input.js';
 
 /** What a client may ask the worker to do. `submit`/`steer`/`cancel` mirror
  * the same three actions a terminal already offers a running turn; `attach`
@@ -143,7 +144,7 @@ export type WorkerEvent =
    * the queue; `running`: it is the turn running now; `gone`: it was no
    * longer queued (already run or taken back); `error`: the state could not
    * be read or written, and it is still queued. */
-  | { type: 'unqueued'; id: string; outcome: 'removed' | 'running' | 'gone' | 'error'; message?: string };
+  | { type: 'unqueued'; id: string; outcome: TakeBackOutcome; message?: string };
 
 /** What a window shows of a conversation's settings. A client that sees it
  * change between two reads of state sends `refresh`. */

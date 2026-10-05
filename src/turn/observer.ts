@@ -13,7 +13,7 @@ import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
-import type { LiveTurnInputResult } from './live-input.js';
+import type { LiveTurnInputResult, TakeBackOutcome } from './live-input.js';
 
 export interface TurnObserver {
   render(session: HarnessSession, account?: string, notice?: string): void;
@@ -34,6 +34,8 @@ export interface TurnObserver {
     /** Stop showing this turn and leave it running, where that is possible
      * (a worker's turn: the worker keeps it, and any window can follow it). */
     onLeave?: () => void,
+    /** Take a waiting message back out of the queue to edit (Esc). */
+    onTakeBack?: (id: string) => Promise<TakeBackOutcome>,
   ): void;
   stopWaiting(refresh?: boolean): void;
   suspend(): Promise<void>;

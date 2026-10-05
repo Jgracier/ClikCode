@@ -10,7 +10,10 @@ import { nextCharacterIndex } from './render/width.js';
 import { logCursorEvent } from './cursor-log.js';
 import { LEGACY_MOUSE_PREFIX, setTerminalRawMode } from './modes.js';
 
-type WaitingInputAction = 'cancel-edit' | 'cancel-stop';
+/** A key's meaning while a turn runs. Esc never stops anything: it backs
+ * out of something of the user's own -- reading back, or a message still
+ * waiting, which it takes back to edit. Ctrl+C is the one key that stops. */
+type WaitingInputAction = 'take-back' | 'stop';
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
 
@@ -21,8 +24,8 @@ const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
 const OPEN_PASTE_TIMEOUT_MS = 10_000;
 
 export function waitingInputAction(key: string): WaitingInputAction | undefined {
-  if (key === '\u001b') return 'cancel-edit';
-  if (key === '\u0003') return 'cancel-stop';
+  if (key === '\u001b') return 'take-back';
+  if (key === '\u0003') return 'stop';
   return undefined;
 }
 

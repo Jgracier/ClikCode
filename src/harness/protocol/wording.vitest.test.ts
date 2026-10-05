@@ -5,9 +5,10 @@ import { turnStopReason } from './turn-usage';
 
 describe('one verb per action', () => {
   it('says stop, in the band and on the button', () => {
-    expect(keyHint('stop')).toBe('esc to stop');
+    expect(keyHint('stop')).toBe('ctrl+c to stop');
     expect(keyHint('sendNow')).toBe('enter again to stop & send');
-    expect(buttonTitle('stop')).toBe('Stop (Esc)');
+    expect(keyHint('takeBack')).toBe('esc to edit');
+    expect(buttonTitle('sendNow')).toBe('Stop & send (Enter again)');
   });
 
   it('names a stopped turn the same whatever the vendor called it', () => {

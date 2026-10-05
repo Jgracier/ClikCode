@@ -11,7 +11,6 @@ import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/cl
 import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
-import { ACTIONS } from '../../../../src/harness/protocol/wording';
 import { useNow, useSpinFrame } from './clock';
 
 /** The shimmer sweeps a label at the terminal's pace: the same characters a
@@ -522,7 +521,6 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
         <span class="muted">{live ? formatElapsed(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
-        {asking ? null : <span class="muted working-hint">{`${ACTIONS.stop.key} to ${ACTIONS.stop.verb}`}</span>}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
