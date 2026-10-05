@@ -790,11 +790,14 @@ SCENARIOS = {
                   ('type', '!echo shell-out-$((40+2))'), ('wait_for', 'shell-out-42', 10), ('settle', 2)],
         'watch': ['shell-out-42'], 'final_contains': ['!echo shell-out-$((40+2))', 'exit 0'], 'never': ['rides into the next request'],
     },
+    # No alternate screen: the first message still signs in, on the plain
+    # terminal (login.ts plainSignInScreen), then answers.
     'classic-fallback': {
         'classic': True,
         'turns': [{'blocks': ['The final commit is live.']}],
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30)],
         'watch': [], 'final_contains': ['The final commit is live.'],
+        'ever': ['accounts.x.ai/oauth2/device'], 'never': ['is not signed in'],
     },
 }
 
