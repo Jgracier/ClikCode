@@ -11,6 +11,7 @@ import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../../session/
 import { saveDiscoveryCache } from '../../session/discovery/cache.js';
 import { acpDiscoveryDirectory } from '../../harness/accounts/acp-query.js';
 import { type DiscoveredNativeSession } from '../../session/discovery/discovered-session.js';
+import { adoptableNativeSessions } from '../../session/discovery/owned.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
@@ -80,10 +81,12 @@ async function discoverAdoptableSessions(
   const discoverable = allLocalHarnesses().filter((harness) => harness.session?.discoverArgv);
   // The session ClikCode reads a model list from is its own, not the user's.
   const discovery = acpDiscoveryDirectory();
-  const notAdopted = (found: AdoptableNativeSession[]): AdoptableNativeSession[] => found
-    .filter(({ item }) => item.workspace !== discovery)
-    .filter(({ harness, item, accountId }) => !state.sessions.some((session) => session.nativeHarness === harness.command
-      && session.nativeSessionId === item.nativeId && (!accountId || session.accountId === accountId)));
+  // Not ClikCode's own threads (session/discovery/owned.ts).
+  const profileOf = new Map(state.accounts.map((account) => [account.id, account.nativeProfile]));
+  const notAdopted = (found: AdoptableNativeSession[]): Promise<AdoptableNativeSession[]> => adoptableNativeSessions(
+    state, found.filter(({ item }) => item.workspace !== discovery),
+    (accountId) => nativeProfileEnvironment(accountId ? profileOf.get(accountId) : undefined),
+  );
   const seen = (async () => (await Promise.all(discoverable.map(async (harness) => {
     const profiles = discoveryProfiles(harness);
     if (profiles[0] === undefined) return [];
@@ -122,7 +125,7 @@ async function discoverAdoptableSessions(
   // with it. They run together now, and the cache is flushed once when both
   // are done rather than relying on whichever vendor discoverer happened to
   // save it on the way past.
-  if (early) void Promise.all([seen, files]).then(([seenShell, fsDiscovered]) => early(notAdopted([...seenShell, ...fsDiscovered])), () => undefined);
+  if (early) void Promise.all([seen, files]).then(async ([seenShell, fsDiscovered]) => early(await notAdopted([...seenShell, ...fsDiscovered])), () => undefined);
   const [shellDiscovered, fsDiscovered] = await Promise.all([shell, files]);
   await saveDiscoveryCache().catch(() => undefined);
   return notAdopted([...shellDiscovered, ...fsDiscovered]);

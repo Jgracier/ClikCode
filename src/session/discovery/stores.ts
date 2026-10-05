@@ -81,6 +81,11 @@ export interface NativeSessionStore {
    *  (turn/thread-start.ts). Absent: the conversation is transferred as a
    *  prompt (turn/transfer.ts). See NativeThreadWriter for the contract. */
   writer?: NativeThreadWriter;
+  /** The first user message of each of `nativeIds` found under `root`, for a
+   *  vendor whose listing is a CLI's and says nothing of it: what tells a
+   *  thread ClikCode wrote from the user's own (session/discovery/owned.ts).
+   *  Read-only; a thread it cannot read is left out. */
+  openings?(root: string, nativeIds: readonly string[]): Promise<Map<string, string>>;
 }
 
 /** What ClikCode hands a writer for one write. */

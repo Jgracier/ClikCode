@@ -2,11 +2,15 @@
  * session.messages is the durable, vendor-agnostic record. Forgetting it --
  * a new account, harness, workspace or option that needs a fresh thread, or a
  * thread the vendor no longer knows -- clears every field that describes it,
- * so the next turn starts fresh and carries the conversation in its prompt. */
+ * so the next turn starts fresh and carries the conversation in its prompt.
+ * Its id is remembered in `ownedThreads`. */
 import type { HarnessSession } from './model.js';
 import { messageOrigin, sessionTranscriptMessages } from '../turn/checkpoint.js';
 
 export function forgetNativeThread(session: HarnessSession): void {
+  // Still ClikCode's: kept so discovery never offers it back as a vendor chat.
+  const thread = session.nativeSessionId && session.nativeHarness ? `${session.nativeHarness}:${session.nativeSessionId}` : undefined;
+  if (thread && !session.ownedThreads?.includes(thread)) session.ownedThreads = [...session.ownedThreads ?? [], thread];
   session.nativeSessionId = undefined;
   delete session.nativeTransport;
   session.nativeStartedAt = undefined;

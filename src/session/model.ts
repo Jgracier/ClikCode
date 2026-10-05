@@ -101,6 +101,11 @@ export interface HarnessSession {
    * re-creates with the same id instead of resuming a session that never was. */
   nativeSessionPreallocated?: true;
   nativeStartedAt?: string;
+  /** Every vendor thread this conversation has used and let go of (a
+   * switch, a new account, a thread the vendor lost), as `<harness>:<id>`.
+   * They are ClikCode's own, so another CLI's history never lists them as
+   * chats to adopt (session/discovery/owned.ts). */
+  ownedThreads?: string[];
   workspace?: string;
   /** Latest token/context reading reported by the transport for this chat. */
   lastUsage?: TurnUsage & { at: string };
