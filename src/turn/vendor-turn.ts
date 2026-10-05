@@ -585,7 +585,8 @@ export async function sendVendorTurn(input: {
       // minutes) runs out.
       await sleep(waited, undefined, signal ? { signal } : {}).catch(() => undefined);
       if (signal?.aborted) throw turnCancelledError();
-      prompter?.activity(chalk.dim('continuing after background command'));
+      // Plumbing, not news: the phase above already said what the wait was.
+      lifecycle('turn.pending-continuation', { session: session.id, harness: harness.command, attempt: pendingContinuations, waitedMs: waited });
       carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
       turnText = PENDING_CONTINUATION_PROMPT;
       continue;

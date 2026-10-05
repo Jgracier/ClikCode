@@ -1,9 +1,9 @@
 /** One structured CLI attempt, including its native session and background process. */
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { HarnessSession } from '../session/model.js';
@@ -133,13 +133,16 @@ export async function runVendorCliAttempt(input: {
       heldInput.end();
     },
     onQuiet: () => held?.quiet(),
+    // The task's own tool row already shows it; what the turn is waiting on
+    // goes on the status line, the rest to the lifecycle log.
     onTaskStarted: (id, description) => {
       idle.toolStarted(`background:${id}`);
-      if (!held) prompter?.activity(chalk.dim(`background: ${description}`));
+      lifecycle('turn.background-task', { session: session.id, task: id, state: 'started' });
+      if (!held) prompter?.phase(`background: ${description}`);
     },
     onTaskFinished: (id, status) => {
       idle.toolFinished(`background:${id}`);
-      if (!held) prompter?.activity(chalk.dim(`background task ${status}`));
+      lifecycle('turn.background-task', { session: session.id, task: id, state: status });
     },
   }) : undefined;
   if (heldInput && background) {

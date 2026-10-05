@@ -21,6 +21,9 @@ import { closePersistentTransport, persistentTransportFor, vendorChildKey } from
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
+/** Per chat, the unapplied options last said (see the app-server branch). */
+const ignoredOptionsSaid = new Map<string, string>();
+
 export async function runVendorSessionAttempt(input: {
   harness: AiLocalHarnessDefinition;
   account: AiHarnessAccount;
@@ -68,7 +71,13 @@ export async function runVendorSessionAttempt(input: {
   try {
     if (transport === 'codex-app-server') {
       const overrides = appServerThreadOverrides(declaredOptions, session.harnessOptions);
-      if (overrides.unmapped.length) prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${overrides.unmapped.join(', ')}`));
+      // The user's own option going unapplied is theirs to know -- once per
+      // chat and set of options, not as a note on every turn.
+      const ignored = overrides.unmapped.join(', ');
+      if (ignored && ignoredOptionsSaid.get(session.id) !== ignored) {
+        ignoredOptionsSaid.set(session.id, ignored);
+        prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${ignored}`));
+      }
       const codexInput: CodexAppServerTurnInput = {
         binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
