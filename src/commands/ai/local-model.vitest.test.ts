@@ -122,6 +122,12 @@ describe('letting go', () => {
     expect(engine.releaseLocalModel).toHaveBeenCalledWith('s1');
     expect((await readState()).sessions[0]!.route).toBe('gateway');
   });
+
+  it('/settings permissions is /permissions, which the agent routes take too', async () => {
+    await stored(session());
+    await aiSessionCommand('s1', '/settings permissions ask');
+    expect((await readState()).sessions[0]!.permissionMode).toBe('ask');
+  });
 });
 
 describe('/model on ClikCode Local', () => {
