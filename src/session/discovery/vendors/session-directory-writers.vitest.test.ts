@@ -227,7 +227,7 @@ describe('kimi thread writer', () => {
 
 describe('kiro thread writer', () => {
   it('writes the golden conversation and session metadata', async () => {
-    const files = kiroThreadFiles(fixtureRecord(), {
+    const files = kiroThreadFiles(fixtureRecordAllTools(), {
       sessionId: '0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', workspace: WORKSPACE, now: NOW,
       messageId: sequentialIds('msg-'), callId: sequentialIds('tooluse_clikcode_'),
     });
