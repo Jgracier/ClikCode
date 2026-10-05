@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { matchingVendorAccount } from './labels.js';
 import {
-  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseMiniMaxUserInfo, parseAugmentModels, parseCommandCodeApiWhoami, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
+  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseMiniMaxUserInfo, parseAugmentModels, parseCommandCodeApiWhoami, parseHermesNousAuth, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser, vendorAccountEmail,
 } from './vendor-identity.js';
 
@@ -205,5 +205,14 @@ describe('vendor account email', () => {
   it('reads the Command Code /alpha/whoami user', () => {
     expect(parseCommandCodeApiWhoami('{"success":true,"user":{"id":"1","name":"N","email":"a@example.com","userName":"n"},"org":null}')).toBe('a@example.com');
     expect(parseCommandCodeApiWhoami('{"success":false}')).toBeUndefined();
+  });
+
+  it('reads only the Nous login from Hermes auth.json', () => {
+    const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
+    const nous = jwt({ iss: 'https://portal.nousresearch.com', email: 'a@example.com', exp: 1 });
+    expect(parseHermesNousAuth(JSON.stringify({ version: 1, providers: { nous: { access_token: nous } }, active_provider: 'nous' }))).toBe('a@example.com');
+    expect(parseHermesNousAuth(JSON.stringify({ providers: { nous: { access_token: jwt({ iss: 'https://evil.example', email: 'a@example.com' }) } } }))).toBeUndefined();
+    expect(parseHermesNousAuth(JSON.stringify({ providers: { 'openai-codex': { tokens: { id_token: nous } } } }))).toBeUndefined();
+    expect(parseHermesNousAuth('{}')).toBeUndefined();
   });
 });

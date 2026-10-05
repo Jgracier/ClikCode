@@ -275,6 +275,17 @@ async function commandCodeEmail(harness: AiLocalHarnessDefinition, profilePath: 
   return parseCommandCodeWhoami(await capture(harness, profilePath, ['whoami']));
 }
 
+/** Hermes's auth.json keeps the Nous Portal OAuth login under
+ * providers.nous; its access_token is a JWT issued by the portal carrying the
+ * account's `email` (read live 2026-10-05). Only the Nous login is read: the
+ * other providers Hermes can hold are model keys, not this account. An
+ * expired token still names who signed in. */
+export function parseHermesNousAuth(authJson: string): string | undefined {
+  const nous = (json(authJson) as { providers?: { nous?: { access_token?: unknown } } } | undefined)?.providers?.nous;
+  const claims = jwtClaims(nous?.access_token);
+  return typeof claims?.iss === 'string' && /^https:\/\/portal\.nousresearch\.com\/?$/.test(claims.iss) ? text(claims.email) : undefined;
+}
+
 /** Codex's auth.json id_token is a standard OIDC JWT whose payload carries an
  * `email` claim. Decoding the payload to read a claim is not verifying the
  * signature, and need not be: this is display of a claim from a credential
@@ -393,6 +404,8 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   mcode: (_harness, profilePath) => miniMaxEmail(profilePath),
   droid: (_harness, profilePath) => droidAccountEmail(profilePath),
   auggie: (_harness, profilePath) => augmentEmail(profilePath),
+  // HERMES_HOME is the profile itself; auth.json sits at its root.
+  hermes: read((profilePath) => [join(profilePath ?? (process.env.HERMES_HOME || join(homedir(), '.hermes')), 'auth.json')], parseHermesNousAuth),
 };
 
 /** Harnesses whose login can leave the API key outside the account's own
