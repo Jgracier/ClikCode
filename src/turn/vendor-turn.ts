@@ -18,7 +18,7 @@ import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { carryNativeSession } from '../session/carry.js';
+import { moveThreadToAccount } from '../session/carry.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -145,14 +145,6 @@ export async function sendVendorTurn(input: {
   session.workspace ??= process.cwd();
   const baseMessages = sessionTranscriptMessages(session);
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
-  /** The vendor's own thread, carried into the account taking over, so it
-   * resumes with everything it actually said and did rather than a retelling
-   * of it. Undefined where that cannot be done -- a harness whose transcript
-   * layout is not known, a file that is not on disk. */
-  const carryThread = (from: AiHarnessAccount, to: AiHarnessAccount) => carryNativeSession({
-    harness, nativeId: session.nativeSessionId, workspace: session.workspace,
-    from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
-  });
   /** The two edits a retry makes to the answer, in the saved turn and on
    * screen alike: clear it, or start a new paragraph after it. Only these --
    * the model's own words reach the screen through emitResponseDelta alone. */
@@ -198,6 +190,14 @@ export async function sendVendorTurn(input: {
     }
     return start.prompt;
   };
+  /** A retry on a fresh thread (the old one already forgotten): the interrupted
+   * request, taken up with the answer so far, which is cleared or continued
+   * in a new paragraph. Returns what to send. */
+  const retellInterrupted = async (edit: keyof typeof RETRY_EDITS): Promise<string> => {
+    const prompt = await takeUp(INTERRUPTED_TURN_REQUEST, { interrupted: true, withJournal: true, requestContext });
+    if (edit === 'clear' || !/\n\s*\n\s*$/.test(session.pendingTurn?.response ?? '')) editAnswer(edit);
+    return prompt;
+  };
   const accounts = turnAccounts({
     state, session, prompter, matchesBackend: (item) => turnBackendForAccount(item) === 'vendor',
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
@@ -207,7 +207,7 @@ export async function sendVendorTurn(input: {
   try {
   // The thread goes with the conversation, as on a switch mid-turn; only
   // one that cannot be carried starts afresh.
-  if (await accounts.start(async (to) => { if (!await carryThread(account, to)) forgetNativeThread(session); })) {
+  if (await accounts.start(async (to) => { await moveThreadToAccount(session, harness, account, to); })) {
     await checkpoint.persistNow();
   }
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode
@@ -507,12 +507,11 @@ export async function sendVendorTurn(input: {
         nativeThreadRetried = true;
         await closePersistentTransport(session.id);
         forgetNativeThread(session);
-        turnText = await takeUp(INTERRUPTED_TURN_REQUEST, { interrupted: true, withJournal: true, requestContext });
-        editAnswer('clear');
+        turnText = await retellInterrupted('clear');
         continue;
       }
       const fallback = await accounts.after(failure, failureKind, signal);
-      const carriedThread = await carryThread(account, fallback);
+      const carriedThread = await moveThreadToAccount(session, harness, account, fallback);
       await accounts.switchTo(fallback, failureKind);
       nativeThreadRetried = false;
       if (carriedThread) {
@@ -534,19 +533,12 @@ export async function sendVendorTurn(input: {
           editAnswer('new-paragraph');
         }
       } else {
-        forgetNativeThread(session);
         // Built while the interrupted attempt's touched-file hints are still
         // on the checkpoint. Keep any real progress already on screen: the
         // rehydration prompt tells the next account to finish without
         // repeating, so clearing here made the first half vanish and the
         // retry look like a fresh start from the original prompt.
-        turnText = await takeUp(INTERRUPTED_TURN_REQUEST, { interrupted: true, withJournal: true, requestContext });
-        const partial = session.pendingTurn?.response ?? '';
-        if (partial.trim()) {
-          if (!/\n\s*\n\s*$/.test(partial)) editAnswer('new-paragraph');
-        } else {
-          editAnswer('clear');
-        }
+        turnText = await retellInterrupted(session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear');
       }
       continue;
     }

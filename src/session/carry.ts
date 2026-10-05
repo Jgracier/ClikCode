@@ -26,7 +26,10 @@
 import { cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { locateNativeSessionFile, nativeSessionRoot, nativeSessionStore, type NativeSessionEnvironment } from './discovery/registry.js';
-import type { AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import { turnEnvironment } from '../turn/turn-environment.js';
+import type { HarnessSession } from './model.js';
+import { forgetNativeThread } from './native-thread.js';
 
 type CarryNativeSessionInput = {
   harness: AiLocalHarnessDefinition;
@@ -81,6 +84,22 @@ function sharesVendorProfile(
     if (read(from, name) !== read(to, name)) return false;
   }
   return true;
+}
+
+/** A conversation moving to another account takes its vendor thread along;
+ * one that cannot be carried (or no harness or previous account to carry it
+ * from) is forgotten, so the next turn takes the conversation up afresh.
+ * The one step for a pre-turn move, a failover and `/accounts use`. */
+export async function moveThreadToAccount(
+  session: HarnessSession, harness: AiLocalHarnessDefinition | undefined,
+  from: AiHarnessAccount | undefined, to: AiHarnessAccount,
+): Promise<CarryOutcome> {
+  const carried = harness && from ? await carryNativeSession({
+    harness, nativeId: session.nativeSessionId, workspace: session.workspace,
+    from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
+  }).catch(() => undefined) : undefined;
+  if (!carried) forgetNativeThread(session);
+  return carried;
 }
 
 export async function carryNativeSession(input: CarryNativeSessionInput): Promise<CarryOutcome> {

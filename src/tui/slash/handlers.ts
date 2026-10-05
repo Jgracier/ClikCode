@@ -68,8 +68,7 @@ import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNot
 import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
-import { carryNativeSession } from '../../session/carry.js';
-import { turnEnvironment } from '../../turn/turn-environment.js';
+import { moveThreadToAccount } from '../../session/carry.js';
 import { undoTurnsBack } from '../../session/undo-turn.js';
 import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../session/turn-changes.js';
 import { stateDirectory } from '../../session/store/paths.js';
@@ -582,11 +581,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         // turn then re-seeds a fresh one from ClikCode's own transcript.
         const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
         const previous = state.accounts.find((item) => item.id === session.accountId);
-        const carried = harness && previous && session.nativeSessionId ? await carryNativeSession({
-          harness, nativeId: session.nativeSessionId, workspace: session.workspace,
-          from: turnEnvironment(harness, previous), to: turnEnvironment(harness, account),
-        }).catch(() => undefined) : undefined;
-        if (!carried) forgetNativeThread(session);
+        await moveThreadToAccount(session, harness, previous, account);
       }
       session.accountId = account.id;
       // Explicit selection is the user's retry signal for an account previously
