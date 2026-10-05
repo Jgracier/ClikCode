@@ -29,7 +29,21 @@ function gooseRoot(environment: NativeSessionEnvironment): string {
  *  Goose names a session by date and a per-database counter (`20261005_1`),
  *  so the same id in another profile is often ANOTHER conversation: a
  *  same-id row there is replaced only when it was created at the same moment
- *  and holds a prefix of this one's messages. */
+ *  and holds a prefix of this one's messages.
+ *
+ *  Verified against goose 1.51.0 (2026-10-05, vendor-sandbox, provider
+ *  codex/gpt-5.5, ACP as ClikCode drives it): session 20261005_2 made in
+ *  profile A ("Remember the word TUNDRA69") was carried into a profile B
+ *  holding its own 20261005_1 ('carried'; A and B's own session unchanged),
+ *  and the ACP resume of that id in B answered TUNDRA69. After a second turn
+ *  in B ("remember the number 332") it was carried back, and A's resume
+ *  answered "TUNDRA69 332".
+ *
+ *  Seen in the same run: two profiles that each start a session the same day
+ *  both name it 20261005_1, and that carry is declined (created_at differs),
+ *  both databases untouched -- the failover then re-seeds. (Goose's codex
+ *  provider also fails every turn under GOOSE_MODE=approve, ClikCode's `ask`:
+ *  "Codex command failed with exit code: Some(1)"; the run used bypass.) */
 export const gooseCarry: SqliteCarrySpec = {
   database: (environment) => join(gooseRoot(environment), 'sessions.db'),
   session: { table: 'sessions', key: 'id', identity: ['created_at'], parent: 'parent_session_id' },
