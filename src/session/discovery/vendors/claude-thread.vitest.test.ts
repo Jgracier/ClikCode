@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
-import type { CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
+import { markProviderBoundaries, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
 import { claudeToolUses, claudeThreadJsonl, claudeThreadRecords } from './claude-thread.js';
 import { claudeImportWriter, testedBuild, versionNumber } from './claude-import.js';
 import { claudeSessionStore } from './claude-store.js';
@@ -102,7 +102,9 @@ describe('claudeThreadRecords', () => {
       ]),
     ]);
     record.turns[1]!.attachments = ['/w/spec.md'];
-    const records = claudeThreadRecords(record, {
+    record.turns[1]!.origin = { ...record.turns[1]!.origin, provider: 'openai', model: 'gpt-5.5' };
+    // The Codex turn keeps its model and is introduced by the boundary note.
+    const records = claudeThreadRecords(markProviderBoundaries(record, 'claude'), {
       sessionId: 'sess', cwd, model: 'claude-haiku-4-5', version: '2.1.288', now: new Date('2026-10-04T12:00:00.000Z'), uuid: counter(),
     });
     // Golden: reviewed by hand against a transcript Claude Code 2.1.288 wrote.

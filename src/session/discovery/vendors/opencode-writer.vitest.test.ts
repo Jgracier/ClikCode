@@ -2,7 +2,7 @@ import { chmod, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { CanonicalOrigin, CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical';
+import { markProviderBoundaries, type CanonicalOrigin, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical';
 import type { NativeThreadWriteContext } from '../stores';
 import { nativeSessionStore } from '../registry';
 import {
@@ -49,8 +49,34 @@ const options = { workspace: '/ws', model: 'opencode/big-pickle', version: '1.18
 
 describe('openCodeExport', () => {
   it('writes the export format opencode 1.18.32 imported and resumed (golden)', async () => {
-    const exported = openCodeExport(liveRecord(), { ...options, random: counter() });
+    const exported = openCodeExport(markProviderBoundaries(liveRecord(), 'opencode'), { ...options, random: counter() });
     await expect(`${JSON.stringify(exported, null, 2)}\n`).toMatchFileSnapshot('./opencode-writer.golden.json');
+  });
+
+  it('names the producing provider/model on each assistant message, the receiving one on requests', () => {
+    const kilo: CanonicalOrigin = { sessionId: 's2', harness: 'kilo', route: 'native', provider: 'kilo', model: 'kilo/cohere/north-mini-code:free' };
+    const own: CanonicalOrigin = { sessionId: 's3', harness: 'opencode', route: 'native', provider: 'opencode', model: 'opencode/big-pickle' };
+    const record = liveRecord();
+    record.turns = [
+      turn(0, 'Say hi.', [{ type: 'text', text: 'Hi.' }], { origin: own }),
+      turn(1, 'Say hello.', [{ type: 'text', text: 'Hello.' }], { origin: kilo }),
+      turn(2, 'Bye.', [{ type: 'text', text: 'Bye.' }], { origin: own }),
+    ];
+    const exported = openCodeExport(markProviderBoundaries(record, 'opencode'), options);
+    const rows = exported.messages.map((message) => [
+      message.info.role,
+      message.info.role === 'user' ? (message.info.model as { providerID: string; modelID: string }).providerID : message.info.providerID,
+      message.info.role === 'user' ? (message.info.model as { providerID: string; modelID: string }).modelID : message.info.modelID,
+      String(message.parts.find((part) => part.type === 'text')?.text),
+    ]);
+    expect(rows).toEqual([
+      ['user', 'opencode', 'big-pickle', 'Say hi.'],
+      ['assistant', 'opencode', 'big-pickle', 'Hi.'],
+      ['user', 'opencode', 'big-pickle', '[ClikCode: the following turns ran on kilo (kilo/cohere/north-mini-code:free)]\n\nSay hello.'],
+      ['assistant', 'kilo', 'cohere/north-mini-code:free', 'Hello.'],
+      ['user', 'opencode', 'big-pickle', '[ClikCode: the following turns ran on opencode (opencode/big-pickle)]\n\nBye.'],
+      ['assistant', 'opencode', 'big-pickle', 'Bye.'],
+    ]);
   });
 
   it('gives every message and part an id that sorts in conversation order', () => {

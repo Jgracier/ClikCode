@@ -12,7 +12,7 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { CanonicalOrigin, CanonicalPart, CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
+import { markProviderBoundaries, type CanonicalOrigin, type CanonicalPart, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import type { NativeThreadWriteContext } from '../stores.js';
 import { piProjectDirectoryName, piSessionStore, piThreadLines } from './pi-store.js';
@@ -74,10 +74,11 @@ export function fixtureRecord(workspace = WORKSPACE): CanonicalRecord {
       { type: 'text', text: 'Fixed the typo in src/app.ts; no other occurrences.' },
     ], origin('claude', 'anthropic', 'claude-sonnet-4-6')),
   ];
-  return {
+  // As thread-start hands it to a writer: the switch to Claude is noted.
+  return markProviderBoundaries({
     version: 1, conversationId: 'conv-1', sessionId: 's-claude', workspace, turns,
     touchedFiles: ['src/app.ts'], attachments: [], pendingAttachments: [], openTodos: [],
-  };
+  }, 'codex', (command) => localHarnessForCommand(command)?.displayName);
 }
 
 function context(command: string, environment: Record<string, string>, version: string | undefined): NativeThreadWriteContext {

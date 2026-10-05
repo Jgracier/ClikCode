@@ -29,7 +29,7 @@
       "parts": [
         {
           "type": "text",
-          "text": "Remember this codeword for later: MARMALADE-COMET-31. Just acknowledge it.",
+          "text": "[ClikCode: the following turns ran on codex (gpt-5.6-luna)]\n\nRemember this codeword for later: MARMALADE-COMET-31. Just acknowledge it.",
           "id": "prt_106c9060200100000000000003",
           "sessionID": "ses_ef936f9ffffe00000000000001",
           "messageID": "msg_106c9060100100000000000002"
@@ -56,8 +56,8 @@
             "write": 0
           }
         },
-        "modelID": "big-pickle",
-        "providerID": "opencode",
+        "modelID": "gpt-5.6-luna",
+        "providerID": "openai",
         "time": {
           "created": 1791115200004,
           "completed": 1791115200007
@@ -147,8 +147,8 @@
             "write": 0
           }
         },
-        "modelID": "big-pickle",
-        "providerID": "opencode",
+        "modelID": "gpt-5.6-luna",
+        "providerID": "openai",
         "time": {
           "created": 1791115200010,
           "completed": 1791115200015
@@ -259,8 +259,8 @@
             "write": 0
           }
         },
-        "modelID": "big-pickle",
-        "providerID": "opencode",
+        "modelID": "gpt-5.6-luna",
+        "providerID": "openai",
         "time": {
           "created": 1791115200016,
           "completed": 1791115200019

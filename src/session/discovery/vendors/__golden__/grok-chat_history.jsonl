@@ -3,7 +3,7 @@
 {"type":"assistant","content":"I'll read the notes.","tool_calls":[{"id":"call-clikcode-0001","name":"run_terminal_command","arguments":"{\"command\":\"cat notes.txt\",\"description\":\"Run a shell command\"}"}],"model_id":"gpt-5.5"}
 {"type":"tool_result","tool_call_id":"call-clikcode-0001","content":"launch window: Thursday"}
 {"type":"assistant","content":"notes.txt says the launch window is Thursday. Codeword PELICAN-73 noted.","model_id":"gpt-5.5"}
-{"type":"user","content":[{"type":"text","text":"<user_query>\nFix the typo in src/app.ts\n</user_query>"}],"prompt_index":1}
+{"type":"user","content":[{"type":"text","text":"<user_query>\n[ClikCode: the following turns ran on Claude Code (claude-sonnet-4-6)]\n\nFix the typo in src/app.ts\n</user_query>"}],"prompt_index":1}
 {"type":"assistant","content":"","tool_calls":[{"id":"call-clikcode-0002","name":"search_replace","arguments":"{\"file_path\":\"/home/user/projects/app/src/app.ts\",\"old_string\":\"cosnt x = 1;\",\"new_string\":\"const x = 1;\"}"},{"id":"call-clikcode-0003","name":"grep","arguments":"{\"pattern\":\"cosnt\"}"}],"model_id":"claude-sonnet-4-6"}
 {"type":"tool_result","tool_call_id":"call-clikcode-0002","content":"--- src/app.ts\n-cosnt x = 1;\n+const x = 1;"}
 {"type":"tool_result","tool_call_id":"call-clikcode-0003","content":"(no matches)"}

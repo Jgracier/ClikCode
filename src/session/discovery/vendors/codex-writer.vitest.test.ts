@@ -2,7 +2,7 @@ import { mkdtemp, readdir, readFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { CanonicalOrigin, CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical';
+import { markProviderBoundaries, type CanonicalOrigin, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical';
 import type { NativeThreadWriteContext } from '../stores';
 import { nativeSessionStore } from '../registry';
 import { codexCallFor, codexRolloutRecords, codexRolloutRelativePath, codexThreadWriter, uuidv7 } from './codex-writer';
@@ -50,7 +50,7 @@ const START = Date.UTC(2026, 9, 4, 12, 0, 0);
 
 describe('codexRolloutRecords', () => {
   it('writes the layout codex-cli 0.155.1 resumed (golden)', async () => {
-    const records = codexRolloutRecords(liveRecord(), { threadId: THREAD, workspace: '/ws', cliVersion: '0.155.1', startMs: START, id: counter() });
+    const records = codexRolloutRecords(markProviderBoundaries(liveRecord(), 'codex'), { threadId: THREAD, workspace: '/ws', cliVersion: '0.155.1', startMs: START, id: counter() });
     await expect(`${records.map((record) => JSON.stringify(record)).join('\n')}\n`).toMatchFileSnapshot('./codex-writer.golden.jsonl');
   });
 
