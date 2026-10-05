@@ -137,21 +137,46 @@ async function openHandsEmail(profilePath: string | undefined): Promise<string |
  * file already trusted to authenticate real requests, profile-scoped by
  * CODEX_HOME like the rest of the file. */
 export function codexIdTokenEmail(authJson: string): string | undefined {
-  const payload = (json(authJson) as { tokens?: { id_token?: string } } | undefined)?.tokens?.id_token?.split('.')[1];
-  if (!payload) return undefined;
-  const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
-  return text((json(Buffer.from(padded, 'base64url').toString('utf8')) as { email?: unknown } | undefined)?.email);
+  const claims = jwtClaims((json(authJson) as { tokens?: { id_token?: unknown } } | undefined)?.tokens?.id_token);
+  return text(claims?.email);
 }
 
-/** Antigravity keeps no email in any file of its config tree (settings.json,
- * jetski_state.pbtxt and the project id file are byte-identical across
- * accounts). Its identity surfaces only in its own log: `server_oauth.go`
- * logs "OAuth: authenticated successfully as <email>" on every sign-in. A
+/** The payload of a JWT, decoded but (deliberately, see above) not verified. */
+function jwtClaims(token: unknown): Record<string, unknown> | undefined {
+  const payload = typeof token === 'string' ? token.split('.')[1] : undefined;
+  if (!payload) return undefined;
+  const padded = payload + '='.repeat((4 - (payload.length % 4)) % 4);
+  const claims = json(Buffer.from(padded, 'base64url').toString('utf8'));
+  return claims && typeof claims === 'object' ? claims as Record<string, unknown> : undefined;
+}
+
+/** $HOME/.gemini/antigravity-cli/antigravity-oauth-token is JSON
+ * {token:{access_token,token_type,refresh_token,expiry},auth_method,id_token}.
+ * `id_token` is Google's OIDC token from the same sign-in; its `email` claim
+ * names the account (checked live against every profile's log line: equal,
+ * and newer than a stale log line where the profile once held another
+ * account). Read regardless of `exp`: an expired token still names who
+ * signed in, and the file is replaced on the next sign-in. */
+export function antigravityIdTokenEmail(tokenJson: string): string | undefined {
+  const claims = jwtClaims((json(tokenJson) as { id_token?: unknown } | undefined)?.id_token);
+  if (claims?.iss !== 'https://accounts.google.com' && claims?.iss !== 'accounts.google.com') return undefined;
+  return claims.email_verified === false ? undefined : text(claims.email);
+}
+
+/** Antigravity: the id_token in its OAuth token file first (above). Its
+ * settings.json, jetski_state.pbtxt and project id file are byte-identical
+ * across accounts. As a fallback for a token file without an id_token, its
+ * own log: `server_oauth.go` logs "OAuth: authenticated successfully as
+ * <email>" on a full sign-in -- not when the sign-in stops agy as soon as
+ * the token file appears, hence the token file first. A
  * profile path IS the isolated $HOME, and agy writes under $HOME/.gemini
  * either way. The log is flushed by a background server after the awaited
  * client exits -- measured live needing several seconds -- so the newest few
  * logs are re-read for a while rather than once. */
 async function antigravityEmail(profilePath: string | undefined): Promise<string | undefined> {
+  const tokenFile = join(profilePath ?? homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+  const fromToken = await readFile(tokenFile, 'utf8').then(antigravityIdTokenEmail, () => undefined);
+  if (fromToken) return fromToken;
   const logDir = join(profilePath ?? homedir(), '.gemini', 'antigravity-cli', 'log');
   for (let attempt = 0; attempt < 12; attempt++) {
     const entries = await readdir(logDir, { withFileTypes: true }).catch(() => []);
