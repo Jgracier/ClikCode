@@ -84,9 +84,15 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   session.accountFailover = 'never';
   session.gatewayConfirmed = true;
   // The approval setting stays: the Gateway route's agent runs here and honours it.
+  shedVendorHarness(session);
+}
+
+/** What a move off a vendor harness sheds: the harness, its options and its
+ * thread -- recorded as still ClikCode's (forgetNativeThread), so discovery
+ * never offers it back as a vendor chat. */
+function shedVendorHarness(session: HarnessSession): void {
+  forgetNativeThread(session);
   delete session.nativeHarness;
-  delete session.nativeSessionId;
-  delete session.nativeStartedAt;
   delete session.harnessOptions;
 }
 
@@ -108,10 +114,7 @@ export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
   session.accountFailover = 'never';
   // gatewayConfirmed marks an explicit Gateway choice; this is not one.
   delete session.gatewayConfirmed;
-  delete session.nativeHarness;
-  delete session.nativeSessionId;
-  delete session.nativeStartedAt;
-  delete session.harnessOptions;
+  shedVendorHarness(session);
 }
 
 /** The policy for whichever agent route `route` names, so a route switch in
@@ -131,10 +134,7 @@ export function applyFreshLocalSessionPolicy(state: HarnessState, session: Harne
   session.permissionMode = defaults.permissionMode;
   session.accountFailover = defaults.accountFailover;
   delete session.gatewayConfirmed;
-  delete session.nativeHarness;
-  delete session.nativeSessionId;
-  delete session.nativeStartedAt;
-  delete session.harnessOptions;
+  shedVendorHarness(session);
 }
 
 setEmitHarnessOutput(emitHarnessOutput);
