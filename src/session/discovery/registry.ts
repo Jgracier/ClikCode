@@ -28,6 +28,7 @@ import { gooseSessionStore } from './vendors/goose-store.js';
 import { kiloSessionStore, openCodeSessionStore } from './vendors/opencode-writer.js';
 import { grokSessionStore } from './vendors/grok-store.js';
 import { clineSessionStore } from './vendors/cline-store.js';
+import { kimiSessionStore } from './vendors/kimi-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -79,6 +80,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   kilo: kiloSessionStore,
   grok: grokSessionStore,
   cline: clineSessionStore,
+  kimi: kimiSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {

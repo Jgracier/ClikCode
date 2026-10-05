@@ -20,6 +20,7 @@ import type { NativeThreadWriteContext } from '../stores.js';
 import { sequentialIds } from './thread-writer-files.js';
 import { grokThreadFiles, grokWorkspaceDirectoryName } from './grok-store.js';
 import { clineThreadFiles } from './cline-store.js';
+import { kimiThreadFiles, kimiWorkDirKey } from './kimi-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
 const WORKSPACE = '/home/user/projects/app';
@@ -156,5 +157,40 @@ describe('cline thread writer', () => {
     expect(await readdir(join(data, 'sessions'))).toEqual([again!.nativeId]);
 
     expect(await writer.versionOk(context('cline', {}, '3.0.69'))).toBe(false);
+  });
+});
+
+describe('kimi thread writer', () => {
+  it('writes the golden wire log and state', async () => {
+    const files = kimiThreadFiles(fixtureRecord(), {
+      sessionId: 'session_0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', workspace: WORKSPACE, now: NOW,
+      directory: '/home/user/.kimi-code/sessions/wd_app_x/session_0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee',
+      uuid: sequentialIds('uuid-'), callId: sequentialIds('call_clikcode_'),
+    });
+    await golden('kimi-wire.jsonl', files.wire);
+    expect(JSON.parse(files.state)).toMatchObject({
+      id: 'session_0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', version: 2, cwd: WORKSPACE,
+      agents: { main: { homedir: '/home/user/.kimi-code/sessions/wd_app_x/session_0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee/agents/main', type: 'main' } },
+    });
+  });
+
+  it('names the workdir bucket as Kimi does', () => {
+    expect(kimiWorkDirKey('/var/tmp/wprobe/kmws')).toBe('wd_kmws_c5c6e3059ec1');
+    expect(kimiWorkDirKey('/home/justin-gracier')).toBe('wd_justin-gracier_b44802654eba');
+    expect(kimiWorkDirKey('/tmp/My Project!/')).toMatch(/^wd_my-project_[0-9a-f]{12}$/);
+  });
+
+  it('writes under the taking-over profile, pinned to ACP, and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'kimi-writer-'));
+    const writer = NATIVE_SESSION_STORES.kimi!.writer!;
+    const ctx = context('kimi', { HOME: home }, '2.0.2');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(written?.transport).toBe('acp');
+    expect(written!.nativeId).toMatch(/^session_[0-9a-f-]{36}$/);
+    const directory = join(home, '.kimi-code', 'sessions', kimiWorkDirKey(WORKSPACE), written!.nativeId);
+    expect((await readdir(directory)).sort()).toEqual(['agents', 'state.json']);
+    expect(await readdir(join(directory, 'agents', 'main'))).toEqual(['wire.jsonl']);
+    expect(await writer.versionOk(context('kimi', {}, '2.0.3'))).toBe(false);
   });
 });
