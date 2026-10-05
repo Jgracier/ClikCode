@@ -21,6 +21,7 @@ import { sequentialIds } from './thread-writer-files.js';
 import { grokThreadFiles, grokWorkspaceDirectoryName } from './grok-store.js';
 import { clineThreadFiles } from './cline-store.js';
 import { kimiThreadFiles, kimiWorkDirKey } from './kimi-store.js';
+import { kiroThreadFiles } from './kiro-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
 const WORKSPACE = '/home/user/projects/app';
@@ -192,5 +193,28 @@ describe('kimi thread writer', () => {
     expect((await readdir(directory)).sort()).toEqual(['agents', 'state.json']);
     expect(await readdir(join(directory, 'agents', 'main'))).toEqual(['wire.jsonl']);
     expect(await writer.versionOk(context('kimi', {}, '2.0.3'))).toBe(false);
+  });
+});
+
+describe('kiro thread writer', () => {
+  it('writes the golden conversation and session metadata', async () => {
+    const files = kiroThreadFiles(fixtureRecord(), {
+      sessionId: '0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', workspace: WORKSPACE, now: NOW,
+      messageId: sequentialIds('msg-'), callId: sequentialIds('tooluse_clikcode_'),
+    });
+    await golden('kiro.jsonl', files.messages);
+    await golden('kiro.json', files.session);
+  });
+
+  it('writes under the taking-over HOME, pinned to ACP, and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'kiro-writer-'));
+    const writer = NATIVE_SESSION_STORES.kiro!.writer!;
+    const ctx = context('kiro', { HOME: home }, 'kiro-cli 2.23.1');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(written?.transport).toBe('acp');
+    expect((await readdir(join(home, '.kiro', 'sessions', 'cli'))).sort())
+      .toEqual([`${written!.nativeId}.json`, `${written!.nativeId}.jsonl`]);
+    expect(await writer.versionOk(context('kiro', {}, 'kiro-cli 2.24.0'))).toBe(false);
   });
 });
