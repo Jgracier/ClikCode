@@ -70,7 +70,10 @@ for (const harness of AI_LOCAL_HARNESSES) {
  * against the sandbox's. */
 const expand = (path, base) => path
   .replace(/\$\{(\w+):-([^}]*)\}/g, (_, _name, fallback) => fallback)
-  .replace(/^~/, base);
+  .replace(/^~/, base)
+  // A directory is declared with its trailing slash (Kimi's credentials/),
+  // which a symlink's own path cannot carry.
+  .replace(/\/+$/, '');
 for (const command of auth) {
   const harness = AI_LOCAL_HARNESSES.find((item) => item.command === command);
   if (!harness) { console.error(`no harness named ${command}`); process.exit(2); }

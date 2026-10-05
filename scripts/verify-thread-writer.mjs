@@ -69,7 +69,10 @@ const environment = {
 };
 const expand = (path, base, env) => path
   .replace(/\$\{(\w+):-([^}]*)\}/g, (_, name, fallback) => env[name] ?? fallback)
-  .replace(/^~/, base);
+  .replace(/^~/, base)
+  // A declared directory's trailing slash (Kimi's credentials/) cannot be
+  // part of a symlink's own path.
+  .replace(/\/+$/, '');
 for (const path of [...(harness.authFiles ?? []).map((file) => file.path), ...links.map((path) => (path.startsWith('~') ? path : `~/${path}`))]) {
   const from = expand(path, home, {});
   const to = expand(path, profile, environment);
