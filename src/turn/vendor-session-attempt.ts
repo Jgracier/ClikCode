@@ -18,6 +18,13 @@ import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/laz
 import { swarmIsOn } from '../swarm/policy.js';
 import { swarmAcpMcpServers } from '../swarm/publish.js';
 import { closePersistentTransport, persistentTransportFor, vendorChildKey } from './vendor-process.js';
+import { isTurnCancelled } from '../agent/cancellation.js';
+
+/** Whether a turn that ended in `error` leaves its warm vendor child usable:
+ * only a cancel does. */
+export function keepsVendorAfter(error: unknown): boolean {
+  return isTurnCancelled(error) || (error as Error | null)?.name === 'AbortError';
+}
 
 export async function runVendorSessionAttempt(input: {
   harness: AiLocalHarnessDefinition;
@@ -149,8 +156,12 @@ export async function runVendorSessionAttempt(input: {
       }
     }
   } catch (error) {
-    // After a failed turn the child's protocol state is unknown.
-    if (persistent) await closePersistentTransport(session.id);
+    // After a failed turn the child's protocol state is unknown. A cancel is
+    // not a failure: the transport asked the vendor to stop and either saw it
+    // settle (the child stays, resumable) or killed the child itself
+    // (persistent-session.ts settleCancel). Closing here as well respawned the
+    // vendor and every MCP server it starts on each Esc / stop & send.
+    if (persistent && !keepsVendorAfter(error)) await closePersistentTransport(session.id);
     throw error;
   }
   return result;
