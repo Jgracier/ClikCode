@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
 import { installMcpOnHarness, type McpServerEntry } from './mcp-registry.js';
+import { npxRoots, withoutNpx, type NpxRoots } from './npx-bin.js';
 import { loadMcpServers, type McpServerSpec } from '../agent/mcp/config.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { discoverSkills, type Skill } from '../agent/skills.js';
@@ -59,6 +60,8 @@ export interface ProvisionInput {
   /** ClikCode's own servers (search/mcp-entry.ts), given to every harness
    * by the same rules as the user's: never over a name already there. */
   builtins?: readonly McpServerEntry[];
+  /** Where npm keeps what npx installed. Tests pass fixtures. */
+  npx?: NpxRoots;
 }
 
 function profileOf(account?: AiHarnessAccount): { env: string; path: string } | undefined {
@@ -120,12 +123,15 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   const userNames = new Set(userEntries.map((entry) => entry.name));
   // A user's server by the same name is theirs and wins.
   const entries = [...userEntries, ...(input.builtins ?? []).filter((entry) => !userNames.has(entry.name))];
+  let roots: Promise<NpxRoots> | undefined;
   for (const entry of entries) {
     if (present.unreadable) { mcpSkipped.push(entry.name); continue; }
     if (present.known && present.names.has(entry.name)) continue;
     if (grokClaudeMcp?.names.has(entry.name)) continue;
     if (!present.known && await alreadyProvisioned(stateDir, input, entry.name)) continue;
-    const result = await (input.install ?? installMcpOnHarness)(input.harness, entry, input.account);
+    // Only the vendor's copy: mcp.json keeps the user's own npx line.
+    const written = await withoutNpx(entry, () => (roots ??= input.npx ? Promise.resolve(input.npx) : npxRoots(home)));
+    const result = await (input.install ?? installMcpOnHarness)(input.harness, written, input.account);
     if (result.ok) {
       mcpInstalled.push(entry.name);
       if (!present.known) await rememberProvisioned(stateDir, input, entry.name);
