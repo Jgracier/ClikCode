@@ -69,6 +69,24 @@ describe('startConversationThread', () => {
     }
   });
 
+  it('transfers, without writing, when the model runs behind a provider that keeps no history', async () => {
+    // Goose on claude-code: its thread is forgotten after every turn, and a
+    // written thread resumed there would reach a model that never sees it.
+    const goose = {
+      command: 'goose', provider: 'goose', displayName: 'Goose', modelProviderSeparator: '/',
+      turn: { output: 'json-lines', statelessProviders: ['claude-code'] },
+    } as AiLocalHarnessDefinition;
+    const { writer, seen } = fakeWriter();
+    const reasons: string[] = [];
+    const start = await startConversationThread(input({ writer, harness: goose, model: 'claude-code/sonnet', onFallback: (reason) => reasons.push(reason) }));
+    expect(start.kind).toBe('transfer');
+    expect(start.prompt).toContain('1. rename the parser');
+    expect(seen).toEqual([]);
+    expect(reasons[0]).toContain('keeps no history');
+    // Another provider on the same harness keeps its history: written.
+    expect((await startConversationThread(input({ writer, harness: goose, model: 'anthropic/sonnet' }))).kind).toBe('native');
+  });
+
   it('writes nothing for a conversation with no turns', async () => {
     const { writer, seen } = fakeWriter();
     const start = await startConversationThread(input({ writer, record: { ...record, turns: [] } }));
