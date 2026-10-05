@@ -144,4 +144,27 @@ describe('ACP model catalog refresh', () => {
     await nativeModelCatalog(harness);
     expect(queryAcp.mock.calls[0]![1]).toEqual(['--acp', '--allowed-mcp-server-names', 'none']);
   });
+
+  it('discovers once per machine: a window already running takes another window\'s answer', async () => {
+    const acpHarness = (command: string) => ({
+      command, binary: `missing-${command}`, transport: 'acp', acp: { argv: [] },
+    } as unknown as AiLocalHarnessDefinition);
+    const first = acpHarness('test-shared-first');
+    const second = acpHarness('test-shared-second');
+    queryAcp.mockImplementation(async () => ({ models: ['m'], labels: {} }));
+    // A second module instance stands for another ClikCode process that has
+    // already read the catalog file.
+    vi.resetModules();
+    const other = await import('./model-catalog.js');
+    await other.nativeModelCatalog(second);
+    expect(queryAcp).toHaveBeenCalledTimes(1);
+    await nativeModelCatalog(first);
+    expect(queryAcp).toHaveBeenCalledTimes(2);
+    // The running window reads the answer this one wrote...
+    expect((await other.nativeModelCatalog(first)).models).toEqual(['m']);
+    // ...and this one's write kept the other's entry.
+    resetModelCatalogMemo();
+    await nativeModelCatalog(second);
+    expect(queryAcp).toHaveBeenCalledTimes(2);
+  });
 });

@@ -237,15 +237,24 @@ async function cachedCatalog(
   account?: AiHarnessAccount,
   options?: { allowStale?: boolean; fingerprint?: string },
 ): Promise<ModelCatalogResult | undefined> {
-  const cached = (await memo.load()).entries[cacheKey(harness, account)];
-  if (!cached) return undefined;
-  if (cached.fingerprint !== (options?.fingerprint ?? await catalogFingerprint(harness, account))) return undefined;
-  // A model the account lists that the entry lacks was added since: the
-  // list is read again with it.
-  if (account?.models?.some((model) => !cached.result.models.includes(model))) return undefined;
-  if (harness.acp && cached.result.models.length === 0) return undefined;
-  const isExpired = serverModelList(harness) && Date.now() - cached.at >= SERVER_LIST_TTL_MS;
-  if (isExpired && !options?.allowStale) return undefined;
+  const key = cacheKey(harness, account);
+  const fingerprint = options?.fingerprint ?? await catalogFingerprint(harness, account);
+  const usable = (cached: CatalogMemoEntry | undefined): cached is CatalogMemoEntry => Boolean(cached
+    && cached.fingerprint === fingerprint
+    // A model the account lists that the entry lacks was added since: the
+    // list is read again with it.
+    && !account?.models?.some((model) => !cached.result.models.includes(model))
+    && !(harness.acp && cached.result.models.length === 0)
+    && (options?.allowStale || !(serverModelList(harness) && Date.now() - cached.at >= SERVER_LIST_TTL_MS)));
+  const held = await memo.load();
+  let cached = held.entries[key];
+  if (!usable(cached)) {
+    // Another ClikCode process may have read it since this one loaded the
+    // file: one discovery per machine, not one per window.
+    const written = (await memo.read())?.entries[key];
+    if (!usable(written)) return undefined;
+    held.entries[key] = cached = written;
+  }
   rememberVendorModelNames(harness, cached.result);
   return cached.result;
 }
@@ -406,7 +415,13 @@ async function discoverModelCatalog(
 async function rememberCatalog(
   harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, fingerprint: string, result: ModelCatalogResult,
 ): Promise<void> {
-  (await memo.load()).entries[cacheKey(harness, account)] = { at: Date.now(), fingerprint, result };
+  const held = await memo.load();
+  // What other processes wrote since this one loaded the file is kept, not
+  // overwritten with this process's older copy.
+  for (const [key, entry] of Object.entries((await memo.read())?.entries ?? {})) {
+    if (!held.entries[key] || held.entries[key]!.at < entry.at) held.entries[key] = entry;
+  }
+  held.entries[cacheKey(harness, account)] = { at: Date.now(), fingerprint, result };
   memo.changed();
   await memo.save();
   if (account?.id && result.models.length) {
