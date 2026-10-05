@@ -2,9 +2,8 @@
  * credential file, or its real API with the account's own token. */
 
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
-import { auggieUsageLabel } from '../auggie-usage.js';
 import { grokUsageReading } from './grok-usage.js';
-import { ampUsageProbe, commandCodeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
+import { ampUsageProbe, auggieUsageProbe, commandCodeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -12,9 +11,8 @@ import type { NativeUsageProbe } from '../definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { UsageReading, UsageWindow, claudeRateLimitReading, claudeUsageCommandReading, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
 
-/** The Claude probe runs a real (tiny) turn, so it waits on the model, not on
- * a local file: measured at ~1.7s to the rate_limit_event, with room for a
- * slow link. The other probes read locally and use a tighter 8s. */
+/** Claude Code's `/usage` probe: measured at ~3.8s (see
+ * CLAUDE_USAGE_PROBE_ARGV), with room for a slow start. */
 const NATIVE_USAGE_PROBE_TIMEOUT_MS = 20_000;
 
 /** Per-harness live usage probe. Each vendor CLI exposes quota/cost through a different
@@ -163,17 +161,6 @@ export function codexRateLimitsReading(rateLimits: unknown): UsageReading | unde
     return usageWindow(usageWindowName(window.windowDurationMins), window.usedPercent, resetsAt);
   };
   return usageReading([part(windows?.primary), part(windows?.secondary)]);
-}
-
-/** Auggie publishes an account balance; ClikCode reads it from the harness
- * rather than from Augment's API, the same rule every other usage source
- * follows here. */
-async function auggieUsageProbe(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<string | undefined> {
-  const harness = localHarnessForCommand('auggie');
-  if (!harness) return undefined;
-  try {
-    return auggieUsageLabel(await captureNativeHarnessOutput(harness, ['account', 'status', '--json'], environment, NATIVE_USAGE_PROBE_TIMEOUT_MS));
-  } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }
 
 type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;

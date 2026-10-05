@@ -1,6 +1,7 @@
-/** Plan usage that five more harnesses publish without a model turn, each
+/** Plan usage that more harnesses publish without a model turn, each
  * asked of the harness itself (its own credentials, its own token refresh):
  *
+ *   - Auggie: `auggie account status --json` reports the credit balance.
  *   - Copilot: `copilot --headless --stdio` serves the Copilot SDK's JSON-RPC,
  *     whose `account.getQuota` answers the quota snapshots its TUI shows.
  *   - Kimi Code: `kimi web --no-open` serves `/api/v1/oauth/usage`, the same
@@ -297,6 +298,25 @@ async function captureLabel(command: string, argv: readonly string[], environmen
     return harness ? parse(await captureNativeHarnessOutput(harness, argv, environment, PROBE_TIMEOUT_MS)) : undefined;
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }
+
+/** `auggie account status --json`, verified against a real account:
+ * `{"planName":"Free Plan","usageUnit":"usd","amountRemaining":"0",...}`.
+ * The amount arrives as a string; one that does not parse is not guessed at.
+ * Spent is said in the words every harness uses for it. */
+export function auggieUsageLabel(raw: string): string | undefined {
+  let status: { usageUnit?: unknown; amountRemaining?: unknown };
+  try { status = JSON.parse(raw) as typeof status; } catch { return undefined; }
+  const value = status.amountRemaining;
+  const remaining = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value.trim()) : Number.NaN;
+  if (!Number.isFinite(remaining)) return undefined;
+  if (remaining <= 0) return 'Out Of Credits';
+  const unit = typeof status.usageUnit === 'string' ? status.usageUnit : undefined;
+  if (unit?.toLowerCase() === 'usd') return balanceLabel(remaining);
+  return `${Number.isInteger(remaining) ? remaining : remaining.toFixed(2)}${unit ? ` ${unit}` : ''} credits left`;
+}
+
+export const auggieUsageProbe = (_session: HarnessSession, environment: Environment): Promise<string | undefined> =>
+  captureLabel('auggie', ['account', 'status', '--json'], environment, auggieUsageLabel);
 
 export const ampUsageProbe = (_session: HarnessSession, environment: Environment): Promise<string | undefined> =>
   captureLabel('amp', ['usage'], environment, ampUsageLabel);
