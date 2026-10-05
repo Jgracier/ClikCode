@@ -1,29 +1,88 @@
 /** Portable conversation branches and vendor transcript reconciliation. */
 import { randomUUID } from 'node:crypto';
-import type { AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../session/model.js';
 import { conversationIdFor } from '../session/options.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
-import { harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { allLocalHarnesses, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 
 /** The settings a conversation keeps when another harness takes it up. The
  * user chose an effort and a permission mode for this conversation, not for
  * a provider: they carry over wherever the target takes them, and fall back
- * to the target's defaults only where it does not. `efforts` is the levels
+ * to the target's defaults only where it does not. A permission mode carries
+ * by meaning (carriedPermissionMode), never to one that allows more. `efforts` is the levels
  * the target offers (effortChoicesFor), when known; unknown, the vendor's own
  * refusal decides (vendor-turn.ts isEffortRefusal). */
 export function carriedHandoffSettings(
-  source: Pick<HarnessSession, 'effort' | 'permissionMode' | 'accountFailover'>, target: AiLocalHarnessDefinition,
-  defaults: HarnessDefaultSettings, efforts?: readonly string[],
+  source: Pick<HarnessSession, 'effort' | 'permissionMode' | 'accountFailover'> & Partial<Pick<HarnessSession, 'nativeHarness'>>,
+  target: AiLocalHarnessDefinition, defaults: HarnessDefaultSettings, efforts?: readonly string[],
 ): HarnessDefaultSettings {
   const effort = source.effort && harnessSupportsEffort(target) && (!efforts?.length || efforts.includes(source.effort))
     ? source.effort : defaults.effort;
-  const permissionMode = source.permissionMode && harnessSupportsPermissionMode(target, source.permissionMode)
-    ? source.permissionMode : defaults.permissionMode;
+  const from = source.nativeHarness ? localHarnessForCommand(source.nativeHarness) : undefined;
+  const permissionMode = source.permissionMode
+    ? carriedPermissionMode(from, source.permissionMode, target, defaults.permissionMode)
+    : defaults.permissionMode;
   return { ...defaults, effort, permissionMode, accountFailover: source.accountFailover ?? defaults.accountFailover };
+}
+
+/** How much a mode lets the agent do without asking, by its normalized name. */
+const PERMISSION_NAME_LEVEL: Record<AiHarnessPermissionMode, number> = { ask: 0, auto: 1, bypass: 2 };
+
+/** What a harness actually passes for a mode (argv and environment);
+ * undefined for the unflagged default, which means nothing across vendors. */
+function permissionSignature(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): string | undefined {
+  const argv = harness.permissionArgv?.[mode]?.argv ?? [];
+  const env = harness.permissionEnv?.[mode] ?? {};
+  if (!argv.length && !Object.keys(env).length) return undefined;
+  return JSON.stringify({ argv, env: Object.entries(env).sort(([left], [right]) => left.localeCompare(right)) });
+}
+
+/** A mode's level by what it does, not what it is called: the highest
+ * normalized name any catalog harness gives the same flags. OpenCode calls
+ * `--auto` bypass and Kilo (the same program) calls it auto, so Kilo's auto
+ * is bypass-level. */
+export function permissionLevel(
+  harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode,
+  catalog: readonly AiLocalHarnessDefinition[] = allLocalHarnesses(),
+): number {
+  let level = PERMISSION_NAME_LEVEL[mode];
+  const signature = permissionSignature(harness, mode);
+  if (!signature) return level;
+  for (const other of catalog) {
+    for (const otherMode of other.permissionModes ?? []) {
+      if (permissionSignature(other, otherMode) === signature) level = Math.max(level, PERMISSION_NAME_LEVEL[otherMode]);
+    }
+  }
+  return level;
+}
+
+/** The target's mode closest in meaning to `mode` on `from` that never lets
+ * the agent do more: the one passing the same flags if any, else the most
+ * permissive one at or below the source's level (same name on a tie). With
+ * none at or below it, `fallback` if that does not exceed it, else the
+ * target's least permissive mode. `from` unknown: the mode's name decides. */
+export function carriedPermissionMode(
+  from: AiLocalHarnessDefinition | undefined, mode: AiHarnessPermissionMode, target: AiLocalHarnessDefinition,
+  fallback: AiHarnessPermissionMode,
+  catalog: readonly AiLocalHarnessDefinition[] = allLocalHarnesses(),
+): AiHarnessPermissionMode {
+  const sourceLevel = from ? permissionLevel(from, mode, catalog) : PERMISSION_NAME_LEVEL[mode];
+  const sourceSignature = from ? permissionSignature(from, mode) : undefined;
+  const offered = (target.permissionModes ?? []).filter((candidate) => harnessSupportsPermissionMode(target, candidate))
+    .map((candidate) => ({ mode: candidate, level: permissionLevel(target, candidate, catalog) }));
+  const same = sourceSignature ? offered.find((candidate) => permissionSignature(target, candidate.mode) === sourceSignature) : undefined;
+  if (same) return same.mode;
+  const allowed = offered.filter((candidate) => candidate.level <= sourceLevel)
+    .sort((left, right) => right.level - left.level || Number(right.mode === mode) - Number(left.mode === mode));
+  if (allowed[0]) return allowed[0].mode;
+  if (!offered.length) return fallback;
+  const fallbackLevel = offered.find((candidate) => candidate.mode === fallback)?.level;
+  if (fallbackLevel !== undefined && fallbackLevel <= sourceLevel) return fallback;
+  return [...offered].sort((left, right) => left.level - right.level)[0]!.mode;
 }
 
 /** The model a conversation runs on another harness: the one it ran here,

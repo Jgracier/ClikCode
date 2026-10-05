@@ -3,7 +3,7 @@
  * offers the same one. */
 import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { carriedHandoffModel, carriedHandoffSettings, createHandoffBranch } from './handoff.js';
+import { carriedHandoffModel, carriedHandoffSettings, carriedPermissionMode, createHandoffBranch, permissionLevel } from './handoff.js';
 import type { HarnessDefaultSettings, HarnessSession } from '../session/model.js';
 
 const defaults: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask', accountFailover: 'never' };
@@ -26,6 +26,30 @@ describe('carriedHandoffSettings', () => {
     expect(carriedHandoffSettings(source, opencode, defaults, ['minimal', 'low', 'medium', 'high', 'max'])).toMatchObject({ effort: 'medium', permissionMode: 'ask' });
     // Continue takes no effort at all, but does take bypass.
     expect(carriedHandoffSettings({ ...source, permissionMode: 'bypass' }, cn, defaults)).toMatchObject({ effort: 'medium', permissionMode: 'bypass' });
+  });
+
+  it('carries a permission mode by meaning, never escalating', () => {
+    const kilo = localHarnessForCommand('kilo')!;
+    const claude = localHarnessForCommand('claude')!;
+    const copilot = localHarnessForCommand('copilot')!;
+    const openhands = localHarnessForCommand('openhands')!;
+    // OpenCode and Kilo both pass `--auto`: one calls it bypass, the other auto.
+    expect(carriedHandoffSettings({ ...source, permissionMode: 'bypass', nativeHarness: 'opencode' }, kilo, defaults).permissionMode).toBe('auto');
+    expect(carriedHandoffSettings({ ...source, permissionMode: 'auto', nativeHarness: 'kilo' }, opencode, defaults).permissionMode).toBe('bypass');
+    expect(permissionLevel(kilo, 'auto')).toBe(permissionLevel(opencode, 'bypass'));
+    // Kilo's auto is bypass-level, so Claude gets bypass; Claude's auto (asks
+    // its classifier) is below Kilo's `--auto`, so Kilo gets ask.
+    expect(carriedPermissionMode(kilo, 'auto', claude, 'ask')).toBe('bypass');
+    expect(carriedPermissionMode(claude, 'auto', kilo, 'bypass')).toBe('ask');
+    expect(carriedPermissionMode(claude, 'auto', opencode, 'bypass')).toBe('ask');
+    // Same name, same level: carried as is.
+    expect(carriedPermissionMode(claude, 'auto', codex, 'ask')).toBe('auto');
+    expect(carriedPermissionMode(codex, 'bypass', copilot, 'ask')).toBe('bypass');
+    // Copilot has no auto: the closest below it is ask, not bypass.
+    expect(carriedPermissionMode(codex, 'auto', copilot, 'bypass')).toBe('ask');
+    // OpenHands has nothing at ask: the default only if it does not allow
+    // more, else its least permissive mode.
+    expect(carriedPermissionMode(claude, 'ask', openhands, 'bypass')).toBe('auto');
   });
 
   it('is what the handoff branch gets', () => {
