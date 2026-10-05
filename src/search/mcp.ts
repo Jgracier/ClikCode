@@ -22,9 +22,6 @@ interface RpcMessage {
   params?: { name?: string; arguments?: Record<string, unknown>; protocolVersion?: string };
 }
 
-/** How the three fit together, for a vendor that reads server instructions. */
-const MCP_USAGE = 'A conversation is named by one id; anchors are "<id>:<message number>" (e.g. "6e647d75:60"), which read_conversation takes as `at` (with full=true for one message whole). search_conversations ranks a conversation titled with the query first, and with in=<id> lists where inside one conversation something comes up.';
-
 const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
 /** The session id a `session-worker <id>` argv names. */
@@ -77,7 +74,7 @@ export async function answerMcp(message: RpcMessage, context: ConversationToolCo
       protocolVersion: asked && SUPPORTED_PROTOCOLS.includes(asked) ? asked : SUPPORTED_PROTOCOLS[0],
       capabilities: { tools: {} },
       serverInfo: { name: CONVERSATIONS_MCP_NAME, version: '1' },
-      instructions: `${CONVERSATION_TOOLS_NOTE} ${MCP_USAGE}`,
+      instructions: CONVERSATION_TOOLS_NOTE,
     });
   }
   if (message.method === 'ping') return respond({});
