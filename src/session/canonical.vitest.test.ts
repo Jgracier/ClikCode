@@ -8,6 +8,7 @@ import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
 import { createHandoffBranch } from '../turn/handoff.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { finishPendingTurn } from '../turn/checkpoint.js';
 
 const now = '2026-10-04T00:00:00.000Z';
 
@@ -90,6 +91,25 @@ describe('canonicalRecord', () => {
     expect(record.turns.map((turn) => [turn.user, turn.origin.harness])).toEqual([
       ['read the parser', 'claude'], ['try another name', 'opencode'],
     ]);
+  });
+
+  it('reads who answered from each message stamp, whatever the session runs now', () => {
+    const { root } = chain();
+    const claude = { route: 'local' as const, harness: 'claude', provider: 'anthropic', model: 'opus' };
+    const moved = {
+      ...root, nativeHarness: 'codex', provider: 'openai', model: 'gpt-5',
+      messages: [...root.messages!.map((message) => (message.role === 'assistant' ? { ...message, origin: claude } : message)), user('now the docs'), said('Docs updated.')],
+    };
+    expect(canonicalRecord(moved).turns.map((turn) => [turn.origin.harness, turn.origin.model])).toEqual([
+      ['claude', 'opus'], ['claude', 'opus'], ['codex', 'gpt-5'],
+    ]);
+  });
+
+  it('stamps a committed turn with the harness and model that ran it', () => {
+    const { root } = chain();
+    const live = { ...root, reported: { at: now, model: 'opus-4' }, pendingTurn: { prompt: 'go', response: 'went', startedAt: now, updatedAt: now, outputStarted: true } };
+    finishPendingTurn(live, undefined, now);
+    expect(live.messages!.at(-1)).toMatchObject({ role: 'assistant', content: 'went', origin: { harness: 'claude', route: 'local', provider: 'anthropic', model: 'opus-4' } });
   });
 
   it('marks a turn still in the journal interrupted, with the files it had started changing', () => {

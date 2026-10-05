@@ -4,7 +4,7 @@
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
-import type { HarnessSession } from '../session/model.js';
+import type { HarnessSession, MessageOrigin } from '../session/model.js';
 import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
 import type { LiveTurnSubmission } from './live-input.js';
 import { activitiesBetween, readTurnActivities, recordTurnActivity, runningTurnActivity } from './turn-activities.js';
@@ -110,6 +110,15 @@ function remapPendingOffsets(pending: NonNullable<HarnessSession['pendingTurn']>
   }
 }
 
+/** Who answers in `session` now: its harness (or agent route) and the model
+ * that harness said it ran. */
+export function messageOrigin(session: HarnessSession): MessageOrigin {
+  return {
+    ...(session.nativeHarness ? { harness: session.nativeHarness } : {}),
+    route: session.route, provider: session.provider, model: session.reported?.model ?? session.model,
+  };
+}
+
 /** Materialize an in-flight turn without mutating the session. This is used by
  * rendering, history, and provider handoff so a process/provider failure never
  * makes submitted work disappear from the portable conversation. */
@@ -136,7 +145,8 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
     const own = activitiesBetween(activities, start, end, content.length, first);
     first = false;
     if (!content && !own.length) return undefined;
-    return { role: 'assistant', content, ...(own.length ? { activities: own } : {}) };
+    // The journal is this session's own turn, so this session produced it.
+    return { role: 'assistant', content, ...(own.length ? { activities: own } : {}), origin: messageOrigin(session) };
   };
   let responseOffset = 0;
   for (const steer of [...(pending.steers ?? [])].sort((left, right) => (left.responseOffset ?? 0) - (right.responseOffset ?? 0))) {

@@ -23,7 +23,7 @@ import { asFileDiffs } from '../agent/line-diff.js';
 import type { HarnessActivityEvent, ToolCategory } from '../harness/prompter.js';
 import type { HarnessPlanEntry } from '../harness/events/turn-observer.js';
 import type { HarnessSession, TranscriptMessage } from './model.js';
-import { sessionTranscriptMessages, touchedFilesFromActivity, type PendingTurnWithHints } from '../turn/checkpoint.js';
+import { messageOrigin, sessionTranscriptMessages, touchedFilesFromActivity, type PendingTurnWithHints } from '../turn/checkpoint.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
 import { providerBoundaryNote } from '../turn/failover-prompt.js';
 import { conversationIdFor } from './options.js';
@@ -200,11 +200,7 @@ function sharedPrefix(left: readonly TranscriptMessage[], right: readonly Transc
 }
 
 function originOf(session: HarnessSession): CanonicalOrigin {
-  return {
-    sessionId: session.id,
-    ...(session.nativeHarness ? { harness: session.nativeHarness } : {}),
-    route: session.route, provider: session.provider, model: session.reported?.model ?? session.model,
-  };
+  return { sessionId: session.id, ...messageOrigin(session) };
 }
 
 /** Which branch produced each message of `session`'s history.
@@ -228,6 +224,9 @@ export function messageOrigins(
     owned = shared;
     if (!owned) break;
   }
+  // A stamped message says who wrote it; the chain only answers for
+  // messages from before the stamp.
+  messages.forEach((message, index) => { if (message.origin) origins[index] = { sessionId: session.id, ...message.origin }; });
   return origins;
 }
 

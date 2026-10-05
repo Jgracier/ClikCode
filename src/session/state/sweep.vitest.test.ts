@@ -88,7 +88,7 @@ describe('the housekeeping sweep', () => {
     expect(after.sessions.map((session) => session.id).sort()).toEqual(['adopted', 'crashed', 'live', 'recent-turn']);
     const crashed = after.sessions.find((session) => session.id === 'crashed')!;
     expect(crashed.pendingTurn).toBeUndefined();
-    expect(crashed.messages?.slice(-2)).toEqual([{ role: 'user', content: 'do it' }, { role: 'assistant', content: 'half done' }]);
+    expect(crashed.messages?.slice(-2)).toEqual([{ role: 'user', content: 'do it' }, { role: 'assistant', content: 'half done', origin: expect.objectContaining({ route: crashed.route }) }]);
     expect(after.sessions.find((session) => session.id === 'recent-turn')?.pendingTurn?.prompt).toBe('now');
   });
 });
