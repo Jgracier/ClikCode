@@ -348,14 +348,6 @@ async function driveWorkerTurn(
                 (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: error instanceof Error ? error.message : String(error) }));
             return;
           }
-          case 'suspend':
-            // A worker has no terminal to hand over; the window shows that the
-            // turn is waiting on its own.
-            void rl.suspend();
-            return;
-          case 'resume':
-            rl.resume();
-            return;
           case 'restore-draft':
             rl.restoreDraft(event.text);
             return;

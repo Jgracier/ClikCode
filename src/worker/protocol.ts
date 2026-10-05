@@ -104,12 +104,10 @@ export type WorkerEvent =
    * and shows the prompt as the pending message. */
   | { type: 'waiting-start'; message: string; prompt?: string }
   | { type: 'waiting-stop' }
-  | { type: 'suspend' }
   /** A turn needs the vendor signed in. The worker has no terminal to run a
    * sign-in on, so the client runs it on its own and answers with
    * `sign-in-response`; the worker then retries the turn. */
   | { type: 'sign-in-request'; id: string; command: string; argv: readonly string[]; environment: Record<string, string>; name: string }
-  | { type: 'resume' }
   | { type: 'notice'; message: string }
   | { type: 'turn-error'; message: string }
   /** A cancelled turn that produced nothing worth keeping is discarded

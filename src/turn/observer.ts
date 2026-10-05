@@ -38,8 +38,6 @@ export interface TurnObserver {
     onTakeBack?: (id: string) => Promise<TakeBackOutcome>,
   ): void;
   stopWaiting(refresh?: boolean): void;
-  suspend(): Promise<void>;
-  resume(): void;
   /** Runs a vendor sign-in somewhere with a terminal. A worker has none, so
    * it asks its client; absent, the turn signs in where it runs. */
   signIn?(request: SignInRequest): Promise<void>;
