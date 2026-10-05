@@ -698,18 +698,6 @@ export class ClikCodeController implements vscode.Disposable {
         await this.host.reveal(other);
         return undefined;
       }
-      case 'openInTerminal': {
-        const bridge = this.bridge;
-        if (!bridge) throw new Error('ClikCode is not connected.');
-        const terminal = vscode.window.createTerminal({
-          name: 'ClikCode', shellPath: bridge.runtime.node,
-          shellArgs: [bridge.runtime.entry, 'sessions', 'resume', request.sessionId],
-          env: bridge.runtime.env, cwd: this.model.workspace ?? this.workspaceFolder(),
-          iconPath: new vscode.ThemeIcon('comment-discussion'),
-        });
-        terminal.show();
-        return undefined;
-      }
       case 'saveImage': {
         // A directory of this chat's own (mkdtemp: 0700, a fresh name, so no
         // other user can read it or plant a link in it), emptied as each
@@ -767,7 +755,6 @@ export class ClikCodeController implements vscode.Disposable {
         this.bridge?.send({ type: 'unqueue', id: message.id });
         return;
       }
-        return;
       case 'approve':
         this.approve(message.id, message.approved);
         return;

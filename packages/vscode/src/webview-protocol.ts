@@ -63,8 +63,6 @@ export type WebviewRequest =
   | { method: 'open'; mode: 'new' | 'continue' | 'resume'; sessionId?: string }
   /** Conversation in a new editor tab. */
   | { method: 'openInTab'; sessionId?: string }
-  /** Continue a conversation in the integrated terminal: `clikcode sessions resume`. */
-  | { method: 'openInTerminal'; sessionId: string }
   /** Files dropped on the composer (from the Explorer or an editor tab) as
    * @-mentions, by their URIs. */
   | { method: 'mentions'; uris: string[] }
