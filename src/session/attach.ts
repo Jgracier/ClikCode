@@ -24,6 +24,7 @@ import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { ensureLocalModelForTurn } from '../commands/ai/local-model.js';
 import { releaseQueuedTurn } from '../commands/ai/conversations.js';
+import { isTurnCancelled } from '../agent/cancellation.js';
 import { isUsageExhaustedMessage, type ResumeAt } from '../turn/usage-exhausted.js';
 import { carryOnAfterExhaustion, type ExhaustionRetryGuard, type ResumedIn } from '../tui/pickers/resume-in.js';
 import type { HarnessPrompter } from '../harness/prompter.js';
@@ -160,7 +161,7 @@ export async function prepareTurn(
 }
 
 export function turnWasCancelled(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException)?.code === 'ERR_TURN_CANCELLED' || (error as Error)?.name === 'AbortError';
+  return isTurnCancelled(error) || (error as Error | null)?.name === 'AbortError';
 }
 
 /** What follows a turn that failed: send it again here, carry it on in the
