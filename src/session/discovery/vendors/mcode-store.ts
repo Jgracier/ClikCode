@@ -31,9 +31,9 @@
  */
 
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { rm, stat } from 'node:fs/promises';
+import { cp, mkdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join, normalize } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
@@ -41,6 +41,7 @@ import {
   testedVersion,
 } from './thread-writer-files.js';
 import { writeDirectoryAtomic } from './thread-writer-directory.js';
+import { carrySqliteSession, type CarryDb, type CarrySchema, type SqliteCarrySpec } from './sqlite-carry.js';
 
 /** mcode's data dir for an environment (its own `MINIMAX_DATA_DIR ||
  *  MAVIS_DATA_DIR || ~/.minimax`). */
@@ -166,6 +167,8 @@ const SESSION_COLUMNS = [
   'created_at_ms', 'extra_data_json', 'history_relative_dir',
 ];
 
+const CHECKPOINT_COLUMNS = ['session_id', 'migrated_at_ms', 'source', 'message_count', 'target_revision'];
+
 /** Registers the written directory as a session, the way mcode's own first
  *  turn leaves it. False when the database is not one this was verified on. */
 async function registerSession(
@@ -180,7 +183,7 @@ async function registerSession(
     const sessions = have('local_runtime_sessions');
     const checkpoints = have('local_runtime_pi_history_file_migrations');
     if (!SESSION_COLUMNS.every((name) => sessions.has(name))) return false;
-    if (!['session_id', 'migrated_at_ms', 'source', 'message_count', 'target_revision'].every((name) => checkpoints.has(name))) return false;
+    if (!CHECKPOINT_COLUMNS.every((name) => checkpoints.has(name))) return false;
     const { sessionId, workspace, nowMs } = row;
     const record = {
       sessionId, agentName: '__local_runtime_v2__', workspaceDir: workspace, runtime: 'pi-agent', sessionType: 'branch',
@@ -239,7 +242,81 @@ export const mcodeThreadWriter: NativeThreadWriter = {
   },
 };
 
+/** The session's history directory, relative to the sessions root, as its
+ *  row names it -- only a plain relative path, never one leaving the root. */
+function historyDirectory(db: CarryDb, schema: CarrySchema, sessionId: string): string | undefined {
+  const row = db.prepare(`SELECT history_relative_dir AS d FROM ${schema}.local_runtime_sessions WHERE session_id = ?`)
+    .get(sessionId) as { d?: unknown } | undefined;
+  const relative = typeof row?.d === 'string' ? row.d : undefined;
+  if (!relative || isAbsolute(relative) || normalize(relative).split(/[\\/]/).includes('..')) return undefined;
+  return relative;
+}
+
+/** One conversation in mcode 0.5.10 is the writer's three pieces: the
+ *  `local_runtime_sessions` row, its `local_runtime_pi_history_file_migrations`
+ *  checkpoint, and the history directory the row names (`messages.jsonl` and
+ *  whatever mcode wrote beside it). Carried as one: the directory is staged
+ *  and swapped in while the row transaction is open, and put back if it does
+ *  not commit. `project_id` is the destination's own numbering, so it is left
+ *  for mcode's insert trigger to assign.
+ *
+ *  Deliberately NOT carried: mcode's other per-session state (turn ingress
+ *  sequences, agent state, token usage, turn diffs, the session search
+ *  index). A session the writer made has none of it and resumes (live, 0.5.10),
+ *  so the carried thread is at least that.
+ *
+ *  Progress is the lines of `messages.jsonl`: a resume only appends. */
+export const mcodeCarry: SqliteCarrySpec = {
+  database: (environment) => join(mcodeDataDir(environment), 'v2', 'sqlite', 'runtime-state.sqlite'),
+  session: { table: 'local_runtime_sessions', key: 'session_id', identity: ['created_at_ms'], omit: ['project_id'], parent: 'parent_session_id' },
+  rows: [{ table: 'local_runtime_pi_history_file_migrations', key: 'session_id' }],
+  required: { local_runtime_sessions: SESSION_COLUMNS, local_runtime_pi_history_file_migrations: CHECKPOINT_COLUMNS },
+  async progress(db, schema, input) {
+    const relative = historyDirectory(db, schema, input.nativeId);
+    const root = mcodeRoot(schema === 'src' ? input.from : input.to);
+    const text = relative ? await readFile(join(root, relative, 'messages.jsonl'), 'utf8').catch(() => undefined) : undefined;
+    // A destination without the file holds nothing to keep.
+    if (text === undefined) return schema === 'main' ? [] : undefined;
+    return text.split('\n').filter((line) => line.trim());
+  },
+  async files(db, input) {
+    const relative = historyDirectory(db, 'src', input.nativeId);
+    if (!relative) return undefined;
+    const source = join(mcodeRoot(input.from), relative);
+    const target = join(mcodeRoot(input.to), relative);
+    const tag = randomBytes(4).toString('hex');
+    const staged = `${target}.${tag}.carry`;
+    const displaced = `${target}.${tag}.old`;
+    try {
+      await mkdir(dirname(target), { recursive: true, mode: 0o700 });
+      await cp(source, staged, { recursive: true });
+    } catch {
+      await rm(staged, { recursive: true, force: true });
+      return undefined;
+    }
+    // A non-empty directory cannot be renamed over, so an older copy moves
+    // aside first and is deleted only once the rows have committed.
+    const had = await stat(target).then(() => true, () => false);
+    try {
+      if (had) await rename(target, displaced);
+      await rename(staged, target);
+    } catch {
+      if (had && !await stat(target).then(() => true, () => false)) await rename(displaced, target).catch(() => undefined);
+      await rm(staged, { recursive: true, force: true });
+      return undefined;
+    }
+    return {
+      commit: () => rm(displaced, { recursive: true, force: true }),
+      async undo() {
+        await rm(target, { recursive: true, force: true });
+        if (had) await rename(displaced, target);
+      },
+    };
+  },
+};
+
 export const mcodeSessionStore: NativeSessionStore = {
   root: mcodeRoot,
+  carry: (input) => carrySqliteSession(mcodeCarry, input),
   writer: mcodeThreadWriter,
 };

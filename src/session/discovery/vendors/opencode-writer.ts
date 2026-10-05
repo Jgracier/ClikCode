@@ -41,13 +41,14 @@
  * runs lands: in the history the account already uses. */
 
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
+import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
 import type { CanonicalPart, CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
-import { nativeDataRoot, type NativeSessionStore, type NativeThreadWriteContext, type NativeThreadWriter, type NativeThreadWritten } from '../stores.js';
+import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriteContext, type NativeThreadWriter, type NativeThreadWritten } from '../stores.js';
 
 type Json = Record<string, unknown>;
 
@@ -402,12 +403,62 @@ export const KILO_WRITER_TESTED_VERSIONS = ['7.7.6'] as const;
 export const openCodeThreadWriter = openCodeFamilyThreadWriter(OPENCODE_WRITER_TESTED_VERSIONS);
 export const kiloThreadWriter = openCodeFamilyThreadWriter(KILO_WRITER_TESTED_VERSIONS);
 
-/** The store: `<XDG_DATA_HOME>/<name>`, one SQLite database holding every
- *  conversation, so there is no per-conversation file to `locate` -- only a
- *  root, which tells a carry whether two accounts share it, and the writer. */
-function openCodeFamilyStore(name: string, writer: NativeThreadWriter): NativeSessionStore {
+/** One conversation in an OpenCode-family database, as opencode 1.18.32 and
+ *  kilo 7.7.6 lay it out (schemas read from a database each made in
+ *  vendor-sandbox; a real turn's rows checked). The `session` row, its
+ *  `message`s and `part`s -- what a resume reads -- plus everything else the
+ *  vendor keys on the session: todos, a share, the context epoch, queued
+ *  input, the v2 `session_message` log, the event-sourcing `event_sequence`
+ *  and `event` rows (aggregate = the session; every turn writes them), and
+ *  Kilo's agent board. Ids are the vendor's own globally unique ones (`ses_`,
+ *  `msg_`, `prt_`, `evt_`), so they are carried as they are. The `project`
+ *  and `workspace` the session names are shared with other sessions, so they
+ *  are added only when missing -- a project id is the repository's root
+ *  commit (or `global`), the same in every profile.
+ *
+ *  Progress is the part ids: time-ordered, and a turn only adds parts. */
+function openCodeCarrySpec(name: string): SqliteCarrySpec {
   return {
-    root: (environment) => join(nativeDataRoot(environment, 'XDG_DATA_HOME', join(environment.HOME?.trim() || homedir(), '.local', 'share')), name),
+    database: (environment) => join(openCodeDataRoot(environment, name), `${name}.db`),
+    session: { table: 'session', key: 'id', identity: ['time_created'], parent: 'parent_id' },
+    rows: [
+      { table: 'message', key: 'session_id' },
+      { table: 'part', key: 'session_id' },
+      { table: 'todo', key: 'session_id' },
+      { table: 'session_share', key: 'session_id' },
+      { table: 'session_context_epoch', key: 'session_id' },
+      { table: 'session_input', key: 'session_id' },
+      { table: 'session_message', key: 'session_id' },
+      { table: 'event_sequence', key: 'aggregate_id' },
+      { table: 'event', key: 'aggregate_id' },
+      { table: 'kilo_board', key: 'root_session_id' },
+      { table: 'kilo_board_message', key: 'board_root_session_id' },
+    ],
+    shared: [
+      { table: 'project', key: 'id', via: 'project_id' },
+      { table: 'workspace', key: 'id', via: 'workspace_id' },
+    ],
+    required: {
+      session: ['id', 'project_id', 'directory', 'title', 'version', 'time_created', 'time_updated'],
+      message: ['id', 'session_id', 'data'],
+      part: ['id', 'message_id', 'session_id', 'data'],
+    },
+    progress: progressQuery('SELECT id AS k FROM {db}.part WHERE session_id = ? ORDER BY id'),
+  };
+}
+
+function openCodeDataRoot(environment: NativeSessionEnvironment, name: string): string {
+  return join(nativeDataRoot(environment, 'XDG_DATA_HOME', join(environment.HOME?.trim() || homedir(), '.local', 'share')), name);
+}
+
+/** The store: `<XDG_DATA_HOME>/<name>`, one SQLite database holding every
+ *  conversation, so there is no per-conversation file to `locate`: a carry
+ *  moves the session's rows (openCodeCarrySpec). */
+function openCodeFamilyStore(name: string, writer: NativeThreadWriter): NativeSessionStore {
+  const carry = openCodeCarrySpec(name);
+  return {
+    root: (environment) => openCodeDataRoot(environment, name),
+    carry: (input) => carrySqliteSession(carry, input),
     writer,
     // A message's text is its parts; the user's first text part (observed
     // on opencode 1.18.32).

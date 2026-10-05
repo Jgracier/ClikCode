@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import { assistantSteps, callCommand, callResultText, requestText, sequentialIds, testedVersion } from './thread-writer-files.js';
+import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
 
 function devinRoot(environment: NativeSessionEnvironment): string {
   const data = environment.XDG_DATA_HOME?.trim() || join(environment.HOME?.trim() || homedir(), '.local', 'share');
@@ -127,7 +128,33 @@ export const devinThreadWriter: NativeThreadWriter = {
   },
 };
 
+/** One conversation in Devin 3000.11.3's sessions.db (schema read from one it
+ *  made in vendor-sandbox): the `sessions` row, its `message_nodes` (node ids
+ *  are per session, `main_chain_id` names one, so they carry as they are),
+ *  and the other tables Devin keys on the session -- `tool_call_state`,
+ *  `subagent_heads`, `rendered_commits` and its `prompt_history`. Row ids are
+ *  AUTOINCREMENT and left to the destination.
+ *
+ *  Progress is the node chain in node order: Devin adds nodes as a session
+ *  runs (its rebuilt system prefix included) rather than rewriting them. */
+export const devinCarry: SqliteCarrySpec = {
+  database: (environment) => join(devinRoot(environment), 'sessions.db'),
+  session: { table: 'sessions', key: 'id', identity: ['created_at'] },
+  rows: [
+    { table: 'message_nodes', key: 'session_id', omit: ['row_id'], order: 'node_id' },
+    { table: 'tool_call_state', key: 'session_id' },
+    { table: 'subagent_heads', key: 'session_id' },
+    { table: 'rendered_commits', key: 'session_id', omit: ['id'], order: 'sequence_number' },
+    { table: 'prompt_history', key: 'session_id', omit: ['id'], order: 'id' },
+  ],
+  required: { sessions: SESSION_COLUMNS, message_nodes: NODE_COLUMNS },
+  progress: progressQuery(
+    'SELECT node_id || char(31) || chat_message AS k FROM {db}.message_nodes WHERE session_id = ? ORDER BY node_id',
+  ),
+};
+
 export const devinSessionStore: NativeSessionStore = {
   root: devinRoot,
+  carry: (input) => carrySqliteSession(devinCarry, input),
   writer: devinThreadWriter,
 };
