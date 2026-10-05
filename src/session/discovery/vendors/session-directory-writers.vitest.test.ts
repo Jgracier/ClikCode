@@ -1,5 +1,5 @@
 /** Golden output of the thread writers whose vendor resumes a session from a
- * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw, Droid, Auggie, Vibe), for one
+ * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw, Droid, Auggie, Vibe, Devin), for one
  * conversation: a codeword, a Codex shell call, a Claude Edit and a Claude
  * Grep.
  *
@@ -27,6 +27,7 @@ import { openClawCall } from './openclaw-store.js';
 import { droidProjectDirectoryName, droidThreadLines } from './droid-store.js';
 import { auggieSession } from './auggie-store.js';
 import { vibeSessionDirectoryName, vibeThreadFiles } from './vibe-store.js';
+import { devinMessages } from './devin-store.js';
 import { piThreadLines } from './pi-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
@@ -380,5 +381,40 @@ describe('vibe thread writer', () => {
     await writeFile(join(vibeHome, 'config.toml'), '[session_logging]\nsave_dir = "/elsewhere"\n');
     expect(await writer.write(fixtureRecord(), context('vibe', { HOME: home, VIBE_HOME: vibeHome }, 'vibe 2.25.7'))).toBeUndefined();
     expect(await writer.versionOk(context('vibe', {}, 'vibe 2.26.0'))).toBe(false);
+  });
+});
+
+describe('devin thread writer', () => {
+  it('writes the golden message chain', async () => {
+    const messages = devinMessages(fixtureRecord(), { now: NOW, messageId: sequentialIds('m-') });
+    await golden('devin.messages.jsonl', `${messages.map((message) => JSON.stringify(message)).join('\n')}\n`);
+  });
+
+  it('adds a session and its chain to the database Devin made, and writes nothing without one', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'devin-writer-'));
+    const writer = NATIVE_SESSION_STORES.devin!.writer!;
+    const ctx = context('devin', { HOME: home }, 'devin 3000.11.3 (9c803229faa4)');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    expect(await writer.write(fixtureRecord(), ctx)).toBeUndefined();
+
+    const cli = join(home, '.local', 'share', 'devin', 'cli');
+    await mkdir(cli, { recursive: true });
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(join(cli, 'sessions.db'));
+    db.exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, working_directory TEXT NOT NULL, backend_type TEXT NOT NULL,
+      model TEXT NOT NULL, agent_mode TEXT NOT NULL, created_at INTEGER NOT NULL, last_activity_at INTEGER NOT NULL, title TEXT,
+      main_chain_id INTEGER, shell_last_seen_index INTEGER DEFAULT 0, cogs_json TEXT, workspace_dirs TEXT,
+      hidden INTEGER NOT NULL DEFAULT 0, metadata TEXT)`);
+    db.exec(`CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, node_id INTEGER NOT NULL,
+      parent_node_id INTEGER, chat_message TEXT NOT NULL, created_at INTEGER NOT NULL, metadata TEXT, UNIQUE(session_id, node_id))`);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(written?.nativeId).toMatch(/^clikcode-[0-9a-f]{12}$/);
+    const session = db.prepare('SELECT working_directory, main_chain_id FROM sessions WHERE id = ?').get(written!.nativeId) as Record<string, unknown>;
+    const nodes = db.prepare('SELECT node_id, parent_node_id FROM message_nodes WHERE session_id = ? ORDER BY node_id').all(written!.nativeId) as Record<string, unknown>[];
+    expect(session).toEqual({ working_directory: WORKSPACE, main_chain_id: nodes.length - 1 });
+    expect(nodes[0]).toEqual({ node_id: 0, parent_node_id: null });
+    expect(nodes.at(-1)).toEqual({ node_id: nodes.length - 1, parent_node_id: nodes.length - 2 });
+    db.close();
+    expect(await writer.versionOk(context('devin', {}, 'devin 3000.12.0 (x)'))).toBe(false);
   });
 });
