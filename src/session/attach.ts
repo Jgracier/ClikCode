@@ -107,7 +107,9 @@ export async function resolveSessionModel(id: string): Promise<void> {
  * timer (a third of the TTL). A claim another live client holds is left
  * alone and nothing is written; session/claims.ts would refuse it anyway. */
 export async function claimConversation(id: string): Promise<void> {
-  const state = await readState({ transcripts: [id] });
+  // A claim is its own file (claims.ts), overlaid on the record: the
+  // conversation's history is not needed to take or refresh it.
+  const state = await readState({ transcripts: [] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || sessionClaimIsLive(session)) return;
   claimSession(session);
@@ -117,7 +119,7 @@ export async function claimConversation(id: string): Promise<void> {
 /** Hands the conversation back. Only this process's own claim is released
  * (releaseSession checks it too), and nothing is written when there is none. */
 export async function releaseConversationClaim(id: string): Promise<void> {
-  const state = await readState({ transcripts: [id] });
+  const state = await readState({ transcripts: [] });
   const session = state.sessions.find((item) => item.id === id);
   if (session?.claim?.pid !== process.pid) return;
   releaseSession(session);
