@@ -47,6 +47,7 @@ import {
   nativeDataRoot,
   type NativeSessionCarry, type NativeSessionEnvironment, type NativeSessionStore,
 } from '../stores.js';
+import { claudeImportWriter } from './claude-import.js';
 
 type Db = {
   exec(sql: string): void;
@@ -197,4 +198,20 @@ export const hermesSessionStore: NativeSessionStore = {
     return nativeDataRoot(environment, 'HERMES_HOME', join(homedir(), '.hermes'));
   },
   carry: carryHermesSession,
+  /** `hermes sessions import --from claude <file>` (claude-import.ts) prints
+   *  `Imported Claude Code session as <id>`, resumed with `--resume <id>`
+   *  (verified on 0.20.5). Its importer folds a turn into ONE assistant row
+   *  and keeps a tool_use only as `[ran tool: Bash]` -- the command, the edit
+   *  and the output are dropped, and a resumed model said the shell command
+   *  was "not stated". So calls go in as text lines that carry them.
+   *  Pinned to the CLI: Hermes' ACP agent restores only sessions whose
+   *  `source` is `acp` (acp_adapter/session.py `_restore`), so `session/load`
+   *  of an imported one answers "session not found". */
+  writer: claudeImportWriter({
+    testedVersions: ['0.20.5'],
+    toolCalls: 'text',
+    transport: 'text-cli',
+    argv: (file) => ['sessions', 'import', '--from', 'claude', file],
+    parse: (output) => /Imported Claude Code session as (\S+)/.exec(output)?.[1],
+  }),
 };

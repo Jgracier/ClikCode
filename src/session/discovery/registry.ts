@@ -24,6 +24,7 @@ import { copilotSessionStore } from './vendors/copilot-store.js';
 import { qwenSessionStore } from './vendors/qwen-store.js';
 import { commandSessionStore } from './vendors/command-store.js';
 import { hermesSessionStore } from './vendors/hermes-store.js';
+import { gooseSessionStore } from './vendors/goose-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -70,6 +71,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   qwen: qwenSessionStore,
   command: commandSessionStore,
   hermes: hermesSessionStore,
+  goose: gooseSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
