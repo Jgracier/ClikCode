@@ -3,7 +3,6 @@
 
 import { type SlashHandlerKey } from './registry.js';
 
-/** Persistent terminal session using the same command and routing surface as automation. */
 /** Commands the interactive loop handles itself (pickers, prompts, turns with
  * the waiting UI). Every other registry command falls through to
  * HEADLESS_SLASH_HANDLERS with its output shown in a panel. */

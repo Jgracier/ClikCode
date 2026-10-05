@@ -54,9 +54,6 @@ export async function aiGatewayStatus(config: Conf): Promise<void> {
   });
 }
 
-/** The signed-in account's AI use as ClikDeploy Gateway records it: every
- * surface, not only ClikCode, with the credit that gates the next call (or
- * `unlimited`). The Gateway owns the ledger; this only reads it. */
 /** The reason in a Gateway error body: OpenAI's `{ error: { message } }`, or
  * the platform's `{ error: "..." }`; else the status, or `missing` for a 404
  * from a Gateway older than the endpoint. */

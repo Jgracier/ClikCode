@@ -393,14 +393,6 @@ export type SlashRoute =
   | { kind: 'native'; prompt: string; why: 'explicit' | 'passthrough' | 'advertised' }
   | { kind: 'unknown'; head: string; suggestion?: string };
 
-/** Decide what one submitted line means. Precedence:
- *   1. not a slash line, or an existing filesystem path  -> prompt
- *   2. `//text`                                           -> native, verbatim `/text`
- *   3. registry command (incl. `/native <text>`)          -> command
- *   4. vendor manager, custom command, `/<harness>`       -> their own routes
- *   5. advertised by the ACP agent, or the harness declares
- *      `nativeSlashPassthrough`                           -> native, verbatim
- *   6. otherwise unknown, with a did-you-mean suggestion. */
 /** Whether this route can be applied to a session while a turn is streaming.
  * Only the argument form: without one, `/model` is a picker and a picker
  * needs the screen the answer is being written on. */
@@ -412,6 +404,14 @@ export function slashRouteAppliesDuringTurn(route: SlashRoute, session?: Harness
   return route.kind === 'command' && route.entry.duringTurn === 'apply' && route.args.trim().length > 0;
 }
 
+/** Decide what one submitted line means. Precedence:
+ *   1. not a slash line, or an existing filesystem path  -> prompt
+ *   2. `//text`                                           -> native, verbatim `/text`
+ *   3. registry command (incl. `/native <text>`)          -> command
+ *   4. vendor manager, custom command, `/<harness>`       -> their own routes
+ *   5. advertised by the ACP agent, or the harness declares
+ *      `nativeSlashPassthrough`                           -> native, verbatim
+ *   6. otherwise unknown, with a did-you-mean suggestion. */
 export function routeSlashInput(line: string, context: SlashRouteContext = {}): SlashRoute {
   const text = line.trim();
   if (!text.startsWith('/')) return { kind: 'prompt', prompt: text };

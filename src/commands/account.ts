@@ -76,7 +76,6 @@ export async function aiAccountProviders(): Promise<void> {
   emitResult({ harnesses: builtInHarnesses() });
 }
 
-/** Read-only compatibility report for every catalog entry. */
 /** How `doctor` describes a harness's install: the route choosing it takes,
  * and the same install as a command to run by hand. */
 function installSummary(harness: Parameters<typeof harnessInstallRoute>[0]): Record<string, unknown> {
@@ -89,6 +88,7 @@ function installSummary(harness: Parameters<typeof harnessInstallRoute>[0]): Rec
   };
 }
 
+/** Read-only compatibility report for every catalog entry. */
 export async function aiDoctor(): Promise<void> {
   // One write for the whole sweep: every harness inspected here contributes a
   // version memo, and flushing per harness would be 24 writes for one answer.
@@ -325,20 +325,6 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   return accountLabel;
 }
 
-/** Written directly to the real terminal, not ClikCode's own alt-screen
- * activity log -- an activity() call right before suspend() gets thrown
- * away the instant the alt-screen exits, so it's never actually visible;
- * this writes after suspend() has already switched to the main buffer,
- * where it's the last thing on screen before the child's own output
- * starts. Only for harnesses whose loginArgv is an empty array (currently
- * Gemini CLI, Antigravity CLI): that shape means "launch bare, no
- * dedicated login subcommand exists" -- confirmed live for Antigravity
- * specifically that this drops into its own full interactive session
- * (a real, separate program, not a quick sign-in step) with no way back to
- * ClikCode until the user exits *that* program on its own terms. Every
- * other harness's loginArgv actually targets a real login flow that
- * returns control on its own once finished, so this notice would be noise
- * for those. */
 /** Runs `work` -- a vendor's sign-in -- on the prompter's own sign-in
  * screen: the CLI's band, the VS Code panel's card. Every vendor, the same
  * way (gateway/login/vendor-sign-in.ts). Without one (a shell, a worker) the
