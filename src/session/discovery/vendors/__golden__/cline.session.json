@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "session_id": "1791160000000_abcde",
+  "source": "cli",
+  "pid": 0,
+  "started_at": "2026-10-04T12:00:00.000Z",
+  "ended_at": "2026-10-04T12:00:00.000Z",
+  "exit_code": 0,
+  "status": "completed",
+  "interactive": false,
+  "provider": "cline",
+  "model": "anthropic/claude-sonnet-5",
+  "cwd": "/home/user/projects/app",
+  "workspace_root": "/home/user/projects/app",
+  "enable_tools": true,
+  "enable_spawn": true,
+  "enable_teams": false,
+  "prompt": "Remember the codeword PELICAN-73. Then check what is in notes.txt.",
+  "metadata": {
+    "title": "Remember the codeword PELICAN-73. Then check what is in notes.txt."
+  },
+  "messages_path": "/home/user/.cline/data/sessions/1791160000000_abcde/1791160000000_abcde.messages.json"
+}

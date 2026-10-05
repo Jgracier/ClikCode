@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "updated_at": "2026-10-04T12:00:00.000Z",
+  "agent": "lead",
+  "sessionId": "1791160000000_abcde",
+  "messages": [
+    {
+      "id": "msg_clikcode_0001",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<user_input mode=\"act\">Remember the codeword PELICAN-73. Then check what is in notes.txt.</user_input>"
+        }
+      ],
+      "ts": 1791115200000
+    },
+    {
+      "id": "msg_clikcode_0002",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "I'll read the notes."
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_clikcode_0001",
+          "name": "run_commands",
+          "input": {
+            "commands": [
+              "cat notes.txt"
+            ]
+          }
+        }
+      ],
+      "ts": 1791115200001
+    },
+    {
+      "id": "msg_clikcode_0003",
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_clikcode_0001",
+          "name": "run_commands",
+          "content": "launch window: Thursday"
+        }
+      ],
+      "ts": 1791115200002
+    },
+    {
+      "id": "msg_clikcode_0004",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "notes.txt says the launch window is Thursday. Codeword PELICAN-73 noted."
+        }
+      ],
+      "ts": 1791115200003
+    },
+    {
+      "id": "msg_clikcode_0005",
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": "<user_input mode=\"act\">Fix the typo in src/app.ts</user_input>"
+        }
+      ],
+      "ts": 1791115200004
+    },
+    {
+      "id": "msg_clikcode_0006",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "[Edit src/app.ts]\n> --- src/app.ts\n> -cosnt x = 1;\n> +const x = 1;"
+        },
+        {
+          "type": "tool_use",
+          "id": "toolu_clikcode_0002",
+          "name": "search_codebase",
+          "input": {
+            "queries": [
+              "cosnt"
+            ]
+          }
+        }
+      ],
+      "ts": 1791115200005
+    },
+    {
+      "id": "msg_clikcode_0007",
+      "role": "user",
+      "content": [
+        {
+          "type": "tool_result",
+          "tool_use_id": "toolu_clikcode_0002",
+          "name": "search_codebase",
+          "content": "(no matches)"
+        }
+      ],
+      "ts": 1791115200006
+    },
+    {
+      "id": "msg_clikcode_0008",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Fixed the typo in src/app.ts; no other occurrences."
+        }
+      ],
+      "ts": 1791115200007
+    }
+  ]
+}
