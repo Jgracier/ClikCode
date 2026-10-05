@@ -4,7 +4,7 @@ import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
-import { commandOutcome, fileChangeActivity, thoughtLabel } from '../protocol/activity-events.js';
+import { commandOutcome, fileChangeActivity, thoughtLabel, toolCall } from '../protocol/activity-events.js';
 import { categoryOf, commandText, formatToolRow, toolLabel } from '../protocol/tools.js';
 
 /** A Codex commandExecution is a shell call by its envelope's own shape. */
@@ -96,6 +96,7 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
     const aggregated = completed && typeof item.aggregatedOutput === 'string' ? activityOutput(item.aggregatedOutput, { tail: true }) : {};
     return {
       kind: completed ? completedKind : 'tool-start', label: formatToolRow('shell', codexCommandText(item.command) ?? 'command', SHELL.category), ...SHELL, ...(id ? { id } : {}),
+      ...(codexCommandText(item.command) ? { call: toolCall('shell', { command: codexCommandText(item.command), ...(typeof item.cwd === 'string' ? { cwd: item.cwd } : {}) }) } : {}),
       ...aggregated,
       ...(completed ? commandOutcome(item) : {}),
     };
@@ -125,6 +126,7 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
     const said = failed && typeof error?.message === 'string' ? error.message : resultText;
     return {
       kind: failed ? 'tool-error' : completed ? completedKind : 'tool-start', label: toolLabel(name, args, classified.category), ...classified, ...(id ? { id } : {}),
+      call: toolCall(name, args),
       ...(completed && said ? activityOutput(said) : {}),
       ...(completed ? commandOutcome(item) : {}),
     };

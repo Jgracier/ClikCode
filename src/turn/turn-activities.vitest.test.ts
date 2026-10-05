@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandOutputPreview, diffPreview, DIFF_PREVIEW_LINES, outputPreview } from '../harness/protocol/activity-view.js';
 import type { TurnActivity } from '../session/model.js';
-import { boundTurnActivities, MAX_TURN_ACTIVITY_BYTES, readTurnActivities, recordTurnActivity, textTranscript } from './turn-activities.js';
+import { boundTurnActivities, MAX_OUTPUT_LINES, MAX_TURN_ACTIVITY_BYTES, readTurnActivities, recordTurnActivity, textTranscript } from './turn-activities.js';
 
 const lines = (count: number, prefix = 'line'): string[] => Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`);
 
@@ -27,7 +27,7 @@ describe('a turn\'s calls, as kept', () => {
   it('keeps a long command\'s head and tail, so its row reads the same', () => {
     const event: HarnessActivityEvent = { kind: 'tool-done', label: '$ build', id: 'b', category: 'run', output: lines(500) };
     const [kept] = recordTurnActivity([], event, 0);
-    expect(kept!.event.output).toHaveLength(40);
+    expect(kept!.event.output).toHaveLength(MAX_OUTPUT_LINES);
     expect(commandOutputPreview(kept!.event)).toEqual(commandOutputPreview(event));
     expect(outputPreview(kept!.event, 3)).toEqual(outputPreview(event, 3));
   });
@@ -35,7 +35,7 @@ describe('a turn\'s calls, as kept', () => {
   it('keeps the start of other output, counting the rest', () => {
     const event: HarnessActivityEvent = { kind: 'tool-done', label: 'Grep(x)', id: 'g', category: 'search', output: lines(300) };
     const [kept] = recordTurnActivity([], event, 0);
-    expect(kept!.event.output).toEqual(lines(40));
+    expect(kept!.event.output).toEqual(lines(MAX_OUTPUT_LINES));
     expect(outputPreview(kept!.event, 8)).toEqual(outputPreview(event, 8));
   });
 

@@ -33,6 +33,12 @@ export interface HarnessActivityEvent {
   /** Vendor tool-call identity, when emitted, lets the TUI update an in-flight
    * row instead of appending a detached completion at the bottom. */
   id?: string;
+  /** The call as the vendor made it: its own tool name and arguments
+   * (bounded, turn/turn-activities.ts). Never drawn -- `label` is the row.
+   * Kept so another provider can be handed the call itself rather than its
+   * one-line row (session/canonical.ts). Absent on calls recorded before it
+   * was kept, and where the stream carries no input. */
+  call?: { name: string; input?: Record<string, unknown> };
   /** Bounded partial/final tool output supplied by the native event stream. */
   output?: string[];
   /** Lines of output the producer dropped to bound `output`; the renderer

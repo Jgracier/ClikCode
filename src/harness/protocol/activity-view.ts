@@ -67,6 +67,7 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
     ...(next.agent ? {} : prior.agent ? { agent: prior.agent } : {}),
     ...(next.swarm ? {} : prior.swarm ? { swarm: prior.swarm } : {}),
     ...(next.diff ? {} : prior.diff ? { diff: prior.diff } : {}),
+    ...(next.call ? {} : prior.call ? { call: prior.call } : {}),
     ...(next.childTools !== undefined || prior.childTools === undefined ? {} : { childTools: prior.childTools }),
     ...(next.childTokens !== undefined || prior.childTokens === undefined ? {} : { childTokens: prior.childTokens }),
     ...(next.durationMs !== undefined || prior.durationMs === undefined ? {} : { durationMs: prior.durationMs }),

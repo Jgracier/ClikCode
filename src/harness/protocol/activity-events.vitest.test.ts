@@ -27,9 +27,9 @@ describe('incremental native tool activity', () => {
     // end is shown, the earlier lines counted above it.
     expect(plain(renderActivityLine({ ...long, outputOmitted: 20, outputTail: true })).slice(1)).toEqual(['… 26 earlier lines', 'line 7', 'line 8', 'line 9']);
     // Unless the producer kept its head as well, as activityOutput does.
-    const cut = { ...event!, ...activityOutput(Array.from({ length: 30 }, (_, index) => `step ${index + 1}`).join('\n'), { tail: true }) };
+    const cut = { ...event!, ...activityOutput(Array.from({ length: 90 }, (_, index) => `step ${index + 1}`).join('\n'), { tail: true }) };
     expect(cut.outputHead).toEqual(['step 1', 'step 2']);
-    expect(plain(renderActivityLine(cut)).slice(1)).toEqual(['step 1', 'step 2', '… 25 lines hidden', 'step 28', 'step 29', 'step 30']);
+    expect(plain(renderActivityLine(cut)).slice(1)).toEqual(['step 1', 'step 2', '… 85 lines hidden', 'step 88', 'step 89', 'step 90']);
   });
 
   it('renders failed command completions as failures rather than green done events', () => {
@@ -61,8 +61,8 @@ describe('incremental native tool activity', () => {
     const done = parseNativeActivityEvent(codex, JSON.stringify({
       type: 'item.completed', item: { id: 'call-2', type: 'mcp_tool_call', name: 'search' },
     }));
-    expect(start).toEqual({ kind: 'tool-start', label: 'Search', category: 'search', id: 'call-2' });
-    expect(done).toEqual({ kind: 'tool-done', label: 'Search', category: 'search', id: 'call-2' });
+    expect(start).toEqual({ kind: 'tool-start', label: 'Search', category: 'search', id: 'call-2', call: { name: 'search' } });
+    expect(done).toEqual({ kind: 'tool-done', label: 'Search', category: 'search', id: 'call-2', call: { name: 'search' } });
   });
 
   it('pairs generic file changes instead of creating a detached completion row', () => {

@@ -13,8 +13,10 @@ export { ACTIVITY_PREVIEW_LINES, CATEGORY_PREVIEW_LINES, previewLinesFor } from 
 import { COMMAND_HEAD_LINES } from './activity-view.js';
 
 /** Lines of tool output an event carries -- more than any row shows, so the
- * renderer can choose what to show (first lines, or a command's last). */
-export const EVENT_OUTPUT_LINES = 20;
+ * renderer can choose what to show (first lines, or a command's last), and
+ * as many as a turn keeps of a call (turn/turn-activities.ts MAX_OUTPUT_LINES,
+ * where the number is justified). */
+export const EVENT_OUTPUT_LINES = 60;
 
 /** What a harness appends to a command's output that the command never
  * printed: Claude Code's `Shell cwd was reset to <dir>` when the command
@@ -143,10 +145,41 @@ export function editDiffFromInput(input: JsonRecord | undefined): HarnessActivit
 /** What every parser says about a tool call from its name and input: its
  * label, its kind of work, and -- for an edit -- the change. One place, so
  * a harness whose stream carries the input gets the same row as any other. */
-export function toolFacts(name: string, input: JsonRecord | undefined, command: string): Pick<HarnessActivityEvent, 'label' | 'category' | 'agent' | 'diff'> {
+export function toolFacts(name: string, input: JsonRecord | undefined, command: string): Pick<HarnessActivityEvent, 'label' | 'category' | 'agent' | 'diff' | 'call'> {
   const classified = categoryOf(name, input, command);
   const diff = classified.category === 'edit' ? editDiffFromInput(input) : undefined;
-  return { label: toolLabel(name, input, classified.category), ...classified, ...(diff?.length ? { diff } : {}) };
+  return { label: toolLabel(name, input, classified.category), ...classified, ...(diff?.length ? { diff } : {}), call: toolCall(name, input) };
+}
+
+/** Characters one argument string keeps in a call record. */
+const CALL_VALUE_CHARS = 2_000;
+/** Serialized size of a call's arguments as kept. A Write's whole file, a
+ * long patch: the diff already carries the change, bounded on its own. */
+export const CALL_INPUT_MAX_CHARS = 4_096;
+
+function clipValue(value: unknown, limit: number, depth = 0): unknown {
+  if (typeof value === 'string') return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= 3) return clipValue(JSON.stringify(value), limit);
+  if (Array.isArray(value)) return value.slice(0, 50).map((item) => clipValue(item, limit, depth + 1));
+  return Object.fromEntries(Object.entries(value).slice(0, 50).map(([key, item]) => [key, clipValue(item, limit, depth + 1)]));
+}
+
+/** A call's arguments within CALL_INPUT_MAX_CHARS: every string clipped,
+ * then clipped harder, and past that only the argument names survive. */
+export function boundCallInput(input: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  for (const limit of [CALL_VALUE_CHARS, 400, 80]) {
+    const clipped = clipValue(input, limit) as Record<string, unknown>;
+    if (JSON.stringify(clipped).length <= CALL_INPUT_MAX_CHARS) return clipped;
+  }
+  return Object.fromEntries(Object.keys(input).slice(0, 50).map((key) => [key, '…']));
+}
+
+/** The call itself, as the vendor made it, for `HarnessActivityEvent.call`. */
+export function toolCall(name: string, input: Record<string, unknown> | undefined): NonNullable<HarnessActivityEvent['call']> {
+  const bounded = boundCallInput(input);
+  return { name, ...(bounded ? { input: bounded } : {}) };
 }
 
 /** One Claude-shaped `tool_use` block. */

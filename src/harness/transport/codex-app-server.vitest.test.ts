@@ -8,10 +8,11 @@ describe('Codex app-server protocol mapping', () => {
   });
   it('preserves native ids so tool completion updates the start row', () => {
     const item = { type: 'commandExecution', id: 'tool-1', command: 'git status' };
-    expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: '$ git status', category: 'run', id: 'tool-1' });
-    expect(codexActivityForItem(item, true)).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'tool-1' });
+    const call = { name: 'shell', input: { command: 'git status' } };
+    expect(codexActivityForItem(item, false)).toEqual({ kind: 'tool-start', label: '$ git status', category: 'run', id: 'tool-1', call });
+    expect(codexActivityForItem(item, true)).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'tool-1', call });
     expect(codexActivityForItem({ ...item, exitCode: 1, durationMs: 1200 }, true))
-      .toEqual({ kind: 'tool-error', label: '$ git status', category: 'run', id: 'tool-1', exitCode: 1, durationMs: 1200 });
+      .toEqual({ kind: 'tool-error', label: '$ git status', category: 'run', id: 'tool-1', call, exitCode: 1, durationMs: 1200 });
   });
 
   it('marks a collab call as a sub-agent the chat can show while it runs', () => {
