@@ -35,6 +35,7 @@ import { kiroSessionStore } from './vendors/kiro-store.js';
 import { mcodeSessionStore } from './vendors/mcode-store.js';
 import { openClawSessionStore } from './vendors/openclaw-store.js';
 import { droidSessionStore } from './vendors/droid-store.js';
+import { auggieSessionStore } from './vendors/auggie-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -94,6 +95,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   mcode: mcodeSessionStore,
   openclaw: openClawSessionStore,
   droid: droidSessionStore,
+  auggie: auggieSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
