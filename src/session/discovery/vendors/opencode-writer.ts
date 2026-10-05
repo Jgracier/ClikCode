@@ -36,9 +36,10 @@
  * conversation (2026-10-04) resumed natively on both, and OpenCode, asked
  * what it did on the other provider, named Kilo Code CLI and its turn.
  *
- * Accounts of these harnesses share the user's own data directory (no
- * profile variable), so the thread lands where every OpenCode turn ClikCode
- * runs lands: in the history the account already uses. */
+ * The thread lands in the data directory the taking-over account's
+ * environment places (each account profile is its own HOME/XDG_DATA_HOME),
+ * which is why a failover carries a session's rows across (the store's
+ * `carry`, below). */
 
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
 import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
@@ -416,7 +417,13 @@ export const kiloThreadWriter = openCodeFamilyThreadWriter(KILO_WRITER_TESTED_VE
  *  are added only when missing -- a project id is the repository's root
  *  commit (or `global`), the same in every profile.
  *
- *  Progress is the part ids: time-ordered, and a turn only adds parts. */
+ *  Progress is the part ids: time-ordered, and a turn only adds parts.
+ *
+ *  Verified live (vendor-sandbox, 2026-10-05, opencode 1.18.32 big-pickle
+ *  and kilo 7.7.6 north-mini-code:free): a session made in profile A, carried
+ *  into a profile B holding its own session, was listed there beside it and
+ *  `run --session <id>` in B recalled A's codeword (without the carry: "Session
+ *  not found"); carried back to A, A resumed with B's turn included. */
 function openCodeCarrySpec(name: string): SqliteCarrySpec {
   return {
     database: (environment) => join(openCodeDataRoot(environment, name), `${name}.db`),
