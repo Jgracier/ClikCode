@@ -103,15 +103,21 @@ async function codexUsageReading(_session: HarnessSession, environment: Readonly
  * cost 0 and zero tokens, measured at ~3.8s -- so, unlike the one-token turn
  * this used to run, it may run on any refresh and the composer is not blank
  * until something asks. `--no-session-persistence`: a probe is not a chat.
+ * `--strict-mcp-config` with no `--mcp-config`: start NO MCP server. Without
+ * it every probe booted each configured server (8 node processes, ~650MB
+ * transient on the user's setup) only to print a local command; measured in
+ * a sandbox with one marker server, 4.0s -> 1.2s, same /usage text.
  * It runs under this account's own CLAUDE_CONFIG_DIR, so the figure is that
  * account's. Every turn then keeps it current from the rate-limit data the
  * turn itself carries (claudeStreamReading, or the ACP adapter's
  * `_claude/rateLimit`). */
+export const CLAUDE_USAGE_PROBE_ARGV: readonly string[] = ['-p', '/usage', '--output-format', 'json', '--no-session-persistence', '--strict-mcp-config'];
+
 async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const harness = localHarnessForCommand('claude');
   if (!harness) return undefined;
   try {
-    const output = await captureNativeHarnessOutput(harness, ['-p', '/usage', '--output-format', 'json', '--no-session-persistence'], environment, NATIVE_USAGE_PROBE_TIMEOUT_MS);
+    const output = await captureNativeHarnessOutput(harness, CLAUDE_USAGE_PROBE_ARGV, environment, NATIVE_USAGE_PROBE_TIMEOUT_MS);
     const result = (JSON.parse(output) as { result?: unknown }).result;
     return typeof result === 'string' ? claudeUsageCommandReading(result) : undefined;
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
