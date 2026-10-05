@@ -118,7 +118,12 @@ export async function carryNativeSession(input: CarryNativeSessionInput): Promis
     // replaces what is there; an identical one is left alone.
     const [here, there] = await Promise.all([measure(destination), measure(source.path)]);
     if (!there) return undefined;
-    if (here && here.size >= there.size && here.mtime >= there.mtime) return 'carried';
+    // The vendor's own index has to agree with the copy (NativeSessionStore
+    // reconcile): Codex trusts a row over the file.
+    const reconciled = async (): Promise<CarryOutcome> => (
+      !store?.reconcile || await store.reconcile({ nativeId, path: destination, environment: input.to }).catch(() => false)
+        ? 'carried' : undefined);
+    if (here && here.size >= there.size && here.mtime >= there.mtime) return reconciled();
     await mkdir(dirname(destination), { recursive: true });
     // Through a temporary name in the destination directory: a half-copied
     // transcript that a resume then read would be worse than no transcript.
@@ -139,7 +144,7 @@ export async function carryNativeSession(input: CarryNativeSessionInput): Promis
     } else {
       await rename(staged, destination);
     }
-    return 'carried';
+    return reconciled();
   } catch {
     // fail-open-ok: carrying is an optimization over re-seeding, never a requirement.
     return undefined;

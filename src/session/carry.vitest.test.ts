@@ -63,6 +63,39 @@ describe('carrying a vendor session between account profiles', () => {
     await expect(readFile(join(to, day, name), 'utf8')).resolves.toBe('{"type":"response_item"}\n');
   });
 
+  it("points Codex's own thread row at the copy, which Codex trusts over the disk", async () => {
+    const { DatabaseSync } = await import('node:sqlite');
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
+    const from = join(root, 'account-a');
+    const to = join(root, 'account-b');
+    const id = '11111111-2222-3333-4444-666666666666';
+    const day = join('sessions', '2026', '09', '20');
+    const name = `rollout-2026-09-20T08-00-00-${id}.jsonl`;
+    await mkdir(join(from, day), { recursive: true });
+    await mkdir(to, { recursive: true });
+    await writeFile(join(from, day, name), '{"type":"response_item"}\n', 'utf8');
+    // The receiving profile already indexes the thread at a path that is not
+    // where the copy lands (an earlier copy, since moved): Codex would answer
+    // "no rollout found". Its name is the account's own and stays.
+    const db = new DatabaseSync(join(to, 'state_5.sqlite'));
+    db.exec('CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, name TEXT)');
+    db.prepare('INSERT INTO threads VALUES (?, ?, ?)').run(id, join(to, 'sessions', '2026', '09', '01', name), 'my thread');
+    db.prepare('INSERT INTO threads VALUES (?, ?, ?)').run('other', '/elsewhere.jsonl', 'other');
+    db.close();
+
+    const carried = await carryNativeSession({
+      harness: harnessFor('codex'), nativeId: id, workspace: WORKSPACE, from: { CODEX_HOME: from }, to: { CODEX_HOME: to },
+    });
+
+    expect(carried).toBe('carried');
+    const after = new DatabaseSync(join(to, 'state_5.sqlite'));
+    expect(after.prepare('SELECT id, rollout_path, name FROM threads ORDER BY id').all()).toEqual([
+      { id, rollout_path: join(to, day, name), name: 'my thread' },
+      { id: 'other', rollout_path: '/elsewhere.jsonl', name: 'other' },
+    ]);
+    after.close();
+  });
+
   it('updates the copy waiting in a profile the conversation returns to', async () => {
     // A -> B -> A: A still holds the copy it had when the conversation left,
     // one switch out of date. Everything said while B owned the thread is only

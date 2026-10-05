@@ -68,6 +68,14 @@ export interface NativeSessionStore {
    *  re-seed, which is always available, so anything uncertain returns false
    *  and leaves both stores as they were. */
   carry?(input: NativeSessionCarry): Promise<boolean>;
+  /** After a `locate` store's transcript was copied to `path` under
+   *  `environment` (carry.ts): make the vendor's own index agree with it, and
+   *  answer whether the thread now resumes from there. A vendor that trusts an
+   *  index over the disk needs this -- Codex resolves a thread through
+   *  `state_5.sqlite` `threads.rollout_path` before it looks at the file, so a
+   *  row left from an earlier copy at another path made the resume fail with
+   *  "no rollout found". False makes the carry count as failed. */
+  reconcile?(input: { nativeId: string; path: string; environment: NativeSessionEnvironment }): Promise<boolean>;
   /** Writes a whole conversation as this vendor's own thread, so a provider
    *  taking a conversation up resumes it natively instead of being told it
    *  (turn/thread-start.ts). Absent: the conversation is transferred as a
