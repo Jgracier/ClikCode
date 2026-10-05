@@ -173,7 +173,7 @@ export function conversationOption(
     ].filter(Boolean).join(' · '),
     value: latest.id,
     alternates: history.length > 1 ? history.map((session) => ({
-      label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,
+      label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${session.fork ? 'fork' : 'original'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,
       value: session.id,
     })) : undefined,
   };
