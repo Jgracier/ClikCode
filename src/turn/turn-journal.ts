@@ -37,7 +37,7 @@ function interruptedTurnMessages(
 
 export async function preserveInterruptedTurn(id: string, prompt: string, partialResponse: string, outputStarted: boolean): Promise<void> {
   if (!outputStarted) return;
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
   if (session.pendingTurn?.prompt === prompt) {
@@ -51,7 +51,7 @@ export async function preserveInterruptedTurn(id: string, prompt: string, partia
 }
 
 export async function discardInterruptedTurn(id: string, prompt: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || !discardPendingTurn(session, prompt)) return;
   session.updatedAt = new Date().toISOString();

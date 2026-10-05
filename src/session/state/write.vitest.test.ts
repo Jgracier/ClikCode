@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from './read.js';
-import { writeState } from './write.js';
+import { writeState, writeTranscriptCheckpoint } from './write.js';
 import { STATE_BASELINE, type BaselinedState } from './merge.js';
 import { resetSessionStoreCache } from '../store/records.js';
 import type { HarnessSession } from '../model.js';
@@ -126,6 +126,38 @@ describe('a list that does not open every transcript', () => {
     const full = await readState();
     expect(full.sessions.find((session) => session.id === 'a')?.messages?.[0]?.content).toBe('hello from a');
     expect(full.sessions.find((session) => session.id === 'b')).toMatchObject({ name: 'Renamed', messages: [{ role: 'user', content: 'hello from b' }] });
+  });
+
+  it('runs a turn on a read of its own transcript only, leaving every other chat as stored', async () => {
+    // What a worker does: it reads only its conversation's history.
+    root = await mkdtemp(join(tmpdir(), 'clikcode-own-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    const make = (id: string, content: string): HarnessSession => ({
+      id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content }],
+    } as HarnessSession);
+    state.sessions.push(make('mine', 'first'), make('other', 'hello from other'));
+    await writeState(state);
+    await writeState(await readState());
+    resetSessionStoreCache();
+    const own = await readState({ transcripts: ['mine'] });
+    expect(own.sessions.find((session) => session.id === 'other')?.messages).toBeUndefined();
+    const mine = own.sessions.find((session) => session.id === 'mine')!;
+    mine.pendingTurn = { prompt: 'go', response: '', startedAt: now, updatedAt: now };
+    await writeState(own);
+    mine.pendingTurn.response = 'streamed';
+    mine.pendingTurn.updatedAt = new Date(Date.parse(now) + 1000).toISOString();
+    expect(await writeTranscriptCheckpoint(own, 'mine')).toBe(true);
+    mine.messages = [...mine.messages!, { role: 'user', content: 'go' }, { role: 'assistant', content: 'streamed' }];
+    delete mine.pendingTurn;
+    mine.updatedAt = new Date(Date.parse(now) + 2000).toISOString();
+    await writeState(own);
+    resetSessionStoreCache();
+    const full = await readState();
+    expect(full.sessions.find((session) => session.id === 'other')).toMatchObject({ messages: [{ role: 'user', content: 'hello from other' }], listPreview: 'hello from other' });
+    expect(full.sessions.find((session) => session.id === 'mine')?.messages?.map((message) => message.content)).toEqual(['first', 'go', 'streamed']);
   });
 
   it('keeps a turn in flight in the transcript only: the index row carries no copy of it', async () => {

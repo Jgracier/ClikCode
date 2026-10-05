@@ -85,7 +85,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
     };
     const dequeue = async (): Promise<void> => {
       if (!queuedTurnId) return;
-      const state = await readState();
+      const state = await readState({ transcripts: [sessionId] });
       const session = state.sessions.find((item) => item.id === sessionId);
       if (session && consumeSessionTurn(session, queuedTurnId)) await writeState(state);
     };
@@ -94,7 +94,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
      * worker runs it once whoever asks first. */
     const sendWhenDue = async (): Promise<void> => {
       if (!queuedTurnId || running || ours) return;
-      const session = (await readState()).sessions.find((item) => item.id === sessionId);
+      const session = (await readState({ transcripts: [sessionId] })).sessions.find((item) => item.id === sessionId);
       const queue = session?.queuedTurns ?? [];
       if (!queue.some((item) => item.id === queuedTurnId)) {
         finish(() => rejectTurn(new Error('The queued message was removed before it ran.')));
@@ -105,7 +105,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
     const done = async (): Promise<void> => {
       if (failure) { finish(() => rejectTurn(failure)); return; }
       if (stopping) { finish(() => rejectTurn(turnCancelledError())); return; }
-      const state = await readState();
+      const state = await readState({ transcripts: [sessionId] });
       const session = state.sessions.find((item) => item.id === sessionId);
       const answer = session ? textTranscript(sessionTranscriptMessages(session)).at(-1) : undefined;
       const invocation = state.invocations.filter((item) => item.sessionId === sessionId && item.at >= startedAt).at(-1);
@@ -176,7 +176,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
 async function settleInProcessWork(sessionId: string): Promise<void> {
   const undelivered = disposeSessionState(stateDirectory(), sessionId, 'the command that started it ended and no ClikCode worker could keep it');
   if (!undelivered.length) return;
-  const state = await readState();
+  const state = await readState({ transcripts: [sessionId] });
   const found = state.sessions.find((item) => item.id === sessionId);
   if (!found) return;
   const submittedAt = new Date().toISOString();

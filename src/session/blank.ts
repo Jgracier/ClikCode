@@ -46,7 +46,7 @@ export function blankChatSweepable(session: HarnessSession, workerIsLive: Worker
 /** Put a draft on disk. The turn worker is another process and can only see
  * what has been written; this is the moment the chat is actually used. */
 export async function ensureSessionOnDisk(id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || !isBlankConversation(session)) return;
   // The grace a stored empty chat gets from other processes' sweeps runs
@@ -60,7 +60,7 @@ export async function ensureSessionOnDisk(id: string): Promise<void> {
  * that was never written is forgotten; a stored one only when another
  * process cannot be about to use it (blankChatSweepable). */
 export async function discardIfBlank(id: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || !blankChatSweepable(session, await liveWorkerSessions())) return;
   state.sessions = state.sessions.filter((item) => item.id !== id);
