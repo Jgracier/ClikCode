@@ -1,10 +1,12 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   EMPTY_LISTING_TTL_MS, SEEN_LISTING_TTL_MS, freshListing, lastSeenListing, rememberListing, resetNativeSessionDiscoveryCache, saveDiscoveryCache,
 } from './cache.js';
+import { discoverNativeSessions } from './cli-listing.js';
+import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 
 /**
  * Vendor `sessions list` commands cost a subprocess each and mostly find
@@ -130,5 +132,53 @@ describe('the last list each CLI gave', () => {
     expect(await freshListing('kilo', '/work', undefined, now + SEEN_LISTING_TTL_MS + 1, 'kilo-1')).toBeUndefined();
     // A new binary is asked at once.
     expect(await freshListing('kilo', '/work', undefined, now + 1_000, 'kilo-2')).toBeUndefined();
+  });
+});
+
+describe('a vendor CLI listing', () => {
+  let home: string;
+  const savedPath = process.env.PATH;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), 'clikcode-listing-'));
+    process.env.CLIKCODE_HOME = home;
+    resetNativeSessionDiscoveryCache();
+  });
+
+  afterEach(async () => {
+    process.env.PATH = savedPath;
+    delete process.env.CLIKCODE_HOME;
+    resetNativeSessionDiscoveryCache();
+    await rm(home, { recursive: true, force: true });
+  });
+
+  /** A stand-in CLI that prints `output` for any arguments, and fails when
+   * `output` is undefined. */
+  async function fakeCli(name: string, output: string | undefined): Promise<AiLocalHarnessDefinition> {
+    const bin = join(home, 'bin');
+    await mkdir(bin, { recursive: true });
+    await writeFile(join(bin, name), output === undefined ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\ncat <<'JSON'\n${output}\nJSON\n`);
+    await chmod(join(bin, name), 0o755);
+    process.env.PATH = `${bin}:${savedPath}`;
+    return { command: name, binary: name, session: { discoverArgv: ['list'], discoverFormat: 'json' } } as unknown as AiLocalHarnessDefinition;
+  }
+
+  it('reads Kiro CLI\'s per-folder envelopes, with each session\'s folder', async () => {
+    // Verbatim from kiro-cli 2.23 `chat --list-sessions --format json`.
+    const harness = await fakeCli('kiro-fake', '[{"cwd":"/work","sessions":[{"sessionId":"0b6f4adb-25a0-4ac0-8426-c71912f9edc6","source":"v2","title":"Probe title","updatedAt":"2026-10-01T19:21:44.760Z","messageCount":0}],"complete":true}]');
+    expect(await discoverNativeSessions(harness, {}, home)).toEqual([
+      { nativeId: '0b6f4adb-25a0-4ac0-8426-c71912f9edc6', title: 'Probe title', updatedAt: '2026-10-01T19:21:44.760Z', workspace: '/work' },
+    ]);
+  });
+
+  it('keeps the last answer through a failure, and does not ask again at once', async () => {
+    const harness = await fakeCli('flaky-fake', undefined);
+    const log = join(home, 'asked.log');
+    await writeFile(join(home, 'bin', 'flaky-fake'), `#!/bin/sh\necho asked >> ${log}\nexit 1\n`);
+    // What it listed before it started failing (any build, long expired).
+    await rememberListing('flaky-fake', home, undefined, [{ nativeId: 's1', title: 'One' }], Date.now() - SEEN_LISTING_TTL_MS - 1);
+    expect(await discoverNativeSessions(harness, {}, home)).toEqual([{ nativeId: 's1', title: 'One' }]);
+    expect(await discoverNativeSessions(harness, {}, home)).toEqual([{ nativeId: 's1', title: 'One' }]);
+    expect((await readFile(log, 'utf8')).trim().split('\n')).toHaveLength(1);
   });
 });
