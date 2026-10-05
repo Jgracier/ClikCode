@@ -157,6 +157,29 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     for (let index = 0; index < (turn.tools_first ?? 0) && !cancelled; index += 1) {
       await tool(`lead_${index}`, `npx vitest run part${index}`, `part${index} ok`, Number(process.env.FAKE_TOOL_MS ?? 600));
     }
+    // `subagents`: { count, calls, hold_ms } -- Agent tool calls left
+    // running, each with `calls` child tool calls stamped with its id the way
+    // claude-agent-acp stamps a sub-agent's (_meta.claudeCode.parentToolUseId),
+    // held open for hold_ms, then finished.
+    if (turn.subagents && !cancelled) {
+      const { count, calls, hold_ms: hold } = turn.subagents;
+      for (let agent = 0; agent < count; agent += 1) {
+        update({ sessionUpdate: 'tool_call', toolCallId: `agent_${agent}`, title: `Task: worker ${agent}`, kind: 'think', status: 'in_progress', rawInput: { description: `worker ${agent}`, subagent_type: 'general-purpose' } });
+      }
+      for (let call = 0; call < calls && !cancelled; call += 1) {
+        for (let agent = 0; agent < count; agent += 1) {
+          const id = `agent_${agent}_call_${call}`;
+          const meta = { claudeCode: { parentToolUseId: `agent_${agent}` } };
+          update({ sessionUpdate: 'tool_call', toolCallId: id, title: `Read file${call}.ts`, kind: 'read', status: 'in_progress', rawInput: { file_path: `/tmp/file${call}.ts` }, _meta: meta });
+          update({ sessionUpdate: 'tool_call_update', toolCallId: id, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'ok' } }], _meta: meta });
+        }
+        await sleep(40);
+      }
+      await sleep(hold ?? 0);
+      for (let agent = 0; agent < count; agent += 1) {
+        update({ sessionUpdate: 'tool_call_update', toolCallId: `agent_${agent}`, status: 'completed', content: [{ type: 'content', content: { type: 'text', text: `worker ${agent} done` } }] });
+      }
+    }
     // `hold_ms`: one more call that runs that long with nothing new arriving,
     // so a test can look at a running turn whose screen holds still.
     if (turn.hold_ms && !cancelled) await tool('hold_1', 'sleep 30', 'held call done', turn.hold_ms);

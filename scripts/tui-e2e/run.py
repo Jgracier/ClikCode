@@ -74,6 +74,44 @@ SCENARIOS = {
         'watch': ['The final answer is ready.'],
         'no_clear_after_type': True,
     },
+    'rebuild-while-following-running-turn': {
+        # A newer build lands while a turn runs; the window leaves for the
+        # board and comes back. The quiet moment it re-execs at is while the
+        # worker still runs that turn, and the new process must follow it to
+        # its end and take the next message.
+        'rebuild_entry': True,
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 12000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Second answer arrives here.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
+            ('touch_entry',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\r'), ('settle', 4),
+            ('wait_for', 'The build passed.', 40), ('settle', 3),
+            ('type', 'and the second question'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2),
+        ],
+        'watch': ['The build passed.', 'Second answer arrives here.'],
+        'no_clear_after_type': True,
+    },
+    'board-back-into-running-turn': {
+        # Chat B runs a long turn; the window steps out to chat A through the
+        # board and comes back to B while that turn still runs. It must follow
+        # the turn to its end and take the next message -- it used to stop
+        # showing the turn a moment after joining and never ask again.
+        'turns': [{'blocks': ['First chat answered.']},
+                  {'intro': 'Starting the long build.', 'subagents': {'count': 2, 'calls': 40, 'hold_ms': 15000}, 'blocks': ['The build passed.']},
+                  {'blocks': ['Second answer arrives here.']}],
+        'steps': [
+            ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            # A second chat, started from the board, runs the long turn.
+            ('keys', '\x1b[D'), ('settle', 2), ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30), ('settle', 6),
+            # Out to the first chat, then back into the running one.
+            ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board1'), ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('settle', 3),
+            ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board2'), ('keys', '\x1b[A'), ('keys', '\x1b[C'), ('settle', 3),
+            ('wait_for', 'The build passed.', 40), ('settle', 3),
+            ('type', 'and the second question'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2),
+        ],
+        'watch': ['The build passed.', 'Second answer arrives here.'],
+        'no_clear_after_type': True,
+    },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 4)],
