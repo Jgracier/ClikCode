@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -18,6 +18,7 @@ vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
 
 const { signOutAccount } = await import('./account.js');
 const { readState } = await import('../session/state/read.js');
+const { writeState } = await import('../session/state/write.js');
 
 const previousHome = process.env.CLIKCODE_HOME;
 afterEach(() => {
@@ -26,14 +27,10 @@ afterEach(() => {
 });
 
 async function signedInAccount(): Promise<void> {
-  const root = await mkdtemp(join(tmpdir(), 'clikcode-signout-'));
-  process.env.CLIKCODE_HOME = root;
-  await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-    version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
-    accounts: [{ id: 'acct', provider: 'openai', label: 'Work', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:codex', signedInAt: '2026-09-01T00:00:00.000Z' }],
-    sessions: [], invocations: [],
-    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-  })}\n`);
+  process.env.CLIKCODE_HOME = await mkdtemp(join(tmpdir(), 'clikcode-signout-'));
+  const state = await readState();
+  state.accounts.push({ id: 'acct', provider: 'openai', label: 'Work', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:codex', signedInAt: '2026-09-01T00:00:00.000Z' } as typeof state.accounts[number]);
+  await writeState(state);
 }
 
 describe('sign-out', () => {

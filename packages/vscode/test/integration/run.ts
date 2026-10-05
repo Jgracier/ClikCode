@@ -106,7 +106,6 @@ function seedDemoHome(home: string, workspace: string): void {
     messages: messages.map(([role, content]) => ({ role, content })),
   });
   const state = {
-    version: 1, installationId: 'demo', localApiToken: 'demo', devicePrivateKeyPem: 'demo', devicePublicKey: { kty: 'OKP' },
     accounts: [
       account('demo-claude-work', 'anthropic', 'alex@work.dev', [['5h', 38, 2.4 * 3_600_000], ['weekly', 61, 3.2 * 86_400_000]]),
       account('demo-claude-personal', 'anthropic', 'alex@home.dev', [['5h', 92, 1.1 * 3_600_000], ['weekly', 74, 4.5 * 86_400_000]]),
@@ -119,10 +118,23 @@ function seedDemoHome(home: string, workspace: string): void {
       chat('demo-3', 'Why does the build fail on Windows?', 'gemini', 'google', 'gemini-3-pro', 26 * 3_600_000, [['user', 'The build fails on Windows with ENOENT.'], ['assistant', 'The copy step used a POSIX path. It now uses path.join; CI passes on windows-latest.']]),
       chat('demo-4', 'Write tests for the date parser', 'opencode', 'opencode', 'opencode/big-pickle', 3 * 86_400_000, [['user', 'Write tests for parseDate.'], ['assistant', 'Added 14 cases covering time zones, leap years and invalid input.']]),
     ],
-    invocations: [],
-    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
   };
-  writeFileSync(join(home, 'harness-state.json'), `${JSON.stringify(state)}\n`);
+  // ClikCode's on-disk layout: the index lists each conversation (with the
+  // row facts the list draws from), and each transcript is its own file.
+  const sessions = join(home, 'sessions');
+  mkdirSync(sessions, { recursive: true });
+  const rows = state.sessions.map(({ messages, ...meta }) => {
+    writeFileSync(join(sessions, `${meta.id}.json`), `${JSON.stringify({ v: 1, id: meta.id, messages })}\n`, { mode: 0o600 });
+    const asked = messages.filter((message) => message.role === 'user').at(-1)?.content.replace(/\s+/g, ' ').trim() ?? '';
+    const listPreview = asked.length > 48 ? `${asked.slice(0, 47)}…` : asked;
+    return { ...meta, listPreview, listMessageCount: messages.length, listChecked: true };
+  });
+  writeFileSync(join(home, 'index.json'), `${JSON.stringify({
+    version: 2, installationId: 'demo', devicePublicKey: { kty: 'OKP' },
+    accounts: state.accounts, sessions: rows, invocations: [], invocationRollups: {},
+    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+  })}\n`, { mode: 0o600 });
+  writeFileSync(join(home, 'secrets.json'), `${JSON.stringify({ localApiToken: 'demo', devicePrivateKeyPem: 'demo' })}\n`, { mode: 0o600 });
 }
 
 main().catch((error: unknown) => {

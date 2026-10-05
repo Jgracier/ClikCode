@@ -33,6 +33,7 @@ vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
 
 const { accountList, conversationList, creditOf } = await import('./queries.js');
 const { readState } = await import('../session/state/read.js');
+const { writeState } = await import('../session/state/write.js');
 const { IdeBridge } = await import('./bridge.js');
 const { IDE_PROTOCOL } = await import('./protocol.js');
 const { ensureWorkersDirectory, writeWorkerRecord } = await import('../worker/registry.js');
@@ -50,14 +51,13 @@ const session = (id: string, extra: Record<string, unknown> = {}) => ({
   createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', status: 'closed', nativeHarness: 'codex', ...extra,
 });
 
-async function home(state: { sessions?: unknown[]; accounts?: unknown[] }): Promise<void> {
+async function home(seed: { sessions?: unknown[]; accounts?: unknown[] }): Promise<void> {
   const root = await mkdtemp(join(tmpdir(), 'clikcode-ide-queries-'));
   process.env.CLIKCODE_HOME = root;
-  await writeFile(join(root, 'harness-state.json'), `${JSON.stringify({
-    version: 1, installationId: 'install', localApiToken: 'token', devicePrivateKeyPem: 'private', devicePublicKey: { kty: 'OKP' },
-    accounts: state.accounts ?? [], sessions: state.sessions ?? [], invocations: [],
-    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
-  })}\n`);
+  const state = await readState();
+  state.accounts.push(...(seed.accounts ?? []) as typeof state.accounts);
+  state.sessions.push(...(seed.sessions ?? []) as typeof state.sessions);
+  await writeState(state);
 }
 
 describe('the conversation list', () => {
