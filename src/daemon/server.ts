@@ -102,7 +102,8 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
   const runtimePath = join(runtimeDirectory, 'runtime.json');
   const lockPath = join(runtimeDirectory, 'runtime.lock');
   const runtimeLock = await acquireRuntimeLock(lockPath, runtimePath);
-  const startupState = await readState();
+  // Only the installation id and the bearer: no conversation is opened.
+  const startupState = await readState({ transcripts: [] });
   const server = nodeHttp().createServer(async (request, response) => {
     try {
       // DNS-rebinding guard: only a literal loopback authority on OUR port.
@@ -114,8 +115,9 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         sendJson(response, 401, { error: 'unauthorized' });
       } else {
         // Commands and native harnesses may update state while the optional
-        // control API is running. Always serve the latest atomic snapshot.
-        const state = await readState();
+        // control API is running. Always serve the latest atomic snapshot --
+        // with every transcript only for the one route that returns them.
+        const state = await readState({ transcripts: route === 'GET /v1/sessions' ? 'all' : [] });
         if (route === 'GET /v1/accounts') {
         sendJson(response, 200, { accounts: state.accounts.map(accountView) });
         } else if (route === 'GET /v1/device') {
@@ -145,7 +147,7 @@ export async function aiStart(_config: Conf, options: { port?: string }): Promis
         // of the WHOLE file, so persisting it here would revert every message,
         // rename, and new conversation written meanwhile. Re-read so appending
         // one usage record only ever appends.
-        const latest = await readState();
+        const latest = await readState({ transcripts: [] });
         latest.invocations.push(invocation);
         await writeState(latest);
         sendJson(response, 200, { text: turn.text, toolCalls: turn.toolCalls, usage: turn.usage, invocation });
@@ -195,7 +197,7 @@ export async function aiStatus(): Promise<void> {
 
 export async function aiStop(): Promise<void> {
   const runtimePath = join(harnessStatePath(), '..', 'runtime.json');
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   let runtime: { pid?: unknown; installationId?: unknown };
   try {
     runtime = JSON.parse(await readFile(runtimePath, 'utf8')) as typeof runtime;
