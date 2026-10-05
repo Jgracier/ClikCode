@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HarnessSession, TranscriptMessage } from '../model.js';
 import { canonicalRecord } from '../canonical.js';
 import { conversationRows } from '../conversation-rows.js';
+import { conversationOption } from '../options.js';
 import { readState } from './read.js';
 import { writeState } from './write.js';
 
@@ -77,6 +78,9 @@ describe('folding handoff branches', () => {
     expect(rest).toEqual([]);
     expect(row!.latest.id).toBe('b');
     expect(row!.chats.map((session) => session.id).sort()).toEqual(['b', 'fork']);
+    // Its Branches are the history and the fork, nothing a switch made.
+    expect(conversationOption(row!).alternates!.map((option) => [option.value, / · (original|fork)/.exec(option.label)?.[1]]))
+      .toEqual([['fork', 'fork'], ['b', 'original']]);
   });
 
   it('runs once: a second read changes nothing on disk', async () => {
