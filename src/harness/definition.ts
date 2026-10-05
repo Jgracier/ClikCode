@@ -5,10 +5,21 @@
 import type { UsageLearning } from './accounts/usage-learning.js';
 import type { HarnessSession } from '../session/model.js';
 
-import type { AiHarnessAuthKind } from '@clikcode/router/ai-local-harness';
+/** The catalog's own vocabulary (packages/clikrouter/src/ai-local-harness.ts),
+ * type-only: erased at build, so the catalog bundle still loads lazily. */
+import type {
+  AiCustomAcpHarnessInput, AiHarnessAcpLaunch, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel,
+  AiHarnessPermissionMode, AiHarnessTransport, AiHarnessTurnDefinition, AiLocalHarnessDefinition,
+} from '@clikcode/router/ai-local-harness';
+export type {
+  AiCustomAcpHarnessInput, AiHarnessAcpDefinition, AiHarnessAcpLaunch, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessInstallStep,
+  AiHarnessInstaller, AiHarnessIntegrationLevel, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition,
+} from '@clikcode/router/ai-local-harness';
+
+/** ClikCode's own, not the catalog's: where a conversation runs, ClikCode
+ * Local included, and the account record with the state it keeps. */
 export type AiHarnessRoute = 'local' | 'gateway' | 'clikcode-local';
-export type { AiHarnessAuthKind, AiHarnessPermissionMode, AiHarnessIntegrationLevel, AiHarnessTransport, AiHarnessAcpDefinition, AiHarnessAcpLaunch, AiCustomAcpHarnessInput, AiHarnessInstallStep, AiHarnessInstaller, AiHarnessOptionDefinition, AiHarnessCapabilityManifest, AiLocalHarnessDefinition } from '@clikcode/router/ai-local-harness';
-import type { AiHarnessTurnDefinition, AiHarnessAcpLaunch, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition, AiCustomAcpHarnessInput } from '@clikcode/router/ai-local-harness';
+
 export interface AiHarnessAccount {
   id: string;
   provider: string;
