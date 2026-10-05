@@ -30,7 +30,6 @@ import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.j
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { closePersistentTransport, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
-import { synchronizeNativeTranscript } from './handoff.js';
 import { turnEnvironment } from './turn-environment.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
@@ -574,10 +573,6 @@ export async function sendVendorTurn(input: {
         ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
         : {}),
     });
-    // The vendor subprocess owns persistence. Re-read its transcript after
-    // exit so any source-side turns/events that were not represented by the
-    // final response are reflected in ClikCode before the turn is saved.
-    await synchronizeNativeTranscript(state, session);
     await writeState(state);
     if (!prompter) emitHarnessOutput({ session, text: completedText, usage: { attributedBy: harness.command, ...usage }, invocation, ...accounts.switched() });
     return;
