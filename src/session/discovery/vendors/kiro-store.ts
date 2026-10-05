@@ -10,8 +10,8 @@
  *
  * No `locate`: an ACP session is two sibling files in a directory shared
  * with every other session, not one path, so the single-path copy in
- * session/carry.ts cannot carry it, and a failover re-seeds. Carrying Kiro
- * needs a store `carry` that copies both, the conversation first.
+ * session/carry.ts cannot carry it. The store carries the pair itself
+ * (`carry`), the conversation first, as the writer writes it.
  *
  * Observed (vendor-sandbox, kiro-cli 2.23.1, a real `session/new` turn and
  * then hand-written files loaded with `session/load`, which replays what it
@@ -34,11 +34,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { rm } from 'node:fs/promises';
+import { copyFile, mkdir, rename, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
+import { nativeDataRoot, type NativeSessionCarry, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText, sequentialIds, testedVersion,
   writeFileAtomic, type VendorCall,
@@ -46,6 +46,12 @@ import {
 
 function kiroRoot(environment: NativeSessionEnvironment): string {
   return join(nativeDataRoot(environment, 'HOME', homedir()), '.kiro', 'sessions', 'cli');
+}
+
+/** One ACP session's two files, in the order they are written and carried:
+ *  the conversation, then the metadata that makes the id a session. */
+function kiroSessionFiles(root: string, sessionId: string): { conversation: string; session: string } {
+  return { conversation: join(root, `${sessionId}.jsonl`), session: join(root, `${sessionId}.json`) };
 }
 
 /** A call as one of Kiro's own tools (see above), paths absolute. */
@@ -197,14 +203,13 @@ export const kiroThreadWriter: NativeThreadWriter = {
   async write(record, context) {
     if (!record.turns.length) return undefined;
     const sessionId = randomUUID();
-    const root = kiroRoot(context.environment);
+    const { conversation, session } = kiroSessionFiles(kiroRoot(context.environment), sessionId);
     const files = kiroThreadFiles(record, { sessionId, workspace: context.workspace, now: new Date() });
     // The conversation first, the metadata that makes it a session last:
     // until `<id>.json` exists Kiro does not know the id.
-    const conversation = join(root, `${sessionId}.jsonl`);
     await writeFileAtomic(conversation, files.messages);
     try {
-      await writeFileAtomic(join(root, `${sessionId}.json`), files.session);
+      await writeFileAtomic(session, files.session);
     } catch (error) {
       await rm(conversation, { force: true });
       throw error;
@@ -213,7 +218,42 @@ export const kiroThreadWriter: NativeThreadWriter = {
   },
 };
 
+/** Size and recency of a session's pair taken together, the way carry.ts
+ *  measures a directory; undefined unless both files are there. */
+async function measureKiroSession(files: { conversation: string; session: string }): Promise<{ size: number; mtime: number } | undefined> {
+  const entries = await Promise.all([files.conversation, files.session].map((path) => stat(path).catch(() => undefined)));
+  if (entries.some((entry) => !entry?.isFile())) return undefined;
+  return {
+    size: entries.reduce((sum, entry) => sum + entry!.size, 0),
+    mtime: Math.max(...entries.map((entry) => entry!.mtimeMs)),
+  };
+}
+
+/** Copies one session's pair into `to`, touching no other session. Both are
+ * staged under temporary names first, so a failed copy changes nothing; then
+ * renamed into place conversation first, as the writer writes them. A copy
+ * already there that is as long and as recent stays (carry.ts's rule: the
+ * transcript is append-only, so the newer, longer one is current). */
+async function carryKiroSession(input: NativeSessionCarry): Promise<boolean> {
+  const source = kiroSessionFiles(kiroRoot(input.from), input.nativeId);
+  const target = kiroSessionFiles(kiroRoot(input.to), input.nativeId);
+  const [there, here] = await Promise.all([measureKiroSession(source), measureKiroSession(target)]);
+  if (!there) return false;
+  if (here && here.size >= there.size && here.mtime >= there.mtime) return true;
+  await mkdir(kiroRoot(input.to), { recursive: true, mode: 0o700 });
+  const order = ['conversation', 'session'] as const;
+  const staged = { conversation: `${target.conversation}.clikcode-carry`, session: `${target.session}.clikcode-carry` };
+  try {
+    for (const file of order) await copyFile(source[file], staged[file]);
+    for (const file of order) await rename(staged[file], target[file]);
+  } finally {
+    await Promise.all(order.map((file) => rm(staged[file], { force: true })));
+  }
+  return true;
+}
+
 export const kiroSessionStore: NativeSessionStore = {
   root: kiroRoot,
+  carry: carryKiroSession,
   writer: kiroThreadWriter,
 };
