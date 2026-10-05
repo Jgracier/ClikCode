@@ -37,7 +37,9 @@ export function statusText(model: ChatModel): { text: string; tooltip: string } 
   if (model.connection === 'error' || model.connection === 'stopped') return { text: '$(warning) ClikCode', tooltip: model.connectionError ?? 'ClikCode is not running' };
   if (!model.sessionId) return { text: '$(comment-discussion) ClikCode', tooltip: 'Open the ClikCode chat' };
   const name = providerDisplayName(model);
-  const usage = model.currentAccount?.usage?.label ?? model.accountUsage;
+  // The composer's figure: the account list's own reading can be older, and
+  // the two read differently side by side.
+  const usage = model.accountUsage;
   const waiting = model.approvals.length > 0;
   const tooltip = [
     `${model.title ?? 'New chat'}${waiting ? ' (waiting for your approval)' : model.running ? ' (working)' : ''}`,
