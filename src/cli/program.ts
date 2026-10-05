@@ -11,9 +11,8 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import type Conf from 'conf';
 import { toCliErrorMessage, toCliErrorDebugDetails, toCliErrorJson } from './errors/message.js';
-import { isDebugMode } from './debug-mode.js';
 import { isJsonDefaultMode } from './output-mode.js';
-import { bindGlobalFlags } from './flags.js';
+import { bindGlobalFlags, globalFlag } from './flags.js';
 import { emitResult } from './structured-output.js';
 import { restoreTerminal } from '../tui/restore.js';
 import { CLIKCODE_VERSION } from '../version.js';
@@ -50,6 +49,12 @@ function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error:
     const detail = error instanceof Error ? (error.stack ?? `${error.name}: ${error.message}`) : String(error);
     appendFileSync(join(dir, 'crash.log'), `[${new Date().toISOString()}] ${kind} (pid ${process.pid})\n${detail}\n\n`, { encoding: 'utf8', mode: 0o600 });
   } catch { /* fail-open-ok: a broken crash log must never block the actual crash handling below it. */ }
+}
+
+/** `--debug`, or CLIKCODE_DEBUG=1: a failure also prints the stack, HTTP
+ * status and raw response body the friendly line collapses. */
+function isDebugMode(): boolean {
+  return globalFlag('debug') || ['1', 'true', 'yes'].includes(String(process.env.CLIKCODE_DEBUG || '').trim().toLowerCase());
 }
 
 /**
