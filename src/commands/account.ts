@@ -47,7 +47,7 @@ export const ACCOUNT_LIMIT_NOTE = 'At an account\'s usage limit, ClikCode moves 
  * checking accounts, wants from this list. The model catalog is long and
  * rarely the question, so it comes only with `--models`. */
 export async function aiAccountsList(options: { models?: boolean } = {}): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const ready = (account: AiHarnessAccount): boolean => account.status === 'ready' && accountCanTakeTurn(account);
   const accounts = await Promise.all(state.accounts.map(async (account) => {
     const reading = await accountUsageReading(account, state);
@@ -202,7 +202,7 @@ export async function aiAccountLogin(harnessCommandName: string, label?: string)
 async function signInAccount(harnessCommandName: string, label: string | undefined, touched: Set<string>): Promise<string> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const explicit = label?.trim();
   let accountLabel = explicit || nameAccount(state.accounts, harness);
   if (!accountLabel) throw new Error('account label cannot be empty');
@@ -359,7 +359,7 @@ function nativeAccountContext(state: HarnessState, labelOrId: string): { account
 }
 
 export async function aiAccountStatus(labelOrId: string): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
   if (!harness.statusArgv && !hasAuthEvidence(harness)) throw new Error(`${harness.displayName} does not publish a non-destructive account-status command`);
   const nativeStatus = harness.statusArgv
@@ -379,7 +379,7 @@ export async function aiAccountLogout(labelOrId: string): Promise<void> {
  * the account marked as needing a login. Clearing signedInAt retires any
  * live vendor child still holding the old credentials. */
 export async function signOutAccount(labelOrId: string): Promise<AiHarnessAccount> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const { account, harness, environment } = nativeAccountContext(state, labelOrId);
   if (!harnessCanLogout(harness)) throw new Error(`${harness.displayName} has no way to sign out from outside its own session.`);
   await logoutNativeHarness(harness, environment);
@@ -471,7 +471,7 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   }
   const harness = localHarnessForProvider(provider);
   if (harness && !harness.localAuth.includes(auth)) throw new Error(`${harness.displayName} does not support local ${auth} accounts`);
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   if (state.accounts.some((account) => account.label.toLowerCase() === label.toLowerCase())) {
     throw new Error(`a local AI account named "${label}" already exists`);
   }
@@ -502,7 +502,7 @@ interface AccountRemoveOptions {
 }
 
 export async function aiAccountRemove(labelOrId: string, options: AccountRemoveOptions = {}): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const index = state.accounts.findIndex((account) => account.id === labelOrId || account.label === labelOrId);
   if (index < 0) throw new Error(`local AI account "${labelOrId}" was not found`);
   const [removed] = state.accounts.splice(index, 1);

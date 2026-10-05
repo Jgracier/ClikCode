@@ -10,7 +10,7 @@ import { assertRealModel } from './sessions.js';
 
 /** Applies to every provider that doesn't have its own override. */
 export async function aiSettingsSetGlobal(key: string, value: string, emit = true): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   applyDefaultSetting(state.globalSettings, key, value);
   await writeState(state);
   if (emit) emitResult({ globalSettings: state.globalSettings });
@@ -18,7 +18,7 @@ export async function aiSettingsSetGlobal(key: string, value: string, emit = tru
 
 /** Overrides the global default for one provider only; existing sessions are untouched. */
 export async function aiSettingsSetProvider(providerOrHarness: string, key: string, value: string, emit = true): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
   if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
   // `model` present (even unset) marks this as a provider entry, where a
@@ -33,7 +33,7 @@ export async function aiSettingsSetProvider(providerOrHarness: string, key: stri
 
 /** Removes every override for one provider, falling back to the global defaults. */
 export async function aiSettingsClearProvider(providerOrHarness: string, emit = true): Promise<void> {
-  const state = await readState();
+  const state = await readState({ transcripts: [] });
   const harness = localHarnessForCommand(providerOrHarness) ?? localHarnessForProvider(providerOrHarness);
   if (!harness) throw new Error(`unknown provider "${providerOrHarness}"`);
   delete state.providerSettings[harness.provider];
