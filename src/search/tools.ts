@@ -27,8 +27,11 @@ export interface ConversationTool {
   run(args: Record<string, unknown>, context: ConversationToolContext): Promise<ConversationToolResult>;
 }
 
-/** One line for the instructions an agent is given. */
-export const CONVERSATION_TOOLS_NOTE = 'The user\'s other ClikCode conversations (with any provider) are searchable: when they refer to other work, another chat or another agent, use search_conversations, read_conversation and active_conversations rather than guessing or asking them to paste it.';
+/** One line for the instructions an agent is given: the system prompt of
+ * ClikCode's own agent, the MCP server's instructions for vendors. When to
+ * reach for the tools is said here, once; each description says only what
+ * its tool does, and the anchor format is described once, on search. */
+export const CONVERSATION_TOOLS_NOTE = 'The user\'s other ClikCode conversations (any provider) are searchable: when they mention other work, another chat or agent, use search_conversations, read_conversation and active_conversations instead of guessing or asking them to paste it.';
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
@@ -50,15 +53,15 @@ const IN_SNIPPETS = 20;
 
 const searchTool: ConversationTool = {
   name: 'search_conversations',
-  description: 'Search the user\'s other ClikCode conversations (every provider: Claude, Codex, Gemini, ClikCode\'s own agent, …) by words or a phrase, including the tool calls they ran. Use it whenever the user mentions other work, another chat or agent, or something "we discussed" that is not in this conversation. Returns the best-matching conversations, each with its id, title, provider, when it was last active, how many mentions it has (of the exact phrase, or else of messages holding all the words -- it says which), and up to 3 snippets of those mentions with anchors like "6e647d75:60" (conversation id : message number); pass one as `at` to read_conversation for the surrounding messages. A conversation whose title is the query ranks first, then titles holding every word, then the exact phrase, then all the words; recent conversations rank higher. Pass `in` (a conversation id) to list where inside that one conversation the query comes up (up to 20 anchors; works for the current conversation too).',
+  description: 'Search the user\'s other ClikCode conversations (every provider, tool calls included) by words or a phrase. Returns the best matches: id, title, provider, last active, mention count, and up to 3 snippets with anchors "<id>:<message>" (e.g. "6e647d75:60") to pass to read_conversation as `at`. Title matches rank first, then the exact phrase, then all words; recent ranks higher. With `in`, lists up to 20 anchors inside that one conversation.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['query'],
     properties: {
-      query: { type: 'string', description: 'Words or a phrase, case-insensitive, e.g. "token refresh retry".' },
-      in: { type: 'string', description: 'Search only this conversation (an id from a result, or the current one): returns up to 20 anchors in it.' },
-      since: { type: 'string', description: 'Only conversations active since then: "2d", "12h", "1w", or a date.' },
-      limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT, description: `Conversations to return (default ${DEFAULT_LIMIT}).` },
-      includeCurrent: { type: 'boolean', description: 'Also search the conversation you are in (left out by default).' },
+      query: { type: 'string', description: 'Words or a phrase, case-insensitive.' },
+      in: { type: 'string', description: 'A conversation id (the current one too): search only inside it.' },
+      since: { type: 'string', description: 'Only conversations active since: "2d", "12h", "1w" or a date.' },
+      limit: { type: 'integer', minimum: 1, maximum: MAX_LIMIT, description: `Default ${DEFAULT_LIMIT}.` },
+      includeCurrent: { type: 'boolean', description: 'Include the conversation you are in.' },
     },
   },
   async run(args, context) {
@@ -118,16 +121,16 @@ function resolveAnchor(anchor: { session?: string; messageIndex: number }, group
 
 const readTool: ConversationTool = {
   name: 'read_conversation',
-  description: 'Read part of another ClikCode conversation: its messages and compacted tool calls around an anchor from search_conversations (`at`, e.g. "6e647d75:14" or a message number), or its latest turns when `at` is omitted. Widen before/after (or move `at`) to page through it. Long messages are shortened ("[… 441 chars]"); `full: true` reads the one message at `at` whole, with every tool call\'s output. Output is bounded by maxChars.',
+  description: 'Read another conversation\'s messages and compacted tool calls around `at`, or its latest turns without it. Page with before/after or by moving `at`. Long messages are shortened; full=true reads the message at `at` whole, tool output included.',
   inputSchema: {
     type: 'object', additionalProperties: false, required: ['id'],
     properties: {
-      id: { type: 'string', description: 'A conversation id (or its first 8 characters) from search_conversations or active_conversations.' },
-      at: { type: 'string', description: 'Anchor: "<conversation>:<message>" from a snippet (e.g. "6e647d75:14"), or a message number ("14").' },
-      before: { type: 'integer', minimum: 0, maximum: 50, description: 'Messages before the anchor (default 2; without an anchor, how many of the latest messages, default 6).' },
-      after: { type: 'integer', minimum: 0, maximum: 50, description: 'Messages after the anchor (default 2).' },
-      full: { type: 'boolean', description: 'Read only the message at `at` (the latest without one), whole: nothing shortened but at maxChars.' },
-      maxChars: { type: 'integer', minimum: 500, maximum: MAX_READ_CHARS, description: `Most characters to return (default ${DEFAULT_READ_CHARS}).` },
+      id: { type: 'string', description: 'Conversation id (its first 8 characters suffice).' },
+      at: { type: 'string', description: 'An anchor ("6e647d75:14") or a message number ("14").' },
+      before: { type: 'integer', minimum: 0, maximum: 50, description: 'Messages before `at` (default 2); without `at`, latest messages (default 6).' },
+      after: { type: 'integer', minimum: 0, maximum: 50, description: 'Messages after `at` (default 2).' },
+      full: { type: 'boolean', description: 'Only the message at `at` (else the latest), unshortened.' },
+      maxChars: { type: 'integer', minimum: 500, maximum: MAX_READ_CHARS, description: `Output cap (default ${DEFAULT_READ_CHARS}).` },
     },
   },
   async run(args, context) {
@@ -192,11 +195,11 @@ const readTool: ConversationTool = {
 
 const activeTool: ConversationTool = {
   name: 'active_conversations',
-  description: 'What the user\'s other ClikCode conversations are doing right now: each one that is working, open, or active in the last 2 hours, with its provider, when it was last active, the user\'s last request, how long a running turn has been going and its current step, and whether it is waiting for the user\'s approval. Use it when the user asks about other agents, what is running, or work happening elsewhere.',
+  description: 'The user\'s other conversations that are working, open or active in the last 2 hours, each with provider, last activity, last request, a running turn\'s duration and current step, and any approval it waits for.',
   inputSchema: {
     type: 'object', additionalProperties: false,
     properties: {
-      includeCurrent: { type: 'boolean', description: 'Also list the conversation you are in (left out by default).' },
+      includeCurrent: { type: 'boolean', description: 'Include the conversation you are in.' },
     },
   },
   async run(args, context) {
