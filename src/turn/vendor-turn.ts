@@ -16,6 +16,7 @@ import { keepsNoHistory, startConversationThread } from './thread-start.js';
 import { targetContextWindow } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { nativeSessionStore } from '../session/discovery/registry.js';
+import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
@@ -399,6 +400,8 @@ export async function sendVendorTurn(input: {
     // with its ACP session instead (a CLI turn has no such channel).
     const sessionMcpServers = conversationsForAcpSession(conversations, provisioned.mcpSkipped,
       { CLIKCODE_SESSION_ID: session.id, ...(process.env.CLIKCODE_HOME ? { CLIKCODE_HOME: process.env.CLIKCODE_HOME } : {}) });
+    // Goose resumes by its own id what was created under ClikCode's name.
+    if (await adoptListedNativeId(harness, session, environment)) await checkpoint.persistNow();
     const transport = sessionTurnTransport(harness, session);
     activeTransport = transport;
     // A fresh native thread with prior ClikCode messages: see above. Also
@@ -463,6 +466,7 @@ export async function sendVendorTurn(input: {
       result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     }
     if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
+    if (!result.isError && !session.nativeSessionPreallocated) await adoptListedNativeId(harness, session, environment);
     if (session.nativeSessionId) keepTransport(transport);
     // A route that keeps no history: forget the session, so the next turn
     // opens a fresh one and carries ClikCode's own transcript (the fresh-

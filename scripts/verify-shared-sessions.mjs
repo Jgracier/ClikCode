@@ -141,7 +141,10 @@ async function cliToAcp() {
   const turn = cliTurn(rememberPrompt(word), id, createdHere);
   if (turn.status !== 0 && !replayOnly) return { pass: false, detail: `the CLI's first turn exited ${turn.status}: ${turn.error}` };
   const listed = discoveredIds(before, discover()).filter((token) => !token.includes(word) && !token.startsWith('vendor-sandbox'));
-  const threadId = turn.sessionId ?? id ?? listed[0];
+  // `session.idByName` (Goose): the minted id is the session's name; ClikCode
+  // keeps the id the listing gives that name (adoptListedNativeId).
+  const named = harness.session?.idByName && id ? listedIdForName(id) : undefined;
+  const threadId = turn.sessionId ?? named ?? id ?? listed[0];
   console.log(`thread: minted/created ${id ?? '-'}, stream reported ${turn.sessionId ?? '-'}, session list added ${listed.join(' ') || '-'}`);
   if (!threadId) return { pass: false, detail: 'the CLI turn reported no session id and the session list showed none' };
   if (replayOnly) {
@@ -219,6 +222,13 @@ function discover() {
   const listArgv = option('--discover')?.split(' ') ?? harness.session?.discoverArgv;
   if (!listArgv) return '';
   return spawnSync(binary, listArgv, { cwd: workspace, env, encoding: 'utf8', timeout: 60_000 }).stdout ?? '';
+}
+function listedIdForName(name) {
+  try {
+    const rows = JSON.parse(discover());
+    const found = (Array.isArray(rows) ? rows : []).find((row) => row?.name === name);
+    return typeof found?.id === 'string' ? found.id : undefined;
+  } catch { return undefined; }
 }
 function discoveredIds(before, after) {
   const old = new Set(before.match(/[\w-]{8,}/g) ?? []);
