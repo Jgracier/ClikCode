@@ -1,0 +1,9 @@
+{"role":"user","content":"Remember the codeword PELICAN-73. Then check what is in notes.txt.","injected":false,"message_id":"m-0001"}
+{"role":"assistant","content":"I'll read the notes.","injected":false,"tool_calls":[{"id":"call_clikcode_0001","index":0,"function":{"name":"bash","arguments":"{\"command\":\"cat notes.txt\"}"},"type":"function"}],"message_id":"m-0002"}
+{"role":"tool","content":"launch window: Thursday","injected":false,"name":"bash","tool_call_id":"call_clikcode_0001"}
+{"role":"assistant","content":"notes.txt says the launch window is Thursday. Codeword PELICAN-73 noted.","injected":false,"message_id":"m-0003"}
+{"role":"user","content":"[ClikCode: the following turns ran on Claude Code (claude-sonnet-4-6)]\n\nFix the typo in src/app.ts","injected":false,"message_id":"m-0004"}
+{"role":"assistant","injected":false,"tool_calls":[{"id":"call_clikcode_0002","index":0,"function":{"name":"edit","arguments":"{\"file_path\":\"src/app.ts\",\"old_string\":\"cosnt x = 1;\",\"new_string\":\"const x = 1;\"}"},"type":"function"},{"id":"call_clikcode_0003","index":1,"function":{"name":"grep","arguments":"{\"pattern\":\"cosnt\"}"},"type":"function"}],"message_id":"m-0005"}
+{"role":"tool","content":"--- src/app.ts\n-cosnt x = 1;\n+const x = 1;","injected":false,"name":"edit","tool_call_id":"call_clikcode_0002"}
+{"role":"tool","content":"(no matches)","injected":false,"name":"grep","tool_call_id":"call_clikcode_0003"}
+{"role":"assistant","content":"Fixed the typo in src/app.ts; no other occurrences.","injected":false,"message_id":"m-0006"}
