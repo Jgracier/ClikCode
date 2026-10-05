@@ -257,7 +257,7 @@ function stateLockPath(): string {
 declare const stateLockBrand: unique symbol;
 /** Proof, passed down explicitly, that the caller holds the state lock. Only
  * withStateLock makes one. Functions that must run under the state lock
- * (transcript writes, migration) take it as a parameter, so holding the lock
+ * (transcript writes) take it as a parameter, so holding the lock
  * is checked by the compiler and nothing ever re-takes it. */
 export type StateLockHeld = { readonly [stateLockBrand]: true };
 const STATE_LOCK_HELD = Object.freeze({}) as StateLockHeld;

@@ -59,8 +59,6 @@ export async function writeState(state: HarnessState): Promise<void> {
   let written: StateBaselineData | undefined;
   const deleted: string[] = [];
   await withStateLock(async (held) => {
-    // No legacy single-file check here: readState migrates it (ensureLayout),
-    // and only builds from before 2026-09-19 ever wrote that file.
     const disk = await loadIndex();
     if (disk && disk.version > HARNESS_STATE_VERSION) throw new HarnessStateVersionError(disk.version);
 
