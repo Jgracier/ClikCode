@@ -524,6 +524,13 @@ describe('local harness catalog', () => {
     expect(nativeHarnessTurnArgv(localHarnessForCommand('cursor')!, { prompt: '-f' }).slice(-2)).toEqual(['--', '-f']);
     // A prompt that is a FLAG VALUE can never take `--`; it gets the space guard.
     expect(nativeHarnessTurnArgv(localHarnessForCommand('gemini')!, { prompt: '--yolo' }).slice(-2)).toEqual(['--prompt', ' --yolo']);
+    // A thread Gemini's CLI did not just create is resumed by id, never
+    // silently restarted; --skip-trust keeps a headless turn in a folder
+    // Gemini has not been told to trust from exiting 55.
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('gemini')!, { prompt: 'p', nativeSessionId: 'abc' }).slice(0, 5))
+      .toEqual(['--skip-trust', '--output-format', 'stream-json', '--resume', 'abc']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('gemini')!, { prompt: 'p', nativeSessionId: 'abc', createdHere: true }).slice(3, 5))
+      .toEqual(['--session-id', 'abc']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('aider')!, { prompt: '-x' }).slice(-2)).toEqual(['--message', ' -x']);
     // Positional, but `--` support undeclared: space guard.
     expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: '-rf' }).at(-1)).toBe(' -rf');

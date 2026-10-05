@@ -179,10 +179,12 @@ describe('gemini thread writer', () => {
     expect(geminiProjectSlug('/')).toBe('project');
   });
 
-  it('is not enabled for any build: ClikCode cannot resume it yet', async () => {
+  it('is enabled for the verified build only', async () => {
     const writer = geminiSessionStore.writer!;
-    expect(writer.testedVersions).toEqual([]);
-    expect(await writer.versionOk(context('gemini', {}, '0.62.0'))).toBe(false);
+    expect(writer.testedVersions).toEqual(['0.62.0']);
+    expect(await writer.versionOk(context('gemini', {}, '0.62.0'))).toBe(true);
+    expect(await writer.versionOk(context('gemini', {}, '0.63.0'))).toBe(false);
+    expect(await writer.versionOk(context('gemini', {}, undefined))).toBe(false);
   });
 
   it('registers the project as Gemini would and writes where locate finds it', async () => {
@@ -192,6 +194,8 @@ describe('gemini thread writer', () => {
     await mkdir(join(gemini, 'tmp', 'app'), { recursive: true });
     await writeFile(join(gemini, 'projects.json'), JSON.stringify({ projects: { '/elsewhere/app': 'app' } }), 'utf8');
     const written = await geminiSessionStore.writer!.write(fixtureRecord(), context('gemini', { GEMINI_CLI_HOME: home }, '0.62.0'));
+    // ACP session/load wipes a thread it did not start: the CLI resumes it.
+    expect(written?.transport).toBe('structured-cli');
     expect(JSON.parse(await readFile(join(gemini, 'projects.json'), 'utf8')).projects)
       .toEqual({ '/elsewhere/app': 'app', [WORKSPACE]: 'app-1' });
     await expect(readFile(join(gemini, 'tmp', 'app-1', '.project_root'), 'utf8')).resolves.toBe(WORKSPACE);

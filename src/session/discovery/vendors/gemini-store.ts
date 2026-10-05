@@ -204,30 +204,24 @@ async function geminiProjectDirectory(geminiDirectory: string, workspace: string
   }
 }
 
-/** NOT enabled: no build is verified, so every write is declined and the
- *  conversation is transferred as a prompt.
+/** Verified against Gemini CLI 0.62.0 (2026-10-04, vendor-sandbox, a local
+ *  Gemini-API stub through GOOGLE_GEMINI_BASE_URL -- the Google account on
+ *  hand is refused by Code Assist ("This client is no longer supported"), so
+ *  no Google model was reachable): a thread written here is listed by
+ *  `gemini --list-sessions`, and ClikCode's own CLI turn argv
+ *  (`--skip-trust --output-format stream-json --resume <id> --model ...
+ *  --prompt ...`) sent the whole written history to the model once -- 9
+ *  contents: the codeword, run_shell_command, read_file, replace, grep_search
+ *  and write_file calls, each with its result, and the new request.
  *
- *  What was seen against Gemini CLI 0.62.0 (2026-10-04, vendor-sandbox, a
- *  local Gemini-API endpoint through GOOGLE_GEMINI_BASE_URL -- Google
- *  sign-in fails outside the real home, so no real model was reachable):
- *  a thread written here is listed by `gemini --list-sessions`, and
- *  `gemini --resume <id> --prompt ...` sent the whole written history,
- *  calls and results once each, to the model.
- *
- *  What blocks enabling it: ClikCode resumes Gemini over ACP, and 0.62.0's
- *  ACP `session/load` races with itself. Loading starts the chat recorder
- *  for the requested id, which appends a fresh header plus a `$set` of the
- *  messages to [session context] to the very file being loaded; when that
- *  lands before the session list is read (it did on every plain run), the
- *  thread reads as empty and load fails with "No previous sessions found for
- *  this project". A session Gemini's own CLI wrote fails the same way, so
- *  this is not the format. The CLI turn cannot resume by id either
- *  (`--session-id` refuses an existing id). Enable -- list the build in
- *  `testedVersions` and gate on it -- once a resume through ClikCode's own
- *  path is seen to work. */
+ *  Pinned to the CLI (`structured-cli`): 0.62.0's ACP `session/load` reopens
+ *  only threads ACP itself started. Any other thread -- Gemini's own CLI
+ *  threads as much as a written one -- fails "No previous sessions found for
+ *  this project", and the load has already reset that file to its first
+ *  message, so the thread is lost to the CLI as well. */
 export const geminiThreadWriter: NativeThreadWriter = {
-  testedVersions: [],
-  versionOk: testedVersion([]),
+  testedVersions: ['0.62.0'],
+  versionOk: testedVersion(['0.62.0']),
   async write(record, context) {
     if (!record.turns.length) return undefined;
     const geminiDirectory = dirname(geminiRoot(context.environment));
@@ -239,7 +233,7 @@ export const geminiThreadWriter: NativeThreadWriter = {
     await writeFileAtomic(join(project, 'chats', name), geminiThreadLines(record, {
       sessionId, workspace: resolve(context.workspace), model: context.model, now,
     }));
-    return { nativeId: sessionId };
+    return { nativeId: sessionId, transport: 'structured-cli' };
   },
 };
 
