@@ -6,6 +6,7 @@ import { PAINT_COALESCE_MS } from '../../../src/harness/protocol/timings';
 import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import { homedir, tmpdir } from 'node:os';
+import { unwatchFile, watchFile } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
@@ -48,6 +49,8 @@ export class ClikCodeController implements vscode.Disposable {
   private readonly surfaces = new Set<WebviewSurface>();
   private starting: Promise<void> | undefined;
   private restartingForBuild = false;
+  private watchedEntry: string | undefined;
+  private buildSettle: NodeJS.Timeout | undefined;
   private disposed = false;
   private postTimer: NodeJS.Timeout | undefined;
   private refreshTimer: NodeJS.Timeout | undefined;
@@ -124,7 +127,7 @@ export class ClikCodeController implements vscode.Disposable {
     // Only a turn the worker says is over has ended: a bridge that died or is
     // reconnecting says nothing about the turn, which runs on in the worker.
     if (previous.running && !next.running && next.connection === 'ready') {
-      this.turnEnded(previous);
+      this.turnEnded();
       this.dropSentImages(next);
     }
     if (next.connection === 'ready' && next.sessionId) {
@@ -179,15 +182,12 @@ export class ClikCodeController implements vscode.Disposable {
     return this.finishedUnseen;
   }
 
-  /** This window's turn finished where nobody is looking: say so, as Claude
-   * Code does. Another window's turn is that window's to announce. */
-  private turnEnded(previous: ChatModel): void {
+  /** A turn finished out of sight: its tab and the conversation list mark it
+   * unread. Nothing pops up -- the editor the user is in already shows it,
+   * and a toast for every finished turn was noise. */
+  private turnEnded(): void {
     if (!this.visible) this.finishedUnseen = true;
-    if (!previous.ownTurn || (this.visible && vscode.window.state.focused)) return;
-    const title = previous.title ?? 'your chat';
-    void vscode.window.showInformationMessage(`ClikCode finished: ${title}`, 'Show').then((choice) => {
-      if (choice) void this.host.reveal(this);
-    });
+    void this.moveToNewBuild();
   }
 
   /** The composer footer's facts: this chat's setting choices, its provider,
@@ -258,6 +258,7 @@ export class ClikCodeController implements vscode.Disposable {
     log.appendLine(`[${this.label}] Starting ${runtime.entry} with ${runtime.node} (${runtime.nodeSource})`);
     const bridge = BridgeClient.start(runtime, this.workspaceFolder());
     this.bridge = bridge;
+    this.watchBuild(runtime.entry);
     const startLog: string[] = [];
     bridge.on('log', (line) => { log.appendLine(`[${this.label}] ${line}`); if (startLog.length < 200) startLog.push(line); });
     bridge.on('exit', ({ code, signal }) => {
@@ -361,10 +362,33 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   /** ClikCode was reinstalled since the bridge started: move onto the new
-   * build between turns, so the worker is retired onto it too. */
-  private async freshBridge(): Promise<void> {
+   * build while nothing is happening, so the worker is retired onto it too.
+   * Watched for, never done in the way of a message: a send used to restart
+   * the bridge first, and one stood 30 s before it went out. A running turn
+   * moves when it ends (turnEnded). */
+  private watchBuild(entry: string): void {
+    if (this.watchedEntry === entry) return;
+    this.unwatchBuild();
+    this.watchedEntry = entry;
+    watchFile(entry, { interval: 2_000 }, this.onBuildChanged);
+  }
+
+  private unwatchBuild(): void {
+    if (this.watchedEntry) unwatchFile(this.watchedEntry, this.onBuildChanged);
+    this.watchedEntry = undefined;
+    if (this.buildSettle) clearTimeout(this.buildSettle);
+    this.buildSettle = undefined;
+  }
+
+  /** A build is several files written in turn: wait for it to settle. */
+  private readonly onBuildChanged = (): void => {
+    if (this.buildSettle) clearTimeout(this.buildSettle);
+    this.buildSettle = setTimeout(() => { this.buildSettle = undefined; void this.moveToNewBuild(); }, 1_500);
+  };
+
+  private async moveToNewBuild(): Promise<void> {
     const bridge = this.bridge;
-    if (!bridge || this.model.running || this.restartingForBuild) return;
+    if (!bridge || this.disposed || this.model.running || this.model.connection !== 'ready' || this.restartingForBuild) return;
     const now = entryBuild(bridge.runtime.entry);
     if (!now || !bridge.build || now === bridge.build) return;
     this.restartingForBuild = true;
@@ -601,7 +625,6 @@ export class ClikCodeController implements vscode.Disposable {
 
   async send(text: string, id = `${Date.now()}`): Promise<void> {
     await this.ensureStarted();
-    await this.freshBridge();
     const bridge = this.bridge;
     if (!bridge?.running || !this.model.sessionId) {
       this.note('ClikCode is not connected.', 'error');
@@ -625,7 +648,6 @@ export class ClikCodeController implements vscode.Disposable {
 
   async open(mode: 'new' | 'continue' | 'resume', sessionId?: string): Promise<void> {
     await this.ensureStarted();
-    await this.freshBridge();
     const bridge = this.bridge;
     if (!bridge?.running) return;
     try {
@@ -793,6 +815,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
+    this.unwatchBuild();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
     for (const subscription of this.subscriptions) subscription.dispose();
