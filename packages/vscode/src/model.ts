@@ -590,6 +590,17 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
  * turn, and what waits goes next, the queue's head first, as the bridge sends
  * it whenever a turn ends. A background task's notice is not the user's
  * message and never makes Enter stop anything. */
+/** The text of a queued message taken back to edit, once the worker's answer
+ * says it left the queue -- and only then: one that was already steered into
+ * the turn, or is the turn running now, stays sent, and putting its text in
+ * the composer too would send it twice (the terminal's takeBackWaiting does
+ * the same). Forgets the request whatever the answer. */
+export function takenBackText(takingBack: Map<string, string>, event: Extract<WorkerEvent, { type: 'unqueued' }>): string | undefined {
+  const text = takingBack.get(event.id);
+  takingBack.delete(event.id);
+  return event.outcome === 'removed' ? text : undefined;
+}
+
 export function stopAndSendReady(model: Pick<ChatModel, 'queued' | 'running'>): boolean {
   return model.running && model.queued.some((item) => !item.notification && !item.command);
 }

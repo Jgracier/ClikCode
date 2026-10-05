@@ -437,7 +437,7 @@ export function Composer(props: {
               <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
               <span class="muted">{queuedRowLabel(model, item, index === firstWaiting && stopAndSend)}</span>
               <button type="button" class="icon-button tiny" title="Edit: take it back into the message box" aria-label="Edit queued message"
-                onClick={() => { post({ type: 'unqueue', id: item.id }); props.handle.current?.insert(item.text); }}><Icon name="edit" /></button>
+                onClick={() => post({ type: 'unqueue', id: item.id, edit: true })}><Icon name="edit" /></button>
               <button type="button" class="icon-button tiny" title="Remove from the queue" aria-label="Remove queued message"
                 onClick={() => post({ type: 'unqueue', id: item.id })}><Icon name="close" /></button>
             </div>

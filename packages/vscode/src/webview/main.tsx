@@ -218,7 +218,7 @@ function App(): JSX.Element {
   const approvalRef = useRef<string>();
   approvalRef.current = model?.approvals[0]?.id;
   /** The newest message of the user's still waiting -- what Esc takes back. */
-  const waitingRef = useRef<{ id: string; text: string }>();
+  const waitingRef = useRef<{ id: string }>();
   waitingRef.current = model?.queued.filter((item) => !item.notification && !item.command).at(-1);
 
   const answer = (id: string, result: IdeUiResult): void => {
@@ -295,7 +295,7 @@ function App(): JSX.Element {
         const pending = approvalRef.current;
         const waiting = waitingRef.current;
         if (pending) { event.preventDefault(); post({ type: 'approve', id: pending, approved: false }); }
-        else if (waiting) { event.preventDefault(); post({ type: 'unqueue', id: waiting.id }); composer.current?.insert(waiting.text); }
+        else if (waiting) { event.preventDefault(); post({ type: 'unqueue', id: waiting.id, edit: true }); }
       }
     };
     document.addEventListener('click', onClick);
