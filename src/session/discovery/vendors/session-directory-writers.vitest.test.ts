@@ -1,5 +1,5 @@
 /** Golden output of the thread writers whose vendor resumes a session from a
- * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw, Droid), for one
+ * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw, Droid, Auggie), for one
  * conversation: a codeword, a Codex shell call, a Claude Edit and a Claude
  * Grep.
  *
@@ -25,6 +25,7 @@ import { kiroThreadFiles } from './kiro-store.js';
 import { mcodeSessionRelativeDir, mcodeThreadLines } from './mcode-store.js';
 import { openClawCall } from './openclaw-store.js';
 import { droidProjectDirectoryName, droidThreadLines } from './droid-store.js';
+import { auggieSession } from './auggie-store.js';
 import { piThreadLines } from './pi-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
@@ -326,5 +327,25 @@ describe('droid thread writer', () => {
     const again = await writer.write(fixtureRecord(), context('droid', { HOME: home, FACTORY_HOME_OVERRIDE: factory }, '0.223.0'));
     expect(await readdir(join(factory, 'sessions', '-home-user-projects-app'))).toEqual([`${again!.nativeId}.jsonl`]);
     expect(await writer.versionOk(context('droid', {}, '0.224.0'))).toBe(false);
+  });
+});
+
+describe('auggie thread writer', () => {
+  it('writes the golden session file', async () => {
+    const text = auggieSession(fixtureRecord(), {
+      sessionId: '0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', workspace: WORKSPACE, now: NOW,
+      requestId: sequentialIds('req-'), rootTaskUuid: 'root-1',
+    });
+    await golden('auggie.json', text);
+  });
+
+  it('writes under the taking-over HOME and declines other builds', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'auggie-writer-'));
+    const writer = NATIVE_SESSION_STORES.auggie!.writer!;
+    const ctx = context('auggie', { HOME: home }, '0.36.0 (commit 7c61e5bb)');
+    expect(await writer.versionOk(ctx)).toBe(true);
+    const written = await writer.write(fixtureRecord(), ctx);
+    expect(await readdir(join(home, '.augment', 'sessions'))).toEqual([`${written!.nativeId}.json`]);
+    expect(await writer.versionOk(context('auggie', {}, '0.37.0 (commit x)'))).toBe(false);
   });
 });
