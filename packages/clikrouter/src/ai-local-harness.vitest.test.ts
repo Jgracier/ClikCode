@@ -127,6 +127,8 @@ describe('local harness catalog', () => {
   it('uses each vendor\'s exact native-session selector', () => {
     expect(nativeHarnessTurnArgv(localHarnessForCommand('droid')!, { prompt: 'continue', nativeSessionId: 'droid-thread' }))
       .toEqual(['exec', '--output-format', 'stream-json', '--session-id', 'droid-thread', 'continue']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('auggie')!, { prompt: 'continue', nativeSessionId: 'auggie-thread' }))
+      .toEqual(['--print', '--output-format', 'json', '--resume', 'auggie-thread', 'continue']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('kiro')!, { prompt: 'continue', nativeSessionId: 'kiro-thread', effort: 'high' }))
       .toEqual(['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json', '--resume-id', 'kiro-thread', '--effort', 'high', 'continue']);
   });
