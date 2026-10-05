@@ -16,11 +16,10 @@ import { nodeHttp } from '../../runtime/lazy-node.js';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
-import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { binaryOnPath } from '../transport/native/binary.js';
 import {
-  discoverHermesTurboFitRecommendations, hermesInstallDirectory, selectHermesTurboFitRecommendation, turboFitPluginRoot,
+  discoverHermesTurboFitRecommendations, hermesInstall, selectHermesTurboFitRecommendation, turboFitPluginRoot,
 } from './hermes-discovery.js';
 import {
   TURBOFIT_CPU_LANES_SCRIPT, TURBOFIT_CPU_LANE_SELECT_SCRIPT, TURBOFIT_CPU_TUNE_SCRIPT, TURBOFIT_PLAN_SCRIPT, TURBOFIT_SUPERVISOR_SCRIPT,
@@ -80,14 +79,10 @@ function tail(output: string, lines = 8): string {
   return output.trim().split(/\r?\n/).filter((line) => line.trim()).slice(-lines).join('\n');
 }
 
-async function hermesInstall(harness: AiLocalHarnessDefinition, environment: Environment): Promise<string> {
-  const install = hermesInstallDirectory(await captureNativeHarnessOutput(harness, ['--version'], environment, 30_000));
-  if (!install) throw new Error('Could not locate the Hermes Python environment');
-  return install;
-}
-
-async function hermesPython(harness: AiLocalHarnessDefinition, environment: Environment): Promise<string> {
-  return join(await hermesInstall(harness, environment), 'venv', WINDOWS ? 'Scripts/python.exe' : 'bin/python');
+async function hermesLocated(harness: AiLocalHarnessDefinition, environment: Environment): Promise<{ install: string; python: string }> {
+  const found = await hermesInstall(harness, environment);
+  if (!found) throw new Error('Could not locate the Hermes Python environment');
+  return found;
 }
 
 /** Packages TurboFit's runtime scripts import beyond the standard library
@@ -105,7 +100,7 @@ async function ensureTools(harness: AiLocalHarnessDefinition, environment: Envir
   if (existsSync(python) && await readFile(stampFile, 'utf8').catch(() => '') === TOOLS_STAMP) return python;
   progress('preparing TurboFit tools…');
   if (!existsSync(python)) {
-    const created = await run(await hermesPython(harness, environment), ['-m', 'venv', venv], { timeoutMs: 300_000 });
+    const created = await run((await hermesLocated(harness, environment)).python, ['-m', 'venv', venv], { timeoutMs: 300_000 });
     if (created.code !== 0) throw new Error(`Could not create TurboFit's tools environment.\n${tail(created.output)}`);
   }
   const installed = await run(python, ['-m', 'pip', 'install', '--disable-pip-version-check', '--quiet', ...TOOLS_REQUIREMENTS], { timeoutMs: 900_000 });
@@ -606,7 +601,7 @@ export async function prepareTurboFitModel(
   }
   if (!before) {
     progress('choosing a model for this machine…');
-    const [top] = await discoverHermesTurboFitRecommendations(await hermesInstall(harness, environment), environment);
+    const [top] = await discoverHermesTurboFitRecommendations((await hermesLocated(harness, environment)).install, environment);
     if (!top) throw new Error('TurboFit found no local model that fits this machine.');
     await selectHermesTurboFitRecommendation(harness, account, top.id);
   }

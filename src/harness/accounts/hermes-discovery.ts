@@ -5,6 +5,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { harnessBinaryIdentity } from '../transport/native/version-memo.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 
 /** What the installed Hermes Agent actually offers, read from that install.
@@ -47,6 +48,30 @@ export function hermesToolsetNames(listText: string): string[] {
 /** `hermes --version` prints `Install directory: /path`. */
 export function hermesInstallDirectory(versionText: string): string | undefined {
   return /^Install directory:\s*(.+)\s*$/m.exec(versionText)?.[1]?.trim() || undefined;
+}
+
+/** Answers by binary identity. A fact about the installed build, and costly
+ * to ask: a Hermes home's first `--version` checks upstream (~10s). Every
+ * model discovery used to ask it again. */
+const installs = new Map<string, Promise<string | undefined>>();
+
+/** Where Hermes is installed, and the Python of its own environment. A
+ * failed ask is not kept: the next one asks again. */
+export async function hermesInstall(
+  harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>,
+): Promise<{ install: string; python: string } | undefined> {
+  const key = await harnessBinaryIdentity(harness.binary) ?? harness.binary;
+  let asked = installs.get(key);
+  if (!asked) {
+    asked = captureNativeHarnessOutput(harness, ['--version'], environment, 30_000).then(hermesInstallDirectory, () => undefined);
+    installs.set(key, asked);
+  }
+  const install = await asked;
+  if (!install) {
+    if (installs.get(key) === asked) installs.delete(key);
+    return undefined;
+  }
+  return { install, python: join(install, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python') };
 }
 
 /** Toolset names for the options picker. Providers are not an option: a
@@ -273,10 +298,9 @@ export async function registerHermesTurboFitProvider(
 ): Promise<void> {
   const root = await turboFitPluginRoot(environment);
   if (!root) throw new Error('TurboFit is not installed in this Hermes home');
-  // 30s: a Hermes home's first --version checks upstream and can take ~10s.
-  const install = hermesInstallDirectory(await captureNativeHarnessOutput(harness, ['--version'], environment, 30_000));
-  if (!install) throw new Error('Could not locate the Hermes Python environment');
-  const python = join(install, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  const found = await hermesInstall(harness, environment);
+  if (!found) throw new Error('Could not locate the Hermes Python environment');
+  const { install, python } = found;
   const output = await new Promise<string>((resolve) => {
     execFile(python, ['-c', TURBOFIT_REGISTER_SCRIPT, root], {
       cwd: install, timeout: 60_000, maxBuffer: 4 * 1024 * 1024,
@@ -388,10 +412,8 @@ export async function selectHermesTurboFitRecommendation(
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const root = await turboFitPluginRoot(environment);
   if (!root) throw new Error('TurboFit is not installed in this Hermes profile');
-  const versionText = await captureNativeHarnessOutput(harness, ['--version'], environment, 8_000);
-  const install = hermesInstallDirectory(versionText);
-  if (!install) throw new Error('Could not locate the Hermes Python environment');
-  const python = join(install, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  const python = (await hermesInstall(harness, environment))?.python;
+  if (!python) throw new Error('Could not locate the Hermes Python environment');
   const output = await new Promise<string>((resolve) => {
     execFile(python, ['-c', TURBOFIT_SELECT_SCRIPT, root, profile], {
       cwd: root, timeout: 240_000, maxBuffer: 4 * 1024 * 1024,
@@ -458,10 +480,9 @@ export async function discoverHermesModels(
   harness: AiLocalHarnessDefinition, account?: AiHarnessAccount,
 ): Promise<HermesInventory | undefined> {
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const versionText = await captureNativeHarnessOutput(harness, ['--version'], environment, 8_000).catch(() => '');
-  const install = hermesInstallDirectory(versionText);
-  if (!install) return undefined;
-  const python = join(install, 'venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python');
+  const found = await hermesInstall(harness, environment);
+  if (!found) return undefined;
+  const { install, python } = found;
   const output = await new Promise<string>((resolve) => {
     execFile(python, ['-c', INVENTORY_SCRIPT], {
       cwd: install, timeout: 30_000, maxBuffer: 8 * 1024 * 1024,
