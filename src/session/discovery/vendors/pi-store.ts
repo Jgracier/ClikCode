@@ -35,7 +35,7 @@ export function piProjectDirectoryName(workspace: string): string {
  *  anything else -- a search, a fetch, an MCP call -- is told as text, since
  *  grep/find/ls are off by default and a call to a tool the session does not
  *  have reads as one the model never made. */
-function piCall(call: CanonicalToolCall): { name: string; args: Record<string, unknown> } | undefined {
+export function piCall(call: CanonicalToolCall): { name: string; args: Record<string, unknown> } | undefined {
   const path = callPath(call);
   if (call.category === 'run' || (!call.category && /^(bash|shell|exec|run_shell_command|shell_command)$/i.test(call.name))) {
     const command = callCommand(call);
@@ -61,6 +61,10 @@ export interface PiThreadOptions {
   now: Date;
   /** Entry ids; Pi's own are eight hex characters. */
   entryId?: () => string;
+  /** For a Pi-based vendor with its own tool names (OpenClaw): its mapping
+   *  and session format version. Pi's own when left out. */
+  mapCall?: (call: CanonicalToolCall) => { name: string; args: Record<string, unknown> } | undefined;
+  version?: number;
 }
 
 const ZERO_USAGE = {
@@ -82,7 +86,7 @@ export function piThreadLines(record: CanonicalRecord, options: PiThreadOptions)
     tick += 1;
     return { iso: new Date(ms).toISOString(), ms };
   };
-  const lines: unknown[] = [{ type: 'session', version: 3, id: options.sessionId, timestamp: new Date(start).toISOString(), cwd: options.workspace }];
+  const lines: unknown[] = [{ type: 'session', version: options.version ?? 3, id: options.sessionId, timestamp: new Date(start).toISOString(), cwd: options.workspace }];
   let parentId: string | null = null;
   const append = (message: Record<string, unknown>): void => {
     const { iso, ms } = stamp();
@@ -95,7 +99,7 @@ export function piThreadLines(record: CanonicalRecord, options: PiThreadOptions)
     if (request.trim() || !parentId) append({ role: 'user', content: [{ type: 'text', text: request.trim() ? request : '(continue)' }] });
     const model = turn.origin.model ?? options.model ?? 'unknown';
     const provider = turn.origin.provider ?? turn.origin.harness ?? 'clikcode';
-    for (const step of assistantSteps(turn, piCall, callId)) {
+    for (const step of assistantSteps(turn, options.mapCall ?? piCall, callId)) {
       append({
         role: 'assistant',
         content: [

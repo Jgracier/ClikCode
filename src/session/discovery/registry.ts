@@ -32,6 +32,7 @@ import { clineSessionStore } from './vendors/cline-store.js';
 import { kimiSessionStore } from './vendors/kimi-store.js';
 import { kiroSessionStore } from './vendors/kiro-store.js';
 import { mcodeSessionStore } from './vendors/mcode-store.js';
+import { openClawSessionStore } from './vendors/openclaw-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -87,6 +88,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   kimi: kimiSessionStore,
   kiro: kiroSessionStore,
   mcode: mcodeSessionStore,
+  openclaw: openClawSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {

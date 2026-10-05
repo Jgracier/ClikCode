@@ -1,5 +1,5 @@
 /** Golden output of the thread writers whose vendor resumes a session from a
- * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code), for one
+ * directory or a pair of files (Grok, Kiro, Cline, Kimi, MiniMax Code, OpenClaw), for one
  * conversation: a codeword, a Codex shell call, a Claude Edit and a Claude
  * Grep.
  *
@@ -9,7 +9,7 @@
  * `UPDATE_GOLDEN=1`. */
 
 import { describe, expect, it } from 'vitest';
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -23,6 +23,8 @@ import { clineThreadFiles } from './cline-store.js';
 import { kimiThreadFiles, kimiWorkDirKey } from './kimi-store.js';
 import { kiroThreadFiles } from './kiro-store.js';
 import { mcodeSessionRelativeDir, mcodeThreadLines } from './mcode-store.js';
+import { openClawCall } from './openclaw-store.js';
+import { piThreadLines } from './pi-store.js';
 
 const GOLDEN = join(dirname(fileURLToPath(import.meta.url)), '__golden__');
 const WORKSPACE = '/home/user/projects/app';
@@ -262,5 +264,40 @@ describe('mcode thread writer', () => {
     expect(db.prepare('SELECT source, message_count FROM local_runtime_pi_history_file_migrations').get()).toEqual({ source: 'empty', message_count: 0 });
     db.close();
     expect(await writer.versionOk(context('mcode', {}, '0.5.11'))).toBe(false);
+  });
+});
+
+describe('openclaw thread writer', () => {
+  it('writes the golden legacy transcript (Pi format 4, OpenClaw tool names)', async () => {
+    const text = piThreadLines(fixtureRecord(), {
+      sessionId: '189fc5d9-eb5f-4189-8d9c-16b27f9730b9', workspace: WORKSPACE, model: null, now: NOW,
+      entryId: sequentialIds('e'), mapCall: openClawCall, version: 4,
+    });
+    await golden('openclaw.jsonl', text);
+    expect(text).toContain('"name":"exec"');
+  });
+
+  it('writes nothing where OpenClaw never ran or legacy sources wait, and removes its files when the import fails', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'openclaw-writer-'));
+    const writer = NATIVE_SESSION_STORES.openclaw!.writer!;
+    const harness = { ...localHarnessForCommand('openclaw')!, binary: 'clikcode-no-such-openclaw' };
+    const ctx = { ...context('openclaw', { HOME: home }, 'OpenClaw 2026.9.6 (eb377ac)'), harness };
+    expect(await writer.versionOk(ctx)).toBe(true);
+    expect(await writer.write(fixtureRecord(), ctx)).toBeUndefined();
+
+    const agent = join(home, '.openclaw', 'agents', 'main');
+    await mkdir(join(agent, 'agent'), { recursive: true });
+    await writeFile(join(agent, 'agent', 'openclaw-agent.sqlite'), '');
+    await mkdir(join(agent, 'sessions'), { recursive: true });
+    await writeFile(join(agent, 'sessions', 'old.jsonl'), '{}\n');
+    expect(await writer.write(fixtureRecord(), ctx)).toBeUndefined();
+    expect(await readdir(join(agent, 'sessions'))).toEqual(['old.jsonl']);
+
+    await rm(join(agent, 'sessions', 'old.jsonl'));
+    expect(await writer.write(fixtureRecord(), ctx)).toBeUndefined();
+    expect(await readdir(join(agent, 'sessions'))).toEqual([]);
+
+    expect(await writer.write(fixtureRecord(), { ...ctx, environment: { HOME: home, OPENCLAW_PROFILE: 'work' } })).toBeUndefined();
+    expect(await writer.versionOk(context('openclaw', {}, 'OpenClaw 2026.9.7 (abc)'))).toBe(false);
   });
 });
