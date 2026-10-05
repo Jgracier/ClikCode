@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { matchingVendorAccount } from './labels.js';
 import {
-  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseMiniMaxUserInfo, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
+  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseMiniMaxUserInfo, parseAugmentModels, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser, vendorAccountEmail,
 } from './vendor-identity.js';
 
@@ -174,6 +174,27 @@ describe('vendor account email', () => {
       globalThis.fetch = (async () => { called = true; return new Response('{}'); }) as typeof fetch;
       try {
         expect(await vendorAccountEmail({ command: 'mcode' } as AiLocalHarnessDefinition, profile)).toBeUndefined();
+      } finally { globalThis.fetch = original; }
+      expect(called).toBe(false);
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
+  });
+
+  it('reads the user Augment get-models answers with', () => {
+    expect(parseAugmentModels('{"default_model":"m","user_tier":"x","user":{"id":"1","email":"a@example.com","tenant_id":"t"}}')).toBe('a@example.com');
+    expect(parseAugmentModels('{"default_model":"m"}')).toBeUndefined();
+  });
+  it('never sends the Augment token to a tenant outside augmentcode.com', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'clikcode-auggie-identity-'));
+    try {
+      mkdirSync(join(profile, '.augment'));
+      writeFileSync(join(profile, '.augment', 'session.json'), JSON.stringify({ accessToken: 'redacted', tenantURL: 'https://evil.example/', scopes: ['email'] }));
+      const original = globalThis.fetch;
+      let called = false;
+      globalThis.fetch = (async () => { called = true; return new Response('{}'); }) as typeof fetch;
+      try {
+        expect(await vendorAccountEmail({ command: 'auggie' } as AiLocalHarnessDefinition, profile)).toBeUndefined();
       } finally { globalThis.fetch = original; }
       expect(called).toBe(false);
     } finally {

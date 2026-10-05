@@ -230,6 +230,30 @@ async function miniMaxEmail(profilePath: string | undefined): Promise<string | u
   return undefined;
 }
 
+/** Augment `POST <tenantURL>get-models` -- the configuration call Auggie's
+ * own CLI makes at every start, a read -- answers {..., user:{id, email,
+ * tenant_id, tenant_name}}; Auggie shows that `user.email` in its banner. */
+export function parseAugmentModels(text: string): string | undefined {
+  return email((json(text) as { user?: { email?: unknown } } | undefined)?.user?.email);
+}
+
+/** $HOME/.augment/session.json is {accessToken, tenantURL, scopes}: a
+ * long-lived token, nothing to refresh. Only an augmentcode.com tenant is
+ * sent the token. */
+async function augmentEmail(profilePath: string | undefined): Promise<string | undefined> {
+  const session = json(await readFile(join(profilePath ?? homedir(), '.augment', 'session.json'), 'utf8')) as { accessToken?: unknown; tenantURL?: unknown } | undefined;
+  if (typeof session?.accessToken !== 'string' || typeof session.tenantURL !== 'string') return undefined;
+  const tenant = new URL(session.tenantURL);
+  if (tenant.protocol !== 'https:' || !/(^|\.)augmentcode\.com$/.test(tenant.hostname)) return undefined;
+  const response = await fetch(new URL('get-models', tenant.href.endsWith('/') ? tenant.href : `${tenant.href}/`), {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${session.accessToken}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: '{}',
+    signal: AbortSignal.timeout(15_000),
+  });
+  return response.ok ? parseAugmentModels(await response.text()) : undefined;
+}
+
 /** Codex's auth.json id_token is a standard OIDC JWT whose payload carries an
  * `email` claim. Decoding the payload to read a claim is not verifying the
  * signature, and need not be: this is display of a claim from a credential
@@ -347,6 +371,7 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   kimi: (_harness, profilePath) => kimiEmail(profilePath),
   mcode: (_harness, profilePath) => miniMaxEmail(profilePath),
   droid: (_harness, profilePath) => droidAccountEmail(profilePath),
+  auggie: (_harness, profilePath) => augmentEmail(profilePath),
 };
 
 /** Harnesses whose login can leave the API key outside the account's own
