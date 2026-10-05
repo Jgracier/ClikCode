@@ -1,0 +1,37 @@
+{
+  "session_id": "0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+  "cwd": "/home/user/projects/app",
+  "created_at": "2026-10-04T12:00:00.000Z",
+  "updated_at": "2026-10-04T12:00:00.000Z",
+  "title": "Remember the codeword PELICAN-73. Then check what is in notes.txt.",
+  "session_created_reason": "subagent",
+  "session_state": {
+    "version": "v1",
+    "conversation_metadata": {
+      "user_turn_metadatas": [],
+      "last_context_usage": null,
+      "user_turn_start_request": null,
+      "last_request": null
+    },
+    "rts_model_state": {
+      "conversation_id": "0199aaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      "model_info": null,
+      "context_usage_percentage": null
+    },
+    "permissions": {
+      "filesystem": {
+        "allowed_read_paths": [
+          "/home/user/projects/app"
+        ],
+        "allowed_write_paths": [],
+        "denied_read_paths": [],
+        "denied_write_paths": []
+      },
+      "trusted_tools": [],
+      "denied_tools": [],
+      "allowed_commands": []
+    },
+    "agent_name": "kiro_default",
+    "goal": null
+  }
+}
