@@ -3,7 +3,6 @@ import {
   SLASH_COMMANDS, SLASH_HANDLER_KEYS, SLASH_PALETTE_PINNED, parseSlashInput, resolveSlashCommand, routeSlashInput, slashControls,
   slashHelpText, slashPalette, suggestSlashCommand, unknownSlashMessage,
 } from './registry';
-import { requiresProviderHandoff } from '../../session/options.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 
@@ -238,15 +237,3 @@ describe('a command that is missing only its provider', () => {
   });
 });
 
-/** A conversation with nothing in it has nothing to branch, so choosing an
- * account of another provider is a move, not a handoff. */
-describe('switching to an account of another provider', () => {
-  it('needs a handoff only once the conversation has content', () => {
-    const empty = { id: 's', route: 'local', nativeHarness: 'claude', messages: [] } as unknown as HarnessSession;
-    const used = { id: 's', route: 'local', nativeHarness: 'claude', messages: [{ role: 'user', content: 'hi' }] } as unknown as HarnessSession;
-    expect(requiresProviderHandoff(empty, 'codex')).toBe(false);
-    expect(requiresProviderHandoff(used, 'codex')).toBe(true);
-    // The same harness is never a handoff, whatever the history.
-    expect(requiresProviderHandoff(used, 'claude')).toBe(false);
-  });
-});

@@ -60,24 +60,6 @@ export async function releaseQueuedTurn(id: string, queuedTurnId: string): Promi
   if (session && consumeSessionTurn(session, queuedTurnId)) await writeState(state);
 }
 
-/** The messages and commands queued behind a turn follow the conversation
- * when "Resume in" moves it to another provider: left in the source, they
- * would run there later (on the provider that ran out) or never, while the
- * conversation carried on without them. Notifications stay: they report the
- * source's own background work. */
-export async function moveQueuedTurns(fromId: string, toId: string): Promise<void> {
-  if (fromId === toId) return;
-  const state = await readState();
-  const from = state.sessions.find((item) => item.id === fromId);
-  const to = state.sessions.find((item) => item.id === toId);
-  const moving = (from?.queuedTurns ?? []).filter((item) => item.kind !== 'notification');
-  if (!from || !to || !moving.length) return;
-  for (const item of moving) consumeSessionTurn(from, item.id);
-  to.queuedTurns = [...(to.queuedTurns ?? []), ...moving];
-  from.updatedAt = to.updatedAt = new Date().toISOString();
-  await writeState(state);
-}
-
 /** Takes the messages typed behind a turn out of the queue, oldest first:
  * the conversation's provider has no usage left and the user chose not to
  * move it, so each would only fail the same way and ask again. They go back

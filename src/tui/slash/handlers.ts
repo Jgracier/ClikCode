@@ -131,7 +131,7 @@ interface HeadlessSlashContext {
 }
 
 /** Resolves with the resulting session id when the command moved the
- * conversation to another session (`/new`, a handoff), otherwise nothing. */
+ * conversation to another session (`/new`, `/fork`), otherwise nothing. */
 type HeadlessSlashHandler = (context: HeadlessSlashContext) => Promise<string | void>;
 
 const INTERACTIVE_ONLY = (name: string): HeadlessSlashHandler => async () => {
@@ -297,9 +297,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       // the context, so a fork at N does not carry what came after it.
       nativeSessionId: undefined, nativeStartedAt: undefined, createdAt: now, updatedAt: now, status: 'active', closedAt: undefined,
     };
-    // A fork is a sibling concept, not another copy of the handoff event that
-    // created its parent. Its parentSessionId is sufficient ancestry.
-    delete fork.handoff;
     // A turn parked for the reset is the original's to send.
     delete fork.resumeAt;
     state.sessions.push(fork);

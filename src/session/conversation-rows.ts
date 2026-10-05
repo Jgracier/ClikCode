@@ -29,7 +29,7 @@ export function sectionRank(section: ConversationSection): number {
   return SECTION_RANK[section];
 }
 
-/** The conversation a chat belongs to: its root (handoffs and forks share it). */
+/** The conversation a chat belongs to: its root (forks share it). */
 export function conversationIdFor(session: HarnessSession): string {
   return session.conversationId ?? session.id;
 }
@@ -41,7 +41,7 @@ export function recencySection(updatedAtMs: number | undefined, now: number): 'a
 
 export interface ConversationRow {
   root: string;
-  /** Every chat in the conversation (provider handoffs, forks). */
+  /** Every chat in the conversation (it and its forks). */
   chats: HarnessSession[];
   /** The chat the row opens: the newest still active, else the newest. */
   latest: HarnessSession;

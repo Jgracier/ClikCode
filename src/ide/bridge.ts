@@ -9,7 +9,7 @@
  * prompter.ts) and the protocol in protocol.ts in place of painting.
  *
  * One conversation at a time, like a terminal: `open` switches, and a slash
- * command that moves the conversation (/new, a handoff, /resume) switches too.
+ * command that moves the conversation (/new, /fork, /resume) switches too.
  */
 import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';

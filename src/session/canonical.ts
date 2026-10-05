@@ -1,11 +1,11 @@
 /** The conversation as ClikCode owns it, independent of any provider.
  *
- * A ClikCode conversation is a chain of branches: every provider switch,
- * "Resume in" or fork makes a child session that starts with a copy of its
- * parent's history (stored as a reference into it, store/transcripts.ts) and
- * runs on its own harness from there. The canonical record is that chain read
- * back as ONE list of turns, in order, with one numbering, each turn knowing
- * which provider and model produced it.
+ * A ClikCode conversation is one session whose provider can change in place
+ * (commands/ai/conversations.ts moveToProvider). The canonical record is its
+ * history read back as ONE list of turns, in order, with one numbering, each
+ * turn knowing which provider and model produced it -- stamped on its
+ * messages (MessageOrigin); an unstamped one is the session's current
+ * provider's.
  *
  * It is what a provider taking the conversation up is given -- written as its
  * own native thread where a writer for it exists (discovery/stores.ts
@@ -14,9 +14,9 @@
  * what the conversation was.
  *
  * Built from what is stored, never from a vendor's files: those belong to the
- * vendor, and a branch's messages already hold everything its native thread
- * said that ClikCode saw (synchronizeNativeTranscript pulls in what was said
- * in the vendor's own CLI, when the conversation is opened). */
+ * vendor, and the session's messages already hold everything its native
+ * threads said that ClikCode saw (synchronizeNativeTranscript pulls in what
+ * was said in the vendor's own CLI, when the conversation is opened). */
 
 import type { FileDiff } from '../agent/line-diff.js';
 import { asFileDiffs } from '../agent/line-diff.js';
@@ -69,7 +69,7 @@ export interface CanonicalToolCall {
 /** An assistant turn in the order it happened: text and calls interleaved. */
 export type CanonicalPart = { type: 'text'; text: string } | { type: 'tool'; call: CanonicalToolCall };
 
-/** Which branch, harness and model produced a turn. */
+/** Which session, harness and model produced a turn. */
 export interface CanonicalOrigin {
   sessionId: string;
   /** Native harness command (`claude`, `codex`); absent on ClikCode's own
@@ -81,7 +81,7 @@ export interface CanonicalOrigin {
 }
 
 export interface CanonicalTurn {
-  /** 0-based position across the whole chain. */
+  /** 0-based position in the conversation. */
   index: number;
   /** The request as typed. '' for answer text with no request before it (a
    * continuation of an interrupted turn, or a transcript that began so). */
@@ -109,7 +109,7 @@ export interface CanonicalTurn {
 export interface CanonicalRecord {
   version: typeof CANONICAL_RECORD_VERSION;
   conversationId: string;
-  /** The session the record was read from (the newest branch). */
+  /** The session the record was read from. */
   sessionId: string;
   workspace: string;
   turns: CanonicalTurn[];
@@ -188,74 +188,16 @@ function assistantParts(message: TranscriptMessage): CanonicalPart[] {
   return parts;
 }
 
-function sameMessage(left: TranscriptMessage | undefined, right: TranscriptMessage | undefined): boolean {
-  return Boolean(left && right && left.role === right.role && left.content === right.content);
-}
-
-function sharedPrefix(left: readonly TranscriptMessage[], right: readonly TranscriptMessage[]): number {
-  const limit = Math.min(left.length, right.length);
-  let index = 0;
-  while (index < limit && sameMessage(left[index], right[index])) index += 1;
-  return index;
-}
-
 function originOf(session: HarnessSession): CanonicalOrigin {
   return { sessionId: session.id, ...messageOrigin(session) };
 }
 
-/** Which branch produced each message of `session`'s history.
- *
- * `ancestors` is the parent chain, nearest first. A child starts with its
- * parent's history, so the messages it shares with an ancestor (a common
- * prefix) are that ancestor's or older, and what follows the longest prefix
- * it shares with its parent is its own. Walking up, each ancestor owns the
- * stretch between the prefix it shares and the one its own parent shares.
- * A fork that cut history short (fork-at) shares only up to the cut, which
- * this reads the same way. */
-export function messageOrigins(
-  session: HarnessSession, messages: readonly TranscriptMessage[], ancestors: readonly HarnessSession[],
-): CanonicalOrigin[] {
-  const origins: CanonicalOrigin[] = messages.map(() => originOf(session));
-  let owned = messages.length;
-  for (const ancestor of ancestors) {
-    const shared = Math.min(owned, sharedPrefix(messages, sessionTranscriptMessages(ancestor)));
-    const origin = originOf(ancestor);
-    for (let index = 0; index < shared; index += 1) origins[index] = origin;
-    owned = shared;
-    if (!owned) break;
-  }
-  // A stamped message says who wrote it; the chain only answers for
-  // messages from before the stamp.
-  messages.forEach((message, index) => { if (message.origin) origins[index] = { sessionId: session.id, ...message.origin }; });
-  return origins;
-}
-
-/** The parent chain of `session`, nearest first, from whatever sessions the
- * caller has (with their transcripts). Stops at a missing parent or a cycle. */
-export function ancestorChain(session: HarnessSession, sessions: readonly HarnessSession[]): HarnessSession[] {
-  const byId = new Map(sessions.map((item) => [item.id, item]));
-  const chain: HarnessSession[] = [];
-  const seen = new Set([session.id]);
-  for (let next = session.parentSessionId; next && !seen.has(next);) {
-    const parent = byId.get(next);
-    if (!parent) break;
-    seen.add(next);
-    chain.push(parent);
-    next = parent.parentSessionId;
-  }
-  return chain;
-}
-
-/** The canonical record of `session`'s conversation.
- *
- * `ancestors` (nearest first, with transcripts; see ancestorChain and
- * loadCanonicalRecord) only attribute turns to the provider that produced
- * them: the history itself is the session's own, which already holds every
- * inherited message. A turn still in the session's journal is the last turn,
- * marked interrupted, with the files it had started changing. */
-export function canonicalRecord(session: HarnessSession, ancestors: readonly HarnessSession[] = []): CanonicalRecord {
+/** The canonical record of `session`'s conversation. A turn still in the
+ * session's journal is the last turn, marked interrupted, with the files it
+ * had started changing. */
+export function canonicalRecord(session: HarnessSession): CanonicalRecord {
   const messages = sessionTranscriptMessages(session);
-  const origins = messageOrigins(session, messages, ancestors);
+  const own = originOf(session);
   const turns: CanonicalTurn[] = [];
   let current: CanonicalTurn | undefined;
   const open = (user: string, attachments: readonly string[], origin: CanonicalOrigin): CanonicalTurn => {
@@ -266,15 +208,15 @@ export function canonicalRecord(session: HarnessSession, ancestors: readonly Har
     turns.push(current);
     return current;
   };
-  messages.forEach((message, index) => {
-    const origin = origins[index]!;
+  messages.forEach((message) => {
+    const origin = message.origin ? { sessionId: session.id, ...message.origin } : own;
     if (message.role === 'user') {
       open(message.content, message.attachments ?? [], origin);
       return;
     }
     const turn = current ?? open('', [], origin);
     // The answer's producer, not the request's: a request typed on one
-    // provider and answered on the next (a handoff's first turn) is the
+    // provider and answered on the next (the first turn after a switch) is the
     // second provider's turn.
     turn.origin = origin;
     turn.parts.push(...assistantParts(message));
@@ -303,23 +245,6 @@ export function canonicalRecord(session: HarnessSession, ancestors: readonly Har
     ...(plan ? { plan } : {}),
     openTodos: (plan ?? []).filter((entry) => !/^(completed|done|complete|finished|cancelled|canceled)$/i.test(entry.status?.trim() ?? '')),
   };
-}
-
-/** The record of a session in `state`, with its ancestors' transcripts read
- * from the store where the state was assembled without them. */
-export async function loadCanonicalRecord(
-  session: HarnessSession, sessions: readonly HarnessSession[],
-  readTranscript: (id: string) => Promise<Pick<HarnessSession, 'messages' | 'pendingTurn'>> = defaultTranscriptReader,
-): Promise<CanonicalRecord> {
-  const chain = ancestorChain(session, sessions);
-  const ancestors = await Promise.all(chain.map(async (ancestor) => (
-    ancestor.messages !== undefined ? ancestor : { ...ancestor, ...await readTranscript(ancestor.id).catch(() => ({})) })));
-  return canonicalRecord(session, ancestors);
-}
-
-async function defaultTranscriptReader(id: string): Promise<Pick<HarnessSession, 'messages' | 'pendingTurn'>> {
-  const { readSessionTranscript } = await import('./store/transcripts.js');
-  return readSessionTranscript(id);
 }
 
 /** Who produced a turn, as a note names it: `Kilo Code CLI

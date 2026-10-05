@@ -10,7 +10,6 @@ import type { HarnessSession } from '../../session/model';
 import { readState } from '../../session/state/read';
 import { writeState } from '../../session/state/write';
 import { forceStoreSession, unforceStoreSession } from '../../session/ephemeral';
-import { moveQueuedTurns } from '../../commands/ai/conversations';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt';
 import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from './resume-in';
 
@@ -75,16 +74,5 @@ describe('running out of usage', () => {
     const guard: ExhaustionRetryGuard = { autoResent: 's1\nfix the parser' };
     expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', guard)).toEqual({ stayed: [] });
     expect((await readState()).sessions.find((item) => item.id === 's1')!.queuedTurns).toHaveLength(4);
-  });
-});
-
-describe('a conversation moved by "Resume in"', () => {
-  it('takes what was queued behind the turn with it, in order, and leaves it queued nowhere else', async () => {
-    await chat([account('a1', true)], { queuedTurns: queue() });
-    await chat([], { queuedTurns: [] }, 's2');
-    await moveQueuedTurns('s1', 's2');
-    const state = await readState();
-    expect(state.sessions.find((item) => item.id === 's2')!.queuedTurns?.map((item) => item.id)).toEqual(['q1', 'q2', 'q3']);
-    expect(state.sessions.find((item) => item.id === 's1')!.queuedTurns?.map((item) => item.id)).toEqual(['q4']);
   });
 });

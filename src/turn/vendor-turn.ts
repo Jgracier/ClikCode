@@ -12,7 +12,7 @@ import { classifyAccountFailure } from './failover.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { keepsNoHistory, startConversationThread } from './thread-start.js';
 import { targetContextWindow } from './transfer.js';
-import { loadCanonicalRecord } from '../session/canonical.js';
+import { canonicalRecord } from '../session/canonical.js';
 import { nativeSessionStore } from '../session/discovery/registry.js';
 import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
@@ -160,7 +160,7 @@ export async function sendVendorTurn(input: {
    * does not keep. */
   const takeUp = async (request: string, options: { interrupted: boolean; withJournal: boolean; requestContext?: string }): Promise<string> => {
     const view = options.withJournal ? session : { ...session, pendingTurn: undefined };
-    const record = await loadCanonicalRecord(view, state.sessions);
+    const record = canonicalRecord(view);
     const last = record.turns.at(-1);
     if (options.interrupted && options.requestContext && last) last.user = `${last.user}${options.requestContext}`;
     const transport = sessionTurnTransport(harness, session);

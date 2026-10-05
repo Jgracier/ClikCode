@@ -37,24 +37,14 @@ export interface MessageOrigin { harness?: string; route: AiHarnessRoute; provid
 
 export interface HarnessSession {
   id: string;
-  /** Stable ClikCode conversation root. Native harness sessions are branches
-   * beneath this root and are never rewritten into one another. */
+  /** Stable ClikCode conversation root, shared by its forks. */
   conversationId?: string;
-  /** The ClikCode branch this session was created from, when it is a fork or
-   * cross-provider handoff. */
+  /** The session this one was forked from (/fork, /compact). */
   parentSessionId?: string;
   /** The terminal currently driving this conversation. Present only while a
    * process has it open, so a second terminal can tell a live chat from an
    * idle one and never attach to the same conversation twice. */
   claim?: { pid: number; host: string; startedAt: string; heartbeatAt: string };
-  /** Describes a portable handoff; the source native session remains intact. */
-  handoff?: {
-    fromSessionId: string; fromHarness: string; at: string;
-    /** `startedAt` of the source's interrupted turn this branch carries on,
-     * when "Resume in" made it: a second window resuming the same turn joins
-     * this branch instead of making another. */
-    turn?: string;
-  };
   route: AiHarnessRoute;
   accountId: string | null;
   provider: string | null;

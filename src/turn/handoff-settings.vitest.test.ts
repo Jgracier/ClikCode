@@ -3,8 +3,8 @@
  * offers the same one. */
 import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { carriedHandoffModel, carriedHandoffSettings, carriedPermissionMode, createHandoffBranch, permissionLevel } from './handoff.js';
-import type { HarnessDefaultSettings, HarnessSession } from '../session/model.js';
+import { carriedHandoffModel, carriedHandoffSettings, carriedPermissionMode, permissionLevel } from './handoff.js';
+import type { HarnessDefaultSettings } from '../session/model.js';
 
 const defaults: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask', accountFailover: 'never' };
 const codex = localHarnessForCommand('codex')!;
@@ -50,16 +50,6 @@ describe('carriedHandoffSettings', () => {
     // OpenHands has nothing at ask: the default only if it does not allow
     // more, else its least permissive mode.
     expect(carriedPermissionMode(claude, 'ask', openhands, 'bypass')).toBe('auto');
-  });
-
-  it('is what the handoff branch gets', () => {
-    const now = new Date().toISOString();
-    const from = {
-      id: 'a', route: 'local', accountId: null, provider: 'anthropic', model: 'opus', nativeHarness: 'claude', ...source,
-      createdAt: now, updatedAt: now, status: 'active',
-    } as HarnessSession;
-    const branch = createHandoffBranch({ source: from, target: codex, accountId: null, model: null, defaults: carriedHandoffSettings(from, codex, defaults), now });
-    expect(branch).toMatchObject({ effort: 'xhigh', permissionMode: 'auto', accountFailover: 'on-quota-exhausted' });
   });
 });
 
