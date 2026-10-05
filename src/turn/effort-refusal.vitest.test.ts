@@ -9,6 +9,10 @@ describe('a vendor refusing the reasoning level', () => {
     expect(isEffortRefusal(new Error('Invalid reasoning_effort: ultra'))).toBe(true);
   });
 
+  it('is an ACP session that offers no such level, which the CLI fallback could not take', () => {
+    expect(isEffortRefusal(Object.assign(new Error('kimi ACP does not offer effort high'), { acpUnsupportedEffort: true }))).toBe(true);
+  });
+
   it('is not any other failure', () => {
     expect(isEffortRefusal(new Error('Codex: You have exceeded your monthly quota'))).toBe(false);
     expect(isEffortRefusal(new Error('Unknown model "gpt-9"'))).toBe(false);
