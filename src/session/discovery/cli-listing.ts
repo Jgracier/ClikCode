@@ -120,11 +120,15 @@ function sessionsFromRecords(records: readonly unknown[], workspace?: string): D
     const title = item.customTitle ?? item.title ?? item.name ?? item.summary
       ?? (typeof item.prompt === 'string' ? item.prompt : undefined);
     const updatedAt = item.updatedAt ?? item.updated_at ?? item.modified ?? item.mtime ?? item.lastActive ?? item.startTime;
+    // Goose lists every folder's sessions, each with its `working_dir`
+    // (verified on goose's `session list --format json`): adopting one
+    // resumes it there, not in whatever folder the list was opened from.
+    const folder = typeof item.working_dir === 'string' && item.working_dir ? item.working_dir : workspace;
     sessions.push({
       nativeId,
       title: typeof title === 'string' ? title : undefined,
       updatedAt: typeof updatedAt === 'string' ? updatedAt : typeof updatedAt === 'number' ? new Date(updatedAt).toISOString() : undefined,
-      ...(workspace ? { workspace } : {}),
+      ...(folder ? { workspace: folder } : {}),
     });
   }
   return sessions;

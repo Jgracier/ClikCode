@@ -171,6 +171,14 @@ describe('a vendor CLI listing', () => {
     ]);
   });
 
+  it('reads the folder Goose records on each session', async () => {
+    // Trimmed from goose `session list --format json`.
+    const harness = await fakeCli('goose-fake', '[{"id":"20261001_3","working_dir":"/elsewhere","name":"Fix the parser","updated_at":"2026-10-01T03:03:15Z","message_count":4}]');
+    expect(await discoverNativeSessions(harness, {}, home)).toEqual([
+      { nativeId: '20261001_3', title: 'Fix the parser', updatedAt: '2026-10-01T03:03:15Z', workspace: '/elsewhere' },
+    ]);
+  });
+
   it('keeps the last answer through a failure, and does not ask again at once', async () => {
     const harness = await fakeCli('flaky-fake', undefined);
     const log = join(home, 'asked.log');
