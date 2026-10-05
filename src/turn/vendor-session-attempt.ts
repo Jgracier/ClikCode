@@ -3,7 +3,7 @@ import chalk from 'chalk';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
-import type { HarnessTurnTransport } from '../harness/transport/select.js';
+import { cliThreadTransport, type HarnessTurnTransport } from '../harness/transport/select.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
@@ -135,8 +135,9 @@ export async function runVendorSessionAttempt(input: {
         if (session.nativeSessionId && !shared) throw error;
         // A thread the CLI starts belongs to the CLI from now on -- unless
         // both share one store, when this turn alone takes the CLI.
-        if (!shared) {
-          session.nativeTransport = harness.turn.output === 'text' ? 'text-cli' : 'structured-cli';
+        const pinned = cliThreadTransport(harness);
+        if (pinned) {
+          session.nativeTransport = pinned;
           await checkpoint.persistNow();
         }
         prompter?.phase('using structured CLI fallback');

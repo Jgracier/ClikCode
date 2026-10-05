@@ -20,8 +20,9 @@ export const gooseSessionStore: NativeSessionStore = {
     const data = environment.XDG_DATA_HOME?.trim() || join(environment.HOME?.trim() || homedir(), '.local', 'share');
     return join(data, 'goose', 'sessions');
   },
+  // Pinned to the CLI: the resume verified above is the CLI's.
   writer: claudeImportWriter({
-    testedVersions: ['1.51.0'],
+    testedVersions: ['1.51.0'], transport: 'structured-cli',
     argv: (file) => ['session', 'import', file],
     parse: (output) => /Session imported:\s*\n\s*(\S+) - /.exec(output)?.[1],
   }),

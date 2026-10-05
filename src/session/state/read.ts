@@ -62,6 +62,19 @@ function attachHidden(state: HarnessState, secrets: HarnessSecrets, rollups: Rec
   return state;
 }
 
+/** Harnesses that ran every turn on their one-shot CLI before ACP became
+ * their transport. Their threads from then carry no transport marker and
+ * belong to that CLI (Gemini's ACP even resets a CLI-born thread it is asked
+ * to load); every thread since is marked when it is made. History, not a
+ * catalog fact: this list never grows. */
+const CLI_BEFORE_ACP = new Set(['gemini', 'goose', 'kiro', 'qwen', 'cursor', 'auggie']);
+
+/** The marker an unmarked thread from before ACP gets, once, on read. */
+function legacyThreadTransport(session: HarnessSession): Pick<HarnessSession, 'nativeTransport'> {
+  return session.nativeSessionId && !session.nativeSessionPreallocated && !session.nativeTransport
+    && CLI_BEFORE_ACP.has(session.nativeHarness ?? '') ? { nativeTransport: 'structured-cli' } : {};
+}
+
 function normalizedState(raw: HarnessState): HarnessState {
   // Older previews did not include a failover preference. Migrate those
   // sessions to the safe default so a local account does not remain stuck
@@ -75,6 +88,7 @@ function normalizedState(raw: HarnessState): HarnessState {
       // time of upgrade, so preserve their resumability once.
       status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
       ...normalizedSessionPermission(session),
+      ...legacyThreadTransport(session),
     };
     // The spread above is a new object, so the marks have to be put back.
     if (sessionFromIndex(session)) markFromIndex(next);
