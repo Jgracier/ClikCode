@@ -13,10 +13,13 @@ import { cp, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
-import { installMcpOnHarness, type McpServerEntry } from './mcp-registry.js';
+import {
+  installMcpOnHarness, isRemoteTarget, mcpHeadersReachHarness, removeMcpFromHarness, type McpServerEntry,
+} from './mcp-registry.js';
+import { mcpServerNeedsSignIn, type McpSignInAnswer } from './mcp-sign-in.js';
 import { npxRoots, withoutNpx, type NpxRoots } from './npx-bin.js';
 import { loadMcpServers, type McpServerSpec } from '../agent/mcp/config.js';
-import { vendorMcpServerNames } from '../agent/mcp/import.js';
+import { importedFromCommand, vendorMcpServerNames, vendorMcpServerUrls } from '../agent/mcp/import.js';
 import { discoverSkills, type Skill } from '../agent/skills.js';
 import { stateDirectory } from '../session/store/paths.js';
 
@@ -46,6 +49,11 @@ const PROJECT_SKILL_DIR: Record<string, readonly string[]> = {
 export interface ProvisionResult {
   mcpInstalled: string[];
   mcpSkipped: string[];
+  /** Remote servers that need a browser sign-in, or could not be checked:
+   * never given to a vendor (see mcp-sign-in.ts). */
+  mcpNeedsSignIn: string[];
+  /** ClikCode's own earlier copies of those, taken back out of this harness. */
+  mcpRemoved: string[];
   skillsCopied: string[];
 }
 
@@ -57,6 +65,10 @@ export interface ProvisionInput {
   home?: string;
   /** Tests pass the writer. Production uses the harness's own mcp add. */
   install?: typeof installMcpOnHarness;
+  /** Tests pass these. Production asks the server, and the vendor's own
+   * `mcp remove`. */
+  signIn?: (entry: McpServerEntry, headersReach: boolean) => Promise<McpSignInAnswer>;
+  remove?: typeof removeMcpFromHarness;
   /** ClikCode's own servers (search/mcp-entry.ts), given to every harness
    * by the same rules as the user's: never over a name already there. */
   builtins?: readonly McpServerEntry[];
@@ -114,6 +126,8 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   const workspace = input.workspace?.trim() || process.cwd();
   const mcpInstalled: string[] = [];
   const mcpSkipped: string[] = [];
+  const mcpNeedsSignIn: string[] = [];
+  const mcpRemoved: string[] = [];
   const skillsCopied: string[] = [];
 
   const loaded = await loadMcpServers(stateDir);
@@ -129,8 +143,32 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   const entries = [...userEntries, ...(input.builtins ?? []).filter((entry) => !userNames.has(entry.name))];
   let roots: Promise<NpxRoots> | undefined;
   const launcher = input.launcher;
+  const headersReach = mcpHeadersReachHarness(input.harness);
+  const signIn = input.signIn ?? ((entry: McpServerEntry, reach: boolean) => mcpServerNeedsSignIn(entry, { stateDir, headersReach: reach }));
+  // Remote servers are asked at once, not one after another.
+  const answers = new Map(await Promise.all(entries.filter((entry) => isRemoteTarget(entry.target))
+    .map(async (entry) => [entry.name, await signIn(entry, headersReach)] as const)));
+  const ownership = await mcpOwnership(stateDir, input, home, profile, present.known);
   for (const entry of entries) {
     if (present.unreadable) { mcpSkipped.push(entry.name); continue; }
+    const answer = answers.get(entry.name);
+    if (answer && answer !== 'open') {
+      // Never handed to a vendor: each one keeps its own sign-in, so it
+      // would be a sign-in owed in every vendor and profile, and Copilot
+      // opens the browser for it on every session. ClikCode's own earlier
+      // copy comes back out; one the user put there is theirs.
+      mcpNeedsSignIn.push(entry.name);
+      // The same server, not a different one the user keeps under the name.
+      const there = present.known ? ownership.urls.get(entry.name) === entry.target : ownership.recorded(entry.name);
+      if (answer === 'sign-in' && there && await ownership.owns(entry.name)) {
+        const removed = await (input.remove ?? removeMcpFromHarness)(input.harness, entry.name, input.account, home);
+        if (removed.ok) {
+          mcpRemoved.push(entry.name);
+          await forgetProvisioned(stateDir, input, entry.name);
+        }
+      }
+      continue;
+    }
     if (present.known && present.names.has(entry.name)) continue;
     if (grokClaudeMcp?.names.has(entry.name)) continue;
     if (!present.known && await alreadyProvisioned(stateDir, input, entry.name)) continue;
@@ -139,7 +177,10 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     const result = await (input.install ?? installMcpOnHarness)(input.harness, written, input.account);
     if (result.ok) {
       mcpInstalled.push(entry.name);
-      if (!present.known) await rememberProvisioned(stateDir, input, entry.name);
+      // Every write is recorded: it is how a later turn knows this copy is
+      // ClikCode's to take back, and for a harness whose file is unknown it
+      // is also the brake on writing it again.
+      await rememberProvisioned(stateDir, input, entry.name);
     } else if (result.detail && /already|exists|duplicate/i.test(result.detail)) {
       if (!present.known) await rememberProvisioned(stateDir, input, entry.name);
     } else mcpSkipped.push(entry.name);
@@ -165,7 +206,52 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     }
   }
 
-  return { mcpInstalled, mcpSkipped, skillsCopied };
+  if (!present.unreadable) await ownership.settle(entries.map((entry) => entry.name).filter((name) => !mcpRemoved.includes(name)));
+  return { mcpInstalled, mcpSkipped, mcpNeedsSignIn, mcpRemoved, skillsCopied };
+}
+
+/** Which of this harness's servers ClikCode wrote.
+ *
+ * Every write is recorded in mcp-provision.json now, but before that only
+ * harnesses whose file ClikCode cannot read were, so the first pass over a
+ * harness and account also adopts what was clearly ClikCode's: anything in
+ * an isolated account profile (ClikCode made the profile; the user never
+ * configured it by hand), and in the user's own home, a server mcp-import.json
+ * says was imported from a DIFFERENT vendor -- the vendor it was imported
+ * from is where the user put it. After that first pass only the record
+ * counts, so a server the user adds by hand later is never taken. */
+async function mcpOwnership(
+  stateDir: string, input: ProvisionInput, home: string,
+  profile: { env: string; path: string } | undefined, known: boolean,
+): Promise<{
+  urls: Map<string, string>;
+  recorded: (name: string) => boolean;
+  owns: (name: string) => Promise<boolean>;
+  settle: (names: readonly string[]) => Promise<void>;
+}> {
+  const marker = await readMarker(stateDir);
+  const legacyKey = `legacy\0${input.harness.command}\0${input.account?.id ?? ''}`;
+  const legacy = !(legacyKey in marker);
+  const urls = known ? await vendorMcpServerUrls(input.harness.command, home, profile) : new Map<string, string>();
+  const recorded = (name: string): boolean => provisionKey(input, name) in marker;
+  const owns = async (name: string): Promise<boolean> => {
+    if (recorded(name)) return true;
+    if (!legacy) return false;
+    if (profile) return true;
+    const from = await importedFromCommand(stateDir, name);
+    return from !== undefined && from !== input.harness.command;
+  };
+  // Only ClikCode's own list is adopted, and only what is in the file now.
+  const settle = async (names: readonly string[]): Promise<void> => {
+    if (!legacy) return;
+    const adopted: string[] = [];
+    for (const name of names) if (urls.has(name) && await owns(name)) adopted.push(name);
+    const latest = await readMarker(stateDir);
+    for (const name of adopted) latest[provisionKey(input, name)] = true;
+    latest[legacyKey] = true;
+    await writeMarker(stateDir, latest);
+  };
+  return { urls, recorded, owns, settle };
 }
 
 /** Grok's compat.claude flags default to on. An explicit false is the only off. */
@@ -193,9 +279,20 @@ async function alreadyProvisioned(stateDir: string, input: ProvisionInput, name:
   return provisionKey(input, name) in await readMarker(stateDir);
 }
 
+async function writeMarker(stateDir: string, marker: Record<string, true>): Promise<void> {
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(join(stateDir, 'mcp-provision.json'), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+}
+
 async function rememberProvisioned(stateDir: string, input: ProvisionInput, name: string): Promise<void> {
   const marker = await readMarker(stateDir);
   marker[provisionKey(input, name)] = true;
-  await mkdir(stateDir, { recursive: true });
-  await writeFile(join(stateDir, 'mcp-provision.json'), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+  await writeMarker(stateDir, marker);
+}
+
+async function forgetProvisioned(stateDir: string, input: ProvisionInput, name: string): Promise<void> {
+  const marker = await readMarker(stateDir);
+  if (!(provisionKey(input, name) in marker)) return;
+  delete marker[provisionKey(input, name)];
+  await writeMarker(stateDir, marker);
 }

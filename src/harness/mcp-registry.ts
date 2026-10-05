@@ -44,6 +44,7 @@ import { dirname, join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
 import { MCP_SERVERS_KEY, mcpConfigFilePath } from '../agent/mcp/config.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { removeFromVendorJsonFile } from '../agent/mcp/import.js';
 
 /** What a user asked ClikCode to make available, in the one shape both
  * grammars can be produced from. */
@@ -320,4 +321,70 @@ export async function installMcpOnHarness(
  * Choosing a provider later copies a missing name into that harness. */
 export async function recordSharedMcpServer(entry: McpServerEntry): Promise<void> {
   await writeMcpConfigEntry(mcpConfigFilePath(stateDirectory()), MCP_SERVERS_KEY, entry);
+}
+
+/** Whether this harness is given a remote server's headers along with its
+ * URL. A config file in the `mcpServers` shape keeps them; Goose's extension
+ * shape has no field for them; an `mcp add` keeps them only where the
+ * catalog records the flag that carries them (Claude's --header). A
+ * credential that never reaches the vendor does not sign it in. */
+export function mcpHeadersReachHarness(harness: AiLocalHarnessDefinition): boolean {
+  const add = mcpAddGrammar(harness);
+  if (add) return add.shape === 'doubledash-local' && !!add.headerPrefix;
+  const config = mcpConfigFile(harness);
+  return !!config && (config.entryShape ?? 'mcp-servers') === 'mcp-servers';
+}
+
+/** Removes one server from a config file of the shape mcpConfigFile
+ *  describes, leaving everything else in it as it was. */
+export async function removeMcpConfigEntry(
+  path: string, key: string, name: string, config: Partial<McpConfigFile> = {},
+): Promise<boolean> {
+  const existing = await readFile(path, 'utf8').catch(() => undefined);
+  if (!existing?.trim()) return false;
+  if (config.format === 'yaml') {
+    const { parseDocument } = await import('yaml');
+    const document = parseDocument(existing);
+    if (document.errors.length || !document.hasIn([key, name])) return false;
+    document.deleteIn([key, name]);
+    await writeFile(path, document.toString(), 'utf8');
+    return true;
+  }
+  const root: unknown = JSON.parse(existing);
+  if (!root || typeof root !== 'object' || Array.isArray(root)) return false;
+  const servers = (root as Record<string, unknown>)[key];
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers) || !(name in servers)) return false;
+  delete (servers as Record<string, unknown>)[name];
+  await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
+  return true;
+}
+
+/** Takes one server back out of one harness, under one account's profile --
+ *  by the same route the install used: the vendor's own `mcp remove` where
+ *  `mcp add` wrote it, the config file where ClikCode wrote the file.
+ *  opencode and Kilo add through the CLI but have no remove; their file is
+ *  edited only when it is plain JSON (see removeFromVendorJsonFile). */
+export async function removeMcpFromHarness(
+  harness: AiLocalHarnessDefinition, name: string, account?: AiHarnessAccount, home: string = homedir(),
+): Promise<McpInstallResult> {
+  const label = { harness: harness.command, ...(account?.label ? { account: account.label } : {}) };
+  const environment = nativeProfileEnvironment(account?.nativeProfile);
+  const config = mcpAddGrammar(harness) ? undefined : mcpConfigFile(harness);
+  try {
+    if (config) {
+      const removed = await removeMcpConfigEntry(mcpConfigPath(config, { HOME: home, ...environment }), config.key, name, config);
+      return removed ? { ...label, ok: true } : { ...label, ok: false, detail: 'not in the config file' };
+    }
+    const remove = (localHarnessCapabilityManifest(harness) as {
+      managers?: { mcp?: { remove?: { argv: readonly string[] } } };
+    }).managers?.mcp?.remove;
+    if (remove) {
+      await captureNativeHarnessOutput(harness, [...remove.argv, name], environment, 20_000);
+      return { ...label, ok: true };
+    }
+    const profile = account?.nativeProfile ? { env: account.nativeProfile.env, path: account.nativeProfile.path } : undefined;
+    return { ...label, ...await removeFromVendorJsonFile(harness.command, name, home, profile) };
+  } catch (error) {
+    return { ...label, ok: false, detail: error instanceof Error ? error.message.split('\n')[0] : 'failed' };
+  }
 }

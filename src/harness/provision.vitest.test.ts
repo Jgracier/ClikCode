@@ -8,6 +8,7 @@ import type { AiHarnessAccount } from './definition.js';
 import { provisionChosenHarness, skillRoot } from './provision.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
+import { mcpServerNeedsSignIn } from './mcp-sign-in.js';
 import { conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
 
 const cursor = allLocalHarnesses().find((item) => item.command === 'cursor')!;
@@ -172,4 +173,123 @@ describe('where a harness keeps what it was given', () => {
     expect(await readFile(join(home, '.grok', 'skills', 'only-here', 'SKILL.md'), 'utf8')).toContain('Not in Claude');
   });
 
+});
+
+describe('a remote MCP server that needs a browser sign-in', () => {
+  const ROBINHOOD = 'https://agent.robinhood.com/mcp/trading';
+  const FIGMA = 'https://mcp.figma.com/mcp';
+  const OPEN = 'https://open.example.test/mcp';
+  const signIn = async (entry: { target: string }): Promise<'sign-in' | 'open' | 'unknown'> =>
+    entry.target === OPEN ? 'open' : entry.target.includes('offline') ? 'unknown' : 'sign-in';
+  const copilot = allLocalHarnesses().find((item) => item.command === 'copilot')!;
+
+  async function clikcodeList(state: string, servers: Record<string, unknown>): Promise<void> {
+    await writeFile(join(state, 'mcp.json'), JSON.stringify({ mcpServers: servers }));
+  }
+  async function imported(state: string, list: Array<{ name: string; from: string }>): Promise<void> {
+    await writeFile(join(state, 'mcp-import.json'), JSON.stringify({ ranAt: 'x', imported: list, skipped: [] }));
+  }
+  async function cursorServers(home: string): Promise<Record<string, unknown>> {
+    return (JSON.parse(await readFile(join(home, '.cursor', 'mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> }).mcpServers;
+  }
+
+  it('is not copied into a vendor; a local server and an open remote one are', async () => {
+    const { home, state, workspace } = await layout();
+    await clikcodeList(state, {
+      'robinhood-trading': { url: ROBINHOOD }, offline: { url: 'https://offline.example.test/mcp' },
+      open: { url: OPEN }, local: { command: 'npx', args: ['-y', 'x'] },
+    });
+    const installed: string[] = [];
+    const result = await provisionChosenHarness({
+      harness: cursor, account: account(home), workspace, stateDir: state, home, signIn,
+      install: async (_harness, entry) => { installed.push(entry.name); return { harness: 'cursor', ok: true }; },
+    });
+    expect(installed).toEqual(['open', 'local']);
+    // Unreachable is not copied either: the only costly mistake is a popup.
+    expect(result.mcpNeedsSignIn).toEqual(['robinhood-trading', 'offline']);
+  });
+
+  it('copies one whose entry carries its own credential, where the vendor keeps headers', async () => {
+    const { home, state, workspace } = await layout();
+    await clikcodeList(state, { keyed: { url: ROBINHOOD, headers: { Authorization: 'Bearer t' } } });
+    const asked: boolean[] = [];
+    const installed: string[] = [];
+    await provisionChosenHarness({
+      harness: cursor, account: account(home), workspace, stateDir: state, home,
+      signIn: async (entry, headersReach) => {
+        asked.push(headersReach);
+        return mcpServerNeedsSignIn(entry, { stateDir: state, headersReach, probe: async () => 'sign-in' });
+      },
+      install: async (_harness, entry) => { installed.push(entry.name); return { harness: 'cursor', ok: true }; },
+    });
+    expect(asked).toEqual([true]);
+    expect(installed).toEqual(['keyed']);
+  });
+
+  it("takes ClikCode's copies out of an isolated profile, and leaves the user's own servers", async () => {
+    const { home, state, workspace } = await layout();
+    const profile = join(state, 'profiles', 'cursor', 'acct');
+    await mkdir(join(profile, '.cursor'), { recursive: true });
+    await writeFile(join(profile, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: {
+      'robinhood-trading': { url: ROBINHOOD }, figma: { url: 'https://my-own-figma.example/mcp' },
+      mine: { url: 'https://mine.example/mcp' }, local: { command: 'npx' },
+    } }));
+    await clikcodeList(state, { 'robinhood-trading': { url: ROBINHOOD }, figma: { url: FIGMA }, local: { command: 'npx' } });
+    const result = await provisionChosenHarness({ harness: cursor, account: account(profile), workspace, stateDir: state, home, signIn });
+    expect(result.mcpRemoved).toEqual(['robinhood-trading']);
+    // A different server under the same name, and one not in ClikCode's list, stay.
+    expect(Object.keys(await cursorServers(profile))).toEqual(['figma', 'mine', 'local']);
+    const again = await provisionChosenHarness({ harness: cursor, account: account(profile), workspace, stateDir: state, home, signIn });
+    expect(again.mcpRemoved).toEqual([]);
+    expect(again.mcpInstalled).toEqual([]);
+  });
+
+  it("in the user's own home, keeps the vendor it was imported from and cleans the vendors ClikCode fanned it out to", async () => {
+    const { home, state, workspace } = await layout();
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    await writeFile(join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: {
+      'robinhood-trading': { url: ROBINHOOD }, figma: { url: FIGMA },
+    } }));
+    await clikcodeList(state, { 'robinhood-trading': { url: ROBINHOOD }, figma: { url: FIGMA } });
+    await imported(state, [{ name: 'robinhood-trading', from: 'Cursor' }, { name: 'figma', from: 'Claude Code' }]);
+    const result = await provisionChosenHarness({ harness: cursor, workspace, stateDir: state, home, signIn });
+    expect(result.mcpRemoved).toEqual(['figma']);
+    expect(Object.keys(await cursorServers(home))).toEqual(['robinhood-trading']);
+  });
+
+  it('never takes a server the user adds by hand after the first pass', async () => {
+    const { home, state, workspace } = await layout();
+    const profile = join(state, 'profiles', 'cursor', 'acct');
+    await mkdir(join(profile, '.cursor'), { recursive: true });
+    await writeFile(join(profile, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: {} }));
+    await clikcodeList(state, { 'robinhood-trading': { url: ROBINHOOD } });
+    await provisionChosenHarness({ harness: cursor, account: account(profile), workspace, stateDir: state, home, signIn });
+    // The user signs it in here on purpose.
+    await writeFile(join(profile, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { 'robinhood-trading': { url: ROBINHOOD } } }));
+    const later = await provisionChosenHarness({ harness: cursor, account: account(profile), workspace, stateDir: state, home, signIn });
+    expect(later.mcpRemoved).toEqual([]);
+    expect(Object.keys(await cursorServers(profile))).toEqual(['robinhood-trading']);
+  });
+
+  it('takes back a server ClikCode wrote that has since started asking for a sign-in', async () => {
+    const { home, state, workspace } = await layout();
+    await mkdir(join(home, '.copilot'), { recursive: true });
+    await writeFile(join(home, '.copilot', 'mcp-config.json'), JSON.stringify({ mcpServers: { mine: { type: 'http', url: OPEN } } }));
+    await clikcodeList(state, { svc: { url: OPEN }, mine: { url: OPEN } });
+    const install: NonNullable<Parameters<typeof provisionChosenHarness>[0]['install']> = async (_harness, entry) => {
+      await writeMcpConfigEntry(join(home, '.copilot', 'mcp-config.json'), 'mcpServers', entry);
+      return { harness: 'copilot', ok: true };
+    };
+    const first = await provisionChosenHarness({ harness: copilot, workspace, stateDir: state, home, signIn, install });
+    expect(first.mcpInstalled).toEqual(['svc']);
+    const removed: string[] = [];
+    const later = await provisionChosenHarness({
+      harness: copilot, workspace, stateDir: state, home, install,
+      signIn: async () => 'sign-in',
+      remove: async (_harness, name) => { removed.push(name); return { harness: 'copilot', ok: true }; },
+    });
+    // `mine` was the user's before ClikCode looked, and no import says otherwise.
+    expect(removed).toEqual(['svc']);
+    expect(later.mcpRemoved).toEqual(['svc']);
+  });
 });

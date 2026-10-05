@@ -6,12 +6,15 @@
  * prompted, so no turn is spent. */
 
 import { mkdir, readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { JsonRpcPeer } from '../transport/jsonrpc-peer.js';
 import { spawnPortable } from '../transport/spawn.js';
+import { vendorMcpServerNames } from '../../agent/mcp/import.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 
 type Json = Record<string, any>;
 
@@ -104,4 +107,20 @@ export function acpSessionModels(result: Json | undefined): { models: string[]; 
     ? modelOption.currentValue
     : undefined;
   return { models, labels, ...((current ?? configured) ? { current: current ?? configured } : {}) };
+}
+
+/** The extra argv for an ACP agent started only to be asked something: its
+ * switch that keeps the user's MCP servers from starting. Where the vendor
+ * has only a per-server switch (Copilot), every server its config names is
+ * switched off one by one. A server left running here is not only a wasted
+ * process -- one that needs a sign-in makes Copilot open the browser. */
+export async function acpProbeArgv(
+  harness: Pick<AiLocalHarnessDefinition, 'command' | 'acp'>, account?: Pick<AiHarnessAccount, 'nativeProfile'>, home: string = homedir(),
+): Promise<string[]> {
+  const fixed = [...harness.acp?.probeArgv ?? []];
+  const prefix = harness.acp?.probeDisableMcpPrefix;
+  if (!prefix?.length) return fixed;
+  const profile = account?.nativeProfile ? { env: account.nativeProfile.env, path: account.nativeProfile.path } : undefined;
+  const { names } = await vendorMcpServerNames(harness.command, home, profile);
+  return [...fixed, ...[...names].sort().flatMap((name) => [...prefix, name])];
 }

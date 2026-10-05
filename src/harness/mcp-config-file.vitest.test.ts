@@ -9,7 +9,8 @@ import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mcpConfigEntry, mcpConfigPath, writeMcpConfigEntry } from './mcp-registry';
+import { mcpConfigEntry, mcpConfigPath, removeMcpConfigEntry, writeMcpConfigEntry } from './mcp-registry';
+import { removeFromVendorJsonFile } from '../agent/mcp/import.js';
 
 const GOOSE = { homeRelativeDir: ['.config', 'goose'], file: 'config.yaml', key: 'extensions',
   format: 'yaml' as const, entryShape: 'goose-extension' as const };
@@ -171,5 +172,35 @@ describe("Goose's own YAML shape", () => {
     await expect(writeMcpConfigEntry(path, 'extensions', { name: 'x', target: 'npx' }, GOOSE))
       .rejects.toThrow(/not valid YAML/);
     expect(await readFile(path, 'utf8')).toBe(broken);
+  });
+});
+
+describe('taking one server back out', () => {
+  it('removes only that server from a JSON or YAML config, keeping the rest', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-mcp-remove-'));
+    const json = join(dir, 'mcp.json');
+    await writeFile(json, JSON.stringify({ other: 1, mcpServers: { gone: { url: 'https://a' }, kept: { command: 'x' } } }));
+    expect(await removeMcpConfigEntry(json, 'mcpServers', 'gone', CURSOR)).toBe(true);
+    expect(await read(json)).toEqual({ other: 1, mcpServers: { kept: { command: 'x' } } });
+    expect(await removeMcpConfigEntry(json, 'mcpServers', 'gone', CURSOR)).toBe(false);
+    const yaml = join(dir, 'config.yaml');
+    await writeFile(yaml, '# mine\nextensions:\n  gone:\n    uri: https://a\n  kept:\n    cmd: x\n');
+    expect(await removeMcpConfigEntry(yaml, 'extensions', 'gone', GOOSE)).toBe(true);
+    expect(await readFile(yaml, 'utf8')).toBe('# mine\nextensions:\n  kept:\n    cmd: x\n');
+  });
+
+  it("edits opencode's file only when it is plain JSON, never one with comments", async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clikcode-mcp-remove-'));
+    await mkdir(join(home, '.config', 'opencode'), { recursive: true });
+    const path = join(home, '.config', 'opencode', 'opencode.jsonc');
+    await writeFile(path, JSON.stringify({ $schema: 's', mcp: { figma: { type: 'remote', url: 'https://f' }, mine: { type: 'remote', url: 'https://m' } } }));
+    expect(await removeFromVendorJsonFile('opencode', 'figma', home)).toEqual({ ok: true });
+    expect(await read(path)).toEqual({ $schema: 's', mcp: { mine: { type: 'remote', url: 'https://m' } } });
+    const commented = '{\n  // my servers\n  "mcp": { "mine": { "type": "remote", "url": "https://m" } }\n}\n';
+    await writeFile(path, commented);
+    const refused = await removeFromVendorJsonFile('opencode', 'mine', home);
+    expect(refused.ok).toBe(false);
+    expect(refused.detail).toMatch(/comments/);
+    expect(await readFile(path, 'utf8')).toBe(commented);
   });
 });
