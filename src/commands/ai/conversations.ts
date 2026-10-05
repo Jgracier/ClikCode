@@ -8,7 +8,9 @@ import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
-import { createHandoffBranch, synchronizeNativeTranscript } from '../../turn/handoff.js';
+import { carriedHandoffModel, carriedHandoffSettings, createHandoffBranch, synchronizeNativeTranscript } from '../../turn/handoff.js';
+import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
+import { harnessSupportsEffort } from '../../runtime/lazy-bridge.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';
@@ -123,7 +125,13 @@ export async function newProviderConversation(
   // Refresh the source before freezing its portable ClikCode history into a
   // child branch. The source native session remains untouched after this.
   if (await synchronizeNativeTranscript(state, current)) await writeState(state);
-  const defaults = resolveDefaultSettings(state, harness.provider);
+  const accountId = selection.accountId ?? preferredAccountId(state, harness.provider);
+  const account = accountId ? state.accounts.find((item) => item.id === accountId) : undefined;
+  // Effort and permission mode are the conversation's, not the provider's.
+  const efforts = harnessSupportsEffort(harness)
+    ? (await effortChoicesFor(harness, account, current.model).catch(() => undefined))?.values
+    : undefined;
+  const defaults = carriedHandoffSettings(current, harness, resolveDefaultSettings(state, harness.provider), efforts);
   const lastUsedModel = [...state.sessions]
     .filter((session) => session.nativeHarness === harness.command && session.model)
     .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
@@ -133,9 +141,9 @@ export async function newProviderConversation(
     : sessionProviderLabel(current);
   const session = createHandoffBranch({
     source: current, target: harness,
-    accountId: selection.accountId ?? preferredAccountId(state, harness.provider),
-    model: selection.model ?? (current.nativeHarness === harness.command ? current.model : undefined)
-      ?? lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null,
+    accountId,
+    model: selection.model ?? carriedHandoffModel(current, account?.models ?? [],
+      lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null),
     defaults, now, sourceDisplayName, ...(selection.turn ? { turn: selection.turn } : {}),
   });
   state.sessions.push(session);
