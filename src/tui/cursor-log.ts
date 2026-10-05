@@ -7,13 +7,7 @@ import { appendFileSync, mkdirSync, renameSync, statSync } from 'node:fs';
 import { stateDirectory } from '../session/store/paths.js';
 import { join } from 'node:path';
 
-/** A short, bounded record of what the terminal actually did with the cursor,
- * written to ~/.clikcode/cursor.log. Placing the cursor depends on how a
- * client answers (or ignores) DSR, which cannot be seen from a screenshot and
- * differs per terminal; this is how a report becomes a diagnosis. Sixty lines
- * per process, so a long session cannot grow it without bound. */
 let cursorLogLines = 0;
-
 let inputLogLines = 0;
 
 /** Frames are noisy and a session opens with a burst of them; what a client
