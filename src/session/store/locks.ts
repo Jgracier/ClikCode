@@ -6,7 +6,8 @@ import { randomBytes } from 'node:crypto';
 import { readlinkSync } from 'node:fs';
 import { link, open, readFile, rename, stat, unlink, utimes } from 'node:fs/promises';
 import { hostname } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { ensurePrivateDirectory } from './files.js';
 import { stateDirectory } from './paths.js';
 
@@ -197,6 +198,10 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise
     if (waited > LOCK_TUNING.waitMs) throw new StateLockTimeoutError(lockPath, holder, waited);
     await new Promise((resolve) => setTimeout(resolve, 8 + Math.floor(Math.random() * 12)));
   }
+  // A wait anyone would notice is recorded with whoever held it: a send in
+  // VS Code once stood 30 s with nothing saying what it waited for.
+  const waitedMs = Date.now() - started;
+  if (waitedMs >= 1_000) lifecycle('lock.wait', { lock: basename(lockPath), ms: waitedMs, ...(holder ? { holder } : {}) });
   // The heartbeat: a held lock's file stays fresh, so other processes judge
   // it by age alone (lockLooksStale) -- up to maxHoldMs.
   const heldSince = Date.now();
