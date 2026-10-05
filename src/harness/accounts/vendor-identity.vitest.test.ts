@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { matchingVendorAccount } from './labels.js';
 import {
-  antigravityIdTokenEmail, codexIdTokenEmail, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
+  antigravityIdTokenEmail, codexIdTokenEmail, kimiBaseUrl, parseKimiUserInfo, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser, vendorAccountEmail,
 } from './vendor-identity.js';
 
@@ -130,5 +130,30 @@ describe('vendor account email', () => {
     expect(antigravityIdTokenEmail(file(jwt({ ...google, email_verified: false })))).toBeUndefined();
     expect(antigravityIdTokenEmail(file())).toBeUndefined();
     expect(antigravityIdTokenEmail('not json')).toBeUndefined();
+  });
+
+  it('reads the Kimi /me profile and the base_url its config names', () => {
+    expect(parseKimiUserInfo('{"user_id":"u1","nickname":"n","email":"a@example.com"}')).toBe('a@example.com');
+    expect(parseKimiUserInfo('{"user_id":"u1","nickname":"n"}')).toBeUndefined();
+    expect(parseKimiUserInfo('{"email":"a@example.com"}')).toBeUndefined();
+    const config = '[providers."managed:kimi-code"]\ntype = "kimi"\nbase_url = "https://api.kimi.ai/coding/v1/"\n\n[providers."managed:kimi-code".oauth]\nstorage = "file"\n';
+    expect(kimiBaseUrl(config)).toBe('https://api.kimi.ai/coding/v1');
+    expect(kimiBaseUrl('[providers.other]\nbase_url = "https://x.example"\n')).toBeUndefined();
+  });
+  it('never sends an expired Kimi access token anywhere', async () => {
+    const profile = mkdtempSync(join(tmpdir(), 'clikcode-kimi-identity-'));
+    try {
+      mkdirSync(join(profile, '.kimi-code', 'credentials'), { recursive: true });
+      writeFileSync(join(profile, '.kimi-code', 'credentials', 'kimi-code.json'), JSON.stringify({ access_token: 'h.e30.s', expires_at: 1 }));
+      const original = globalThis.fetch;
+      let called = false;
+      globalThis.fetch = (async () => { called = true; return new Response('{}'); }) as typeof fetch;
+      try {
+        expect(await vendorAccountEmail({ command: 'kimi' } as AiLocalHarnessDefinition, profile)).toBeUndefined();
+      } finally { globalThis.fetch = original; }
+      expect(called).toBe(false);
+    } finally {
+      rmSync(profile, { recursive: true, force: true });
+    }
   });
 });
