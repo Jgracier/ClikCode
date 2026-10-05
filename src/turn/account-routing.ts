@@ -6,7 +6,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import chalk from 'chalk';
-import { accountSwitchNotice, accountSwitchPhase, accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
+import { accountSwitchNotice, accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
 import { recordQuotaRefusal } from './account-outcome.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { readState } from '../session/state/read.js';
@@ -49,6 +49,11 @@ export function reportedRoom(state: HarnessState, account: AiHarnessAccount, now
  * reported room first, an account with no figure after those. Reads stored
  * state only (a live probe per candidate is what made a switch take minutes)
  * and writes nothing. */
+function resetPassed(account: AiHarnessAccount, now: number): boolean {
+  const at = account.quotaRetryAt ? Date.parse(account.quotaRetryAt) : Number.NaN;
+  return Number.isFinite(at) && at <= now;
+}
+
 export function nextUsableFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
@@ -58,7 +63,10 @@ export function nextUsableFailoverAccount(
 ): AiHarnessAccount | undefined {
   const room = (account: AiHarnessAccount): number => reportedRoom(state, account, now) ?? -1;
   return state.accounts
-    .filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
+    // One this turn already tried is tried again only once the reset its
+    // refusal named has passed: "All accounts exhausted" was said a minute
+    // after the first account had come back.
+    .filter((candidate) => candidate.id !== current.id && (!attempted.has(candidate.id) || resetPassed(candidate, now))
       && candidate.provider === current.provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now))
     .sort((left, right) => room(right) - room(left))[0];
 }
@@ -230,8 +238,9 @@ export function turnAccounts(input: {
   /** Why the turn left that account: the failure it met there. */
   let switchReason: AccountFailureKind = 'quota-exhausted';
   const switchTo = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
-    prompter?.activity(chalk.yellow(accountSwitchNotice(why, to.label)));
-    prompter?.phase(accountSwitchPhase(to.label));
+    // The status line says it while it happens; the band names the account
+    // the turn is on. A line in the conversation per switch was noise.
+    prompter?.phase(accountSwitchNotice(why, to.label));
     await input.beforeSwitch?.();
     switchedFrom = input.current().label;
     switchReason = why;

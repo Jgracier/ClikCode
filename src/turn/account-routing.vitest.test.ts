@@ -38,6 +38,18 @@ describe('stored-usage account switch', () => {
     )?.id).toBe('key');
   });
 
+  it('goes back to an account this turn already tried once the reset it named has passed', () => {
+    // Codex: account A said "try again at 10:38", B ran out at 10:39 -- and
+    // the turn said "All accounts exhausted" with A back a minute earlier.
+    const back = account('back', { quotaState: 'exhausted', quotaRetryAt: earlier });
+    const current = account('current', { quotaState: 'exhausted', quotaRetryAt: later });
+    expect(nextUsableFailoverAccount(state([current, back]), current, () => true, new Set(['back']))?.id).toBe('back');
+    const stillOut = account('still-out', { quotaState: 'exhausted', quotaRetryAt: later });
+    expect(nextUsableFailoverAccount(state([current, stillOut]), current, () => true, new Set(['still-out']))).toBeUndefined();
+    // Tried and refused for something that names no reset: not again this turn.
+    expect(nextUsableFailoverAccount(state([current, account('throttled')]), current, () => true, new Set(['throttled']))).toBeUndefined();
+  });
+
   it('skips a known spent account before the turn and records that attempt', () => {
     const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
     const next = account('next');
