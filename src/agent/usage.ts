@@ -46,6 +46,3 @@ export function recordUsage(ledger: UsageLedger, entry: UsageLedgerEntry): Usage
   };
 }
 
-function aggregateUsage(usages: readonly TokenUsage[]): TokenUsage {
-  return usages.reduce<TokenUsage>((total, usage) => addUsage(total, usage), {});
-}

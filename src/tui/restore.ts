@@ -7,7 +7,7 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
-import { POP_TITLE, progressSequence } from './terminal-signals.js';
+import { FOCUS_REPORTING_OFF, POP_TITLE, progressSequence } from './terminal-signals.js';
 
 /** An in-place build reload inherits the current terminal screen and title. */
 export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
@@ -67,7 +67,7 @@ export function terminalPrepare(): string {
  * sets but whatever ran before may have. */
 export const MOUSE_MODES_OFF = '\x1b[?1006l\x1b[?1016l\x1b[?1003l\x1b[?1002l\x1b[?1000l';
 /** Bracketed paste, theme and focus reports, off. */
-const READ_MODES_OFF = '\x1b[?2004l\x1b[?2031l\x1b[?1004l';
+const READ_MODES_OFF = `\x1b[?2004l\x1b[?2031l${FOCUS_REPORTING_OFF}`;
 /** State a client latches: modifyOtherKeys, the charset, the scroll region. */
 const LATCHED_OFF = '\x1b[>4m\x1b(B\x0f\x1b7\x1b[r\x1b8';
 

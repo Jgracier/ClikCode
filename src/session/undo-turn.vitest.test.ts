@@ -12,7 +12,8 @@ import { FileCheckpointStore } from '../agent/file-checkpoints.js';
 import { resolveSlashCommand } from '../tui/slash/registry.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from './model.js';
-import { appendTurnChanges, readTurnChanges, removeTurnChanges, TurnRecorder, turnChangesAgo, turnChangesDiff, turnChangesList } from './turn-changes.js';
+import { forgetSessionArtifacts } from './store/forget.js';
+import { appendTurnChanges, readTurnChanges, TurnRecorder, turnChangesAgo, turnChangesDiff, turnChangesList } from './turn-changes.js';
 import { undoLastTurn as undoTurn, undoTurnsBack } from './undo-turn.js';
 
 const undoLastTurn = (s: HarnessSession, options: { stateDir: string; who: string }) => undoTurn(s, { ...options, turnIsRunning: async () => false });
@@ -415,7 +416,9 @@ describe('/undo N and /changes', () => {
   it('refuses while a turn is running, and forgets the log with the conversation', async () => {
     const s = await threeTurns('undo-n-3');
     expect((await undoTurnsBack(s, 2, { stateDir, who: 'OpenCode', turnIsRunning: async () => true })).text).toMatch(/^Not undone: a turn is running/);
-    await removeTurnChanges(s.id, stateDir);
+    const home = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = stateDir;
+    try { await forgetSessionArtifacts(s.id); } finally { if (home === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = home; }
     expect(await readTurnChanges(stateDir, s.id)).toEqual([]);
   });
 });
