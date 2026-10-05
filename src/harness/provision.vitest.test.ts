@@ -257,6 +257,21 @@ describe('a remote MCP server that needs a browser sign-in', () => {
     expect(Object.keys(await cursorServers(home))).toEqual(['robinhood-trading']);
   });
 
+  it('a take-back-only sweep removes and writes nothing new', async () => {
+    const { home, state, workspace } = await layout();
+    const profile = join(state, 'profiles', 'cursor', 'acct');
+    await mkdir(join(profile, '.cursor'), { recursive: true });
+    await writeFile(join(profile, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { 'robinhood-trading': { url: ROBINHOOD } } }));
+    await clikcodeList(state, { 'robinhood-trading': { url: ROBINHOOD }, open: { url: OPEN }, local: { command: 'npx' } });
+    const result = await provisionChosenHarness({
+      harness: cursor, account: account(profile), workspace, stateDir: state, home, signIn, takeBackOnly: true,
+      install: async () => { throw new Error('a sweep must not install'); },
+    });
+    expect(result.mcpRemoved).toEqual(['robinhood-trading']);
+    expect(result.mcpInstalled).toEqual([]);
+    expect(await cursorServers(profile)).toEqual({});
+  });
+
   it('never takes a server the user adds by hand after the first pass', async () => {
     const { home, state, workspace } = await layout();
     const profile = join(state, 'profiles', 'cursor', 'acct');

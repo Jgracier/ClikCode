@@ -54,6 +54,8 @@ export interface ProvisionResult {
   mcpNeedsSignIn: string[];
   /** ClikCode's own earlier copies of those, taken back out of this harness. */
   mcpRemoved: string[];
+  /** Copies that could not be taken out, and why (a JSONC file with comments). */
+  mcpRemoveFailed: Array<{ name: string; detail?: string }>;
   skillsCopied: string[];
 }
 
@@ -78,6 +80,10 @@ export interface ProvisionInput {
    * which runs an npx server's installed bin. Without it npx entries are
    * written as they are. */
   launcher?: { target: string; args: readonly string[] };
+  /** Only take ClikCode's sign-in servers back out: write nothing new and
+   * copy no skills. For a sweep over every profile at once, which must not
+   * fan anything out to a harness nobody chose. */
+  takeBackOnly?: boolean;
 }
 
 function profileOf(account?: AiHarnessAccount): { env: string; path: string } | undefined {
@@ -128,6 +134,7 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   const mcpSkipped: string[] = [];
   const mcpNeedsSignIn: string[] = [];
   const mcpRemoved: string[] = [];
+  const mcpRemoveFailed: Array<{ name: string; detail?: string }> = [];
   const skillsCopied: string[] = [];
 
   const loaded = await loadMcpServers(stateDir);
@@ -165,10 +172,11 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
         if (removed.ok) {
           mcpRemoved.push(entry.name);
           await forgetProvisioned(stateDir, input, entry.name);
-        }
+        } else mcpRemoveFailed.push({ name: entry.name, ...(removed.detail ? { detail: removed.detail } : {}) });
       }
       continue;
     }
+    if (input.takeBackOnly) continue;
     if (present.known && present.names.has(entry.name)) continue;
     if (grokClaudeMcp?.names.has(entry.name)) continue;
     if (!present.known && await alreadyProvisioned(stateDir, input, entry.name)) continue;
@@ -187,7 +195,7 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   }
 
   const userDirParts = USER_SKILL_DIR[input.harness.command];
-  if (userDirParts) {
+  if (userDirParts && !input.takeBackOnly) {
     const catalog = await discoverSkills({ cwd: workspace, stateDir, homeDir: home });
     const userDir = skillRoot(userDirParts, home, profile);
     const projectParts = PROJECT_SKILL_DIR[input.harness.command];
@@ -207,7 +215,7 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   }
 
   if (!present.unreadable) await ownership.settle(entries.map((entry) => entry.name).filter((name) => !mcpRemoved.includes(name)));
-  return { mcpInstalled, mcpSkipped, mcpNeedsSignIn, mcpRemoved, skillsCopied };
+  return { mcpInstalled, mcpSkipped, mcpNeedsSignIn, mcpRemoved, mcpRemoveFailed, skillsCopied };
 }
 
 /** Which of this harness's servers ClikCode wrote.
