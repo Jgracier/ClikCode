@@ -15,16 +15,15 @@
  */
 
 import { stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore } from '../stores.js';
+import type { NativeSessionFile, NativeSessionStore } from '../stores.js';
+import { antigravityConversationsRoot, antigravityThreadWriter } from './antigravity-writer.js';
 
 export const antigravitySessionStore: NativeSessionStore = {
-  root(environment: NativeSessionEnvironment): string {
-    return join(nativeDataRoot(environment, 'HOME', homedir()), '.gemini', 'antigravity-cli', 'conversations');
-  },
+  root: antigravityConversationsRoot,
   async locate(root: string, nativeId: string): Promise<NativeSessionFile | undefined> {
     const path = join(root, `${nativeId}.db`);
     return await stat(path).then(() => ({ path, root }), () => undefined);
   },
+  writer: antigravityThreadWriter,
 };
