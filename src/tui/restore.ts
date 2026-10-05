@@ -112,23 +112,12 @@ export function restoreTerminal(options: { sync?: boolean } = {}): void {
     // `?1003h` set in the client. The next session then opened into a terminal
     // that still believed the last application owned the mouse.
     //
-    // Claude Code's own exit, captured from this user's phone, clears modes it
-    // never sets: `?1016l`, `CSI > 4 m`, the charset, the scroll region, each
-    // of the four mouse modes, twice over. That is what a program does when it
-    // knows a client latches state, and it is why running Claude Code once
-    // makes the next program work -- measured here three times.
-    //
-    // The order is the point too: it clears the mouse modes on the ALTERNATE screen, then leaves it, then
-    // clears them AGAIN on the main screen -- twice. This cleared them once,
-    // on the alternate screen, and left `?1049l` for last, so the main screen's
-    // mouse state was never touched at all.
-    //
-    // Emulators commonly keep DEC private modes per screen buffer. Leaving the
-    // main screen dirty means the next session's `?1049h` inherits it, which is
-    // the self-perpetuating failure actually observed: ClikCode stops scrolling
-    // with the keyboard hidden and stays broken across restarts, and running
-    // Claude Code once -- which does clean the main screen -- fixes the next
-    // ClikCode.
+    // What is cleared, and in which order on which screen, is Claude Code's
+    // own exit (see terminalTeardown). Clearing only the alternate screen was
+    // the self-perpetuating failure actually observed: ClikCode stopped
+    // scrolling with the keyboard hidden and stayed broken across restarts,
+    // and running Claude Code once -- which cleans the main screen -- fixed
+    // the next ClikCode. Measured three times.
     sequence += terminalTeardown(terminalModes.alternateScreen);
     sequence += signalsTeardown();
     const wasRaw = terminalModes.rawMode;
