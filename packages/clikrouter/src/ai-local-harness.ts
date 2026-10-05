@@ -437,8 +437,10 @@ export interface AiLocalHarnessDefinition {
   /** Environment variables that sign the vendor in by themselves
    * (GEMINI_API_KEY). Any one set counts as signed in. */
   authEnv?: readonly string[];
-  /** What to do inside a vendor that signs in only from its own session
-   * (Pi: "type /login"). Shown before ClikCode hands it the terminal. */
+  /** The vendor runs turns with no sign-in at all (OpenCode's free models,
+   * `opencode/big-pickle`, in a fresh home). Choosing it never signs in
+   * first; a turn the vendor refuses for want of one signs in then. */
+  signInOptional?: true;
   /** Side-effect-free version probe; defaults to --version. */
   versionArgv?: readonly string[];
   /** Arguments required before entering the vendor's normal interactive UI. */
@@ -734,7 +736,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // its threads there.
   { command: 'gemini', provider: 'google', displayName: 'Gemini CLI', surface: 'terminal', tier: 'primary', transport: 'acp', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'GEMINI.md', nativeSlashPassthrough: false, customCommandDirs: ['.gemini/commands', '~/.gemini/commands'], acp: { argv: ['--acp'], listsModels: true }, normalizedPermissionOptionIds: ['approval-mode'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'gemini', npmPackage: '@google/gemini-cli', authFiles: [{ path: '${GEMINI_CLI_HOME:-~}/.gemini/oauth_creds.json' }], authEnv: ['GEMINI_API_KEY'], loginArgv: ['--skip-trust'], loginSteps: [{ when: 'Type your message', send: '/quit{enter}' }], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--include-directories'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--approval-mode', 'default'] }, bypass: { argv: ['--approval-mode', 'yolo'] }, auto: { argv: ['--approval-mode', 'auto_edit'] } }, profileEnv: 'GEMINI_CLI_HOME', turn: { startArgv: ['--skip-trust', '--output-format', 'stream-json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--prompt'], output: 'json-lines', responseFields: ['response', 'result', 'text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], continueArgv: ['--resume', 'latest'] } },
   { command: 'codex', provider: 'openai', displayName: 'Codex', surface: 'terminal', tier: 'primary', transport: 'codex-app-server', integration: 'native', parser: 'codex-items', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['~/.codex/prompts'], effortValues: ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'codex', authFiles: [{ path: '${CODEX_HOME:-~/.codex}/auth.json' }], authEnv: ['OPENAI_API_KEY'], npmPackage: '@openai/codex', loginRemoteArgv: ['login', '--device-auth'], loginArgv: ['login'], statusArgv: ['login', 'status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cd'], effortArgvPrefix: ['--config'], effortConfigKey: 'model_reasoning_effort', permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--sandbox', 'workspace-write', '--ask-for-approval', 'on-request'], placement: 'root' }, bypass: { argv: ['--sandbox', 'danger-full-access', '--ask-for-approval', 'never'], placement: 'root' }, auto: { argv: ['--approve-for-me'], placement: 'root' } }, imageArgvPrefix: ['--image'], profileEnv: 'CODEX_HOME', turn: { startArgv: ['exec', '--json', '--skip-git-repo-check'], resumeArgv: ['exec', 'resume'], resumeIdSuffix: ['--json', '--skip-git-repo-check'], promptInput: 'stdin', output: 'json-lines', responseFields: ['text'], resumeSupportsWorkspaceSelector: false }, session: { resumeIdPrefix: ['resume'], continueArgv: ['resume', '--last'] } },
-  { ...OPENCODE_FAMILY, command: 'opencode', provider: 'opencode', displayName: 'OpenCode', tier: 'primary', binary: 'opencode', npmPackage: 'opencode-ai' },
+  { ...OPENCODE_FAMILY, command: 'opencode', provider: 'opencode', displayName: 'OpenCode', tier: 'primary', binary: 'opencode', npmPackage: 'opencode-ai', signInOptional: true },
   // No logoutArgv: Copilot signs out only with /logout inside its own chat
   // (1.0.91: `copilot logout` exits 1, "Invalid command format"), and its
   // token is in the system credential store, so ClikCode can remove the
