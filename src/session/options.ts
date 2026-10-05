@@ -112,12 +112,8 @@ export function latestChat(sessions: readonly HarnessSession[], workspace: strin
   return chats.find((session) => session.workspace === workspace) ?? chats[0];
 }
 
-export function requiresProviderHandoff(session: HarnessSession, targetHarness: string): boolean {
-  return hasConversationContent(session) && (session.route !== 'local' || session.nativeHarness !== targetHarness);
-}
-
-/** One row per ClikCode conversation, newest first. Provider-native hops stay
- * available via the row's Provider history action instead of appearing as
+/** One row per ClikCode conversation, newest first. Its forks stay
+ * available via the row's Branches action instead of appearing as
  * duplicate rows. (The /resume board builds its rows with liveness: see
  * conversationRows and conversationOption.) */
 export function sessionPickerOptions(
@@ -133,7 +129,7 @@ export function sessionPickerOptions(
 }
 
 /** A conversation row as a picker option: title, who answered, how long ago,
- * the last thing asked; its chats under Provider history. */
+ * the last thing asked; its forks under Branches. */
 export function conversationOption(
   row: ConversationRow,
   providerLabel: ((session: HarnessSession) => string) | undefined = sessionProviderLabel,
@@ -169,7 +165,7 @@ export function conversationOption(
     label: title,
     // The model segment is dropped entirely when there is no real one,
     // rather than printed as "default" -- see resolveNativeModel.
-    // Provider history stays on Tab. The row is the conversation: who
+    // Branches stay on Tab. The row is the conversation: who
     // answered, how long ago, and the last thing that was asked.
     detail: [
       `· ${labelFor(latest)}${row.current ? ' · current' : ''}`,
@@ -177,7 +173,7 @@ export function conversationOption(
     ].filter(Boolean).join(' · '),
     value: latest.id,
     alternates: history.length > 1 ? history.map((session) => ({
-      label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : session.handoff ? 'handed off' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,
+      label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${!session.parentSessionId || !byId.has(session.parentSessionId) ? 'original' : 'fork'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,
       value: session.id,
     })) : undefined,
   };

@@ -361,7 +361,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
        * the line (/review): what an interrupted turn recorded is compared to. */
       let sentPrompt: string | undefined;
       // One live Codex/ACP child per OPEN conversation: leaving it (new chat,
-      // handoff, resume) closes the child it had.
+      // fork, resume) closes the child it had.
       if (transportSessionId !== id) {
         const leaving = transportSessionId;
         nativeAvailableCommands.delete(leaving);

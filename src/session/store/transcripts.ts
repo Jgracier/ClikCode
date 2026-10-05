@@ -14,7 +14,7 @@ export interface SessionTranscript {
   pendingTurn?: HarnessSession['pendingTurn'];
 }
 
-/** A fork or handoff child shares its parent's history up to an offset instead
+/** A fork shares its parent's history up to an offset instead
  * of storing a second copy of it. */
 export interface TranscriptRef { sessionId: string; uptoIndex: number }
 
@@ -109,7 +109,7 @@ async function materializeChildrenOf(parentId: string): Promise<string[]> {
 }
 
 interface TranscriptWriteOptions {
-  /** Session whose history this one may share (its fork/handoff parent). */
+  /** Session whose history this one may share (its fork parent). */
   parentSessionId?: string;
   /** `next` is a baseline copy that nothing will change (state/merge.ts), so
    * it is stored as it is instead of copied again. Its unchanged history is

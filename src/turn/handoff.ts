@@ -1,8 +1,7 @@
-/** Portable conversation branches and vendor transcript reconciliation. */
-import { randomUUID } from 'node:crypto';
+/** What a conversation carries to another provider, and vendor transcript
+ * reconciliation. */
 import type { AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../session/model.js';
-import { conversationIdFor } from '../session/options.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
@@ -95,42 +94,6 @@ export function carriedHandoffModel(
     if (model && targetModels.includes(model)) return model;
   }
   return fallback;
-}
-
-/** Create a portable child branch. The source keeps its provider-owned
- * identity; the child carries the ClikCode-owned transcript into its target. */
-export function createHandoffBranch(input: {
-  source: HarnessSession;
-  target: AiLocalHarnessDefinition;
-  accountId: string | null;
-  model: string | null;
-  defaults: HarnessDefaultSettings;
-  now: string;
-  id?: string;
-  sourceDisplayName?: string;
-  /** The interrupted turn this branch carries on (see handoff.turn). */
-  turn?: string;
-}): HarnessSession {
-  const sourceCommand = input.source.nativeHarness ?? input.source.route;
-  const id = input.id ?? randomUUID();
-  const base = input.source.name?.replace(/\s+\(from [^)]+\)$/i, '').trim();
-  return {
-    id, conversationId: conversationIdFor(input.source), parentSessionId: input.source.id,
-    handoff: { fromSessionId: input.source.id, fromHarness: sourceCommand, at: input.now, ...(input.turn ? { turn: input.turn } : {}) },
-    route: 'local', accountId: input.accountId, provider: input.target.provider, model: input.model,
-    effort: input.defaults.effort, permissionMode: input.defaults.permissionMode, accountFailover: input.defaults.accountFailover,
-    workspace: input.source.workspace ?? process.cwd(), nativeHarness: input.target.command,
-    ...(base ? { name: base } : {}),
-    ...(sessionTranscriptMessages(input.source).length
-      ? { messages: sessionTranscriptMessages(input.source).map((message) => ({ ...message })) }
-      : {}),
-    // Files attached for a request that has not finished (one that ran out
-    // mid-turn keeps them) or for the next one. The transcript keeps only the
-    // typed words, so without these the new provider's first turn retold the
-    // request without what it was about.
-    ...(input.source.attachments?.length ? { attachments: [...input.source.attachments] } : {}),
-    createdAt: input.now, updatedAt: input.now, status: 'active',
-  };
 }
 
 /** Pull turns added directly in a vendor CLI back into an already-linked

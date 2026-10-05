@@ -174,7 +174,8 @@ const MANAGE_ACTIONS = [
 /** One list for finding a conversation and managing it.
  *
  * One list opens, creates, and manages conversations. Row actions also expose
- * provider history, so finding a branch and managing a chat share one screen. */
+ * a conversation's branches (forks), so finding one and managing a chat share
+ * one screen. */
 export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: string): Promise<{ id: string } | { new: true } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
@@ -354,7 +355,7 @@ export async function interactiveSessionPicker(
     })));
     for (const option of options) {
       if (option.value.startsWith('native:')) continue;
-      const historyAction = option.alternates?.length ? [{ label: 'Provider history', value: 'history' }] : [];
+      const historyAction = option.alternates?.length ? [{ label: 'Branches', value: 'history' }] : [];
       if (option.alternates?.length) histories.set(option.value, [...option.alternates]);
       delete option.alternates;
       option.actions = [...historyAction, ...MANAGE_ACTIONS];
@@ -397,7 +398,7 @@ export async function interactiveSessionPicker(
   const manage = async (targetId: string, action: string): Promise<void> => {
     actedOn = true;
     if (action === 'history') {
-      const selectedHistory = await chooseOption(rl, 'Provider history', histories.get(targetId) ?? []);
+      const selectedHistory = await chooseOption(rl, 'Branches', histories.get(targetId) ?? []);
       if (selectedHistory) replacement = selectedHistory;
       return;
     }

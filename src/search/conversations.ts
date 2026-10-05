@@ -8,7 +8,7 @@ import { loadIndex } from '../session/state/index-file.js';
 
 export interface ConversationGroup {
   id: string;
-  /** Its chats (provider handoffs, forks), newest first. */
+  /** Its chats (it and its forks), newest first. */
   branches: HarnessSession[];
   /** The newest branch: it names the conversation and is the one opened. */
   newest: HarnessSession;

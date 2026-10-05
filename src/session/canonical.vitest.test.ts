@@ -1,13 +1,9 @@
-/** The canonical record: a conversation's branch chain read back as one list
- * of turns, each with what produced it. */
+/** The canonical record: a conversation read back as one list of turns,
+ * each with what produced it. */
 import { describe, expect, it } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import type { HarnessSession, TranscriptMessage } from './model.js';
-import { ancestorChain, canonicalRecord, loadCanonicalRecord } from './canonical.js';
-import { readState } from './state/read.js';
-import { writeState } from './state/write.js';
-import { createHandoffBranch } from '../turn/handoff.js';
-import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { canonicalRecord } from './canonical.js';
 import { finishPendingTurn } from '../turn/checkpoint.js';
 
 const now = '2026-10-04T00:00:00.000Z';
@@ -22,8 +18,11 @@ function session(fields: Partial<HarnessSession>): HarnessSession {
 const user = (content: string, attachments?: string[]): TranscriptMessage => ({ role: 'user', content, ...(attachments ? { attachments } : {}) });
 const said = (content: string, activities?: TranscriptMessage['activities']): TranscriptMessage => ({ role: 'assistant', content, ...(activities ? { activities } : {}) });
 
-/** root (Claude, 2 turns) -> child (Codex, +2 turns) -> fork of root's first
- * turn only (OpenCode, +1 turn). */
+const claude = { harness: 'claude', route: 'local' as const, provider: 'anthropic', model: 'opus' };
+const by = (origin: TranscriptMessage['origin'], messages: TranscriptMessage[]): TranscriptMessage[] => messages.map((message) => ({ ...message, origin }));
+
+/** root (Claude, 2 turns) -> moved to Codex in place (+2 turns) -> a fork of
+ * its first turn only, on OpenCode (+1 turn). */
 function chain() {
   const root = session({
     nativeHarness: 'claude', model: 'opus',
@@ -38,22 +37,22 @@ function chain() {
     ],
   });
   const child = session({
-    nativeHarness: 'codex', provider: 'openai', model: 'gpt-5', parentSessionId: root.id, conversationId: root.id,
-    messages: [...root.messages!, user('now the docs'), said('Docs updated.', [
+    id: root.id, nativeHarness: 'codex', provider: 'openai', model: 'gpt-5',
+    messages: [...by(claude, root.messages!), user('now the docs'), said('Docs updated.', [
       { responseOffset: 0, event: { kind: 'tool-done', label: 'Edit docs/README.md', category: 'edit' } },
     ])],
   });
   const fork = session({
     nativeHarness: 'opencode', provider: 'opencode', model: 'big-pickle', parentSessionId: child.id, conversationId: root.id,
-    messages: [...root.messages!.slice(0, 2), user('try another name'), said('Called it Lexer.')],
+    messages: [...by(claude, root.messages!.slice(0, 2)), user('try another name'), said('Called it Lexer.')],
   });
   return { root, child, fork };
 }
 
 describe('canonicalRecord', () => {
-  it('merges the branch chain in order, one numbering, each turn with its producer', () => {
+  it('reads the conversation in order, one numbering, each turn with its producer', () => {
     const { root, child } = chain();
-    const record = canonicalRecord(child, [root]);
+    const record = canonicalRecord(child);
     expect(record.turns.map((turn) => [turn.index, turn.user, turn.origin.harness, turn.origin.model])).toEqual([
       [0, 'read the parser', 'claude', 'opus'],
       [1, 'rename it', 'claude', 'opus'],
@@ -64,7 +63,7 @@ describe('canonicalRecord', () => {
 
   it('keeps every tool call, including on turns that wrote text, with category, name, args, output and status', () => {
     const { root, child } = chain();
-    const [first, second] = canonicalRecord(child, [root]).turns;
+    const [first, second] = canonicalRecord(child).turns;
     expect(first!.tools).toEqual([expect.objectContaining({
       category: 'read', name: 'Read', input: { file_path: 'src/parser.ts' }, target: 'src/parser.ts', status: 'done', output: ['export function parse() {}'],
     })]);
@@ -78,30 +77,18 @@ describe('canonicalRecord', () => {
 
   it('collects touched files and attachments across the conversation', () => {
     const { root, child } = chain();
-    const record = canonicalRecord({ ...child, attachments: ['/w/next.png'] }, [root]);
+    const record = canonicalRecord({ ...child, attachments: ['/w/next.png'] });
     expect(record.touchedFiles).toEqual(['src/parser.ts', 'docs/README.md']);
     expect(record.turns[0]!.attachments).toEqual(['/w/notes.md']);
     expect(record.attachments).toEqual(['/w/notes.md']);
     expect(record.pendingAttachments).toEqual(['/w/next.png']);
   });
 
-  it('attributes a fork that cut history short to the branch it shares it with', () => {
-    const { root, child, fork } = chain();
-    const record = canonicalRecord(fork, ancestorChain(fork, [root, child, fork]));
+  it('keeps who answered on what a fork copied', () => {
+    const { fork } = chain();
+    const record = canonicalRecord(fork);
     expect(record.turns.map((turn) => [turn.user, turn.origin.harness])).toEqual([
       ['read the parser', 'claude'], ['try another name', 'opencode'],
-    ]);
-  });
-
-  it('reads who answered from each message stamp, whatever the session runs now', () => {
-    const { root } = chain();
-    const claude = { route: 'local' as const, harness: 'claude', provider: 'anthropic', model: 'opus' };
-    const moved = {
-      ...root, nativeHarness: 'codex', provider: 'openai', model: 'gpt-5',
-      messages: [...root.messages!.map((message) => (message.role === 'assistant' ? { ...message, origin: claude } : message)), user('now the docs'), said('Docs updated.')],
-    };
-    expect(canonicalRecord(moved).turns.map((turn) => [turn.origin.harness, turn.origin.model])).toEqual([
-      ['claude', 'opus'], ['claude', 'opus'], ['codex', 'gpt-5'],
     ]);
   });
 
@@ -131,24 +118,4 @@ describe('canonicalRecord', () => {
     expect(record.openTodos).toEqual([{ content: 'docs', status: 'in_progress' }]);
   });
 
-  it('reads stored ancestors through their transcript references', async () => {
-    const state = await readState();
-    const { root } = chain();
-    const source = { ...root, conversationId: root.id };
-    state.sessions.push(source);
-    await writeState(state);
-    const after = await readState();
-    const branch = createHandoffBranch({
-      source: after.sessions.find((item) => item.id === source.id)!, target: localHarnessForCommand('codex')!, accountId: null, model: 'gpt-5',
-      defaults: { effort: 'medium', permissionMode: 'ask', accountFailover: 'never' }, now,
-    });
-    branch.messages!.push(user('now the docs'), said('Docs updated.'));
-    after.sessions.push(branch);
-    await writeState(after);
-    // Only the branch's transcript is loaded; the root's is read on demand.
-    const partial = await readState({ transcripts: [branch.id] });
-    const loaded = partial.sessions.find((item) => item.id === branch.id)!;
-    const record = await loadCanonicalRecord(loaded, partial.sessions);
-    expect(record.turns.map((turn) => turn.origin.harness)).toEqual(['claude', 'claude', 'codex']);
-  });
 });

@@ -1,4 +1,4 @@
-/** A conversation handed to another provider ("Resume in", `/<harness>`)
+/** A conversation moved to another provider ("Resume in", `/<harness>`)
  * starts a fresh vendor thread that knows nothing of it. Its first turn is
  * the only place the earlier conversation can reach that vendor: this drives
  * that turn through a fake vendor CLI on PATH and reads the prompt it was
@@ -9,13 +9,12 @@ import { tmpdir } from 'node:os';
 import { delimiter, dirname, join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import { forceStoreSession, unforceStoreSession } from '../session/ephemeral.js';
-import { createHandoffBranch } from './handoff.js';
+import { leaveProvider } from '../session/native-thread.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { runSessionTurn } from './session-turn.js';
 import { resumePromptForPendingTurn } from '../tui/pickers/resume-in.js';
@@ -55,7 +54,8 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-/** A Claude Code chat that ran out mid-turn, handed to Continue. */
+/** A Claude Code chat that ran out mid-turn, moved to Continue in place (as
+ * moveToProvider does, without installing anything). */
 async function handedOff(pendingTurn?: HarnessSession['pendingTurn'], fields: Partial<HarnessSession> = {}): Promise<string> {
   const state = await readState();
   const now = new Date().toISOString();
@@ -74,21 +74,19 @@ async function handedOff(pendingTurn?: HarnessSession['pendingTurn'], fields: Pa
     ],
     ...(pendingTurn ? { pendingTurn } : {}), ...fields,
   };
-  const branch = createHandoffBranch({
-    source, target: localHarnessForCommand('cn')!, accountId: account.id, model: null,
-    defaults: { effort: 'medium', permissionMode: 'ask', accountFailover: 'never' }, now,
-  });
-  state.sessions.push(source, branch);
-  for (const id of [source.id, branch.id]) { forceStoreSession(id); forced.push(id); }
+  leaveProvider(source);
+  Object.assign(source, { nativeHarness: 'cn', provider: 'continue', accountId: account.id, model: null });
+  state.sessions.push(source);
+  forceStoreSession(source.id); forced.push(source.id);
   await writeState(state);
-  return branch.id;
+  return source.id;
 }
 
 async function sentPrompts(): Promise<string[]> {
   return (await readFile(promptLog, 'utf8')).trim().split('\n').map((line) => JSON.parse(line) as string);
 }
 
-describe("a handoff branch's first vendor turn", () => {
+describe("the first vendor turn after a provider switch", () => {
   it('hands the new vendor the earlier conversation along with the request', async () => {
     const id = await handedOff();
     await runSessionTurn({} as never, id, 'now run the focused test');

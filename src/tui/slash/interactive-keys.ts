@@ -16,7 +16,7 @@ const INTERACTIVE_SLASH_HANDLER_KEYS = [
 export type InteractiveSlashHandlerKey = typeof INTERACTIVE_SLASH_HANDLER_KEYS[number];
 
 export interface InteractiveSlashOutcome {
-  /** Adopt this session (a new conversation, a handoff branch, a resumed chat). */
+  /** Adopt this session (a new conversation, a fork, a resumed chat). */
   id?: string;
   exit?: boolean;
   notice?: string;
