@@ -1,8 +1,11 @@
 /** An npx MCP entry becomes `node <bin>` only when that is exactly what npx would run. */
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { access, chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
 import type { AiHarnessAccount } from './definition.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
@@ -22,6 +25,9 @@ async function npxDir(roots: NpxRoots, dir: string, spec: string, name: string, 
   }
   return packageDir;
 }
+
+const LAUNCHER = { target: '/opt/clikcode/bin/clikcode', args: [] };
+const launched = (bin: string, start: number, target: string, args: string[]) => ({ target: LAUNCHER.target, args: ['npx-mcp', bin, String(start), target, ...args] });
 
 async function roots(): Promise<NpxRoots> {
   const root = await mkdtemp(join(tmpdir(), 'clikcode-npx-'));
@@ -47,7 +53,7 @@ describe('the bin npx would run', () => {
     const at = await roots();
     const dir = await npxDir(at, 'aaa', 'mcp-remote', 'mcp-remote', { version: '0.14.3', bin: { 'mcp-remote': 'dist/proxy.js', 'mcp-remote-client': 'dist/client.js' } }, { 'dist/proxy.js': '', 'dist/client.js': '' });
     const entry = { name: 'brain', target: 'npx', args: ['-y', 'mcp-remote', 'http://x/sse', '--header', 'K: v'] };
-    expect(await withoutNpx(entry, async () => at)).toEqual({ name: 'brain', target: 'node', args: [join(dir, 'dist/proxy.js'), 'http://x/sse', '--header', 'K: v'] });
+    expect(await withoutNpx(entry, async () => at, LAUNCHER)).toEqual({ name: 'brain', ...launched(join(dir, 'dist/proxy.js'), 2, 'npx', entry.args) });
   });
 
   it('takes an exact version only when that version is the one installed', async () => {
@@ -62,7 +68,7 @@ describe('the bin npx would run', () => {
     const at = await roots();
     await npxDir(at, 'ddd', 'ctx@latest', 'ctx', { version: '4.1.1', bin: 'index.js' }, { 'index.js': '' });
     const entry = { name: 'ctx', target: 'npx', args: ['-y', 'ctx@latest'] };
-    expect(await withoutNpx(entry, async () => at)).toBe(entry);
+    expect(await withoutNpx(entry, async () => at, LAUNCHER)).toBe(entry);
     expect(await resolveNpxBin(parseNpxCommand('npx', ['ctx@^4'])!, at)).toBeUndefined();
   });
 
@@ -109,7 +115,7 @@ describe('provisioning an npx server', () => {
       id: 'acct', provider: 'cursor', label: 'Cursor', authKind: 'oauth', models: [], status: 'ready', credentialRef: 'none', nativeProfile: { env: 'HOME', path: home },
     };
     const result = await provisionChosenHarness({
-      harness: cursor, account, workspace: base, stateDir: state, home, npx: at,
+      harness: cursor, account, workspace: base, stateDir: state, home, npx: at, launcher: LAUNCHER,
       install: async (_harness, entry) => {
         await writeMcpConfigEntry(join(home, '.cursor', 'mcp.json'), 'mcpServers', entry);
         return { harness: 'cursor', ok: true };
@@ -117,8 +123,43 @@ describe('provisioning an npx server', () => {
     });
     expect(result.mcpInstalled).toEqual(['brain', 'ctx']);
     const written = JSON.parse(await readFile(join(home, '.cursor', 'mcp.json'), 'utf8')) as { mcpServers: Record<string, unknown> };
-    expect(written.mcpServers.brain).toEqual({ command: 'node', args: [join(dir, 'dist/proxy.js'), 'http://x/sse'] });
+    const brain = launched(join(dir, 'dist/proxy.js'), 2, 'npx', ['-y', 'mcp-remote', 'http://x/sse']);
+    expect(written.mcpServers.brain).toEqual({ command: brain.target, args: brain.args });
     expect(written.mcpServers.ctx).toEqual({ command: 'npx', args: ['-y', 'ctx@latest'] });
     expect(await readFile(join(state, 'mcp.json'), 'utf8')).toBe(source);
   });
+});
+
+describe('a vendor starting a rewritten npx server', () => {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const entry = join(repoRoot, 'dist', 'index.js');
+  beforeAll(async () => {
+    if (!await access(entry).then(() => true, () => false)) await promisify(execFile)('node', ['scripts/build.mjs'], { cwd: repoRoot });
+  }, 60_000);
+
+  it.skipIf(process.platform === 'win32')('runs the cached bin while it is there, and the npx command once the cache is gone', async () => {
+    const at = await roots();
+    const dir = await npxDir(at, 'aaa', 'srv', 'srv', { version: '1.0.0', bin: 'cli.js' }, {
+      'cli.js': '#!/usr/bin/env node\nconsole.log(JSON.stringify({ main: require.main === module, argv: process.argv.slice(2) }));\n',
+    });
+    // Stands in for npx: says what it was asked to run.
+    const npx = join(at.cache, '..', 'npx');
+    await writeFile(npx, '#!/bin/sh\necho "npx $*"\n');
+    await chmod(npx, 0o755);
+    const written = await withoutNpx({ name: 'srv', target: npx, args: ['-y', 'srv', '--port', '7'] }, async () => at, { target: process.execPath, args: [entry] });
+    const run = async () => (await promisify(execFile)(written.target, [...written.args!])).stdout.trim();
+    expect(JSON.parse(await run())).toEqual({ main: true, argv: ['--port', '7'] });
+    await rm(join(at.cache, '_npx'), { recursive: true, force: true });
+    expect(dir).toContain('_npx');
+    expect(await run()).toBe('npx -y srv --port 7');
+  }, 30_000);
+
+  it('runs an ES module bin as the main script too', async () => {
+    const at = await roots();
+    await npxDir(at, 'bbb', 'esm', 'esm', { version: '1.0.0', type: 'module', bin: { esm: 'bin.js' } }, {
+      'bin.js': '#!/usr/bin/env node\nimport { argv } from "node:process";\nconsole.log(argv.slice(2).join(" "), import.meta.url.endsWith("/bin.js"));\n',
+    });
+    const written = await withoutNpx({ name: 'esm', target: 'npx', args: ['-y', 'esm', 'a', 'b'] }, async () => at, { target: process.execPath, args: [entry] });
+    expect((await promisify(execFile)(written.target, [...written.args!])).stdout.trim()).toBe('a b true');
+  }, 30_000);
 });

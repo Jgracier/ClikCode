@@ -5,7 +5,7 @@
  * dist/index.js loads only dist/conversations-mcp.js for that command, so
  * the entry every vendor config already holds is the lean one too: nothing
  * written into a vendor's config has to be found and rewritten. */
-import { accessSync, constants } from 'node:fs';
+import { accessSync, constants, realpathSync } from 'node:fs';
 import type { McpServerEntry } from '../harness/mcp-registry.js';
 
 export const CONVERSATIONS_MCP_NAME = 'clikcode-conversations';
@@ -15,16 +15,32 @@ function executable(path: string): boolean {
   try { accessSync(path, constants.X_OK); return true; } catch { return false; }
 }
 
-/** The installed launcher when it runs on its own (a `#!/usr/bin/env node`
- * script, so the entry survives a Node upgrade), otherwise Node with the
- * script. Undefined when this process has no script to name. */
+/** How another program starts the installed ClikCode: the launcher when it
+ * runs on its own (a `#!/usr/bin/env node` script, so the entry survives a
+ * Node upgrade), otherwise Node with the script. Undefined when this process
+ * has no script to name. */
+export function clikcodeLauncher(
+  script: string | undefined = process.argv[1], execPath = process.execPath, platform: NodeJS.Platform = process.platform,
+  isExecutable: (path: string) => boolean = executable,
+): { target: string; args: string[] } | undefined {
+  if (!script) return undefined;
+  return platform !== 'win32' && isExecutable(script) ? { target: script, args: [] } : { target: execPath, args: [script] };
+}
+
+/** The launcher, only when it is the built dist/index.js -- the one that
+ * knows `npx-mcp` (scripts/build.mjs). Run from source, an entry naming it
+ * would not start. */
+export function builtClikcodeLauncher(script: string | undefined = process.argv[1]): { target: string; args: string[] } | undefined {
+  if (!script) return undefined;
+  let real: string;
+  try { real = realpathSync(script); } catch { return undefined; }
+  return /[\\/]dist[\\/]index\.js$/.test(real) ? clikcodeLauncher(script) : undefined;
+}
+
 export function conversationsMcpEntry(
   script: string | undefined = process.argv[1], execPath = process.execPath, platform: NodeJS.Platform = process.platform,
   isExecutable: (path: string) => boolean = executable,
 ): McpServerEntry | undefined {
-  if (!script) return undefined;
-  const direct = platform !== 'win32' && isExecutable(script);
-  return direct
-    ? { name: CONVERSATIONS_MCP_NAME, target: script, args: [CONVERSATIONS_MCP_COMMAND] }
-    : { name: CONVERSATIONS_MCP_NAME, target: execPath, args: [script, CONVERSATIONS_MCP_COMMAND] };
+  const launcher = clikcodeLauncher(script, execPath, platform, isExecutable);
+  return launcher && { name: CONVERSATIONS_MCP_NAME, target: launcher.target, args: [...launcher.args, CONVERSATIONS_MCP_COMMAND] };
 }

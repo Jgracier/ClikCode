@@ -44,7 +44,7 @@ import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
-import { conversationsMcpEntry } from '../search/mcp-entry.js';
+import { builtClikcodeLauncher, conversationsMcpEntry } from '../search/mcp-entry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
@@ -335,7 +335,9 @@ export async function sendVendorTurn(input: {
     // is invisible to a process that is already running, so that process is
     // closed and this attempt starts one that can see it.
     const conversations = conversationsMcpEntry();
+    const launcher = builtClikcodeLauncher();
     const provisioned = await provisionChosenHarness({
+      ...(launcher ? { launcher } : {}),
       harness, account, workspace: session.workspace, stateDir: stateDirectory(),
       ...(conversations ? { builtins: [conversations] } : {}),
     });

@@ -62,6 +62,10 @@ export interface ProvisionInput {
   builtins?: readonly McpServerEntry[];
   /** Where npm keeps what npx installed. Tests pass fixtures. */
   npx?: NpxRoots;
+  /** How a vendor starts ClikCode (search/mcp-entry.ts clikcodeLauncher),
+   * which runs an npx server's installed bin. Without it npx entries are
+   * written as they are. */
+  launcher?: { target: string; args: readonly string[] };
 }
 
 function profileOf(account?: AiHarnessAccount): { env: string; path: string } | undefined {
@@ -124,13 +128,14 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   // A user's server by the same name is theirs and wins.
   const entries = [...userEntries, ...(input.builtins ?? []).filter((entry) => !userNames.has(entry.name))];
   let roots: Promise<NpxRoots> | undefined;
+  const launcher = input.launcher;
   for (const entry of entries) {
     if (present.unreadable) { mcpSkipped.push(entry.name); continue; }
     if (present.known && present.names.has(entry.name)) continue;
     if (grokClaudeMcp?.names.has(entry.name)) continue;
     if (!present.known && await alreadyProvisioned(stateDir, input, entry.name)) continue;
     // Only the vendor's copy: mcp.json keeps the user's own npx line.
-    const written = await withoutNpx(entry, () => (roots ??= input.npx ? Promise.resolve(input.npx) : npxRoots(home)));
+    const written = launcher ? await withoutNpx(entry, () => (roots ??= input.npx ? Promise.resolve(input.npx) : npxRoots(home)), launcher) : entry;
     const result = await (input.install ?? installMcpOnHarness)(input.harness, written, input.account);
     if (result.ok) {
       mcpInstalled.push(entry.name);
