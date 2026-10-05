@@ -1,5 +1,6 @@
 /** `clikcode harness`: choosing which harness a session runs on. */
 
+import { forceStoreSession } from '../../session/ephemeral.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { randomUUID } from 'node:crypto';
@@ -252,6 +253,10 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
     const state = await readState({ transcripts: [] });
     const session = launchSession(state, process.cwd());
     state.sessions.push(session);
+    // On disk before the worker is asked for it: a draft held only in this
+    // process's memory is a chat the worker cannot find -- it exited "not
+    // found" and the turn quietly ran here instead, owning nothing after exit.
+    forceStoreSession(session.id);
     await writeState(state);
     id = session.id;
   }
