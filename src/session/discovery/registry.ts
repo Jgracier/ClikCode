@@ -31,6 +31,7 @@ import { grokSessionStore } from './vendors/grok-store.js';
 import { clineSessionStore } from './vendors/cline-store.js';
 import { kimiSessionStore } from './vendors/kimi-store.js';
 import { kiroSessionStore } from './vendors/kiro-store.js';
+import { mcodeSessionStore } from './vendors/mcode-store.js';
 
 /** Only harnesses genuinely observed to store sessions on disk in a
  * predictable, project-scoped way get an entry here — this is deliberately
@@ -85,6 +86,7 @@ export const NATIVE_SESSION_STORES: Readonly<Record<string, NativeSessionStore>>
   cline: clineSessionStore,
   kimi: kimiSessionStore,
   kiro: kiroSessionStore,
+  mcode: mcodeSessionStore,
 };
 
 export function nativeSessionStore(harness: AiLocalHarnessDefinition): NativeSessionStore | undefined {
