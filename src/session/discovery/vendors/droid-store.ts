@@ -17,10 +17,11 @@
  * found"), which does not stop the turn. */
 
 import { randomUUID } from 'node:crypto';
+import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
+import { type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
   sequentialIds, testedVersion, writeFileAtomic,
@@ -37,6 +38,12 @@ function droidRoot(environment: NativeSessionEnvironment): string {
 /** Droid's project directory: the cwd with every `/` a dash. */
 export function droidProjectDirectoryName(workspace: string): string {
   return workspace.replace(/[/\\]/g, '-');
+}
+
+/** One session's transcript, under a project directory: the path the writer
+ *  writes and locate looks for. */
+function droidSessionPath(root: string, projectDirectory: string, sessionId: string): string {
+  return join(root, projectDirectory, `${sessionId}.jsonl`);
 }
 
 /** Droid's own tools: Execute, Read, Edit, Create, Grep, Glob, LS. File
@@ -127,13 +134,29 @@ export const droidThreadWriter: NativeThreadWriter = {
   async write(record, context) {
     if (!record.turns.length) return undefined;
     const sessionId = randomUUID();
-    const path = join(droidRoot(context.environment), droidProjectDirectoryName(context.workspace), `${sessionId}.jsonl`);
+    const path = droidSessionPath(droidRoot(context.environment), droidProjectDirectoryName(context.workspace), sessionId);
     await writeFileAtomic(path, droidThreadLines(record, { sessionId, workspace: context.workspace, now: new Date() }));
     return { nativeId: sessionId };
   },
 };
 
+/** A session is one transcript, filed under the cwd it ran in -- the
+ * conversation's workspace first, then any other project directory (a chat
+ * whose folder moved). `<id>.settings.json` beside it stays behind: a resume
+ * reads neither it nor the discovery cache. */
+async function locateDroidSession(root: string, nativeId: string, workspace: string): Promise<NativeSessionFile | undefined> {
+  const isSession = (path: string): Promise<boolean> => stat(path).then((entry) => entry.isFile(), () => false);
+  const project = droidProjectDirectoryName(workspace);
+  const others = (await readdir(root).catch(() => [] as string[])).filter((name) => name !== project);
+  for (const directory of [project, ...others]) {
+    const path = droidSessionPath(root, directory, nativeId);
+    if (await isSession(path)) return { path, root };
+  }
+  return undefined;
+}
+
 export const droidSessionStore: NativeSessionStore = {
   root: droidRoot,
+  locate: locateDroidSession,
   writer: droidThreadWriter,
 };
