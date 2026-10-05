@@ -3,7 +3,7 @@
  *
  *   node scripts/verify-shared-sessions.mjs <harness> [--direction both|cli-to-acp|acp-to-cli]
  *     [--model <id>] [--mode ask|bypass|auto] [--cli-arg <arg>]...
- *     [--resume-id-prefix "<argv>"] [--replay-only] [--link <~/path>]... [--copy <source>=<~/dest>]...
+ *     [--resume-id-prefix "<argv>"] [--discover "<argv>"] [--replay-only] [--link <~/path>]... [--copy <source>=<~/dest>]...
  *
  * The live proof behind a catalog entry's `acp.sharedSessions: true`, run
  * inside scripts/vendor-sandbox.mjs (never the user's own vendor history):
@@ -139,21 +139,19 @@ async function cliToAcp() {
   }
   const before = discover();
   const turn = cliTurn(rememberPrompt(word), id, createdHere);
+  if (turn.status !== 0 && !replayOnly) return { pass: false, detail: `the CLI's first turn exited ${turn.status}: ${turn.error}` };
+  const listed = discoveredIds(before, discover()).filter((token) => !token.includes(word) && !token.startsWith('vendor-sandbox'));
+  const threadId = turn.sessionId ?? id ?? listed[0];
+  console.log(`thread: minted/created ${id ?? '-'}, stream reported ${turn.sessionId ?? '-'}, session list added ${listed.join(' ') || '-'}`);
+  if (!threadId) return { pass: false, detail: 'the CLI turn reported no session id and the session list showed none' };
   if (replayOnly) {
     // An account without usage: the CLI still records the prompt before the
     // vendor refuses it. Whether ACP replays it shows only that the store is
     // readable -- not that a model continues the thread, so never a pass.
-    const threadId = turn.sessionId ?? id;
-    if (!threadId) return { pass: false, detail: 'replay-only: the CLI turn reported no session id' };
     const acp = await acpTurn({ load: threadId, loadOnly: true });
     if (acp.error) return { pass: false, detail: `replay-only: ACP ${acp.method ?? ''} of CLI thread ${threadId}: ${acp.error}` };
     return { pass: false, detail: `replay-only (not a proof): ACP ${acp.method} of CLI thread ${threadId} ${acp.replayed.includes(word) ? 'REPLAYED the prompt with' : 'did NOT replay'} ${word}` };
   }
-  if (turn.status !== 0) return { pass: false, detail: `the CLI's first turn exited ${turn.status}: ${turn.error}` };
-  const listed = discoveredIds(before, discover());
-  const threadId = turn.sessionId ?? id ?? listed[0];
-  console.log(`thread: minted/created ${id ?? '-'}, stream reported ${turn.sessionId ?? '-'}, session list added ${listed.join(' ') || '-'}`);
-  if (!threadId) return { pass: false, detail: 'the CLI turn reported no session id and the session list showed none' };
   const acp = await acpTurn({ load: threadId, prompt: recallPrompt() });
   if (acp.error) {
     // Diagnosis only (it is not a pass): does ACP know the thread under the
@@ -217,8 +215,10 @@ function cliTurn(prompt, nativeSessionId, createdHere) {
 
 /** The vendor's own session list, for a CLI that does not report its id. */
 function discover() {
-  if (!harness.session?.discoverArgv) return '';
-  return spawnSync(binary, harness.session.discoverArgv, { cwd: workspace, env, encoding: 'utf8', timeout: 60_000 }).stdout ?? '';
+  // --discover "<argv>": a session list the catalog does not declare (Cline's `history --json`).
+  const listArgv = option('--discover')?.split(' ') ?? harness.session?.discoverArgv;
+  if (!listArgv) return '';
+  return spawnSync(binary, listArgv, { cwd: workspace, env, encoding: 'utf8', timeout: 60_000 }).stdout ?? '';
 }
 function discoveredIds(before, after) {
   const old = new Set(before.match(/[\w-]{8,}/g) ?? []);
