@@ -187,12 +187,16 @@ export function chatSuite(): void {
       assert.strictEqual(api.state.running, false, 'Esc in a menu does not touch the turn');
     });
 
-    it('stops a running turn with Esc and keeps the chat usable', async () => {
+    it('keeps a running turn on Esc, stops it with the stop button, and keeps the chat usable', async () => {
       await type(api, '#composer-input', 'Count slowly from 1 to 400, one number per line.');
       await click(api, '#send-button');
       await until(api, (state) => state.running, 'the turn to start', 120_000);
       await screenshot('live', 2500);
+      // Esc only takes back a waiting message: with none it touches nothing.
       await key(api, '#composer-input', 'Escape');
+      await sleep(1_500);
+      assert.strictEqual(api.state.running, true, 'Esc does not stop the turn');
+      await click(api, '#stop-button');
       const before = { harness: api.state.harness, model: api.state.model };
       const stopped = await until(api, (state) => !state.running, 'the turn to stop', 120_000);
       assert.ok(stopped.connection === 'ready');

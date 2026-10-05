@@ -230,7 +230,7 @@ SCENARIOS = {
         'cols': 70, 'rows': 56, 'env': {'FAKE_TOOL_MS': '1500'},
         'turns': [{'tools_first': 10, 'blocks': ['All ten parts pass.']}],
         'steps': [
-            ('type', 'run every part'), ('wait_for', 'esc to stop', 30), ('settle', 4),
+            ('type', 'run every part'), ('wait_for', 'ctrl+c to stop', 30), ('settle', 4),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'),
@@ -248,7 +248,7 @@ SCENARIOS = {
             ('type', 'say something short'), ('wait_for', 'A short first answer.', 30), ('settle', 2),
             # A new conversation, started from the board by typing.
             ('keys', '\x1b[D'), ('settle', 2),
-            ('type', 'run every part'), ('wait_for', 'esc to stop', 30), ('settle', 4),
+            ('type', 'run every part'), ('wait_for', 'ctrl+c to stop', 30), ('settle', 4),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'), ('settle', 2.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
@@ -290,7 +290,7 @@ SCENARIOS = {
             ('type', 'second conversation question'), ('wait_for', 'BETA answer lives here.', 30), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'ALPHA answer lives here.', 10), ('settle', 1),
-            ('type', 'run every part'), ('wait_for', 'esc to stop', 30), ('settle', 3),
+            ('type', 'run every part'), ('wait_for', 'ctrl+c to stop', 30), ('settle', 3),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'BETA answer lives here.', 10), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
@@ -343,7 +343,7 @@ SCENARIOS = {
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15),
                   ('wait_for', 'signed in to', 15), ('settle', 1)],
-        'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'esc to stop'],
+        'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'ctrl+c to stop'],
         'final_contains': ['signed in to'], 'never': ['Confirm this code in your browser', 'Waiting for authorization', 'not a tty'],
     },
     # A sign-in that asks for a key: asked under ClikCode's band, typed
@@ -503,6 +503,37 @@ SCENARIOS = {
         'ever': ['sending at the next pause', 'sent into the turn'],
         'never': ['Request interrupted', 'Queued turn answered.', 'stopping'],
         'final_once': ['Steered in: also run the linter.'],
+    },
+    # Esc on a waiting message takes it back into the composer to edit, and
+    # touches nothing running: the held steer is never sent, the turn runs to
+    # its end, nothing is stopped. Recorded: Esc to fix a just-sent message
+    # stopped the turn and every sub-agent in it.
+    'esc-takes-back-waiting-message': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 6000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
+            ('type', 'also run the linter'), ('wait_for', 'esc to edit', 10), ('settle', 0.5),
+            ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('snap', 'taken-back'),
+            ('wait_for', 'The build passed.', 40), ('settle', 3),
+        ],
+        'watch': ['start the build', 'The build passed.'],
+        'snap_contains': {'taken-back': ['ctrl+c to stop']},
+        'never': ['Steered in: also run the linter.', 'Queued turn answered.', 'stopping', 'Stopped'],
+    },
+    # Ctrl+C is the one key that stops a turn.
+    'ctrl-c-stops-turn': {
+        'env': {'FAKE_DELAY_MS': '300'},
+        'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']}],
+        'steps': [
+            ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
+            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'after-esc'),
+            ('keys', '\x03'), ('wait_for', 'Stopped', 15), ('settle', 2),
+        ],
+        'snap_contains': {'after-esc': ['ctrl+c to stop']},
+        'watch': ['start the long job'],
+        'never': ['The long job is finished.'],
     },
     # `/send queue`: the same steering-capable agent, and the message waits
     # for the turn to end instead -- never steered in, never stopping it.
@@ -954,7 +985,7 @@ def run(name, spec, entry, keep):
             return max(found) if found else None
         def bottom(name):
             lines = [line.rstrip() for line in snaps.get(name, [])]
-            band = next((i for i, line in enumerate(lines) if 'esc to stop' in line), len(lines))
+            band = next((i for i, line in enumerate(lines) if 'ctrl+c to stop' in line), len(lines))
             return [line for line in lines[max(0, band - 12):band] if line.strip() and not regex.search(r'\(\d+s\)|\d+m \d+s', line)]
         before, scrolled, back = newest('before'), newest('scrolled'), newest('back')
         if before is None: problems.append('scroll check: nothing matching the pattern on screen before scrolling')

@@ -27,7 +27,7 @@ import { readTurnActivities } from '../turn/turn-activities.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
-import type { LiveTurnInputResult } from '../turn/live-input.js';
+import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, openToolsStatus, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
@@ -125,9 +125,12 @@ type WaitingTurn = {
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
-  /** Esc, or Enter again on a waiting message, has asked the turn to stop. */
+  /** Ctrl+C, or Enter again on a waiting message, has asked the turn to stop. */
   cancelled: boolean;
   cancel?: (restoreDraft: boolean) => void;
+  /** Take a waiting message back out of the queue (Esc): `removed` only when
+   * it is the user's again -- not already on its way into the turn. */
+  takeBack?: (id: string) => Promise<TakeBackOutcome>;
   /** Absent for a wait that takes no messages. */
   submit?: (text: string) => Promise<LiveTurnInputResult>;
   command?: (text: string) => Promise<LiveTurnInputResult>;
@@ -312,16 +315,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Before approvals and before the draft: a turn running is when someone
     // wants to read what went past.
     if (!this.pendingApproval && this.handleScrollKey(key)) return;
-    // Escape backs out one level, as it does everywhere else. Scrolled back
-    // mid-turn it returns to the live edge; pressed again -- now at the edge,
-    // where the band that says "esc to stop" is the thing being looked
-    // at -- it interrupts.
+    // Escape backs out one level, as it does everywhere else, and never
+    // stops the turn. Scrolled back mid-turn it returns to the live edge; at
+    // the edge it takes the newest waiting message back to edit.
     //
-    // It used to interrupt on the first press regardless, which was a fair
-    // call when scrolled-back reading was not really usable during a turn.
-    // Now that the page holds still while a turn streams, the only way back
-    // to the live edge was to kill the turn, so reading what went past cost
-    // the answer being read.
+    // It used to stop the turn. A message sent and then Esc'd to fix a typo
+    // stopped everything the turn was running -- its sub-agents with it --
+    // when all that was wanted was the words back. Ctrl+C stops.
     if (!this.pendingApproval && key === '\u001b' && this.scrolledBack) {
       this.scrollTranscript(-Number.MAX_SAFE_INTEGER);
       return;
@@ -389,13 +389,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     const action = waitingInputAction(key);
-    if (action === 'cancel-edit' || action === 'cancel-stop') {
+    if (action === 'take-back') {
+      this.takeBackWaiting();
+    } else if (action === 'stop') {
       if (turn.cancelled) return;
       turn.cancelled = true;
       turn.label = 'stopping…';
       this.updateWaiting();
-      if (turn.early) turn.early.interrupt = { restoreDraft: action === 'cancel-edit' };
-      turn.cancel?.(action === 'cancel-edit');
+      // A turn that did nothing yet gives its prompt back to edit -- unless
+      // something is already typed, which keeps the composer.
+      const restoreDraft = !turn.draft.trim();
+      if (turn.early) turn.early.interrupt = { restoreDraft };
+      turn.cancel?.(restoreDraft);
     } else if (key === '\u001a') {
       this.suspendToShell();
     } else if (key === '\r' && this.signInInput) {
@@ -466,6 +471,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private messageWaiting(): boolean {
     return Boolean(this.currentSession?.queuedTurns?.some((item) => item.kind !== 'command'))
       || this.waitingSubmissions.some((item) => item.state === 'queued');
+  }
+
+  /** Esc mid-turn: the newest message still waiting -- queued, or held for
+   * the turn's next pause -- comes back into the composer, ahead of anything
+   * typed, and is gone from the queue. Nothing running is touched. One
+   * already on its way into the turn stays where it is. */
+  private takeBackWaiting(): void {
+    const turn = this.turn;
+    if (!turn?.takeBack) return;
+    const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command');
+    const last = [
+      ...stored.map((item) => ({ id: item.id, text: item.text })),
+      ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !stored.some((entry) => entry.id === item.id))
+        .map((item) => ({ id: item.id!, text: item.text })),
+    ].at(-1);
+    if (!last) return;
+    void turn.takeBack(last.id).then((outcome) => {
+      if (outcome !== 'removed') return;
+      this.waitingSubmissions = this.waitingSubmissions.filter((item) => item.id !== last.id);
+      if (this.currentSession?.queuedTurns) this.currentSession.queuedTurns = this.currentSession.queuedTurns.filter((item) => item.id !== last.id);
+      if (this.turn) {
+        this.turn.draft = this.turn.draft ? `${last.text}\n${this.turn.draft}` : last.text;
+        this.turn.cursor = last.text.length;
+        this.updateWaiting();
+      } else this.queuedDraft = this.queuedDraft ? `${last.text}\n${this.queuedDraft}` : last.text;
+    }, () => undefined);
   }
 
   /** A message typed during the turn, sent: steered into it or queued
@@ -1063,6 +1094,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
     onCommand?: (text: string) => Promise<LiveTurnInputResult>,
     onLeave?: () => void,
+    onTakeBack?: (id: string) => Promise<TakeBackOutcome>,
   ): void {
     lifecycle('window.turn.start', { label: message.slice(0, 80), steerable: Boolean(onSubmit) });
     // stopWaiting is also how a finished turn drops its prompt. Calling it
@@ -1106,6 +1138,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       draft: early?.draft ?? '', cursor: early?.cursor ?? 0, cancelled: false,
       ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
       ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
+      ...(onTakeBack ? { takeBack: onTakeBack } : {}),
     };
     this.turn = turn;
     this.waitingSubmissions = [];
@@ -1451,7 +1484,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // then says whether the agent took it) or queue. With nothing typed and
     // a message waiting, Enter again stops the turn and sends it.
     const enterHint = turn.draft.trim() ? ` · enter to ${this.sendMode}`
-      : turn.cancel && !turn.cancelled && this.messageWaiting() ? ` · ${STEER_WORDS.stopAndSend}`
+      : turn.cancel && !turn.cancelled && this.messageWaiting() ? ` · ${STEER_WORDS.stopAndSend} · ${keyHint('takeBack')}`
         : ` · type and press Enter to ${this.sendMode}`;
     const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
       + `${turn.cancel && !this.pendingApproval ? ` · ${keyHint('stop')}` : ''}`

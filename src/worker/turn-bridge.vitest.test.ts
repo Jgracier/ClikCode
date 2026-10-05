@@ -111,9 +111,10 @@ describe('runTurnThroughWorker (real spawned worker, fake terminal)', () => {
     const rl = fakePrompter();
     await expect(runTurnThroughWorker(session.id, rl, 'hello', { echo: true }))
       .rejects.toThrow(/no account selected/);
-    // Three callbacks: cancel, a message steered into the turn, and a slash
-    // command typed during it (queued, then run when the turn ends).
-    expect(rl.calls).toContain('startWaiting("thinking",[fn],[fn],[fn],[fn])');
+    // Five callbacks: stop, a message steered into the turn, a slash command
+    // typed during it (queued, then run when the turn ends), stepping away,
+    // and taking a waiting message back (Esc).
+    expect(rl.calls).toContain('startWaiting("thinking",[fn],[fn],[fn],[fn],[fn])');
     expect(rl.calls).toContain('stopWaiting()');
     // No worker attached yet: the spinner went up before it answered.
     expect(rl.calls.indexOf('turnStarting()')).toBeLessThan(rl.calls.findIndex((call) => call.startsWith('render(')));

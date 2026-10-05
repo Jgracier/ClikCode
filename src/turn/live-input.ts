@@ -13,6 +13,11 @@ export interface LiveTurnSubmission {
   kind?: 'command' | 'notification';
 }
 
+/** What became of a waiting message the user took back: `removed` -- it is
+ * theirs again; `running` -- already on its way into the turn, so it stays;
+ * `gone` -- its turn already took it. */
+export type TakeBackOutcome = 'removed' | 'running' | 'gone' | 'error';
+
 export interface LiveTurnInputResult {
   disposition: 'steered' | 'queued' | 'command';
   submission: LiveTurnSubmission;

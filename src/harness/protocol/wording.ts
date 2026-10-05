@@ -6,8 +6,12 @@
  */
 
 export const ACTIONS = {
-  /** End the running turn. Esc, the stop button, the palette's command. */
-  stop: { verb: 'stop', key: 'Esc' },
+  /** End the running turn. Ctrl+C, the stop button, the palette's command --
+   *  never Esc, which only ever backs out of something of the user's own. */
+  stop: { verb: 'stop', key: 'Ctrl+C' },
+  /** Mid-turn, a message waiting: take the newest back into the composer to
+   *  edit. Nothing running is touched. */
+  takeBack: { verb: 'edit', key: 'Esc' },
   /** Mid-turn, nothing typed, a message already waiting: stop the turn and
    *  send what waits next, at once. Enter AGAIN -- the first Enter is the one
    *  that sent the message. Says "stop": it ends the turn's sub-agents too. */
@@ -26,13 +30,13 @@ export const STOPPED = 'Stopped';
 /** The VS Code command that stops the turn, as the palette lists it. */
 export const STOP_TURN_COMMAND = 'Stop Turn';
 
-/** `esc to stop`: a hint in the terminal's dim status band. */
+/** `ctrl+c to stop`: a hint in the terminal's dim status band. */
 export function keyHint(action: Action): string {
   const { verb, key } = ACTIONS[action];
   return `${key.toLowerCase()} to ${verb}`;
 }
 
-/** `Stop (Esc)`: a button's title and accessible name. */
+/** `Stop (Ctrl+C)`: a button's title and accessible name. */
 export function buttonTitle(action: Action): string {
   const { verb, key } = ACTIONS[action];
   return `${verb[0]!.toUpperCase()}${verb.slice(1)} (${key})`;
