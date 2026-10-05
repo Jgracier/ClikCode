@@ -275,6 +275,67 @@ export async function vendorMcpServerNames(
   return { known: true, names };
 }
 
+/** The URL each remote server in this harness's own file points at, by name
+ * -- what tells "ClikCode's copy of that server" from a different server the
+ * user keeps under the same name. Local servers and entries that are not
+ * portable (disabled, placeholders) are left out. */
+export async function vendorMcpServerUrls(
+  command: string, home: string, profile?: { env: string; path: string },
+): Promise<Map<string, string>> {
+  const urls = new Map<string, string>();
+  for (const source of SOURCES.filter((item) => item.command === command)) {
+    for (const path of vendorConfigCandidates(source, home, profile)) {
+      for (const [name, raw] of Object.entries(await readServerTable(path, source) ?? {})) {
+        const normalized = normalize(source.dialect, raw);
+        if ('entry' in normalized && typeof normalized.entry.url === 'string' && !urls.has(name)) urls.set(name, normalized.entry.url);
+      }
+    }
+  }
+  return urls;
+}
+
+/** The vendor whose own file an imported server came from (mcp-import.json),
+ * as a harness command. That vendor's copy is the user's; every other copy
+ * of it was fanned out by ClikCode. Undefined when the import never ran or
+ * did not bring this name in. */
+export async function importedFromCommand(stateDir: string, name: string): Promise<string | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(stateDir, IMPORT_MARKER_FILE), 'utf8'));
+    const imported = isRecord(parsed) && Array.isArray(parsed.imported) ? parsed.imported as unknown[] : [];
+    const found = imported.find((item): item is ImportedServer => isRecord(item) && item.name === name && typeof item.from === 'string');
+    return found ? SOURCES.find((source) => source.vendor === found.from)?.command : undefined;
+  } catch { return undefined; }
+}
+
+/** Removes one server from a harness's JSON config by editing the file, for
+ * a vendor with no `mcp remove` (opencode, Kilo). Only a file that is plain
+ * JSON is rewritten: a JSONC file with comments would lose them, and the
+ * user's comments are not ClikCode's to drop -- that case is reported. */
+export async function removeFromVendorJsonFile(
+  command: string, name: string, home: string, profile?: { env: string; path: string },
+): Promise<{ ok: boolean; detail?: string }> {
+  let removed = false;
+  for (const source of SOURCES.filter((item) => item.command === command && item.format !== 'toml' && item.format !== 'yaml')) {
+    for (const path of vendorConfigCandidates(source, home, profile)) {
+      const text = await readFile(path, 'utf8').catch(() => undefined);
+      if (!text?.trim()) continue;
+      let root: unknown;
+      try { root = JSON.parse(text); } catch {
+        const table = await readServerTable(path, source);
+        if (table && name in table) return { ok: false, detail: `${path} has comments or trailing commas; remove "${name}" by hand` };
+        continue;
+      }
+      let table: unknown = root;
+      for (const key of source.key) table = isRecord(table) ? table[key] : undefined;
+      if (!isRecord(table) || !(name in table)) continue;
+      delete table[name];
+      await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
+      removed = true;
+    }
+  }
+  return removed ? { ok: true } : { ok: false, detail: 'not found in any config file ClikCode knows for this harness' };
+}
+
 /** The files to read for one source: the user's own, then each isolated
  * ClikCode account profile for that vendor, whose directory is either a
  * whole fake HOME or the vendor's own config root. */

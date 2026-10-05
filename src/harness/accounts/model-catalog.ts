@@ -18,7 +18,7 @@ import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
-import { acpDiscoverySession, acpSessionModels, queryAcp } from './acp-query.js';
+import { acpDiscoverySession, acpProbeArgv, acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
@@ -635,7 +635,7 @@ async function nativeModelCatalogUncached(
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
   if (harness.acp && harness.acp.listsModels !== false && !harness.modelDiscoveryArgv) {
-    const listed = liveListed ?? await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...(harness.acp.probeArgv ?? [])], nativeProfileEnvironment(account?.nativeProfile),
+    const listed = liveListed ?? await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...await acpProbeArgv(harness, account)], nativeProfileEnvironment(account?.nativeProfile),
       async (request, capabilities) => acpSessionModels(await acpDiscoverySession(request, capabilities, cacheKey(harness, account))), 30_000).catch(() => undefined);
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping

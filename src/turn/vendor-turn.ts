@@ -372,7 +372,9 @@ export async function sendVendorTurn(input: {
       harness, account, workspace: session.workspace, stateDir: stateDirectory(),
       ...(conversations ? { builtins: [conversations] } : {}),
     });
-    if (provisioned.mcpInstalled.length) await closePersistentTransport(session.id);
+    // A server taken back out is just as invisible to a running process,
+    // which would go on asking for its sign-in.
+    if (provisioned.mcpInstalled.length || provisioned.mcpRemoved.length) await closePersistentTransport(session.id);
     // Which conversation this is, for ClikCode's conversation MCP server the
     // vendor starts (search/mcp.ts): it leaves this one out of its answers.
     const environment = { ...turnEnvironment(harness, account, session.permissionMode ?? 'ask'), CLIKCODE_SESSION_ID: session.id };

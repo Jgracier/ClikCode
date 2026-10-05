@@ -2,7 +2,30 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { acpDiscoveryDirectory, acpDiscoverySession, acpSessionModels } from './acp-query.js';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
+import { acpDiscoveryDirectory, acpDiscoverySession, acpProbeArgv, acpSessionModels } from './acp-query.js';
+
+describe('an ACP agent started only to be asked something', () => {
+  it("switches off every MCP server in Copilot's config, so none can open a sign-in page", async () => {
+    const copilot = allLocalHarnesses().find((item) => item.command === 'copilot')!;
+    const root = mkdtempSync(join(tmpdir(), 'clikcode-probe-argv-'));
+    try {
+      const profile = join(root, 'copilot-profile');
+      await mkdir(profile, { recursive: true });
+      await writeFile(join(profile, 'mcp-config.json'), JSON.stringify({ mcpServers: {
+        'robinhood-trading': { type: 'http', url: 'https://agent.robinhood.com/mcp/trading' }, context7: { command: 'npx' },
+      } }));
+      const argv = await acpProbeArgv(copilot, { nativeProfile: { env: 'COPILOT_HOME', path: profile } }, join(root, 'home'));
+      expect(argv).toEqual(['--disable-mcp-server', 'context7', '--disable-mcp-server', 'robinhood-trading']);
+      expect(await acpProbeArgv(copilot, undefined, join(root, 'empty-home'))).toEqual([]);
+      const qwen = allLocalHarnesses().find((item) => item.command === 'qwen')!;
+      expect(await acpProbeArgv(qwen, undefined, join(root, 'home'))).toEqual(['--allowed-mcp-server-names', 'clikcode-probe-none']);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('ACP model discovery', () => {
   it('reads model choices and current value from session config options', () => {
