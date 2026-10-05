@@ -498,6 +498,8 @@ describe('local harness catalog', () => {
     const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, authFiles: _kaf, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
+    // Only OpenCode's free models were proven to answer signed out.
+    expect(localHarnessForCommand('kilo')!.signInOptional).toBeUndefined();
     expect(localHarnessForCommand('kilo')!.authFiles).toEqual([{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }]);
   });
 
