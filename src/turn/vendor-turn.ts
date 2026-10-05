@@ -433,7 +433,7 @@ export async function sendVendorTurn(input: {
         });
       }
     } catch (error) {
-      if (isTurnCancelled(error) || (error as Error).name === 'AbortError') throw error;
+      if (isTurnCancelled(error)) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') throw error;
       caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
     }

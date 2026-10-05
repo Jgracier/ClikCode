@@ -21,12 +21,6 @@ import { closePersistentTransport, persistentTransportFor, vendorChildKey } from
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
-/** Whether a turn that ended in `error` leaves its warm vendor child usable:
- * only a cancel does. */
-export function keepsVendorAfter(error: unknown): boolean {
-  return isTurnCancelled(error) || (error as Error | null)?.name === 'AbortError';
-}
-
 export async function runVendorSessionAttempt(input: {
   harness: AiLocalHarnessDefinition;
   account: AiHarnessAccount;
@@ -168,7 +162,7 @@ export async function runVendorSessionAttempt(input: {
     // settle (the child stays, resumable) or killed the child itself
     // (persistent-session.ts settleCancel). Closing here as well respawned the
     // vendor and every MCP server it starts on each Esc / stop & send.
-    if (persistent && !keepsVendorAfter(error)) await closePersistentTransport(session.id);
+    if (persistent && !isTurnCancelled(error)) await closePersistentTransport(session.id);
     throw error;
   }
   return result;
