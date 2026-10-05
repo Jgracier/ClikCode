@@ -1,7 +1,7 @@
 /** Conversations stored as one branch per provider switch read back as one
- * conversation: older branches folded (kept, not listed), who answered each
- * turn stamped on it, forks and branches that went their own way left alone.
- * CLIKCODE_HOME is throwaway. */
+ * chat history: every switch-made branch folded (kept, not listed) into the
+ * newest, turns it alone held merged in where they happened, who answered
+ * each turn stamped on it; forks left alone. CLIKCODE_HOME is throwaway. */
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,11 +29,13 @@ const said = (content: string): TranscriptMessage => ({ role: 'assistant', conte
 const at = (minute: number): string => `2026-10-01T00:${String(minute).padStart(2, '0')}:00.000Z`;
 
 function chat(id: string, harness: string, minute: number, messages: TranscriptMessage[], parent?: string, handoff = true): HarnessSession {
+  // A fork made by this build carries the marker; a branch from an older one
+  // may still carry `handoff`, and from the last one before this, nothing.
   return {
     id, conversationId: 'root', route: 'local', accountId: null, provider: harness, model: `${harness}-model`, nativeHarness: harness,
     effort: 'medium', accountFailover: 'never', createdAt: at(minute), updatedAt: at(minute), status: 'active', messages,
     nativeSessionId: `${harness}-thread`,
-    ...(parent ? { parentSessionId: parent, ...(handoff ? { handoff: { fromSessionId: parent, fromHarness: 'x', at: at(minute) } } : {}) } : {}),
+    ...(parent ? { parentSessionId: parent, ...(handoff ? { handoff: { fromSessionId: parent, fromHarness: 'x', at: at(minute) } } : { fork: true }) } : {}),
   } as HarnessSession;
 }
 
@@ -55,26 +57,26 @@ async function store(): Promise<void> {
 }
 
 describe('folding handoff branches', () => {
-  it('folds each branch into the newest that carries its whole history, and stamps who answered', async () => {
+  it('folds every switch-made branch into the newest, merging what only it held, and stamps who answered', async () => {
     await store();
     const sessions = (await readState()).sessions;
     const byId = new Map(sessions.map((session) => [session.id, session]));
-    // root is carried whole by both a and c; the newer one takes it.
-    expect(byId.get('root')!.foldedInto).toBe('c');
-    expect(byId.get('a')!.foldedInto).toBe('b');
-    for (const id of ['b', 'c', 'fork']) expect(byId.get(id)!.foldedInto).toBeUndefined();
+    for (const id of ['root', 'a', 'c']) expect(byId.get(id)!.foldedInto).toBe('b');
+    for (const id of ['b', 'fork']) expect(byId.get(id)!.foldedInto).toBeUndefined();
     expect(sessions.some((session) => 'handoff' in session)).toBe(false);
     // Nothing deleted, the old thread ids intact.
     expect(byId.get('root')).toMatchObject({ nativeSessionId: 'claude-thread', messages: [user('codeword is PLUM'), expect.objectContaining({ content: 'noted' })] });
-    // The record needs no chain any more.
-    expect(canonicalRecord(byId.get('b')!).turns.map((turn) => turn.origin.harness)).toEqual(['claude', 'codex', 'kilo']);
+    // c's turn is in b's history, after a's turn (a was made before c) and
+    // before b's own (b was made after it), stamped with who answered it.
+    expect(byId.get('b')!.messages!.map((message) => message.content))
+      .toEqual(['codeword is PLUM', 'noted', 'repeat it', 'PLUM', 'other way', 'went', 'again', 'PLUM again']);
+    expect(canonicalRecord(byId.get('b')!).turns.map((turn) => turn.origin.harness)).toEqual(['claude', 'codex', 'gemini', 'kilo']);
     expect(canonicalRecord(byId.get('fork')!).turns.map((turn) => turn.origin.harness)).toEqual(['claude', 'codex', 'codex']);
-    expect(canonicalRecord(byId.get('c')!).turns.map((turn) => turn.origin.harness)).toEqual(['claude', 'gemini']);
-    // One row, listing only the chats that are still conversations.
+    // One row: the history and its fork.
     const [row, ...rest] = conversationRows(sessions);
     expect(rest).toEqual([]);
     expect(row!.latest.id).toBe('b');
-    expect(row!.chats.map((session) => session.id).sort()).toEqual(['b', 'c', 'fork']);
+    expect(row!.chats.map((session) => session.id).sort()).toEqual(['b', 'fork']);
   });
 
   it('runs once: a second read changes nothing on disk', async () => {
@@ -85,12 +87,33 @@ describe('folding handoff branches', () => {
     expect(await readFile(join(root, 'index.json'), 'utf8')).toBe(before);
   });
 
-  it('leaves a branch that went on after the switch, or has something queued, listed', async () => {
+  it('folds branches an earlier fold left listed: an empty switch, and one beside the line that went on', async () => {
+    const first = [user('one'), said('1')];
+    const state = await readState();
+    // No handoff markers any more: the earlier fold dropped them.
+    const branch = (session: HarnessSession): HarnessSession => { const { handoff: _, ...rest } = session as HarnessSession & { handoff?: unknown }; return rest as HarnessSession; };
+    state.sessions.push(
+      { ...chat('root', 'claude', 1, first), foldedInto: 'main' },
+      branch(chat('empty', 'grok', 2, first, 'root')),
+      branch(chat('side', 'cursor', 3, [...first, user('side'), said('s')], 'root')),
+      branch({ ...chat('main', 'cursor', 4, [...first, user('main'), said('m')], 'root') }),
+      { ...chat('named', 'claude', 5, first, 'root', false), fork: undefined, name: 'my own fork' } as HarnessSession,
+    );
+    await writeState(state);
+    const sessions = (await readState()).sessions;
+    const byId = new Map(sessions.map((session) => [session.id, session]));
+    expect(byId.get('empty')!.foldedInto).toBe('main');
+    expect(byId.get('side')!.foldedInto).toBe('main');
+    expect(byId.get('main')!.messages!.map((message) => message.content)).toEqual(['one', '1', 'side', 's', 'main', 'm']);
+    // A fork from before the marker, told by its own name on the same provider.
+    expect(byId.get('named')).toMatchObject({ fork: true });
+    expect(byId.get('named')!.foldedInto).toBeUndefined();
+  });
+
+  it('leaves a branch with something queued, or a turn still running, listed', async () => {
     const first = [user('one'), said('1')];
     const state = await readState();
     state.sessions.push(
-      { ...chat('root', 'claude', 1, [...first, user('kept going'), said('here')]) },
-      chat('a', 'codex', 2, [...first, user('two'), said('2')], 'root'),
       { ...chat('q', 'claude', 3, first), conversationId: 'q', queuedTurns: [{ id: 'x', text: 'later', submittedAt: at(3) }] },
       { ...chat('qa', 'codex', 4, [...first, user('three'), said('3')], 'q'), conversationId: 'q' },
     );

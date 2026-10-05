@@ -18,8 +18,9 @@ import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js';
 import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission } from './settings.js';
 import { writeState } from './write.js';
-import { foldHandoffBranches, hasUnfoldedHandoffs } from './fold-handoffs.js';
+import { foldHandoffBranches, hasLooseBranches } from './fold-handoffs.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { liveWorkerSessions } from '../liveness.js';
 
 function sessionClaimView(claim: SessionClaim): NonNullable<HarnessSession['claim']> {
   return { pid: claim.pid, host: claim.host, startedAt: claim.startedAt, heartbeatAt: claim.heartbeatAt };
@@ -137,7 +138,7 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
     index = await loadIndex();
     if (!index) throw new Error('local AI harness state could not be created');
   }
-  if (!folding && index.version <= HARNESS_STATE_VERSION && hasUnfoldedHandoffs(index.sessions as HarnessSession[])) {
+  if (!folding && index.version <= HARNESS_STATE_VERSION && hasLooseBranches(index.sessions as HarnessSession[])) {
     await foldStoredHandoffs();
     index = await loadIndex() ?? index;
   }
@@ -161,14 +162,15 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
 /** Set while the fold below reads and writes the state itself. */
 let folding = false;
 
-/** Conversations stored as a branch per provider switch become one
- * conversation (fold-handoffs.ts). Once; again only for a branch an older
- * build made since. */
+/** Conversations stored as a branch per provider switch become one chat
+ * history (fold-handoffs.ts). Only while the index shows a conversation with
+ * two such chats listed, so once; again only for a branch an older build
+ * made since. */
 async function foldStoredHandoffs(): Promise<void> {
   folding = true;
   try {
     const state = await readState();
-    const report = foldHandoffBranches(state.sessions);
+    const report = foldHandoffBranches(state.sessions, await liveWorkerSessions());
     await writeState(state);
     lifecycle('state.fold-handoffs', { ...report });
   } finally {
