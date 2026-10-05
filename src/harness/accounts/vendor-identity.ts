@@ -131,6 +131,46 @@ async function openHandsEmail(profilePath: string | undefined): Promise<string |
   return response.ok ? parseOpenHandsUser(await response.text()) : undefined;
 }
 
+/** Kimi Code `GET <base_url>/me` -- the profile call its own CLI makes
+ * (`fetchManagedUserInfo`) -- answers {user_id, nickname, ..., email?}. */
+export function parseKimiUserInfo(text: string): string | undefined {
+  const parsed = json(text) as { user_id?: unknown; email?: unknown } | undefined;
+  return typeof parsed?.user_id === 'string' ? email(parsed.email) : undefined;
+}
+
+/** The managed provider's base_url in Kimi's config.toml, if one is set. */
+export function kimiBaseUrl(configToml: string): string | undefined {
+  const section = /^\[providers\."managed:kimi-code"\]\s*$([\s\S]*?)(?=^\[|(?![\s\S]))/m.exec(configToml)?.[1];
+  const url = section && /^\s*base_url\s*=\s*"([^"]+)"/m.exec(section)?.[1];
+  return url && /^https:\/\//.test(url) ? url.replace(/\/+$/, '') : undefined;
+}
+
+/** Kimi's OAuth access token lives 15 minutes and every refresh rotates the
+ * refresh token too, so this only uses an access token still fresh -- which
+ * it is right after sign-in, when an account is named -- and never refreshes:
+ * a refresh here would spend the token the CLI holds. */
+async function kimiEmail(profilePath: string | undefined): Promise<string | undefined> {
+  const home = profilePath ? join(profilePath, '.kimi-code') : process.env.KIMI_CODE_HOME || join(homedir(), '.kimi-code');
+  const dir = join(home, 'credentials');
+  const names = (await readdir(dir).catch(() => [] as string[])).filter((name) => name.endsWith('.json'));
+  const config = await readFile(join(home, 'config.toml'), 'utf8').catch(() => '');
+  const now = Date.now() / 1000;
+  for (const name of names) {
+    const record = json(await readFile(join(dir, name), 'utf8').catch(() => '')) as { access_token?: unknown; expires_at?: unknown } | undefined;
+    const token = record?.access_token;
+    if (typeof token !== 'string' || typeof record?.expires_at !== 'number' || record.expires_at < now + 30) continue;
+    const region = jwtClaims(token)?.region;
+    const base = kimiBaseUrl(config) ?? (region === 'overseas' ? 'https://api.kimi.ai/coding/v1' : 'https://api.kimi.com/coding/v1');
+    const response = await fetch(`${base}/me`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+      signal: AbortSignal.timeout(15_000),
+    });
+    const found = response.ok ? parseKimiUserInfo(await response.text()) : undefined;
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /** Codex's auth.json id_token is a standard OIDC JWT whose payload carries an
  * `email` claim. Decoding the payload to read a claim is not verifying the
  * signature, and need not be: this is display of a claim from a credential
@@ -245,6 +285,7 @@ const IDENTITY: Readonly<Partial<Record<string, IdentitySource>>> = {
   openhands: (_harness, profilePath) => openHandsEmail(profilePath),
   vibe: (_harness, profilePath) => mistralVibeAccountEmail(profilePath),
   antigravity: (_harness, profilePath) => antigravityEmail(profilePath),
+  kimi: (_harness, profilePath) => kimiEmail(profilePath),
 };
 
 /** Harnesses whose login can leave the API key outside the account's own
