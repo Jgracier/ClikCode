@@ -70,7 +70,6 @@ import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
 
-
 /** How long a resize burst is given to finish before the settled redraw. A
  * phone dismissing its keyboard emits several SIGWINCHes a few tens of
  * milliseconds apart; this is longer than that gap. The first size of a
@@ -83,12 +82,6 @@ const SCROLL_DRAIN_MIN = 4;
 
 /** One frame, roughly: the gap between drains of an outstanding scroll. */
 const SCROLL_DRAIN_MS = 16;
-
-/** The spinner's step while something is moving. */
-
-/** No delta and no event for this long, with no tool running and no
- * approval up, and the band says so: the spinner stops and turns yellow and
- * the clock says for how long nothing has arrived. */
 
 const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 

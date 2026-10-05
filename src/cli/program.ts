@@ -38,10 +38,6 @@ ${chalk.cyan(`╚${'═'.repeat(inner)}╝`)}
 const CLIKCODE_BANNER = bannerBox('⚡ ClikCode', 'Local-first AI coding runtime');
 
 /**
- * Render a command failure. JSON mode gets a machine-readable object; human mode
- * gets a friendly line, plus stack/HTTP status/response body under --debug.
- */
-/**
  * process.exit() runs synchronously right after this in both handlers below
  * -- an async fs write would very plausibly never flush before the process
  * actually dies, so this uses the sync fs API specifically, not fs/promises.
@@ -56,6 +52,10 @@ function logCrashToDisk(kind: 'uncaughtException' | 'unhandledRejection', error:
   } catch { /* fail-open-ok: a broken crash log must never block the actual crash handling below it. */ }
 }
 
+/**
+ * Render a command failure. JSON mode gets a machine-readable object; human mode
+ * gets a friendly line, plus stack/HTTP status/response body under --debug.
+ */
 export function handleCommandError(error: unknown): void {
   if (isJsonDefaultMode()) {
     emitResult(toCliErrorJson(error));
