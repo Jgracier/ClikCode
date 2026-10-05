@@ -8,7 +8,6 @@ import { writeState } from '../../session/state/write.js';
 import { applyDefaultSetting } from '../../session/options.js';
 import { assertRealModel } from './sessions.js';
 
-/** Read-only view of the defaults every new chat is built from. */
 /** Applies to every provider that doesn't have its own override. */
 export async function aiSettingsSetGlobal(key: string, value: string, emit = true): Promise<void> {
   const state = await readState();
