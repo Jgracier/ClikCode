@@ -291,7 +291,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const now = new Date().toISOString();
     const fork: HarnessSession = {
       ...session, id: randomUUID(), name: words.join(' ').trim() || (session.name ? `${session.name} (fork)` : undefined),
-      conversationId: conversationIdFor(session), parentSessionId: session.id,
+      conversationId: conversationIdFor(session), parentSessionId: session.id, fork: true,
       messages: at === undefined ? messages : messagesThrough(messages, at), pendingTurn: undefined,
       // No vendor thread: the next turn replays the kept messages to rebuild
       // the context, so a fork at N does not carry what came after it.

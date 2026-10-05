@@ -39,8 +39,14 @@ export interface HarnessSession {
   id: string;
   /** Stable ClikCode conversation root, shared by its forks. */
   conversationId?: string;
-  /** The session this one was forked from (/fork, /compact). */
+  /** The session this one was forked from (/fork, /compact), or -- in
+   * conversations from before provider switches happened in place -- the
+   * branch a switch was made from (state/fold-handoffs.ts). */
   parentSessionId?: string;
+  /** Made by /fork or /compact: a chat of its own beside the conversation's
+   * history, not a piece of it. Set when the fork is made, and on a fork from
+   * before the marker existed the first time it is read. */
+  fork?: true;
   /** The terminal currently driving this conversation. Present only while a
    * process has it open, so a second terminal can tell a live chat from an
    * idle one and never attach to the same conversation twice. */
@@ -164,8 +170,8 @@ export interface HarnessSession {
   /** Set on a clerk run that was stored by mistake. Those rows are not chats. */
   clerkOf?: string;
   /** A branch from before provider switches happened in place, whose whole
-   * history the named session carries on (state/fold-handoffs.ts). Kept,
-   * never listed. */
+   * history the named session carries on (state/fold-handoffs.ts: its turns
+   * the other lacked were merged into it first). Kept, never listed. */
   foldedInto?: string;
 }
 

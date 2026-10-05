@@ -31,7 +31,7 @@ describe('a fork that shares its parent\'s history', () => {
     const state = await readState();
     state.sessions.push(chat('p', said(6)));
     await writeState(state);
-    const child = chat('c', [...said(6), { role: 'user', content: 'forked' }], { parentSessionId: 'p' });
+    const child = chat('c', [...said(6), { role: 'user', content: 'forked' }], { parentSessionId: 'p', fork: true });
     state.sessions.push(child);
     await writeState(state);
     child.pendingTurn = { prompt: 'go', startedAt: now, updatedAt: now, outputStarted: true, response: '' };
@@ -59,7 +59,7 @@ describe('a fork that shares its parent\'s history', () => {
     process.env.CLIKCODE_HOME = root;
     const state = await readState();
     state.sessions.push(chat('p', said(6)));
-    const child = chat('c', [...said(6), { role: 'user', content: 'forked' }], { parentSessionId: 'p' });
+    const child = chat('c', [...said(6), { role: 'user', content: 'forked' }], { parentSessionId: 'p', fork: true });
     state.sessions.push(child);
     await writeState(state);
     await writeState(state);

@@ -3,6 +3,7 @@
 import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
+import { COMPACTED_OPENING } from '../../session/state/fold-handoffs.js';
 import { closePersistentTransport } from '../../turn/vendor-process.js';
 import { conversationIdFor, hasConversationContent } from '../../session/options.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
@@ -38,11 +39,11 @@ export async function compactConversation(
   if (!summary) throw new Error('The provider returned no summary; the conversation was left as it was.');
   const compacted: HarnessSession = {
     ...newConversationSession(state, source),
-    conversationId: conversationIdFor(source), parentSessionId: source.id,
+    conversationId: conversationIdFor(source), parentSessionId: source.id, fork: true,
     ...(source.name ? { name: source.name } : {}),
     ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),
     messages: [
-      { role: 'user', content: 'Summary of the conversation so far (compacted by ClikCode):' },
+      { role: 'user', content: COMPACTED_OPENING },
       { role: 'assistant', content: summary },
     ],
   };

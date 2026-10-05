@@ -31,7 +31,7 @@ describe('separate processes writing related chats', () => {
     const home = await freshHome();
     const state = await readState();
     const history = [message('a'), message('b', 'assistant'), message('c'), message('d', 'assistant')];
-    state.sessions.push(chat('p', history), chat('c', [...history, message('child')], { parentSessionId: 'p' }));
+    state.sessions.push(chat('p', history), chat('c', [...history, message('child')], { parentSessionId: 'p', fork: true }));
     await writeState(state);
 
     const results = await Promise.all([
