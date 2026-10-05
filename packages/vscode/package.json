@@ -445,7 +445,7 @@
         "clikcode.openDiffOnApproval": {
           "type": "boolean",
           "default": true,
-          "description": "Open the proposed change in a diff editor when an approval request carries one."
+          "description": "Open the proposed change in a diff editor when an approval request carries one. A change to several files opens from the approval's diff button instead: VS Code's changes editor would take the keyboard."
         },
         "clikcode.startWith": {
           "type": "string",

@@ -473,7 +473,12 @@ export class ClikCodeController implements vscode.Disposable {
 
   private onWorkerEvent(event: WorkerEvent): void {
     if (event.type === 'approval-request') {
-      if (event.preview?.diff?.length && vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.viewDiff(event.id);
+      // One file opens beside the chat without the keyboard (preserveFocus).
+      // Several open VS Code's multi-file changes editor, which always takes
+      // the keyboard -- neither `vscode.changes` nor the editor behind it
+      // takes a preserveFocus (VS Code 1.123) -- so those wait for the
+      // card's diff button.
+      if (event.preview?.diff?.length === 1 && vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.viewDiff(event.id);
       // Only a chat out of sight asks in a toast: one on screen shows the
       // question already, and a toast for it was the same question twice
       // when the user came back to the window.
