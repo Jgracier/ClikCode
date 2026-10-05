@@ -1,7 +1,6 @@
-/** Two windows following one turn that ran out both offer "Resume in". Only
- * one branch is made; the other window joins it and sends nothing.
- * CLIKCODE_HOME is throwaway; branch creation is stubbed so no vendor runs. */
-import { randomUUID } from 'node:crypto';
+/** Two windows following one turn that ran out both offer "Resume in". The
+ * conversation moves once; the other window follows it and sends nothing.
+ * CLIKCODE_HOME is throwaway; the move is stubbed so no vendor runs. */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -11,32 +10,24 @@ import type { HarnessSession } from '../../session/model';
 import { readState } from '../../session/state/read';
 import { writeState } from '../../session/state/write';
 import { forceStoreSession, unforceStoreSession } from '../../session/ephemeral';
+import { leaveProvider } from '../../session/native-thread';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt';
 
-const created = vi.hoisted(() => ({ count: 0 }));
+const moves = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../../commands/ai/conversations', async (original) => ({
   ...await original<typeof import('../../commands/ai/conversations')>(),
-  newProviderConversation: async (sourceId: string, command: string, selection: { turn?: string }) => {
-    created.count += 1;
+  moveToProvider: async (id: string, command: string) => {
+    moves.count += 1;
     // Slow enough that an unlocked second caller would read before this write.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    const state = await readState();
-    const now = new Date().toISOString();
-    const id = randomUUID();
-    state.sessions.push({
-      id, conversationId: sourceId, parentSessionId: sourceId, route: 'local', accountId: null, provider: 'openai', model: null,
-      nativeHarness: command, effort: 'medium', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
-      handoff: { fromSessionId: sourceId, fromHarness: 'claude', at: now, ...(selection.turn ? { turn: selection.turn } : {}) },
-      // As a real branch: the interrupted turn and its partial answer, enough
-      // for the store to share the parent's transcript (and take its lock).
-      messages: [{ role: 'user', content: 'fix the parser' }, { role: 'assistant', content: 'half' }],
-    } as HarnessSession);
-    forceStoreSession(id);
+    const state = await readState({ transcripts: [id] });
+    const session = state.sessions.find((item) => item.id === id)!;
+    leaveProvider(session);
+    session.nativeHarness = command;
     await writeState(state);
-    return id;
   },
 }));
-const { resumeInBranch } = await import('./resume-in');
+const { resumeIn } = await import('./resume-in');
 
 const saved = process.env.CLIKCODE_HOME;
 let root: string;
@@ -45,7 +36,7 @@ const codex = { command: 'codex', provider: 'openai', displayName: 'Codex' } as 
 beforeEach(async () => {
   root = await mkdtemp(join(tmpdir(), 'cc-resume-join-'));
   process.env.CLIKCODE_HOME = root;
-  created.count = 0;
+  moves.count = 0;
 });
 afterEach(async () => {
   unforceStoreSession('s1');
@@ -67,25 +58,27 @@ async function interrupted(startedAt: string): Promise<void> {
 }
 
 describe('"Resume in" from two windows at once', () => {
-  it('makes one branch: the first window sends the continuation, the second joins without sending', async () => {
+  it('moves the conversation once: the first window sends the continuation, the second follows without sending', async () => {
     await interrupted('2026-10-03T10:00:00.000Z');
     const [first, second] = await Promise.all([
-      resumeInBranch('s1', codex, 'acct', null, 'fix the parser', 'fix the parser'),
-      resumeInBranch('s1', codex, 'acct', null, 'fix the parser', 'fix the parser'),
+      resumeIn('s1', codex, 'acct', null, 'fix the parser', 'fix the parser', 'claude'),
+      resumeIn('s1', codex, 'acct', null, 'fix the parser', 'fix the parser', 'claude'),
     ]);
-    expect(created.count).toBe(1);
-    expect(second.id).toBe(first.id);
+    expect(moves.count).toBe(1);
+    expect([first.id, second.id]).toEqual(['s1', 's1']);
     expect([first.prompt, second.prompt].sort()).toEqual([INTERRUPTED_TURN_REQUEST, undefined].sort());
+    const moved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
+    expect(moved.nativeHarness).toBe('codex');
+    // The interrupted turn is history now, its answer still Claude's.
+    expect(moved.pendingTurn).toBeUndefined();
+    expect(moved.messages).toEqual([{ role: 'user', content: 'fix the parser' }, expect.objectContaining({ content: 'half', origin: expect.objectContaining({ harness: 'claude' }) })]);
   });
 
-  it('makes a new branch for a later turn that runs out', async () => {
+  it('moves it again when a later turn runs out there', async () => {
     await interrupted('2026-10-03T10:00:00.000Z');
-    const first = await resumeInBranch('s1', codex, 'acct', null, 'fix the parser', 'fix the parser');
-    const state = await readState({ transcripts: ['s1'] });
-    state.sessions.find((item) => item.id === 's1')!.pendingTurn!.startedAt = '2026-10-03T11:00:00.000Z';
-    await writeState(state);
-    const later = await resumeInBranch('s1', codex, 'acct', null, 'fix the parser', 'fix the parser');
-    expect(later.id).not.toBe(first.id);
-    expect(later.prompt).toBe(INTERRUPTED_TURN_REQUEST);
+    await resumeIn('s1', codex, 'acct', null, 'fix the parser', 'fix the parser', 'claude');
+    const later = await resumeIn('s1', { ...codex, command: 'kilo' }, 'acct', null, 'go on', 'go on', 'codex');
+    expect(moves.count).toBe(2);
+    expect(later).toEqual({ id: 's1', prompt: 'go on' });
   });
 });

@@ -3,15 +3,15 @@
 
 import { randomUUID } from 'node:crypto';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
-import { carriedHandoffModel, carriedHandoffSettings, createHandoffBranch, synchronizeNativeTranscript } from '../../turn/handoff.js';
+import { carriedHandoffModel, carriedHandoffSettings, synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { harnessSupportsEffort } from '../../runtime/lazy-bridge.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
+import { leaveProvider } from '../../session/native-thread.js';
 import { aiHarnessSelect } from './harness.js';
 import { preferredAccountId } from './preferred-account.js';
 import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
@@ -111,20 +111,34 @@ export async function newConversation(
   return created.id;
 }
 
-export async function newProviderConversation(
-  currentId: string,
+/** A conversation's worker running a turn keeps the provider it started on;
+ * moving the conversation under it would answer on one provider into a
+ * record that says another. */
+export async function refuseWhileTurnRuns(id: string): Promise<void> {
+  const { workerTurn } = await import('../../worker/turn-bridge.js');
+  if (await workerTurn(id).catch(() => undefined)) {
+    throw new Error('A turn is still running in this conversation -- switch when it ends, or stop it first.');
+  }
+}
+
+/** Moves the conversation onto another harness, in place: same session, same
+ * history, the effort, permission mode and model it can carry
+ * (carriedHandoffSettings, carriedHandoffModel). Then selected the way any
+ * harness is (aiHarnessSelect: install, sign-in, a real model). */
+export async function moveToProvider(
+  id: string,
   harnessCommandName: string,
-  selection: { accountId?: string | null; model?: string | null; turn?: string } = {},
-): Promise<string> {
-  const state = await readState();
-  const current = state.sessions.find((item) => item.id === currentId);
-  if (!current) throw new Error(`AI session "${currentId}" was not found`);
+  selection: { accountId?: string | null; model?: string | null } = {},
+): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
-  if (current.route === 'local' && current.nativeHarness === harness.command) return current.id;
-  // Refresh the source before freezing its portable ClikCode history into a
-  // child branch. The source native session remains untouched after this.
-  if (await synchronizeNativeTranscript(state, current)) await writeState(state);
+  const state = await readState({ transcripts: [id] });
+  const current = state.sessions.find((item) => item.id === id);
+  if (!current) throw new Error(`AI session "${id}" was not found`);
+  if (current.route === 'local' && current.nativeHarness === harness.command) return;
+  await refuseWhileTurnRuns(id);
+  // What was said in the vendor's own CLI is the leaving provider's too.
+  await synchronizeNativeTranscript(state, current);
   const accountId = selection.accountId ?? preferredAccountId(state, harness.provider);
   const account = accountId ? state.accounts.find((item) => item.id === accountId) : undefined;
   // Effort and permission mode are the conversation's, not the provider's.
@@ -135,19 +149,13 @@ export async function newProviderConversation(
   const lastUsedModel = [...state.sessions]
     .filter((session) => session.nativeHarness === harness.command && session.model)
     .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
-  const now = new Date().toISOString();
-  const sourceDisplayName = current.nativeHarness
-    ? localHarnessForCommand(current.nativeHarness)?.displayName
-    : sessionProviderLabel(current);
-  const session = createHandoffBranch({
-    source: current, target: harness,
-    accountId,
-    model: selection.model ?? carriedHandoffModel(current, account?.models ?? [],
-      lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null),
-    defaults, now, sourceDisplayName, ...(selection.turn ? { turn: selection.turn } : {}),
+  const model = selection.model ?? carriedHandoffModel(current, account?.models ?? [],
+    lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null);
+  leaveProvider(current);
+  Object.assign(current, {
+    route: 'local', provider: harness.provider, nativeHarness: harness.command, accountId, model,
+    effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
   });
-  state.sessions.push(session);
   await writeState(state);
-  await aiHarnessSelect(harnessCommandName, session.id);
-  return session.id;
+  await aiHarnessSelect(harnessCommandName, id);
 }

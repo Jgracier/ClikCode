@@ -203,7 +203,7 @@ export interface IdeGateway {
 }
 
 export type IdeChoice =
-  /** Move this chat onto a provider (in place when empty, else a handoff),
+  /** Move this chat onto a provider (in place, history and all),
    * then optionally a model on it. */
   | { kind: 'provider'; provider: string; model?: string }
   | { kind: 'model'; model: string }

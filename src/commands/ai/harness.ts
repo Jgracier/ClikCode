@@ -19,12 +19,11 @@ import { deriveAccountLabel, nameAccount } from '../../harness/accounts/labels.j
 import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { harnessCanRunTurns } from '../../runtime/lazy-bridge.js';
-import { requiresProviderHandoff } from '../../session/options.js';
 import { signedInAccountId } from './preferred-account.js';
 import { hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
 import { turnBackendForAccount } from '../../turn/account-routing.js';
-import { forgetNativeThread } from '../../session/native-thread.js';
+import { leaveProvider } from '../../session/native-thread.js';
 import { harnessCommand } from '../../session/state/paths.js';
 
 /** Select a provider while retaining ClikCode as the foreground UI. Installs
@@ -47,10 +46,7 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (!session) throw new Error(`AI session "${sessionId}" was not found`);
   const sameHarness = session.nativeHarness === harness.command;
   if (!sameHarness) {
-    if (requiresProviderHandoff(session, harness.command)) {
-      throw new Error(`Use /${harness.command} to hand off this ${sessionProviderLabel(session)} conversation. Native provider changes always create a new branch.`);
-    }
-    forgetNativeThread(session);
+    leaveProvider(session);
     session.model = null;
   }
   session.nativeHarness = harness.command;
@@ -235,11 +231,11 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
     const state = await readState();
     const session = state.sessions.find((item) => item.id === id);
     if (session?.nativeHarness !== harness.command) {
-      // A chat with history moves to the harness as a branch; a new one
+      // A chat with history moves there with what it carries; a new one
       // simply runs there.
-      const { newProviderConversation } = await import('./conversations.js');
-      id = options.chat ? await newProviderConversation(id, harness.command) : id;
-      if (!options.chat) await aiHarnessSelect(harness.command, id, { emit: false });
+      const { moveToProvider } = await import('./conversations.js');
+      if (options.chat) await moveToProvider(id, harness.command);
+      else await aiHarnessSelect(harness.command, id, { emit: false });
     }
   }
   await ensureChatReady(id);

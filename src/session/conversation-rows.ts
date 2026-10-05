@@ -94,8 +94,8 @@ export function conversationRows(sessions: readonly HarnessSession[], facts: Con
     const latest = newest(open.length ? open : chats);
     const updatedAtMs = Math.max(...chats.map((session) => timestamp(session.updatedAt)));
     const current = facts.currentId !== undefined && chats.some((session) => session.id === facts.currentId);
-    // Per conversation, not per chat: a provider handoff leaves the older
-    // chat's worker running for a while, and it is still this conversation.
+    // Per conversation, not per chat: a fork's worker is this conversation's
+    // too.
     let activity: ConversationRow['activity'];
     let pending: PendingTurn | undefined;
     for (const session of chats) {
