@@ -28,6 +28,14 @@
  * appends to the record's `messages_path` (and `compaction_path`) before the
  * path it would derive (`U.messages_path || l` in @cline/core), so the copy's
  * record is pointed at the copy's own files (reconcile).
+ *
+ * Carry verified live against Cline CLI 3.0.68 (2026-10-05, temp homes A and
+ * B with the same Cline account sign-in): a session started over ACP in A
+ * ("Remember the word HERON80. Reply OK."), carried by carryNativeSession
+ * ('carried', no sessions.db row in B), then `session/load` +
+ * `session/prompt` in B answered "HERON80". A's files were byte-identical
+ * after B's turn (the reconciled record wrote to B's copy, not A's); an id
+ * never carried fails B's load "Resource not found".
  */
 
 import { randomBytes } from 'node:crypto';

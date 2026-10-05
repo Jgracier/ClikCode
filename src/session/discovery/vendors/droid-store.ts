@@ -14,7 +14,15 @@
  * Any resume -- of droid's own sessions too -- needs a Factory sign-in
  * (`Failed to fetch session`, 401, signed out); a thread droid did not create
  * also logs a 404 from its cloud sync ("Session write target was not
- * found"), which does not stop the turn. */
+ * found"), which does not stop the turn.
+ *
+ * Carry checked live against droid 0.223.0 (2026-10-05, temp homes A and B
+ * with the same Factory sign-in), short of the model's answer: a session
+ * started over ACP in A wrote `<id>.jsonl` with the prompt, carried by
+ * carryNativeSession ('carried', the transcript only), and B's ACP
+ * `session/resume` accepted the id (one never carried: "Unknown session
+ * identifier"); A unchanged. Every prompt failed 402 "No active
+ * subscription found", so the recall itself is unproved. */
 
 import { randomUUID } from 'node:crypto';
 import { readdir, stat } from 'node:fs/promises';
