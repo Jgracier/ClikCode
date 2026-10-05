@@ -13,12 +13,24 @@
  *       that receives it.
  *
  * A writer that declines, fails or throws is (b) for that turn: the transfer
- * always works, so nothing here can fail the turn. */
+ * always works, so nothing here can fail the turn. So is a model route that
+ * keeps no history (keepsNoHistory): a written thread would be resumed into
+ * a provider that never sees it. */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import { markProviderBoundaries, type CanonicalRecord } from '../session/canonical.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
+import { modelProvider } from '../runtime/lazy-bridge.js';
 import { transferBudget, transferPrompt } from './transfer.js';
+
+/** The model runs behind a provider that keeps no history between one-shot
+ * turns (catalog `turn.statelessProviders`: Goose's `claude-code`). Its
+ * thread is forgotten after every turn, and no thread is written for it:
+ * only the transfer reaches the model. */
+export function keepsNoHistory(harness: AiLocalHarnessDefinition, model: string | null): boolean {
+  const stateless = harness.turn?.statelessProviders;
+  return Boolean(model && stateless?.length && stateless.includes(modelProvider(harness, model) ?? ''));
+}
 
 export type ThreadStart =
   /** Resume `written.nativeId`; send `prompt` (the request itself). */
@@ -55,6 +67,10 @@ export interface ThreadStartInput {
 async function written(input: ThreadStartInput): Promise<NativeThreadWritten | undefined> {
   const writer = input.writer;
   if (!writer || !input.record.turns.length) return undefined;
+  if (keepsNoHistory(input.harness, input.model)) {
+    input.onFallback?.(`${input.model} keeps no history: a written ${input.harness.command} thread would not reach it`);
+    return undefined;
+  }
   try {
     const context = {
       harness: input.harness, workspace: input.workspace, environment: input.environment, model: input.model,
