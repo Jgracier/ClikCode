@@ -136,7 +136,14 @@ export const devinThreadWriter: NativeThreadWriter = {
  *  AUTOINCREMENT and left to the destination.
  *
  *  Progress is the node chain in node order: Devin adds nodes as a session
- *  runs (its rebuilt system prefix included) rather than rewriting them. */
+ *  runs (its rebuilt system prefix included) rather than rewriting them.
+ *
+ *  Verified against devin 3000.11.3 (2026-10-05, vendor-sandbox, swe-1-6-slow,
+ *  ACP as ClikCode drives it): a session made in profile A ("Remember the word
+ *  MAPLE2A") was carried into a profile B already holding its own session
+ *  ('carried'; A's chain and B's own session unchanged), and ClikCode's ACP resume of
+ *  that id in B answered MAPLE2A. After a second turn in B ("remember the
+ *  number 110") it was carried back, and A's resume answered "MAPLE2A 110". */
 export const devinCarry: SqliteCarrySpec = {
   database: (environment) => join(devinRoot(environment), 'sessions.db'),
   session: { table: 'sessions', key: 'id', identity: ['created_at'] },
