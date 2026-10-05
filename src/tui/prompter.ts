@@ -792,6 +792,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return this.journal.running ? settledTranscriptMessages(session, this.journal.prompt) : sessionTranscriptMessages(session);
   }
 
+  /** Where activity outside a turn goes: after the conversation as drawn --
+   * a prompt held for a turn not started yet (a sign-in before it) included,
+   * or its outcome line lands at a place already written and is never drawn. */
+  private restingAnchor(): number {
+    const session = this.currentSession;
+    if (!session) return 0;
+    const stable = session.messages ?? [];
+    const held = pendingPromptText({ ...(this.submittedPrompt ? { sticky: this.submittedPrompt } : {}), lastMessage: stable[stable.length - 1] });
+    return held ? stable.length + 1 : this.transcriptMessages(session).length;
+  }
+
   render(session: HarnessSession, _account?: string, notice?: string, journal?: JournalState): void {
     if (this.currentSession?.id !== session.id) {
       setLifecycleSession(session.id);
@@ -878,7 +889,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
     this.activityEntries = [...this.activityEntries, {
-      anchor: this.turn ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0,
+      anchor: this.turn ? this.activityAnchor : this.restingAnchor(),
       ...(this.turn ? { responseOffset: this.liveResponse.length } : {}),
       // Every entry gets one, waiting or not: it is this row's identity for
       // "already retired", and two rows that happen to say the same thing are
@@ -938,7 +949,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     if (event.kind === 'tool-start') this.thought = undefined;
-    const anchor = this.turn ? this.activityAnchor : this.currentSession ? this.transcriptMessages(this.currentSession).length : 0;
+    const anchor = this.turn ? this.activityAnchor : this.restingAnchor();
     const responseOffset = this.turn ? live?.responseOffset ?? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
     // The status line follows the work: "running tests", "editing app.ts"
@@ -1083,7 +1094,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // Not repainted here: the outcome line withSignIn writes next paints,
         // and a paint between them drew the composer empty for a frame
         // while a message sent under the sign-in waited for its turn.
-        if (!turn) { this.signedInJustNow = true; if (this.turn) this.stopWaiting(false); return; }
+        // The message whose first use opened it is still on its way: its
+        // prompt stays drawn into the turn that starts next.
+        if (!turn) {
+          this.signedInJustNow = true;
+          const prompt = this.submittedPrompt;
+          if (this.turn) this.stopWaiting(false);
+          this.submittedPrompt = prompt;
+          return;
+        }
         if (this.turn !== turn) { this.schedulePaint(); return; }
         turn.label = saved!.label;
         turn.cancel = saved!.cancel;
