@@ -402,7 +402,11 @@ export async function locateCursorSession(root: string, nativeId: string): Promi
  *  writer's check), but whether another ACCOUNT's model turn accepts a
  *  session another account started (its agentId, its blobEncryptionKey) is
  *  unseen. Turn on once one carried session answers a model turn there:
- *  `locateCursorSession` is the whole of what this enables. */
+ *  `locateCursorSession` is the whole of what this enables.
+ *
+ *  Re-tried 2026-10-05 (cursor-agent 2026.09.26-dd393fe, vendor-sandbox, ACP
+ *  session/new + "Reply OK."): all 13 accounts, on the default model and on
+ *  `auto` and `composer-2.5`, answered "Upgrade your plan to continue". */
 export const CURSOR_CARRY_VERIFIED: boolean = false;
 
 /** Until then a failover re-seeds, exactly as before. */
