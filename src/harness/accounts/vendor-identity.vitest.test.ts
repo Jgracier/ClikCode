@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { matchingVendorAccount } from './labels.js';
 import {
-  codexIdTokenEmail, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
+  antigravityIdTokenEmail, codexIdTokenEmail, parseAmpUsage, parseClineProviders, parseCommandCodeWhoami, parseDevinAuthStatus,
   parseJunieCredentials, parseKiloProfile, parseKiroWhoami, parseOpenHandsUser, vendorAccountEmail,
 } from './vendor-identity.js';
 
@@ -116,5 +116,19 @@ describe('vendor account email', () => {
     const payload = Buffer.from(JSON.stringify({ email: 'a@example.com' })).toString('base64url');
     expect(codexIdTokenEmail(JSON.stringify({ tokens: { id_token: `h.${payload}.s` } }))).toBe('a@example.com');
     expect(codexIdTokenEmail(JSON.stringify({ tokens: {} }))).toBeUndefined();
+  });
+
+  it('reads the Google email claim of the Antigravity id_token, expired or not', () => {
+    const jwt = (claims: object) => `h.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.s`;
+    const file = (idToken?: string) => JSON.stringify({
+      token: { access_token: 'redacted', token_type: 'Bearer', refresh_token: 'redacted', expiry: '2026-09-26T21:30:55-06:00' },
+      auth_method: 'consumer', ...(idToken ? { id_token: idToken } : {}),
+    });
+    const google = { iss: 'https://accounts.google.com', email: 'a@example.com', email_verified: true, exp: 1 };
+    expect(antigravityIdTokenEmail(file(jwt(google)))).toBe('a@example.com');
+    expect(antigravityIdTokenEmail(file(jwt({ ...google, iss: 'https://evil.example' })))).toBeUndefined();
+    expect(antigravityIdTokenEmail(file(jwt({ ...google, email_verified: false })))).toBeUndefined();
+    expect(antigravityIdTokenEmail(file())).toBeUndefined();
+    expect(antigravityIdTokenEmail('not json')).toBeUndefined();
   });
 });
