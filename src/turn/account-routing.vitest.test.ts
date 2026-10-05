@@ -205,13 +205,23 @@ describe('the failover step both account backends take', () => {
     return { result, tally, persist };
   };
 
-  it('moves to the next account whatever the failure, and marks spent only a quota refusal', async () => {
+  it('ends on a failure that is not the account\'s, instead of retelling the turn on every account', async () => {
+    // A Grok turn walked four accounts in an hour this way, retold onto a
+    // fresh thread at each, until the model only repeated the retelling.
     const crashed = account('crashed');
-    const { result, tally } = step({ accounts: [crashed, account('next')], failure: new Error('segfault'), kind: 'other' });
-    expect((await result).id).toBe('next');
-    expect([...tally.attempted]).toEqual(['crashed']);
-    expect(tally.exhaustedAny).toBe(false);
+    const segfault = new Error('segfault');
+    await expect(step({ accounts: [crashed, account('next')], failure: segfault, kind: 'other' }).result).rejects.toBe(segfault);
     expect(crashed.quotaState).toBeUndefined();
+  });
+
+  it('moves on for what another account fixes, and marks spent only a quota refusal', async () => {
+    for (const kind of ['temporarily-throttled', 'authentication-required', 'account-ineligible'] as const) {
+      const first = account('first');
+      const { result, tally } = step({ accounts: [first, account('next')], failure: new Error('429 too many requests'), kind });
+      expect((await result).id, kind).toBe('next');
+      expect(tally.exhaustedAny, kind).toBe(false);
+      expect(first.quotaState, kind).toBeUndefined();
+    }
   });
 
   it('stops on Esc instead of walking the accounts', async () => {

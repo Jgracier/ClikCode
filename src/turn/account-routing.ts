@@ -120,15 +120,19 @@ export interface FailoverTally {
  * account with the already-aborted signal -- until every account had been
  * walked.
  *
- * Failover is about finding an account that can still work, so it is not
- * gated on a quota refusal: a turn that died any other way still moves on.
- * Only a quota refusal marks the account spent, though -- a crash says nothing
- * about how much allowance is left. A rejected REQUEST is not an account
- * problem at all: every account refuses the same argv the same way (ClikCode
- * once sent --effort to Antigravity, then walked seven accounts collecting
- * the same refusal), so it is surfaced as the vendor worded it. Nor is a
- * stall: a vendor that went quiet for the idle budget says nothing about the
- * account, and moving on only started the request over somewhere else. */
+ * Failover moves a turn to another account only for what is the ACCOUNT's:
+ * usage spent, a rate limit, a sign-in gone, a plan that does not cover the
+ * model. Anything else -- a crash, an unrecognised error, a rejected request,
+ * a stall -- would happen on every account alike, and moving on only started
+ * the request over somewhere else: ClikCode once sent --effort to Antigravity
+ * and walked seven accounts collecting the same refusal, and a Grok turn
+ * walked four accounts in an hour, retold onto a fresh thread at each, until
+ * the model only repeated the retelling. Those are surfaced as the vendor
+ * worded them (the caller has already retried once in place). Only a quota
+ * refusal marks the account spent. */
+/** Failures another account can fix. */
+const ACCOUNT_FAILURES: ReadonlySet<AccountFailureKind> = new Set(['quota-exhausted', 'temporarily-throttled', 'authentication-required', 'account-ineligible']);
+
 export async function accountAfterFailure(input: {
   state: HarnessState;
   session: HarnessSession;
@@ -149,7 +153,7 @@ export async function accountAfterFailure(input: {
     throw isTurnCancelled(failure) ? failure : turnCancelledError();
   }
   if (kind === 'authentication-required') account.status = 'needs_login';
-  if (kind === 'request-invalid' || (failure as { reason?: unknown } | undefined)?.reason === 'idle-timeout') {
+  if (!ACCOUNT_FAILURES.has(kind) || (failure as { reason?: unknown } | undefined)?.reason === 'idle-timeout') {
     await input.persist();
     throw failure;
   }
