@@ -41,6 +41,8 @@ export async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter,
  * (a ready account, or a credential the vendor keeps on disk), then the first
  * installed one in tier order. Tier alone put a user signed in only to Codex
  * on an installed, signed-out Claude Code and straight into its login.
+ * Never signs in or installs: nobody asked for this provider yet. Its first
+ * turn signs in if it needs to.
  * Returns false only when nothing useful is installed.
  */
 export async function autoSelectSessionHarness(id: string): Promise<boolean> {
@@ -60,7 +62,7 @@ export async function autoSelectSessionHarness(id: string): Promise<boolean> {
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const preferred = localHarnessForProvider(session.provider ?? account?.provider ?? '');
   if (preferred && await isInstalled(preferred)) {
-    await aiHarnessSelect(preferred.command, id, { emit: false });
+    await aiHarnessSelect(preferred.command, id, { emit: false, signIn: false });
     return true;
   }
   const candidates = allLocalHarnesses()
@@ -74,11 +76,11 @@ export async function autoSelectSessionHarness(id: string): Promise<boolean> {
     if (!await isInstalled(harness)) continue;
     fallback ??= harness;
     if (await signedIn(harness)) {
-      await aiHarnessSelect(harness.command, id, { emit: false });
+      await aiHarnessSelect(harness.command, id, { emit: false, signIn: false });
       return true;
     }
   }
   if (!fallback) return false;
-  await aiHarnessSelect(fallback.command, id, { emit: false });
+  await aiHarnessSelect(fallback.command, id, { emit: false, signIn: false });
   return true;
 }

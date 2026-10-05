@@ -1,6 +1,7 @@
 /** Switching the conversation a session is attached to, including the
  * handover a change of provider forces. */
 
+import type { HarnessPrompter } from '../../harness/prompter.js';
 import { randomUUID } from 'node:crypto';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
@@ -110,7 +111,7 @@ export async function refuseWhileTurnRuns(id: string): Promise<void> {
 export async function moveToProvider(
   id: string,
   harnessCommandName: string,
-  selection: { accountId?: string | null; model?: string | null } = {},
+  selection: { accountId?: string | null; model?: string | null; prompter?: HarnessPrompter } = {},
 ): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
@@ -139,5 +140,5 @@ export async function moveToProvider(
     effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
   });
   await writeState(state);
-  await aiHarnessSelect(harnessCommandName, id);
+  await aiHarnessSelect(harnessCommandName, id, selection.prompter ? { prompter: selection.prompter } : {});
 }
