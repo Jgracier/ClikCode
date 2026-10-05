@@ -28,10 +28,11 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { readdir, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
-import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
+import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile, type NativeSessionStore, type NativeThreadWriter } from '../stores.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
   sequentialIds, testedVersion,
@@ -201,7 +202,22 @@ export const grokThreadWriter: NativeThreadWriter = {
   },
 };
 
+/** A session is a directory, filed under the cwd it ran in -- the
+ * conversation's workspace first, then any other cwd (a chat whose folder
+ * moved). Found, it is carried as a path: the whole directory, so the next
+ * account resumes the vendor's own thread, every tool call included. */
+async function locateGrokSession(root: string, nativeId: string, workspace: string): Promise<NativeSessionFile | undefined> {
+  const isSession = (path: string): Promise<boolean> => stat(join(path, 'summary.json')).then((entry) => entry.isFile(), () => false);
+  const group = grokWorkspaceDirectoryName(workspace);
+  if (group && await isSession(join(root, group, nativeId))) return { path: join(root, group, nativeId), root };
+  for (const other of await readdir(root).catch(() => [] as string[])) {
+    if (other !== group && await isSession(join(root, other, nativeId))) return { path: join(root, other, nativeId), root };
+  }
+  return undefined;
+}
+
 export const grokSessionStore: NativeSessionStore = {
   root: grokRoot,
+  locate: locateGrokSession,
   writer: grokThreadWriter,
 };
