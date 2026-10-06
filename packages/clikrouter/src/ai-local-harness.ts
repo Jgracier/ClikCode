@@ -291,6 +291,10 @@ export interface AiHarnessTurnDefinition {
    *  distinction matters. */
   quotaSignals?: readonly string[];
   resumeSupportsWorkspaceSelector?: boolean;
+  /** Argv flag that takes inline MCP configuration or a path to an MCP config JSON. Amp takes `['--mcp-config']`. */
+  mcpConfigArgv?: readonly string[];
+  /** Argv flag that takes an extension file or plugin file. Pi takes `['-e']`. */
+  extensionArgv?: readonly string[];
 }
 
 /** One way a vendor's own installer runs on one family of operating systems.
@@ -844,7 +848,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // it borrows the claude-stream-json parser family. UNVERIFIED LIVE: amp is
   // not installed where this was written, hence `experimental`; `fallbackTurn`
   // is the previously shipped plain-text contract, unchanged.
-  { command: 'amp', provider: 'amp', displayName: 'Amp', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/amp/secrets.json', contains: 'apiKey@' }], authEnv: ['AMP_API_KEY'], loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: ['--stream-json'], resumeArgv: ['threads', 'continue'], resumeIdSuffix: ['--stream-json'], promptArgvPrefix: ['-x'], output: 'json-lines', responseFields: ['result'] }, fallbackTurn: { startArgv: [], resumeArgv: ['threads', 'continue'], promptArgvPrefix: ['-x'], output: 'text' }, session: { resumeIdPrefix: ['threads', 'continue'] } },
+  { command: 'amp', provider: 'amp', displayName: 'Amp', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/amp/secrets.json', contains: 'apiKey@' }], authEnv: ['AMP_API_KEY'], loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: ['--stream-json'], resumeArgv: ['threads', 'continue'], resumeIdSuffix: ['--stream-json'], promptArgvPrefix: ['-x'], output: 'json-lines', responseFields: ['result'], mcpConfigArgv: ['--mcp-config'] }, fallbackTurn: { startArgv: [], resumeArgv: ['threads', 'continue'], promptArgvPrefix: ['-x'], output: 'text' }, session: { resumeIdPrefix: ['threads', 'continue'] } },
   // Verified against Antigravity's own official headless-mode docs
   // (antigravity.google/docs/cli/headless/): -p/--print for a single
   // non-interactive prompt, --model <slug>, --continue/-c for the most
@@ -914,7 +918,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginSteps: [{ when: '/login to log into a provider', send: '/login{enter}' }, { when: 'Credentials saved to', send: '{ctrl-d}' }], loginKeyRoutes: providerKeyRoutes(['Sign in with an API key'], {
     anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: 'OpenAI', google: 'Google', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
     fireworks: 'Fireworks', mistral: 'Mistral', deepseek: 'DeepSeek', moonshot: 'Moonshot AI', 'moonshot-cn': 'Moonshot AI CN', zai: 'Z.AI', minimax: 'MiniMax', together: 'Together',
-  }), authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
+  }), authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'], extensionArgv: ['-e'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
   // Checked against droid 0.223.0: `droid exec` takes -m/--model,
   // -r/--reasoning-effort, --cwd, -s/--session-id, --auto low|medium|high and
   // --skip-permissions-unsafe, all as declared here. Two things were missing:
@@ -1500,7 +1504,25 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('timeout', 'Turn timeout (seconds)', 'Override the agent command timeout', 'safety', ['--timeout'], 'number'),
       value('verbose', 'Verbose', 'Persist the agent verbose level for the session', 'output', ['--verbose'], 'enum', { values: ['on', 'off'] }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, skills: { label: 'Skills', manageArgv: ['skills'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
+    managers: {
+      mcp: {
+        label: 'MCP servers',
+        listArgv: ['mcp', 'list'],
+        manageArgv: ['mcp'],
+        remove: { argv: ['mcp', 'unset'] },
+        add: {
+          argv: ['mcp', 'add', '--no-probe'],
+          shape: 'named-flags',
+          commandPrefix: ['--command'],
+          argsPrefix: ['--arg'],
+          argsStyle: 'repeat-equals',
+          urlPrefix: ['--url'],
+        },
+      },
+      plugins: { label: 'Plugins', manageArgv: ['plugins'] },
+      skills: { label: 'Skills', manageArgv: ['skills'] },
+      hooks: { label: 'Hooks', manageArgv: ['hooks'] },
+    },
     features: ['plugins', 'skills', 'hooks', 'memory', 'chat channels', 'model fallbacks'],
   },
   hermes: {

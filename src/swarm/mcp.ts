@@ -8,6 +8,7 @@ import { readState } from '../session/state/read.js';
 import { activeSwarmHost } from './store.js';
 import { swarmIsOn } from './policy.js';
 import { runSwarmDelegation, swarmModelList } from './run.js';
+import { SWARM_CLERK_ENV } from './publish.js';
 
 interface RpcMessage {
   jsonrpc?: string;
@@ -44,18 +45,21 @@ const TOOL_SCHEMA = {
   },
 };
 
-async function toolSpec(): Promise<{ name: string; description: string; inputSchema: typeof TOOL_SCHEMA }> {
+async function toolSpec(): Promise<{ name: string; description: string; inputSchema: typeof TOOL_SCHEMA } | undefined> {
+  if (process.env[SWARM_CLERK_ENV]) return undefined;
   let description = 'Hand one self-contained task to a model that has usage left. This chat shows it as one subagent: its steps appear under the row, and you get back a short card, not that model\'s conversation.';
   const sessionId = await activeSwarmHost();
   if (sessionId) {
     const state = await readState({ transcripts: [] });
     const host = state.sessions.find((session) => session.id === sessionId);
+    if (host && !swarmIsOn(host)) return undefined;
     if (host && swarmIsOn(host)) description = await swarmModelList(host, state).catch(() => description);
   }
   return { name: 'swarm', description, inputSchema: TOOL_SCHEMA };
 }
 
 async function callTool(args: Record<string, unknown> | undefined, onStep?: (label: string) => void): Promise<string> {
+  if (process.env[SWARM_CLERK_ENV]) return 'A swarm clerk cannot start another swarm.';
   const prompt = typeof args?.prompt === 'string' ? args.prompt.trim() : '';
   if (!prompt) return 'A swarm task needs a prompt.';
   const description = typeof args?.description === 'string' ? args.description.trim() : undefined;
@@ -93,7 +97,10 @@ async function dispatch(message: RpcMessage, send: McpSend): Promise<unknown> {
       serverInfo: { name: 'clikcode-swarm', version: '1' },
     });
   }
-  if (message.method === 'tools/list') return respond(message.id, { tools: [await toolSpec()] });
+  if (message.method === 'tools/list') {
+    const spec = await toolSpec();
+    return respond(message.id, { tools: spec ? [spec] : [] });
+  }
   if (message.method === 'tools/call') {
     try {
       const token = progressTokenOf(message);
