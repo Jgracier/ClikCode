@@ -21,13 +21,14 @@ describe('the board spinner', () => {
       setSelecting: () => undefined,
       select: async () => undefined,
     };
-    const conversations = (): PickerOption<string>[] => [{ label: 'Fix the bug', value: 'a', group: 'Working 1', ...(working ? { working: 'flowing' as const } : {}) }];
+    const conversations = (): PickerOption<string>[] => [{ label: 'Fix the bug', value: 'a', group: 'Working 1', ...(working ? { activity: 'working' as const } : {}) }];
     void runConversationBoard(host as never, { conversations, commands: [] });
     await vi.advanceTimersByTimeAsync(500);
     expect(painted.at(-1)?.[0]).not.toBe('Fix the bug');
     working = false;
     await vi.advanceTimersByTimeAsync(500);
-    expect(painted.at(-1)?.[0]).toBe('Fix the bug');
+    // The glyph column stays, blank.
+    expect(painted.at(-1)?.[0]).toBe('   Fix the bug');
     const draws = painted.length;
     await vi.advanceTimersByTimeAsync(1_000);
     // Idle: nothing more to animate, so nothing more is drawn.
@@ -52,7 +53,7 @@ describe('the board spinner', () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(builds).toBe(idleBuilds);
     working = true;
-    list = [{ label: 'Fix the bug', value: 'a', group: 'Working 1', ...(working ? { working: 'flowing' as const } : {}) }];
+    list = [{ label: 'Fix the bug', value: 'a', group: 'Working 1', ...(working ? { activity: 'working' as const } : {}) }];
     redraw!();
     await vi.advanceTimersByTimeAsync(1_000);
     expect(painted).toBeGreaterThan(3);

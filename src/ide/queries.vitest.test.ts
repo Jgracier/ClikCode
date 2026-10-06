@@ -74,7 +74,7 @@ describe('the conversation list', () => {
     const rows = await conversationList(await readState(), 'other');
     // Both are older than 24 hours, so Past by recency: handoff (Sep 5) then other (Sep 4).
     expect(rows.map((row) => row.id)).toEqual(['handoff', 'other']);
-    expect(rows[0]).toMatchObject({ title: 'Login bug', messages: 2, preview: 'Done.', current: false });
+    expect(rows[0]).toMatchObject({ title: 'Login bug', messages: 2, preview: 'fix it', current: false });
     expect(rows[1]).toMatchObject({ current: true, activity: 'idle', title: 'write tests for the parser', provider: 'Codex' });
   });
 
@@ -120,6 +120,27 @@ describe('the conversation list', () => {
     expect(by.get('stale')).toBe('idle');
     expect(by.get('crashed')).toBeUndefined();
     expect(rows[0]?.id).toBe('running');
+    // What the row's state is read from: the turn, not a pace word.
+    expect(rows[0]).toMatchObject({ turn: { startedAt: now, activeAt: now } });
+    expect(rows[0]).not.toHaveProperty('needsYou');
+  });
+
+  it('says a conversation needs you while its worker records an approval waiting', async () => {
+    const now = new Date().toISOString();
+    await home({
+      sessions: [session('asking', {
+        conversationId: 'q', status: 'active', updatedAt: now, messages: [{ role: 'user', content: 'deploy it' }],
+        pendingTurn: { prompt: 'deploy it', startedAt: now, updatedAt: now, outputStarted: true },
+      })],
+    });
+    await ensureWorkersDirectory();
+    await writeWorkerRecord({
+      sessionId: 'asking', pid: process.pid, socketPath: join(process.env.CLIKCODE_HOME!, 'asking.sock'), token: 't', installationId: 'install', build: 'test', startedAt: now,
+      awaitingApproval: { title: 'Run make release', since: now },
+    });
+    const rows = await conversationList(await readState(), undefined);
+    expect(rows[0]).toMatchObject({ id: 'asking', needsYou: true, preview: 'deploy it' });
+    expect(rows[0]).not.toHaveProperty('model');
   });
 });
 

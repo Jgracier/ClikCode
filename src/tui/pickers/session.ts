@@ -24,13 +24,10 @@ import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
-import { sessionClaimIsLive } from '../../session/claim.js';
-import { livePendingTurns, liveWorkerSessions } from '../../session/liveness.js';
+import { livePendingTurns, liveWorkers } from '../../session/liveness.js';
 import { watchConversationList } from '../../session/list-watch.js';
 import { conversationRows, recencySection, sectionRank, SECTION_TITLES, type ConversationRow, type ConversationSection } from '../../session/conversation-rows.js';
-import { activityGlyph, subagentOptions, workingDetail } from './conversation-activity.js';
-import { turnPace } from '../../harness/protocol/turn-pace.js';
-import { resumeWaitLabel } from '../../turn/usage-exhausted.js';
+import { conversationLabel, subagentOptions } from './conversation-activity.js';
 import { conversationIdFor, conversationOption, isBlankConversation } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
@@ -219,7 +216,8 @@ export async function interactiveSessionPicker(
   const workspace = current?.workspace ?? process.cwd();
   // Whether a worker is behind each chat. Re-checked while the board stays
   // open, so a turn that finishes mid-list drops out of Working.
-  let workerIsLive = await liveWorkerSessions();
+  let workers = await liveWorkers();
+  let workerIsLive = workers.isLive;
   // The turn each live-worker chat is generating, from its transcript -- the
   // one record of a turn in flight. Its `updatedAt` is the spinner's pace.
   let pendingById = await livePendingTurns(sessions, workerIsLive);
@@ -228,7 +226,7 @@ export async function interactiveSessionPicker(
   // the same rows the editor's history menu draws).
   let rows: ConversationRow[] = [];
   const fillActivity = (): void => {
-    rows = conversationRows(sessions, { workerIsLive, pending: pendingById, currentId });
+    rows = conversationRows(sessions, { workerIsLive, awaitingYou: workers.awaitingYou, pending: pendingById, currentId });
   };
   fillActivity();
 
@@ -264,7 +262,8 @@ export async function interactiveSessionPicker(
   const refreshActivity = (): void => {
     if (activityRefresh) return;
     activityRefresh = (async () => {
-      workerIsLive = await liveWorkerSessions();
+      workers = await liveWorkers();
+      workerIsLive = workers.isLive;
       pendingById = await livePendingTurns(sessions, workerIsLive);
       fillActivity();
       listRevision += 1;
@@ -308,22 +307,12 @@ export async function interactiveSessionPicker(
     // rather than claiming a false position.
     histories.clear();
     type OptionBlock = { sortKey: number; options: PickerOption<string>[]; section: ConversationSection };
+    // Built when the list changes, so a row's `working 3m` is as of then.
+    const now = Date.now();
     const trackedBlocks = rows.map((row): OptionBlock => {
-      const option = conversationOption(row, undefined, openedAt);
-      const pending = row.pending;
-      // Three cells in front of every title, so they line up: a running turn's
-      // spinner (the board animates it) or its dot, otherwise blank.
-      if (pending) option.working = turnPace(pending.updatedAt, openedAt);
-      option.label = pending ? (onBoard ? option.label : `${activityGlyph('working', option.working)}  ${option.label}`) : `   ${option.label}`;
-      if (pending) {
-        option.detail = `${workingDetail(pending, openedAt)} ${option.detail ?? ''}`;
-        if (pending.subagents?.length) option.inner = { title: 'Subagents', options: subagentOptions(pending, option.value, openedAt) };
-      }
-      // A turn parked for the quota reset says so, and when.
-      else if (row.latest.resumeAt) option.detail = `· ${resumeWaitLabel(row.latest.resumeAt, openedAt)} ${option.detail ?? ''}`;
-      if (row.latest.id !== currentId && sessionClaimIsLive(row.latest)) {
-        option.detail = `${option.detail ?? ''} · active in another terminal`;
-      }
+      const option = conversationOption(row, undefined, now);
+      const agents = row.pending?.subagents;
+      if (agents?.length) option.inner = { title: 'Agents', options: subagentOptions(row.pending!, option.value, now) };
       return { sortKey: row.updatedAtMs, options: [option], section: row.section };
     });
     const optionBlocks: OptionBlock[] = [
@@ -332,7 +321,7 @@ export async function interactiveSessionPicker(
         sortKey: item.updatedAtMs ?? -Infinity,
         section: recencySection(item.updatedAtMs, openedAt),
         options: [{
-          label: `   ${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
+          label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
           detail: `· not yet in ClikCode${ADOPTED_TRANSCRIPT_READERS[harness.command] ? '' : ' · opens without earlier messages'}${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
           // By identity, not position: the list is replaced when the CLIs
           // answer, and a row chosen from the earlier one must still resolve.
@@ -355,15 +344,18 @@ export async function interactiveSessionPicker(
       option.actions = [...historyAction, ...MANAGE_ACTIONS];
       option.deleteAction = { label: 'Delete', value: 'delete' };
     }
-    // On the board its composer is how a conversation starts.
-    if (!onBoard) options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
     if (discovering && slowDiscovery) {
       options.push({
-        label: discovered.length ? '  Refreshing chats from other CLIs…' : '  Looking for chats from other CLIs…',
+        label: discovered.length ? 'Refreshing chats from other CLIs…' : 'Looking for chats from other CLIs…',
         detail: discovered.length ? '· showing what they listed last time' : '· your ClikCode conversations are listed above',
         value: PENDING_DISCOVERY_VALUE,
       });
     }
+    // The glyph column: the board draws it, the spinner animated; this list
+    // draws it still.
+    if (!onBoard) for (const option of options) option.label = conversationLabel(option, 0);
+    // On the board its composer is how a conversation starts.
+    if (!onBoard) options.unshift({ label: '+ New conversation', detail: '· same provider and model', value: NEW_CONVERSATION_VALUE });
     return options;
   };
   // Asked for on every keypress (the list redraws, and a picker re-reads its

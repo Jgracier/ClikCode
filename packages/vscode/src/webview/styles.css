@@ -463,13 +463,14 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .conversation { display: flex; gap: 10px; padding: 8px; align-items: flex-start; }
 .conversation-dot { width: 7px; height: 7px; border-radius: 50%; margin-top: 7px; flex: none; background: transparent; }
 .conversation-dot.working { background: var(--vscode-terminal-ansiGreen, var(--vscode-charts-green, #89d185)); border-color: transparent; animation: pulse var(--spin-cycle, 1.2s) ease-in-out infinite; }
-/* A working turn's pace (src/harness/protocol/turn-pace.ts), coloured as the terminal board colours it. */
-.conversation-dot.working.slowing { background: var(--vscode-terminal-ansiYellow, var(--vscode-charts-yellow, #cca700)); }
-.conversation-dot.working.stuck { background: var(--vscode-terminal-ansiRed, var(--vscode-charts-red, #f14c4c)); }
+/* A stalled turn (src/harness/protocol/turn-pace.ts), yellow as the terminal board's spinner. */
+.conversation-dot.working.stalled { background: var(--vscode-terminal-ansiYellow, var(--vscode-charts-yellow, #cca700)); }
 .conversation-dot.idle { background: var(--ok); border-color: transparent; }
 .conversation-dot.unread { background: var(--vscode-textLink-foreground); }
 .conversation-main { flex: 1; min-width: 0; }
 .conversation-title { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The last thing asked, dim under the title. */
+.conversation-preview { color: var(--muted); font-size: 0.88em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conversation-meta { color: var(--muted); font-size: 0.88em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rename { width: 100%; font: inherit; padding: 2px 6px; border-radius: 4px; border: 1px solid var(--focus); background: var(--input); color: var(--vscode-input-foreground); }
 .group-head { display: flex; align-items: center; gap: 4px; font-size: 0.82em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 6px 2px 4px; }

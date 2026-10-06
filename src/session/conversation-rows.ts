@@ -6,22 +6,23 @@
  * This is the one place that does it; each surface only draws the rows.
  *
  *   working  a turn is generating (a live worker and its transcript turn)
- *   active   something happened on it in the last 24 hours
- *   past     older
+ *   active   something happened on it in the last 24 hours (titled Recent)
+ *   past     older (titled Older)
+ *
+ * What a row says it is doing is conversation-state.ts.
  */
 
 import { hostname } from 'node:os';
 import type { HarnessSession } from './model.js';
 import { sessionActivity, type WorkerLiveness } from './liveness.js';
+import type { ConversationSection } from './conversation-state.js';
+
+export { SECTION_TITLES, type ConversationSection } from './conversation-state.js';
 
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
 
 /** A chat counts as Active when something happened on it in this window. */
 export const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
-
-export type ConversationSection = 'working' | 'active' | 'past';
-
-export const SECTION_TITLES: Readonly<Record<ConversationSection, string>> = { working: 'Working', active: 'Active', past: 'Past' };
 
 const SECTION_RANK: Readonly<Record<ConversationSection, number>> = { working: 0, active: 1, past: 2 };
 
@@ -52,6 +53,8 @@ export interface ConversationRow {
   activity?: 'working' | 'idle';
   /** The generating turn, when `working`. */
   pending?: PendingTurn;
+  /** An approval in one of its chats is waiting on the user. */
+  needsYou: boolean;
   /** It holds the chat open here. */
   current: boolean;
   section: ConversationSection;
@@ -60,6 +63,8 @@ export interface ConversationRow {
 export interface ConversationRowFacts {
   /** Which sessions have a worker process (liveWorkerSessions). */
   workerIsLive?: WorkerLiveness;
+  /** Which live workers have an approval waiting (liveWorkers). */
+  awaitingYou?: WorkerLiveness;
   /** Transcript turns of live-worker sessions (livePendingTurns). */
   pending?: ReadonlyMap<string, PendingTurn>;
   currentId?: string;
@@ -107,8 +112,9 @@ export function conversationRows(sessions: readonly HarnessSession[], facts: Con
     // The chat open here is active by definition; a claim only says whether
     // someone ELSE holds it, so it would not show up by liveness alone.
     if (!activity && current) activity = 'idle';
+    const needsYou = Boolean(facts.awaitingYou && chats.some((session) => facts.awaitingYou!(session.id)));
     const section: ConversationSection = activity === 'working' ? 'working' : recencySection(updatedAtMs, now);
-    rows.push({ root, chats, latest, updatedAtMs, ...(activity ? { activity } : {}), ...(pending ? { pending } : {}), current, section });
+    rows.push({ root, chats, latest, updatedAtMs, ...(activity ? { activity } : {}), ...(pending ? { pending } : {}), needsYou, current, section });
   }
   return rows.sort((left, right) => sectionRank(left.section) - sectionRank(right.section) || right.updatedAtMs - left.updatedAtMs);
 }

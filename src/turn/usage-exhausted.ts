@@ -14,6 +14,7 @@
  * for a balance. This line only says that none of the accounts left can take
  * the turn. It is not an error.
  */
+import { quotaResetPhrase } from '../harness/protocol/format.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { accountCanTakeTurn, windowSpent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
 
@@ -35,26 +36,6 @@ export function nextQuotaReset(
     .filter((at) => Number.isFinite(at) && at > now)
     .sort((left, right) => left - right);
   return resets.length ? new Date(resets[0]!) : undefined;
-}
-
-/** `5:34PM`, or `5:34PM Friday Sep 25` when the reset is not today.
- *
- * The calendar day decides, not the window's name: a five-hour window that
- * rolls over after midnight needs its date as much as a weekly one does. */
-export function quotaResetPhrase(reset: Date, now: number = Date.now()): string {
-  const hours24 = reset.getHours();
-  const time = `${hours24 % 12 || 12}:${reset.getMinutes().toString().padStart(2, '0')}${hours24 >= 12 ? 'PM' : 'AM'}`;
-  const today = new Date(now);
-  const sameDay = reset.getFullYear() === today.getFullYear()
-    && reset.getMonth() === today.getMonth() && reset.getDate() === today.getDate();
-  if (sameDay) return time;
-  // Spelled out rather than taken from toLocaleDateString: that follows the
-  // machine's locale, so the same reset reads "Sat 26 Sept" on one box and
-  // "sam. 26 sept." on another, and a test written against either is wrong
-  // somewhere else.
-  const weekday = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][reset.getDay()];
-  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][reset.getMonth()];
-  return `${time} ${weekday} ${month} ${reset.getDate()}`;
 }
 
 /** The one sentence shown when every account has been tried and none has

@@ -7,7 +7,8 @@
  * resolving an option id (or one of its aliases) against a harness's
  * published manifest.
  *
- * `sessionPickerOptions`, `providerPickerOptions` and `accountPickerOptions`
+ * A conversation row (conversationOption) is its title, its one state and
+ * the last thing asked. `providerPickerOptions` and `accountPickerOptions`
  * are out of scope here and remain uncovered as a follow-up. */
 import { describe, expect, it, vi } from 'vitest';
 
@@ -31,11 +32,12 @@ vi.mock('../runtime/lazy-bridge', () => ({
 }));
 
 import {
-  applyDefaultSetting, normalizeFailoverWord, optionForControl, optionForHarness,
+  applyDefaultSetting, conversationOption, normalizeFailoverWord, optionForControl, optionForHarness,
   parseHarnessOption, setSessionHarnessOption, VALID_EFFORTS, VALID_PERMISSION_MODES,
 } from './options';
 import type { AiHarnessOptionDefinition, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession } from './model.js';
+import type { ConversationRow } from './conversation-rows.js';
 
 const option = (overrides: Partial<AiHarnessOptionDefinition>): AiHarnessOptionDefinition => ({
   id: 'flag', label: 'Flag', description: 'a flag', category: 'general', kind: 'boolean',
@@ -387,5 +389,52 @@ describe('setSessionHarnessOption', () => {
     setSessionHarnessOption(target, harness(), 'sandbox', 'on');
     expect(target.nativeSessionId).toBe('native-1');
     expect(target.nativeStartedAt).toBe('2026-01-01T00:00:00.000Z');
+  });
+});
+
+describe('conversationOption', () => {
+  const NOW = Date.parse('2026-09-29T12:00:00');
+  const ago = (ms: number): string => new Date(NOW - ms).toISOString();
+  const strip = (text: string | undefined): string => (text ?? '').replace(/\u001b\[[0-9;]*m/g, '');
+  const row = (latest: HarnessSession, extra: Partial<ConversationRow> = {}): ConversationRow => ({
+    root: latest.id, chats: [latest], latest, updatedAtMs: Date.parse(latest.updatedAt), needsYou: false, current: false, section: 'active', ...extra,
+  });
+  const asked = { messages: [{ role: 'user' as const, content: 'fix the scroll jump' }, { role: 'assistant' as const, content: 'Fixed.' }] };
+
+  it('is the title, then when, then the last thing asked: no provider, model or `current`', () => {
+    const option = conversationOption(row(session({ name: 'Scroll bug', model: 'gpt-5', updatedAt: ago(5 * 60_000), ...asked }), { current: true }), () => 'Acme CLI', NOW);
+    expect(option.label).toBe('Scroll bug');
+    expect(strip(option.detail)).toBe('· 5m ago · fix the scroll jump');
+    expect(option.activity).toBeUndefined();
+  });
+
+  it('says a running turn is working, with its agents, and marks the row', () => {
+    const pending = {
+      prompt: 'go', startedAt: ago(3 * 60_000), updatedAt: ago(5_000), outputStarted: true,
+      subagents: [{ id: 'a', label: 'Explore', startedAt: ago(60_000) }, { id: 'b', label: 'Review', startedAt: ago(30_000) }],
+    };
+    const option = conversationOption(row(session({ name: 'Build', updatedAt: ago(0), ...asked }), { activity: 'working', pending, section: 'working' }), undefined, NOW);
+    expect(strip(option.detail)).toBe('· working 3m · 2 agents · fix the scroll jump');
+    expect(option.activity).toBe('working');
+  });
+
+  it('paints a stalled turn yellow', () => {
+    const pending = { prompt: 'go', startedAt: ago(20 * 60_000), updatedAt: ago(4 * 60_000), outputStarted: true };
+    const option = conversationOption(row(session({ updatedAt: ago(0) }), { activity: 'working', pending, section: 'working' }), undefined, NOW);
+    expect(strip(option.detail)).toBe('· stalled 4m');
+    expect(option.activity).toBe('stalled');
+  });
+
+  it('needs you while an approval waits', () => {
+    const pending = { prompt: 'go', startedAt: ago(60_000), updatedAt: ago(0), outputStarted: true };
+    const option = conversationOption(row(session({ updatedAt: ago(0) }), { activity: 'working', pending, needsYou: true, section: 'working' }), undefined, NOW);
+    expect(strip(option.detail)).toBe('· needs you');
+    expect(option.activity).toBe('needs-you');
+  });
+
+  it('says when a turn parked for the quota reset is back', () => {
+    const at = new Date('2026-09-29T14:30:00').toISOString();
+    const option = conversationOption(row(session({ updatedAt: ago(0), resumeAt: { at, prompt: 'go', setAt: ago(0) } })), undefined, NOW);
+    expect(strip(option.detail)).toBe('· back 2:30PM');
   });
 });
