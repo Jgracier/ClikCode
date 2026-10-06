@@ -15,7 +15,7 @@ import { composerLayout } from './render/composer-layout.js';
 import { closeOpenHyperlink } from './render/hyperlinks.js';
 import { createStreamingBlockParser } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
-import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
+import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visiblePathTail, visibleSlice, visibleTail } from './render/width.js';
 import { installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
 import { PUSH_TITLE, notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle, type FocusState } from './terminal-signals.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
@@ -1477,10 +1477,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
-  private statusText(): string {
+  /** The line under the composer, fitted to `width`: a narrow screen
+   * shortens the directory from the left (`…/clikcode`) before anything. */
+  private statusText(width: number): string {
     const session = this.currentSession;
     if (!session) return '';
-    const context = compactPath(session.workspace ?? process.cwd());
+    const path = compactPath(session.workspace ?? process.cwd());
     const provider = sessionProviderLabel(session);
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     // What the harness reported running beats what it was asked to run: a
@@ -1502,7 +1504,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title is not on this line: it sits on the rule under the composer,
     // so a long one never truncates the provider, model or directory.
-    return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
+    const lead = [provider, [model, effort].filter(Boolean).join(' ')].filter(Boolean).join('  •  ');
+    const context = visiblePathTail(path, Math.max(12, width - terminalCellWidth(lead) - 5));
+    return visibleSlice([lead, context].filter(Boolean).join('  •  '), width);
   }
 
   /** `⠋  Reading prompter.ts · 1m 12s`: what the turn is doing and how long
@@ -2064,7 +2068,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         ...userRows(message.content), `  ${chalk.dim(`↳ ${fitHint(status, Math.max(1, inner - 4))}`)}`);
     }
     const conversationLines = liveConversationLines(liveConversation, true);
-    const meta = this.statusText();
+    const meta = this.statusText(inner);
     const footer: string[] = [];
     // The resting composer starts with a clear row, or its rule sits directly
     // on the last line of the answer. While a turn runs the generating band
@@ -2103,7 +2107,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // conversation is running as -- so they read as one line in one colour
     // rather than a bright word followed by a dimmer tail. Cyan is ClikCode's
     // own chrome, the same family as the caret above it.
-    footer.push(`  ${chalk.cyan(visibleSlice(meta, inner))}`);
+    footer.push(`  ${chalk.cyan(meta)}`);
 
     // The live region is bounded by the viewport: it is erased and redrawn as
     // one block every frame, so it can never be taller than the terminal. A
