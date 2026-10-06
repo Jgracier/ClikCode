@@ -266,6 +266,97 @@ export async function clineUsageReading(_session: HarnessSession, environment: E
   }
 }
 
+// ---------------------------------------------------------------- Mistral Vibe
+
+/** Mistral's answer to a request with no messages, which its rate limiter
+ * judges before anything runs (so it costs nothing): a key whose plan allows
+ * no requests at all (`x-ratelimit-limit-req-minute: 0`, every Vibe key here
+ * on 2026-10-06, though vibe itself reports it as a retryable 429) is spent.
+ * Anything else says nothing about usage. */
+export function vibeQuotaReading(status: number, requestsPerMinute: string | null): UsageReading | undefined {
+  if (status === 429 && requestsPerMinute === '0') return { windows: [{ name: 'requests', usedPct: 100 }], label: 'No requests allowed on this plan' };
+  return undefined;
+}
+
+export async function vibeUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  try {
+    const home = environment.VIBE_HOME ?? join(environment.HOME ?? homedir(), '.vibe');
+    const key = /^MISTRAL_API_KEY=["']?([^"'\s]+)/m.exec(await readFile(join(home, '.env'), 'utf8'))?.[1];
+    if (!key) return undefined;
+    const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
+      method: 'POST', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'mistral-small-latest', messages: [] }),
+    });
+    await response.body?.cancel();
+    return vibeQuotaReading(response.status, response.headers.get('x-ratelimit-limit-req-minute'));
+  } catch {
+    return undefined; // fail-open-ok: no figure beats a wrong one
+  }
+}
+
+// ---------------------------------------------------------------- Devin
+
+/** Windsurf's GetUserStatus `planStatus` (what devin's own CLI reads): a
+ * daily and a weekly quota as percent remaining, each with its reset in unix
+ * seconds (Free plan, 2026-10-06: daily 100, weekly 99). */
+export function devinQuotaReading(planStatus: unknown): UsageReading | undefined {
+  const plan = planStatus as Json | undefined;
+  if (!plan) return undefined;
+  const window = (name: string, remaining: unknown, reset: unknown): UsageWindow | undefined => {
+    const left = Number(remaining);
+    const at = Number(reset);
+    return Number.isFinite(left) && remaining !== undefined ? usageWindow(name, 100 - left, Number.isFinite(at) && at > 0 ? at * 1000 : undefined) : undefined;
+  };
+  return usageReading([window('daily', plan.dailyQuotaRemainingPercent, plan.dailyQuotaResetAtUnix), window('weekly', plan.weeklyQuotaRemainingPercent, plan.weeklyQuotaResetAtUnix)]);
+}
+
+export async function devinUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  try {
+    const data = environment.XDG_DATA_HOME ?? join(environment.HOME ?? homedir(), '.local', 'share');
+    const credentials = await readFile(join(data, 'devin', 'credentials.toml'), 'utf8');
+    const key = /^\s*windsurf_api_key\s*=\s*"([^"]+)"/m.exec(credentials)?.[1];
+    const server = /^\s*api_server_url\s*=\s*"([^"]+)"/m.exec(credentials)?.[1] ?? 'https://server.codeium.com';
+    if (!key) return undefined;
+    // The full metadata: with only the key the server answers invalid_argument.
+    const response = await fetch(`${server}/exa.seat_management_pb.SeatManagementService/GetUserStatus`, {
+      method: 'POST', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
+      body: JSON.stringify({ metadata: { apiKey: key, ideName: 'windsurf', ideVersion: '1.0.0', extensionName: 'windsurf', extensionVersion: '1.0.0' } }),
+    });
+    return response.ok ? devinQuotaReading(((await response.json() as Json).userStatus as Json | undefined)?.planStatus) : undefined;
+  } catch {
+    return undefined; // fail-open-ok: no figure beats a wrong one
+  }
+}
+
+// ---------------------------------------------------------------- Hermes (Nous Portal)
+
+/** `GET /api/oauth/account` on the Nous Portal (hermes's own credit check):
+ * the credits it can spend, and whether it may run paid models at all. */
+export function hermesQuotaReading(account: unknown): UsageReading | undefined {
+  const record = account as Json | undefined;
+  const access = record?.paid_service_access as Json | undefined;
+  if (!access) return undefined;
+  const credits = Number(access.total_usable_credits ?? record?.purchased_credits_remaining);
+  if (access.allowed === false) return { windows: [{ name: 'credits', usedPct: 100 }], label: 'Out of credits' };
+  return Number.isFinite(credits) ? { windows: [], label: `$${credits.toFixed(2)} credits left` } : undefined;
+}
+
+export async function hermesUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  try {
+    const home = environment.HERMES_HOME ?? join(environment.HOME ?? homedir(), '.hermes');
+    const nous = ((JSON.parse(await readFile(join(home, 'auth.json'), 'utf8')) as Json).providers as Json | undefined)?.nous as Json | undefined;
+    // A short-lived token hermes renews as it runs; never renewed here.
+    if (typeof nous?.access_token !== 'string') return undefined;
+    const base = typeof nous.portal_base_url === 'string' ? nous.portal_base_url : 'https://portal.nousresearch.com';
+    const response = await fetch(`${base}/api/oauth/account`, { headers: { Authorization: `Bearer ${nous.access_token}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    return response.ok ? hermesQuotaReading(await response.json()) : undefined;
+  } catch {
+    return undefined; // fail-open-ok: no figure beats a wrong one
+  }
+}
+
 // ---------------------------------------------------------------- Kiro
 
 /** Kiro's `/usage` result: each `usageBreakdowns` entry a resource with a
@@ -305,6 +396,9 @@ export function commandCodeQuotaReading(result: unknown): UsageReading | undefin
   if (windows) return windows;
   const credits = record?.credits as Json | undefined;
   const balance = ['monthlyCredits', 'purchasedCredits', 'freeCredits'].reduce((sum, key) => sum + (Number(credits?.[key]) || 0), 0);
+  // None left is spent: its turns answer "Insufficient credits for Command
+  // Code" (2026-10-06), until a reading shows credits again.
+  if (credits && balance <= 0) return { windows: [{ name: 'credits', usedPct: 100 }], label: 'Out of credits' };
   return balance > 0 ? { windows: [], label: `${Number.isInteger(balance) ? balance : balance.toFixed(2)} credits left` } : undefined;
 }
 

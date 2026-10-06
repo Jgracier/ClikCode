@@ -3,7 +3,7 @@
 
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { grokUsageReading } from './grok-usage.js';
-import { ampUsageProbe, auggieUsageProbe, clineUsageReading, commandCodeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
+import { ampUsageProbe, auggieUsageProbe, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -186,4 +186,7 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageRea
   cursor: cursorUsageReading,
   kiro: kiroUsageReading,
   command: commandCodeUsageReading,
+  devin: devinUsageReading,
+  hermes: hermesUsageReading,
+  vibe: vibeUsageReading,
 };

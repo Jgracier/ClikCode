@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ampUsageLabel, auggieUsageLabel, clineQuotaReading, commandCodeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
+import { ampUsageLabel, auggieUsageLabel, clineQuotaReading, commandCodeQuotaReading, devinQuotaReading, hermesQuotaReading, vibeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
 
 const NOW = Date.parse('2026-09-30T04:42:49.300Z');
 
@@ -115,6 +115,26 @@ describe('Cline credits balance', () => {
   });
 });
 
+describe('the readings checked against real turns on 2026-10-06', () => {
+  it('Mistral: a key allowed no requests a minute is spent; any other answer says nothing', () => {
+    expect(vibeQuotaReading(429, '0')).toEqual({ windows: [{ name: 'requests', usedPct: 100 }], label: 'No requests allowed on this plan' });
+    expect(vibeQuotaReading(429, '60')).toBeUndefined();
+    expect(vibeQuotaReading(400, '60')).toBeUndefined();
+  });
+  it('Devin: daily and weekly remaining percent, resetting at their unix times', () => {
+    const reading = devinQuotaReading({ availableFlexCredits: 100, dailyQuotaRemainingPercent: 100, weeklyQuotaRemainingPercent: 99, dailyQuotaResetAtUnix: '1791360000', weeklyQuotaResetAtUnix: '1791705600' });
+    expect(reading?.label).toBe('Daily 100% left · Weekly 99% left');
+    expect(reading?.windows[1]).toEqual({ name: 'weekly', usedPct: 1, resetsAt: new Date(1791705600000).toISOString() });
+  });
+  it('Nous Portal: usable credits, and spent when paid access is refused', () => {
+    expect(hermesQuotaReading({ subscription: null, purchased_credits_remaining: 9.803, paid_service_access: { allowed: true, total_usable_credits: 9.8030062407 } })?.label).toBe('$9.80 credits left');
+    expect(hermesQuotaReading({ paid_service_access: { allowed: false, total_usable_credits: 0 } })).toEqual({ windows: [{ name: 'credits', usedPct: 100 }], label: 'Out of credits' });
+  });
+  it('Command Code: no credits left and no plan windows is spent', () => {
+    expect(commandCodeQuotaReading({ credits: { monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 } })).toEqual({ windows: [{ name: 'credits', usedPct: 100 }], label: 'Out of credits' });
+  });
+});
+
 describe('Kiro /usage over ACP', () => {
   // `_kiro.dev/commands/execute` usage, kiro-cli 2.23.1, KIRO FREE.
   const data = {
@@ -139,9 +159,10 @@ describe('Command Code /alpha/billing/credits', () => {
     });
     expect(reading?.label).toBe('5h 75% left · Weekly 40% left');
   });
-  it('falls back to the credit balance, and says nothing for an empty free account', () => {
+  it('falls back to the credit balance, and an empty free account is out of credits', () => {
     expect(commandCodeQuotaReading({ credits: { monthlyCredits: 10, purchasedCredits: 2.5, freeCredits: 0 }, windowLimits: { limited: false } })?.label).toBe('12.50 credits left');
-    // The real answer for this machine's free account, 2026-09-30.
-    expect(commandCodeQuotaReading({ credits: { belowThreshold: false, creditThreshold: 0, monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: false, exceeded: null, fiveHour: null, weekly: null } })).toBeUndefined();
+    // The real answer for this machine's free account, 2026-09-30; its turns
+    // answered "Insufficient credits for Command Code" on 2026-10-06.
+    expect(commandCodeQuotaReading({ credits: { belowThreshold: false, creditThreshold: 0, monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: false, exceeded: null, fiveHour: null, weekly: null } })?.label).toBe('Out of credits');
   });
 });
