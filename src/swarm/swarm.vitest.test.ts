@@ -196,25 +196,26 @@ describe('the model list', () => {
 });
 
 describe('a delegation', () => {
-  it('rejects a cut-off structured reply instead of showing it as a card', () => {
-    expect(() => cardFromReply('[]}', 300)).toThrow('incomplete card');
-    expect(() => cardFromReply('\": [] } ``` 7', 300)).toThrow('incomplete card');
+  it('safely handles unstructured or partial text without failing the clerk turn', () => {
+    expect(cardFromReply('[]}', 300).summary).toBe('[]}');
+    expect(cardFromReply('\": [] } ``` 7', 300).summary).toBe('\": [] } ``` 7');
     expect(cardFromReply('5', 300).summary).toBe('5');
+    expect(() => cardFromReply('   ', 300)).toThrow('The clerk returned no answer');
   });
 
-  it('stays on the host for one file, and runs a clerk when the work spans files', async () => {
-    expect(keepOnHost('What does src/app.ts export?')).toBe(true);
-    expect(keepOnHost('Review src/a.ts and src/b.ts across the tree')).toBe(false);
+  it('delegates any requested task to a clerk without artificial refusal', async () => {
+    expect(keepOnHost('What does src/app.ts export?')).toBe(false);
     const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
     process.env.CLIKCODE_HOME = dir;
     const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(38) });
-    const session = host({ id: 'span' });
-    const own = await runSwarmDelegation({
-      host: session, state: state([cursor]),
-      request: { prompt: 'What does src/app.ts export?', description: 'one file', callId: 'own' },
-      runClerk: async () => { throw new Error('the host should have kept this'); },
+    const single = await runSwarmDelegation({
+      host: host({ id: 'single-span' }), state: state([cursor]),
+      request: { prompt: 'What does src/app.ts export?', description: 'one file', callId: 'single' },
+      runClerk: async () => '{"summary":"exports app"}',
     });
-    expect(own).toBeNull();
+    expect(single?.output).toContain('exports app');
+    expect(single?.swarm?.displayName).toBe('Cursor Agent');
+    const session = host({ id: 'span' });
     const events: HarnessActivityEvent[] = [];
     const done = await runSwarmDelegation({
       host: session, state: state([cursor]),
@@ -257,6 +258,37 @@ describe('a delegation', () => {
     expect(ran).toEqual({ accountId: 'cursor', model: 'claude-sonnet-4.5' });
     expect(done?.output).toContain('it exports a router');
     expect(done?.activityLabel).toContain('claude-sonnet-4.5');
+  });
+
+  it('auto-selects the best account when no model is passed', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70) });
+    const codex = account({ id: 'codex', provider: 'openai', label: 'Bea', usage: windows(20) });
+    let ranAccountId: string | undefined;
+    const done = await runSwarmDelegation({
+      host: host({ id: 'auto-pick' }), state: state([cursor, codex]),
+      request: { prompt: 'Analyze architecture', callId: 'auto-call' },
+      runClerk: async (input) => {
+        ranAccountId = input.account.id;
+        return '{"summary":"architecture analyzed"}';
+      },
+    });
+    expect(ranAccountId).toBe('codex'); // codex has 80% left, cursor has 30% left
+    expect(done?.output).toContain('architecture analyzed');
+  });
+
+  it('gracefully falls back when an unmatched model is requested instead of failing', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70), models: ['claude-sonnet-4.5'] });
+    const done = await runSwarmDelegation({
+      host: host({ id: 'fallback-pick' }), state: state([cursor]),
+      request: { prompt: 'Analyze architecture', model: 'unknown-model-xyz', callId: 'fallback-call' },
+      runClerk: async () => '{"summary":"completed via fallback"}',
+    });
+    expect(done?.output).toContain('completed via fallback');
+    expect(done?.isError).toBeFalsy();
   });
 
   it('says so when nobody has published an amount with room left', async () => {

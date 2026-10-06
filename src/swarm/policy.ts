@@ -17,9 +17,9 @@ export interface SwarmPolicy {
 
 /** The caps for a conversation with swarm on. No artificial limit on parallel workers. */
 export const SWARM_POLICY: SwarmPolicy = {
-  maxBriefTokens: 12000,
-  maxBoardTokens: 400,
-  maxCardTokens: 300,
+  maxBriefTokens: 20000,
+  maxBoardTokens: 2000,
+  maxCardTokens: 4000,
 };
 
 /** True when this conversation delegates. A saved `lean` or `frugal` list

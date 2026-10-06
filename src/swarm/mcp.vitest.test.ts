@@ -36,7 +36,7 @@ describe('swarm MCP framing', () => {
         child.stdin.write(first.slice(12) + frame(2, 'tools/list'));
       });
       expect(listed.result?.tools?.[0]?.name).toBe('swarm');
-      expect(listed.result?.tools?.[0]?.inputSchema.required).toEqual(['prompt', 'model']);
+      expect(listed.result?.tools?.[0]?.inputSchema.required).toEqual(['prompt']);
     } finally {
       if (child.exitCode === null) {
         child.kill();
