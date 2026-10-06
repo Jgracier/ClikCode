@@ -212,7 +212,8 @@ export function toolStatusVerb(tool: OpenTool): string {
   const subject = (value: string, width = 32): string => visibleSlice(value, width);
   switch (tool.category) {
     case 'run': {
-      const command = argument ?? tool.label;
+      // A shell row's label is often the prompt-shaped `$ git log`.
+      const command = (argument ?? tool.label).replace(/^\s*\$\s+/, '');
       if (/(?:^|[\s/])(?:test|tests|vitest|jest|pytest|mocha|rspec|phpunit)\b|\btest:/.test(command)) return 'running tests';
       const program = command.split(/\s+/).find((word) => word && !/^\w+=/.test(word) && word !== 'sudo');
       return program ? `running ${subject(program.split('/').pop() || program, 24)}` : 'running';

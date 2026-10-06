@@ -43,6 +43,7 @@ describe('the activity log', () => {
     expect(toolStatusVerb({ label: 'Edit(/repo/src/prompter.ts)', category: 'edit' })).toBe('editing prompter.ts');
     expect(toolStatusVerb({ label: 'Bash(pnpm vitest run src)', category: 'run' })).toBe('running tests');
     expect(toolStatusVerb({ label: 'git status --short', category: 'run' })).toBe('running git');
+    expect(toolStatusVerb({ label: '$ git log --oneline', category: 'run' })).toBe('running git');
     expect(toolStatusVerb({ label: 'Bash(CI=1 /usr/bin/make build)', category: 'run' })).toBe('running make');
     expect(toolStatusVerb({ label: 'Grep(TODO)', category: 'search' })).toBe('searching');
     expect(toolStatusVerb({ label: 'Task(review the diff)' })).toBe('waiting on agent');
