@@ -130,16 +130,16 @@ function localDay(at: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-/** A cost that is only partly known says so; one never recorded is
- * "cost unknown" -- never `$0.00`, which would claim it was free. */
+/** A cost that is only partly known is an `at least` (`$1.20+`); one never
+ * recorded is left out -- never `$0.00`, which would claim it was free. */
 function costText(known: number, unknownTurns: number, knownTurns: number): string {
-  if (!knownTurns) return unknownTurns ? 'cost unknown' : '';
-  return unknownTurns ? `${dollars(known)} + unknown` : dollars(known);
+  if (!knownTurns) return '';
+  return unknownTurns ? `${dollars(known)}+` : dollars(known);
 }
 
-/** Turns whose vendor reported no token counts read as unknown, not 0. */
+/** Turns whose vendor reported no token counts leave the figure out, not 0. */
 function tokensText(tokens: number, turns: number): string {
-  return turns && !tokens ? 'tokens unknown' : compactCount(tokens);
+  return turns && !tokens ? '' : compactCount(tokens);
 }
 
 export interface UsageDay { day: string; turns: number; tokens: number; costUsd: number; costTurns: number; unknownCostTurns: number }
@@ -193,18 +193,19 @@ export function usageReportAll(
         const label = account.id === session.accountId ? `${account.label} · current` : account.label;
         return [`  ${label}${quota.label === 'not reported yet' ? '' : ` · ${quota.label}`}${quota.reset ? ` · ${quota.reset}` : ''}`];
       }),
-      `  ${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'} · ${tokensText(totals.totalTokens, totals.turns)}${cost ? ` · ${cost}` : ''}`,
+      `  ${[`${totals.turns} ${totals.turns === 1 ? 'turn' : 'turns'}`, tokensText(totals.totalTokens, totals.turns), cost].filter(Boolean).join(' · ')}`,
     ].join('\n');
   });
-  const days = usageDays(state, now);
-  const width = Math.max(...days.map((row) => tokensText(row.tokens, row.turns).length));
+  // Only the days with use: an idle day is a row saying nothing.
+  const days = usageDays(state, now).filter((row) => row.turns);
+  const width = Math.max(0, ...days.map((row) => tokensText(row.tokens, row.turns).length));
   const week = days.map((row) => {
     // Spelled out, not toLocaleDateString: the same on every machine.
     const date = new Date(`${row.day}T12:00:00`);
     const label = `${WEEKDAYS[date.getDay()]} ${MONTHS[date.getMonth()]} ${date.getDate()}`;
-    if (!row.turns) return `  ${label.padEnd(11)}  —`;
     const cost = costText(row.costUsd, row.unknownCostTurns, row.costTurns);
-    return `  ${label.padEnd(11)}  ${tokensText(row.tokens, row.turns).padStart(width)} · ${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}${cost ? ` · ${cost}` : ''}`;
+    const figures = [...(width ? [tokensText(row.tokens, row.turns).padStart(width)] : []), `${row.turns} ${row.turns === 1 ? 'turn' : 'turns'}`, ...(cost ? [cost] : [])];
+    return `  ${label.padEnd(11)}  ${figures.join(' · ')}`;
   });
-  return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...week].join('\n')].join('\n\n') };
+  return { text: [...(sections.length ? sections : ['No providers yet']), ['Last 7 days', ...(week.length ? week : ['  Nothing recorded'])].join('\n')].join('\n\n') };
 }

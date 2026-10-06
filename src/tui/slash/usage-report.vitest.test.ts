@@ -78,18 +78,18 @@ describe('/usage all', () => {
     now: NOW, providerName: (provider) => ({ anthropic: 'Claude Code', xai: 'Grok Build' })[provider] ?? provider,
   });
 
-  it('lists every provider with its accounts and totals, cost unknown where none was recorded', () => {
+  it('lists every provider with its accounts and totals, no cost where none was recorded', () => {
     expect(all.text).toContain('Claude Code\n  full · current\n  2 turns · 2.5k · $9.25');
-    expect(all.text).toContain('Grok Build\n  g1\n  2 turns · 600 · cost unknown');
+    expect(all.text).toContain('Grok Build\n  g1\n  2 turns · 600\n');
+    expect(all.text).not.toContain('unknown');
     expect(all.text).not.toContain('$0.00');
   });
 
-  it('adds a seven-day table, newest first, a day with nothing as a dash', () => {
+  it('adds a table of the last seven days with use, newest first', () => {
     const week = all.text.slice(all.text.indexOf('Last 7 days')).split('\n').slice(1);
-    expect(week).toHaveLength(7);
-    expect(week[0]).toMatch(/^ {2}Mon Sep 21 +1.8k · 2 turns · \$0\.25 \+ unknown$/);
-    expect(week[1]).toMatch(/—$/);
-    expect(week[2]).toMatch(/300 · 1 turn · cost unknown$/);
+    expect(week).toHaveLength(2);
+    expect(week[0]).toMatch(/^ {2}Mon Sep 21 +1.8k · 2 turns · \$0\.25\+$/);
+    expect(week[1]).toMatch(/Sat Sep 19 +300 · 1 turn$/);
   });
 
   it('counts folded rollups as tokens of unknown cost', () => {
