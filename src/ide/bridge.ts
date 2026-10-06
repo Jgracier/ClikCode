@@ -41,7 +41,10 @@ import { isShellCommandLine } from '../commands/ai/shell-run.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
 import { selectGatewayAgent } from '../commands/ai/sessions.js';
 import { dispatchLine, type SlashHost } from '../tui/slash/dispatch.js';
-import { slashPalette } from '../tui/slash/registry.js';
+import { slashControls, slashHelpText, slashPalette, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
+import { lastAnswer } from '../tui/slash/handlers.js';
+import { browseSearch, type MentionScreen } from '../tui/slash/search-browse.js';
+import { emitHarnessOutput } from '../harness/output.js';
 import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
 import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
 import { withArgValues } from '../tui/slash/arg-values.js';
@@ -57,7 +60,7 @@ import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../work
 import { shownSettingsKey, type WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
 import { watchConversationList, type ListWatch } from '../session/list-watch.js';
-import { encodeTerminalSpec, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
+import { encodeTerminalSpec, type IdeChoice, type IdeEvent, type IdeFeature, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
 import { IDE_PROTOCOL } from './protocol-version.js';
 import { sessionEvent } from './session-event.js';
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
@@ -101,12 +104,13 @@ export class IdeBridge {
    * its confirmation ("Model set to …", "Renamed to …", an account removed)
    * is not said again in the chat. Errors still are. */
   quietOutput = 0;
-
-  private readonly slashHost: SlashHost;
+  /** What the editor said it handles, with its last `open`. */
+  private features: ReadonlySet<IdeFeature> = new Set();
+  /** /search waiting on the editor's next key. */
+  private searchKey: ((key: Extract<IdeRequest, { type: 'search-key' }>['key']) => void) | undefined;
 
   constructor(private readonly config: Conf, private readonly channel: IdeChannel) {
     this.prompter = new IdePrompter(channel);
-    this.slashHost = this.createSlashHost();
   }
 
   start(): void {
@@ -123,6 +127,7 @@ export class IdeBridge {
     if (request.type !== 'query') lifecycle('bridge.request', { type: request.type, ...(request.type === 'choose' ? { kind: request.choice.kind } : {}) });
     switch (request.type) {
       case 'open':
+        this.features = new Set(request.features ?? []);
         this.enqueue(async () => {
           try {
             await this.open(request.workspace, request.mode, request.sessionId);
@@ -169,6 +174,12 @@ export class IdeBridge {
       case 'watch-conversations':
         this.watchConversations(request.on);
         return;
+      case 'search-key': {
+        const answer = this.searchKey;
+        this.searchKey = undefined;
+        answer?.(request.key);
+        return;
+      }
       case 'close':
         void this.shutdown();
         return;
@@ -207,6 +218,7 @@ export class IdeBridge {
     this.listWatch = undefined;
     for (const timer of this.timers) clearInterval(timer);
     this.prompter.cancelAll();
+    this.searchKey?.('done');
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));
     this.signIns.clear();
     this.detachWorker();
@@ -589,7 +601,7 @@ export class IdeBridge {
         } finally { this.quietOutput -= 1; }
       });
     }
-    return dispatchLine(this.slashHost, id, line, { fromQueuedCommand });
+    return dispatchLine(this.slashHost(), id, line, { fromQueuedCommand });
   }
 
   private async withBusy<T>(label: string, work: () => Promise<T>): Promise<T> {
@@ -598,7 +610,7 @@ export class IdeBridge {
   }
 
   /** The editor as the screen a slash command runs for. */
-  private createSlashHost(): SlashHost {
+  private slashHost(): SlashHost {
     return {
       config: this.config,
       prompter: this.prompter,
@@ -624,6 +636,49 @@ export class IdeBridge {
       runManager: (harness, label, argv, environment) =>
         this.runInTerminal({ command: harness.command, mode: 'run', argv }, { environment, name: `${harness.displayName} ${label}` }),
       exported: (path) => this.channel.send({ type: 'open-file', path }),
+      // The terminal's walk, where the editor can show it.
+      ...(this.features.has('search-walk') ? { browseSearch: (query: string) => browseSearch(this.searchScreen(), query, (label, work) => this.withBusy(label, work)) } : {}),
+      intercept: (route, session, harness) => {
+        const name = route.entry.name;
+        if (TERMINAL_ONLY_COMMANDS.has(name)) return { notice: `/${name} is for the terminal; the editor has no use for it.` };
+        if (name === 'help') {
+          emitHarnessOutput({ panel: 'help', helpText: slashHelpText(session, harness, { ...slashExtrasFor(session, harness), omit: TERMINAL_ONLY_COMMANDS }), controls: slashControls() });
+          return {};
+        }
+        // The editor's own clipboard: the bridge's machine may not be the
+        // one the user is at (Remote-SSH), and has no terminal for OSC 52.
+        if (name === 'copy' && this.features.has('copy')) {
+          this.channel.send({ type: 'copy', text: lastAnswer(session) });
+          return { notice: 'Last response copied to the clipboard.' };
+        }
+        return undefined;
+      },
+    };
+  }
+
+  /** /search's screen in the editor: each mention opens its conversation
+   * there (a `search` event says where); the editor's keys come back as
+   * `search-key`. */
+  private searchScreen(): MentionScreen {
+    let shown: Promise<void> = Promise.resolve();
+    return {
+      showMention: (session, focus) => {
+        shown = shown.then(async () => {
+          if (session.id !== this.sessionId) await this.switchTo(session.id);
+          this.channel.send({ type: 'search', focus: {
+            sessionId: session.id, messageIndex: focus.messageIndex, occurrence: focus.occurrence, words: [...focus.words], status: focus.status ?? '',
+          } });
+        });
+      },
+      mentionKey: async () => {
+        await shown;
+        if (this.closed) return 'done';
+        return new Promise((resolve) => { this.searchKey = resolve; });
+      },
+      endMention: () => {
+        this.searchKey = undefined;
+        this.channel.send({ type: 'search' });
+      },
     };
   }
 
@@ -641,7 +696,7 @@ export class IdeBridge {
           const harness = sessionHarness(current);
           // The terminal palette's own values (withArgValues): the vendor
           // lists fill in as they load, so a later query has more.
-          const rows: PaletteEntry[] = withArgValues(slashPalette(current, harness, slashExtrasFor(current, harness)), current, harness, state);
+          const rows: PaletteEntry[] = withArgValues(slashPalette(current, harness, { ...slashExtrasFor(current, harness), omit: TERMINAL_ONLY_COMMANDS }), current, harness, state);
           answer(rows.map((row) => {
             const values = row.argValues?.();
             return {

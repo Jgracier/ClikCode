@@ -76,6 +76,13 @@ import { undoTurnsBack } from '../../session/undo-turn.js';
 import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../session/turn-changes.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
+/** What /copy copies: the conversation's last answer. */
+export function lastAnswer(session: HarnessSession): string {
+  const last = textTranscript(sessionTranscriptMessages(session)).reverse().find((message) => message.role === 'assistant');
+  if (!last) throw new Error('There is no assistant response to copy yet.');
+  return last.content;
+}
+
 /** A setting changed: stamp the session, store the state, and show the
  * settings panel -- in the terminal, the status line it re-renders. */
 async function saveSettings(state: HarnessState, session: HarnessSession): Promise<void> {
@@ -220,9 +227,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return emitHarnessOutput({ panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)) });
   },
   copy: async ({ session }) => {
-    const last = textTranscript(sessionTranscriptMessages(session)).reverse().find((message) => message.role === 'assistant');
-    if (!last) throw new Error('There is no assistant response to copy yet.');
-    const via = await copyToClipboard(last.content);
+    const via = await copyToClipboard(lastAnswer(session));
     return emitHarnessOutput({ panel: 'copied', text: via === 'osc52' ? 'Last response sent to your terminal clipboard (OSC 52).' : 'Last response copied to the clipboard.' });
   },
   select: async ({ words }) => {

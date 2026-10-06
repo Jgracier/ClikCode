@@ -559,10 +559,12 @@ const WINDOW = 120;
 
 /** The settled conversation. Memoized on the fields it draws, which keep
  * their objects while a turn streams, so a delta does not redraw it. */
-const History = memo(({ sessionId, messages, traces, notes, workspace }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'>): JSX.Element => {
+const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'> & { reveal?: number }): JSX.Element => {
   const byUser = useMemo(() => new Map(traces.map((trace) => [trace.userIndex, trace])), [traces]);
   const [shown, setShown] = useState(WINDOW);
   useEffect(() => { setShown(WINDOW); }, [sessionId]);
+  // A message /search went to is drawn, however far back it is.
+  useEffect(() => { if (reveal !== undefined && messages.length - reveal > shown) setShown(messages.length - reveal + WINDOW / 4); }, [reveal, messages.length]);
   const start = Math.max(0, messages.length - shown);
   const parts: JSX.Element[] = [];
   if (start > 0) {
@@ -578,19 +580,21 @@ const History = memo(({ sessionId, messages, traces, notes, workspace }: Pick<Ch
   if (start === 0) notesAt(0);
   messages.forEach((message, index) => {
     if (index < start) return;
-    if (message.role === 'user') parts.push(<UserMessage key={`m${index}`} text={message.content} />);
-    else {
-      const trace = byUser.get(index - 1);
-      parts.push(trace
-        ? <FinishedTurn key={`m${index}`} text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} />
-        : <AssistantMessage key={`m${index}`} cacheKey={`${sessionId}#${index}`} text={message.content} />);
-    }
+    const trace = message.role === 'assistant' ? byUser.get(index - 1) : undefined;
+    // `display: contents`: an anchor /search finds the message by, with no box of its own.
+    parts.push(
+      <div key={`m${index}`} class="message-anchor" data-message={index}>
+        {message.role === 'user' ? <UserMessage text={message.content} />
+          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} />
+            : <AssistantMessage cacheKey={`${sessionId}#${index}`} text={message.content} />}
+      </div>,
+    );
     notesAt(index + 1);
   });
   return <>{parts}</>;
 });
 
-export function Transcript({ model }: { model: ChatModel }): JSX.Element {
+export function Transcript({ model, reveal }: { model: ChatModel; reveal?: number }): JSX.Element {
   const parts: JSX.Element[] = [];
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
   // A plan is on screen while it has open steps; finished, it goes, and is
@@ -610,7 +614,7 @@ export function Transcript({ model }: { model: ChatModel }): JSX.Element {
   }
   return (
     <div class="transcript" role="log" aria-live="polite" aria-relevant="additions">
-      <History sessionId={model.sessionId} messages={model.messages} traces={model.traces} notes={model.notes} workspace={model.workspace} />
+      <History sessionId={model.sessionId} messages={model.messages} traces={model.traces} notes={model.notes} workspace={model.workspace} reveal={reveal} />
       {parts}
     </div>
   );
