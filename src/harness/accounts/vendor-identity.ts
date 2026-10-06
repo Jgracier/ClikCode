@@ -18,7 +18,29 @@
  * /user/emails is 404 -- it keeps its GitHub login as its name below. Qwen's
  * API keys name no person. Multi-provider harnesses (OpenCode, Aider, Goose,
  * Pi, OpenClaw, Continue, Crush, Deep Agents) have no single account to name;
- * Hermes is named only by its Nous Portal login. */
+ * Hermes is named only by its Nous Portal login.
+ *
+ * API-key accounts (api-key-identity.ts) are named by a read-only call made
+ * with the key, checked per vendor on 2026-10-05:
+ * - email, verified live: Mistral GET /v1/users/me; Command Code GET
+ *   /alpha/whoami (the cmdc login's own key).
+ * - email, from the vendor's docs or CLI, no key on this machine to verify:
+ *   OpenAI GET /v1/me (help article 9132009); Cursor GET
+ *   api.cursor.com/v1/me `userEmail` (user-scoped keys only); Cline GET
+ *   /api/v1/users/me (its CLI's fetchMe; docs: API keys and login tokens use
+ *   the same Bearer header); Fireworks GET /v1/accounts (only when the key
+ *   reaches exactly one account); Kimi Code GET /coding/v1/me (route live,
+ *   401 unauthenticated); Amp's own `amp usage` with AMP_API_KEY (env read
+ *   before its stored login -- confirmed live, its login token is refused as
+ *   AMP_API_KEY, so no access token was at hand).
+ * - no email for a key: OpenRouter /api/v1/key (live: label, usage,
+ *   creator_user_id only); xAI /v1/api-key (user_id, team_id); Factory
+ *   /api/cli/whoami (userId, orgId -- droid itself sets email "" for an API
+ *   key); Anthropic (no identity route for a non-admin key); Gemini, DeepSeek,
+ *   Moonshot platform, MiniMax, Z.AI, DashScope, Groq, Together (none
+ *   documented). Augment has no API-key mode in the catalog. Devin
+ *   (WINDSURF_API_KEY), Junie (JUNIE_API_KEY), Nous (NOUS_API_KEY) and
+ *   OpenHands' LLM_API_KEY (a model key, not its cloud key) publish none. */
 
 import { createHash } from 'node:crypto';
 import { readdir, readFile, stat } from 'node:fs/promises';
