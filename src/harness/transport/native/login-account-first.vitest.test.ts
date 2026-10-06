@@ -71,6 +71,16 @@ describe('accountFirst', () => {
     expect(own.seen).toContain('ask Paste code here if prompted · or paste your Claude Code API key');
   });
 
+  it('the vendor\'s own key question stands alone, and nothing is offered after it (a Base URL)', async () => {
+    const own = screen({ 'Paste your API key': 'sk-test-42', 'Base URL': '' });
+    const done = await accountFirst('Hermes', [], own, async (ui) => {
+      await ui.ask('Paste your API key', true);
+      await ui.ask('Base URL [https://api.example/v1]', false, true);
+    }, offer());
+    expect(done).toBeUndefined();
+    expect(own.seen).toEqual(['ask Or paste a Cline CLI API key · Enter for other sign-ins', 'ask Paste your API key', 'ask Base URL [https://api.example/v1]']);
+  });
+
   it('a key pasted into the vendor\'s question is taken as the key', async () => {
     const own = screen({ 'Paste code here': 'sk-ant-api03-x' });
     const done = await accountFirst('Claude Code', [], own, async (ui) => {

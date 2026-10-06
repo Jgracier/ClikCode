@@ -32,12 +32,20 @@ import { extractLoginUrl, stripAnsi } from './url.js';
 
 export interface LoginLink { url: string; code?: string }
 
+/** An API key as typed into a composer: one unbroken token, long enough
+ * that a word of a message is never taken for one. */
+export function isKeyShaped(text: string): boolean {
+  return text.length >= 16 && !/\s/.test(text);
+}
+
 /** What a sign-in needs from the screen showing it. */
 export interface SignInUi {
   show(link: LoginLink): void;
   /** A typed answer. `secret`: a key, drawn as dots. `optional`: an empty
-   * answer is one (a shown default, a skipped key). */
-  ask(prompt: string, secret: boolean, optional?: boolean): Promise<string>;
+   * answer is one (a shown default, a skipped key). `alongside`: a key the
+   * user may paste while the vendor's own sign-in goes on -- the composer
+   * stays theirs, and only a key-shaped answer (isKeyShaped) is this one. */
+  ask(prompt: string, secret: boolean, optional?: boolean, alongside?: boolean): Promise<string>;
   /** One of `choices`, by index; undefined cancels the sign-in.
    * `selected`: the one the vendor's menu has current (its default). */
   choose(title: string, choices: readonly string[], selected?: number): Promise<number | undefined>;
