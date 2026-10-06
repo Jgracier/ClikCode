@@ -156,7 +156,11 @@ export function diffTotals(files: readonly FileDiff[]): { additions: number; rem
 
 export type Thought = { id?: string; text: string };
 
-const THOUGHT_LIMIT = 2000;
+/** How much of one thought is kept: what an expanded reasoning row shows. */
+const THOUGHT_LIMIT = 8000;
+/** Characters a running total's tail must share with the thought so far to
+ * be read as its continuation rather than a jump. */
+const TAIL_OVERLAP_MIN = 20;
 
 /** A reasoning event added to the thought on screen.
  *
@@ -175,6 +179,16 @@ export function appendThought(prior: Thought | undefined, label: string, id?: st
   const withId = (text: string): Thought => ({ ...(id === undefined ? {} : { id }), text: text.length > THOUGHT_LIMIT ? text.slice(-THOUGHT_LIMIT) : text });
   if (!prior || prior.id !== id) return withId(trimmed);
   if (trimmed.startsWith(prior.text)) return withId(trimmed);
+  // A running total cut to its newest words (thoughtLabel's `…tail`): the
+  // part it shares with the end of the thought so far is already there.
+  // Appended whole, every event repeated the 240 characters before it.
+  if (trimmed.startsWith('…')) {
+    const tail = trimmed.slice(1);
+    for (let shared = Math.min(tail.length, prior.text.length); shared >= TAIL_OVERLAP_MIN; shared -= 1) {
+      if (prior.text.endsWith(tail.slice(0, shared))) return withId(`${prior.text}${tail.slice(shared)}`);
+    }
+    return withId(`${prior.text} … ${tail}`);
+  }
   const joined = /^[\s.,;:!?)\]'"]/.test(fragment) || /\s$/.test(prior.text) ? `${prior.text}${fragment}` : `${prior.text} ${fragment}`;
   return withId(joined.replace(/\s+/g, ' ').trim());
 }
