@@ -190,7 +190,10 @@ export function cursorQuotaReading(result: unknown, planName?: string): UsageRea
   if (!plan) return undefined;
   const end = Number((result as Json).billingCycleEnd);
   const reset = Number.isFinite(end) && end > 0 ? end : undefined;
-  const api = usageWindow('API', plan.apiPercentUsed, reset);
+  // A Free plan runs Auto only: every named model answers "Named models
+  // unavailable. Free plans can only use Auto" (2026-10-06), so its API
+  // share -- always "100% left" -- is no allowance at all.
+  const api = planName === 'Free' ? undefined : usageWindow('API', plan.apiPercentUsed, reset);
   // A Free plan's agent usage is all bonus: with none left (`remainingBonus:
   // false`) its turns answer "Upgrade your plan to continue" even at 0% used
   // (GetPlanInfo "Free", 2026-10-06). A paid plan's included usage is not bonus.
