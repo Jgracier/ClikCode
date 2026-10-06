@@ -114,11 +114,18 @@ export function formatSwarmOffers(offers: readonly SwarmOffer[]): string {
 }
 
 export function matchSwarmOffer<T>(offers: readonly SwarmOffer<T>[], model: string): SwarmOffer<T> | undefined {
-  const exact = offers.find((offer) => offer.model === model);
+  const trimmed = model.trim().toLowerCase();
+  const exact = offers.find((offer) => offer.model.toLowerCase() === trimmed);
   if (exact) return exact;
   const key = scoreKey(model);
   const hits = offers.filter((offer) => scoreKey(offer.model) === key);
-  return hits.length === 1 ? hits[0] : undefined;
+  if (hits.length > 0) return hits[0];
+  const substring = offers.find((offer) => {
+    const o = offer.model.toLowerCase();
+    return o.includes(trimmed) || trimmed.includes(o);
+  });
+  if (substring) return substring;
+  return undefined;
 }
 
 /** The account that has this model and the most usage left, skipping one that is already working when another is free. */

@@ -7,7 +7,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { harnessCanRunTurns, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import {
-  applyCard, boardSlice, cardFromReply, clerkBrief, estimateTokens, formatCard, goalKey, keepOnHost, pathsIn, swarmRole,
+  applyCard, boardSlice, cardFromReply, clerkBrief, estimateTokens, formatCard, goalKey, pathsIn, swarmRole,
   type SwarmBoard, type SwarmCard, type SwarmRole,
 } from './board.js';
 import { runProviderPrompt } from './clerk.js';
@@ -15,7 +15,7 @@ import { SWARM_POLICY, swarmIsOn, type SwarmPolicy } from './policy.js';
 import { appendSwarmActivity } from './spool.js';
 import { readBoard, writeBoard } from './store.js';
 import { clerkUsage } from './usage.js';
-import { formatSwarmOffers, matchSwarmOffer, seatFor, swarmChoiceNote, swarmOffers } from './offers.js';
+import { matchSwarmOffer, seatFor, swarmChoiceNote, swarmOffers } from './offers.js';
 import { loadScoreCache, type ScoreCache } from './scores.js';
 import type { ToolRunResult } from '../agent/tool-contract.js';
 
@@ -106,25 +106,32 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
   const policy = SWARM_POLICY;
   const text = [input.request.description, input.request.prompt].filter(Boolean).join('\n');
   const chosenModel = input.request.model?.trim();
-  if (!chosenModel && keepOnHost(text)) return null;
   const role = swarmRole(text);
   const paths = pathsIn(input.request.prompt);
   const key = goalKey(role, paths, input.request.prompt);
   const description = (input.request.description?.trim() || input.request.prompt.replace(/\s+/g, ' ').trim()).slice(0, 80);
   const scores = chosenModel ? input.scores ?? await loadScoreCache() : undefined;
-  const offers = chosenModel ? swarmOffers(clerkAccounts(input.state, input.host), scores) : [];
-  const offer = chosenModel ? matchSwarmOffer(offers, chosenModel) : undefined;
-  if (chosenModel && !offer) {
-    return { output: `No account with usage lists ${chosenModel}. Pass one of these model ids.\n${formatSwarmOffers(offers)}`, isError: true, activityLabel: 'Swarm' };
+  const candidates = clerkAccounts(input.state, input.host);
+  const offers = chosenModel ? swarmOffers(candidates, scores) : [];
+  let offer = chosenModel ? matchSwarmOffer(offers, chosenModel) : undefined;
+  const namedCandidate = chosenModel
+    ? candidates.find((c) =>
+        c.command.toLowerCase() === chosenModel.toLowerCase()
+        || c.displayName.toLowerCase() === chosenModel.toLowerCase()
+        || c.account.provider.toLowerCase() === chosenModel.toLowerCase())
+    : undefined;
+  if (chosenModel && !offer && !namedCandidate && offers.length > 0) {
+    offer = offers[0];
   }
   const opened = await lock(input.host.id, async () => {
     const board = await readBoard(input.host.id);
     const busy = new Set(board.roster.flatMap((line) => (line.status === 'working' && line.accountId ? [line.accountId] : [])));
     const seat = offer ? seatFor(offer, busy) : undefined;
-    const picked = seat?.candidate ?? pickClerkAccount(input.state, input.host, Date.now(), busy);
+    const picked = seat?.candidate ?? namedCandidate ?? pickClerkAccount(input.state, input.host, Date.now(), busy);
     if (!picked) return undefined;
-    const reserved = await reserve(input.host.id, policy, picked.displayName, role, paths, key, input.request.prompt, description, picked.account.id);
-    return { picked, reserved, modelArg: seat?.modelArg };
+    const modelArg = seat?.modelArg ?? (namedCandidate ? undefined : (offer ? undefined : chosenModel));
+    const reserved = await reserve(input.host.id, policy, picked.displayName, role, paths, key, input.request.prompt, description, picked.account.id, modelArg ?? chosenModel);
+    return { picked, reserved, modelArg };
   });
   if (!opened) return null;
   const { picked, reserved, modelArg } = opened;
@@ -184,10 +191,11 @@ type Reservation =
   | { kind: 'run'; workerId: string; brief: string };
 
 async function reserve(
-  sessionId: string, policy: SwarmPolicy, displayName: string, role: SwarmRole, paths: string[], key: string, task: string, description: string, accountId: string,
+  sessionId: string, policy: SwarmPolicy, displayName: string, role: SwarmRole, paths: string[], key: string, task: string, description: string, accountId: string, model?: string,
 ): Promise<Reservation> {
   const board = await readBoard(sessionId);
-  const existing = board.roster.find((line) => line.key === key && line.status === 'working');
+  const lineKey = model ? `${key}|${model}` : key;
+  const existing = board.roster.find((line) => line.key === lineKey && line.status === 'working' && line.accountId === accountId);
   if (existing) return { kind: 'attach', card: { summary: `${existing.provider} is already on this. ${existing.step}`, facts: [], paths, blockers: [], questions: [] } };
   const running = inflight.get(sessionId) ?? 0;
   if (
@@ -200,11 +208,11 @@ async function reserve(
   const next: SwarmBoard = {
     ...board,
     goal: board.goal || description,
-    roster: [...board.roster, { id: workerId, provider: displayName, role, paths: paths.join(', '), step: 'starting', key, status: 'working', accountId }],
+    roster: [...board.roster, { id: workerId, provider: displayName, role, paths: paths.join(', '), step: 'starting', key: lineKey, status: 'working', accountId }],
   };
   await writeBoard(sessionId, next);
   inflight.set(sessionId, running + 1);
-  const slice = boardSlice(next, paths, Math.min(policy.maxBoardTokens, 400));
+  const slice = boardSlice(next, paths, policy.maxBoardTokens);
   let brief = clerkBrief({ role, task, slice });
   if (estimateTokens(brief) > policy.maxBriefTokens) brief = brief.slice(0, policy.maxBriefTokens * 4);
   return { kind: 'run', workerId, brief };

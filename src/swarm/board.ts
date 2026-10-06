@@ -40,9 +40,9 @@ export interface SwarmCard {
   questions: string[];
 }
 
-const MAX_FACTS = 12;
-const MAX_DECISIONS = 8;
-const MAX_OPEN = 6;
+const MAX_FACTS = 32;
+const MAX_DECISIONS = 16;
+const MAX_OPEN = 16;
 
 export function emptyBoard(goal = ''): SwarmBoard {
   return { goal, decisions: [], facts: [], roster: [], open: [] };
@@ -53,17 +53,13 @@ export function estimateTokens(text: string): number {
 }
 
 export function goalKey(role: SwarmRole, paths: readonly string[], prompt: string): string {
-  const normalized = prompt.replace(/\s+/g, ' ').trim().toLowerCase().slice(0, 80);
+  const normalized = prompt.replace(/\s+/g, ' ').trim().toLowerCase();
   return `${role}|${[...paths].sort().join(',')}|${normalized}`;
 }
 
-/** A one-file question stays with the host. Two paths, or a review of the
- * tree, is worth a clerk. */
-export function keepOnHost(text: string): boolean {
-  const paths = new Set(text.match(/[\w./~-]+\.[A-Za-z0-9]+/g) ?? []);
-  if (paths.size >= 2) return false;
-  if (/\b(review|across|every file|all files)\b/i.test(text)) return false;
-  return text.length < 320;
+/** Delegations are handled by the swarm when requested without artificial host refusal. */
+export function keepOnHost(_text: string): boolean {
+  return false;
 }
 
 export function swarmRole(text: string): SwarmRole {
@@ -119,7 +115,7 @@ export function formatCard(card: SwarmCard): string {
 
 function clip(text: string, tokens: number): string {
   const limit = Math.max(16, tokens * 4);
-  const trimmed = text.replace(/\s+/g, ' ').trim();
+  const trimmed = text.trim();
   return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit - 1).trimEnd()}…`;
 }
 
@@ -128,8 +124,8 @@ function asStrings(value: unknown, limit: number): string[] {
   return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim()).slice(0, limit);
 }
 
-/** A clerk's reply becomes a card. JSON is used when the reply contains an
- * object; otherwise the reply itself is the summary, cut to the cap. */
+/** A clerk's reply becomes a card. JSON is parsed when present; otherwise the
+ * reply itself is safely used as the summary, cut to the cap. */
 export function cardFromReply(reply: string, capTokens: number): SwarmCard {
   if (!reply.trim()) throw new Error('The clerk returned no answer');
   const start = reply.indexOf('{');
@@ -137,21 +133,30 @@ export function cardFromReply(reply: string, capTokens: number): SwarmCard {
   if (start >= 0 && end > start) {
     try {
       const parsed = JSON.parse(reply.slice(start, end + 1)) as Record<string, unknown>;
-      if (typeof parsed.summary !== 'string' || !parsed.summary.trim()) throw new Error('missing summary');
-      const summary = clip(parsed.summary, capTokens);
-      const card: SwarmCard = {
-        summary,
-        facts: asStrings(parsed.facts, 6).map((fact) => clip(fact, 40)),
-        paths: asStrings(parsed.paths, 8),
-        blockers: asStrings(parsed.blockers, 4).map((line) => clip(line, 40)),
-        questions: asStrings(parsed.questions, 4).map((line) => clip(line, 40)),
-      };
-      if (typeof parsed.diffstat === 'string' && parsed.diffstat.trim()) card.diffstat = clip(parsed.diffstat, 20);
-      return card;
-    } catch { /* a malformed object is rejected below */ }
-  }
-  if (/^[\s`]*[\[{"}:]/.test(reply) || (start >= 0 && end > start)) {
-    throw new Error('The clerk returned an incomplete card');
+      const rawSummary = typeof parsed.summary === 'string' && parsed.summary.trim()
+        ? parsed.summary
+        : typeof parsed.result === 'string' && parsed.result.trim()
+          ? parsed.result
+          : typeof parsed.answer === 'string' && parsed.answer.trim()
+            ? parsed.answer
+            : typeof parsed.output === 'string' && parsed.output.trim()
+              ? parsed.output
+              : typeof parsed.response === 'string' && parsed.response.trim()
+                ? parsed.response
+                : undefined;
+      if (rawSummary) {
+        const summary = clip(rawSummary, capTokens);
+        const card: SwarmCard = {
+          summary,
+          facts: asStrings(parsed.facts, 20).map((fact) => clip(fact, 200)),
+          paths: asStrings(parsed.paths, 20),
+          blockers: asStrings(parsed.blockers, 10).map((line) => clip(line, 200)),
+          questions: asStrings(parsed.questions, 10).map((line) => clip(line, 200)),
+        };
+        if (typeof parsed.diffstat === 'string' && parsed.diffstat.trim()) card.diffstat = clip(parsed.diffstat, 100);
+        return card;
+      }
+    } catch { /* if JSON parsing or object shape is invalid, gracefully treat full reply as summary */ }
   }
   return { summary: clip(reply, capTokens), facts: [], paths: [], blockers: [], questions: [] };
 }
@@ -166,8 +171,9 @@ export function applyCard(board: SwarmBoard, workerId: string, card: SwarmCard):
       return split > 0 ? { path: text.slice(0, split).trim(), text: text.slice(split + 1).trim() } : { path: card.paths[0] ?? 'note', text };
     }),
   ].slice(-MAX_FACTS);
+  const step = card.summary.replace(/\s+/g, ' ').trim().slice(0, 160);
   const roster = board.roster.map((line) => (line.id === workerId
-    ? { ...line, status: 'done' as const, step: card.summary, paths: card.paths[0] ?? line.paths }
+    ? { ...line, status: 'done' as const, step, paths: card.paths[0] ?? line.paths }
     : line));
   return {
     ...board,
@@ -187,10 +193,12 @@ export function beginTurn(board: SwarmBoard): SwarmBoard {
 
 export function clerkBrief(input: { role: SwarmRole; task: string; slice: string }): string {
   return [
-    'You are a swarm clerk. Do the task, then reply with one JSON object and nothing else:',
-    '{"summary":"","facts":["path: one line"],"paths":[],"diffstat":"","blockers":[],"questions":[]}',
-    'summary is one or two sentences. facts are path and one line, never file bodies.',
-    'Do not include your tool log.',
+    'You are a swarm clerk working collaboratively on this task.',
+    'Perform the requested work directly using your available tools.',
+    'When finished, summarize your findings, changes, or answers clearly and thoroughly.',
+    'You may optionally wrap your final response in a JSON object:',
+    '{"summary":"Detailed overview of results and findings","facts":["path: key insight"],"paths":[],"diffstat":"","blockers":[],"questions":[]}',
+    'If responding in plain text or markdown, your complete response will be provided directly to the host.',
     '',
     input.slice ? `Shared memory:\n${input.slice}` : '',
     '',

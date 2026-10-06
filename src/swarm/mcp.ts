@@ -37,11 +37,11 @@ function progressTokenOf(message: RpcMessage): string | number | undefined {
 const TOOL_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['prompt', 'model'],
+  required: ['prompt'],
   properties: {
     prompt: { type: 'string', description: 'The complete task: what to do, where to look, and what the card should answer.' },
     description: { type: 'string', description: 'A 3-6 word label shown in the host chat, e.g. "Find the refresh handler".' },
-    model: { type: 'string', description: 'One model id from the list in this tool\'s description, copied exactly.' },
+    model: { type: 'string', description: 'Optional model id from the swarm tool list, or omit to auto-select the best available account.' },
   },
 };
 
@@ -63,8 +63,7 @@ async function callTool(args: Record<string, unknown> | undefined, onStep?: (lab
   const prompt = typeof args?.prompt === 'string' ? args.prompt.trim() : '';
   if (!prompt) return 'A swarm task needs a prompt.';
   const description = typeof args?.description === 'string' ? args.description.trim() : undefined;
-  const model = typeof args?.model === 'string' ? args.model.trim() : undefined;
-  if (!model) return 'Choose a model id from the swarm tool list.';
+  const model = typeof args?.model === 'string' && args.model.trim() ? args.model.trim() : undefined;
   const sessionId = await activeSwarmHost();
   if (!sessionId) return 'No host turn is using the swarm right now. Do this yourself.';
   const state = await readState({ transcripts: [] });
@@ -77,7 +76,7 @@ async function callTool(args: Record<string, unknown> | undefined, onStep?: (lab
       if (label) onStep?.(label);
     },
   });
-  return result?.output ?? 'Keep this task on the host. It is small enough that another provider would cost more than it saves.';
+  return result?.output ?? 'No other account with usage is available to take this task right now.';
 }
 
 function respond(id: RpcMessage['id'], result: unknown): unknown {
@@ -111,7 +110,7 @@ async function dispatch(message: RpcMessage, send: McpSend): Promise<unknown> {
           send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress, message: label } });
         })
         : `Unknown tool ${message.params?.name ?? ''}`;
-      const isError = text.startsWith('No host') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage');
+      const isError = text.startsWith('No host') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage') || text.startsWith('No other account with usage');
       return respond(message.id, { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
     } catch (error) {
       return fail(message.id, error instanceof Error ? error.message : String(error));
