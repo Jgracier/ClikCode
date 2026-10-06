@@ -53,7 +53,7 @@ import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
 import { swarmIsOn } from '../swarm/policy.js';
 import { swarmProvisionEntry, swarmRidesTurn } from '../swarm/publish.js';
-import { markSwarmHost, openSwarmTurn } from '../swarm/store.js';
+import { openSwarmTurn } from '../swarm/store.js';
 import { emptySwarmFold, foldSwarmActivity, type SwarmFold } from '../swarm/fold.js';
 import { watchSwarmActivity } from '../swarm/spool.js';
 
@@ -319,7 +319,6 @@ export async function sendVendorTurn(input: {
   };
   if (swarmIsOn(session)) {
     await openSwarmTurn(session.id).catch(() => undefined);
-    await markSwarmHost(session.id).catch(() => undefined);
     stopSwarmWatch = watchSwarmActivity(session.id, onActivity);
   }
   // The tool rides on the ACP session ClikCode opens. A process already up
@@ -616,7 +615,6 @@ export async function sendVendorTurn(input: {
   }
   } finally {
     stopSwarmWatch();
-    await markSwarmHost(undefined).catch(() => undefined);
     await checkpoint.flush();
   }
 }

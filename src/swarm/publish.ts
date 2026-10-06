@@ -1,6 +1,8 @@
-/** How the `swarm` tool reaches each host, by the channel that host has. Every
- * channel names the chat (CLIKCODE_SESSION_ID), so two chats with swarm on
- * never answer for each other. ClikCode's agent needs none of this: its
+/** How the `swarm` tool reaches each host, by the channel that host has. The
+ * server answers for the chat it runs under (worker/current-session.ts):
+ * CLIKCODE_SESSION_ID where the channel sets it, else the `session-worker <id>`
+ * in its process ancestry. Nothing is stored, so two chats with swarm on never
+ * answer for each other. ClikCode's agent needs none of this: its
  * `task` tool delegates in-process.
  *
  *   ACP            the session's own `mcpServers` (session/new, resume)
@@ -8,9 +10,9 @@
  *   Amp            `--mcp-config <json>` on the turn (catalog: mcpConfigArgv)
  *   Pi             an extension file on the turn (catalog: extensionArgv);
  *                  Pi has no MCP, so the extension asks this same server
- *   anything else  the vendor's own MCP list, by its `mcp add`; the server
- *                  finds the chat from the turn's environment or process
- *                  ancestry, and lists no tool for a chat with swarm off. */
+ *   anything else  the vendor's own MCP list, by its `mcp add`: one entry
+ *                  for every chat, so the chat comes from the ancestry, and
+ *                  the server lists no tool for a chat with swarm off. */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { McpServerEntry } from '../harness/mcp-registry.js';
