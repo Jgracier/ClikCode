@@ -33,9 +33,17 @@ export interface GatewayAgentOptions {
   capability?: string[];
   model?: string;
   provider?: string;
+  clearModel?: boolean;
+  clearTools?: boolean;
+  enable?: boolean;
+  disable?: boolean;
 }
 
-function pin(options: GatewayAgentOptions): { modelId?: string; modelProvider?: string } {
+function pin(options: GatewayAgentOptions): { modelId?: string | null; modelProvider?: string | null } {
+  if (options.clearModel) {
+    if (options.model || options.provider) throw new Error('--clear-model cannot be combined with --model or --provider.');
+    return { modelId: null, modelProvider: null };
+  }
   if (Boolean(options.model) !== Boolean(options.provider)) throw new Error('Set both --model and --provider, or neither.');
   return options.model && options.provider ? { modelId: options.model, modelProvider: options.provider } : {};
 }
@@ -50,12 +58,15 @@ export async function gatewayAgentCreate(config: Conf, handle: string, options: 
 }
 
 export async function gatewayAgentUpdate(config: Conf, id: string, options: GatewayAgentOptions): Promise<void> {
+  if (options.clearTools && options.capability?.length) throw new Error('--clear-tools cannot be combined with --capability.');
+  if (options.enable && options.disable) throw new Error('--enable and --disable cannot be combined.');
   const systemPrompt = options.instructionsFile ? await readFile(options.instructionsFile, 'utf8') : undefined;
   const patch = {
     ...(options.name ? { name: options.name } : {}),
     ...(options.description !== undefined ? { blurb: options.description } : {}),
     ...(systemPrompt !== undefined ? { systemPrompt } : {}),
-    ...(options.capability?.length ? { capabilities: options.capability } : {}),
+    ...(options.clearTools ? { capabilities: [] } : options.capability?.length ? { capabilities: options.capability } : {}),
+    ...(options.enable || options.disable ? { enabled: Boolean(options.enable) } : {}),
     ...pin(options),
   };
   if (!Object.keys(patch).length) throw new Error('Give at least one agent setting to change.');

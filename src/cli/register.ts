@@ -131,6 +131,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   agentOptions(gatewayAgents.command('create <handle>').description('Build an account-owned agent'))
     .action((handle: string, options) => gatewayAgentCreate(config, handle, options));
   agentOptions(gatewayAgents.command('update <id>').description('Change one of your agents'))
+    .option('--clear-model', 'Use this agent’s configured router instead of a default pin')
+    .option('--clear-tools', 'Remove every granted tool')
+    .option('--enable', 'Enable this agent')
+    .option('--disable', 'Disable this agent')
     .action((id: string, options) => gatewayAgentUpdate(config, id, options));
   gatewayAgents.command('remove <id>').description('Delete one of your agents')
     .action((id: string) => gatewayAgentRemove(config, id));
