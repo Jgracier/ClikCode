@@ -122,13 +122,13 @@ export function messageRows(content: string, marker: string, width: number): rea
 }
 
 /** A notice ClikCode sent the model as a turn (session/clikcode-notice.ts):
- * muted, under its own label, never the user's marker -- the user did not
- * write it. Plain text, wrapped line by line: it is ClikCode's wording and a
+ * muted, under its own label and glyph (◇ is a read), never the user's
+ * marker -- the user did not write it. Plain text, wrapped line by line: it is ClikCode's wording and a
  * shell's output tail, not Markdown. */
 export function noticeRows(content: string, width: number): readonly string[] {
   const budget = Math.max(1, width - 2);
   const lines = sanitizeTerminalText(clikCodeNoticeBody(content)).split('\n');
-  const rows = [`${chalk.dim('◇')} ${chalk.dim('ClikCode notice')}`];
+  const rows = [`${chalk.dim('✦')} ${chalk.dim('ClikCode notice')}`];
   for (const line of lines) {
     for (const wrapped of line.trim() ? wrapWords(line, budget) : ['']) rows.push(wrapped ? `  ${chalk.dim(wrapped)}` : '  ');
   }

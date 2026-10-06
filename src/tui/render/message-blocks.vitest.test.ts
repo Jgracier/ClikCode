@@ -25,7 +25,7 @@ describe('a notice ClikCode sent the model', () => {
     const { isClikCodeNotice } = await import('../../session/clikcode-notice.js');
     const plainRows = noticeRows('[ClikCode] Background work you started was stopped: a newer build. Check whether it finished.', 30)
       .map((row) => row.replace(/\u001b\[[0-9;]*m/g, ''));
-    expect(plainRows[0]).toBe('◇ ClikCode notice');
+    expect(plainRows[0]).toBe('✦ ClikCode notice');
     expect(plainRows.slice(1).every((row) => row.startsWith('  ') && row.length <= 30)).toBe(true);
     expect(plainRows.join(' ')).not.toContain('[ClikCode]');
     expect(plainRows.join(' ').replace(/\s+/g, ' ')).toContain('Background work you started was stopped');
