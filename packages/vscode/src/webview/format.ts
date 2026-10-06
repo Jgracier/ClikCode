@@ -24,6 +24,6 @@ export function titleCase(value: string): string {
  * bundled from its source so the panel and the terminal cannot disagree. */
 export { modelLabel } from '../../../../src/harness/model-label.js';
 
-/** The running turn's tokens, cache hits, context and cost: the terminal's
- * own line, bundled from its source for the same reason. */
-export { estimatedTokens, formatTurnUsage } from '../../../../src/tui/render/usage-line.js';
+/** A finished turn's tokens, cache hits, context and cost, bundled from
+ * ClikCode's source for the same reason. */
+export { formatTurnUsage } from '../../../../src/tui/render/usage-line.js';

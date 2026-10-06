@@ -90,7 +90,6 @@ function fakePrompter(): TerminalHarnessPrompter & { calls: string[] } {
     activityEvent: record('activityEvent'),
     phase: record('phase'),
     setPlan: record('setPlan'),
-    setTurnUsage: record('setTurnUsage'),
     approval: async (...args: unknown[]) => { record('approval')(...args); return false; },
     startWaiting: record('startWaiting'),
     turnStarting: record('turnStarting'),

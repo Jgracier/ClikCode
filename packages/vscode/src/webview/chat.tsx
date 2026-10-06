@@ -17,6 +17,7 @@ import { useNow, useSpinFrame } from './clock';
  * step, so a longer label takes longer, as it does there. */
 const shimmerStyle = (label: string): string => `--shimmer-cycle: ${shimmerCycleMs(label.length)}ms`;
 import { formatElapsed } from '../../../../src/harness/protocol/format';
+import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
@@ -514,7 +515,7 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
   return (
     <div class="working-wrap">
       <div class={`working status-${status.tone}`} role="status">
-        <Spinner tone={status.toneClass} still={asking} />
+        <Spinner tone={!asking && live && turnStalled(now - live.activeAt) ? 'tone-yellow' : status.toneClass} still={asking} />
         <span class={`working-label ${status.toneClass}`} style={shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}

@@ -15,7 +15,7 @@ import { buttonTitle } from '../../../../src/harness/protocol/wording';
 import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
-import { estimatedTokens, formatTurnUsage, titleCase } from './format';
+import { formatTurnUsage, titleCase } from './format';
 import { AccountMenu, choose, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { focusHere, Icon, KeyList, type ListRow } from './ui';
 
@@ -404,12 +404,11 @@ export function Composer(props: {
   const account = model.currentAccount;
   const busy = model.busy;
   const installing = busy && /^(installing|waiting for another ClikCode to finish installing)/i.test(busy);
-  // What streamed since the vendor last counted is an estimate (`~`), as in
-  // the terminal, until its own count covers it.
-  const estimate = model.running && model.live ? estimatedTokens(model.live.text.length - (model.usageTextAt ?? 0)) : 0;
-  // The context window has its own ring beside this; the line keeps to tokens.
-  const usage = model.turnUsage && { ...model.turnUsage, contextUsed: undefined, contextWindow: undefined, contextPercent: undefined };
-  const tokens = formatTurnUsage(usage, estimate) || undefined;
+  // The last turn's tokens, once it has ended: a running turn shows what it
+  // is doing and for how long, as the terminal's waiting line does, not a
+  // count. The context window has its own ring beside this.
+  const usage = !model.running && model.turnUsage && { ...model.turnUsage, contextUsed: undefined, contextWindow: undefined, contextPercent: undefined };
+  const tokens = (usage && formatTurnUsage(usage)) || undefined;
 
   // Enter on an empty box stops the turn and sends what waits: the hint goes
   // on the first message that would go, and only while Enter would do it.
@@ -541,7 +540,7 @@ export function Composer(props: {
         {/* One figure under the box: the context ring, the turn's tokens on
             hover; the tokens themselves only where no ring is reported. */}
         {model.context ? <ContextMeter context={model.context} tokens={tokens} />
-          : tokens ? <span class="muted turn-tokens" title={model.running ? 'Tokens used by this turn so far' : 'Tokens used by the last turn'}>{tokens}</span> : null}
+          : tokens ? <span class="muted turn-tokens" title="Tokens used by the last turn">{tokens}</span> : null}
       </div>
     </div>
   );

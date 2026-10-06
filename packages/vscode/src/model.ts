@@ -113,6 +113,10 @@ export interface LiveTurn {
    * words ("still thinking"). Not moved by the answer's deltas, which stay
    * an append and a timestamp on the wire. */
   thinkingSince: number;
+  /** When the turn last did anything (a word, a thought, a call) or an
+   * approval was answered: quiet past turn-pace's threshold and the working
+   * line's spinner turns yellow, as the terminal's does. */
+  activeAt: number;
 }
 
 export interface ChatModel {
@@ -157,9 +161,6 @@ export interface ChatModel {
   traces: TurnTrace[];
   plan: Array<{ content: string; status?: string }>;
   turnUsage?: Extract<WorkerEvent, { type: 'usage' }>['usage'];
-  /** How much of the live answer had streamed when usage last arrived: what
-   * streamed since is shown as an estimate, as the terminal does. */
-  usageTextAt?: number;
   /** The conversation's context window as last reported: kept between turns
    * (a turn's usage starts empty) and dropped with the conversation. */
   context?: { used?: number; window?: number; percent: number };
@@ -401,7 +402,7 @@ function applyActivity(live: LiveTurn, event: HarnessActivityEvent, offset?: num
 }
 
 function freshLive(waitingLabel: string, startedAt = Date.now()): LiveTurn {
-  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, openTools: [], steers: [], startedAt, thinkingSince: Date.now() };
+  return { text: '', waitingLabel, activities: [], reasoning: [], seen: 0, openTools: [], steers: [], startedAt, thinkingSince: Date.now(), activeAt: Date.now() };
 }
 
 /** Text replaced wholesale keeps the rows placed in what it kept; one placed
@@ -461,7 +462,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
         live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
-        turnUsage: undefined, usageTextAt: undefined,
+        turnUsage: undefined,
       };
     case 'waiting-stop':
       return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };
@@ -474,11 +475,11 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
         reasoning: rebaseOffsets(after.reasoning, live.text, text),
       } : {};
-      return { ...model, live: { ...after, ...placed, text } };
+      return { ...model, live: { ...after, ...placed, text, activeAt: Date.now() } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
-      return { ...model, live: applyActivity(live, event.event) };
+      return { ...model, live: { ...applyActivity(live, event.event), activeAt: Date.now() } };
     }
     case 'phase':
       return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
@@ -488,7 +489,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const usage = event.usage;
       const percent = usage.contextPercent ?? (usage.contextUsed && usage.contextWindow ? (usage.contextUsed / usage.contextWindow) * 100 : undefined);
       return {
-        ...model, turnUsage: { ...usage }, usageTextAt: model.live?.text.length ?? 0,
+        ...model, turnUsage: { ...usage },
         ...(percent !== undefined ? { context: { percent: Math.min(100, Math.max(0, percent)), ...(usage.contextUsed ? { used: usage.contextUsed } : {}), ...(usage.contextWindow ? { window: usage.contextWindow } : {}) } } : {}),
       };
     }
@@ -614,7 +615,8 @@ export function queuedRowLabel(model: Pick<ChatModel, 'submissions'>, item: { id
 }
 
 export function answeredApproval(model: ChatModel, id: string): ChatModel {
-  return { ...model, approvals: model.approvals.filter((item) => item.id !== id) };
+  // Time spent on the user's answer is not the turn going quiet.
+  return { ...model, approvals: model.approvals.filter((item) => item.id !== id), ...(model.live ? { live: { ...model.live, activeAt: Date.now() } } : {}) };
 }
 
 export function typedDuringTurn(model: ChatModel, id: string, text: string): ChatModel {

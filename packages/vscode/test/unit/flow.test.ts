@@ -135,7 +135,7 @@ describe('tool rows', () => {
 describe('the working line', () => {
   const live = (patch: Partial<LiveTurn> = {}): LiveTurn => ({
     text: '', waitingLabel: 'thinking', activities: [], reasoning: [], seen: 0, openTools: [], steers: [],
-    startedAt: 0, thinkingSince: 0, ...patch,
+    startedAt: 0, thinkingSince: 0, activeAt: 0, ...patch,
   });
 
   it('says it waits for you, in the permission colour, while an approval is up', () => {

@@ -38,12 +38,15 @@ export function statusColour(tone: StatusTone, category?: ToolCategory): Colour 
 }
 
 /** The spinner glyph and the label, painted. `shimmer` is false whenever the
- * band should hold still: reduced motion, an approval up. */
+ * band should hold still: reduced motion, an approval up. `stalled`: the turn
+ * has gone quiet (turn-pace.ts), and the spinner alone turns yellow -- the
+ * words keep the colour of what the turn is doing. */
 export function paintStatus(input: {
   glyph: string; label: string; tone: StatusTone; category?: ToolCategory;
-  frame: number; shimmer: boolean;
+  frame: number; shimmer: boolean; stalled?: boolean;
 }, paint: ChalkInstance = chalk): { spinner: string; label: string } {
   const base = statusColour(input.tone, input.category);
+  const spinnerColour: Colour = input.stalled ? 'yellow' : base;
   if (paint.level === 0) return { spinner: input.glyph, label: input.label };
   const characters = [...input.label];
   const levels = input.shimmer ? shimmerLevels(characters.length, input.frame * SHIMMER_STRIDE) : undefined;
@@ -52,12 +55,12 @@ export function paintStatus(input: {
     const label = levels
       ? painted(characters, (index) => blend(tone, WHITE, (levels[index] ?? 0) * SHIMMER_LIFT).join(','), (key, run) => paint.rgb(...(key.split(',').map(Number) as unknown as Rgb))(run))
       : paint.rgb(...tone)(input.label);
-    return { spinner: paint.rgb(...tone)(input.glyph), label };
+    return { spinner: paint.rgb(...RGB[spinnerColour])(input.glyph), label };
   }
   const label = levels
     ? painted(characters, (index) => ((levels[index] ?? 0) >= 0.5 ? 'bold' : ''), (key, run) => (key ? paint.bold[base](run) : paint[base](run)))
     : paint[base](input.label);
-  return { spinner: paint[base](input.glyph), label };
+  return { spinner: paint[spinnerColour](input.glyph), label };
 }
 
 /** The characters as runs of one look each, every run painted once: the
