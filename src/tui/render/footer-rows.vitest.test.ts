@@ -48,4 +48,9 @@ describe('the panel band', () => {
     expect(shown.total).toBe(2);
     expect(shown.rows.map(plain)).toEqual(['  T', `  ${'x'.repeat(10)}`, '  xxxxx', '  q/Esc/Ent…']);
   });
+
+  it('breaks prose between words, keeping the line\'s indent', () => {
+    const shown = panelRows({ title: 'T', lines: ['  alpha beta gamma'], offset: 0 }, 10, 10, 40);
+    expect(shown.rows.map(plain).slice(1, -1)).toEqual(['    alpha', '    beta', '    gamma']);
+  });
 });

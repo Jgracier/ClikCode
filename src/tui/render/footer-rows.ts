@@ -5,7 +5,7 @@
 import chalk from 'chalk';
 import { paletteDisplayRows, type PaletteEntry } from '../command-palette.js';
 import { terminalCellWidth, visibleSlice } from './width.js';
-import { wrapCodeLine } from './wrap.js';
+import { wrapWords } from './wrap.js';
 
 /** The palette band, `capacity` rows tall: a rule, the list windowed around
  * the selected row (padded to its height), and the hint under it. `width`
@@ -50,7 +50,12 @@ export function paletteRows(
 export function panelRows(
   panel: { title: string; lines: readonly string[]; offset: number }, inner: number, budget: number, targetHeight: number,
 ): { rows: string[]; page: number; total: number; offset: number } {
-  const wrapped = panel.lines.flatMap((line) => (terminalCellWidth(line) <= inner ? [line] : wrapCodeLine(line, inner)));
+  // Prose, broken between words; a wrapped row keeps its line's indent.
+  const wrap = (line: string): string[] => {
+    const indent = /^\s*/.exec(line)![0];
+    return wrapWords(line.slice(indent.length), Math.max(1, inner - indent.length)).map((row) => `${indent}${row}`);
+  };
+  const wrapped = panel.lines.flatMap((line) => (terminalCellWidth(line) <= inner ? [line] : wrap(line)));
   const page = Math.max(1, Math.min(wrapped.length, budget - 2, Math.max(3, targetHeight - 10)));
   const offset = Math.max(0, Math.min(panel.offset, wrapped.length - page));
   const position = wrapped.length > page ? `${offset + 1}-${offset + page} of ${wrapped.length} · ↑↓ PgUp/PgDn scroll · ` : '';
