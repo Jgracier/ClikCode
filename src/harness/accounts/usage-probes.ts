@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { grokUsageReading } from './grok-usage.js';
-import { ampUsageProbe, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
+import { ampUsageProbe, antigravityUsageReading, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -201,6 +201,7 @@ export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageRea
   grok: grokUsageReading,
   // Free reads of the harness's own usage surface (cli-usage-probes.ts).
   copilot: copilotUsageReading,
+  antigravity: antigravityUsageReading,
   kimi: kimiUsageReading,
   amp: labelOnly(ampUsageProbe),
   kilo: labelOnly(kiloUsageProbe),

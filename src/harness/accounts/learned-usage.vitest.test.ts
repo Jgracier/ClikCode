@@ -22,13 +22,13 @@ function account(provider: string, extra: Partial<AiHarnessAccount> = {}): AiHar
 
 describe('where usage is learned', () => {
   it('only for a harness that reports none, never where the vendor reports it', () => {
-    expect(learnsUsage(account('antigravity'))).toBe(true);
+    expect(learnsUsage(account('google'))).toBe(true);
     // Codex and Claude Code report their own windows.
     expect(learnsUsage(account('openai'))).toBe(false);
     expect(learnsUsage(account('anthropic'))).toBe(false);
     // A vendor figure on the account wins, windows or a balance alike.
-    expect(learnsUsage(account('antigravity', { usage: { at: new Date(NOW).toISOString(), label: '$3 left' } }))).toBe(false);
-    expect(learnsUsage(account('antigravity', { authKind: 'api-key' }))).toBe(false);
+    expect(learnsUsage(account('google', { usage: { at: new Date(NOW).toISOString(), label: '$3 left' } }))).toBe(false);
+    expect(learnsUsage(account('google', { authKind: 'api-key' }))).toBe(false);
   });
 });
 
@@ -36,7 +36,7 @@ describe('learning from turns as they happen', () => {
   // Turns of 100 every 10 minutes for four hours, then a 5h-rolling refusal
   // at 2400 that names its reset: when the first of them ages out.
   function history() {
-    const user = account('antigravity');
+    const user = account('google');
     // The log reaches back two days (another account's turn), so it holds
     // every turn of this one since then -- there were none before these.
     const invocations: HarnessState['invocations'] = [
@@ -45,7 +45,7 @@ describe('learning from turns as they happen', () => {
     const state = { accounts: [user], sessions: [], invocations } as unknown as HarnessState;
     const start = NOW - 4 * HOUR;
     for (let index = 0; index < 24; index += 1) {
-      const invocation = { id: `t${index}`, accountId: user.id, provider: 'antigravity', at: new Date(start + index * 10 * MINUTE + 1000).toISOString(), latencyMs: 1000, totalTokens: 100 };
+      const invocation = { id: `t${index}`, accountId: user.id, provider: 'google', at: new Date(start + index * 10 * MINUTE + 1000).toISOString(), latencyMs: 1000, totalTokens: 100 };
       invocations.push(invocation);
       noteAllowedTurn(state, user, invocation, start + index * 10 * MINUTE + 1000);
     }
@@ -70,7 +70,7 @@ describe('learning from turns as they happen', () => {
     recordQuotaRefusal(state, user, Object.assign(new Error('quota'), { stderrTail: 'Resets in 1h0m0s.' }), NOW);
     // ...a turn allowed once it reset, and refused again later, unnamed.
     const after = firstStart + 5 * HOUR + MINUTE;
-    const invocation = { id: 'after', accountId: user.id, provider: 'antigravity', at: new Date(after + 1000).toISOString(), latencyMs: 1000, totalTokens: 100 };
+    const invocation = { id: 'after', accountId: user.id, provider: 'google', at: new Date(after + 1000).toISOString(), latencyMs: 1000, totalTokens: 100 };
     state.invocations.push(invocation);
     noteAllowedTurn(state, user, invocation, after + 1000);
     recordQuotaRefusal(state, user, new Error('quota'), after + 2 * MINUTE);

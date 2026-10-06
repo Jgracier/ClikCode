@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { freeModelAfterPlanRefusal, freePlanModels, planIsFree } from './free-plan';
 import { opencodeVerboseModels } from './opencode-discovery';
+import { antigravityQuotaReading } from './cli-usage-probes';
 
 const harness = (command: string) => localHarnessForCommand(command)!;
 
@@ -15,6 +16,12 @@ describe('which models a free plan runs', () => {
   it('takes `:free` ids and what the vendor list marks free, on any plan', () => {
     const free = freePlanModels(harness('kilo'), undefined, { models: ['kilo/a:free', 'kilo/kilo-auto/free', 'kilo/paid'], free: ['kilo/kilo-auto/free'] });
     expect([...free].sort()).toEqual(['kilo/a:free', 'kilo/kilo-auto/free']);
+  });
+
+  // Command Code, 2026-10-06: its `:free` ids answered "Insufficient credits"
+  // at zero credits like any other, so the suffix is not free there.
+  it('takes the suffix only where the harness says it means free', () => {
+    expect(freePlanModels(harness('command'), undefined, { models: ['inclusionai/ling-3.1-flash:free'] }).size).toBe(0);
   });
 
   // Cursor, 2026-10-06: a Free account ran only Auto (`default`, the one
@@ -83,5 +90,22 @@ describe('`models --verbose` (OpenCode, Kilo)', () => {
       models: ['kilo/kilo-auto/free', 'kilo/kilo-auto/balanced', 'opencode/big-pickle', 'opencode/gpt-6', 'anthropic/claude-x'],
       free: ['kilo/kilo-auto/free', 'opencode/big-pickle'],
     });
+  });
+});
+
+// Antigravity's fetchAvailableModels, abridged from a free-tier account on
+// 2026-10-06: two pools, each named by its families; tool models (no
+// display name, no reset) are not a pool.
+describe('Antigravity quota pools', () => {
+  it('reads one advisory window per reset, the spent one with no fraction', () => {
+    const reading = antigravityQuotaReading({
+      'gemini-3.6-flash-low': { displayName: 'Gemini 3.6 Flash (Low)', quotaInfo: { remainingFraction: 0.8598712, resetTime: '2026-10-09T13:12:35Z' } },
+      'gemini-3.1-pro-high': { displayName: 'Gemini 3.1 Pro (High)', quotaInfo: { remainingFraction: 0.8598712, resetTime: '2026-10-09T13:12:35Z' } },
+      'claude-sonnet-4-6': { displayName: 'Claude Sonnet 4.6 (Thinking)', quotaInfo: { remainingFraction: 1, resetTime: '2026-10-13T15:58:46Z' } },
+      'gpt-oss-120b-medium': { displayName: 'GPT-OSS 120B (Medium)', quotaInfo: { resetTime: '2026-10-13T15:58:46Z' } },
+      chat_23310: { quotaInfo: { remainingFraction: 1 } },
+    });
+    expect(reading?.label).toBe('Gemini 86% left · Claude/GPT-OSS 0% left');
+    expect(reading?.windows.every((window) => window.advisory)).toBe(true);
   });
 });

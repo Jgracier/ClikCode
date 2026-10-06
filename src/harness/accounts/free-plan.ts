@@ -2,8 +2,8 @@
  * names a model: each fact is the vendor's own, read where it publishes it
  * (catalog `freePlan` says only where to look).
  *
- * - A `:free` id is free everywhere it appears (OpenRouter's convention,
- *   which Cline, Kilo, Hermes's Nous and every OpenRouter route share).
+ * - An id with the harness's free suffix (`freePlan.suffix`: OpenRouter's
+ *   `:free`, which Cline, Kilo, Hermes's Nous and OpenRouter routes share).
  * - The vendor's list marks it (`catalog.free`: Kilo's `isFree`, OpenCode's
  *   zero price).
  * - The account is on a free plan (`account.plan`, from its usage reading)
@@ -32,7 +32,8 @@ export function freePlanModels(
   catalog: Pick<ModelCatalogResult, 'models' | 'free'>,
 ): Set<string> {
   const free = new Set(catalog.free ?? []);
-  for (const model of catalog.models) if (model.endsWith(':free')) free.add(model);
+  const suffix = harness?.freePlan?.suffix;
+  if (suffix) for (const model of catalog.models) if (model.endsWith(suffix)) free.add(model);
   if (planIsFree(account?.plan)) {
     const named = account!.plan!.models;
     for (const model of catalog.models) {
