@@ -243,9 +243,9 @@ describe('local harness catalog', () => {
     // is read as one.
     expect(harnessLoginArgvForModel(hermes, 'opencode-free:hy3-free')).toEqual(['auth', 'add', 'opencode-free']);
     expect(harnessLoginArgvForModel(hermes, undefined)).toEqual(['model']);
-    expect(harnessReplyError(hermes, 'API call failed after 3 retries: HTTP 429: The usage limit has been reached')).toEqual({ statusCode: 429 });
-    expect(harnessReplyError(hermes, 'HTTP 400: {"detail":"not supported"}')).toEqual({ statusCode: 400 });
-    expect(harnessReplyError(hermes, 'No access token found for Nous Portal login. Run `hermes model` to\r\nre-authenticate.')).toEqual({ statusCode: 401 });
+    expect(harnessReplyError(hermes, 'API call failed after 3 retries: HTTP 429: The usage limit has been reached')).toMatchObject({ statusCode: 429 });
+    expect(harnessReplyError(hermes, 'HTTP 400: {"detail":"not supported"}')).toMatchObject({ statusCode: 400 });
+    expect(harnessReplyError(hermes, 'No access token found for Nous Portal login. Run `hermes model` to\r\nre-authenticate.')).toMatchObject({ statusCode: 401 });
     expect(harnessReplyError(hermes, 'The fix returns HTTP 400: when the body is empty.')).toBeUndefined();
     const claw = localHarnessForCommand('openclaw')!;
     expect(harnessLoginArgvForModel(claw, 'openai/gpt-5.5')).toEqual(['models', 'auth', 'login', '--provider', 'openai']);
@@ -617,7 +617,7 @@ describe('replies that are really a failed call', () => {
 
   it('reads Copilot\'s request-id error as a failure, and not an answer that mentions one', () => {
     // Verbatim from Copilot 1.0.88 over ACP, stop reason end_turn.
-    expect(harnessReplyError(harness('copilot'), 'Error: You have exceeded your monthly quota (Request ID: 4755:2BCAD5:424FACB:4F41C2D:6AB87680)')).toEqual({});
+    expect(harnessReplyError(harness('copilot'), 'Error: You have exceeded your monthly quota (Request ID: 4755:2BCAD5:424FACB:4F41C2D:6AB87680)')).toEqual({ notice: 'Error: You have exceeded your monthly quota (Request ID: 4755:2BCAD5:424FACB:4F41C2D:6AB87680)' });
     expect(harnessReplyError(harness('copilot'), 'PONG')).toBeUndefined();
     expect(harnessReplyError(harness('copilot'), 'Error: handling is done in parse(); see the Request ID header.')).toBeUndefined();
   });
@@ -625,23 +625,23 @@ describe('replies that are really a failed call', () => {
   it('reads Goose\'s framed provider failure as a failure', () => {
     // Verbatim from goose 1.51.
     const failure = 'Ran into this error: Request failed: Claude CLI error: Fable 5.1 requires usage credits. Switch to another model, or manage usage credits at claude.ai/settings/usage?from=cc_cli_limit_message, to continue..\n\nPlease retry if you think this is a transient or recoverable error.';
-    expect(harnessReplyError(harness('goose'), failure)).toEqual({});
+    expect(harnessReplyError(harness('goose'), failure)).toEqual({ notice: failure });
     expect(harnessReplyError(harness('goose'), 'I ran into this error: the test fails on line 3. Fixed it.')).toBeUndefined();
   });
 
   it('reads Auggie\'s ACP quota notice as a failure', () => {
-    expect(harnessReplyError(harness('auggie'), '⚠️ **You have run out of usage for an account. Please upgrade.** ⚠️')).toEqual({ statusCode: 402 });
+    expect(harnessReplyError(harness('auggie'), '⚠️ **You have run out of usage for an account. Please upgrade.** ⚠️')).toMatchObject({ statusCode: 402 });
     expect(harnessReplyError(harness('auggie'), 'The test says “You have run out of usage for” in a fixture.')).toBeUndefined();
   });
 
   it('reads Cursor\'s upgrade banner as a spent plan, keeping any real progress before it', () => {
-    expect(harnessReplyError(harness('cursor'), 'Upgrade your plan to continue')).toEqual({ statusCode: 402 });
-    expect(harnessReplyError(harness('cursor'), 'Upgrade your account to continue')).toEqual({ statusCode: 402 });
+    expect(harnessReplyError(harness('cursor'), 'Upgrade your plan to continue')).toMatchObject({ statusCode: 402 });
+    expect(harnessReplyError(harness('cursor'), 'Upgrade your account to continue')).toMatchObject({ statusCode: 402 });
     expect(harnessReplyError(harness('cursor'), 'Here is the patch.\n\nUpgrade your plan to continue')).toEqual({
-      statusCode: 402, withoutNotice: 'Here is the patch.',
+      notice: 'Upgrade your plan to continue', statusCode: 402, withoutNotice: 'Here is the patch.',
     });
-    expect(harnessReplyError(harness('cursor'), 'Add a payment method to continue')).toEqual({ statusCode: 402 });
-    expect(harnessReplyError(harness('cursor'), 'Please sign in to continue')).toEqual({ statusCode: 401 });
+    expect(harnessReplyError(harness('cursor'), 'Add a payment method to continue')).toMatchObject({ statusCode: 402 });
+    expect(harnessReplyError(harness('cursor'), 'Please sign in to continue')).toMatchObject({ statusCode: 401 });
     expect(harnessReplyError(harness('cursor'), 'I would upgrade your plan to continue the migration.')).toBeUndefined();
   });
 });

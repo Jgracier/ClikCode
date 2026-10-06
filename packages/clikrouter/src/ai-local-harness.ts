@@ -1721,7 +1721,7 @@ export interface AiHarnessAuthFile { path: string; contains?: string; removeLine
  * trimmed reply; the status is the first capture group, else `status`. */
 export interface AiHarnessReplyErrorPattern { pattern: string; status?: number }
 
-export function harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number; withoutNotice?: string } | undefined {
+export function harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { notice: string; statusCode?: number; withoutNotice?: string } | undefined {
   const reply = text.trim();
   for (const entry of harness.replyErrorPatterns ?? []) {
     const match = new RegExp(entry.pattern).exec(reply);
@@ -1733,7 +1733,10 @@ export function harnessReplyError(harness: AiLocalHarnessDefinition, text: strin
     // checkpoint made failover look like the model had only written the
     // refusal. Only set when there is something to keep.
     const withoutNotice = match.index > 0 ? reply.slice(0, match.index).trimEnd() : undefined;
+    // The notice alone is the vendor's error; the progress before it is the
+    // model's, and is never read as a failure reason.
     return {
+      notice: reply.slice(match.index).trim(),
       ...(statusCode !== undefined ? { statusCode } : {}),
       ...(withoutNotice !== undefined ? { withoutNotice } : {}),
     };

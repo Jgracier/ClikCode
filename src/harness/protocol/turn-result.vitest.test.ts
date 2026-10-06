@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { nativeTurnResult } from './turn-result';
+import { nativeTurnFailure, nativeTurnResult } from './turn-result';
+import { classifyAccountFailure } from '../../turn/failover.js';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { codex } from './vendor-fixtures.vitest';
 
@@ -132,5 +133,35 @@ describe('native harness turn results', () => {
     it('returns the output as the answer on a clean exit', () => {
       expect(nativeTurnResult(continueCli, 'PONG\n', { exitCode: 0 }).text).toBe('PONG');
     });
+  });
+});
+
+describe('the failure a failed turn is classified by', () => {
+  const cursor = localHarnessForCommand('cursor')!;
+  const claude = localHarnessForCommand('claude')!;
+  const kind = (result: ReturnType<typeof nativeTurnResult>) => {
+    const { failure, isResultError } = nativeTurnFailure(cursor, result);
+    return classifyAccountFailure(failure, { isResultError });
+  };
+
+  it('never reads the model\'s own sentence as the vendor\'s refusal', () => {
+    const stdout = [
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'The test asserts "usage limit exceeded" when the cap is hit.' }] } },
+      { type: 'result', subtype: 'error', is_error: true },
+    ].map((record) => JSON.stringify(record)).join('\n');
+    const result = nativeTurnResult(cursor, stdout);
+    expect(result.isError).toBe(true);
+    expect(result.errorMessage).toBeUndefined();
+    expect(kind(result)).toBe('other');
+  });
+
+  it('reads the reason the vendor declared on its failed result', () => {
+    const stdout = [
+      { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Working on it.' }] } },
+      { type: 'result', subtype: 'success', is_error: true, result: 'Claude AI usage limit reached|1760000000' },
+    ].map((record) => JSON.stringify(record)).join('\n');
+    const result = nativeTurnResult(claude, stdout);
+    expect(result.errorMessage).toBe('Claude AI usage limit reached|1760000000');
+    expect(kind(result)).toBe('quota-exhausted');
   });
 });
