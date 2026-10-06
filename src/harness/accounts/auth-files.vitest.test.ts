@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { authEvidencePresent, expandAuthPath, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files';
+import { authEvidencePresent, authFilesStamp, expandAuthPath, harnessCanLogout, removableAuthFiles, removeAuthFiles } from './auth-files';
 import type { AiLocalHarnessDefinition } from '../definition';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 
@@ -23,6 +23,21 @@ describe('vendor credential files', () => {
     expect(expandAuthPath('${QWEN_HOME:-~/.qwen}/settings.json', { QWEN_HOME: '  ' }, '/home/u')).toBe('/home/u/.qwen/settings.json');
     expect(expandAuthPath('~/.cline/data/settings/providers.json', { HOME: '/profiles/cline' }, '/home/u'))
       .toBe('/profiles/cline/.cline/data/settings/providers.json');
+  });
+
+  it('reads a * segment as every entry of that directory (MiniMax Code: region and client)', async () => {
+    const mcode = AI_LOCAL_HARNESSES.find((item) => item.command === 'mcode')!;
+    const environment = { HOME: root };
+    expect(await authEvidencePresent(mcode, environment, {})).toBe(false);
+    const stampBefore = await authFilesStamp(mcode, environment, {});
+    const dir = join(root, '.minimax', 'auth', 'prod', 'en', 'client-1');
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, 'auth.json'), '{"records":{}}');
+    expect(await authEvidencePresent(mcode, environment, {})).toBe(false);
+    await writeFile(join(dir, 'auth.json'), '{"records":{"a":{"accessToken":"t","expiresAtMs":1}}}');
+    expect(await authEvidencePresent(mcode, environment, {})).toBe(true);
+    expect(await authFilesStamp(mcode, environment, {})).not.toBe(stampBefore);
+    expect(await authEvidencePresent(mcode, { HOME: join(root, 'elsewhere') }, {})).toBe(false);
   });
 
   it('is signed in by a non-empty file, a file containing the key, a non-empty directory, or an API-key variable', async () => {
