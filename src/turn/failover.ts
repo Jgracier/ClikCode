@@ -152,6 +152,10 @@ export function quotaRetryHint(error: unknown, now: number = Date.now()): string
   const stamp = /(?:resets?|try again|retry(?: again)?)\s+(?:at|after)\s+(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/i.exec(text)?.[1];
   const at = stamp ? Date.parse(stamp) : Number.NaN;
   if (Number.isFinite(at) && at > now) return new Date(at).toISOString();
+  // "Usage resets over a rolling 24-hour window" (Grok Free): what the turn
+  // spent comes back only as the window rolls past it.
+  const rolling = /rolling (\d+)[- ]hour window/i.exec(text)?.[1];
+  if (rolling) return new Date(now + Number(rolling) * 3_600_000).toISOString();
   return clockTimeHint(text, now);
 }
 

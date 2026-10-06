@@ -49,8 +49,13 @@ export function grokBillingReading(result: unknown): UsageReading | undefined {
   if (!period || typeof period !== 'object') return undefined;
   const type = typeof period.type === 'string' ? period.type : '';
   const name = PERIOD_NAMES[type] ?? (type.replace(/^USAGE_PERIOD_TYPE_/, '').toLowerCase() || 'plan');
-  const reading = usageReading([usageWindow(name, protoNumber(config!.creditUsagePercent) ?? 0, period.end ?? config!.billingPeriodEnd)]);
   const tier = (result as Json).subscription_tier;
+  // A Free account's limit is tokens over a rolling 24 hours ("603117/500000",
+  // 2026-10-06), which this answer never mentions: its weekly window read
+  // "100% left" on a spent account and cleared every refusal, so a spent
+  // account was asked again on each turn. Its refusals say when it is out.
+  if (typeof tier === 'string' && /free/i.test(tier)) return { windows: [], label: 'Free plan', plan: { name: tier } };
+  const reading = usageReading([usageWindow(name, protoNumber(config!.creditUsagePercent) ?? 0, period.end ?? config!.billingPeriodEnd)]);
   return reading && typeof tier === 'string' && tier ? { ...reading, plan: { name: tier } } : reading;
 }
 
