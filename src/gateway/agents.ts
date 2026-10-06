@@ -19,8 +19,9 @@ export async function gatewayAgents(options: { config?: Conf; fetchImpl?: typeof
   // another account may connect to the same URL on this machine.
   return (body as { data: unknown[] }).data.flatMap((value): GatewayAgent[] => {
     if (!value || typeof value !== 'object') return [];
-    const entry = value as { id?: unknown; name?: unknown; description?: unknown };
-    if (typeof entry.id !== 'string' || !entry.id || typeof entry.name !== 'string' || !entry.name) return [];
+    const entry = value as { id?: unknown; name?: unknown; description?: unknown; enabled?: unknown };
+    // A switched-off agent is still listed for managing it, but there is no talking to it.
+    if (typeof entry.id !== 'string' || !entry.id || typeof entry.name !== 'string' || !entry.name || entry.enabled === false) return [];
     return [{ id: entry.id, name: entry.name, ...(typeof entry.description === 'string' ? { description: entry.description } : {}) }];
   });
 }
