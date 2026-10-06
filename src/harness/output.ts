@@ -196,6 +196,7 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     write(`\n${chalk.bold(title)}${controls ? `\n  ${chalk.dim(controls)}` : ''}\n\n`);
     return;
   }
-  if (TERMINAL.active) return write(`\n${JSON.stringify(payload, null, 2)}\n`);
+  // No panel and no text: nothing in it is for a person to read.
+  if (TERMINAL.active) return;
   emitResult(payload);
 }
