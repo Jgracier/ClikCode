@@ -834,12 +834,20 @@ def run(name, spec, entry, keep):
     shutil.copy(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-grok.mjs'), os.path.join(fakebin, binary))
     os.chmod(os.path.join(fakebin, binary), 0o755)
     node = os.path.realpath(shutil.which('node'))
+    # Node, npm and npx alone, not the directory they live in: a vendor CLI
+    # installed globally beside node (opencode, 2026-10-06) was on the
+    # scenario's PATH, and ClikCode chose it over the fake.
+    nodebin = os.path.join(root, 'node-bin')
+    os.makedirs(nodebin)
+    for tool in ('node', 'npm', 'npx'):
+        found = os.path.join(os.path.dirname(node), tool)
+        if os.path.exists(found): os.symlink(found, os.path.join(nodebin, tool))
     # Its own npm prefix: a harness ClikCode installs during a scenario (an
     # ACP adapter) must land in the scenario, never in the global node_modules
     # of the node running it.
     npm_prefix = os.path.join(root, 'npm')
     env = {
-        'PATH': ':'.join([fakebin, os.path.join(npm_prefix, 'bin'), os.path.dirname(node), '/usr/bin', '/bin']),
+        'PATH': ':'.join([fakebin, os.path.join(npm_prefix, 'bin'), nodebin, '/usr/bin', '/bin']),
         'npm_config_prefix': npm_prefix,
         'HOME': home, 'CLIKCODE_HOME': state, 'TERM': 'xterm-256color', 'LANG': 'C.UTF-8',
         'FAKE_TURNS': json.dumps(spec['turns']), 'FAKE_STATE': os.path.join(root, 'turn-counter'),
