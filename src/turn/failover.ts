@@ -33,7 +33,11 @@ interface AccountFailureSignals {
 // "No API key found for provider …" and "No route-compatible authentication
 // source is configured for openai." are OpenClaw's (2026.9.6); "No access
 // token found for Nous Portal login." is Hermes's.
-const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|failed|error)|login required|please (?:log|sign) ?in|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|headless mode requires existing settings|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured|authentication[_ ]?error|incorrect api[ _-]?key|(?:invalid or )?missing api[ _-]?key|api key required|no api key (?:for|found)|no credentials (?:are )?(?:configured|found)|not signed in|no longer authenticated|please authenticate|needs authentication|re-?authenticate|authori[sz]ation (?:with .{0,40})?failed|invalid or expired|has expired\b|\bsign (?:in|up) (?:to|or) |run [`'"]?[\w-]+ login\b|run \/(?:login|auth)\b|no [\w ]{0,30}auth token found|\bPAID_MODEL_AUTH_REQUIRED\b)/i;
+const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|failed|error)|login required|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|headless mode requires existing settings|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured|authentication[_ ]?error|incorrect api[ _-]?key|(?:invalid or )?missing api[ _-]?key|api key required|no api key (?:for|found)|no credentials (?:are )?(?:configured|found)|not signed in|no longer authenticated|please authenticate|needs authentication|re-?authenticate|authori[sz]ation (?:with .{0,40})?failed|invalid or expired|run [`'"]?[\w-]+ login\b|run \/(?:login|auth)\b|no [\w ]{0,30}auth token found|\bPAID_MODEL_AUTH_REQUIRED\b)/i;
+// Loose enough to sit in a quota refusal too -- "Your free trial has
+// expired", "Quota exceeded ... Please sign in to Google AI Studio" -- so
+// these are read only once the quota wording has had its say.
+const AUTH_LOOSE_TEXT = /(?:has expired\b|\bsign (?:in|up) (?:to|or) |please (?:log|sign) ?in)/i;
 // Both halves of "ran out" matter, because vendors write it either way
 // round. Captured verbatim from real refusals on this machine:
 //   antigravity  'RESOURCE_EXHAUSTED (code 429): Individual quota reached.
@@ -56,7 +60,14 @@ const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|faile
 // action `upgrade` (cursor-agent 2026.09.26): it is written into the chat as
 // an agent_message_chunk, not as a structured error code. Same for "Add a
 // payment method to continue" (action `payment`).
-const QUOTA_TEXT = /(?:\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|\bPROMOTION_MODEL_LIMIT_REACHED\b|UsageLimitError\b|quota (?:has been |is )?(?:exceeded|exhausted|reached|used up)|quota\b[^.\n]{0,40}\bused up|quota to reset|(?:weekly|monthly|daily) (?:\w+ )?limit (?:has been )?reached|\bacu limit|usage (?:limit )?exceeded|usage (?:is )?(?:paused|frozen)|paused usage|insufficient[_ ](?:\w+ )?(?:balance|funds|credits?)|not enough credits|no credits|credits? (?:is |are )?(?:exhausted|depleted)|billing (?:issue|error)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend) limit(?: reached)?|you(?:'ve| have) hit your limit|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit)|upgrade your (?:plan|account) to continue|add a payment method to continue)/i;
+// A limit counts only with the verb that says it was reached, on either side
+// of the noun: "used 80% of your weekly limit", "the plan limit for file
+// uploads is 10MB" and "exceeded the session limit of 200 tool calls" name a
+// limit, not a spent account.
+const QUOTA_TEXT = /(?:\b(?:FREE|PRO)_USER_USAGE_LIMIT\b|\bUSAGE_PRICING_REQUIRED|\bPROMOTION_MODEL_LIMIT_REACHED\b|UsageLimitError\b|quota (?:has been |is )?(?:exceeded|exhausted|reached|used up)|quota\b[^.\n]{0,40}\bused up|quota to reset|(?:weekly|monthly|daily) (?:\w+ )?limit (?:has been )?reached|\bacu limit|usage (?:limit )?exceeded|usage (?:is )?(?:paused|frozen)|paused usage|insufficient[_ ](?:\w+ )?(?:balance|funds|credits?)|not enough credits|no credits|credits? (?:is |are )?(?:exhausted|depleted)|billing (?:issue|error)|exceeded (?:your |the )?(?:\w+ ){0,3}quota|resource[_ ]exhausted|insufficient[_ ]quota|(?:usage|session|plan|weekly|monthly|daily|spend|request) limit (?:has been |was |is )?(?:reached|exceeded|hit)\b|\b(?:reached|hit|exceeded) (?:your|the|its) (?:[\w-]+ ){0,2}(?:usage|session|plan|weekly|monthly|daily|spend|request) limit\b(?! of \d)|usage is at (?:its|your|the) (?:\w+ )?limit\b|you(?:'ve| have) hit your limit|(?:free )?trial (?:has )?(?:expired|ended)|credits? exhausted|(?:ran|run) out of (?:usage|quota)|out of credits|(?:add|buy|purchase) (?:more )?credits|insufficient credits|billing (?:hard )?limit|payment required|(?:balance|funds|credit) (?:is )?(?:exhausted|depleted)|insufficient (?:balance|funds|credit)|upgrade your (?:plan|account) to continue|add a payment method to continue)/i;
+/** A request too big for the model's window: it says "exceeded" and "limit"
+ *  as a refusal does, and no other account would take it either. */
+const CONTEXT_TEXT = /(?:context (?:window|length)|maximum context|prompt is too long)/i;
 const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|temporar(?:y|ily) throttled)/i;
 /** The account is real and signed in, but the vendor will not serve it --
  *  a plan or verification problem rather than a credential one. Confirmed
@@ -265,8 +276,9 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // cannot fix either, so these explicit eligibility denials take precedence.
   if (INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
   if (AUTH_TEXT.test(text)) return 'authentication-required';
-  if (rateLimitStatus === 'rejected' || QUOTA_TEXT.test(text)) return 'quota-exhausted';
-  if (status === 429 || THROTTLE_TEXT.test(text)) return 'temporarily-throttled';
+  if (rateLimitStatus === 'rejected' || (QUOTA_TEXT.test(text) && !CONTEXT_TEXT.test(text))) return 'quota-exhausted';
+  if (AUTH_LOOSE_TEXT.test(text)) return 'authentication-required';
+  if (effectiveStatus === 429 || THROTTLE_TEXT.test(text)) return 'temporarily-throttled';
   // Confirmed verbatim from a real, reproduced Codex error: "thread/resume:
   // thread/resume failed: no rollout found for thread id ...". A stale
   // nativeSessionId (the account it was created under no longer matches the
