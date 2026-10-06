@@ -149,7 +149,7 @@ export async function runVendorSessionAttempt(input: {
         const unsupported = error as Error & { acpUnsupportedImages?: boolean; acpUnsupportedModel?: boolean; acpUnsupportedEffort?: boolean };
         if (!(unsupported.acpUnsupportedImages || unsupported.acpUnsupportedModel || unsupported.acpUnsupportedEffort) || !harness.turn) throw error;
         // A model the plan's own list leaves out is the plan's refusal; the
-        // CLI would only be refused it too (Kiro). The turn moves to a free one.
+        // CLI would only be refused it too (Kiro).
         if (unsupported.acpUnsupportedModel && harness.freePlan?.listed) throw error;
         // An ACP session id is not guaranteed to identify the same vendor
         // thread in the one-shot CLI. Only a new chat can safely switch
