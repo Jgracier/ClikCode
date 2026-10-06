@@ -319,7 +319,7 @@ export function integrationLabel(harness: AiLocalHarnessDefinition): string {
 /** The providers listed first, in this order, after the ClikDeploy Gateway
  * and ClikCode Local. The user's own ranking; every other harness follows,
  * installed ones first, then by catalog tier. */
-export const PROVIDER_ORDER: readonly string[] = ['claude', 'codex', 'grok', 'cursor', 'cline', 'antigravity', 'opencode', 'hermes', 'kiro', 'copilot', 'openclaw'];
+export const PROVIDER_ORDER: readonly string[] = ['claude', 'codex', 'grok', 'cursor', 'cline', 'kiro', 'copilot', 'antigravity', 'opencode', 'hermes', 'openclaw'];
 
 /** One order for every list of providers -- /provider, VS Code's list, the
  * add-account list, the slash menu's harnesses -- so they cannot disagree. */
