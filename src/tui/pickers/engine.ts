@@ -1,37 +1,42 @@
 /** Choosing which harness runs the session, by hand or automatically. */
 
 import type Conf from 'conf';
-import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { inspectNativeHarnessForPicker } from '../../harness/transport/native/inspect.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
-import type { HarnessPrompter } from '../../harness/prompter.js';
+import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
+import type { IdeProvider } from '../../ide/protocol.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { allLocalHarnesses, harnessCanRunTurns, harnessTierRank } from '../../runtime/lazy-bridge.js';
-import { providerPickerOptions } from '../../session/options.js';
+import { GATEWAY_ID, harnessSignedIn, LOCAL_ID, providerRows } from '../../session/picker-rows.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { chooseOption } from './choose.js';
-import { authEvidencePresent, hasAuthEvidence } from '../../harness/accounts/auth-files.js';
 import { selectProviderConversation } from './conversation.js';
-import { accountQuotaSpent } from '../../harness/accounts/usage-reading.js';
+
+/** /provider's rows (picker-rows.ts providerRows) as the terminal shows them;
+ * the value is the provider's id, as the editor's `choose` takes it. */
+export function providerPickerOptions(rows: readonly IdeProvider[]): PickerOption<string>[] {
+  return rows.map((row) => {
+    const current = row.current ? ' · current' : '';
+    if (row.kind === 'gateway') return { label: row.name, detail: `· ${row.signedIn ? 'connected' : 'sign in with OAuth'}${current}`, value: row.id };
+    if (row.kind === 'clikcode-local') return { label: row.name, detail: `· local models on this machine${current}`, value: row.id };
+    const install = row.install === 'ready' ? `installed${row.version ? ` ${row.version}` : ''}` : row.install === 'auto' ? 'installs when chosen' : 'install it yourself';
+    return { label: row.name, detail: `· ${install} · ${row.integration}${current}`, value: row.id };
+  });
+}
 
 export async function interactiveEnginePicker(config: Conf, rl: HarnessPrompter, id: string): Promise<string | undefined> {
-  for (;;) {
-    const available = await Promise.all(allLocalHarnesses()
-      .filter((harness) => harnessCanRunTurns(harness))
-      .map(async (harness) => ({ harness, inspection: await inspectNativeHarnessForPicker(harness) })));
-    const state = await readState({ transcripts: [id] });
-    const session = state.sessions.find((item) => item.id === id);
-    if (!session) throw new Error(`AI session "${id}" was not found`);
-    const gatewayConnected = Boolean(getApiKeyForUrl(config, getApiUrl(config)));
-    const configuredProviders = new Set(state.accounts.map((account) => account.provider));
-    const provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(available, session, gatewayConnected, configuredProviders));
-    if (!provider) return undefined;
-    if (provider.kind === 'gateway') return selectProviderConversation(config, rl, id, '__gateway__');
-    if (provider.kind === 'clikcode-local') return selectProviderConversation(config, rl, id, '__clikcode_local__');
-    if (provider.kind !== 'provider') continue;
-    return selectProviderConversation(config, rl, id, provider.harness);
-  }
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session) throw new Error(`AI session "${id}" was not found`);
+  const provider = await chooseOption(rl, 'Choose a provider', providerPickerOptions(await providerRows(config, state, session)));
+  return provider ? selectProviderConversation(config, rl, id, providerConversationKey(provider)) : undefined;
+}
+
+/** The provider id a row (or the editor's `choose`) names, as
+ * selectProviderConversation takes it. */
+export function providerConversationKey(provider: string): string {
+  return provider === GATEWAY_ID ? '__gateway__' : provider === LOCAL_ID ? '__clikcode_local__' : provider;
 }
 
 /**
@@ -66,12 +71,9 @@ export async function autoSelectSessionHarness(id: string): Promise<boolean> {
   const candidates = allLocalHarnesses()
     .filter((harness) => harnessCanRunTurns(harness))
     .sort((left, right) => harnessTierRank(left) - harnessTierRank(right));
-  const readyProviders = new Set(state.accounts.filter((item) => item.status === 'ready' && !accountQuotaSpent(item)).map((item) => item.provider));
-  const signedIn = async (harness: AiLocalHarnessDefinition): Promise<boolean> =>
-    readyProviders.has(harness.provider) || (hasAuthEvidence(harness) && await authEvidencePresent(harness, {}));
   const installed = (await Promise.all(candidates.map(async (harness) => (await isInstalled(harness) ? harness : undefined))))
     .filter((harness): harness is AiLocalHarnessDefinition => harness !== undefined);
-  const ready = await Promise.all(installed.map(signedIn));
+  const ready = await Promise.all(installed.map((harness) => harnessSignedIn(harness, state.accounts, true)));
   const chosen = installed.find((_harness, index) => ready[index]) ?? installed[0];
   if (!chosen) return false;
   await aiHarnessSelect(chosen.command, id, { emit: false, signIn: false });

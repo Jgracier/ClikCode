@@ -8,8 +8,8 @@
  * published manifest.
  *
  * A conversation row (conversationOption) is its title, its one state and
- * the last thing asked. `providerPickerOptions` and `accountPickerOptions`
- * are out of scope here and remain uncovered as a follow-up. */
+ * the last thing asked. Provider and account rows are picker-rows.ts, and
+ * tested there. */
 import { describe, expect, it, vi } from 'vitest';
 
 // The router runtime is a separately bundled .cjs that unit tests do not

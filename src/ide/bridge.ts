@@ -47,7 +47,7 @@ import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
 import { withArgValues } from '../tui/slash/arg-values.js';
 import type { PaletteEntry } from '../tui/command-palette.js';
 import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
-import { autoSelectSessionHarness } from '../tui/pickers/engine.js';
+import { autoSelectSessionHarness, providerConversationKey } from '../tui/pickers/engine.js';
 import { addAccountForHarness, manageAccountAction, useAddedAccount } from '../tui/pickers/account.js';
 import { interactiveSessionPicker } from '../tui/pickers/session.js';
 import { type ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
@@ -62,7 +62,7 @@ import { IDE_PROTOCOL } from './protocol-version.js';
 import { sessionEvent } from './session-event.js';
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
 import {
-  accountList, chatSettings, conversationList, gatewayCheckoutUrl, gatewayStatus, GATEWAY_ID, LOCAL_ID, modelList, providerList,
+  accountList, chatSettings, conversationList, gatewayCheckoutUrl, gatewayStatus, modelList, providerList,
   sessionHarnessDefinition,
 } from './queries.js';
 
@@ -732,8 +732,7 @@ export class IdeBridge {
           if (this.workerTurnRunning) throw new Error('A turn is running: stop it or wait for it to finish before switching provider.');
           queued(async () => {
             const id = this.requireSession();
-            const selected = choice.provider === GATEWAY_ID ? '__gateway__' : choice.provider === LOCAL_ID ? '__clikcode_local__' : choice.provider;
-            const moved = await selectProviderConversation(this.config, this.prompter, id, selected);
+            const moved = await selectProviderConversation(this.config, this.prompter, id, providerConversationKey(choice.provider));
             if (choice.model) {
               const { session } = await this.current(moved);
               await aiSessionCommand(moved, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);

@@ -15,8 +15,8 @@ import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
-import { harnessSupportsEffort, harnessSupportsModelSelection, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
-import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
+import { harnessSupportsModelSelection, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { effortChoices } from '../../session/picker-rows.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
 import { sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
@@ -61,7 +61,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     if (!session) return id;
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-    const efforts = harness && harnessSupportsEffort(harness) ? (await effortChoicesFor(harness, account, session.model)).values : [];
+    const effort = await effortChoices(state, session, harness);
     const permissions = sessionPermissionModes(session, isClikCodeAgent(session) ? undefined : harness);
     const failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
     const inline = (choices: readonly { label: string; value: string }[], current: string, apply: (value: string) => Promise<void>) => (
@@ -107,11 +107,11 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
         label: 'Model', detail: localModelLabel(session.model) ?? 'chosen for this machine on the first turn', value: 'model',
       }] : []),
       ...(harness ? [{ label: 'Account', detail: account?.label ?? 'automatic', value: 'account' }] : []),
-      ...(efforts.length ? [{
-        label: 'Effort', detail: settingLabel(session.effort ?? ''), value: 'effort', actions: defaultActions(harness, 'effort'),
+      ...(effort ? [{
+        label: 'Effort', detail: settingLabel(effort.current ?? ''), value: 'effort', actions: defaultActions(harness, 'effort'),
         // Default is a real choice: no level sent, the harness decides.
-        ...inline([{ label: 'Default', value: 'default' }, ...efforts.map((value) => ({ label: settingLabel(value), value }))],
-          session.effort || 'default', (value) => applyToChat(id, 'effort', value)),
+        ...inline([{ label: 'Default', value: 'default' }, ...effort.choices.map((value) => ({ label: settingLabel(value), value }))],
+          effort.current || 'default', (value) => applyToChat(id, 'effort', value)),
       }] : []),
       ...(permissions.length ? [{
         label: 'Permissions', detail: settingLabel(session.permissionMode ?? 'ask'), value: 'permissions', actions: defaultActions(harness, 'permissions'),
