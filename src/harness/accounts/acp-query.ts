@@ -109,6 +109,24 @@ export function acpSessionModels(result: Json | undefined): { models: string[]; 
   return { models, labels, ...((current ?? configured) ? { current: current ?? configured } : {}) };
 }
 
+/** The values an agent's session offers for one config option (Goose's
+ * `thinking_effort`), flat or grouped as ACP allows. */
+export function acpConfigOptionValues(result: Json | undefined, configId: string): string[] {
+  const option = Array.isArray(result?.configOptions)
+    ? result!.configOptions.find((entry: Json) => (entry?.id ?? entry?.configId) === configId)
+    : undefined;
+  const values: string[] = [];
+  const visit = (entries: unknown): void => {
+    if (!Array.isArray(entries)) return;
+    for (const entry of entries as Json[]) {
+      if (Array.isArray(entry?.options)) visit(entry.options);
+      else if (typeof entry?.value === 'string' && entry.value && !values.includes(entry.value)) values.push(entry.value);
+    }
+  };
+  visit(option?.options);
+  return values;
+}
+
 /** The extra argv for an ACP agent started only to be asked something: its
  * switch that keeps the user's MCP servers from starting. Where the vendor
  * has only a per-server switch (Copilot), every server its config names is

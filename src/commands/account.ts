@@ -14,7 +14,7 @@ import { captureNativeHarnessOutput } from '../harness/transport/native/command.
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
 import { loginNativeHarness, withSignInScreen } from '../harness/transport/native/login.js';
-import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
+import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, harnessSupportsEffort, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { readState } from '../session/state/read.js';
@@ -115,7 +115,7 @@ export async function aiDoctor(): Promise<void> {
         isolatedProfiles: Boolean(harness.profileEnv),
         modelSelection: harness.modelArgvPrefix !== undefined || Boolean(harness.acp?.listsModels),
         workspaceSelection: Boolean(harness.workspaceArgvPrefix),
-        effortSelection: Boolean(harness.effortArgvPrefix),
+        effortSelection: harnessSupportsEffort(harness),
         permissionModeSelection: (harness.permissionModes?.length ?? 0) > 0,
         permissionModes: harness.permissionModes ?? [],
         exactResume: Boolean(harness.session?.resumeIdPrefix),

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
-import { acpDiscoveryDirectory, acpDiscoverySession, acpProbeArgv, acpSessionModels } from './acp-query.js';
+import { acpConfigOptionValues, acpDiscoveryDirectory, acpDiscoverySession, acpProbeArgv, acpSessionModels } from './acp-query.js';
 
 describe('an ACP agent started only to be asked something', () => {
   it("switches off every MCP server in Copilot's config, so none can open a sign-in page", async () => {
@@ -39,6 +39,16 @@ describe('ACP model discovery', () => {
       labels: { 'devstral-latest': 'Devstral Latest', 'mistral-medium': 'Mistral Medium' },
       current: 'devstral-latest',
     });
+  });
+
+  it('reads one config option\'s values, flat or grouped (Goose thinking_effort)', () => {
+    const session = { configOptions: [
+      { id: 'model', options: [{ value: 'm' }] },
+      { configId: 'thinking_effort', options: [{ value: 'low' }, { group: 'more', options: [{ value: 'medium' }, { value: 'high' }] }] },
+    ] };
+    expect(acpConfigOptionValues(session, 'thinking_effort')).toEqual(['low', 'medium', 'high']);
+    expect(acpConfigOptionValues(session, 'missing')).toEqual([]);
+    expect(acpConfigOptionValues(undefined, 'thinking_effort')).toEqual([]);
   });
 });
 

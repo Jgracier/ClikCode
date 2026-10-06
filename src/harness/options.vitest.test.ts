@@ -74,9 +74,11 @@ describe('a setting a ClikCode command owns is not also a raw vendor row', () =>
     // 78 -> 79: Vibe declares a model selector, so its model row folds.
     // 79 -> 83: dcode, Devin and Junie add three model selectors and Junie
     // adds an effort selector; each is owned by a common ClikCode control.
+    // 83 -> 85: Copilot and Goose take effort over ACP (a flag, a session
+    // option), so each publishes an effort selector, folded like the rest.
     const all = harnesses.flatMap((h) => optionsOf(h));
     const kept = harnesses.flatMap((h) => vendorFacingOptions(optionsOf(h)));
-    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(83);
+    expect(all.length - kept.length, 'the duplicate count changed; re-check the registry').toBe(85);
     expect(kept.length).toBe(215);
     const emptied = harnesses.filter((h) => optionsOf(h).length > 0 && vendorFacingOptions(optionsOf(h)).length === 0);
     // These ACP-only agents expose no vendor-specific option yet. Their

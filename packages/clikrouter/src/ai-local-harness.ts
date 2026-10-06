@@ -855,12 +855,17 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // (1.0.91: `copilot logout` exits 1, "Invalid command format"), and its
   // token is in the system credential store, so ClikCode can remove the
   // account but cannot sign it out.
+  // Effort goes over ACP only (`--effort`); the levels are read from
+  // `copilot --help` (effort-choices.ts), effortValues is the fallback.
   // Shared sessions (1.0.91, 2026-10-05): a `-p --session-id` thread loads
   // over ACP with its history, and `--session-id` on an ACP thread continues
   // it; each recalled a word the other was told.
-  { command: 'copilot', freePlan: { listed: true }, provider: 'github-copilot', displayName: 'GitHub Copilot', planMode: { option: 'plan', value: true }, surface: 'terminal', tier: 'primary', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp', '--stdio'], effortArgvPrefix: ['--effort'], sharedSessions: true, probeDisableMcpPrefix: ['--disable-mcp-server'] }, retiredOptionIds: ['allow-all'], replyErrorPatterns: COPILOT_REPLY_ERRORS, localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginRemoteArgv: ['login', '--device-code'], loginArgv: ['login'], authFiles: [{ path: '${COPILOT_HOME:-~/.copilot}/config.json', contains: '"loggedInUsers": [\n' }], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['-C'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--allow-all'] } }, imageArgvPrefix: ['--attachment'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
+  { command: 'copilot', freePlan: { listed: true }, provider: 'github-copilot', displayName: 'GitHub Copilot', planMode: { option: 'plan', value: true }, surface: 'terminal', tier: 'primary', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp', '--stdio'], effortArgvPrefix: ['--effort'], sharedSessions: true, probeDisableMcpPrefix: ['--disable-mcp-server'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], retiredOptionIds: ['allow-all'], replyErrorPatterns: COPILOT_REPLY_ERRORS, localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginRemoteArgv: ['login', '--device-code'], loginArgv: ['login'], authFiles: [{ path: '${COPILOT_HOME:-~/.copilot}/config.json', contains: '"loggedInUsers": [\n' }], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['-C'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--allow-all'] } }, imageArgvPrefix: ['--attachment'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], continueArgv: ['--continue'] } },
   { command: 'aider', freePlan: { suffix: ':free' }, loginAccountChoose: ['Yes'], provider: 'aider', displayName: 'Aider', titleSource: 'none', surface: 'terminal', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'aider', memoryFile: 'CONVENTIONS.md', nativeSlashPassthrough: false, localAuth: ['api-key', 'vendor-cli'], binary: 'aider', installer: HARNESS_INSTALLERS.aider, loginArgv: ['--no-git', '--exit'], authFiles: [{ path: '~/.aider/oauth-keys.env' }], authEnv: ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'VERTEXAI_PROJECT'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yes-always'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: ['--no-show-model-warnings', '--no-check-update', '--no-show-release-notes', '--no-analytics', '--no-pretty', '--no-fancy-input', '--no-detect-urls'], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text', outsideRepoArgv: ['--no-git'] }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] } },
-  { command: 'goose', freePlan: { suffix: ':free' }, provider: 'goose', displayName: 'Goose', replyErrorPatterns: GOOSE_REPLY_ERRORS, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'goose', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], inheritCliOptions: false, providerConfigId: 'provider', effortConfigId: 'thinking_effort', permissionModeIds: { ask: 'approve', auto: 'smart_approve', bypass: 'auto' }, sharedSessions: true }, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', installer: HARNESS_INSTALLERS.goose, loginArgv: ['configure'], loginSteps: [{ when: 'Share anonymous usage data', send: '{right}{enter}' }],
+  // Goose effort is the ACP session option `thinking_effort`; its values are
+  // read from the session (effort-choices.ts). effortValues, the fallback, are
+  // the levels its own `goose configure` prompt offers (off/low/medium/high/max).
+  { command: 'goose', freePlan: { suffix: ':free' }, provider: 'goose', displayName: 'Goose', replyErrorPatterns: GOOSE_REPLY_ERRORS, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'goose', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], inheritCliOptions: false, providerConfigId: 'provider', effortConfigId: 'thinking_effort', permissionModeIds: { ask: 'approve', auto: 'smart_approve', bypass: 'auto' }, sharedSessions: true }, effortValues: ['off', 'low', 'medium', 'high', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', installer: HARNESS_INSTALLERS.goose, loginArgv: ['configure'], loginSteps: [{ when: 'Share anonymous usage data', send: '{right}{enter}' }],
     loginKeyRoutes: providerKeyRoutes(['Manual Configuration'], {
       anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: ['OpenAI', 'Yes'], google: 'Google Gemini (API Key)', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
       fireworks: 'Fireworks AI', mistral: 'Mistral AI', deepseek: 'DeepSeek', moonshot: 'Moonshot', zai: 'Z.AI', minimax: 'MiniMax', together: 'Together AI',
@@ -1624,7 +1629,13 @@ export function localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition
   const normalized: AiHarnessOptionDefinition[] = [];
   if (harness.modelArgvPrefix) normalized.push(value('model', 'Model', 'Provider model id or alias', 'model', harness.modelArgvPrefix));
   if (harness.workspaceArgvPrefix) normalized.push(value('workspace', 'Workspace', 'Working directory for the native agent', 'context', harness.workspaceArgvPrefix, 'path', { requiresNewSession: true }));
-  if (harness.effortArgvPrefix) normalized.push(value('effort', 'Reasoning effort', 'Provider-native reasoning level', 'reasoning', harness.effortArgvPrefix, 'enum', { values: harness.effortValues ?? [] }));
+  if (harnessSupportsEffort(harness)) {
+    const effortArgv = harness.effortArgvPrefix ?? harness.acp?.effortArgvPrefix;
+    const values = harness.effortValues ?? [];
+    normalized.push(effortArgv
+      ? value('effort', 'Reasoning effort', 'Provider-native reasoning level', 'reasoning', effortArgv, 'enum', { values })
+      : { id: 'effort', label: 'Reasoning effort', description: 'Provider-native reasoning level', category: 'reasoning', kind: 'enum', values });
+  }
   if (harness.permissionModes?.length) normalized.push({ id: 'permissions', label: 'Permissions', description: 'Normalized ClikCode approval behavior', category: 'permissions', kind: 'enum', values: harness.permissionModes });
   return { ...declared, options: [...normalized, ...declared.options.filter((option) => !normalizedPermissionIds.has(option.id))] };
 }
@@ -2012,7 +2023,10 @@ export function localHarnessForProvider(provider: string): AiLocalHarnessDefinit
  * nothing — effort and permission mode are both vendor-declared capabilities,
  * not universal ones every harness honors. */
 export function harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean {
-  return Boolean(harness.effortArgvPrefix);
+  // An ACP agent may carry effort only over ACP: a flag its ACP mode alone
+  // accepts (Copilot `--effort`) or a session config option (Goose
+  // `thinking_effort`). Either is as real a control as a one-shot flag.
+  return Boolean(harness.effortArgvPrefix || harness.acp?.effortArgvPrefix || harness.acp?.effortConfigId);
 }
 
 export function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean {

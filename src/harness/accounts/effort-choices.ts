@@ -13,6 +13,7 @@
  *   everything   its `--help`, where the effort flag's line enumerates the
  *                levels -- `(low, medium, high, xhigh, max)` for Claude Code,
  *                `none|low|medium|high|xhigh` for Cline.
+ *   goose        the values its ACP session offers for `thinking_effort`.
  *   otherwise    the catalog, which is the verified-by-hand answer for the
  *                harnesses that publish no machine-readable one.
  *
@@ -32,7 +33,7 @@ export interface EffortChoices {
   values: string[];
   /** The level the vendor uses when none is given, where it says. */
   default?: string;
-  source: 'vendor-models' | 'vendor-help' | 'catalog';
+  source: 'vendor-models' | 'vendor-help' | 'vendor-config' | 'catalog';
 }
 
 const LEVEL = /^[a-z][a-z0-9-]{0,15}$/;
@@ -137,7 +138,9 @@ const helpMemo = jsonMemo<HelpMemo>('cache/effort-help.json', () => ({ v: 1, har
 
 /** The help text is read once per binary, not once per model, session or run. */
 async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] | undefined> {
-  const flag = harness.effortArgvPrefix?.[0];
+  // Copilot's effort flag is accepted by its ACP mode only, and its help
+  // still lists the levels.
+  const flag = harness.effortArgvPrefix?.[0] ?? harness.acp?.effortArgvPrefix?.[0];
   if (!flag) return undefined;
   const identity = await harnessBinaryIdentity(harness.binary);
   if (!identity) return undefined;
@@ -176,5 +179,12 @@ export async function effortChoicesFor(
   }
   const fromHelp = await helpChoices(harness);
   if (fromHelp) return { values: fromHelp, source: 'vendor-help' };
+  // An agent whose effort is an ACP session option (Goose `thinking_effort`)
+  // lists its values in the session discovery already reads for its models.
+  if (harness.acp?.effortConfigId && !harness.effortArgvPrefix) {
+    const { nativeModelCatalog } = await import('./model-catalog.js');
+    const offered = (await nativeModelCatalog(harness, account).catch(() => undefined))?.effortValues;
+    if (offered?.length) return { values: [...offered], source: 'vendor-config' };
+  }
   return { values: [...(harness.effortValues ?? [])], source: 'catalog' };
 }

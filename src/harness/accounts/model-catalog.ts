@@ -20,7 +20,7 @@ import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
-import { acpDiscoverySession, acpProbeArgv, acpSessionModels, queryAcp } from './acp-query.js';
+import { acpConfigOptionValues, acpDiscoverySession, acpProbeArgv, acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
@@ -493,7 +493,7 @@ async function nativeModelCatalogUncached(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
   /** What a live session already offered: then no agent is started for it. */
-  liveListed?: { models: string[]; labels: Record<string, string>; current?: string },
+  liveListed?: { models: string[]; labels: Record<string, string>; current?: string; efforts?: string[] },
 ): Promise<ModelCatalogResult> {
   const models = new Set(account?.models ?? []);
   const addDiscoveredModels = (raw: string): void => { for (const model of discoveredModelsFrom(raw)) models.add(model); };
@@ -503,6 +503,7 @@ async function nativeModelCatalogUncached(
   let connect: ModelCatalogConnect[] | undefined;
   let localRecommendations: ModelCatalogResult['localRecommendations'];
   let free: string[] | undefined;
+  let effortValues: string[] | undefined;
   // Hermes' and OpenClaw's inventories are the whole truth: ids remembered on
   // the account from before (bare, or from a provider since signed out)
   // would run wrong.
@@ -633,7 +634,11 @@ async function nativeModelCatalogUncached(
   // own gateway, none of which ClikCode could offer before).
   if (harness.acp && harness.acp.listsModels !== false && !harness.modelDiscoveryArgv) {
     const listed = liveListed ?? await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...await acpProbeArgv(harness, account)], nativeProfileEnvironment(account?.nativeProfile),
-      async (request, capabilities) => acpSessionModels(await acpDiscoverySession(request, capabilities, cacheKey(harness, account))), 30_000).catch(() => undefined);
+      async (request, capabilities) => {
+        const session = await acpDiscoverySession(request, capabilities, cacheKey(harness, account));
+        const efforts = harness.acp?.effortConfigId ? acpConfigOptionValues(session, harness.acp.effortConfigId) : [];
+        return { ...acpSessionModels(session), ...(efforts.length ? { efforts } : {}) };
+      }, 30_000).catch(() => undefined);
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping
       // persisted CLI ids alongside it can select an id this transport does
@@ -646,6 +651,7 @@ async function nativeModelCatalogUncached(
       // added here it read as one the account's plan offers.
       if (listed.current && listed.models.includes(listed.current)) configured ??= listed.current;
     }
+    if (listed?.efforts?.length) effortValues = listed.efforts;
   }
   if (harness.modelDiscoveryArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
@@ -680,5 +686,6 @@ async function nativeModelCatalogUncached(
     ...(free?.length ? { free } : {}),
     ...(connect?.length ? { connect } : {}),
     ...(localRecommendations?.length ? { localRecommendations } : {}),
+    ...(effortValues?.length ? { effortValues } : {}),
   };
 }

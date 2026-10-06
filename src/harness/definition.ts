@@ -127,6 +127,9 @@ export type ModelCatalogResult = {
    * zero price); `:free` ids are free without being listed here. */
   free?: string[];
   connect?: readonly ModelCatalogConnect[];
+  /** The reasoning levels the agent's own ACP session offers for its
+   * `acp.effortConfigId` option (Goose), where it has no effort flag. */
+  effortValues?: string[];
   /** Hardware-fit model configurations exposed by Hermes local runtimes. */
   localRecommendations?: readonly { id: string; label: string; detail: string }[];
 };
