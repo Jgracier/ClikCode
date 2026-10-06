@@ -140,7 +140,9 @@ export function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefine
  *  - a window it reported spent (`usedPct >= 100`, unrounded) holds until
  *    that window's own reset, or until a newer reading when it gave none;
  *  - a refusal holds until its expiry (above), unless a reading the vendor
- *    published after it shows no window spent. */
+ *    published after it shows no window spent. Only a window that can stop
+ *    the account speaks to a refusal: an advisory one (Antigravity's pools,
+ *    Cline's credits) does not say the account has room. */
 export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now()): boolean {
   const windows = vendorWindows(account);
   if (windows.some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now))) return true;
@@ -148,7 +150,7 @@ export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.
   if (expires === undefined || expires <= now) return false;
   const readAt = Date.parse(account.usage?.at ?? '');
   const markedAt = Date.parse(account.quotaExhaustedAt ?? '');
-  return !(windows.length && readAt > markedAt);
+  return !(windows.some((window) => !window.advisory) && readAt > markedAt);
 }
 
 /** Can this account take a turn now? Signed in, not held by the vendor for
