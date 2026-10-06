@@ -11,6 +11,7 @@ describe('the Gateway account agent roster', () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ data: [
       { id: 'agent-1', name: 'Silas', description: 'Improves the platform' },
       { id: 'agent-2', name: 'ClikNet' },
+      { id: 'agent-3', name: 'Off', enabled: false },
       { name: 'invalid' },
     ] }), { status: 200 }));
     expect(await gatewayAgents({ fetchImpl: fetchImpl as never })).toEqual([

@@ -19,7 +19,11 @@ import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSession
 import { aiGatewayModels, aiGatewayStatus, aiGatewayUsage, aiGatewayCredit, aiModelsList, aiUsage } from '../commands/ai/status.js';
 import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
 import { gatewayLogin } from '../commands/gateway.js';
-import { gatewayAgentList, gatewayAgentTools, gatewayAgentCreate, gatewayAgentUpdate, gatewayAgentRemove } from '../commands/gateway-agents.js';
+import {
+  AGENT_EFFORTS, gatewayAgentCreate, gatewayAgentDelete, gatewayAgentEventAdd, gatewayAgentList, gatewayAgentScheduleAdd,
+  gatewayAgentSet, gatewayAgentShow, gatewayAgentTools, gatewayAgentTriggerRemove, gatewayAgentTriggers,
+  type AgentSettingsOptions, type ScheduleOptions,
+} from '../commands/gateway-agents.js';
 import { runSessionWorker } from '../worker/session-worker.js';
 
 export function registerClikCodeCommands(program: Command, config: Conf): void {
@@ -118,26 +122,51 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
   gateway.command('models').description('List the models ClikDeploy Gateway offers you, cheapest access first')
     .action(() => aiGatewayModels(config));
-  const gatewayAgents = gateway.command('agents').description('List and build agents private to your Gateway account');
-  gatewayAgents.command('list').description('List your Gateway agents').action(() => gatewayAgentList(config));
-  gatewayAgents.command('tools').description('List tools available to your Gateway agents').action(() => gatewayAgentTools(config));
-  const agentOptions = (command: Command) => command
+  const gatewayAgents = gateway.command('agents').description('List and build your Gateway agents (and, as the super admin, the platform agents)');
+  gatewayAgents.command('list').description('List the agents you manage').action(() => gatewayAgentList(config));
+  gatewayAgents.command('show <agent>').description('Show an agent\'s settings and when it runs (id, handle or name)')
+    .action((agent: string) => gatewayAgentShow(config, agent));
+  gatewayAgents.command('tools').description('List the toolsets and tools you may give an agent').action(() => gatewayAgentTools(config));
+  const totpOption = (command: Command) => command.option('--totp <code>', 'Authenticator code, for a platform agent without a prompt');
+  const settingOptions = (command: Command) => command
     .option('--name <name>', 'Agent name')
     .option('--description <text>', 'Short description')
-    .option('--instructions-file <path>', 'UTF-8 file containing the agent instructions')
-    .option('--capability <name>', 'Account-scoped read tool; repeat for more', (value: string, prior: string[]) => [...prior, value], [] as string[])
-    .option('--model <id>', 'Agent default model (requires --provider)')
-    .option('--provider <id>', 'Provider for the agent default model');
-  agentOptions(gatewayAgents.command('create <handle>').description('Build an account-owned agent'))
-    .action((handle: string, options) => gatewayAgentCreate(config, handle, options));
-  agentOptions(gatewayAgents.command('update <id>').description('Change one of your agents'))
-    .option('--clear-model', 'Use this agent’s configured router instead of a default pin')
-    .option('--clear-tools', 'Remove every granted tool')
-    .option('--enable', 'Enable this agent')
-    .option('--disable', 'Disable this agent')
-    .action((id: string, options) => gatewayAgentUpdate(config, id, options));
-  gatewayAgents.command('remove <id>').description('Delete one of your agents')
-    .action((id: string) => gatewayAgentRemove(config, id));
+    .option('--instructions <text>', 'The agent\'s instructions')
+    .option('--instructions-file <path>', 'UTF-8 file containing the agent\'s instructions')
+    .option('--tools <edit...>', 'add|remove|set, then toolset or tool names (see `tools`); set none clears them')
+    .option('--model <id>', 'Model id, or auto')
+    .option('--effort <level>', `auto or ${AGENT_EFFORTS.join(', ')}`)
+    .option('--permission <mode>', 'ask, auto or bypass')
+    .option('--spend-limit <usd>', 'USD of paid models per day: 0 = subscriptions and free only, none = no cap')
+    .option('--on', 'Switch the agent on')
+    .option('--off', 'Switch the agent off');
+  settingOptions(gatewayAgents.command('create').description('Build an agent of your own'))
+    .action((options: AgentSettingsOptions) => gatewayAgentCreate(config, options));
+  totpOption(settingOptions(gatewayAgents.command('set <agent>').description('Change an agent\'s settings')))
+    .action((agent: string, options: AgentSettingsOptions) => gatewayAgentSet(config, agent, options));
+  totpOption(gatewayAgents.command('delete <agent>').alias('remove').description('Delete an agent'))
+    .action((agent: string, options: { totp?: string }) => gatewayAgentDelete(config, agent, options));
+  const schedules = gatewayAgents.command('schedules').description('When an agent runs on a clock');
+  schedules.command('list <agent>').description('List an agent\'s schedules and the presets')
+    .action((agent: string) => gatewayAgentTriggers(config, agent, 'schedule'));
+  totpOption(schedules.command('add <agent>').description('Run an agent on a schedule')
+    .option('--cron <expression>', 'Cron expression, in UTC')
+    .option('--preset <name>', 'hourly, daily, weekdays or weekly')
+    .option('--at <time>', 'Once, at this date and time')
+    .option('--instruction <text>', 'What to do when it runs')
+    .option('--off', 'Add it switched off'))
+    .action((agent: string, options: ScheduleOptions) => gatewayAgentScheduleAdd(config, agent, options));
+  totpOption(schedules.command('remove <agent> <scheduleId>').description('Remove a schedule'))
+    .action((agent: string, id: string, options: { totp?: string }) => gatewayAgentTriggerRemove(config, agent, id, options));
+  const events = gatewayAgents.command('events').description('When an agent runs on a platform event');
+  events.command('list <agent>').description('List an agent\'s event triggers and the events available to you')
+    .action((agent: string) => gatewayAgentTriggers(config, agent, 'event'));
+  totpOption(events.command('add <agent> <event>').description('Run an agent when an event happens')
+    .option('--instruction <text>', 'What to do when it runs')
+    .option('--off', 'Add it switched off'))
+    .action((agent: string, event: string, options: { instruction?: string; off?: boolean; totp?: string }) => gatewayAgentEventAdd(config, agent, event, options));
+  totpOption(events.command('remove <agent> <triggerId>').description('Remove an event trigger'))
+    .action((agent: string, id: string, options: { totp?: string }) => gatewayAgentTriggerRemove(config, agent, id, options));
   gateway.command('usage').description('Show your AI use and credit as ClikDeploy Gateway records it')
     .option('--days <days>', 'Window in days, 1-90 (default 30)')
     .action((options: { days?: string }) => aiGatewayUsage(config, options));
