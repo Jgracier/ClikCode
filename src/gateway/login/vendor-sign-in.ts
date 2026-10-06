@@ -97,10 +97,11 @@ const KEYS: Readonly<Record<string, string>> = {
 };
 
 /** A menu's title: the nearest line above it that says something --
- * not a border, a key hint, or a search box's lone `>`. */
+ * not a border, a key hint, or a search box's `>` and what was typed in it
+ * (Pi's `> google`). */
 function titleAbove(lines: readonly string[], start: number, fallback = ''): string {
   return [...lines.slice(0, start)].reverse().map((line) => line.replace(/[│┃║]/g, ' ').trim())
-    .find((line) => /[A-Za-z]/.test(line) && !/^[┌└╭╰─━]/.test(line) && !/\b(?:navigate|ENTER|ESC|select)\b.*\b(?:select|cancel|confirm)\b/i.test(line))
+    .find((line) => /[A-Za-z]/.test(line) && !/^[┌└╭╰─━]|^>\s/.test(line) && !/\b(?:navigate|ENTER|ESC|select)\b.*\b(?:select|cancel|confirm)\b/i.test(line))
     ?.replace(/^\?\s*/, '') ?? fallback;
 }
 
@@ -299,13 +300,18 @@ function readPointer(lines: readonly string[]): Drawn | undefined {
   const column = indent(plain[at]!);
   // Not a rule, and not a position counter under the list (Pi's `(1/41)`).
   const inMenu = (line: string): boolean => !/^\s*[─━]{3,}|^\s*\(\d+\/\d+\)\s*$/.test(line) && (!line.trim() || indent(line) === column);
+  // A group's heading inside the menu, between two of its entries (Cline's
+  // `Popular ... Other`): the cursor moves past it, and so does the reading.
+  const entryAt = (index: number): boolean => Boolean(plain[index]?.trim()) && indent(plain[index]!) === column;
+  const heading = (index: number): boolean => Boolean(plain[index]!.trim()) && indent(plain[index]!) < column && entryAt(index - 1) && entryAt(index + 1);
   let first = at;
-  while (first > 0 && inMenu(plain[first - 1]!)) first -= 1;
+  while (first > 0 && (inMenu(plain[first - 1]!) || heading(first - 1))) first -= 1;
   let last = at;
-  while (last < plain.length - 1 && inMenu(plain[last + 1]!)) last += 1;
+  while (last < plain.length - 1 && (inMenu(plain[last + 1]!) || heading(last + 1))) last += 1;
   // Groups of lines between blank lines.
   const groups: number[][] = [];
   for (let index = first; index <= last; index += 1) {
+    if (heading(index)) continue;
     if (!plain[index]!.trim()) { if (groups.at(-1)?.length) groups.push([]); continue; }
     if (!groups.length) groups.push([]);
     groups.at(-1)!.push(index);
