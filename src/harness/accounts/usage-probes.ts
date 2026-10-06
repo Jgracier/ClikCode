@@ -11,7 +11,6 @@ import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { NativeUsageProbe } from '../definition.js';
-import type { HarnessSession } from '../../session/model.js';
 import { UsageReading, UsageWindow, claudeRateLimitReading, claudeUsageCommandReading, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
 
 /** Claude Code's `/usage` probe: measured at ~3.8s (see
@@ -48,7 +47,7 @@ export const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
  * picker, and a number that never approaches a limit cannot drive failover.
  * A harness that publishes no window publishes no usage.
  */
-async function codexUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
+async function codexUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const binary = harnessBinary('codex');
   const response = await new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
     const child = spawn(binary, ['app-server', '--listen', 'stdio://'], {
@@ -133,7 +132,7 @@ export async function codexPlan(environment: Readonly<Record<string, string>>): 
  * `_claude/rateLimit`). */
 export const CLAUDE_USAGE_PROBE_ARGV: readonly string[] = ['-p', '/usage', '--output-format', 'json', '--no-session-persistence', '--strict-mcp-config'];
 
-async function claudeUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
+async function claudeUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   const harness = localHarnessForCommand('claude');
   if (!harness) return undefined;
   try {
@@ -185,11 +184,11 @@ export function codexRateLimitsReading(rateLimits: unknown): UsageReading | unde
   return usageReading([part(windows?.primary), part(windows?.secondary)]);
 }
 
-type NativeUsageReadingProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
+type NativeUsageReadingProbe = (environment: Readonly<Record<string, string>>) => Promise<UsageReading | undefined>;
 
 /** A probe whose harness publishes only a balance label, no windows. */
-const labelOnly = (probe: NativeUsageProbe): NativeUsageReadingProbe => async (session, environment) => {
-  const label = await probe(session, environment);
+const labelOnly = (probe: NativeUsageProbe): NativeUsageReadingProbe => async (environment) => {
+  const label = await probe(environment);
   return label === undefined ? undefined : { windows: [], label };
 };
 

@@ -3,7 +3,6 @@
  * per-vendor fact is always a field here and never a name in a branch. */
 
 import type { UsageLearning } from './accounts/usage-learning.js';
-import type { HarnessSession } from '../session/model.js';
 
 /** The catalog's own vocabulary (packages/clikrouter/src/ai-local-harness.ts),
  * type-only: erased at build, so the catalog bundle still loads lazily. */
@@ -135,4 +134,4 @@ export type ModelCatalogResult = {
   localRecommendations?: readonly { id: string; label: string; detail: string }[];
 };
 
-export type NativeUsageProbe = (session: HarnessSession, environment: Readonly<Record<string, string>>) => Promise<string | undefined>;
+export type NativeUsageProbe = (environment: Readonly<Record<string, string>>) => Promise<string | undefined>;
