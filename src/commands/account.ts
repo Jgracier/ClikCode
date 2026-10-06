@@ -28,6 +28,7 @@ import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harne
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
 import { authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
 import { vendorCredentialCapture } from '../harness/accounts/vendor-identity.js';
+import { apiKeyAccountEmail } from '../harness/accounts/api-key-identity.js';
 import { profileExtraEnvironment } from '../harness/transport/profile-environment.js';
 
 // emitHarnessOutput is defined in ai.ts (the HTTP-server-adjacent JSON/panel
@@ -420,11 +421,15 @@ function requireAuthKind(value: string): AiHarnessAuthKind {
   throw new Error('auth kind must be oauth, api-key, or vendor-cli');
 }
 
-export async function aiAccountAdd(options: { provider: string; label: string; auth: string; model?: string[]; credentialRef: string }): Promise<void> {
+/** Register a local account reference. Without a `label`, an API-key account
+ * is named by the email behind its key where the key's vendor exposes one
+ * (api-key-identity.ts), else `placeholder`, else the numbered placeholder.
+ * Returns the label it got. */
+export async function aiAccountAdd(options: { provider: string; label?: string; placeholder?: string; auth: string; model?: string[]; credentialRef: string }): Promise<string> {
   const provider = options.provider.trim();
-  const label = options.label.trim();
+  const given = options.label?.trim() ?? '';
   const credentialRef = options.credentialRef.trim();
-  if (!provider || !label || !credentialRef) throw new Error('provider, label, and local credential reference are required');
+  if (!provider || (options.label !== undefined && !given) || !credentialRef) throw new Error('provider, label, and local credential reference are required');
   const auth = requireAuthKind(options.auth);
   if (auth === 'oauth') {
     throw new Error('OAuth accounts must be created through the harness’s own sign-in flow; manual OAuth credential references are not supported.');
@@ -438,12 +443,24 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   const harness = localHarnessForProvider(provider);
   if (harness && !harness.localAuth.includes(auth)) throw new Error(`${harness.displayName} does not support local ${auth} accounts`);
   const state = await readState({ transcripts: [] });
-  if (state.accounts.some((account) => account.label.toLowerCase() === label.toLowerCase())) {
-    throw new Error(`a local AI account named "${label}" already exists`);
+  if (given && state.accounts.some((account) => account.label.toLowerCase() === given.toLowerCase())) {
+    throw new Error(`a local AI account named "${given}" already exists`);
   }
   if (state.accounts.some((account) => account.provider === provider && account.authKind === auth
     && account.credentialRef === credentialRef)) {
     throw new Error(`this ${provider} credential is already connected`);
+  }
+  let label = given;
+  if (!label) {
+    const envName = auth === 'api-key' ? credentialRef.slice('env:'.length) : undefined;
+    const identity = envName ? await apiKeyAccountEmail({ provider, envName, key: process.env[envName], harness }) : undefined;
+    // Labels are unique across every provider here (a label is how `accounts
+    // remove` and friends find an account), so the email's " (2)" counts all.
+    const everyone = state.accounts.map((account) => ({ ...account, provider }));
+    const naming = { provider, displayName: harness?.displayName ?? provider };
+    label = identity ? nameAccount(everyone, naming, identity)
+      : options.placeholder && !everyone.some((account) => account.label.toLowerCase() === options.placeholder!.toLowerCase()) ? options.placeholder
+        : nameAccount(everyone, naming);
   }
   const account: AiHarnessAccount = {
     id: randomUUID(), provider, label, authKind: auth, models: [...new Set(options.model ?? [])],
@@ -452,6 +469,7 @@ export async function aiAccountAdd(options: { provider: string; label: string; a
   state.accounts.push(account);
   await writeState(state);
   emitResult({ account: accountView(account), credentialBoundary: 'local-only' });
+  return label;
 }
 
 interface AccountRemoveOptions {

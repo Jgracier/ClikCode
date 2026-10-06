@@ -63,17 +63,17 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   accounts.command('logout <labelOrId>').description('Run vendor logout and retain the local alias as needs-login').action(aiAccountLogout);
   accounts.command('add').description('Register a local provider login reference; credentials remain on this device')
     .requiredOption('--provider <provider>', 'Harness (claude, codex) or provider id (anthropic, openai)')
-    .requiredOption('--label <label>', 'Local account alias')
+    .option('--label <label>', 'Local account alias (api-key: defaults to the email behind the key, where its vendor tells)')
     .requiredOption('--auth <kind>', 'api-key or vendor-cli; use the vendor login flow for OAuth')
     .option('--credential-ref <ref>', 'OS-keychain or vendor-CLI profile reference; never a token (vendor-cli: defaults to the CLI\'s own sign-in)')
     .option('--model <model...>', 'Model ids available through this account')
-    .action((options) => {
+    .action(async (options) => {
       const harness = localHarnessForCommand(options.provider);
       const provider = harness?.provider ?? options.provider;
       const credentialRef = options.credentialRef ?? (options.auth === 'vendor-cli' && (harness ?? localHarnessForProvider(provider))
         ? `native:${(harness ?? localHarnessForProvider(provider))!.binary}:default` : undefined);
       if (!credentialRef) throw new Error('--credential-ref is required for oauth and api-key accounts (api-key: env:<VARIABLE>)');
-      return aiAccountAdd({ ...options, provider, credentialRef });
+      await aiAccountAdd({ ...options, provider, credentialRef });
     });
   accounts.command('remove <labelOrId>').alias('rm').description('Remove a local account alias, not the provider credential').action(aiAccountRemove);
   program.command('models').description('List normalized models available through local accounts').action(aiModelsList);

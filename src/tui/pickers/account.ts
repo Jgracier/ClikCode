@@ -182,12 +182,9 @@ async function addApiKeyAccount(rl: HarnessPrompter, harness: AiLocalHarnessDefi
       await writeFile(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
     }
   }
-  const state = await readState({ transcripts: [] });
-  const existingForProvider = state.accounts.filter((account) => account.provider === harness.provider).length;
-  const label = `${harness.displayName} (${envName})`;
-  const finalLabel = state.accounts.some((account) => account.label === label) ? `${label} ${existingForProvider + 1}` : label;
-  await aiAccountAdd({ provider: harness.provider, label: finalLabel, auth: 'api-key', credentialRef: `env:${envName}` });
-  return finalLabel;
+  // Named by the email behind the key where its vendor exposes one
+  // (api-key-identity.ts); otherwise by the variable it lives in.
+  return aiAccountAdd({ provider: harness.provider, placeholder: `${harness.displayName} (${envName})`, auth: 'api-key', credentialRef: `env:${envName}` });
 }
 
 export async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocalHarnessDefinition): Promise<string | undefined> {
