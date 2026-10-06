@@ -582,20 +582,20 @@ export async function runVendorSignIn(input: {
     if (!changed) return;
     const prompt = readScreenPrompt(screen.state());
     if (!prompt) return;
-    const key = `${prompt.kind}:${prompt.kind === 'choice' ? prompt.title : prompt.prompt}`;
+    // A list is its options too: another list under the same title (a
+    // search's results, OpenClaw's `More…`) is a new question.
+    const key = `${prompt.kind}:${prompt.kind === 'choice' ? `${prompt.title}\n${prompt.choices.join('\n')}` : prompt.prompt}`;
     if (lastPrompt && lastPrompt.key === key && Date.now() - lastPrompt.at < REDRAW_MS) return;
     lastPrompt = { key, at: Date.now() };
-    let searched = false;
     void answer(async () => {
       if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret, prompt.optional)}\r`;
       const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
       const index = await ui.choose(prompt.title, choices, prompt.selected);
       if (index === undefined) return undefined;
-      // Typed into the vendor's own search; the filtered list is read next,
-      // under the same title -- not a redraw of the list just answered.
-      if (index === prompt.choices.length) { searched = true; return ui.ask(`Search ${prompt.title.replace(/:$/, '')}`, false); }
+      // Typed into the vendor's own search; the filtered list is read next.
+      if (index === prompt.choices.length) return ui.ask(`Search ${prompt.title.replace(/:$/, '')}`, false);
       return choiceKeys(prompt, index);
-    }).finally(() => { lastPrompt = searched ? undefined : { key, at: Date.now() }; schedule(); });
+    }).finally(() => { lastPrompt = { key, at: Date.now() }; schedule(); });
   };
   // A screen that never goes quiet (Vibe's animated welcome) is still read:
   // at least once a second while it keeps drawing.

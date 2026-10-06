@@ -243,6 +243,14 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     expect(screen.seen).toEqual(['choose Choose a provider: Alpha | Beta | Search for another…', 'ask Search Choose a provider', 'choose Choose a provider: Zeta | Zeta Two']);
   });
 
+  it('another list under the same title is a new question (OpenClaw\'s More…)', async () => {
+    const enter = 'while :; do k=$(dd bs=1 count=1 2>/dev/null | od -An -c | tr -d " "); [ "$k" = "\\\\r" ] && break; done\n';
+    const vendor = await script(`stty raw -echo\nprintf "Model/auth provider\\r\\n❯ OpenAI\\r\\n  More…\\r\\n"\n${enter}printf "\\033[2J\\033[HModel/auth provider\\r\\n❯ Cerebras\\r\\n  DeepSeek\\r\\n"\n${enter}`);
+    const screen = ui({ choose: [1, 1] });
+    await runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: screen.value });
+    expect(screen.seen).toEqual(['choose Model/auth provider: OpenAI | More…', 'choose Model/auth provider: Cerebras | DeepSeek']);
+  });
+
   it('a cancelled choice ends the vendor', async () => {
     const vendor = await script('printf "Continue? [Y/n] "\nread answer\nsleep 30\n');
     await expect(runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: ui({ choose: [] }).value }))
