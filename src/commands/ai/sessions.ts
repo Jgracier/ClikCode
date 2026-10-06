@@ -67,13 +67,12 @@ export async function chooseGatewayModel(value: string): Promise<string | null> 
   return found.id;
 }
 
-/** Store a /model picker choice on this Gateway conversation. The selected
- * agent is deliberately not passed to modelClientForSession: a model step is
- * not a durable platform-agent run. */
+/** Store the selected platform agent on this Gateway conversation. */
 export async function selectGatewayAgent(id: string, agentId: string | undefined): Promise<void> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || session.route !== 'gateway') throw new Error('Select a Gateway session before choosing an agent.');
+  if (agentId !== session.gatewayAgentId) delete session.gatewayAgentThreadId;
   if (agentId) session.gatewayAgentId = agentId;
   else delete session.gatewayAgentId;
   session.updatedAt = new Date().toISOString();
@@ -95,6 +94,7 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   session.provider = 'gateway';
   if (!keepModel) session.model = null;
   if (!keepModel) delete session.gatewayAgentId;
+  if (!keepModel) delete session.gatewayAgentThreadId;
   // A level chosen on the Gateway stays; one from a vendor harness means nothing here.
   if (!keepModel || !gatewayEffort(session)) session.effort = GATEWAY_DEFAULT_EFFORT;
   session.accountFailover = 'never';
@@ -131,6 +131,7 @@ export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
   // gatewayConfirmed marks an explicit Gateway choice; this is not one.
   delete session.gatewayConfirmed;
   delete session.gatewayAgentId;
+  delete session.gatewayAgentThreadId;
   shedVendorHarness(session);
 }
 
@@ -152,6 +153,7 @@ export function applyFreshLocalSessionPolicy(state: HarnessState, session: Harne
   session.accountFailover = defaults.accountFailover;
   delete session.gatewayConfirmed;
   delete session.gatewayAgentId;
+  delete session.gatewayAgentThreadId;
   shedVendorHarness(session);
 }
 
@@ -452,7 +454,10 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };
-  if (effectiveRoute !== 'gateway') delete next.gatewayAgentId;
+  if (effectiveRoute !== 'gateway') {
+    delete next.gatewayAgentId;
+    delete next.gatewayAgentThreadId;
+  }
   if (effectiveRoute === 'gateway' || effectiveRoute === 'clikcode-local') applyClikCodeAgentSessionPolicy(next, effectiveRoute);
   else if (account) {
     if (turnBackendForAccount(account) === 'vendor' && selectedHarness && harnessCanRunTurns(selectedHarness)) {

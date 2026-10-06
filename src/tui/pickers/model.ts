@@ -178,12 +178,10 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
 }
 
 /** A Gateway conversation's picker: account-private agents first, then the
- * Gateway's model list. An agent choice is stored locally until a separate
- * platform-agent execution path exists. */
+ * Gateway's model list. A selected agent runs on the platform agent lane. */
 type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string };
 
-/** Agent rows precede model rows. An agent remains a session selection only;
- * choosing a model changes the model and closes the picker. */
+/** Agent rows precede model rows. Choosing a model closes the picker. */
 export function gatewayPickerRows(list: GatewayModelList, agents: readonly GatewayAgent[], current: string | null, currentAgent?: string): PickerOption<GatewayChoice>[] {
   return [
     ...(agents.length || currentAgent ? [{ label: currentAgent ? 'No agent' : '✓ No agent', detail: '· use ClikCode with the Gateway model', value: { kind: 'agent' as const }, group: 'Agents' }] : []),
@@ -193,7 +191,10 @@ export function gatewayPickerRows(list: GatewayModelList, agents: readonly Gatew
       value: { kind: 'agent' as const, id: agent.id },
       group: 'Agents',
     })),
-    { label: 'Automatic', detail: `· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}${current ? '' : ' · current'}`, value: { kind: 'model' as const, id: 'auto' }, group: 'Models' },
+    { label: currentAgent ? 'Agent default' : 'Automatic', detail: currentAgent
+      ? `· use this agent's configured pin or router${current ? '' : ' · current'}`
+      : `· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}${current ? '' : ' · current'}`,
+      value: { kind: 'model' as const, id: 'auto' }, group: 'Models' },
     ...list.models.map((model) => {
       const price = gatewayModelDetail(model);
       return {
@@ -232,7 +233,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
     if (selected.kind === 'agent') {
       currentAgent = selected.id === currentAgent ? undefined : selected.id;
       await selectGatewayAgent(id, currentAgent);
-      if (currentAgent) rl.notice?.('Agent selected for this session. Platform agent execution is not connected yet.');
+      if (currentAgent) rl.notice?.('Agent selected for this session. Choose a model, or Automatic, to finish.');
       continue;
     }
     await aiSessionCommand(id, `/model ${selected.id}`);
