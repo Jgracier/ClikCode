@@ -7,6 +7,7 @@ import { renderInlineMarkdown, renderInlineMarkdownLive, renderTableBlock, split
 import { sanitizeTerminalText } from './text.js';
 import { terminalCellWidth } from './width.js';
 import { wrapCodeLine, wrapWords, wrapWordsLive } from './wrap.js';
+import { highlightLines, highlightsLanguage, type HighlightKind, type HighlightSpan } from './highlight.js';
 import type { MessageBlock } from '../../harness/prompter.js';
 import { clikCodeNoticeBody } from '../../session/clikcode-notice.js';
 
@@ -47,11 +48,17 @@ export function renderMessageBlocks(
     const quotePrefix = block.quoteDepth ? chalk.dim('│ '.repeat(block.quoteDepth)) : '';
     if (block.kind === 'code') {
       const structural = `${quotePrefix}${'  '.repeat(block.indent)}`;
-      for (const codeLine of [...(block.language ? [chalk.dim(`[${block.language}]`)] : []), ...block.lines]) {
-        const segments = wrapCodeLine(codeLine, Math.max(1, width - terminalCellWidth(structural) - 2));
-        for (const [segmentIndex, segment] of segments.entries()) {
+      const room = Math.max(1, width - terminalCellWidth(structural) - 2);
+      if (block.language && !block.headerless) rows.push(`${linePrefix()}${structural}  ${chalk.dim(`[${block.language}]`)}`);
+      // A language the highlighter knows is coloured by kind on the
+      // terminal's own palette; anything else stays one colour, as before.
+      const highlighted = highlightsLanguage(block.language) ? highlightLines(block.lines, block.language, block.before) : undefined;
+      for (const [lineIndex, codeLine] of block.lines.entries()) {
+        const segments = wrapCodeLine(codeLine, room);
+        const painted = highlighted && !codeLine.includes('\t') ? paintSegments(segments, highlighted[lineIndex]!) : segments.map((segment) => chalk.cyan(segment));
+        for (const [segmentIndex, segment] of painted.entries()) {
           const continuation = segmentIndex ? chalk.dim('↳ ') : '  ';
-          rows.push(`${linePrefix()}${structural}${continuation}${chalk.cyan(segment)}`);
+          rows.push(`${linePrefix()}${structural}${continuation}${segment}`);
         }
       }
       continue;
@@ -89,6 +96,36 @@ export function renderMessageBlocks(
     }
   }
   return rows;
+}
+
+/** Colours by highlight kind, on the 16 colours every terminal theme
+ * defines for itself: a light theme's green is still readable on it. */
+const CODE_COLOURS: Readonly<Record<HighlightKind, (text: string) => string>> = {
+  keyword: chalk.magenta, string: chalk.green, comment: chalk.gray, number: chalk.yellow, constant: chalk.yellow,
+  function: chalk.blue, type: chalk.cyan, property: chalk.blue, tag: chalk.red, attribute: chalk.yellow,
+  inserted: chalk.green, deleted: chalk.red, meta: chalk.cyan,
+};
+
+/** A wrapped code line's rows, each coloured by the spans that fall in it.
+ * The rows are consecutive slices of the line, so a span is cut where a row
+ * ends and carries on in the next. */
+function paintSegments(segments: readonly string[], spans: readonly HighlightSpan[]): string[] {
+  let span = 0;
+  let used = 0;
+  return segments.map((segment) => {
+    let out = '';
+    let left = segment.length;
+    while (left > 0 && span < spans.length) {
+      const current = spans[span]!;
+      const take = Math.min(left, current.text.length - used);
+      const text = current.text.slice(used, used + take);
+      out += current.kind ? CODE_COLOURS[current.kind](text) : text;
+      used += take;
+      left -= take;
+      if (used >= current.text.length) { span += 1; used = 0; }
+    }
+    return out;
+  });
 }
 
 /** How many whole messages' rows are kept: a long chat's scrollback window

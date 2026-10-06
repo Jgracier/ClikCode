@@ -119,8 +119,11 @@ export type MessageBlock =
   | { kind: 'heading'; text: string; level: number; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
   | { kind: 'rule'; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
   /** `open`: a fence whose closing line has not arrived yet, so a blank line
-   * inside it does not end it. */
-  | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean; open?: boolean }
+   * inside it does not end it. `before`: the lines of the same fence already
+   * written above these (a fence retired a line at a time), which decide how
+   * these are highlighted -- inside a comment or a string, say -- and
+   * `headerless` leaves out the language row they already had. */
+  | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean; open?: boolean; before?: readonly string[]; headerless?: boolean }
   | { kind: 'table'; header: string[]; rows: string[][]; align: Array<'left' | 'center' | 'right' | null>; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
   | { kind: 'list-item'; text: string; depth: number; ordered: boolean; number?: number; task: boolean; checked?: boolean; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean };
 

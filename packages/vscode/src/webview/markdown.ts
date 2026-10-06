@@ -8,11 +8,22 @@
  */
 import { Marked, type Token, type Tokens } from 'marked';
 import { pathIn } from './format';
+import { highlightLines, highlightsLanguage } from '../../../../src/tui/render/highlight.js';
 
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
 export function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]!);
+}
+
+/** A fence's code as escaped HTML, each highlighted span in a `tok-<kind>`
+ * span the stylesheet colours from the editor theme (styles.css). The same
+ * highlighter colours the terminal's fences. */
+export function highlightedCode(text: string, language: string): string {
+  if (!highlightsLanguage(language)) return escapeHtml(text);
+  return highlightLines(text.split('\n'), language)
+    .map((spans) => spans.map((span) => (span.kind ? `<span class="tok-${span.kind}">${escapeHtml(span.text)}</span>` : escapeHtml(span.text))).join(''))
+    .join('\n');
 }
 
 export function safeHref(href: string | null | undefined): string | undefined {
@@ -43,7 +54,7 @@ const marked = new Marked({
       const language = (lang ?? '').match(/^[\w+-]+/)?.[0] ?? '';
       return `<div class="codeblock"><div class="codebar"><span>${escapeHtml(language || 'text')}</span>`
         + '<button class="icon-button codecopy" data-copy title="Copy" aria-label="Copy code"><i class="codicon codicon-copy"></i></button></div>'
-        + `<pre class="code"${language ? ` data-lang="${escapeHtml(language)}"` : ''}><code>${escapeHtml(text)}</code></pre></div>`;
+        + `<pre class="code"${language ? ` data-lang="${escapeHtml(language)}"` : ''}><code>${highlightedCode(text, language)}</code></pre></div>`;
     },
     /** Inline code that is a path opens the file. */
     codespan({ text }: Tokens.Codespan): string {

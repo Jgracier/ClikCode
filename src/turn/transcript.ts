@@ -185,7 +185,7 @@ export class TurnTranscript {
     if (this.openCodeLines > 0 && head) {
       if (head.kind === 'code') {
         const owed = head.lines.slice(this.openCodeLines);
-        settled = owed.length ? [{ ...head, lines: owed, language: undefined }, ...settled.slice(1)] : settled.slice(1);
+        settled = owed.length ? [{ ...head, lines: owed, before: head.lines.slice(0, this.openCodeLines), headerless: true }, ...settled.slice(1)] : settled.slice(1);
         if (!owed.length) headJoined = false;
       }
       this.openCodeLines = 0;
@@ -229,14 +229,14 @@ export class TurnTranscript {
       this.openProseRows = 0;
       const complete = open.lines.slice(this.openCodeLines, open.lines.length - 1);
       if (complete.length) {
-        const head = { ...open, lines: complete, ...(this.openCodeLines ? { language: undefined } : {}) };
+        const head = { ...open, lines: complete, before: open.lines.slice(0, this.openCodeLines), ...(this.openCodeLines ? { headerless: true } : {}) };
         const rows = continuing([head], !this.started, this.openSeparated);
         if (rows.length) { this.started = true; this.openSeparated = true; this.lastBlock = open; }
         finished.push(...rows);
         this.openCodeLines = open.lines.length - 1;
       }
       live = continuing(
-        [{ ...open, lines: [open.lines[open.lines.length - 1]!], ...(this.openCodeLines ? { language: undefined } : {}) }],
+        [{ ...open, lines: [open.lines[open.lines.length - 1]!], before: open.lines.slice(0, -1), ...(this.openCodeLines ? { headerless: true } : {}) }],
         !this.started, this.openSeparated, renderLive,
       );
     } else if (open && open.kind !== 'code') {

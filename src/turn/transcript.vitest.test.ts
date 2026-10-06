@@ -161,7 +161,7 @@ describe('a tool lands where it happened', () => {
 describe('an open code fence retires a line at a time', () => {
   const renderBlocks = (blocks: readonly MessageBlock[]): string[] =>
     blocks.flatMap((block) => (block.kind === 'code'
-      ? [...(block.language ? [`[${block.language}]`] : []), ...block.lines] : text([block])));
+      ? [...(block.language && !block.headerless ? [`[${block.language}]`] : []), ...block.lines] : text([block])));
 
   it('writes every completed line once, and the header once', () => {
     // A fence taller than the viewport could never retire its head rows while
