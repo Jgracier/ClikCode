@@ -51,6 +51,16 @@ const COMMUNICATION = `# Communication
 - An <environment> block in a user message is the harness reporting the date and git state at that moment, not text the user typed.
 - ${CONVERSATION_TOOLS_NOTE}`;
 
+/** How an answer is laid out, as Claude Code and Codex ask of their models:
+ * the screen renders Markdown, and a model left to itself answers in walls
+ * of bold or nested bullets that read worse there than in a chat app. */
+const FORMATTING = `# Formatting answers
+- Answers are shown in a terminal or an editor panel that renders GitHub-flavored Markdown in a monospace font.
+- A short answer is a few plain sentences. Add structure only when it helps: a short \`##\` heading per section of a longer answer, \`-\` bullets for parallel items (flat, one level of nesting at most), numbered lists for ordered steps, a table only for a real comparison.
+- Code, commands and file contents go in fenced code blocks with a language tag (\`\`\`ts, \`\`\`bash). Identifiers, paths, commands and values go in \`inline code\`.
+- Refer to files as \`src/app.ts:42\`, relative to the working directory.
+- No emojis, no decorative rules, and no bold for whole sentences.`;
+
 /** Minimal's replacement for the "Editing files" and "Shell" sections: the
  * rules there that no tool description carries. */
 const SAFETY_WITHOUT_TOOL_SECTIONS = `${SAFETY}
@@ -60,8 +70,8 @@ const SAFETY_WITHOUT_TOOL_SECTIONS = `${SAFETY}
 /** The fixed instructions at the head of the system prompt. */
 export function staticInstructions(toolUsageGuidance = true): string {
   return (toolUsageGuidance
-    ? [INTRO, WORKING_METHOD, EDITING_FILES, SHELL, SAFETY, COMMUNICATION]
-    : [INTRO, WORKING_METHOD, SAFETY_WITHOUT_TOOL_SECTIONS, COMMUNICATION]).join('\n\n');
+    ? [INTRO, WORKING_METHOD, EDITING_FILES, SHELL, SAFETY, COMMUNICATION, FORMATTING]
+    : [INTRO, WORKING_METHOD, SAFETY_WITHOUT_TOOL_SECTIONS, COMMUNICATION, FORMATTING]).join('\n\n');
 }
 
 export const PLAN_MODE_INSTRUCTIONS = `# Plan mode is ACTIVE
