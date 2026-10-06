@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
 import type { AiHarnessAccount } from './definition.js';
-import { localServerDown, provisionChosenHarness, skillRoot } from './provision.js';
+import { listSharedMcpServers, localServerDown, provisionChosenHarness, removeSharedMcpServer, skillRoot } from './provision.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
 import { mcpServerNeedsSignIn } from './mcp-sign-in.js';
@@ -341,5 +341,63 @@ describe('a remote MCP server that needs a browser sign-in', () => {
   it('asks only a server on this machine whether it is down', async () => {
     expect(await localServerDown('https://mcp.figma.com/mcp')).toBe(false);
     expect(await localServerDown('http://127.0.0.1:1/mcp')).toBe(true);
+  });
+});
+
+describe('clikcode mcp list and remove', () => {
+  it("lists ClikCode's servers with where it gave each, and remove takes back only ClikCode's copies", async () => {
+    const { home, state, workspace } = await layout();
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    await writeFile(join(home, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { mine: { command: 'echo' } } }));
+    await writeFile(join(state, 'mcp.json'), JSON.stringify({
+      mcpServers: { fresh: { command: 'npx', args: ['-y', 'fresh-mcp'] }, mine: { command: 'npx', args: ['-y', 'mine'] } },
+    }));
+    const install: NonNullable<Parameters<typeof provisionChosenHarness>[0]['install']> = async (_harness, entry) => {
+      await writeMcpConfigEntry(join(home, '.cursor', 'mcp.json'), 'mcpServers', entry);
+      return { harness: 'cursor', ok: true };
+    };
+    const owner = account(home);
+    await provisionChosenHarness({ harness: cursor, account: owner, workspace, stateDir: state, home, install });
+
+    const listed = await listSharedMcpServers(state);
+    expect(listed.servers.map((server) => [server.name, server.target, server.copies])).toEqual([
+      ['fresh', 'npx', [{ harness: 'cursor', accountId: 'acct' }]],
+      ['mine', 'npx', []],
+    ]);
+
+    const removedFrom: string[] = [];
+    const remove: NonNullable<Parameters<typeof removeSharedMcpServer>[1]['remove']> = async (harness, name, acct) => {
+      removedFrom.push(`${harness.command}:${acct?.id}:${name}`);
+      return { harness: harness.command, ok: true };
+    };
+    // The user's own `mine` in Cursor was never ClikCode's: only mcp.json changes.
+    expect(await removeSharedMcpServer('mine', { accounts: [owner], stateDir: state, home, remove }))
+      .toEqual({ unrecorded: true, takenBack: [], failed: [] });
+    expect(removedFrom).toEqual([]);
+    expect(await removeSharedMcpServer('fresh', { accounts: [owner], stateDir: state, home, remove }))
+      .toEqual({ unrecorded: true, takenBack: [{ harness: 'cursor', accountId: 'acct' }], failed: [] });
+    expect(removedFrom).toEqual(['cursor:acct:fresh']);
+    expect((await listSharedMcpServers(state)).servers).toEqual([]);
+    expect(await removeSharedMcpServer('fresh', { accounts: [owner], stateDir: state, home, remove }))
+      .toEqual({ unrecorded: false, takenBack: [], failed: [] });
+  });
+
+  it('keeps the record of a copy it could not take back, and drops one whose account is gone', async () => {
+    const { home, state, workspace } = await layout();
+    await mkdir(join(home, '.cursor'), { recursive: true });
+    await writeFile(join(state, 'mcp.json'), JSON.stringify({ mcpServers: { fresh: { command: 'npx' } } }));
+    const install: NonNullable<Parameters<typeof provisionChosenHarness>[0]['install']> = async (_harness, entry) => {
+      await writeMcpConfigEntry(join(home, '.cursor', 'mcp.json'), 'mcpServers', entry);
+      return { harness: 'cursor', ok: true };
+    };
+    await provisionChosenHarness({ harness: cursor, account: account(home), workspace, stateDir: state, home, install });
+    const refused = await removeSharedMcpServer('fresh', {
+      accounts: [account(home)], stateDir: state, home, remove: async () => ({ harness: 'cursor', ok: false, detail: 'locked' }),
+    });
+    expect(refused.failed).toEqual([{ harness: 'cursor', accountId: 'acct', detail: 'locked' }]);
+    expect(JSON.parse(await readFile(join(state, 'mcp-provision.json'), 'utf8'))).toHaveProperty(['cursor\0acct\0fresh']);
+    const gone = await removeSharedMcpServer('fresh', { accounts: [], stateDir: state, home, remove: async () => { throw new Error('not called'); } });
+    expect(gone).toEqual({ unrecorded: false, takenBack: [], failed: [] });
+    expect(JSON.parse(await readFile(join(state, 'mcp-provision.json'), 'utf8'))).not.toHaveProperty(['cursor\0acct\0fresh']);
   });
 });

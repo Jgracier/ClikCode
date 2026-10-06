@@ -6,7 +6,7 @@
 import { untilStopped } from './stop-signal.js';
 import type { Command } from 'commander';
 import { acpAdd, acpList, acpRemove } from '../commands/acp.js';
-import { mcpAdd, mcpTargets } from '../commands/mcp.js';
+import { mcpAdd, mcpList, mcpRemove, mcpTargets } from '../commands/mcp.js';
 import type Conf from 'conf';
 import { sendScriptedTurn } from '../worker/scripted-send.js';
 import { aiPermissions } from '../tui/pickers/permissions.js';
@@ -115,6 +115,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     // A server's own flags (`--browser chrome`) are its arguments, not ours.
     .allowUnknownOption()
     .action((name: string, target: string, args: string[]) => mcpAdd(name, target, args));
+  mcp.command('list')
+    .description('List the MCP servers recorded in ClikCode, and the harnesses ClikCode has given each')
+    .action(mcpList);
+  mcp.command('remove <name>')
+    .description('Remove a server from ClikCode, and take ClikCode\'s own copies back out of every harness (never one you added there)')
+    .action(mcpRemove);
   mcp.command('targets')
     .description('Show how each harness would be given a server, when you choose it')
     .action(mcpTargets);

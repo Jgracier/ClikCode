@@ -14,15 +14,16 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
 import {
-  installMcpOnHarness, isRemoteTarget, mcpHeadersReachHarness, removeMcpFromHarness, type McpServerEntry,
+  installMcpOnHarness, isRemoteTarget, mcpHeadersReachHarness, removeMcpConfigEntry, removeMcpFromHarness, type McpServerEntry,
 } from './mcp-registry.js';
 import { mcpServerNeedsSignIn, type McpSignInAnswer } from './mcp-sign-in.js';
 import { npxRoots, withoutNpx, type NpxRoots } from './npx-bin.js';
-import { loadMcpServers, type McpServerSpec } from '../agent/mcp/config.js';
+import { loadMcpServers, MCP_SERVERS_KEY, mcpConfigFilePath, type McpServerSpec } from '../agent/mcp/config.js';
 import { importedFromCommand, vendorMcpServerNames, vendorMcpServerUrls } from '../agent/mcp/import.js';
 import { discoverSkills, type Skill } from '../agent/skills.js';
 import { objectOrEmpty, updateJsonFile } from '../session/store/json-file.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 
 /** `<dir>/<name>/SKILL.md`, checked against a real install of that harness. */
 const USER_SKILL_DIR: Record<string, readonly string[]> = {
@@ -346,4 +347,74 @@ async function rememberProvisioned(stateDir: string, input: ProvisionInput, name
 async function forgetProvisioned(stateDir: string, input: ProvisionInput, name: string): Promise<void> {
   const key = provisionKey(input, name);
   await changeMarker(stateDir, (marker) => key in marker && delete marker[key]);
+}
+
+/** One copy ClikCode wrote: the harness and the account whose profile has it
+ * (no account: the user's own home). */
+export interface ProvisionedCopy { harness: string; accountId?: string }
+
+/** The copies of each server ClikCode itself wrote, by the record every write
+ * leaves in mcp-provision.json. */
+async function provisionedCopies(stateDir: string): Promise<Map<string, ProvisionedCopy[]>> {
+  const copies = new Map<string, ProvisionedCopy[]>();
+  for (const key of Object.keys(await readMarker(stateDir))) {
+    const [harness, accountId, name, extra] = key.split('\0');
+    if (harness === 'legacy' || !harness || name === undefined || extra !== undefined) continue;
+    copies.set(name, [...copies.get(name) ?? [], { harness, ...(accountId ? { accountId } : {}) }]);
+  }
+  return copies;
+}
+
+/** `clikcode mcp list`: ClikCode's servers (its mcp.json) and where it has
+ * copied each one. */
+export async function listSharedMcpServers(stateDir: string = stateDirectory()): Promise<{
+  servers: Array<McpServerEntry & { copies: ProvisionedCopy[] }>; problem?: string;
+}> {
+  const loaded = await loadMcpServers(stateDir);
+  const copies = await provisionedCopies(stateDir);
+  return {
+    servers: loaded.servers.map((spec) => ({ ...specToEntry(spec), copies: copies.get(spec.name) ?? [] })),
+    ...(loaded.problem ? { problem: loaded.problem } : {}),
+  };
+}
+
+export interface McpRemoveResult {
+  /** It was in ClikCode's mcp.json, and is not now. */
+  unrecorded: boolean;
+  takenBack: ProvisionedCopy[];
+  failed: Array<ProvisionedCopy & { detail?: string }>;
+}
+
+/** `clikcode mcp remove`: ClikCode's own copies of one server come back out
+ * of every vendor it gave them to, by the same take-back provisioning uses,
+ * and then the server leaves ClikCode's mcp.json. Only a copy the record says
+ * ClikCode wrote is touched: one the user put in a vendor is theirs. A copy
+ * in a profile whose account is gone goes with the profile; only its record
+ * is dropped. */
+export async function removeSharedMcpServer(name: string, input: {
+  accounts: readonly AiHarnessAccount[];
+  stateDir?: string;
+  home?: string;
+  remove?: typeof removeMcpFromHarness;
+}): Promise<McpRemoveResult> {
+  const stateDir = input.stateDir ?? stateDirectory();
+  const home = input.home ?? homedir();
+  const takenBack: ProvisionedCopy[] = [];
+  const failed: McpRemoveResult['failed'] = [];
+  for (const copy of (await provisionedCopies(stateDir)).get(name) ?? []) {
+    const harness = localHarnessForCommand(copy.harness);
+    const account = copy.accountId ? input.accounts.find((item) => item.id === copy.accountId) : undefined;
+    const forget = (): Promise<void> => changeMarker(stateDir, (marker) => {
+      const key = `${copy.harness}\0${copy.accountId ?? ''}\0${name}`;
+      return key in marker && delete marker[key];
+    });
+    if (!harness || (copy.accountId && !account)) { await forget(); continue; }
+    const removed = await (input.remove ?? removeMcpFromHarness)(harness, name, account, home);
+    if (removed.ok) {
+      takenBack.push(copy);
+      await forget();
+    } else failed.push({ ...copy, ...(removed.detail ? { detail: removed.detail } : {}) });
+  }
+  const unrecorded = await removeMcpConfigEntry(mcpConfigFilePath(stateDir), MCP_SERVERS_KEY, name);
+  return { unrecorded, takenBack, failed };
 }
