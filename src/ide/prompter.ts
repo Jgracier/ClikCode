@@ -61,9 +61,12 @@ export class IdePrompter implements HarnessPrompter {
     return {
       signal: controller.signal,
       show: (link) => this.channel.send({ type: 'sign-in-link', id, name, url: link.url, ...(link.code ? { code: link.code } : {}) }),
-      ask: async (prompt, secret) => {
+      ask: async (prompt, secret, _optional, alongside) => {
         const result = await this.ask({ kind: 'input', prompt, ...(secret ? { secret: true } : {}) });
         if ('text' in result) return result.text;
+        // A key offered beside the browser sign-in, dismissed: that sign-in
+        // goes on.
+        if (alongside) return new Promise<string>(() => undefined);
         controller.abort();
         return '';
       },

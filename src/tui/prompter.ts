@@ -5,7 +5,7 @@
 
 import chalk from 'chalk';
 import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
-import type { LoginLink, SignInScreen } from '../gateway/login/vendor-sign-in.js';
+import { isKeyShaped, type LoginLink, type SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import { pastedText } from './keys.js';
 import { backslashNewline, composerVerticalMove, editComposer, editWaitingComposer } from './composer-edit.js';
@@ -164,7 +164,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private signInLines: string[] = [];
   /** What the waiting composer is for while a sign-in asks for a code or a
    * key: Enter hands the draft here instead of to the turn. */
-  private signInInput?: { secret: boolean; optional?: boolean; submit: (text: string) => void };
+  private signInInput?: { secret: boolean; optional?: boolean; alongside?: boolean; submit: (text: string) => void };
   /** A sign-in is up: the wait is on the user, in their browser, so the band
    * holds still as it does for an approval -- the clock ticks, nothing spins. */
   private signingIn = false;
@@ -400,7 +400,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.cancel?.(restoreDraft);
     } else if (key === '\u001a') {
       this.suspendToShell();
-    } else if (key === '\r' && this.signInInput) {
+    } else if (key === '\r' && this.signInInput && (!this.signInInput.alongside || isKeyShaped(turn.draft.trim()) || (!turn.draft.trim() && this.signInInput.optional))) {
+      // A key pasted beside the vendor's sign-in is the sign-in's; anything
+      // else typed there is the user's next message (the branch below).
       const text = turn.draft.trim();
       // A stray Enter answers nothing -- unless the question takes none (a
       // key-first sign-in's Enter for the vendor's own providers).
@@ -1022,16 +1024,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const cancel = (): void => controller.abort();
     const local = hasLocalDisplay();
     let opened = false;
+    // The band: the link's lines, then the key offered beside it (alongside).
+    let linkLines: string[] = [];
+    let hint: string | undefined;
+    const band = (): void => {
+      this.signInLines = [...linkLines, ...(hint ? [hint] : [])];
+      this.updateWaiting();
+    };
     const show = (link: LoginLink): void => {
       if (local && !opened) { opened = true; openLoginUrl(link.url); }
       if (!local) output.write(loginUrlNotice(link.url).clipboard);
-      this.signInLines = [
+      linkLines = [
         `${chalk.bold(`Sign in to ${name}`)}${link.code ? ` · confirm the code ${chalk.bold(link.code)}` : ''}`,
         // Its own plain line: the band wraps a link rather than cutting it.
         link.url,
         chalk.dim(local ? 'opened in your browser' : 'link copied: open it on this device'),
       ];
-      this.updateWaiting();
+      band();
     };
     // A code or key typed under the link: the waiting composer takes it, and
     // the band says what it is for.
@@ -1044,22 +1053,27 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (live && aside) { live.draft = aside.draft; live.cursor = aside.cursor; }
       aside = undefined;
     };
-    const ask = (prompt: string, secret: boolean, optional?: boolean): Promise<string> => new Promise((resolve) => {
+    // Beside the vendor's sign-in (alongside): a line under its link, and
+    // the composer left as it is -- the wait's label still says what it waits on.
+    const ask = (prompt: string, secret: boolean, optional?: boolean, alongside?: boolean): Promise<string> => new Promise((resolve) => {
       const live = this.turn;
-      if (live) {
+      hint = alongside ? chalk.dim(`${prompt} · paste it and press Enter`) : undefined;
+      if (live && !alongside) {
         aside ??= { draft: live.draft, cursor: live.cursor };
         live.draft = ''; live.cursor = 0; live.label = `${prompt} · type it and press Enter`;
       }
       this.signInInput = {
-        secret, optional,
+        secret, optional, alongside,
         submit: (text) => {
           this.signInInput = undefined;
+          hint = undefined;
           putBack();
           if (this.turn) this.turn.label = label;
+          band();
           resolve(text);
         },
       };
-      this.updateWaiting();
+      band();
     });
     const turn = this.turn;
     const saved = turn ? { label: turn.label, cancel: turn.cancel, cancelled: turn.cancelled } : undefined;
@@ -1088,7 +1102,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // An unanswered code is dropped; what was typed for the conversation
         // stays in the composer -- the turn's, or (outside one) the prompt's
         // that opens next, by stopWaiting.
-        if (this.signInInput && this.turn) { this.turn.draft = ''; this.turn.cursor = 0; }
+        if (this.signInInput && !this.signInInput.alongside && this.turn) { this.turn.draft = ''; this.turn.cursor = 0; }
         this.signInInput = undefined;
         putBack();
         this.signingIn = false;
@@ -1591,7 +1605,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * Without this a command was invisible AND unavailable while an answer
    * streamed; `/model` went to the model as the word "/model". */
   private paintWaiting(turn: WaitingTurn): void {
-    if (this.signInInput) {
+    if (this.signInInput && (!this.signInInput.alongside || isKeyShaped(turn.draft))) {
       this.paint(this.signInInput.secret ? '•'.repeat(turn.draft.length) : turn.draft, [], 0, '› ', turn.cursor);
       return;
     }

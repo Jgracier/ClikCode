@@ -142,9 +142,10 @@ export async function accountFirst(
   const take = (key: string): void => { instead = key; stop.abort(); answered(); };
   // Each ask replaces the one before on the screen; only the latest counts.
   let current = 0;
+  let withdrawn = false;
   const openField = (): void => {
     const asked = ++current;
-    void screen.ask(offer.prompt, true, offer.others).then((text) => {
+    void screen.ask(offer.prompt, true, offer.others, true).then((text) => {
       if (asked === current && !signal.aborted) take(text.trim());
     });
   };
@@ -158,8 +159,10 @@ export async function accountFirst(
     },
     ask: async (prompt, secret, optional) => {
       const asked = ++current;
-      // A key question of the vendor's own (Continue's) is already the field.
-      if (secret) return screen.ask(prompt, secret, optional);
+      // A key question of the vendor's own (Continue's) is already the field,
+      // and once it is answered nothing more is offered beside the vendor.
+      if (secret) withdrawn = true;
+      if (withdrawn) return screen.ask(prompt, secret, optional);
       const text = await screen.ask(`${prompt} · or paste your ${name} API key`, secret, optional);
       if (asked === current && text.trim() && await offer.isKey(text.trim())) { take(text.trim()); return ''; }
       if (!signal.aborted) openField();
