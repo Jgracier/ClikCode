@@ -53,6 +53,23 @@ export function providerChoosesModel(providerId: string | undefined): boolean {
   return providerCache?.find((item) => item.id === providerId)?.choosesModel ?? true;
 }
 
+/** The name the model menu last listed for a Gateway agent: the account's
+ * roster is never stored, so before the menu first opens it is unknown. */
+export function agentName(agentId: string | undefined): string | undefined {
+  return agentId ? modelCache.get('gateway')?.agents?.find((agent) => agent.id === agentId)?.name : undefined;
+}
+
+/** Choosing an agent row: the chosen one becomes the chat's agent, or, when it
+ * already is, the chat has none. Returns the list with its mark moved and the
+ * choice that makes it so. */
+export function toggleAgent(list: IdeModels | undefined, agentId: string): { list: IdeModels | undefined; choice: IdeChoice } {
+  const next = list?.agents?.find((agent) => agent.id === agentId)?.current ? null : agentId;
+  return {
+    list: list && { ...list, agents: list.agents?.map((agent) => ({ ...agent, current: agent.id === next })) },
+    choice: { kind: 'agent', agent: next },
+  };
+}
+
 /** `provider`: the providers alone; choosing one switches to it on its
  * default model. `model`: the current provider's models, so the list is
  * always the provider's the chat is on. */
@@ -95,6 +112,21 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
     choose(choice).catch((failure: Error) => props.onError(failure.message));
   };
 
+  // An agent is a step, not the end: choosing one marks it and keeps the menu open for a model
+  // (or Automatic), which closes it — the terminal's /model. Choosing the marked agent clears it.
+  const chooseAgent = (agentId: string): void => {
+    const before = models;
+    const { list, choice } = toggleAgent(models, agentId);
+    setModels(list);
+    if (drill && list) modelCache.set(drill, list);
+    choose(choice).catch((failure: Error) => {
+      setModels(before);
+      if (drill && before) modelCache.set(drill, before);
+      props.onError(failure.message);
+    });
+    input.current?.focus();
+  };
+
   const provider = providers?.find((item) => item.id === drill);
   const query = search.trim().toLowerCase();
 
@@ -102,7 +134,25 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
     if (drill) {
       const list = models?.models ?? [];
       const matching = list.filter((item) => !query || item.label.toLowerCase().includes(query) || item.id.toLowerCase().includes(query) || item.detail?.toLowerCase().includes(query));
-      const result: ListRow[] = matching.map((item) => ({
+      const agents = (models?.agents ?? []).filter((agent) => !query || agent.name.toLowerCase().includes(query) || agent.detail?.toLowerCase().includes(query));
+      const result: ListRow[] = [];
+      if (agents.length) {
+        result.push({ key: 'h:agents', heading: true, render: () => <>Agents<span class="count">{agents.length}</span></> });
+        for (const agent of agents) {
+          result.push({
+            key: `a:${agent.id}`,
+            onSelect: () => chooseAgent(agent.id),
+            render: () => (
+              <div class="row" title={agent.current ? 'Selected: choose again to clear' : undefined}>
+                <span class="row-check">{agent.current ? <Icon name="check" /> : <Icon name="hubot" />}</span>
+                <span class="row-main"><span class="row-label">{agent.name}</span>{agent.detail ? <span class="row-detail">{agent.detail}</span> : null}</span>
+              </div>
+            ),
+          });
+        }
+        if (matching.length) result.push({ key: 'h:models', heading: true, render: () => <>Models<span class="count">{matching.length}</span></> });
+      }
+      result.push(...matching.map((item) => ({
         key: `m:${item.id}`,
         disabled: Boolean(item.unavailable),
         onSelect: () => apply(drill, item.id),
@@ -112,7 +162,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
             <span class="row-main"><span class="row-label">{rowLabel(item, drill, provider?.name)}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
           </div>
         ),
-      }));
+      })));
       if (models?.custom && query && !list.some((item) => item.id.toLowerCase() === query)) {
         result.push({
           key: 'custom', onSelect: () => apply(drill, search.trim()),
@@ -164,6 +214,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       {drill && props.model.chatSettings?.effort ? <EffortBar model={props.model} onError={props.onError} /> : null}
       {error ? <div class="picker-error">{error}</div> : null}
       {drill && models?.error ? <div class="picker-error">{models.error}</div> : null}
+      {drill && models?.agentsError ? <div class="picker-error">Could not load your agents: {models.agentsError}</div> : null}
       {!providers && !error ? <div class="picker-loading"><Icon name="loading" spin /> Loading providers…</div> : null}
       <KeyList id="picker-list" rows={rows} label={drill ? 'Models' : 'Providers'} inputRef={input} onEscape={props.onClose}
         emptyText={drill ? (loading ? 'Finding models…' : 'No models match.') : providers ? 'No providers match.' : undefined} />

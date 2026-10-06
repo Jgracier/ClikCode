@@ -13,6 +13,7 @@ import { turnFacts } from '../session/conversation-state.js';
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
 import { savedGatewayModels, gatewayModels, gatewayModelDetail } from '../gateway/models.js';
+import { gatewayAgents } from '../gateway/agents.js';
 import { gatewayEffort, GATEWAY_EFFORTS } from '../gateway/options.js';
 import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
@@ -105,10 +106,20 @@ export async function providerList(config: Conf, state: HarnessState, session: H
 /** A provider's models, as its /model picker lists them. */
 export async function modelList(config: Conf, state: HarnessState, session: HarnessSession | undefined, provider: string): Promise<IdeModels> {
   if (provider === GATEWAY_ID) {
+    // The roster is private to the key's account and never cached: asked beside the models, and a
+    // roster that cannot be read still leaves the models choosable (as the terminal's picker).
+    const roster = gatewayAgents({ config }).then(
+      (agents) => ({ agents, agentsError: undefined }),
+      (error: unknown) => ({ agents: [], agentsError: error instanceof Error ? error.message : String(error) }),
+    );
     const list = await savedGatewayModels({ config }) ?? await gatewayModels({ config, fresh: true });
+    const { agents, agentsError } = await roster;
     const current = session && isGatewayService(session) ? session.model ?? undefined : undefined;
+    const currentAgent = session?.route === 'gateway' ? session.gatewayAgentId : undefined;
     return {
       provider, custom: false,
+      agents: agents.map((agent) => ({ id: agent.id, name: agent.name, ...(agent.description ? { detail: agent.description } : {}), current: agent.id === currentAgent })),
+      ...(agentsError ? { agentsError } : {}),
       models: [
         { id: 'auto', label: 'Automatic', detail: `the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}`, current: session?.route === 'gateway' && !current },
         ...list.models.map((model) => ({ id: model.id, label: model.id, ...(gatewayModelDetail(model) ? { detail: gatewayModelDetail(model) } : {}), current: model.id === current })),

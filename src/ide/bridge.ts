@@ -39,6 +39,7 @@ import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harne
 import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
 import { isShellCommandLine } from '../commands/ai/shell-run.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
+import { selectGatewayAgent } from '../commands/ai/sessions.js';
 import { dispatchLine, type SlashHost } from '../tui/slash/dispatch.js';
 import { slashPalette } from '../tui/slash/registry.js';
 import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
@@ -695,6 +696,14 @@ export class IdeBridge {
           const { session } = await this.current();
           const line = session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`;
           await setting(line);
+          done();
+          return;
+        }
+        case 'agent': {
+          // The terminal picker's own step: the chat stays on the Gateway and its next turn runs as
+          // the agent; a different agent starts a fresh agent thread.
+          await selectGatewayAgent(this.requireSession(), choice.agent ?? undefined);
+          await this.emitSession();
           done();
           return;
         }

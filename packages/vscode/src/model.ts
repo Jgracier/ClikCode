@@ -141,6 +141,8 @@ export interface ChatModel {
   /** The bridge's label for a model, from the last `session` event. */
   modelLabel?: IdeModelLabel;
   account?: string;
+  /** The Gateway agent this chat runs as (its id; the model menu has its name). */
+  agentId?: string;
   effort?: string;
   permissions?: string;
   route?: string;
@@ -255,6 +257,7 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     providerId: providerIdOf(session),
     model: session.reported?.model ?? session.model ?? undefined,
     account,
+    agentId: session.route === 'gateway' ? session.gatewayAgentId : undefined,
     effort: session.route === 'gateway' ? undefined : session.effort || undefined,
     // What an agent may do to this machine applies on every route, the
     // Gateway's included: ClikCode's own agent asks before it edits.

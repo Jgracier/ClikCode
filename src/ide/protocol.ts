@@ -124,9 +124,23 @@ export interface IdeModel {
   unavailable?: string;
 }
 
+/** A Gateway agent private to the connected account (`GET /v1/agents`). */
+export interface IdeAgent {
+  id: string;
+  name: string;
+  detail?: string;
+  /** Selected for this chat: its turns run as this agent. */
+  current: boolean;
+}
+
 export interface IdeModels {
   provider: string;
   models: IdeModel[];
+  /** The Gateway only: the account's agents, listed before its models. Never
+   * cached by the editor across accounts; the bridge asks with the current key. */
+  agents?: IdeAgent[];
+  /** Why the agent roster could not be read; the models still list. */
+  agentsError?: string;
   /** The terminal offers "Enter a model ID…" here. */
   custom: boolean;
   error?: string;
@@ -211,6 +225,8 @@ export type IdeChoice =
    * then optionally a model on it. */
   | { kind: 'provider'; provider: string; model?: string }
   | { kind: 'model'; model: string }
+  /** Run this Gateway chat as one of the account's agents; null for none. */
+  | { kind: 'agent'; agent: string | null }
   | { kind: 'effort'; value: string }
   | { kind: 'permissions'; value: string }
   | { kind: 'failover'; value: 'auto' | 'never' }
