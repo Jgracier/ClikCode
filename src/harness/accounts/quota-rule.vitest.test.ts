@@ -64,6 +64,17 @@ describe('can an account take a turn now', () => {
     expect(accountCanTakeTurn(account({ provider: 'antigravity', quotaState: 'exhausted' }), now)).toBe(true);
   });
 
+  it('does not let a reading of only advisory windows clear a refusal', () => {
+    // Antigravity's pools, Cline's credits: shown, never what says there is room.
+    const pools = account({
+      provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: minutes(-30),
+      usage: reading(minutes(-1), [{ name: 'gemini', usedPct: 20, resetsAt: minutes(100), advisory: true } as never]),
+    });
+    expect(accountCanTakeTurn(pools, now)).toBe(false);
+    expect(settleQuotaMark(pools, now)).toBe(false);
+    expect(pools.quotaState).toBe('exhausted');
+  });
+
   it('keeps a spent window with no reset until a newer reading says otherwise', () => {
     const spent = account({ usage: reading(minutes(-5), [{ name: '5h', usedPct: 100 }]) });
     expect(accountCanTakeTurn(spent, now)).toBe(false);
