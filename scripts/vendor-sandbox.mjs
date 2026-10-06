@@ -58,11 +58,13 @@ const env = {
   CLIKCODE_HOME: join(home, '.clikcode'),
   // Vendor CLIs ClikCode installed for the user stay runnable.
   PATH: [join(realHome, '.clikcode', 'tools', 'npm', 'bin'), process.env.PATH].join(':'),
-  // The OS keyring is no file under HOME: a key typed into Gemini's or
-  // Goose's sign-in here went into the user's own keyring (and replaced
-  // Gemini's stored key). Both keep it in a file instead when told to.
+  // The OS keyring is no file under HOME: a key typed into Gemini's,
+  // Vibe's or Goose's sign-in here went into the user's own keyring (and
+  // replaced the key stored there). Each keeps it in a file instead when
+  // told to.
   GEMINI_FORCE_FILE_STORAGE: 'true',
   GOOSE_DISABLE_KEYRING: '1',
+  VIBE_TEST_DISABLE_KEYRING: '1',
 };
 for (const [name, fallback] of Object.entries(HOME_REDIRECT_ENV_DEFAULTS)) {
   if (fallback && env[name] === undefined) env[name] = fallback.replace(/^~/, realHome);
