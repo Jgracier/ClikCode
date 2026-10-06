@@ -52,6 +52,11 @@ export interface AiHarnessAccount {
    * terminals -- which is what rate-limited the account out of reading its
    * own usage. */
   usage?: { at: string; label?: string; failed?: boolean };
+  /** The vendor's own name for this account's plan ("Free", "KIRO FREE",
+   * "free_limited_copilot", "plus"), as its usage reading last said, and the
+   * models that plan runs when the vendor names them (Cursor: Auto only).
+   * See free-plan.ts. */
+  plan?: { name: string; models?: string[] };
   /** What this account's vendor has shown about its limit, for a harness
    *  that reports no usage of its own -- see usage-learning.ts. */
   usageLearning?: UsageLearning;
@@ -118,6 +123,9 @@ export type ModelCatalogResult = {
   configured?: string;
   models: string[];
   labels?: Readonly<Record<string, string>>;
+  /** Models the vendor's own list marks free (Kilo's `isFree`, OpenCode's
+   * zero price); `:free` ids are free without being listed here. */
+  free?: string[];
   connect?: readonly ModelCatalogConnect[];
   /** Hardware-fit model configurations exposed by Hermes local runtimes. */
   localRecommendations?: readonly { id: string; label: string; detail: string }[];

@@ -1,9 +1,12 @@
 /** Asking a vendor what an account has left, one probe per harness: its own
  * credential file, or its real API with the account's own token. */
 
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js';
 import { grokUsageReading } from './grok-usage.js';
-import { ampUsageProbe, auggieUsageProbe, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
+import { ampUsageProbe, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
@@ -93,7 +96,23 @@ async function codexUsageReading(_session: HarnessSession, environment: Readonly
     const timer = setTimeout(() => finish(), 8_000);
     timer.unref();
   });
-  return codexRateLimitsReading(response?.rateLimits);
+  const reading = codexRateLimitsReading(response?.rateLimits);
+  const plan = reading ? await codexPlan(environment) : undefined;
+  return reading && plan ? { ...reading, plan: { name: plan } } : reading;
+}
+
+/** The ChatGPT plan Codex signed in with ("free", "plus", "pro"): a claim
+ * in the id token Codex itself keeps in auth.json. Read, never refreshed. */
+export async function codexPlan(environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+  try {
+    const home = environment.CODEX_HOME ?? join(environment.HOME ?? homedir(), '.codex');
+    const auth = JSON.parse(await readFile(join(home, 'auth.json'), 'utf8')) as { tokens?: { id_token?: unknown } };
+    const token = auth.tokens?.id_token;
+    if (typeof token !== 'string') return undefined;
+    const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as Record<string, { chatgpt_plan_type?: unknown } | undefined>;
+    const plan = claims['https://api.openai.com/auth']?.chatgpt_plan_type;
+    return typeof plan === 'string' && plan ? plan : undefined;
+  } catch { return undefined; } // fail-open-ok: no plan is not a guess
 }
 
 /** Claude Code's quota, asked of Claude Code, for one specific account: its
@@ -174,7 +193,7 @@ const labelOnly = (probe: NativeUsageProbe): NativeUsageReadingProbe => async (s
 export const NATIVE_USAGE_PROBES: Readonly<Partial<Record<string, NativeUsageReadingProbe>>> = {
   codex: codexUsageReading,
   claude: claudeUsageReading,
-  auggie: labelOnly(auggieUsageProbe),
+  auggie: auggieUsageReading,
   // Free: an ACP extension call, not a turn (grok-usage.ts).
   grok: grokUsageReading,
   // Free reads of the harness's own usage surface (cli-usage-probes.ts).

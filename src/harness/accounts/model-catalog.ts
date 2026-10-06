@@ -13,7 +13,9 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, M
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
 import { discoverHermesModels, hermesCachedModels, hermesTurboFitCatalogFiles } from './hermes-discovery.js';
 import { discoverOpenClawModels } from './openclaw-discovery.js';
-import { discoverOpencodeConnect } from './opencode-discovery.js';
+import { discoverOpencodeConnect, opencodeVerboseModels } from './opencode-discovery.js';
+import { freePlanModels, planIsFree, preferredFreeModel } from './free-plan.js';
+import { copilotAccountModels } from './cli-usage-probes.js';
 import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
 import { expandAuthPath } from './auth-files.js';
@@ -144,7 +146,8 @@ export function resetModelCatalogMemo(): void {
 const SERVER_LIST_TTL_MS = 300_000;
 
 function serverModelList(harness: AiLocalHarnessDefinition): boolean {
-  return !listsModelsLive(harness) && Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false));
+  // Copilot's account list moves with its quota (spent chat lists `auto` alone).
+  return harness.command === 'copilot' || (!listsModelsLive(harness) && Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false)));
 }
 
 /** The catalog is the list an ACP session offers, so each live session
@@ -344,10 +347,14 @@ export async function resolveNativeModel(
   account?: AiHarnessAccount,
 ): Promise<string | undefined> {
   const catalog = await nativeModelCatalog(harness, account);
-  if (harness.defaultModel && catalog.models.includes(harness.defaultModel)) return harness.defaultModel;
-  const configured = catalog.configured?.trim();
-  if (configured) return configured;
-  return catalog.models.find((model) => model.trim().length > 0);
+  const free = freePlanModels(harness, account, catalog);
+  const chosen = harness.defaultModel && catalog.models.includes(harness.defaultModel) ? harness.defaultModel : catalog.configured?.trim();
+  // A free plan starts on a model it runs, not on a default it refuses
+  // (Cursor's ACP session opens on a named model a Free plan cannot use).
+  if (chosen && !(planIsFree(account?.plan) && free.size && !free.has(chosen))) return chosen;
+  // Nothing chosen: a free model before the first listed, which was a paid
+  // one Kilo refused on an empty balance.
+  return preferredFreeModel(free) ?? chosen ?? catalog.models.find((model) => model.trim().length > 0);
 }
 
 async function syncAccountModels(accountId: string, models: readonly string[]): Promise<void> {
@@ -497,6 +504,7 @@ async function nativeModelCatalogUncached(
   let configured: string | undefined;
   let connect: ModelCatalogConnect[] | undefined;
   let localRecommendations: ModelCatalogResult['localRecommendations'];
+  let free: string[] | undefined;
   // Hermes' and OpenClaw's inventories are the whole truth: ids remembered on
   // the account from before (bare, or from a provider since signed out)
   // would run wrong.
@@ -586,13 +594,15 @@ async function nativeModelCatalogUncached(
       if (found.connect.length) connect = found.connect;
     }
   }
-  // Copilot publishes no model list anywhere ClikCode can read it: no
-  // command, nothing on its ACP session, and GitHub issues the list only to
-  // Copilot's own sign-in (a `gh` token gets 403). The public models.dev
-  // catalog lists what Copilot offers; which of those the account may use
-  // is Copilot's to say when the turn runs.
+  // Copilot: the models its own server offers this account (`models.list`
+  // on `copilot --headless`, which only its own sign-in may ask). The public
+  // models.dev catalog, what Copilot offers anyone, only when that fails.
   if (harness.command === 'copilot') {
-    const listed = modelsDevProvider(await modelsDevCache(), 'github-copilot');
+    const own = await copilotAccountModels(nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
+    const listed = own ?? modelsDevProvider(await modelsDevCache(), 'github-copilot');
+    // The account's own list is the whole truth; ids remembered from the
+    // public catalog would offer models this plan refuses.
+    if (own) models.clear();
     listed.models.forEach((model) => models.add(model));
     labels = { ...labels, ...listed.labels };
   }
@@ -640,11 +650,16 @@ async function nativeModelCatalogUncached(
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
       const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, 12_000);
-      addDiscoveredModels(printed);
-      // OpenCode and Kilo print only connected providers' models; the rest of
-      // what they know is offered as a sign-in.
+      // OpenCode and Kilo print only connected providers' models, each with
+      // its price and (Kilo) whether it is free; the rest of what they know
+      // is offered as a sign-in.
       if (harness.command === 'opencode' || harness.command === 'kilo') {
-        connect = await discoverOpencodeConnect(harness, discoveredModelsFrom(printed));
+        const verbose = opencodeVerboseModels(printed);
+        verbose.models.forEach((model) => models.add(model));
+        free = verbose.free;
+        connect = await discoverOpencodeConnect(harness, verbose.models);
+      } else {
+        addDiscoveredModels(printed);
       }
       // Pi prints a provider/model table; the generic reader cannot see a
       // model in it. Its other providers are signed in to inside Pi.
@@ -661,6 +676,7 @@ async function nativeModelCatalogUncached(
     ...(configured ? { configured } : {}),
     models: [...models],
     ...(labels ? { labels } : {}),
+    ...(free?.length ? { free } : {}),
     ...(connect?.length ? { connect } : {}),
     ...(localRecommendations?.length ? { localRecommendations } : {}),
   };

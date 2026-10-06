@@ -21,7 +21,11 @@ export function windowSpent(window: UsageWindow): boolean {
 }
 
 /** A usage reading: the structured windows plus the label the UI shows. */
-export interface UsageReading { windows: UsageWindow[]; label?: string }
+export interface UsageReading {
+  windows: UsageWindow[]; label?: string;
+  /** The account's plan as the vendor named it, when the same answer says. */
+  plan?: NonNullable<AiHarnessAccount['plan']>;
+}
 
 /** What is stored on `account.usage`. `windows` is persisted alongside the
  * typed fields; types.ts only declares `at`/`label`/`failed` today. */

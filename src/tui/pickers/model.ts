@@ -1,5 +1,6 @@
 /** Choosing a model from the active harness's catalog. */
 
+import { freePlanModels } from '../../harness/accounts/free-plan.js';
 import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
@@ -70,6 +71,8 @@ async function localModelPicker(rl: HarnessPrompter, id: string, current: string
  * digits alone. */
 export function modelRow(
   harness: AiLocalHarnessDefinition | undefined, catalog: ModelCatalogResult, model: string, current: string | undefined, providerConfigured = false,
+  /** freePlanModels for the account: these say "free plan". */
+  free?: ReadonlySet<string>,
 ): PickerOption<string> {
   const localLabel = harness?.turboFit && /^(?:custom:)?turbofit:/.test(model)
     ? catalog.labels?.[model]
@@ -81,6 +84,7 @@ export function modelRow(
   const parts = [
     name && !respells ? name : undefined,
     modelSettingsDetail(model),
+    free?.has(model) ? 'free plan' : undefined,
     model === current ? 'current' : undefined,
     model === current && providerConfigured ? 'provider configured' : undefined,
   ].filter((part): part is string => Boolean(part));
@@ -114,9 +118,10 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     finally { clearTimeout(spinner); if (spinning) waiting?.stopWaiting(); }
   }
   const effective = session.model ?? catalog.configured;
+  const free = freePlanModels(harness, account, catalog);
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
-    ...discoveredModels.map((model) => modelRow(harness, catalog, model, effective, !session.model && model === catalog.configured)),
+    ...discoveredModels.map((model) => modelRow(harness, catalog, model, effective, !session.model && model === catalog.configured, free)),
     ...(harness?.turboFit ? (catalog.localRecommendations ?? []).map((item) => ({
       label: item.label,
       detail: `· TurboFit · ${item.detail}`,

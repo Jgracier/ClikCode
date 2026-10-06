@@ -119,6 +119,9 @@ export async function nativeUsageReading(
     ? { at: probedAt, label: reading.label, ...(reading.windows.length ? { windows: reading.windows } : {}) }
     : { at: probedAt, failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) };
   nativeUsageCache.set(cacheKey, next);
+  // The plan rides on the same answer; it says which models are free
+  // (free-plan.ts), and stays as last said when a reading leaves it out.
+  if (reading?.plan) account.plan = reading.plan;
   if (reading?.label !== undefined) {
     account.usage = accountUsageFrom(next);
     // The moment a reading shows room, the refusal it overtakes is cleared on
