@@ -89,13 +89,17 @@ function sharesVendorProfile(
 /** A conversation moving to another account takes its vendor thread along;
  * one that cannot be carried (or no harness or previous account to carry it
  * from) is forgotten, so the next turn takes the conversation up afresh.
- * The one step for a pre-turn move, a failover and `/accounts use`. */
+ * The one step for a pre-turn move, a failover and `/accounts use`.
+ *
+ * An id ClikCode minted that the vendor never confirmed is no thread at all:
+ * calling it 'present' sent the next account only "carry on", and the
+ * request it was never shown was lost. */
 export async function moveThreadToAccount(
   session: HarnessSession, harness: AiLocalHarnessDefinition | undefined,
   from: AiHarnessAccount | undefined, to: AiHarnessAccount,
 ): Promise<CarryOutcome> {
   const carried = harness && from ? await carryNativeSession({
-    harness, nativeId: session.nativeSessionId, workspace: session.workspace,
+    harness, nativeId: session.nativeSessionPreallocated ? undefined : session.nativeSessionId, workspace: session.workspace,
     from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
   }).catch(() => undefined) : undefined;
   if (!carried) forgetNativeThread(session);
