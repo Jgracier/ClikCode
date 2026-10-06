@@ -2055,12 +2055,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
       // message the moment it is sent, and would then be written a second time.
+      // The keys before the note on why it queued: a narrow row drops parts
+      // from the end, and what can be done is the part worth keeping.
       const keys = queueIndex === waitingAt ? sendNowHint : '';
       const status = message.queueState === 'steered' ? STEER_WORDS.steered
         : message.queueState === 'sending' ? 'submitting…'
           : message.queueState === 'pause' ? `${STEER_WORDS.held}${keys}`
             : message.queueState === 'error' ? 'not sent · restored for editing'
-              : `queued for next turn${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}${keys}`;
+              : `queued for next turn${keys}${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}`;
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.
       // The speaker changes once, where the queue begins: two rows there, the
