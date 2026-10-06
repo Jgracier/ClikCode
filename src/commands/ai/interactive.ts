@@ -10,7 +10,8 @@
 import { lifecycle, setLifecycleRole } from '../../runtime/lifecycle-log.js';
 import { STOPPED } from '../../harness/protocol/wording.js';
 import { currentWorkerBuild } from '../../worker/registry.js';
-import { isClikCodeAgent } from '../../session/route.js';
+import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
+import { gatewayCreditLabel } from '../../gateway/credit-label.js';
 import { reconcileLocalModelLeases } from './local-model.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { isUsageExhaustedMessage, resumeWaitLabel } from '../../turn/usage-exhausted.js';
@@ -226,8 +227,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   warmCatalogFor(session, state);
   if (terminal) terminal.render(session, initialAccount, selectionNotice);
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
-  const refreshUsage = (target: HarnessSession, targetState: HarnessState): void => {
+  const refreshUsage = (target: HarnessSession, targetState: HarnessState, afterTurn = false): void => {
     if (!terminal) return;
+    // A Gateway conversation's allowance is its credit.
+    if (isGatewayService(target)) {
+      void gatewayCreditLabel(config, { fresh: afterTurn }).then((label) => {
+        if (TERMINAL.active === terminal) terminal.usage(label);
+      }).catch(() => { /* Usage is optional provider metadata. */ });
+      return;
+    }
     void nativeUsageReading(target, targetState).then((reading) => {
       // A turn parked for the reset says so instead of when it comes back.
       if (TERMINAL.active === terminal) terminal.usage(reading?.label, target.resumeAt ? resumeWaitLabel(target.resumeAt) : usageResetLabel(reading?.windows));
@@ -433,7 +441,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // transcriptMessages.
         const running = terminal ? await workerTurn(latest.id) : undefined;
         terminal?.render(latest, account, notice, running ? { running: true, ...running } : { running: false });
-        refreshUsage(latest, latestState);
+        // After a turn or a command: a Gateway balance a turn just billed.
+        refreshUsage(latest, latestState, true);
         notice = undefined;
         if (synchronizedSessionId !== id) {
           const syncId = id;
