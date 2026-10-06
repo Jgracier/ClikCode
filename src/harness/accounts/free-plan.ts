@@ -3,7 +3,8 @@
  * (catalog `freePlan` says only where to look).
  *
  * - An id with the harness's free suffix (`freePlan.suffix`: OpenRouter's
- *   `:free`, which Cline, Kilo, Hermes's Nous and OpenRouter routes share).
+ *   `:free`, which Cline, Kilo, Hermes's Nous and OpenRouter routes share;
+ *   not Cline's `openrouter/free`, which it bills: "Insufficient balance").
  * - The vendor's list marks it (`catalog.free`: Kilo's `isFree`, OpenCode's
  *   zero price).
  * - The account is on a free plan (`account.plan`, from its usage reading)
@@ -49,8 +50,10 @@ export function freePlanModels(
 export function freeModelAfterPlanRefusal(
   harness: Pick<AiLocalHarnessDefinition, 'freePlan'>, model: string | null | undefined, failure: unknown, free: ReadonlySet<string>,
 ): string | undefined {
-  const refusals = harness.freePlan?.refusals;
-  if (!refusals?.length || !model || free.has(model)) return undefined;
+  // A vendor that lists only its plan's models refuses the rest before the
+  // turn (acp-client's "does not list model").
+  const refusals = [...harness.freePlan?.refusals ?? [], ...harness.freePlan?.listed ? ['does not list model'] : []];
+  if (!refusals.length || !model || free.has(model)) return undefined;
   const message = (failure instanceof Error ? failure.message : String(failure)).toLowerCase();
   if (!refusals.some((refusal) => message.includes(refusal))) return undefined;
   return preferredFreeModel(free);

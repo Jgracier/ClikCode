@@ -116,6 +116,7 @@ export async function runVendorSessionAttempt(input: {
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
         acp: harness.acp,
         modelProviderSeparator: harness.modelProviderSeparator,
+        plansListModels: Boolean(harness.freePlan?.listed),
         // Claude Code's quota, carried by the turn itself: published like a
         // stream reading, so the composer and the account picker see it.
         onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },

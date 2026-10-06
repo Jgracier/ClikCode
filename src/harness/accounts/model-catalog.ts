@@ -643,7 +643,10 @@ async function nativeModelCatalogUncached(
       if (harness.acp.listsModels === true) models.clear();
       listed.models.forEach((model) => models.add(model));
       labels = { ...labels, ...listed.labels };
-      configured ??= listed.current;
+      // Current only if listed: a model ClikCode set on the session is
+      // reported back as current even when the plan refuses it (Kiro), and
+      // added here it read as one the account's plan offers.
+      if (listed.current && listed.models.includes(listed.current)) configured ??= listed.current;
     }
   }
   if (harness.modelDiscoveryArgv) {
