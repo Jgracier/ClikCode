@@ -516,9 +516,9 @@ export async function sendVendorTurn(input: {
         prompter?.phase('using compatibility turn');
         continue;
       }
+      // The account is marked signed out by accounts.after, if signing in
+      // here does not fix it.
       if (failureKind === 'authentication-required') {
-        account.status = 'needs_login';
-        await checkpoint.persistNow();
         // Reactive counterpart to aiHarnessSelect's proactive login check:
         // a harness with no statusArgv gets no pre-turn "are you logged
         // in?" probe at all (harnessNeedsLogin returns false without

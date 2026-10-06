@@ -88,28 +88,22 @@ export function initialAccountChoice(
   attempted.set(current.id, Date.now());
   const fallback = nextUsableFailoverAccount(state, current, matchesBackend, attempted);
   if (fallback) return { kind: 'switch', account: fallback };
-  return {
-    kind: 'exhausted',
-    error: new Error(usageExhaustedMessage(state.accounts.filter((candidate) => attempted.has(candidate.id)))),
-  };
+  return { kind: 'exhausted', error: new Error(usageExhaustedMessage()) };
 }
 
 /** Report exhaustion only when no account on this backend can still run. */
 export function terminalFailoverError(input: {
   state: HarnessState;
   current: AiHarnessAccount;
-  attempted: ReadonlyMap<string, number>;
   matchesBackend: (candidate: AiHarnessAccount) => boolean;
   exhaustedAny: boolean;
   lastFailure: unknown;
   lastOtherFailure?: unknown;
 }): unknown {
-  const { state, current, attempted, matchesBackend, exhaustedAny, lastFailure, lastOtherFailure } = input;
+  const { state, current, matchesBackend, exhaustedAny, lastFailure, lastOtherFailure } = input;
   if (!exhaustedAny) return lastFailure;
   if (providerHasAccountForTurn(state, current.provider, matchesBackend)) return lastOtherFailure ?? lastFailure;
-  return new Error(usageExhaustedMessage(
-    state.accounts.filter((candidate) => attempted.has(candidate.id) || candidate.id === current.id),
-  ));
+  return new Error(usageExhaustedMessage());
 }
 
 /** Where a turn stands across its failed attempts. */
@@ -189,12 +183,12 @@ export async function accountAfterFailure(input: {
   // than whatever the vendor happened to call it ("Payment Required").
   if (session.accountFailover !== 'on-quota-exhausted') {
     if (!tally.exhaustedAny) throw failure;
-    throw new Error(usageExhaustedMessage([account]));
+    throw new Error(usageExhaustedMessage());
   }
   const fallback = nextUsableFailoverAccount(state, account, input.matchesBackend, tally.attempted);
   if (fallback) return fallback;
   throw terminalFailoverError({
-    state, current: account, attempted: tally.attempted, matchesBackend: input.matchesBackend,
+    state, current: account, matchesBackend: input.matchesBackend,
     exhaustedAny: tally.exhaustedAny, lastFailure: failure, lastOtherFailure: tally.lastOtherFailure,
   });
 }

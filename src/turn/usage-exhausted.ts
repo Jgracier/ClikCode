@@ -16,7 +16,7 @@
  */
 import { quotaResetPhrase } from '../harness/protocol/format.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { accountCanTakeTurn, windowSpent, type AccountUsageReading, type UsageWindow } from '../harness/accounts/usage-reading.js';
+import { accountCanTakeTurn, vendorWindows, windowSpent } from '../harness/accounts/usage-reading.js';
 
 /** The soonest a spent window comes back, across every account that was
  * tried -- or the reset a refusal named (`quotaRetryAt`, the vendor's "try
@@ -27,7 +27,7 @@ export function nextQuotaReset(
 ): Date | undefined {
   const resets = accounts
     .flatMap((account) => [
-      ...(((account.usage as AccountUsageReading | undefined)?.windows ?? []) as readonly UsageWindow[])
+      ...vendorWindows(account)
         .filter((window) => windowSpent(window) && window.resetsAt !== undefined)
         .map((window) => window.resetsAt!),
       ...(account.quotaState === 'exhausted' && account.quotaRetryAt ? [account.quotaRetryAt] : []),
@@ -41,9 +41,7 @@ export function nextQuotaReset(
 /** The one sentence shown when every account has been tried and none has
  * quota left. The same words for every harness. The reset time, when there
  * is one, stays on the composer rule rather than in this sentence. */
-export function usageExhaustedMessage(
-  _accounts: readonly AiHarnessAccount[], _now: number = Date.now(),
-): string {
+export function usageExhaustedMessage(): string {
   return 'All accounts exhausted';
 }
 

@@ -89,7 +89,7 @@ describe('stored-usage account switch', () => {
     const quotaFailure = new Error('quota reached');
     const otherFailure = new Error('connection reset');
     const result = terminalFailoverError({
-      state: state([spent, crashed]), current: crashed, attempted: new Map([['spent', 0], ['crashed', 0]]),
+      state: state([spent, crashed]), current: crashed,
       matchesBackend: () => true, exhaustedAny: true, lastFailure: quotaFailure, lastOtherFailure: otherFailure,
     });
     expect(result).toBe(otherFailure);
@@ -98,7 +98,7 @@ describe('stored-usage account switch', () => {
   it('reports exhaustion only after every matching account is spent', () => {
     const spent = account('spent', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
     const result = terminalFailoverError({
-      state: state([spent]), current: spent, attempted: new Map([['spent', 0]]),
+      state: state([spent]), current: spent,
       matchesBackend: () => true, exhaustedAny: true, lastFailure: new Error('quota reached'),
     });
     expect(result).toBeInstanceOf(Error);
@@ -250,6 +250,8 @@ describe('the failover step both account backends take', () => {
       expect((await result).id, kind).toBe('next');
       expect(tally.exhaustedAny, kind).toBe(false);
       expect(first.quotaState, kind).toBeUndefined();
+      // The one place a lost sign-in is recorded, for both backends.
+      expect(first.status, kind).toBe(kind === 'authentication-required' ? 'needs_login' : 'ready');
     }
   });
 
