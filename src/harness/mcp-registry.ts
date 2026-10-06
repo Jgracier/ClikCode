@@ -82,7 +82,8 @@ type McpAddGrammar = {
   envPrefix?: readonly string[];
 };
 
-/** Where a harness reads its servers from, for one with no usable add. */
+/** The file ClikCode writes a server into, for a harness with no usable add:
+ * the catalog's first `serverFiles` entry, where it says `writesServerFile`. */
 type McpConfigFile = {
   rootEnv?: string;
   homeRelativeDir: readonly string[];
@@ -93,9 +94,17 @@ type McpConfigFile = {
 };
 
 export function mcpConfigFile(harness: AiLocalHarnessDefinition): McpConfigFile | undefined {
-  return (localHarnessCapabilityManifest(harness) as {
-    managers?: { mcp?: { configFile?: McpConfigFile } };
-  }).managers?.mcp?.configFile;
+  const mcp = localHarnessCapabilityManifest(harness).managers?.mcp;
+  const first = mcp?.writesServerFile ? mcp.serverFiles?.[0] : undefined;
+  if (!first) return undefined;
+  return {
+    ...(first.rootEnv ? { rootEnv: first.rootEnv } : {}),
+    homeRelativeDir: first.homeRelative.slice(0, -1),
+    file: first.homeRelative[first.homeRelative.length - 1]!,
+    key: first.key[0]!,
+    ...(first.format === 'yaml' ? { format: 'yaml' as const } : {}),
+    ...(first.dialect === 'goose' ? { entryShape: 'goose-extension' as const } : {}),
+  };
 }
 
 /** The absolute path of that file, under a GIVEN environment so an isolated

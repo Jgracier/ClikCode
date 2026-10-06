@@ -9,8 +9,9 @@ import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { mcpConfigEntry, mcpConfigPath, removeMcpConfigEntry, writeMcpConfigEntry } from './mcp-registry';
-import { removeFromVendorJsonFile } from '../agent/mcp/import.js';
+import { mcpConfigEntry, mcpConfigFile, mcpConfigPath, removeMcpConfigEntry, writeMcpConfigEntry } from './mcp-registry';
+import { removeFromVendorJsonFile, vendorSources } from '../agent/mcp/import.js';
+import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 
 const GOOSE = { homeRelativeDir: ['.config', 'goose'], file: 'config.yaml', key: 'extensions',
   format: 'yaml' as const, entryShape: 'goose-extension' as const };
@@ -20,6 +21,18 @@ const KIMI = { rootEnv: 'KIMI_CODE_HOME', homeRelativeDir: ['.kimi-code'], file:
 const read = async (path: string) => JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
 
 describe('where the config file is', () => {
+  it('is the file the import reads, recorded once in the catalog', () => {
+    const harness = (command: string) => allLocalHarnesses().find((entry) => entry.command === command)!;
+    expect(mcpConfigFile(harness('goose'))).toEqual(GOOSE);
+    expect(mcpConfigFile(harness('cursor'))).toEqual(CURSOR);
+    expect(mcpConfigFile(harness('kimi'))).toEqual(KIMI);
+    // A harness with an `mcp add` is never written directly.
+    expect(mcpConfigFile(harness('claude'))).toBeUndefined();
+    const read = vendorSources();
+    expect(read[0]?.command).toBe('claude');
+    for (const command of ['goose', 'cursor', 'kimi']) expect(read.some((source) => source.command === command)).toBe(true);
+  });
+
   it('sits under the home the harness is being run against', () => {
     expect(mcpConfigPath(CURSOR, { HOME: '/tmp/acct' })).toBe('/tmp/acct/.cursor/mcp.json');
   });

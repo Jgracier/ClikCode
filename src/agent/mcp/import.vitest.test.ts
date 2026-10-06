@@ -79,8 +79,8 @@ describe('reading each vendor', () => {
     const result = await importVendorMcpServers(state, home);
     expect(result.ran).toBe(true);
     expect(result.imported.map((server) => `${server.name}:${server.from}`)).toEqual([
-      'context7:Claude Code', 'figma:Claude Code', 'docs:Codex', 'remote:Codex',
-      'legacy:Gemini CLI', 'streamable:Gemini CLI', 'fetch:Goose', 'browser:opencode',
+      'context7:Claude Code', 'figma:Claude Code', 'legacy:Gemini CLI', 'streamable:Gemini CLI',
+      'docs:Codex', 'remote:Codex', 'browser:OpenCode', 'fetch:Goose',
     ]);
     expect(await servers()).toEqual({
       context7: { command: 'npx', args: ['-y', '@upstash/context7-mcp'], env: { KEY: 'k1' } },
@@ -135,7 +135,7 @@ describe('duplicates', () => {
     ].join('\n'));
     const result = await importVendorMcpServers(state, home);
     expect(Object.keys(await servers())).toEqual(['trading']);
-    expect(result.skipped).toEqual([{ name: 'agent', from: 'Grok', reason: 'same server as "trading"' }]);
+    expect(result.skipped).toEqual([{ name: 'agent', from: 'Grok Build', reason: 'same server as "trading"' }]);
   });
 });
 
