@@ -10,11 +10,13 @@ const account = (windows: Array<{ name: string; usedPct: number; resetsAt?: stri
 
 describe('being out of quota', () => {
   it('says the same thing for every harness, with no reset and no error', () => {
-    expect(usageExhaustedMessage(
-      [account([{ name: '5h', usedPct: 100, resetsAt: new Date(Date.parse('2026-09-21T16:50:00')).toISOString() }])], NOW,
-    )).toBe('All accounts exhausted');
-    expect(usageExhaustedMessage([account([])], NOW)).toBe('All accounts exhausted');
-    expect(usageExhaustedMessage([], NOW)).toBe('All accounts exhausted');
+    expect(usageExhaustedMessage()).toBe('All accounts exhausted');
+  });
+
+  it('takes no reset from a reading that failed', () => {
+    const failed = { ...account([{ name: '5h', usedPct: 100, resetsAt: new Date(Date.parse('2026-09-21T16:50:00')).toISOString() }]) };
+    failed.usage = { ...failed.usage!, failed: true };
+    expect(nextQuotaReset([failed], NOW)).toBeUndefined();
   });
 
   it('ignores a window that still has room, and one already past', () => {
@@ -65,6 +67,6 @@ describe('isUsageExhaustedMessage', () => {
   });
 
   it('matches whatever usageExhaustedMessage actually produces', () => {
-    expect(isUsageExhaustedMessage(usageExhaustedMessage([]))).toBe(true);
+    expect(isUsageExhaustedMessage(usageExhaustedMessage())).toBe(true);
   });
 });
