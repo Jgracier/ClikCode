@@ -94,7 +94,7 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
       // (or Enter, for its other options) taking over; else the key first.
       const instead = spec.loginAccountChoose
         ? await accountFirst(spec.displayName, spec.loginAccountChoose, screen, run, {
-          prompt: `Or paste a ${spec.displayName} API key · Enter for other sign-ins`, others: true,
+          prompt: `Or paste your ${spec.displayName} API key · Enter for other sign-ins`, others: true,
           isKey: async (text) => keyCandidates(routes, text, keyProviders()).length > 0 && Boolean(await routeFor(spec, routes, text, screen.signal).catch(() => undefined)),
         })
         : { key: undefined };
@@ -105,7 +105,7 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
     // a key pasted instead saved where it runs (storeKey).
     if (!harness.localAuth.includes('api-key') || spec.loginKeyCommand || !keyVariables(harness).length) { await run(screen); return; }
     const instead = await accountFirst(spec.displayName, spec.loginAccountChoose ?? [], screen, run, {
-      prompt: `Or paste a ${spec.displayName} API key`, others: false,
+      prompt: `Or paste your ${spec.displayName} API key`, others: false,
       isKey: async (text) => (await keyVariableFor(harness, text, screen.signal))?.checked === true,
     });
     if (instead?.key) await storeKey(harness, spec, envOverrides, instead.key, screen.signal);
@@ -128,7 +128,8 @@ export interface KeyOffer {
  * A key pasted there (or Enter, where `others`) stops that run and is
  * returned ('' for Enter). Undefined: the vendor's sign-in finished (its
  * callback). A question of the vendor's own shares the field: an answer that
- * is a key (offer.isKey) is taken as one, anything else goes to the vendor. */
+ * is a key (offer.isKey) is taken as one, anything else goes to the vendor;
+ * the vendor's own key question (secret) replaces the field. */
 export async function accountFirst(
   name: string, labels: readonly string[], screen: SignInScreen, run: (ui: SignInUi) => Promise<void>, offer: KeyOffer,
 ): Promise<{ key: string } | undefined> {
@@ -157,7 +158,9 @@ export async function accountFirst(
     },
     ask: async (prompt, secret, optional) => {
       const asked = ++current;
-      const text = await screen.ask(`${prompt} · or paste a ${name} API key`, secret, optional);
+      // A key question of the vendor's own (Continue's) is already the field.
+      if (secret) return screen.ask(prompt, secret, optional);
+      const text = await screen.ask(`${prompt} · or paste your ${name} API key`, secret, optional);
       if (asked === current && text.trim() && await offer.isKey(text.trim())) { take(text.trim()); return ''; }
       if (!signal.aborted) openField();
       return text;
