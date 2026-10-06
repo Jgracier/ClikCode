@@ -22,6 +22,7 @@ import { emptyLedger, recordUsage } from './usage.js';
 import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
 import { createSubagentRunner } from './subagent.js';
+import { completedArguments } from './models/openai-client.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
 import { categoryOf, GATEWAY_HARNESS_COMMAND } from '../harness/protocol/tools.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
@@ -32,6 +33,10 @@ const MAX_STEP_RETRIES = 2;
 const STEP_RETRY_CAP_SECONDS = 30;
 const NO_PROGRESS_LIMIT = 3;
 const STREAM_EVENT_INTERVAL_MS = 150;
+/** Times one turn goes on with an answer the output limit cut off, as a
+ * vendor CLI does, before it stops and says the answer was cut. */
+const MAX_LENGTH_CONTINUES = 3;
+const CONTINUE_AFTER_LENGTH = '[harness] Your last reply reached the output limit and was cut off. Continue exactly where it stopped, without repeating anything already written.';
 
 /** A tool's class, for one the shared classifier cannot name (an MCP
  * server's, a skill). */
@@ -234,6 +239,13 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let stalledCall: ModelToolCall | undefined;
   let stepRetries = 0;
   let compactedForSize = false;
+  let lengthContinues = 0;
+  /** The calls of the current step shown while they were written, by id,
+   * with the label last shown. */
+  const shownCalls = new Map<string, string>();
+  /** The step before this one was cut off at the output limit, and this one
+   * carries on its sentence: no paragraph break between them. */
+  let continuesCutAnswer = false;
   let lastContext: { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: typeof profile.name; stopReason?: string } = { contextProfile: profile.name };
 
   // One prompt at a time: parallel reads, and parallel sub-agents, must not stack dialogs.
@@ -287,7 +299,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     let label = call.name;
     if (tool) { try { label = tool.label(call.args); } catch { /* invalid args: fall back to the name */ } }
     const category = categoryForTool(tool, call.args && typeof call.args === 'object' ? call.args as Record<string, unknown> : undefined);
-    input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });
+    // Already on screen as it was written, under this label: not again.
+    if (shownCalls.get(call.id) !== label) input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...category });
     let startedAt: number | undefined;
     const finish = (result: ToolRunResult): ToolRunResult => {
       const output = eventOutputPreview(result.output);
@@ -435,6 +448,14 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       let streamedThisStep = '';
       let reasoning = '';
       let step: ModelStepResult;
+      /** Calls shown while they were being written, by id, with the label
+       * last shown: one that never runs is settled, not left spinning. */
+      shownCalls.clear();
+      const settleUnrun = (ran: ReadonlySet<string>, why: string): void => {
+        for (const [id, label] of shownCalls) {
+          if (!ran.has(id)) input.onActivity?.({ kind: 'tool-error', label, id, output: [why] });
+        }
+      };
       try {
         step = await abortable(input.modelClient.step({
           system, items, signal,
@@ -442,7 +463,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
           ...(finalOnly ? { toolChoice: 'none' as const } : {}),
           onTextDelta: (text) => {
             if (!text || signal?.aborted) return;
-            if (!streamedThisStep && needsSeparator) input.onResponseDelta?.('\n\n', 'append');
+            if (!streamedThisStep && needsSeparator && !continuesCutAnswer) input.onResponseDelta?.('\n\n', 'append');
             streamedThisStep += text;
             input.onResponseDelta?.(text, 'append');
             input.onPhase?.('generating response');
@@ -453,9 +474,35 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
             reasoning = `${reasoning}${text}`.slice(-4000);
             if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: thoughtLabel(reasoning), id: `${turnId}:reasoning:${steps}` });
           },
+          // The row a vendor CLI shows the moment the model picks a tool,
+          // named by its arguments as they arrive; the run settles the same
+          // row by the same id.
+          ...(finalOnly ? {} : {
+            onToolCallDelta: (call: { id: string; name: string; arguments: string }) => {
+              if (signal?.aborted) return;
+              const tool = tools.find((candidate) => candidate.name === call.name);
+              const args = completedArguments(call.arguments);
+              let label = call.name;
+              if (tool) { try { label = tool.label(args); } catch { /* not enough of the arguments yet: the name */ } }
+              if (shownCalls.get(call.id) === label) return;
+              shownCalls.set(call.id, label);
+              input.onActivity?.({ kind: 'tool-start', label, id: call.id, ...categoryForTool(tool, args) });
+            },
+          }),
+          // The model the Gateway serves, on the screen from its first frame
+          // rather than after the step.
+          onServedModel: (model, window) => {
+            servedModel = model;
+            if (window) contextWindow = window;
+            lastContext = { ...lastContext, servedModel: model, ...(window ? { contextWindow: window } : {}) };
+            input.onUsage?.({ ...ledger.total, ...lastContext });
+          },
         }), signal);
       } catch (error) {
         if (isTurnCancelled(error) || signal?.aborted) throw turnCancelledError();
+        // A call being written when the step failed never runs: a resent
+        // step writes its own.
+        settleUnrun(new Set(), 'not run: the model\'s reply was cut off before this call was complete');
         // Once text has streamed the step belongs to what was said; sending it
         // again would say it twice. Before that, a step is safe to resend: the
         // Gateway is stateless and no tool has run.
@@ -490,9 +537,21 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const stepText = step.text || streamedThisStep;
       if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: thoughtLabel(reasoning), id: `${turnId}:reasoning:${steps - 1}` });
 
-      const calls = finalOnly ? [] : withUniqueIds(step.toolCalls);
+      const cutOff = step.stopReason === 'length';
+      const calls = (finalOnly ? [] : withUniqueIds(step.toolCalls)).map((call) => cutOff && call.argumentsError
+        // Cut off mid-call: the model hears why its JSON is incomplete, so it
+        // sends a smaller call rather than the same one again.
+        ? { ...call, argumentsError: `the reply reached the output limit while these arguments were being written, so they are incomplete. Make the call again with less in it, for example a large file written in several smaller edits` }
+        : call);
+      settleUnrun(new Set(calls.map((call) => call.id)), 'not run');
       const produced: ConversationItem[] = [];
-      if (stepText.trim()) { produced.push({ type: 'text', role: 'assistant', text: stepText }); segments.push(stepText.trim()); needsSeparator = true; }
+      if (stepText.trim()) {
+        produced.push({ type: 'text', role: 'assistant', text: stepText });
+        if (continuesCutAnswer && segments.length) segments[segments.length - 1] = `${segments[segments.length - 1]}${stepText}`.trim();
+        else segments.push(stepText.trim());
+        needsSeparator = true;
+      }
+      continuesCutAnswer = false;
       produced.push(...calls.map((call): ConversationItem => ({ type: 'tool_call', id: call.id, name: call.name, args: call.args })));
       if (produced.length) await append(...produced);
 
@@ -511,6 +570,14 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       input.onUsage?.({ ...ledger.total, ...lastContext });
 
       if (finalOnly) return result({ stopReason: 'no-progress', isError: true, errorKind: 'other' });
+      // An answer cut off at the output limit is carried on, not taken as
+      // the answer: the next step picks up mid-sentence.
+      if (!calls.length && cutOff && lengthContinues < MAX_LENGTH_CONTINUES) {
+        lengthContinues += 1;
+        continuesCutAnswer = Boolean(stepText.trim());
+        await append({ type: 'text', role: 'user', text: CONTINUE_AFTER_LENGTH });
+        continue;
+      }
       if (!calls.length) {
         // Steering, or a background shell that finished while this step ran:
         // one more step answers it now rather than in a follow-up turn.

@@ -85,4 +85,26 @@ describe('a Gateway step', () => {
       message: expect.stringMatching(/out of AI credit\..*Run `clikcode gateway credit` to add credit\.$/),
     });
   });
+
+  it('asks for the model\'s output limit and stays inside the Gateway\'s request limits', async () => {
+    const fetchImpl = vi.fn(async () => finished());
+    const tools = Array.from({ length: 130 }, (_, index) => ({ name: `t${index}`, description: 'd', parameters: { type: 'object' } }));
+    await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', maxOutput: 32_000, contextWindow: 131_072, fetchImpl: fetchImpl as never })
+      .step({ ...(step as object), tools, system: 'x'.repeat(70 * 1024) } as never);
+    const body = sent(fetchImpl).body as { max_tokens?: number; tools: unknown[]; messages: Array<{ content: string }> };
+    expect(body.max_tokens).toBe(32_000);
+    expect(body.tools).toHaveLength(128);
+    expect(Buffer.byteLength(body.messages[0]!.content)).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it('says what to do about each of the Gateway\'s refusals', async () => {
+    const refusal = (code: string, status = 200) => vi.fn(async () => status === 200
+      ? sse({ error: { message: `refused (${code}).`, code } })
+      : new Response(JSON.stringify({ error: { message: `refused (${code}).`, code } }), { status, headers: { 'retry-after': '42' } }));
+    const attempt = (fetchImpl: ReturnType<typeof refusal>) => gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: fetchImpl as never }).step(step).catch((error: Error) => error.message);
+    expect(await attempt(refusal('model_not_found'))).toMatch(/Pick another model with \/model/);
+    expect(await attempt(refusal('rate_limit_exceeded', 429))).toMatch(/Try again in 42s\./);
+    expect(await attempt(refusal('gateway_disabled', 503))).toMatch(/turned off for this account/);
+    expect(await attempt(refusal('no_model_available'))).toMatch(/No model can take this request right now/);
+  });
 });

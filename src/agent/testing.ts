@@ -35,12 +35,20 @@ export class ScriptedModelClient implements ModelClient {
     const scripted = typeof entry === 'function' ? await entry(request, position) : entry;
     await scripted.before?.(request);
     if (scripted.error !== undefined) throw scripted.error;
+    // A server names the model before it says anything.
+    if (scripted.servedModel) request.onServedModel?.(scripted.servedModel, scripted.contextWindow);
     const text = scripted.text ?? (scripted.deltas ? scripted.deltas.join('') : '');
     for (const delta of scripted.deltas ?? (text ? [text] : [])) request.onTextDelta(delta);
     if (scripted.reasoning) request.onReasoningDelta?.(scripted.reasoning);
+    const toolCalls = (scripted.toolCalls ?? []).map((call, offset): ModelToolCall => ({
+      id: call.id ?? `call_${position + 1}_${offset + 1}`, name: call.name, args: call.args,
+      ...(call.argumentsError ? { argumentsError: call.argumentsError } : {}),
+    }));
+    // Each call as a streaming server sends it: whole, in one delta.
+    for (const call of toolCalls) request.onToolCallDelta?.({ id: call.id, name: call.name, arguments: JSON.stringify(call.args) });
     return {
       text,
-      toolCalls: (scripted.toolCalls ?? []).map((call, offset) => ({ id: call.id ?? `call_${position + 1}_${offset + 1}`, name: call.name, args: call.args })),
+      toolCalls,
       stopReason: scripted.stopReason ?? (scripted.toolCalls?.length ? 'tool-calls' : 'stop'),
       usage: scripted.usage ?? { input: 100, output: 10 },
       ...(scripted.contextWindow ? { contextWindow: scripted.contextWindow } : {}),
