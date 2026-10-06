@@ -42,19 +42,15 @@ export function liveConversationLines(lines: readonly string[], live: boolean): 
 }
 
 
-/** A rule with its label painted and the dashes left as structure.
- *
- * The rules themselves are always dim: they are furniture and should recede.
- * Only the label at the right edge carries colour, and only because it says
- * something -- how much allowance is left, which conversation this is. */
+/** A rule with its label painted and the dashes left as structure: the
+ * dashes in the terminal's own foreground, and only the label at the right
+ * edge painted, because it says something -- how much allowance is left,
+ * which conversation this is. */
 export function paintLabeledRule(
   width: number, label: string | undefined, paint: (text: string) => string,
 ): string {
-  // The dashes are left unstyled, which is the terminal's own foreground --
-  // the same white the composer's text is drawn in. Dim made the frame recede
-  // so far it read as absent; at full weight the composer is a defined field
-  // rather than a faint suggestion of one. Unstyled rather than chalk.white
-  // so a light-background theme still gets its own foreground.
+  // Unstyled, not dim: dim made the frame recede so far it read as absent.
+  // Not chalk.white either, so a light-background theme gets its own.
   const rule = rightLabeledRule(width, label);
   if (!label) return rule;
   const at = rule.lastIndexOf(label);

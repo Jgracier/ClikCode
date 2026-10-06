@@ -1,6 +1,6 @@
 /**
  * The process-level pieces of the ClikCode program: the root command, the
- * global flags, the first-run banner, crash capture and the error renderer.
+ * global flags, crash capture and the error renderer.
  */
 
 import { appendFileSync, mkdirSync } from 'node:fs';
@@ -9,31 +9,11 @@ import { stateDirectory } from '../session/store/paths.js';
 import { join } from 'node:path';
 import { Command } from 'commander';
 import chalk from 'chalk';
-import type Conf from 'conf';
 import { toCliErrorMessage, toCliErrorDebugDetails, toCliErrorJson } from './errors/message.js';
 import { bindGlobalFlags, globalFlag, isJsonDefaultMode } from './output-mode.js';
 import { emitResult } from './structured-output.js';
 import { restoreTerminal } from '../tui/restore.js';
 import { CLIKCODE_VERSION } from '../version.js';
-
-/** Rows are padded by measured cell width, not typed by hand: the lightning
- * bolt is two cells wide, and the hand-spaced version left the right border
- * two to five columns short of the corners. Default foreground + bold and dim
- * are used instead of white/gray, which vanish on light and Solarized themes. */
-function bannerBox(title: string, tagline: string): string {
-  const inner = 39;
-  const cells = (text: string): number => [...text].reduce((total, character) => total + (/\p{Emoji_Presentation}/u.test(character) ? 2 : 1), 0);
-  const row = (text: string, style: (value: string) => string): string =>
-    `${chalk.cyan('║')}  ${style(text)}${' '.repeat(Math.max(0, inner - 2 - cells(text)))}${chalk.cyan('║')}`;
-  return `
-${chalk.cyan(`╔${'═'.repeat(inner)}╗`)}
-${row(title, chalk.bold)}
-${row(tagline, chalk.dim)}
-${chalk.cyan(`╚${'═'.repeat(inner)}╝`)}
-`;
-}
-
-const CLIKCODE_BANNER = bannerBox('⚡ ClikCode', 'Local-first AI coding runtime');
 
 /**
  * process.exit() runs synchronously right after this in both handlers below
@@ -77,9 +57,9 @@ export function handleCommandError(error: unknown): void {
 
 /**
  * Build the root program: name/description/version, the three global options,
- * the first-run banner, and the process-level error safety net.
+ * and the process-level error safety net.
  */
-export function buildBaseProgram(config: Conf): Command {
+export function buildBaseProgram(): Command {
   const program = new Command();
   // Every process says what it is, when it started and how it ended
   // (runtime/lifecycle-log.ts). A window names its conversation once open.
@@ -121,12 +101,6 @@ export function buildBaseProgram(config: Conf): Command {
       // used to re-scan process.argv for them.
       const opts = program.opts();
       bindGlobalFlags({ json: opts.json, human: opts.human, debug: opts.debug });
-
-      // Show banner on first use for human mode only.
-      if (!config.get('seenBanner') && !isJsonDefaultMode()) {
-        console.log(CLIKCODE_BANNER);
-        config.set('seenBanner', true);
-      }
     });
 
   return program;
