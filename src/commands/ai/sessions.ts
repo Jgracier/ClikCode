@@ -15,7 +15,7 @@ import { emitResult } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { modelIdFromLabel, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
-import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { liveWorkerSessions, sessionIsLive } from '../../session/liveness.js';
 import { pruneSessionClaims } from '../../session/claims.js';
 import { readState } from '../../session/state/read.js';
@@ -224,7 +224,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   }
   // A Gateway model is checked against the Gateway's list below, not a harness's.
   const model = options.model === undefined || options.route === 'gateway' ? undefined : normalizeModelWord(options.model);
-  if (model && harness && !(harness.modelArgvPrefix !== undefined || harness.acp?.listsModels)) throw new Error(`${harness.displayName} does not publish a model selector.`);
+  if (model && harness && !harnessSupportsModelSelection(harness)) throw new Error(`${harness.displayName} does not publish a model selector.`);
   if (model) await assertRealModel(harness, account, model);
   if (options.effort && harness) {
     const effortOption = optionForHarness(harness, 'effort');
@@ -439,7 +439,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   const model = options.model === undefined ? undefined
     : effectiveRoute === 'gateway' ? gatewayModel ?? null
       : effectiveRoute === 'clikcode-local' ? resolveLocalModelId(options.model) : normalizeModelWord(options.model);
-  if (model && effectiveRoute !== 'gateway' && effectiveRoute !== 'clikcode-local' && selectedHarness && !(selectedHarness.modelArgvPrefix !== undefined || selectedHarness.acp?.listsModels)) {
+  if (model && effectiveRoute !== 'gateway' && effectiveRoute !== 'clikcode-local' && selectedHarness && !harnessSupportsModelSelection(selectedHarness)) {
     throw new Error(`${selectedHarness.displayName} does not publish a model selector.`);
   }
   if (model && effectiveRoute !== 'gateway') await assertRealModel(selectedHarness, account ?? state.accounts.find((item) => item.id === current.accountId), model);

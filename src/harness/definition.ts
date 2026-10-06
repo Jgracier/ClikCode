@@ -86,6 +86,7 @@ export interface AiRouterRuntime {
   localHarnessForProvider(provider: string): AiLocalHarnessDefinition | undefined;
   localHarnessCapabilityManifest(harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest;
   harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolean;
+  harnessSupportsModelSelection(harness: AiLocalHarnessDefinition): boolean;
   harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean;
   harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean;
   harnessIntegrationLevel(harness: AiLocalHarnessDefinition): AiHarnessIntegrationLevel;

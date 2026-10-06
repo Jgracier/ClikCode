@@ -15,7 +15,7 @@ import type Conf from 'conf';
 import { vendorFacingOptions } from '../../harness/options.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
-import { harnessSupportsEffort, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, harnessSupportsModelSelection, localHarnessCapabilityManifest, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
@@ -97,7 +97,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
           },
         },
       ] : []),
-      ...(harness && (harness.modelArgvPrefix !== undefined || harness.acp?.listsModels) ? [{
+      ...(harness && harnessSupportsModelSelection(harness) ? [{
         label: 'Model', detail: session.model ? nativeModelLabel(harness.command, session.model) ?? session.model : 'harness default', value: 'model',
         actions: defaultActions(harness, 'model'),
       }] : []),
