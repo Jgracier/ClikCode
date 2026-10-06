@@ -127,6 +127,17 @@ describe('searchConversations', () => {
     expect(result.hits.map((hit) => hit.conversationId)).toEqual(['theirs']);
   });
 
+  it('groups as readState reads: an old status is active, and clerks and folded branches are no conversation', async () => {
+    await store(
+      chat('old', [user('plum')], { status: 'open' } as unknown as Partial<HarnessSession>),
+      chat('clerk', [user('plum')], { clerkOf: 'old' } as Partial<HarnessSession>),
+      chat('folded', [user('plum')], { foldedInto: 'old' } as Partial<HarnessSession>),
+    );
+    const groups = await conversationGroups();
+    expect(groups.map((group) => group.id)).toEqual(['old']);
+    expect(groups[0]!.newest.status).toBe('active');
+  });
+
   it('filters by since', async () => {
     await store(chat('old', [user('kiwi')], { updatedAt: daysAgo(10) }), chat('new', [user('kiwi')], { updatedAt: daysAgo(1) }));
     const result = (await searchConversations('kiwi', { now: NOW, sinceMs: NOW - 2 * 86_400_000 }))!;

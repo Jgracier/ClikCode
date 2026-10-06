@@ -16,7 +16,7 @@ import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, baselineOf, rememberBas
 import { hidden } from '../store/data.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js';
-import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission } from './settings.js';
+import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission, normalizedStatus } from './settings.js';
 import { writeState } from './write.js';
 import { foldHandoffBranches, hasLooseBranches } from './fold-handoffs.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
@@ -87,9 +87,7 @@ function normalizedState(raw: HarnessState): HarnessState {
       ...session,
       ...normalizedConversation(session),
       accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
-      // Sessions created before lifecycle state existed were still open at the
-      // time of upgrade, so preserve their resumability once.
-      status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active',
+      ...normalizedStatus(session),
       ...normalizedSessionPermission(session),
       ...legacyThreadTransport(session),
     };

@@ -20,6 +20,12 @@ export function normalizedSessionPermission(session: HarnessSession): Pick<Harne
   return { permissionMode: normalizedPermissionMode(session.permissionMode) };
 }
 
+/** Sessions created before lifecycle state existed were still open at the
+ * time of upgrade, so they read as active. */
+export function normalizedStatus(session: HarnessSession): Pick<HarnessSession, 'status'> {
+  return { status: session.status === 'closed' || session.status === 'archived' ? session.status : 'active' };
+}
+
 export function normalizedConversation(session: HarnessSession): Pick<HarnessSession, 'conversationId'> {
   // Pre-handoff state had one ClikCode session per conversation. Preserve
   // that exact behavior while giving every existing record a durable root.
