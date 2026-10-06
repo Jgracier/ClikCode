@@ -190,6 +190,16 @@ describe('local harness catalog', () => {
     expect(harnessSupportsEffort(localHarnessForCommand('gemini')!)).toBe(false);
   });
 
+  it('counts effort an ACP agent takes only over ACP: a flag (Copilot) or a session option (Goose)', () => {
+    for (const command of ['copilot', 'goose']) {
+      const harness = localHarnessForCommand(command)!;
+      expect(harnessSupportsEffort(harness)).toBe(true);
+      expect(localHarnessCapabilityManifest(harness).options.find((option) => option.id === 'effort')).toMatchObject({ kind: 'enum' });
+    }
+    expect(localHarnessCapabilityManifest(localHarnessForCommand('copilot')!).options.find((option) => option.id === 'effort')?.argv).toEqual(['--effort']);
+    expect(localHarnessCapabilityManifest(localHarnessForCommand('goose')!).options.find((option) => option.id === 'effort')?.argv).toBeUndefined();
+  });
+
   it('declares permission-mode support for exactly the harnesses that map it to a real flag', () => {
     // Kept hardcoded on purpose: deriving these from the catalog would make
     // the test agree with whatever the catalog says, which is not a test.
@@ -414,7 +424,7 @@ describe('local harness catalog', () => {
       // text with a banner around the answer).
       if (harness.turn) expect(harness.parser === 'text' || harness.parser === 'aider', harness.command).toBe(harness.turn.output === 'text');
       else expect(harness.parser, harness.command).toBe('text');
-      if (harness.effortArgvPrefix) expect(harness.effortValues?.length, harness.command).toBeGreaterThan(0);
+      if (harnessSupportsEffort(harness)) expect(harness.effortValues?.length, harness.command).toBeGreaterThan(0);
       else expect(harness.effortValues, harness.command).toBeUndefined();
     }
   });

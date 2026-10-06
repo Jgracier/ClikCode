@@ -45,14 +45,15 @@ describe('every declared capability is usable', () => {
 
   it('never declares effort values with no flag to pass them through', () => {
     const offenders = harnesses
-      .filter((h) => (h.effortValues?.length ?? 0) > 0 && (h.effortArgvPrefix?.length ?? 0) === 0)
+      .filter((h) => (h.effortValues?.length ?? 0) > 0 && !h.effortArgvPrefix?.length && !h.acp?.effortArgvPrefix?.length && !h.acp?.effortConfigId)
       .map((h) => h.command);
     expect(offenders, 'these declare effort values that cannot be sent').toEqual([]);
   });
 
   it('agrees with itself about whether effort is supported', () => {
     for (const h of harnesses) {
-      const declared = (h.effortArgvPrefix?.length ?? 0) > 0;
+      // A one-shot flag, or over ACP only: a flag (Copilot) or a session option (Goose).
+      const declared = (h.effortArgvPrefix?.length ?? 0) > 0 || (h.acp?.effortArgvPrefix?.length ?? 0) > 0 || Boolean(h.acp?.effortConfigId);
       expect(harnessSupportsEffort(h), `${h.command}`).toBe(declared);
     }
   });

@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
-import { localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { harnessModelLabel, nativeModelCatalogForPicker, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
@@ -689,7 +689,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
 async function keepEffortValidFor(
   session: HarnessSession, harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined,
 ): Promise<void> {
-  if (!session.effort || !harness.effortArgvPrefix) return;
+  if (!session.effort || !harnessSupportsEffort(harness)) return;
   const choices = await effortChoicesFor(harness, account, session.model);
   if (!choices.values.length || choices.values.includes(session.effort)) return;
   // An empty level sends no effort flag at all (every argv builder checks
