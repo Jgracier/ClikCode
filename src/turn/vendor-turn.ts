@@ -1,9 +1,8 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
-import { freeModelAfterPlanRefusal, freePlanModels, preferredFreeModel } from '../harness/accounts/free-plan.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
-import { nativeModelCatalog, resolveNativeModel } from '../harness/accounts/model-catalog.js';
+import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../session/state/paths.js';
 import chalk from 'chalk';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -272,8 +271,6 @@ export async function sendVendorTurn(input: {
     return true;
   };
   let effortRetried = false;
-  // Free models this turn has moved to, so a busy one is not tried twice.
-  const freeModelsTried = new Set<string>();
   /** A fresh native thread gets one recovery attempt per account. */
   let nativeThreadRetried = false;
   const effortKey = (): string => `${harness.command} ${model ?? ''} ${session.effort}`;
@@ -511,29 +508,6 @@ export async function sendVendorTurn(input: {
         session.effortRefused = effortKey();
         await checkpoint.persistNow();
         continue;
-      }
-      // A model the account's plan does not run, refused while its free
-      // models still answer (Cline on spent credits, a Cursor Free account on a
-      // named model): the model's refusal, not the account's -- marking the
-      // account spent failed over every one, all refused the same model,
-      // while each would have answered on a free one. A free model that is
-      // only busy ("temporarily rate-limited upstream") gives way to the next.
-      if (!cliOutputStarted && harness.freePlan && freeModelsTried.size < 3) {
-        const catalog = await nativeModelCatalog(harness, account).catch(() => undefined);
-        const free = freePlanModels(harness, account, catalog ?? { models: [] });
-        const untried = new Set([...free].filter((id) => !freeModelsTried.has(id) && id !== model));
-        const next = freeModelAfterPlanRefusal(harness, model, failure, untried)
-          ?? (model && freeModelsTried.has(model) && failureKind === 'temporarily-throttled' ? preferredFreeModel(untried) : undefined);
-        if (next) {
-          freeModelsTried.add(next);
-          prompter?.activity(chalk.yellow(freeModelsTried.size > 1 && model && free.has(model)
-            ? `${model} is busy; continuing on ${next}`
-            : `${account.label}'s ${harness.displayName} plan does not run ${model}; continuing on ${next}, which it does`));
-          model = next;
-          session.model = next;
-          await checkpoint.persistNow();
-          continue;
-        }
       }
       // An `experimental` structured contract an older vendor build rejects
       // outright: retry once on the proven fallback contract, and remember it.

@@ -44,24 +44,8 @@ export function freePlanModels(
   return free;
 }
 
-/** The free model a refused turn goes on with: when the refusal is the
- * vendor's "not on your plan" (catalog `freePlan.refusals`) and the model it
- * refused is not free (preferredFreeModel). Undefined: another failure, or nothing free to go on with. */
-export function freeModelAfterPlanRefusal(
-  harness: Pick<AiLocalHarnessDefinition, 'freePlan'>, model: string | null | undefined, failure: unknown, free: ReadonlySet<string>,
-): string | undefined {
-  // A vendor that lists only its plan's models refuses the rest before the
-  // turn (acp-client's "does not list model").
-  const refusals = [...harness.freePlan?.refusals ?? [], ...harness.freePlan?.listed ? ['does not list model'] : []];
-  if (!refusals.length || !model || free.has(model)) return undefined;
-  const message = (failure instanceof Error ? failure.message : String(failure)).toLowerCase();
-  if (!refusals.some((refusal) => message.includes(refusal))) return undefined;
-  return preferredFreeModel(free);
-}
-
-/** The vendor's own free router first (Kilo's `kilo-auto/free`,
- * `openrouter/free`, Cursor's `default[]`: they route around a free model
- * that is overloaded, which the first listed one was), then the first. */
+/** The model a free-plan account starts on: the vendor's own router first
+ * (Cursor's `default[]`, Kiro's `auto`), then the first listed. */
 export function preferredFreeModel(free: ReadonlySet<string>): string | undefined {
   const listed = [...free];
   return listed.find((id) => /(?:^|[/-])(?:auto|default)\b|\/free$/.test(id)) ?? listed[0];

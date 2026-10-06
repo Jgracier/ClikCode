@@ -351,10 +351,8 @@ export async function resolveNativeModel(
   const chosen = harness.defaultModel && catalog.models.includes(harness.defaultModel) ? harness.defaultModel : catalog.configured?.trim();
   // A free plan starts on a model it runs, not on a default it refuses
   // (Cursor's ACP session opens on a named model a Free plan cannot use).
-  if (chosen && !(planIsFree(account?.plan) && free.size && !free.has(chosen))) return chosen;
-  // Nothing chosen: a free model before the first listed, which was a paid
-  // one Kilo refused on an empty balance.
-  return preferredFreeModel(free) ?? chosen ?? catalog.models.find((model) => model.trim().length > 0);
+  if (planIsFree(account?.plan) && free.size && !(chosen && free.has(chosen))) return preferredFreeModel(free);
+  return chosen ?? catalog.models.find((model) => model.trim().length > 0);
 }
 
 async function syncAccountModels(accountId: string, models: readonly string[]): Promise<void> {
