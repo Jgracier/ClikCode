@@ -11,6 +11,7 @@
  * importing each other.
  */
 import { conversationPreview, sessionFromIndex, transcriptWasLoaded } from './list-facts.js';
+import { isConversationChat } from './conversation-rows.js';
 
 export { conversationPreview };
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent } from './route.js';
@@ -90,7 +91,7 @@ export function isBlankConversation(session: HarnessSession): boolean {
 export function chatNamed(sessions: readonly HarnessSession[], typed: string, currentId: string): string | undefined {
   const query = typed.trim().toLowerCase();
   if (!query) return undefined;
-  const chats = sessions.filter((session) => session.id !== currentId && !session.clerkOf && !session.foldedInto && !isBlankConversation(session));
+  const chats = sessions.filter((session) => session.id !== currentId && isConversationChat(session) && !isBlankConversation(session));
   const latest = (list: readonly HarnessSession[]): string => [...list].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]!.id;
   // `last`: the most recent chat, whatever it is called.
   if (query === 'last' && chats.length) return latest(chats);
@@ -108,7 +109,7 @@ export function chatNamed(sessions: readonly HarnessSession[], typed: string, cu
 /** The chat `clikcode --continue` reopens: the latest in this folder, else
  * the latest anywhere. */
 export function latestChat(sessions: readonly HarnessSession[], workspace: string): HarnessSession | undefined {
-  const chats = sessions.filter((session) => !session.clerkOf && !session.foldedInto && !isBlankConversation(session)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  const chats = sessions.filter((session) => isConversationChat(session) && !isBlankConversation(session)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   return chats.find((session) => session.workspace === workspace) ?? chats[0];
 }
 

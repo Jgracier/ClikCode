@@ -3,8 +3,9 @@
  * as it is on disk and nothing is ever written back. */
 
 import type { HarnessSession } from '../session/model.js';
-import { conversationIdFor } from '../session/conversation-rows.js';
+import { groupByConversation } from '../session/conversation-rows.js';
 import { loadIndex } from '../session/state/index-file.js';
+import { normalizedStatus } from '../session/state/settings.js';
 
 export interface ConversationGroup {
   id: string;
@@ -31,19 +32,7 @@ export function conversationTitle(session: HarnessSession, limit = 60): string {
 export async function conversationGroups(): Promise<ConversationGroup[]> {
   const index = await loadIndex();
   const sessions = (index?.sessions ?? []) as unknown as HarnessSession[];
-  const groups = new Map<string, HarnessSession[]>();
-  for (const raw of sessions) {
-    // As readState normalizes it: a record from before lifecycle state was
-    // open at the time, so it is active.
-    const session = raw.status === 'closed' || raw.status === 'archived' || raw.status === 'active' ? raw : { ...raw, status: 'active' as const };
-    // A swarm's helper chat is part of its host's turn, never a conversation;
-    // a folded branch's history is all in the branch it was folded into.
-    if (session.clerkOf || session.foldedInto) continue;
-    const root = conversationIdFor(session);
-    const list = groups.get(root);
-    if (list) list.push(session);
-    else groups.set(root, [session]);
-  }
+  const groups = groupByConversation(sessions.map((session) => ({ ...session, ...normalizedStatus(session) })));
   return [...groups].map(([id, branches]) => {
     branches.sort((left, right) => timestamp(right.updatedAt) - timestamp(left.updatedAt));
     return { id, branches, newest: branches[0]!, updatedAtMs: timestamp(branches[0]!.updatedAt) };

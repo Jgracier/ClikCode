@@ -77,6 +77,26 @@ const timestamp = (value: string): number => {
   return Number.isNaN(at) ? -Infinity : at;
 };
 
+/** Whether a chat is a conversation of its own. A swarm's helper chat (a
+ * clerk) is part of its host's turn; a folded branch's history is all in the
+ * branch it was folded into. */
+export function isConversationChat(session: HarnessSession): boolean {
+  return !session.clerkOf && !session.foldedInto;
+}
+
+/** The conversation chats, by the conversation each belongs to. */
+export function groupByConversation(sessions: readonly HarnessSession[]): Map<string, HarnessSession[]> {
+  const groups = new Map<string, HarnessSession[]>();
+  for (const session of sessions) {
+    if (!isConversationChat(session)) continue;
+    const root = conversationIdFor(session);
+    const group = groups.get(root);
+    if (group) group.push(session);
+    else groups.set(root, [session]);
+  }
+  return groups;
+}
+
 /** One row per conversation: Working first, then Recent, then Older; within
  * each, one that needs the user first, then newest first. A clerk (a swarm's helper chat) is never a row. Which
  * chats count as conversations at all (blank ones) is the caller's filter. */
@@ -84,16 +104,8 @@ export function conversationRows(sessions: readonly HarnessSession[], facts: Con
   const now = facts.now ?? Date.now();
   const host = facts.host ?? hostname();
   const workerIsLive = facts.workerIsLive ?? (() => false);
-  const groups = new Map<string, HarnessSession[]>();
-  for (const session of sessions) {
-    if (session.clerkOf || session.foldedInto) continue;
-    const root = conversationIdFor(session);
-    const group = groups.get(root);
-    if (group) group.push(session);
-    else groups.set(root, [session]);
-  }
   const rows: ConversationRow[] = [];
-  for (const [root, chats] of groups) {
+  for (const [root, chats] of groupByConversation(sessions)) {
     const newest = (list: readonly HarnessSession[]): HarnessSession => list.reduce((best, item) => (timestamp(item.updatedAt) > timestamp(best.updatedAt) ? item : best));
     const open = chats.filter((session) => session.status === 'active');
     const latest = newest(open.length ? open : chats);
