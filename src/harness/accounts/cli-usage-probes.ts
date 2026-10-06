@@ -141,6 +141,71 @@ export async function copilotAccountModels(environment: Environment): Promise<{ 
   return Object.keys(labels).length ? { models: Object.keys(labels), labels } : undefined;
 }
 
+// ---------------------------------------------------------------- Antigravity
+
+/** `fetchAvailableModels`' `quotaInfo` per model, as one window per quota
+ * pool: models sharing a reset share a pool (Gemini's, and Claude's with
+ * GPT-OSS, 2026-10-06), named by their families. A pool with no
+ * `remainingFraction` is spent (a protobuf zero). Advisory: a turn answered
+ * once while its pool read spent, and the refusal names the exact reset. */
+export function antigravityQuotaReading(models: unknown): UsageReading | undefined {
+  if (!models || typeof models !== 'object') return undefined;
+  const pools = new Map<string, { families: Set<string>; left: number; reset: string }>();
+  for (const [id, model] of Object.entries(models as Record<string, Json>)) {
+    const quota = model?.quotaInfo as Json | undefined;
+    if (typeof quota?.resetTime !== 'string' || typeof model.displayName !== 'string') continue;
+    const left = typeof quota.remainingFraction === 'number' ? quota.remainingFraction : 0;
+    const pool = pools.get(quota.resetTime) ?? { families: new Set<string>(), left, reset: quota.resetTime };
+    pool.families.add((model.displayName as string).split(/\s+/)[0] ?? id);
+    pool.left = Math.min(pool.left, left);
+    pools.set(quota.resetTime, pool);
+  }
+  const windows = [...pools.values()].sort((a, b) => a.reset.localeCompare(b.reset)).map((pool) => {
+    const window = usageWindow([...pool.families].join('/'), (1 - pool.left) * 100, pool.reset);
+    return window ? { ...window, advisory: true as const } : undefined;
+  });
+  return usageReading(windows);
+}
+
+async function antigravityAccessToken(environment: Environment): Promise<string | undefined> {
+  const file = join(environment.HOME ?? homedir(), '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+  const token = (JSON.parse(await readFile(file, 'utf8')) as Json).token as Json | undefined;
+  const fresh = typeof token?.expiry === 'string' && Date.parse(token.expiry) > Date.now() + 60_000;
+  return fresh && typeof token?.access_token === 'string' ? token.access_token : undefined;
+}
+
+/** The account's tier from `loadCodeAssist` ("free-tier") and its quota
+ * pools from `fetchAvailableModels` for the project that answer names (sent
+ * without it, every pool reads full). The token lasts an hour and only agy
+ * renews it: `agy models` does, as it lists. */
+export async function antigravityUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  try {
+    let token = await antigravityAccessToken(environment).catch(() => undefined);
+    if (!token) {
+      const harness = localHarnessForCommand('antigravity');
+      if (harness) await captureNativeHarnessOutput(harness, ['models'], environment, PROBE_TIMEOUT_MS).catch(() => '');
+      token = await antigravityAccessToken(environment);
+    }
+    if (!token) return undefined;
+    const ask = async (method: string, body: Json): Promise<Json | undefined> => {
+      const response = await fetch(`https://cloudcode-pa.googleapis.com/v1internal:${method}`, {
+        method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        // Any other client is told "This client is no longer supported".
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'antigravity/1.0.0' },
+      });
+      return response.ok ? await response.json() as Json : undefined;
+    };
+    const assist = await ask('loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY', pluginType: 'GEMINI' } });
+    const tier = assist?.currentTier?.id;
+    const project = assist?.cloudaicompanionProject;
+    if (typeof project !== 'string') return undefined;
+    const reading = antigravityQuotaReading((await ask('fetchAvailableModels', { project }))?.models);
+    return reading && typeof tier === 'string' ? { ...reading, plan: { name: tier } } : reading;
+  } catch {
+    return undefined; // fail-open-ok: no figure beats a wrong one
+  }
+}
+
 // ---------------------------------------------------------------- Kimi
 
 /** Kimi's own normalized quota (`managedUsageResultSchema`): each window a

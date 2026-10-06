@@ -88,7 +88,7 @@ describe('can an account take a turn now', () => {
 
 describe('which accounts are re-read', () => {
   const state = (accounts: AiHarnessAccount[]): HarnessState => ({ accounts } as unknown as HarnessState);
-  // Claude has a usage probe; Antigravity has none.
+  // Claude has a usage probe; the others here have none.
   const askable = (item: AiHarnessAccount): boolean => item.provider === 'anthropic';
 
   it('re-reads a spent account once its reading has passed a reset, and not before', () => {
