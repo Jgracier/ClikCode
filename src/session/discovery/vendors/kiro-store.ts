@@ -180,13 +180,16 @@ export function kiroThreadFiles(record: CanonicalRecord, options: KiroThreadOpti
   // Kiro panics on a history whose prompts and replies do not alternate
   // ("first agent loop request should never fail: invalid conversation
   // history received", kiro-cli 2.23.1) and its ACP agent then hangs: a
-  // turn that got no reply (failed, interrupted) says so instead.
+  // turn that got no reply (failed, interrupted) says so instead. Tool
+  // results are the user's side too: a turn cut off after its tools ran
+  // and before the model answered them is two in a row the same way.
   const lastKind = (): string | undefined => (lines.at(-1) as { kind?: string } | undefined)?.kind;
+  const unanswered = (): boolean => lastKind() === 'Prompt' || lastKind() === 'ToolResults';
   const noReply = (): void => add('AssistantMessage', { content: [{ kind: 'text', data: '(No reply: this turn was interrupted.)' }] });
   for (const turn of record.turns) {
     const request = requestText(turn);
     if (request.trim() || !lines.length) {
-      if (lastKind() === 'Prompt') noReply();
+      if (unanswered()) noReply();
       add('Prompt', { content: [{ kind: 'text', data: request.trim() ? request : '(continue)' }], meta: { timestamp: seconds } });
     }
     for (const step of assistantSteps(turn, map, callId)) {
@@ -213,7 +216,7 @@ export function kiroThreadFiles(record: CanonicalRecord, options: KiroThreadOpti
       add('ToolResults', { content, results });
     }
   }
-  if (lastKind() === 'Prompt') noReply();
+  if (unanswered()) noReply();
   const at = options.now.toISOString();
   const title = record.turns.find((turn) => turn.user.trim())?.user.trim().replace(/\s+/g, ' ').slice(0, 120) ?? null;
   const session = {

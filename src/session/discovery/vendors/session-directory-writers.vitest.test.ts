@@ -237,13 +237,17 @@ describe('kiro thread writer', () => {
 
   // kiro-cli 2.23.1 panicked on prompts that did not alternate with replies
   // ("invalid conversation history received") and its ACP agent then hung.
-  it('alternates prompts and replies when a turn got no reply, and never ends on a prompt', () => {
+  it('alternates prompts and replies when a turn got no reply or stopped after its tools, and never ends unanswered', () => {
     const base = fixtureRecord();
     const silent = (index: number, user: string): CanonicalTurn => ({ ...base.turns[0]!, index, user, parts: [], tools: [], assistant: '', touchedFiles: [], interrupted: true });
-    const record = { ...base, turns: [base.turns[0]!, silent(1, 'how are we doing?'), { ...base.turns[1]!, index: 2 }, silent(3, 'and now?')] };
+    // Cut off after its tools ran, before the model answered them: the
+    // results are the user's side, so the next prompt followed one (2026-10-06).
+    const toolsOnly = { ...base.turns[1]!, index: 4, user: 'and fix it', parts: base.turns[1]!.parts.filter((part) => part.type === 'tool'), assistant: '', interrupted: true };
+    const record = { ...base, turns: [base.turns[0]!, silent(1, 'how are we doing?'), { ...base.turns[1]!, index: 2 }, silent(3, 'and now?'), toolsOnly, { ...base.turns[0]!, index: 5 }, { ...toolsOnly, index: 6 }] };
     const kinds = kiroThreadFiles(record, { sessionId: 's', workspace: WORKSPACE, now: NOW }).messages.trim().split('\n').map((line) => (JSON.parse(line) as { kind: string }).kind);
     for (let at = 1; at < kinds.length; at++) {
       expect([kinds[at - 1], kinds[at]], `at ${at}`).not.toEqual(['Prompt', 'Prompt']);
+      expect([kinds[at - 1], kinds[at]], `at ${at}`).not.toEqual(['ToolResults', 'Prompt']);
       expect([kinds[at - 1], kinds[at]], `at ${at}`).not.toEqual(['AssistantMessage', 'AssistantMessage']);
     }
     expect(kinds.at(-1)).toBe('AssistantMessage');
