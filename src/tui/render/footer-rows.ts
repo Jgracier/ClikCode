@@ -6,6 +6,15 @@ import chalk from 'chalk';
 import { paletteDisplayRows, type PaletteEntry } from '../command-palette.js';
 import { terminalCellWidth, visibleSlice } from './width.js';
 import { wrapWords } from './wrap.js';
+import { keyHintFor } from '../../harness/protocol/wording.js';
+
+/** A ` · `-joined hint cut to `width` by whole parts from the end: a narrow
+ * screen shows fewer keys, never half of one. */
+export function fitHint(hint: string, width: number): string {
+  const parts = hint.split(' · ');
+  while (parts.length > 1 && terminalCellWidth(parts.join(' · ')) > width) parts.pop();
+  return visibleSlice(parts.join(' · '), Math.max(1, width));
+}
 
 /** The palette band, `capacity` rows tall: a rule, the list windowed around
  * the selected row (padded to its height), and the hint under it. `width`
@@ -39,7 +48,8 @@ export function paletteRows(
     rows.push(`${margin}${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
   }
   for (let index = windowed.length; index < visibleRows; index++) rows.push('');
-  rows.push(`${margin}${chalk.dim(visibleSlice(settings.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
+  const hint = settings.hint ?? [keyHintFor('↑↓', 'select'), keyHintFor('tab', 'complete'), keyHintFor('enter', 'run')].join(' · ');
+  rows.push(`${margin}${chalk.dim(fitHint(hint, width - 2 - margin.length))}`);
   return rows;
 }
 
@@ -58,12 +68,12 @@ export function panelRows(
   const wrapped = panel.lines.flatMap((line) => (terminalCellWidth(line) <= inner ? [line] : wrap(line)));
   const page = Math.max(1, Math.min(wrapped.length, budget - 2, Math.max(3, targetHeight - 10)));
   const offset = Math.max(0, Math.min(panel.offset, wrapped.length - page));
-  const position = wrapped.length > page ? `${offset + 1}-${offset + page} of ${wrapped.length} · ↑↓ PgUp/PgDn scroll · ` : '';
+  const position = wrapped.length > page ? `${offset + 1}-${offset + page} of ${wrapped.length} · ${keyHintFor('↑↓', 'scroll')} · ` : '';
   return {
     rows: [
       `  ${chalk.bold(visibleSlice(panel.title, inner))}`,
       ...wrapped.slice(offset, offset + page).map((line) => `  ${line}`),
-      `  ${chalk.dim(visibleSlice(`${position}q/Esc/Enter close`, inner))}`,
+      `  ${chalk.dim(fitHint(`${position}${keyHintFor('esc', 'close')}`, inner))}`,
     ],
     page, total: wrapped.length, offset,
   };

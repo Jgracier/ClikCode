@@ -99,8 +99,8 @@ describe('a queued row says where it waits and what Enter does', () => {
   it('names the hold, a steer the turn could not take, and enter again', () => {
     const submissions = [{ id: 'u', text: 'x', disposition: 'queued', unsteered: true }];
     expect(queuedRowLabel({ submissions: [] }, { id: 'a' }, false)).toBe('queued');
-    expect(queuedRowLabel({ submissions: [] }, { id: 'a', held: true }, true)).toBe('sending at the next pause · enter again to stop & send');
-    expect(queuedRowLabel({ submissions }, { id: 'u' }, true)).toBe("queued · this turn can't take it · enter again to stop & send");
+    expect(queuedRowLabel({ submissions: [] }, { id: 'a', held: true }, true)).toBe('sending at the next pause · enter again stop & send');
+    expect(queuedRowLabel({ submissions }, { id: 'u' }, true)).toBe("queued · this turn can't take it · enter again stop & send");
   });
 
   it('carries the worker\'s unsteered answer onto the typed message', () => {

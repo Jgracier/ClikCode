@@ -6,6 +6,7 @@
 import chalk from 'chalk';
 import type { PickerOption, PickerSettings } from '../harness/prompter.js';
 import { takeTerminalKeys } from './input-decoder.js';
+import { keyHintFor } from '../harness/protocol/wording.js';
 import { pickerConfirmsSelection, pickerDeletesSelection } from './command-palette.js';
 
 /** What the picker needs from the frame that owns the screen. */
@@ -117,23 +118,23 @@ export function runOptionPicker<T>(
       const renderOptions = visible.map((option) => ({
         label: option.label, detail: option.inline ? inlineDetail(option) : option.detail, value: '', group: option.group,
       }));
-      const confirmation = '\u2192/Enter';
+      const confirmation = keyHintFor('enter', 'choose');
       const selectedOption = visible[selected];
       if (selectedOption?.inline) {
         host.paint(title, renderOptions, selected, '', 0, {
           capacity, hideCursor: true,
-          hint: `\u2190\u2192 or 1-${selectedOption.inline.choices.length} choose · \u2191\u2193 move · Esc done`,
+          hint: `${keyHintFor(`\u2190\u2192 or 1-${selectedOption.inline.choices.length}`, 'choose')} · ${keyHintFor('\u2191\u2193', 'move')} · ${keyHintFor('esc', 'done')}`,
         });
         return;
       }
-      const secondary = selectedOption?.alternates?.length ? ' · Tab history'
-        : selectedOption?.actions?.length ? ' · Tab options' : '';
-      const destructive = selectedOption?.deleteAction ? ` · Del ${selectedOption.deleteAction.label.toLowerCase()}` : '';
-      const inner = selectedOption?.inner?.options.length ? ` · \u2192 ${selectedOption.inner.title.toLowerCase()}` : '';
-      const back = '\u2190 back';
+      const secondary = selectedOption?.alternates?.length ? ` · ${keyHintFor('tab', 'history')}`
+        : selectedOption?.actions?.length ? ` · ${keyHintFor('tab', 'options')}` : '';
+      const destructive = selectedOption?.deleteAction ? ` · ${keyHintFor('del', selectedOption.deleteAction.label.toLowerCase())}` : '';
+      const inner = selectedOption?.inner?.options.length ? ` · ${keyHintFor('\u2192', selectedOption.inner.title.toLowerCase())}` : '';
+      const keys = `${keyHintFor('\u2191\u2193', 'move')} · ${confirmation}${inner}${secondary}${destructive} · ${keyHintFor('\u2190', 'back')} · ${keyHintFor('esc', 'exit')}`;
       const hint = query
-        ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${inner}${secondary}${destructive} · ${back} · Esc exit`
-        : `${settings?.totalItems ?? currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${inner}${secondary}${destructive} · ${back} · Esc exit · type to filter`;
+        ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · ${keys}`
+        : `${settings?.totalItems ?? currentOptions().length} total · ${keys} · type to filter`;
       host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, headings: true, hint });
     };
     let finished = false;

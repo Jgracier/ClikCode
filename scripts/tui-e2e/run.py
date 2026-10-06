@@ -350,7 +350,7 @@ SCENARIOS = {
         'steps': [('keys', '/effort'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Reasoning effort', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'Effort set to High', 10)],
         'watch': [], 'ever': ['❯ Medium  · current', 'Effort set to High'],
-        'never_together': [('› /effort', 'Reasoning effort'), ('Tab complete · Enter run', 'Reasoning effort')],
+        'never_together': [('› /effort', 'Reasoning effort'), ('tab complete · enter run', 'Reasoning effort')],
     },
     # What runs is what is highlighted: a typed command starts highlighted,
     # and its picker replaces it.
@@ -358,7 +358,7 @@ SCENARIOS = {
         'turns': [TWO_BLOCKS],
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 1)],
         'watch': [], 'ever': ['❯ /account'],
-        'never_together': [('› /account', 'Grok Build accounts'), ('Tab complete · Enter run', 'Grok Build accounts')],
+        'never_together': [('› /account', 'Grok Build accounts'), ('tab complete · enter run', 'Grok Build accounts')],
     },
     # Del on a signed-in account asks first, then signs it out: the row
     # turns to reauth and the vendor's own logout ran.
@@ -535,7 +535,7 @@ SCENARIOS = {
             ('wait_for', 'The long job is finished.', 40), ('settle', 3),
         ],
         'watch': ['start the long job', 'The long job is finished.'],
-        'never': ['stopping', 'enter again to stop & send'],
+        'never': ['stopping', 'enter again stop & send'],
     },
     # Enter mid-turn queues the message; Enter again, nothing typed, stops the
     # turn and sends it as the next one at once -- one row the whole way.
@@ -545,7 +545,7 @@ SCENARIOS = {
                   {'blocks': ['The queued one answered now.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('type', 'then do this'), ('wait_for', 'enter again to stop & send', 10), ('keys', '\r'),
+            ('type', 'then do this'), ('wait_for', 'enter again stop & send', 10), ('keys', '\r'),
             ('wait_for', 'The queued one answered now.', 40), ('settle', 3),
         ],
         'watch': ['start the long job', 'then do this', 'The queued one answered now.'],

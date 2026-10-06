@@ -43,7 +43,7 @@ import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js'
 import { NOTICE_MS, PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
-import { paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
+import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
 import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
@@ -63,7 +63,7 @@ import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { appendThought, composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
 import { formatElapsed } from '../harness/protocol/format.js';
-import { keyHint } from '../harness/protocol/wording.js';
+import { keyHint, keyHintFor } from '../harness/protocol/wording.js';
 import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
@@ -1510,8 +1510,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * what actually arrives: the open call names the verb, the clock stops for
    * an approval. The spinner turns yellow once the turn has gone quiet.
    *
-   * At most one hint, and only for a key whose effect is not obvious: with a
-   * message waiting and nothing typed, Enter stops the turn and sends it.
+   * No key hints: the one whose effect is not obvious (Enter again stops
+   * the turn and sends a waiting message) is on that message's own row.
    * Stopping (Ctrl+C), sending and leaving for the board are the same keys
    * every time and are not spelled out on every frame. */
   private waitingLine(turn: WaitingTurn): string {
@@ -1529,12 +1529,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       asking: Boolean(this.pendingApproval),
     });
     const asking = Boolean(this.pendingApproval);
-    const hint = !asking && turn.submit && turn.cancel && !turn.cancelled && !turn.draft.trim() && this.messageWaiting()
-      ? ` · ${STEER_WORDS.stopAndSend}` : '';
     // What the agent is doing is essential and stays at full contrast; the
-    // clock and the hint after it are dimmed. An open call's row keeps its
-    // own clock, so this line does not show a second one beside it.
-    const rest = asking ? '' : `${tool ? '' : ` · ${elapsed}`}${hint}`;
+    // clock is dimmed. An open call's row keeps its own clock, so this line
+    // does not show a second one beside it.
+    const rest = asking || tool ? '' : ` · ${elapsed}`;
     // One spinner, one motion, for every harness and every tool, the label
     // shimmering with it. An approval is the turn waiting on the user, not
     // working: a still dot, and no clock (it is stopped).
@@ -1701,6 +1699,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // While a turn runs a waiting message can be sent at once -- Enter again,
     // with nothing typed -- by stopping the turn, which the hint says: it ends
     // sub-agents too. Not while something is typed: Enter then delivers that.
+    // Said once, on the newest waiting message (the one Esc takes back).
     const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled && !this.turn.draft.trim() ? ` · ${STEER_WORDS.stopAndSend} · ${keyHint('takeBack')}` : '';
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
@@ -2045,14 +2044,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       emit(['', `  ${chalk.dim(`─ ${this.pendingTurnSummary} ─`)}`, '']);
       this.pendingTurnSummary = undefined;
     }
+    const waitingAt = queuedMessages.map((message) => !['steered', 'sending', 'error'].includes(message.queueState)).lastIndexOf(true);
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
       // message the moment it is sent, and would then be written a second time.
+      const keys = queueIndex === waitingAt ? sendNowHint : '';
       const status = message.queueState === 'steered' ? STEER_WORDS.steered
         : message.queueState === 'sending' ? 'submitting…'
-          : message.queueState === 'pause' ? `${STEER_WORDS.held}${sendNowHint}`
+          : message.queueState === 'pause' ? `${STEER_WORDS.held}${keys}`
             : message.queueState === 'error' ? 'not sent · restored for editing'
-              : `queued for next turn${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}${sendNowHint}`;
+              : `queued for next turn${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}${keys}`;
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.
       // The speaker changes once, where the queue begins: two rows there, the
@@ -2060,7 +2061,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // they are a list of things the same person wrote, not a new speaker
       // each time.
       liveConversation.push(...(queueIndex === 0 ? ['', ''] : ['']),
-        ...userRows(message.content), `  ${chalk.dim(`↳ ${status}`)}`);
+        ...userRows(message.content), `  ${chalk.dim(`↳ ${fitHint(status, Math.max(1, inner - 4))}`)}`);
     }
     const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText();
@@ -2797,8 +2798,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (options.length) {
           // After a space the palette is that command's own values to choose
           // from, or -- for a free-text argument -- just its hint.
-          const hint = options[0]?.completes ? '↑↓ choose · Tab fill in · Enter apply · Esc clear'
-            : value.includes(' ') ? 'Enter run · Esc clear' : undefined;
+          const hint = options[0]?.completes ? [keyHintFor('↑↓', 'choose'), keyHintFor('tab', 'fill in'), keyHint('apply'), keyHintFor('esc', 'clear')].join(' · ')
+            : value.includes(' ') ? `${keyHintFor('enter', 'run')} · ${keyHintFor('esc', 'clear')}` : undefined;
           this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, ...(hint ? { hint } : {}) });
           this.paletteActive = true;
           return;

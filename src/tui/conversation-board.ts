@@ -21,6 +21,7 @@
 import { stdout as output } from 'node:process';
 import type { PickerOption } from '../harness/prompter.js';
 import { takeTerminalKeys } from './input-decoder.js';
+import { keyHintFor } from '../harness/protocol/wording.js';
 import { reducedMotion } from './capabilities.js';
 import { pickerDeletesSelection } from './command-palette.js';
 import { asideOpener, confirmRowDelete, redrawOnRefresh, type OptionPickerHost } from './option-picker.js';
@@ -157,17 +158,20 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
 export function boardHint(state: BoardState, rows: readonly PickerOption<string>[]): string {
   if (state.finding && !boardShowsCommands(state)) {
     const query = state.query ?? '';
-    return `find${query ? `: ${query}` : ''} · ${rows.length ? 'enter open' : 'no match'} · esc clear`;
+    return `find${query ? `: ${query}` : ''} · ${rows.length ? keyHintFor('enter', 'open') : 'no match'} · ${keyHintFor('esc', 'clear')}`;
   }
-  if (boardShowsCommands(state)) return rows.length ? 'enter run · esc clear' : 'no command matches · esc clear';
+  if (boardShowsCommands(state)) return `${rows.length ? keyHintFor('enter', 'run') : 'no command matches'} · ${keyHintFor('esc', 'clear')}`;
   const row = state.selected >= 0 ? rows[state.selected] : undefined;
-  if (!row) return state.draft ? 'enter start a new chat · esc clear' : 'type to start a new chat · ctrl+f find · ↑↓ chats';
+  if (!row) {
+    return state.draft ? `${keyHintFor('enter', 'start a new chat')} · ${keyHintFor('esc', 'clear')}`
+      : `type to start a new chat · ${keyHintFor('ctrl+f', 'find')} · ${keyHintFor('↑↓', 'chats')}`;
+  }
   return [
-    'enter open',
-    ...(row.inner?.options.length ? [`→ ${row.inner.title.toLowerCase()}`] : []),
-    ...(row.actions?.length ? ['tab options'] : []),
-    ...(row.deleteAction ? [`del ${row.deleteAction.label.toLowerCase()}`] : []),
-    '← close',
+    keyHintFor('enter', 'open'),
+    ...(row.inner?.options.length ? [keyHintFor('→', row.inner.title.toLowerCase())] : []),
+    ...(row.actions?.length ? [keyHintFor('tab', 'options')] : []),
+    ...(row.deleteAction ? [keyHintFor('del', row.deleteAction.label.toLowerCase())] : []),
+    keyHintFor('←', 'close'),
   ].join(' · ');
 }
 
