@@ -21,7 +21,7 @@ import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import { markProviderBoundaries, type CanonicalRecord } from '../session/canonical.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { modelProvider } from '../runtime/lazy-bridge.js';
-import { transferBudget, transferPrompt } from './transfer.js';
+import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
 
 /** The model runs behind a provider that keeps no history between one-shot
  * turns (catalog `turn.statelessProviders`: Goose's `claude-code`). Its
@@ -34,7 +34,7 @@ export function keepsNoHistory(harness: AiLocalHarnessDefinition, model: string 
 
 export type ThreadStart =
   /** Resume `written.nativeId`; send `prompt` (the request itself). */
-  | { kind: 'native'; written: NativeThreadWritten; prompt: string }
+  | { kind: 'native'; written: NativeThreadWritten; prompt: string; omitted: number }
   /** A fresh thread; send `prompt` (the transfer, ending in the request). */
   | { kind: 'transfer'; prompt: string; budget: number };
 
@@ -64,7 +64,38 @@ export interface ThreadStartInput {
   onFallback?: (reason: string) => void;
 }
 
-async function written(input: ThreadStartInput): Promise<NativeThreadWritten | undefined> {
+/** Share of the receiving model's context window a written thread may take:
+ * the conversation itself, so more than a transfer's retelling, and the rest
+ * for the vendor's system prompt, tools and the work. A whole conversation
+ * written regardless overflowed the model (365K tokens into a 262K one) or a
+ * free plan's whole day (Grok: 603K of 500K tokens) before the turn began. */
+export const NATIVE_WINDOW_SHARE = 0.5;
+/** The budget when nothing has reported the model's window. */
+export const NATIVE_DEFAULT_BYTES = 400 * 1024;
+
+export function nativeThreadBudget(contextWindow?: number): number {
+  return contextWindow && contextWindow > 0 ? Math.floor(contextWindow * NATIVE_WINDOW_SHARE * BYTES_PER_TOKEN) : NATIVE_DEFAULT_BYTES;
+}
+
+/** The newest turns that fit `maxBytes` (the newest always), the first of
+ * them saying what was left out and where to read it: ClikCode's record keeps
+ * every turn, and its conversation tools read this conversation too. */
+export function fitRecord(record: CanonicalRecord, maxBytes: number): { record: CanonicalRecord; omitted: number } {
+  let used = 0;
+  let first = record.turns.length;
+  while (first > 0) {
+    const size = Buffer.byteLength(JSON.stringify(record.turns[first - 1]), 'utf8');
+    if (first < record.turns.length && used + size > maxBytes) break;
+    used += size;
+    first -= 1;
+  }
+  if (first === 0) return { record, omitted: 0 };
+  const kept = record.turns.slice(first);
+  const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model. search_conversations with in: "${record.conversationId}" and read_conversation("${record.conversationId}") read them.]\n\n`;
+  return { record: { ...record, turns: [{ ...kept[0]!, user: `${note}${kept[0]!.user}` }, ...kept.slice(1)] }, omitted: first };
+}
+
+async function written(input: ThreadStartInput): Promise<{ written: NativeThreadWritten; omitted: number } | undefined> {
   const writer = input.writer;
   if (!writer || !input.record.turns.length) return undefined;
   if (keepsNoHistory(input.harness, input.model)) {
@@ -82,9 +113,10 @@ async function written(input: ThreadStartInput): Promise<NativeThreadWritten | u
     }
     // Which provider ran which turns, said once per switch (the transfer
     // says it in its own preamble).
-    const result = await writer.write(markProviderBoundaries(input.record, input.harness.command, input.displayName), context);
+    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow));
+    const result = await writer.write(markProviderBoundaries(fitted.record, input.harness.command, input.displayName), context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
-    return result?.nativeId ? result : undefined;
+    return result?.nativeId ? { written: result, omitted: fitted.omitted } : undefined;
   } catch (error) {
     // fail-open-ok: a transfer always works; a writer is an improvement on it.
     input.onFallback?.(`${input.harness.command} thread writer failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -94,7 +126,7 @@ async function written(input: ThreadStartInput): Promise<NativeThreadWritten | u
 
 export async function startConversationThread(input: ThreadStartInput): Promise<ThreadStart> {
   const native = await written(input);
-  if (native) return { kind: 'native', written: native, prompt: input.request };
+  if (native) return { kind: 'native', ...native, prompt: input.request };
   const budget = transferBudget({
     ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
     ...(input.argvLimit ? { argvLimit: input.argvLimit } : {}),
