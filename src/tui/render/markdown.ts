@@ -155,7 +155,9 @@ const parseBlocks = (text: string): ParsedBlocks => {
       if (token.type === 'def') hasDefinitions = true;
       if (token.type === 'space' || token.type === 'def') continue;
       if (token.type === 'code') {
-        blocks.push({ kind: 'code', lines: token.text.split(/\r?\n/), ...(token.lang ? { language: token.lang } : {}), quoteDepth, indent: listDepth, sourceEnd });
+        const fence = /^ {0,3}(`{3,}|~{3,})/.exec(token.raw)?.[1];
+        const open = fence !== undefined && !new RegExp(`\\n {0,3}${fence[0]}{${fence.length},}[ \\t]*\\n*$`).test(token.raw);
+        blocks.push({ kind: 'code', lines: token.text.split(/\r?\n/), ...(token.lang ? { language: token.lang } : {}), quoteDepth, indent: listDepth, sourceEnd, ...(open ? { open: true } : {}) });
       } else if (token.type === 'heading') {
         blocks.push({ kind: 'heading', text: token.text, level: token.depth, quoteDepth, sourceEnd });
       } else if (token.type === 'hr') {

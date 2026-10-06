@@ -38,7 +38,9 @@ export function settledAnswerBlocks(
   // waiting for a blank line that never comes left the paragraph pinned above
   // the waiting row for the length of the turn -- stationary, while the tool
   // rows it caused scrolled past above it.
-  const closedByBlankLine = blocks.length > 0 && /\n[ \t]*\n$/.test(content);
+  // Not inside a fence still open: a blank line there is a line of code.
+  const last = blocks[blocks.length - 1];
+  const closedByBlankLine = blocks.length > 0 && /\n[ \t]*\n$/.test(content) && !(last?.kind === 'code' && last.open);
   const settledCount = turnEnded || closedByBlankLine || closedByTool
     ? blocks.length
     : Math.max(0, blocks.length - 1);
@@ -115,6 +117,15 @@ export class TurnTranscript {
    * jumped into the transcript at once. */
   private openProseRows = 0;
   private openProseFirst = false;
+  /** The blank row that separates the open block from the one before it has
+   * already been retired. Each retirement renders the block on its own, and
+   * the renderer opens every block after the first with that row: written
+   * again with each later chunk, it put a blank line between every pair of
+   * code lines, and another under the "```" paragraph a fence begins as. */
+  private openSeparated = false;
+  /** The last block any rows were retired for: an item continuing a list
+   * gets no blank row above it, whichever frame retired the item before. */
+  private lastBlock: MessageBlock | undefined;
   /** Whether anything at all has been written for this message, which is what
    * decides the leading marker -- not the block count, which is still zero
    * while the head of an open fence is being retired line by line. */
@@ -133,6 +144,15 @@ export class TurnTranscript {
     /** Optional separate renderer for the block still receiving tokens. */
     renderLive?: BlockRenderer;
   }): { finished: string[]; live: string[] } {
+    // A last line of only dashes or equals signs is either a list item or
+    // the underline that turns the line above into a heading, and the next
+    // character decides which. Lexed now it made a heading of a list item's
+    // text, whose rows were then retired under the wrong shape.
+    const undecided = input.turnEnded ? null : /(?:^|\n) {0,3}(?:-+|=+)[ \t]*$/.exec(input.content);
+    if (undecided) {
+      const content = input.content.slice(0, undecided.index + (undecided[0].startsWith('\n') ? 1 : 0));
+      return this.advance({ ...input, content, blocks: splitIntoBlocks(content) });
+    }
     // A tool that began at or after the end of the prose proves the prose is
     // final: the model stopped writing to call it. A call that is still
     // running closes that prose too, so its row can sit directly under it
@@ -147,15 +167,26 @@ export class TurnTranscript {
     const settledTools = owing.filter(isSettled);
     const liveTools = owing.filter((tool) => !isSettled(tool));
     const renderLive = input.renderLive ?? input.renderBlocks;
+    /** Rows for `blocks` as they continue what is already written: without
+     * the leading separator when it was written already (`joined`) or when
+     * the first block continues the list the last one belonged to. */
+    const continuing = (blocks: readonly MessageBlock[], first: boolean, joined: boolean, render: BlockRenderer = input.renderBlocks): string[] => {
+      const rows = render(blocks, first);
+      const tight = this.lastBlock?.kind === 'list-item' && blocks[0]?.kind === 'list-item';
+      return !first && rows[0] === '' && (joined || tight) ? rows.slice(1) : rows;
+    };
 
     // The head of an open fence was already retired line by line; only the
     // lines after it are still owed when the block itself finally settles.
     let settled = answer.settled;
     const head = settled[0];
+    let headJoined = false;
+    if (head && this.openSeparated && (head.kind === 'code' || this.openProseRows === 0)) headJoined = true;
     if (this.openCodeLines > 0 && head) {
       if (head.kind === 'code') {
         const owed = head.lines.slice(this.openCodeLines);
         settled = owed.length ? [{ ...head, lines: owed, language: undefined }, ...settled.slice(1)] : settled.slice(1);
+        if (!owed.length) headJoined = false;
       }
       this.openCodeLines = 0;
     }
@@ -165,13 +196,21 @@ export class TurnTranscript {
     // source lines, because how prose wraps is what was written.
     const finished: string[] = [];
     if (this.openProseRows > 0 && head && head.kind !== 'code') {
-      const tail = input.renderBlocks([head], this.openProseFirst).slice(this.openProseRows);
+      const tail = continuing([head], this.openProseFirst, false).slice(this.openProseRows);
       if (tail.length) { finished.push(...tail); this.started = true; }
+      this.lastBlock = head;
       settled = settled.slice(1);
-      this.openProseRows = 0;
+      headJoined = false;
     }
+    if (head) { this.openProseRows = 0; this.openSeparated = false; }
 
-    finished.push(...interleave(settled, settledTools, input.renderBlocks, !this.started));
+    let firstRun = true;
+    finished.push(...interleave(settled, settledTools, (run, first) => {
+      const rows = firstRun ? continuing(run, first, headJoined) : input.renderBlocks(run, first);
+      firstRun = false;
+      this.lastBlock = run[run.length - 1];
+      return rows;
+    }, !this.started));
     if (finished.length) this.started = true;
     // Monotonic, for the same reason the message loop is: a row in scrollback
     // cannot be un-emitted. A turn that streams part of an answer, hits a
@@ -186,34 +225,37 @@ export class TurnTranscript {
     const open = answer.live.length === 1 ? answer.live[0]! : undefined;
     let live: string[] = [];
     if (open?.kind === 'code' && open.lines.length > 1) {
+      // A fence begins as a "```" paragraph, whose separator may be out already.
+      this.openProseRows = 0;
       const complete = open.lines.slice(this.openCodeLines, open.lines.length - 1);
       if (complete.length) {
         const head = { ...open, lines: complete, ...(this.openCodeLines ? { language: undefined } : {}) };
-        const rows = input.renderBlocks([head], !this.started);
-        if (rows.length) this.started = true;
+        const rows = continuing([head], !this.started, this.openSeparated);
+        if (rows.length) { this.started = true; this.openSeparated = true; this.lastBlock = open; }
         finished.push(...rows);
         this.openCodeLines = open.lines.length - 1;
       }
-      live = renderLive(
+      live = continuing(
         [{ ...open, lines: [open.lines[open.lines.length - 1]!], ...(this.openCodeLines ? { language: undefined } : {}) }],
-        !this.started,
+        !this.started, this.openSeparated, renderLive,
       );
     } else if (open && open.kind !== 'code') {
       // Everything but the row still being written is final.
       if (this.openProseRows === 0) this.openProseFirst = !this.started;
       // Still growing: drawn by the live renderer, which lays out only what
       // changed since the last frame (the same rows, by its contract).
-      const rows = renderLive([open], this.openProseFirst);
+      const rows = continuing([open], this.openProseFirst, this.openSeparated && this.openProseRows === 0, renderLive);
       const keep = Math.max(this.openProseRows, rows.length - 1);
       const newly = rows.slice(this.openProseRows, keep);
       if (newly.length) {
         finished.push(...newly);
         this.started = true;
         this.openProseRows = keep;
+        this.openSeparated = true;
       }
       live = rows.slice(keep);
     } else if (answer.live.length) {
-      live = renderLive(answer.live, !this.started);
+      live = continuing(answer.live, !this.started, this.openSeparated, renderLive);
     }
     // A running call stays where it started. One whose offset is already
     // behind the live prose sits at the top of this region, directly under
@@ -239,6 +281,8 @@ export class TurnTranscript {
     this.openCodeLines = 0;
     this.openProseRows = 0;
     this.openProseFirst = false;
+    this.openSeparated = false;
+    this.lastBlock = undefined;
     this.started = false;
   }
 }

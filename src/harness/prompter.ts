@@ -118,7 +118,9 @@ export type MessageBlock =
   | { kind: 'paragraph'; text: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean }
   | { kind: 'heading'; text: string; level: number; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
   | { kind: 'rule'; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
-  | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean }
+  /** `open`: a fence whose closing line has not arrived yet, so a blank line
+   * inside it does not end it. */
+  | { kind: 'code'; lines: string[]; language?: string; quoteDepth: number; indent: number; sourceEnd: number; blockBoundary?: boolean; open?: boolean }
   | { kind: 'table'; header: string[]; rows: string[][]; align: Array<'left' | 'center' | 'right' | null>; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean }
   | { kind: 'list-item'; text: string; depth: number; ordered: boolean; number?: number; task: boolean; checked?: boolean; quoteDepth: number; sourceEnd: number; blockBoundary?: boolean };
 
