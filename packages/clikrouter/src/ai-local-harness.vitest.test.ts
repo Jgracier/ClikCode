@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { modelDisplayId, modelIdFromDisplay, AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv } from './ai-local-harness';
+import { modelDisplayId, modelIdFromDisplay, AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsModelSelection, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv } from './ai-local-harness';
 
 
 describe('local harness catalog', () => {
@@ -188,6 +188,13 @@ describe('local harness catalog', () => {
     expect(harnessSupportsEffort(localHarnessForCommand('codex')!)).toBe(true);
     expect(harnessSupportsEffort(localHarnessForCommand('claude')!)).toBe(true);
     expect(harnessSupportsEffort(localHarnessForCommand('gemini')!)).toBe(false);
+  });
+
+  it('offers a model selector wherever discovery reads a model list: unset listsModels lists', () => {
+    for (const command of ['openhands', 'mcode']) expect(harnessSupportsModelSelection(localHarnessForCommand(command)!), command).toBe(true);
+    const base = localHarnessForCommand('openhands')!;
+    expect(harnessSupportsModelSelection({ ...base, modelArgvPrefix: undefined, acp: { ...base.acp!, listsModels: false } })).toBe(false);
+    expect(harnessSupportsModelSelection({ ...base, modelArgvPrefix: undefined, acp: undefined })).toBe(false);
   });
 
   it('counts effort an ACP agent takes only over ACP: a flag (Copilot) or a session option (Goose)', () => {

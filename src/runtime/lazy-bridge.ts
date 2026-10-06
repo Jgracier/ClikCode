@@ -73,6 +73,7 @@ export const localHarnessForCommand = (command: string): AiLocalHarnessDefinitio
 export const localHarnessForProvider = (provider: string): AiLocalHarnessDefinition | undefined => localCatalog().localHarnessForProvider(provider);
 export const localHarnessCapabilityManifest = (harness: AiLocalHarnessDefinition): AiHarnessCapabilityManifest => localCatalog().localHarnessCapabilityManifest(harness);
 export const harnessSupportsEffort = (harness: AiLocalHarnessDefinition): boolean => localCatalog().harnessSupportsEffort(harness);
+export const harnessSupportsModelSelection = (harness: AiLocalHarnessDefinition): boolean => localCatalog().harnessSupportsModelSelection(harness);
 export const harnessSupportsPermissionMode = (harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean => localCatalog().harnessSupportsPermissionMode(harness, mode);
 export const harnessSupportsImages = (harness: AiLocalHarnessDefinition): boolean => localCatalog().harnessSupportsImages(harness);
 

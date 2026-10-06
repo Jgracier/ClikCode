@@ -2029,6 +2029,14 @@ export function harnessSupportsEffort(harness: AiLocalHarnessDefinition): boolea
   return Boolean(harness.effortArgvPrefix || harness.acp?.effortArgvPrefix || harness.acp?.effortConfigId);
 }
 
+/** Whether a model can be chosen for this harness: a model flag, or an ACP
+ * agent whose session lists its models. `acp.listsModels` unset counts as
+ * listing, exactly as model discovery reads it (OpenHands, MiniMax Code);
+ * only an explicit `false` says the session must not be asked. */
+export function harnessSupportsModelSelection(harness: AiLocalHarnessDefinition): boolean {
+  return harness.modelArgvPrefix !== undefined || Boolean(harness.acp && harness.acp.listsModels !== false);
+}
+
 export function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition, mode: AiHarnessPermissionMode): boolean {
   if (!harness.permissionModes?.includes(mode)) return false;
   // Declaring the mode is not enough: something has to actually carry it to

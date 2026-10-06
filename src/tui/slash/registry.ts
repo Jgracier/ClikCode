@@ -7,6 +7,7 @@
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { AGENT_COMPACTS_ITSELF, isClikCodeAgent, isGatewayService } from '../../session/route.js';
+import { harnessSupportsModelSelection } from '../../runtime/lazy-bridge.js';
 
 type SlashGroup =
   | 'Common' | 'Conversation' | 'Workspace' | 'Provider' | 'Settings' | 'Sessions' | 'Info' | 'Tools' | 'Custom' | 'Switch harness';
@@ -168,7 +169,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       if (session?.route === 'clikcode-local') return { available: true };
       const base = needsHarness('choosing a model')(session, harness);
       if (!base.available) return base;
-      return (harness!.modelArgvPrefix !== undefined || harness!.acp?.listsModels) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
+      return harnessSupportsModelSelection(harness!) ? { available: true } : { available: false, reason: `${harness!.displayName} does not publish a model selector.` };
     },
   }),
   entry('effort', 'Settings', 'reasoning level', {

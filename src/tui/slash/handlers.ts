@@ -22,7 +22,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactPath } from '../../harness/protocol/labels.js';
-import { harnessSupportsEffort, localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { harnessModelLabel, nativeModelCatalogForPicker, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { readState } from '../../session/state/read.js';
@@ -353,7 +353,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         selected: session.model,
       });
     }
-    if (!(harness?.modelArgvPrefix !== undefined || harness?.acp?.listsModels)) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
+    if (!harness || !harnessSupportsModelSelection(harness)) throw new Error(`${harness?.displayName ?? 'This provider'} does not publish a model selector.`);
     const account = state.accounts.find((item) => item.id === session.accountId);
     // `/model auto` and `/model default` mean "stop overriding", not "store a
     // word no vendor accepts" -- so they RESOLVE to whatever the harness

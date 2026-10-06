@@ -27,7 +27,7 @@ import { freePlanModels } from '../harness/accounts/free-plan.js';
 import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import {
-  allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort,
+  allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort, harnessSupportsModelSelection,
   localHarnessForCommand, localHarnessForProvider,
 } from '../runtime/lazy-bridge.js';
 import { localModelChoices } from '../local-models/index.js';
@@ -65,10 +65,6 @@ function accountFor(state: HarnessState, session: HarnessSession | undefined, ha
   return state.accounts.find((item) => item.provider === harness.provider && item.status === 'ready');
 }
 
-function choosesModel(harness: AiLocalHarnessDefinition): boolean {
-  return harness.modelArgvPrefix !== undefined || Boolean(harness.acp?.listsModels);
-}
-
 /** Every provider the terminal's /provider lists, in its order: the two
  * ClikCode routes, then compareProviders. */
 export async function providerList(config: Conf, state: HarnessState, session: HarnessSession | undefined): Promise<IdeProvider[]> {
@@ -97,7 +93,7 @@ export async function providerList(config: Conf, state: HarnessState, session: H
       integration: integrationLabel(harness),
       signedIn,
       current: session?.route === 'local' && session.nativeHarness === harness.command,
-      choosesModel: choosesModel(harness),
+      choosesModel: harnessSupportsModelSelection(harness),
     });
   }
   return rows;
@@ -147,7 +143,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
   }
   const harness = localHarnessForCommand(provider);
   if (!harness) throw new Error(`unknown provider "${provider}"`);
-  if (!choosesModel(harness)) return { provider, models: [], custom: false, error: `${harness.displayName} does not publish a model selector.` };
+  if (!harnessSupportsModelSelection(harness)) return { provider, models: [], custom: false, error: `${harness.displayName} does not publish a model selector.` };
   const onIt = session?.route === 'local' && session.nativeHarness === harness.command ? session : undefined;
   // The terminal's picker gives discovery 3 s and redraws when it lands; the
   // editor's menu shows a spinner and draws once, so it waits for the list.
