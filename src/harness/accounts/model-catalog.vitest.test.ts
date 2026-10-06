@@ -43,6 +43,14 @@ describe('native model display metadata', () => {
     expect(row.detail).toBe('· current');
   });
 
+  it('says "free plan" on a model the account\'s free plan runs', () => {
+    const opencode = localHarnessForCommand('opencode')!;
+    const catalog = { models: ['opencode/big-pickle', 'opencode/gpt-6'], free: ['opencode/big-pickle'] };
+    const free = new Set(catalog.free);
+    expect(modelRow(opencode, catalog, 'opencode/big-pickle', 'opencode/gpt-6', false, free).detail).toBe('· free plan');
+    expect(modelRow(opencode, catalog, 'opencode/gpt-6', 'opencode/gpt-6', false, free).detail).toBe('· current');
+  });
+
   it('takes a model typed the way it is shown', () => {
     const opencode = localHarnessForCommand('opencode')!;
     const kilo = localHarnessForCommand('kilo')!;
