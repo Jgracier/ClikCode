@@ -53,6 +53,11 @@ export interface AcpTurnInput extends HarnessTurnObserver {
    * are selected over the protocol, and what its usage readings mean. */
   acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'usageTotals' | 'cumulativeChunks'>;
   modelProviderSeparator?: string;
+  /** The session lists only what the account's plan runs (catalog
+   * `freePlan.listed`): a model it leaves out is refused, not swapped for
+   * the vendor's default while ClikCode records the one asked for (Devin
+   * took `--model swe-2-medium` on a Free plan and ran swe-1-6-slow). */
+  plansListModels?: boolean;
   /** Local image paths, sent as ACP image blocks when the agent advertises
    * `promptCapabilities.image`. Otherwise the turn fails before the prompt
    * with `acpUnsupportedImages` so the caller can use its image-capable CLI. */
@@ -630,7 +635,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const modelId = requestedModel ? acpModelChoice(live.models, requestedModel)
       ?? (providerConfigId && live.configOptions?.some((option) => (option.id ?? option.configId) === 'model') ? requestedModel : undefined)
       : undefined;
-    if (input.model && !modelId && modelRequiresProtocol) {
+    const offersModels = (Array.isArray(live.models?.availableModels) && live.models.availableModels.length > 0)
+      || Boolean(live.configOptions?.some((option) => (option.id ?? option.configId) === 'model' && Array.isArray(option.options) && option.options.length > 0));
+    if (input.model && !modelId && (modelRequiresProtocol || (input.plansListModels && offersModels))) {
       throw Object.assign(new Error(`${input.command} ACP does not list model ${input.model}`), { acpUnsupportedModel: true });
     }
     const modelConfig = live.configOptions?.find((option) => (option.id ?? option.configId) === 'model');

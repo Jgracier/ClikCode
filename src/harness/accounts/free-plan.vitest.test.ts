@@ -57,6 +57,8 @@ describe('a model the plan does not run, refused', () => {
   // kilo, 2026-10-06: the first `:free` model (apodex) was overloaded; Kilo's
   // own free router answered.
   it('prefers the vendor\'s own free router', () => {
+    // Cline bills its `openrouter/free` ("Insufficient balance", 2026-10-06).
+    expect(freePlanModels(harness('cline'), undefined, { models: ['openrouter/free'] }).size).toBe(0);
     const refusal = new Error('Payment Required: Add credits to continue, or switch to a free model');
     expect(freeModelAfterPlanRefusal(harness('kilo'), 'kilo/aion-labs/aion-2.0', refusal, new Set(['kilo/apodex/apodex-1.1-mini:free', 'kilo/kilo-auto/free']))).toBe('kilo/kilo-auto/free');
   });
@@ -68,6 +70,7 @@ describe('a model the plan does not run, refused', () => {
     ['kiro', 'claude-opus-4.5', "The model 'claude-opus-4.5' is not available. Please use '/model' to select a different model and try again.", 'auto'],
     ['devin', 'swe-2-medium', 'Upgrade to Pro to access this model (https://devin.ai/pricing)', 'swe-1-6-slow'],
     ['grok', 'grok-4.6', 'Invalid params: "unknown model id"', 'grok-4.7'],
+    ['devin', 'swe-2-medium', 'devin ACP does not list model swe-2-medium', 'swe-1-6-slow'],
   ])('%s: %s', (command, model, message, free) => {
     expect(freeModelAfterPlanRefusal(harness(command), model, new Error(message), new Set([free]))).toBe(free);
   });
