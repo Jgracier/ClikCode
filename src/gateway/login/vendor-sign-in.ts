@@ -164,8 +164,8 @@ export function readScreenPrompt(shown: string | ScreenState): ScreenPrompt | un
     .filter((found): found is Drawn => Boolean(found));
   const found = drawn.sort((left, right) => right.at - left.at)[0]?.prompt;
   // A list that shows a few of many and filters as you type (Cline's 228
-  // providers, Pi's, OpenCode's): ClikCode offers a search as well.
-  if (found?.kind === 'choice' && found.style === 'arrows' && lines.some((line) => /\btype to (?:search|filter)\b|\bsearch [a-z]+\.\.\.|\bsearch:|\d+ more\b/i.test(line))) {
+  // providers, Pi's `(1/41)`, OpenCode's): ClikCode offers a search as well.
+  if (found?.kind === 'choice' && found.style === 'arrows' && lines.some((line) => /\btype to (?:search|filter)\b|\bsearch [a-z]+\.\.\.|\bsearch:|\d+ more\b|^\s*\(\d+\/\d+\)\s*$/i.test(line))) {
     return { ...found, searchable: true };
   }
   return found;
@@ -297,7 +297,8 @@ function readPointer(lines: readonly string[]): Drawn | undefined {
   // `  Third-party`.
   const indent = (line: string): number => { const shown = line.replace(/[›>→❯]/, ' '); return shown.length - shown.trimStart().length; };
   const column = indent(plain[at]!);
-  const inMenu = (line: string): boolean => !/^\s*[─━]{3,}/.test(line) && (!line.trim() || indent(line) === column);
+  // Not a rule, and not a position counter under the list (Pi's `(1/41)`).
+  const inMenu = (line: string): boolean => !/^\s*[─━]{3,}|^\s*\(\d+\/\d+\)\s*$/.test(line) && (!line.trim() || indent(line) === column);
   let first = at;
   while (first > 0 && inMenu(plain[first - 1]!)) first -= 1;
   let last = at;
@@ -573,15 +574,17 @@ export async function runVendorSignIn(input: {
     const key = `${prompt.kind}:${prompt.kind === 'choice' ? prompt.title : prompt.prompt}`;
     if (lastPrompt && lastPrompt.key === key && Date.now() - lastPrompt.at < REDRAW_MS) return;
     lastPrompt = { key, at: Date.now() };
+    let searched = false;
     void answer(async () => {
       if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret)}\r`;
       const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
       const index = await ui.choose(prompt.title, choices);
       if (index === undefined) return undefined;
-      // Typed into the vendor's own search; the filtered list is read next.
-      if (index === prompt.choices.length) return ui.ask(`Search ${prompt.title.replace(/:$/, '')}`, false);
+      // Typed into the vendor's own search; the filtered list is read next,
+      // under the same title -- not a redraw of the list just answered.
+      if (index === prompt.choices.length) { searched = true; return ui.ask(`Search ${prompt.title.replace(/:$/, '')}`, false); }
       return choiceKeys(prompt, index);
-    }).finally(() => { lastPrompt = { key, at: Date.now() }; schedule(); });
+    }).finally(() => { lastPrompt = searched ? undefined : { key, at: Date.now() }; schedule(); });
   };
   // A screen that never goes quiet (Vibe's animated welcome) is still read:
   // at least once a second while it keeps drawing.

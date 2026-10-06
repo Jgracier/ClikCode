@@ -124,6 +124,11 @@ describe('reading what a vendor screen waits on, from real screens', () => {
     expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Popular', choices: ['Cline Usage-Billing (OAuth)', 'DeepSeek', 'Anthropic'], selected: 0, style: 'arrows', searchable: true });
   });
 
+  it('Pi\'s long provider list, its position counter no option', () => {
+    const screen = 'Select provider to configure:\n>\n→ Amazon Bedrock • unconfigured\n  Ant Ling • unconfigured\n  Anthropic • unconfigured\n  (1/41)\n';
+    expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Select provider to configure:', choices: ['Amazon Bedrock • unconfigured', 'Ant Ling • unconfigured', 'Anthropic • unconfigured'], selected: 0, style: 'arrows', searchable: true });
+  });
+
   it('Vibe\'s cards, the current one marked left of its box', () => {
     const screen = '   Welcome to Mistral Vibe\n   Choose your sign in method\n\n   ┌──────────┐\n > │ Launch browser │\n   │ Sign in to Mistral AI Studio and finish setup automatically. │\n   └──────────┘\n\n   or\n\n   ┌──────────┐\n   │ Use an API key │\n   │ Already have a key? Paste it manually instead. │\n   └──────────┘\n   Use ↑↓ to navigate - Enter Select - Esc Cancel\n';
     expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Choose your sign in method', choices: ['Launch browser', 'Use an API key'], selected: 0, style: 'arrows' });
@@ -220,6 +225,13 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
       steps: [{ when: 'How do you want to authenticate', send: '2{enter}' }, { when: 'Enter key', ask: { prompt: 'API key', secret: true } }],
     });
     expect(screen.seen).toEqual(['ask API key (secret)']);
+  });
+
+  it('a search typed into a long list, then the filtered list read under the same title', async () => {
+    const vendor = await script('stty raw -echo\nprintf "Choose a provider\\r\\n❯ Alpha\\r\\n  Beta\\r\\n▼ 9 more\\r\\n"\nq=$(dd bs=1 count=4 2>/dev/null)\n[ "$q" = "zeta" ] || exit 4\nprintf "\\033[2J\\033[HChoose a provider\\r\\n❯ Zeta\\r\\n  Zeta Two\\r\\n"\nk=$(dd bs=1 count=1 2>/dev/null | od -An -c | tr -d " ")\n[ "$k" = "\\\\r" ] || exit 5\n');
+    const screen = ui({ choose: [2, 0], ask: ['zeta'] });
+    await runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Example', local: false, ui: screen.value });
+    expect(screen.seen).toEqual(['choose Choose a provider: Alpha | Beta | Search for another…', 'ask Search Choose a provider', 'choose Choose a provider: Zeta | Zeta Two']);
   });
 
   it('a cancelled choice ends the vendor', async () => {
