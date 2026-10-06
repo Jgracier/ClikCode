@@ -21,7 +21,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileIdentity } from './cached-file.js';
-import { sameData } from './data.js';
+import { mergeFields, sameData } from './data.js';
 import { atomicWriteFile } from './files.js';
 import { stateDirectory } from './paths.js';
 
@@ -46,16 +46,17 @@ export interface JsonMemo<T> {
 type Fields = Record<string, unknown>;
 const isFields = (value: unknown): value is Fields => !!value && typeof value === 'object' && !Array.isArray(value);
 
-/** Folds `theirs` into `ours` in place, keeping what `ours` changed since
- * `base`. `depth` 0 is the file's top-level fields, 1 the entries of a map. */
-function fold(base: Fields, ours: Fields, theirs: Fields, depth: number): void {
-  for (const key of new Set([...Object.keys(base), ...Object.keys(ours), ...Object.keys(theirs)])) {
+/** Folds `theirs` into `ours` in place (the held object stays the same one):
+ * the file's top-level fields merge three-way against `base` (mergeFields),
+ * and so do the entries of a field that is a map in all three. */
+function fold(base: Fields, ours: Fields, theirs: Fields): void {
+  const merged = mergeFields(base, ours, theirs);
+  for (const key of Object.keys(merged)) {
     const [b, o, t] = [base[key], ours[key], theirs[key]];
-    if (depth === 0 && isFields(b) && isFields(o) && isFields(t)) { fold(b, o, t, 1); continue; }
-    if (!sameData(o, b)) continue; // Changed here: this process's entry wins.
-    if (t === undefined) delete ours[key];
-    else ours[key] = t;
+    if (isFields(b) && isFields(o) && isFields(t)) merged[key] = mergeFields(b, o, t);
   }
+  for (const key of Object.keys(ours)) if (!(key in merged)) delete ours[key];
+  Object.assign(ours, merged);
 }
 
 /** `relativePath` is under the state directory. `accept` returns the parsed
@@ -94,7 +95,7 @@ export function jsonMemo<T>(relativePath: string, empty: () => T, accept: (parse
     if (!current.path || await identityOf(current.path) === current.identity) return;
     const { theirs, base, identity } = await snapshot(current.path);
     if (held !== current) return; // Reset meanwhile.
-    if (isFields(current.data) && isFields(current.base) && isFields(theirs)) fold(current.base, current.data, theirs, 0);
+    if (isFields(current.data) && isFields(current.base) && isFields(theirs)) fold(current.base, current.data, theirs);
     else if (sameData(current.data, current.base)) current.data = theirs;
     current.base = base;
     current.identity = identity;

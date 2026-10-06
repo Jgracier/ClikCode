@@ -9,6 +9,7 @@
  * workspace on the user's behalf. */
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { objectOrEmpty, updateJsonFile } from '../session/store/json-file.js';
 
 const TRUST_FILE = 'trusted-workspaces.json';
 
@@ -17,14 +18,14 @@ async function canonical(dir: string): Promise<string> {
   return fs.realpath(absolute).catch(() => absolute);
 }
 
+function trustedIn(raw: string | undefined): string[] {
+  const workspaces = objectOrEmpty(raw).workspaces;
+  return Array.isArray(workspaces) ? workspaces.filter((entry): entry is string => typeof entry === 'string') : [];
+}
+
 async function readTrusted(stateDir: string): Promise<string[]> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(path.join(stateDir, TRUST_FILE), 'utf8')) as { workspaces?: unknown };
-    return Array.isArray(parsed.workspaces) ? parsed.workspaces.filter((entry): entry is string => typeof entry === 'string') : [];
-  } catch {
-    // fail-open-ok: no record (or an unreadable one) trusts nothing, the safe answer.
-    return [];
-  }
+  // fail-open-ok: no record (or an unreadable one) trusts nothing, the safe answer.
+  return trustedIn(await fs.readFile(path.join(stateDir, TRUST_FILE), 'utf8').catch(() => undefined));
 }
 
 /** True when `cwd` is a trusted folder or inside one. */
@@ -38,10 +39,6 @@ export async function isWorkspaceTrusted(stateDir: string, cwd: string): Promise
 
 export async function trustWorkspace(stateDir: string, cwd: string): Promise<void> {
   const target = await canonical(cwd);
-  const trusted = await readTrusted(stateDir);
-  if (trusted.includes(target)) return;
-  const file = path.join(stateDir, TRUST_FILE);
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(`${file}.tmp`, `${JSON.stringify({ workspaces: [...trusted, target] }, null, 2)}\n`, { mode: 0o600 });
-  await fs.rename(`${file}.tmp`, file);
+  await updateJsonFile(path.join(stateDir, TRUST_FILE), (raw) => ({ workspaces: trustedIn(raw) }),
+    ({ workspaces }) => workspaces.includes(target) ? undefined : { workspaces: [...workspaces, target] });
 }

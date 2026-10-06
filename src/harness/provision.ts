@@ -9,7 +9,7 @@
  * An existing name is never replaced. The vendor's copy may be one the user
  * edited, and a different command under the same name stays theirs.
  */
-import { cp, mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
@@ -21,6 +21,7 @@ import { npxRoots, withoutNpx, type NpxRoots } from './npx-bin.js';
 import { loadMcpServers, type McpServerSpec } from '../agent/mcp/config.js';
 import { importedFromCommand, vendorMcpServerNames, vendorMcpServerUrls } from '../agent/mcp/import.js';
 import { discoverSkills, type Skill } from '../agent/skills.js';
+import { objectOrEmpty, updateJsonFile } from '../session/store/json-file.js';
 import { stateDirectory } from '../session/store/paths.js';
 
 /** `<dir>/<name>/SKILL.md`, checked against a real install of that harness. */
@@ -294,10 +295,11 @@ async function mcpOwnership(
     if (!legacy) return;
     const adopted: string[] = [];
     for (const name of names) if (urls.has(name) && await owns(name)) adopted.push(name);
-    const latest = await readMarker(stateDir);
-    for (const name of adopted) latest[provisionKey(input, name)] = true;
-    latest[legacyKey] = true;
-    await writeMarker(stateDir, latest);
+    await changeMarker(stateDir, (latest) => {
+      for (const name of adopted) latest[provisionKey(input, name)] = true;
+      latest[legacyKey] = true;
+      return true;
+    });
   };
   return { urls, recorded, owns, settle };
 }
@@ -314,11 +316,12 @@ function provisionKey(input: ProvisionInput, name: string): string {
   return `${input.harness.command}\0${input.account?.id ?? ''}\0${name}`;
 }
 
+function markerPath(stateDir: string): string {
+  return join(stateDir, 'mcp-provision.json');
+}
+
 async function readMarker(stateDir: string): Promise<Record<string, true>> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(join(stateDir, 'mcp-provision.json'), 'utf8'));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, true> : {};
-  } catch { return {}; }
+  return objectOrEmpty(await readFile(markerPath(stateDir), 'utf8').catch(() => undefined)) as Record<string, true>;
 }
 
 /** A harness whose config file ClikCode cannot read still must not be given
@@ -327,20 +330,20 @@ async function alreadyProvisioned(stateDir: string, input: ProvisionInput, name:
   return provisionKey(input, name) in await readMarker(stateDir);
 }
 
-async function writeMarker(stateDir: string, marker: Record<string, true>): Promise<void> {
-  await mkdir(stateDir, { recursive: true });
-  await writeFile(join(stateDir, 'mcp-provision.json'), `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+/** Every worker's turn changes the marker: each change is made to the file as
+ * it is now, under its lock, never to an earlier read of it. */
+async function changeMarker(stateDir: string, change: (marker: Record<string, true>) => boolean): Promise<void> {
+  await updateJsonFile(markerPath(stateDir), (raw) => objectOrEmpty(raw) as Record<string, true>, (marker) => change(marker) ? marker : undefined);
 }
 
 async function rememberProvisioned(stateDir: string, input: ProvisionInput, name: string): Promise<void> {
-  const marker = await readMarker(stateDir);
-  marker[provisionKey(input, name)] = true;
-  await writeMarker(stateDir, marker);
+  await changeMarker(stateDir, (marker) => {
+    marker[provisionKey(input, name)] = true;
+    return true;
+  });
 }
 
 async function forgetProvisioned(stateDir: string, input: ProvisionInput, name: string): Promise<void> {
-  const marker = await readMarker(stateDir);
-  if (!(provisionKey(input, name) in marker)) return;
-  delete marker[provisionKey(input, name)];
-  await writeMarker(stateDir, marker);
+  const key = provisionKey(input, name);
+  await changeMarker(stateDir, (marker) => key in marker && delete marker[key]);
 }

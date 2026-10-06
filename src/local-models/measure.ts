@@ -8,12 +8,12 @@
  * gets measured afresh while an ordinary restart does not. */
 
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import type { Footprint, Measurement } from './choose.js';
 import type { HardwareProfile } from './hardware.js';
 import { httpJson } from './launch.js';
 import { footprintsFile, measurementsFile } from './paths.js';
+import { objectOrEmpty, updateJsonFile } from '../session/store/json-file.js';
 
 export function machineKey(hardware: HardwareProfile, runtimeKey: string): string {
   const identity = [
@@ -48,14 +48,9 @@ export async function latestMeasurement(modelId: string): Promise<Measurement | 
 }
 
 export async function writeMeasurement(machine: string, modelId: string, measurement: Measurement): Promise<void> {
-  const store = await readStore();
-  store[machine] = { ...store[machine], [modelId]: measurement };
-  await mkdir(dirname(measurementsFile()), { recursive: true });
-  // Written aside and renamed: two ClikCode processes measuring at once
-  // must not leave a half-written file for either to read.
-  const temporary = `${measurementsFile()}.${process.pid}.tmp`;
-  await writeFile(temporary, JSON.stringify(store, null, 2));
-  await rename(temporary, measurementsFile());
+  // Two ClikCode processes measuring at once each add their own result.
+  await updateJsonFile(measurementsFile(), (raw) => objectOrEmpty(raw) as MeasurementStore,
+    (store) => ({ ...store, [machine]: { ...store[machine], [modelId]: measurement } }));
 }
 
 /** The footprints the supervisor recorded for a model on this machine

@@ -10,6 +10,7 @@ import {
 } from './security.js';
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
+import { updateJsonFile } from '../session/store/json-file.js';
 
 type PermissionVerdict = 'allow' | 'ask' | 'deny';
 interface PermissionDecision { decision: PermissionVerdict; reason: string }
@@ -234,19 +235,18 @@ export async function loadPermissionRules(cwd: string): Promise<PermissionRules>
 /** Adds one allow rule, preserving every other key in the file. */
 export async function addPermissionAllowRule(cwd: string, rule: string): Promise<PermissionRules> {
   if (!parsePermissionRule(rule)) throw new Error(`Not a valid permission rule: ${rule}`);
-  const file = permissionSettingsPath(cwd);
-  let settings: Record<string, unknown> = {};
-  try {
-    const parsed: unknown = JSON.parse(await fs.readFile(file, 'utf8'));
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) settings = parsed as Record<string, unknown>;
-  } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-  const permissions = (settings.permissions && typeof settings.permissions === 'object' ? settings.permissions : {}) as Record<string, unknown>;
-  const allow = Array.isArray(permissions.allow) ? permissions.allow.filter((value): value is string => typeof value === 'string') : [];
-  if (!allow.includes(rule.trim())) allow.push(rule.trim());
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  await fs.writeFile(`${file}.tmp`, `${JSON.stringify({ ...settings, permissions: { ...permissions, allow } }, null, 2)}\n`, { mode: 0o600 });
-  await fs.rename(`${file}.tmp`, file);
-  return parsePermissionRules(allow);
+  const settings = await updateJsonFile(permissionSettingsPath(cwd), (raw): Record<string, unknown> => {
+    // A file that is there but is not a settings object is the user's to fix, never to overwrite.
+    const parsed: unknown = raw === undefined ? {} : JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${permissionSettingsPath(cwd)} is not a JSON object`);
+    return parsed as Record<string, unknown>;
+  }, (current) => {
+    const permissions = (current.permissions && typeof current.permissions === 'object' ? current.permissions : {}) as Record<string, unknown>;
+    const allow = Array.isArray(permissions.allow) ? permissions.allow.filter((value): value is string => typeof value === 'string') : [];
+    if (allow.includes(rule.trim())) return undefined;
+    return { ...current, permissions: { ...permissions, allow: [...allow, rule.trim()] } };
+  });
+  return parsePermissionRules((settings.permissions as { allow?: unknown } | undefined)?.allow);
 }
 
 /** The narrowest rule that would have allowed this call, for "always allow". */
