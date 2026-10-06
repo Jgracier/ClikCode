@@ -400,6 +400,18 @@ SCENARIOS = {
         'watch': [], 'ever': ['Paste your API key · type it and press Enter', '••••••••••'],
         'final_contains': ['signed in to', 'The final commit is live.'], 'never': ['sk-test-42', 'Paste your API key: ', 'did not finish'],
     },
+    # A question with a shown default after the key (Hermes's `Base URL
+    # [...]:`): Enter alone answers it -- a stray Enter on the key does not.
+    'key-sign-in-default-answer': {
+        'turns': [TWO_BLOCKS],
+        'env': {'FAKE_LOGIN_KEY': 'sk-test-42', 'FAKE_LOGIN_DEFAULT': '1'},
+        'steps': [('type', 'please check the commit'), ('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
+                  ('keys', '\r'), ('settle', 0.5), ('keys', 'sk-test-42'), ('settle', 0.5), ('keys', '\r'),
+                  ('wait_for', 'Base URL', 15), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 15),
+                  ('wait_for', 'The final commit is live.', 40), ('settle', 1)],
+        'watch': [], 'ever': ['Paste your API key · type it and press Enter', 'Base URL [https://api.example.test/v1] · type it and press Enter'],
+        'final_contains': ['signed in to', 'The final commit is live.'], 'never': ['sk-test-42', 'did not finish'],
+    },
     # Nothing signs in at launch: a signed-out provider waits for its first
     # message.
     'no-sign-in-at-launch': {
