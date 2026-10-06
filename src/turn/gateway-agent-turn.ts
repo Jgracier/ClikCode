@@ -13,6 +13,7 @@ const MAX_WAIT_MS = 10 * 60_000;
 async function requestJson(url: string, key: string, init: RequestInit): Promise<Record<string, unknown>> {
   const response = await fetch(url, {
     ...init,
+    signal: init.signal ? AbortSignal.any([init.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     headers: { authorization: `Bearer ${key}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
   });
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
