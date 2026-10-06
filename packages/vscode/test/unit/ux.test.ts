@@ -4,6 +4,7 @@ import { supportsSecondarySidebar } from '../../src/compat';
 import { mentionScore } from '../../src/text';
 import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../../src/webview/composer';
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
+import { approvalHeading } from '../../../../src/tui/render/approval-keys';
 import { noticeLevel } from '../../src/text';
 import { modelWithEffort, toggleAgent } from '../../src/webview/picker';
 import { conversationSection, rowState } from '../../src/webview/screens';
@@ -255,5 +256,13 @@ describe('the Gateway agents in the model menu', () => {
   it('switching agents moves the one mark', () => {
     const { list: next } = toggleAgent(toggleAgent(list, 'silas').list, 'vera');
     expect(next?.agents?.map((agent) => [agent.id, agent.current])).toEqual([['silas', false], ['vera', true]]);
+  });
+});
+
+describe('the approval card', () => {
+  it('heads a call titled with its own command as the terminal does, so the command shows once', () => {
+    expect(approvalHeading('make clean', '$ make clean')).toBe('Approve command');
+    expect(approvalHeading('src/a.ts', 'src/a.ts')).toBe('Approve');
+    expect(approvalHeading('Run the tests', '$ npm test')).toBe('Run the tests');
   });
 });

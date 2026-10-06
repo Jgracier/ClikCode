@@ -19,7 +19,7 @@ const shimmerStyle = (label: string): string => `--shimmer-cycle: ${shimmerCycle
 import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
-import { APPROVAL_GUARD_MS, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
+import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
 import { turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff } from '../protocol';
@@ -670,7 +670,7 @@ export function ApprovalCard({ approval, workspace, position, total, onAnswer }:
   return (
     <div class={`approval${guarded ? ' guarded' : ''}`} role="alertdialog" aria-label={`Approval: ${approval.title}`} tabIndex={0} onKeyDown={onKey} data-approval={approval.id}>
       <div class="approval-head">
-        <Icon name="shield" /><span class="approval-title">{relative(approval.title, workspace)}</span>
+        <Icon name="shield" /><span class="approval-title">{relative(approvalHeading(approval.title, approval.detail), workspace)}</span>
         {total > 1 ? <span class="muted approval-count">Approval {position} of {total}</span> : null}
         {approval.diff?.length ? <button type="button" class="icon-button tiny approval-diff" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={() => post({ type: 'viewDiff', id: approval.id })}><Icon name="diff" /></button> : null}
       </div>

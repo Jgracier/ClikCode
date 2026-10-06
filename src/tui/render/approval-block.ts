@@ -4,6 +4,7 @@
 import { fileDiffRows } from '../../harness/protocol/activity-line.js';
 import type { FileDiff } from '../../agent/line-diff.js';
 import chalk from 'chalk';
+import { approvalHeading } from './approval-keys.js';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { wrapCodeLine, wrapWords } from './wrap.js';
@@ -46,12 +47,7 @@ export function approvalBlockRows(
   const inner = Math.max(8, width - 4);
   const clean = (text: string): string => sanitizeTerminalText(text);
   const count = state.total && state.total > 1 ? `Approval ${state.position ?? 1} of ${state.total} · ` : '';
-  // An agent often titles the call with the very command shown under it
-  // (`make clean` over `$ make clean`): the header then just says what kind
-  // of thing is asked.
-  const named = clean(request.title).replace(/\s+/g, ' ').trim();
-  const repeated = request.detail?.split('\n').find((line) => line.replace(/^\$\s+/, '').trim() === named);
-  const heading = repeated === undefined ? named : repeated.startsWith('$') ? 'Approve command' : 'Approve';
+  const heading = approvalHeading(clean(request.title), request.detail);
   const title = wrapWords(`${count}${heading}`, inner - 2)
     .map((line, index) => `  ${index === 0 ? chalk.yellow('?') : ' '} ${chalk.bold(line)}`);
   const detail = request.detail === undefined ? []

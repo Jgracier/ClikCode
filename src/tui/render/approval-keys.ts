@@ -1,5 +1,5 @@
-/** Which keys answer a pending approval, shared by the terminal and the VS
- * Code webview so a stray keypress is guarded the same way in both. */
+/** Which keys answer a pending approval, and what its header says, shared
+ * by the terminal and the VS Code webview so both read and guard it alike. */
 
 /** How long an approval ignores every key after it appears. A person typing
  * into the composer cannot stop within a frame of a prompt popping up; without
@@ -32,4 +32,13 @@ export function approvalKeyAction(
   if (canTell && (key === 't' || key === 'T')) return 'tell';
   if (key === 'n' || key === 'N' || key === '\r' || key === '\n') return 'deny';
   return 'ignore';
+}
+
+/** The approval's header. An agent often titles the call with the very
+ * command shown under it (`make clean` over `$ make clean`): the header then
+ * just says what kind of thing is asked, and the command is shown once. */
+export function approvalHeading(title: string, detail?: string): string {
+  const named = title.replace(/\s+/g, ' ').trim();
+  const repeated = detail?.split('\n').find((line) => line.replace(/^\$\s+/, '').trim() === named);
+  return repeated === undefined ? named : repeated.startsWith('$') ? 'Approve command' : 'Approve';
 }
