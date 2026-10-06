@@ -82,3 +82,12 @@ describe('answering an approval', () => {
     expect(answer).toContain('[a]');
   });
 });
+
+describe('the approval header', () => {
+  const state = { guarded: false, needsFocus: false, focused: true };
+  it('does not repeat the command shown under it', () => {
+    const rows = approvalBlockRows({ title: 'make clean', detail: '$ make clean' }, 100, 12, state).map((row) => row.replace(/\u001b\[[0-9;]*m/g, ''));
+    expect(rows[0]).toBe('  ? Approve command');
+    expect(rows.filter((row) => row.includes('make clean'))).toHaveLength(1);
+  });
+});
