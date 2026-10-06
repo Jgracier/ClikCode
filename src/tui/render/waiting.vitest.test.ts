@@ -13,7 +13,7 @@ describe('the waiting band', () => {
     const glyphs = Array.from({ length: 4 }, (_, frame) => waitingSpinnerGlyph(frame));
     expect(new Set(glyphs).size).toBe(4);
     expect(glyphs.every((glyph) => [...glyph].length === 2 && terminalCellWidth(glyph) === 2)).toBe(true);
-    expect(runningChatLine('Bash(npm test)', 0, 'command')).toContain('running Bash(npm test)');
+    expect(runningChatLine('$ npm test', 0, 'command')).toMatch(/ {2}\$ npm test$/);
     expect(runningChatLine('Task(review)', 0, 'agent')).toContain('agent Task(review)');
     expect(runningChatLine('Bash(npm test)', 0, 'command')).not.toBe(runningChatLine('Bash(npm test)', 1, 'command'));
   });

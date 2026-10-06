@@ -18,8 +18,9 @@ export function rightLabeledRule(width: number, label?: string): string {
   return `${'─'.repeat(Math.max(0, width - terminalCellWidth(suffix)))}${suffix}`;
 }
 
-/** One open call, drawn under the answer that is still streaming. A command
- * or a sub-agent says so; any other tool is just its own label. The row is
+/** One open call, drawn under the answer that is still streaming: the row it
+ * settles into, the spinner in its glyph's place (a command's `$ make`, not
+ * `running $ make`). A sub-agent says so. The row is
  * repainted, not appended, and the status line is a different place. A call
  * running for a second or more shows for how long, the way a native CLI
  * times its own shell commands. */
@@ -27,7 +28,7 @@ export function runningChatLine(label: string, frame: number, kind: 'command' | 
   const spinner = kind === 'command' ? chalk.yellow(waitingSpinnerGlyph(frame))
     : kind === 'agent' || kind === 'swarm' ? chalk.cyan(waitingSpinnerGlyph(frame))
       : chalk.dim(waitingSpinnerGlyph(frame));
-  const verb = kind === 'command' ? 'running ' : kind === 'agent' ? 'agent ' : '';
+  const verb = kind === 'agent' ? 'agent ' : '';
   const timer = elapsedMs >= 1000 ? chalk.dim(` (${formatElapsed(elapsedMs)})`) : '';
   return `  ${spinner}  ${verb}${label}${timer}`;
 }
