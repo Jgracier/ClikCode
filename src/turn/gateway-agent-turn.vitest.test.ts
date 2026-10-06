@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { runGatewayAgentTurn } from './gateway-agent-turn.js';
+import { agentTurnSettings, runGatewayAgentTurn } from './gateway-agent-turn.js';
 
 vi.mock('../agent/models/for-session.js', () => ({
   gatewayConnection: () => ({ baseUrl: 'https://app.test', apiKey: 'account-key' }),
@@ -42,9 +42,15 @@ describe('selected Gateway agent turn', () => {
     await runGatewayAgentTurn({ config: {} as never, state, session, prompt: 'Please help', run: { prompter: prompter as never } });
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(fetcher.mock.calls[0]?.[0]).toBe('https://app.test/v1/agents/agent-1/chat');
-    expect(JSON.parse(fetcher.mock.calls[0]![1].body as string)).toEqual({ message: 'Please help', threadId: null, model: 'model-x' });
+    expect(JSON.parse(fetcher.mock.calls[0]![1].body as string)).toEqual({ message: 'Please help', threadId: null, model: 'model-x', permissionMode: 'ask' });
     expect(fetcher.mock.calls[1]?.[0]).toContain('threadId=thread-1');
     expect((await readState({ transcripts: ['gw'] })).sessions.find((item) => item.id === 'gw')).toMatchObject({ gatewayAgentThreadId: 'thread-1' });
     expect(prompter.response).toHaveBeenCalledWith('The agent answered.', 'append');
+  });
+
+  it('sends the session\'s permission mode and effort, leaving an automatic effort to the agent', () => {
+    expect(agentTurnSettings({ model: 'm', effort: 'high', permissionMode: 'bypass' })).toEqual({ model: 'm', effort: 'high', permissionMode: 'bypass' });
+    expect(agentTurnSettings({ model: null, effort: 'auto', permissionMode: 'auto' })).toEqual({ model: null, permissionMode: 'auto' });
+    expect(agentTurnSettings({ model: 'm', effort: 'platform-managed', permissionMode: undefined })).toEqual({ model: 'm', permissionMode: 'ask' });
   });
 });
