@@ -17,7 +17,7 @@ function chat(id: string, overrides: Partial<HarnessSession> = {}): HarnessSessi
 describe('conversationRows: the one list both surfaces draw', () => {
   const turn = { prompt: 'go', startedAt: ago(5_000), updatedAt: ago(1_000), outputStarted: true };
 
-  it('is Working, then Active (24h), then Past, newest first in each', () => {
+  it('is Working, then Recent (24h), then Older, newest first in each', () => {
     const rows = conversationRows([
       chat('past-new', { updatedAt: ago(30 * HOUR) }),
       chat('past-old', { updatedAt: ago(90 * HOUR) }),
@@ -28,6 +28,18 @@ describe('conversationRows: the one list both surfaces draw', () => {
       ['busy', 'working'], ['active', 'active'], ['past-new', 'past'], ['past-old', 'past'],
     ]);
     expect(rows[0]?.pending).toEqual(turn);
+  });
+
+  it('puts a conversation that needs the user first within its section', () => {
+    const rows = conversationRows([
+      chat('busy-new', { updatedAt: ago(1_000) }),
+      chat('busy-asking', { updatedAt: ago(10 * HOUR) }),
+      chat('recent'),
+    ], {
+      workerIsLive: (id) => id.startsWith('busy'), awaitingYou: (id) => id === 'busy-asking',
+      pending: new Map([['busy-new', turn], ['busy-asking', turn]]), now: NOW,
+    });
+    expect(rows.map((row) => [row.latest.id, row.needsYou])).toEqual([['busy-asking', true], ['busy-new', false], ['recent', false]]);
   });
 
   it('is one row per conversation, opening its newest open chat, working if any chat generates', () => {

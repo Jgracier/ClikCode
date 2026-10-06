@@ -1,3 +1,4 @@
+import chalk from 'chalk';
 import { describe, expect, it } from 'vitest';
 import { conversationLabel, subagentOptions } from './conversation-activity';
 import { turnStalled } from '../../harness/protocol/turn-pace';
@@ -38,8 +39,15 @@ describe('a working conversation\'s agents', () => {
   it('lists each sub-agent with its step, and each opens the conversation', () => {
     const rows = subagentOptions(pending, 'conversation-1', NOW);
     expect(rows.map((row) => [strip(row.label), strip(row.detail ?? ''), row.value])).toEqual([
-      ['● Agent(Explore)', '· Read(src/a.ts) · 5m', 'conversation-1'],
-      ['● Agent(Review)', '· starting · 1m', 'conversation-1'],
+      ['● Agent(Explore)', 'Read(src/a.ts) · 5m', 'conversation-1'],
+      ['● Agent(Review)', 'starting · 1m', 'conversation-1'],
     ]);
+  });
+
+  it('turns a quiet agent\'s dot yellow, with no word for it', () => {
+    const quiet = { ...pending, subagents: [{ id: 'c', label: 'Agent(Slow)', startedAt: ago(10 * 60_000), step: 'Bash(make)', stepAt: ago(4 * 60_000) }] };
+    const [row] = subagentOptions(quiet, 'conversation-1', NOW);
+    expect(row!.label.startsWith(chalk.yellow('●'))).toBe(true);
+    expect(strip(row!.detail ?? '')).toBe('Bash(make) · 10m');
   });
 });

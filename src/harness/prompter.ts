@@ -163,8 +163,8 @@ export interface PickerOption<T> {
     current: string;
     apply(value: string): Promise<void>;
   };
-  /** A list inside this row, opened with Left Arrow -- a conversation's
-   * running sub-agents. Left from inside it comes back out. */
+  /** A list inside this row, opened with Right Arrow -- a conversation's
+   * running agents. Left from inside it comes back out. */
   inner?: { title: string; options: readonly PickerOption<T>[] };
   /** A conversation row's glyph (conversation-activity.ts): a turn is
    * running in it (a spinner, animated where the list can), has stalled

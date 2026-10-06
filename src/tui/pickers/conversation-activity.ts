@@ -29,8 +29,9 @@ export function workingSpinner(frame: number, activity: Exclude<RowActivity, 'ne
   return (activity === 'stalled' ? chalk.yellow : chalk.green)(waitingSpinnerGlyph(frame));
 }
 
-/** A conversation's running sub-agents as rows of their own. Each opens the
- * conversation it belongs to: that is where its work is shown. */
+/** A conversation's running agents as rows of their own: `● Explore
+ * Read(src/a.ts) · 5m`, the dot yellow once the agent has stalled. Each
+ * opens the conversation it belongs to: that is where its work is shown. */
 export function subagentOptions(
   pending: NonNullable<HarnessSession['pendingTurn']>, conversationValue: string, now: number,
 ): PickerOption<string>[] {
@@ -38,11 +39,7 @@ export function subagentOptions(
     const stalled = turnStalled(now - Date.parse(agent.stepAt ?? agent.startedAt));
     return {
       label: `${(stalled ? chalk.yellow : chalk.green)('●')} ${agent.label}`,
-      detail: [
-        `· ${agent.step ?? 'starting'}`,
-        shortDuration(now - Date.parse(agent.startedAt)),
-        ...(stalled ? ['stalled'] : []),
-      ].join(' · '),
+      detail: `${agent.step ?? 'starting'} · ${shortDuration(now - Date.parse(agent.startedAt))}`,
       value: conversationValue,
     };
   });

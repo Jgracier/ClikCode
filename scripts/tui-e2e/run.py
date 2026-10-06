@@ -105,11 +105,14 @@ SCENARIOS = {
             ('keys', '\x1b[D'), ('settle', 2), ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30), ('settle', 6),
             # Out to the first chat, then back into the running one.
             ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board1'), ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('settle', 3),
-            ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board2'), ('keys', '\x1b[A'), ('keys', '\x1b[C'), ('settle', 3),
+            # Enter, not Right: Right on a row with agents goes into its agents.
+            ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board2'), ('keys', '\x1b[A'), ('keys', '\r'), ('settle', 3),
             ('wait_for', 'The build passed.', 40), ('settle', 3),
             ('type', 'and the second question'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2),
         ],
         'watch': ['The build passed.', 'Second answer arrives here.'],
+        # The board, on the running chat: its one state, and the footer's keys for it.
+        'snap_contains': {'board1': ['Working', 'working', '2 agents', 'Recent', 'enter open · → agents · tab options · del delete · ← close']},
         'no_clear_after_type': True,
     },
     'single-block': {

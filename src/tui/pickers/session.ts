@@ -1,7 +1,6 @@
 /** Choosing a session to resume, including sessions a vendor CLI started
  * outside ClikCode and that can be adopted. */
 
-import { compactPath } from '../../harness/protocol/labels.js';
 import { SLOW_WAIT_MS } from '../../harness/protocol/timings.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
@@ -26,7 +25,8 @@ import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { livePendingTurns, liveWorkers } from '../../session/liveness.js';
 import { watchConversationList } from '../../session/list-watch.js';
-import { conversationRows, recencySection, sectionRank, SECTION_TITLES, type ConversationRow, type ConversationSection } from '../../session/conversation-rows.js';
+import { conversationRows, SECTION_TITLES, type ConversationRow } from '../../session/conversation-rows.js';
+import { relativeTime } from '../../harness/protocol/format.js';
 import { conversationLabel, subagentOptions } from './conversation-activity.js';
 import { conversationIdFor, conversationOption, isBlankConversation } from '../../session/options.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -153,6 +153,9 @@ function nativeValue(command: string, nativeId: string, accountId: string | unde
   return `native:${command}\u0000${nativeId}\u0000${accountId ?? ''}`;
 }
 
+/** The section chats from other CLIs are listed in, last. */
+const OTHER_CLIS = 'From other CLIs';
+
 /** Selected while discovery is still running: wait for it, then reopen. */
 const PENDING_DISCOVERY_VALUE = '__discovering__';
 const NEW_CONVERSATION_VALUE = '__new__';
@@ -221,7 +224,6 @@ export async function interactiveSessionPicker(
   // The turn each live-worker chat is generating, from its transcript -- the
   // one record of a turn in flight. Its `updatedAt` is the spinner's pace.
   let pendingById = await livePendingTurns(sessions, workerIsLive);
-  const openedAt = Date.now();
   // One row per conversation, in its section (session/conversation-rows.ts,
   // the same rows the editor's history menu draws).
   let rows: ConversationRow[] = [];
@@ -253,7 +255,7 @@ export async function interactiveSessionPicker(
   const slow = new Promise<void>((resolveSlow) => { setTimeout(resolveSlow, SLOW_WAIT_MS).unref(); }).then(() => { slowDiscovery = true; });
   const refreshes = [early, discovery, slow];
   let listRevision = 0;
-  let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; options: PickerOption<string>[] } | undefined;
+  let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; second: number; options: PickerOption<string>[] } | undefined;
   /** Re-check workers and the turns they are generating, and have the board
    * draw what changed: a spinner starts, or stops when the turn is over. */
   let activityRefresh: Promise<void> | undefined;
@@ -297,58 +299,47 @@ export async function interactiveSessionPicker(
 
   const histories = new Map<string, PickerOption<string>[]>();
   const buildFresh = (): PickerOption<string>[] => {
-    // Every option gets a single real recency key so the newest conversation is
-    // always near the top regardless of which source found it — grouping by
-    // source first (every ClikCode session, then every opencode result, then
-    // every Hermes result, ...) buried a two-minutes-old live Claude Code
-    // session below Hermes entries from June, since each *group* was sorted
-    // internally but the groups themselves were never interleaved. A source
-    // with no real timestamp (an unparsed vendor display string) sorts last
-    // rather than claiming a false position.
     histories.clear();
-    type OptionBlock = { sortKey: number; options: PickerOption<string>[]; section: ConversationSection };
     // Built when the list changes, so a row's `working 3m` is as of then.
     const now = Date.now();
-    const trackedBlocks = rows.map((row): OptionBlock => {
+    // ClikCode's own conversations, in conversationRows' sections and order:
+    // Working, Recent, Older; one that needs the user first in each.
+    const options: PickerOption<string>[] = rows.map((row) => {
       const option = conversationOption(row, undefined, now);
       const agents = row.pending?.subagents;
       if (agents?.length) option.inner = { title: 'Agents', options: subagentOptions(row.pending!, option.value, now) };
-      return { sortKey: row.updatedAtMs, options: [option], section: row.section };
+      option.group = SECTION_TITLES[row.section];
+      return option;
     });
-    const optionBlocks: OptionBlock[] = [
-      ...trackedBlocks,
-      ...discovered.map(({ harness, item, accountId }) => ({
-        sortKey: item.updatedAtMs ?? -Infinity,
-        section: recencySection(item.updatedAtMs, openedAt),
-        options: [{
-          label: `${harness.displayName} • ${item.title ?? 'Untitled chat'}`,
-          detail: `· not yet in ClikCode${ADOPTED_TRANSCRIPT_READERS[harness.command] ? '' : ' · opens without earlier messages'}${item.workspace && item.workspace !== workspace ? ` · ${compactPath(item.workspace)}` : ''}${accountId ? ` · ${state.accounts.find((account) => account.id === accountId)?.label ?? 'linked account'}` : ''}${item.updatedAt ? ` · ${item.updatedAt}` : ''}`,
-          // By identity, not position: the list is replaced when the CLIs
-          // answer, and a row chosen from the earlier one must still resolve.
-          value: nativeValue(harness.command, item.nativeId, accountId),
-        }],
-      })),
-    ];
-    optionBlocks.sort((left, right) => sectionRank(left.section) - sectionRank(right.section) || right.sortKey - left.sortKey);
-    // Working (generating) first, then Active (last 24 hours), then Past.
-    const sizes = new Map<ConversationSection, number>();
-    for (const block of optionBlocks) sizes.set(block.section, (sizes.get(block.section) ?? 0) + block.options.length);
-    const options: PickerOption<string>[] = optionBlocks.flatMap((block) => block.options.map((option) => ({
-      ...option, group: `${SECTION_TITLES[block.section]} ${sizes.get(block.section)}`,
-    })));
     for (const option of options) {
-      if (option.value.startsWith('native:')) continue;
       const historyAction = option.alternates?.length ? [{ label: 'Branches', value: 'history' }] : [];
       if (option.alternates?.length) histories.set(option.value, [...option.alternates]);
       delete option.alternates;
       option.actions = [...historyAction, ...MANAGE_ACTIONS];
       option.deleteAction = { label: 'Delete', value: 'delete' };
     }
+    // Chats another CLI started, in a section of their own at the bottom,
+    // newest first: they are something to adopt, not what this list is
+    // mostly for, and interleaved by recency they buried ClikCode's own. One
+    // whose vendor gave no real time sorts last rather than claiming a place.
+    const others = [...discovered].sort((left, right) => (right.item.updatedAtMs ?? -Infinity) - (left.item.updatedAtMs ?? -Infinity));
+    for (const { harness, item, accountId } of others) {
+      const when = item.updatedAtMs === undefined ? '' : relativeTime(new Date(item.updatedAtMs).toISOString(), now);
+      options.push({
+        label: `${harness.displayName} · ${item.title ?? 'Untitled chat'}`,
+        ...(when ? { detail: `· ${when}` } : {}),
+        // By identity, not position: the list is replaced when the CLIs
+        // answer, and a row chosen from the earlier one must still resolve.
+        value: nativeValue(harness.command, item.nativeId, accountId),
+        group: OTHER_CLIS,
+      });
+    }
     if (discovering && slowDiscovery) {
       options.push({
         label: discovered.length ? 'Refreshing chats from other CLIs…' : 'Looking for chats from other CLIs…',
         detail: discovered.length ? '· showing what they listed last time' : '· your ClikCode conversations are listed above',
         value: PENDING_DISCOVERY_VALUE,
+        group: OTHER_CLIS,
       });
     }
     // The glyph column: the board draws it, the spinner animated; this list
@@ -361,12 +352,14 @@ export async function interactiveSessionPicker(
   // Asked for on every keypress (the list redraws, and a picker re-reads its
   // rows each time). Nothing it reads changes between keys except discovery
   // landing or the watch below, so the rows are rebuilt only then -- not all
-  // five hundred of them per arrow press.
+  // five hundred of them per arrow press. And once a second while a turn
+  // runs: its `working 3m` counts up, and it can turn `stalled`.
   const buildOptions = (): PickerOption<string>[] => {
-    if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision) {
+    const second = rows.some((row) => row.pending) ? Math.floor(Date.now() / 1000) : 0;
+    if (built && built.discovering === discovering && built.slow === slowDiscovery && built.discovered === discovered && built.revision === listRevision && built.second === second) {
       return built.options;
     }
-    built = { discovering, slow: slowDiscovery, discovered, revision: listRevision, options: buildFresh() };
+    built = { discovering, slow: slowDiscovery, discovered, revision: listRevision, second, options: buildFresh() };
     return built.options;
   };
   // A turn starting or ending, or a worker exiting, writes the state or

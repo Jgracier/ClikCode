@@ -129,10 +129,11 @@ export function runOptionPicker<T>(
       const secondary = selectedOption?.alternates?.length ? ' · Tab history'
         : selectedOption?.actions?.length ? ' · Tab options' : '';
       const destructive = selectedOption?.deleteAction ? ` · Del ${selectedOption.deleteAction.label.toLowerCase()}` : '';
-      const back = selectedOption?.inner?.options.length ? `\u2190 ${selectedOption.inner.title.toLowerCase()}` : '\u2190 back';
+      const inner = selectedOption?.inner?.options.length ? ` · \u2192 ${selectedOption.inner.title.toLowerCase()}` : '';
+      const back = '\u2190 back';
       const hint = query
-        ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit`
-        : `${settings?.totalItems ?? currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${secondary}${destructive} · ${back} · Esc exit · type to filter`;
+        ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · \u2191\u2193 move · ${confirmation} choose${inner}${secondary}${destructive} · ${back} · Esc exit`
+        : `${settings?.totalItems ?? currentOptions().length} total · \u2191\u2193 move · ${confirmation} choose${inner}${secondary}${destructive} · ${back} · Esc exit · type to filter`;
       host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, headings: true, hint });
     };
     let finished = false;
@@ -249,10 +250,9 @@ export function runOptionPicker<T>(
       if (key === '\u001b[A' || key === '\u001b[B') void commit(current);
       if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
       else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
-      else if (key === '\u001b[D') {
-        if (current?.inner?.options.length) { void openList(current.inner.title, current.inner.options); return; }
-        settings?.onBack?.(); finish(undefined, 'back'); return;
-      }
+      else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined, 'back'); return; }
+      // Right goes into a row's inner list where it has one (the board's rule).
+      else if (key === '\u001b[C' && current?.inner?.options.length) { void openList(current.inner.title, current.inner.options); return; }
       else if (pickerConfirmsSelection(key)) {
         if (current) finish(current.value);
         return;
