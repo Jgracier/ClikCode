@@ -25,8 +25,29 @@ export function expandAuthPath(path: string, environment: Environment, home = ho
   return expanded.startsWith('~') ? `${profileHome}${expanded.slice(1)}` : expanded;
 }
 
+/** The files an entry names. A `*` path segment matches every entry of that
+ * directory: MiniMax Code keeps its record under a region and an OAuth client
+ * id (`~/.minimax/auth/prod/<region>/<client>/auth.json`). A path with no `*`
+ * is itself, whether or not it exists. */
+export async function expandAuthPaths(path: string, environment: Environment, home = homedir()): Promise<string[]> {
+  const expanded = expandAuthPath(path, environment, home);
+  if (!expanded.includes('*')) return [expanded];
+  const trailing = expanded.endsWith('/') ? '/' : '';
+  const segments = expanded.replace(/\/$/, '').split('/');
+  let found = [segments[0] ?? ''];
+  for (const segment of segments.slice(1)) {
+    if (segment !== '*') { found = found.map((base) => `${base}/${segment}`); continue; }
+    found = (await Promise.all(found.map(async (base) => (await readdir(base || '/').catch(() => [] as string[])).sort().map((name) => `${base}/${name}`)))).flat();
+  }
+  return found.map((item) => `${item}${trailing}`);
+}
+
 async function present(entry: AuthFile, environment: Environment): Promise<boolean> {
-  const path = expandAuthPath(entry.path, environment);
+  for (const path of await expandAuthPaths(entry.path, environment)) if (await presentAt(path, entry)) return true;
+  return false;
+}
+
+async function presentAt(path: string, entry: AuthFile): Promise<boolean> {
   try {
     if (path.endsWith('/')) return (await readdir(path)).length > 0;
     if (entry.contains === undefined) return (await stat(path)).size > 0;
@@ -46,11 +67,14 @@ export async function authFilesStamp(
 ): Promise<string> {
   const environment = { ...processEnvironment, ...profileEnvironment };
   const parts = await Promise.all((harness.authFiles ?? []).map(async (entry) => {
-    const path = expandAuthPath(entry.path, environment);
-    try {
-      const info = await stat(path);
-      return `${path}:${info.size}:${info.mtimeMs}:${await present(entry, environment)}`;
-    } catch { return `${path}:-`; }
+    const paths = await expandAuthPaths(entry.path, environment);
+    if (!paths.length) return `${entry.path}:-`;
+    return (await Promise.all(paths.map(async (path) => {
+      try {
+        const info = await stat(path);
+        return `${path}:${info.size}:${info.mtimeMs}:${await presentAt(path, entry)}`;
+      } catch { return `${path}:-`; }
+    }))).join('|');
   }));
   return parts.join('|');
 }
@@ -102,15 +126,16 @@ export async function removeAuthFiles(
   const environment = { ...processEnvironment, ...profileEnvironment };
   const removed: string[] = [];
   for (const entry of removableAuthFiles(harness)) {
-    const path = expandAuthPath(entry.path, environment);
-    if (!await present(entry, environment)) continue;
-    if (entry.removeLine && entry.contains !== undefined) {
-      const text = await readFile(path, 'utf8');
-      await writeFile(path, text.split('\n').filter((line) => !line.includes(entry.contains!)).join('\n'), 'utf8');
-    } else {
-      await rm(path, { recursive: path.endsWith('/'), force: true });
+    for (const path of await expandAuthPaths(entry.path, environment)) {
+      if (!await presentAt(path, entry)) continue;
+      if (entry.removeLine && entry.contains !== undefined) {
+        const text = await readFile(path, 'utf8');
+        await writeFile(path, text.split('\n').filter((line) => !line.includes(entry.contains!)).join('\n'), 'utf8');
+      } else {
+        await rm(path, { recursive: path.endsWith('/'), force: true });
+      }
+      removed.push(path);
     }
-    removed.push(path);
   }
   return removed;
 }

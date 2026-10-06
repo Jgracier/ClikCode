@@ -18,7 +18,7 @@ import { freePlanModels, planIsFree, preferredFreeModel } from './free-plan.js';
 import { copilotAccountModels } from './cli-usage-probes.js';
 import { discoverPiProviders, piConnect, piModels } from './pi-discovery.js';
 import { discoverGooseProviders, GOOSE_DRIVEN_HARNESSES, gooseConnect, gooseModelsDevModels, modelsDevCache, modelsDevFiles, modelsDevProvider } from './goose-discovery.js';
-import { expandAuthPath } from './auth-files.js';
+import { expandAuthPaths } from './auth-files.js';
 import { discoverAiderModels, openRouterCacheFile } from './aider-discovery.js';
 import { acpConfigOptionValues, acpDiscoverySession, acpProbeArgv, acpSessionModels, queryAcp } from './acp-query.js';
 import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
@@ -203,9 +203,9 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     ...(harness.command === 'aider' ? [openRouterCacheFile()] : []),
     // A sign-in changes which models a vendor lists (Pi, Qwen, Cline): its
     // credential files are part of what the list was read from.
-    ...(harness.authFiles ?? []).map((entry) => expandAuthPath(entry.path.replace(/\/$/, ''), {
+    ...(await Promise.all((harness.authFiles ?? []).map((entry) => expandAuthPaths(entry.path.replace(/\/$/, ''), {
       ...process.env, ...(account?.nativeProfile ? { [account.nativeProfile.env]: account.nativeProfile.path } : {}),
-    })),
+    })))).flat(),
   ];
   const identities = await Promise.all(files.map(fileIdentity));
   // Goose lists the models of the CLIs it drives, so their lists are its too.
