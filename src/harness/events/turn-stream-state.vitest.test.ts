@@ -1,8 +1,11 @@
 /** A turn's stream position belongs to the turn, not to whatever `session_id`
  * a vendor happens to put on some of its records. */
 import { describe, expect, it } from 'vitest';
-import { createStreamState, nativeResponseUpdate } from './adapters.js';
+import { createStreamState, parseHarnessLine } from './adapters.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
+
+/** The live assistant text one line carries. */
+const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnessLine(...line).response;
 
 const cmdc = { command: 'command', parser: 'generic-json', turn: { output: 'json-lines' } } as unknown as AiLocalHarnessDefinition;
 const line = (record: unknown): string => JSON.stringify(record);
@@ -11,7 +14,7 @@ const text = (value: string) => line({ type: 'assistant', message: { role: 'assi
 /** Everything one turn would put on screen, in order. */
 function shown(records: string[]): string {
   const turn = createStreamState();
-  return records.map((record) => nativeResponseUpdate(cmdc, record, turn)?.text ?? '').join('');
+  return records.map((record) => responseOf(cmdc, record, turn)?.text ?? '').join('');
 }
 
 describe('one turn\'s stream', () => {

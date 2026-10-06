@@ -99,4 +99,3 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
   if (!key.startsWith('\u001b') && !/[\u0000-\u001f\u007f]/.test(key)) return insert(key);
   return { value, cursor, changed: false };
 }
-export const editComposer = editWaitingComposer;

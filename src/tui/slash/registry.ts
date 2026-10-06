@@ -96,10 +96,6 @@ const needsHarness = (what: string) => (session: HarnessSession | undefined, har
   if (!local.available) return local;
   return harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.`, needs: 'provider' };
 };
-/** Reads this machine's repository, which both routes can now do: the gateway
- * route runs ClikCode's own agent loop locally and asks the gateway only for
- * the model step, so its tools touch the same files a local harness does. */
-const needsRepoAccess = (_name: string) => (): SlashAvailability => ({ available: true });
 
 /** Governs what the agent may do to THIS machine, so it applies on both
  * routes. The gateway picks the model; it does not get to pick how much of
@@ -145,8 +141,8 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('redraw', 'Conversation', 'repaint the screen'),
   entry('exit', 'Conversation', 'save and leave', { aliases: ['quit'] }),
 
-  entry('review', 'Workspace', 'ask the provider to review uncommitted changes', { argHint: '[focus]', availability: needsRepoAccess('review') }),
-  entry('init', 'Workspace', "create or improve the harness's agent instructions file", { availability: needsRepoAccess('init') }),
+  entry('review', 'Workspace', 'ask the provider to review uncommitted changes', { argHint: '[focus]' }),
+  entry('init', 'Workspace', "create or improve the harness's agent instructions file"),
   entry('memory', 'Workspace', "show the harness's memory file; `edit` opens $EDITOR", { argHint: '[edit]' }),
   entry('diff', 'Workspace', 'changes against HEAD, staged included, plus untracked files'),
   entry('cwd', 'Workspace', 'show or change the working directory', { argHint: '[dir]' }),

@@ -57,11 +57,6 @@ export function goalKey(role: SwarmRole, paths: readonly string[], prompt: strin
   return `${role}|${[...paths].sort().join(',')}|${normalized}`;
 }
 
-/** Delegations are handled by the swarm when requested without artificial host refusal. */
-export function keepOnHost(_text: string): boolean {
-  return false;
-}
-
 export function swarmRole(text: string): SwarmRole {
   if (/\b(review|nitpick|look over)\b/i.test(text)) return 'review';
   if (/\b(implement|edit|change|fix|update|patch|rewrite)\b/i.test(text)) return 'implement';

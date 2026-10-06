@@ -8,7 +8,7 @@ import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import { isKeyShaped, type LoginLink, type SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import { pastedText } from './keys.js';
-import { backslashNewline, composerVerticalMove, editComposer, editWaitingComposer } from './composer-edit.js';
+import { backslashNewline, composerVerticalMove, editWaitingComposer } from './composer-edit.js';
 import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, type PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { composerLayout } from './render/composer-layout.js';
@@ -3024,7 +3024,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           : key === '\u001b[3~' || key === '\u0004' ? removePlaceholderAt(draft(), 'forward') : undefined;
         if (removed) { apply(removed); selected = highlightFor(value); return draw(); }
         // Everything else is text editing, shared with the waiting composer.
-        const edited = editComposer(value, cursor, key);
+        const edited = editWaitingComposer(value, cursor, key);
         if (!edited.changed) return;
         if (edited.value !== value) selected = highlightFor(edited.value);
         value = edited.value;

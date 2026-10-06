@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { markFromIndex } from './list-facts.js';
 import type { HarnessSession } from './model.js';
-import { chatNamed, conversationPreview, isBlankConversation, sessionPickerOptions } from './options.js';
+import { chatNamed, conversationOption, conversationPreview, isBlankConversation } from './options.js';
+import { conversationRows } from './conversation-rows.js';
 
 const now = new Date().toISOString();
 const chat = (extra: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -32,7 +33,9 @@ describe('a chat nothing happened in', () => {
     const used = chat({ id: 'used', conversationId: 'used', messages: [{ role: 'user', content: 'hi' }] });
     const stranded = chat({ id: 'stranded', conversationId: 'stranded' });
     const open = chat({ id: 'open', conversationId: 'open' });
-    const listed = sessionPickerOptions([used, stranded, open], 'open', () => 'Claude Code').map((option) => option.value);
+    // The /resume board's own filter (tui/pickers/session.ts), then its rows.
+    const shown = [used, stranded, open].filter((session) => session.id === 'open' || !isBlankConversation(session));
+    const listed = conversationRows(shown, { currentId: 'open' }).map((row) => conversationOption(row, () => 'Claude Code').value);
     expect(listed).toContain('used');
     expect(listed).toContain('open');
     // One a killed process left behind is as invisible as one never made.
@@ -55,7 +58,7 @@ describe('a chat nothing happened in', () => {
       id: 'used', conversationId: 'used', updatedAt: new Date(Date.parse(now) - 5 * 60_000).toISOString(),
       messages: [{ role: 'user', content: 'fix the scroll jump' }, { role: 'assistant', content: 'done' }],
     });
-    const row = sessionPickerOptions([used], 'other', () => 'Claude', Date.parse(now))[0]!;
+    const row = conversationOption(conversationRows([used], { currentId: 'other', now: Date.parse(now) })[0]!, () => 'Claude', Date.parse(now));
     expect(row.detail).toContain('5m ago');
     expect(row.detail).toContain('fix the scroll jump');
     expect(conversationPreview(used)).toBe('fix the scroll jump');

@@ -28,7 +28,7 @@ import { harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { forgetNativeThread } from './native-thread.js';
-import { conversationRows, type ConversationRow } from './conversation-rows.js';
+import type { ConversationRow } from './conversation-rows.js';
 import { conversationState, turnFacts } from './conversation-state.js';
 import { parseSendMode } from '../turn/send-mode.js';
 
@@ -111,22 +111,6 @@ export function chatNamed(sessions: readonly HarnessSession[], typed: string, cu
 export function latestChat(sessions: readonly HarnessSession[], workspace: string): HarnessSession | undefined {
   const chats = sessions.filter((session) => isConversationChat(session) && !isBlankConversation(session)).sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   return chats.find((session) => session.workspace === workspace) ?? chats[0];
-}
-
-/** One row per ClikCode conversation, newest first. Its forks stay
- * available via the row's Branches action instead of appearing as
- * duplicate rows. (The /resume board builds its rows with liveness: see
- * conversationRows and conversationOption.) */
-export function sessionPickerOptions(
-  sessions: readonly HarnessSession[],
-  currentId: string,
-  providerLabel: ((session: HarnessSession) => string) | undefined = sessionProviderLabel,
-  now = Date.now(),
-): PickerOption<string>[] {
-  // A chat nothing happened in is not a conversation to go back to -- only
-  // the one open right now, which the user is looking at.
-  const listed = sessions.filter((session) => session.id === currentId || !isBlankConversation(session));
-  return conversationRows(listed, { currentId, now }).map((row) => conversationOption(row, providerLabel, now));
 }
 
 /** A conversation row as a picker option, in three parts: its title, the one
