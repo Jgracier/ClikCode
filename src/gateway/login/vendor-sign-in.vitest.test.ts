@@ -127,6 +127,13 @@ describe('reading what a vendor screen waits on, from real screens', () => {
   it('Pi\'s long provider list, its position counter no option', () => {
     const screen = 'Select provider to configure:\n>\n→ Amazon Bedrock • unconfigured\n  Ant Ling • unconfigured\n  Anthropic • unconfigured\n  (1/41)\n';
     expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Select provider to configure:', choices: ['Amazon Bedrock • unconfigured', 'Ant Ling • unconfigured', 'Anthropic • unconfigured'], selected: 0, style: 'arrows', searchable: true });
+    expect(readScreenPrompt(screen.replace('>\n', '> anth\n'))).toMatchObject({ title: 'Select provider to configure:' });
+  });
+
+  it('Cline\'s filtered list, its groups\' headings between the options', () => {
+    const screen = '  Choose a provider\n   Popular\n   ❯ OpenAI ChatGPT Subscription (OAuth)\n     OpenAI Compatible\n   Other\n     OpenAI\n     OpenAI Codex CLI (local CLI)\n\n  Type to search, ↑/↓ navigate, Enter to select, Esc to go back,\n';
+    expect(readScreenPrompt(screen)).toEqual({ kind: 'choice', title: 'Popular', choices: ['OpenAI ChatGPT Subscription (OAuth)', 'OpenAI Compatible', 'OpenAI', 'OpenAI Codex CLI (local CLI)'], selected: 0, style: 'arrows', searchable: true });
+    expect(readScreenPrompt(screen.replace('❯ OpenAI ChatGPT', '  OpenAI ChatGPT').replace('     OpenAI\n', '   ❯ OpenAI\n'))).toMatchObject({ title: 'Popular', selected: 2 });
   });
 
   it('Vibe\'s cards, the current one marked left of its box', () => {
