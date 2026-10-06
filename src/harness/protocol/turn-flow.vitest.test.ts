@@ -53,6 +53,7 @@ describe('how a turn reads', () => {
   it('shows the reasoning under the status line without its heading or emphasis', () => {
     expect(reasoningBody('**Inspecting the parser** I should look at the **lexer** first')).toBe('I should look at the lexer first');
     expect(reasoningBody('**Inspecting the parser**')).toBe('');
+    expect(reasoningBody('**Inspecting the')).toBe('');
   });
 
   it('sweeps a highlight across the label', () => {

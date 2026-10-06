@@ -100,7 +100,8 @@ export function reasoningHeading(thought: string | undefined): string | undefine
 /** The reasoning under the status line: without the heading the status
  * line already shows, and without its markdown emphasis. */
 export function reasoningBody(thought: string): string {
-  return thought.replace(/\*\*([^*\n]{3,80})\*\*/, '').replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim();
+  // A heading still arriving (`**Inspecting the`) is not body text yet.
+  return thought.replace(/\*\*([^*\n]{3,80})\*\*/, '').replace(/^\s*\*\*[^*\n]*$/, '').replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim();
 }
 
 /** Claude Code's way of saying a long think is still a think. */
