@@ -9,24 +9,24 @@ import type { CodexSession } from '../harness/transport/codex-app-server.js';
 import type { AcpSession } from '../harness/transport/acp-client.js';
 import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harness/transport/background-turn.js';
 
-/** Harnesses whose `experimental` structured turn was rejected, by the build
- * that rejected it; later turns on that build go straight to the catalog's
- * proven `fallbackTurn`.
+/** Harnesses whose `turn` contract was rejected, by the build that rejected
+ * it; later turns on that build go straight to the catalog's declared
+ * `fallbackTurn`.
  *
  * Keyed on the binary's identity, not just the harness. It was a plain set of
  * names, held for the life of the process -- so an update to a vendor build
- * that accepts the experimental contract went on being sent the fallback,
+ * that accepts the newer contract went on being sent the fallback,
  * because an OLDER build had once said no. What was learned is a fact about
  * that build, and it stops applying the moment the binary changes. */
-const rejectedExperimentalTurn = new Map<string, string | undefined>();
+const rejectedTurnContract = new Map<string, string | undefined>();
 
 export async function usesFallbackTurn(harness: AiLocalHarnessDefinition): Promise<boolean> {
-  if (!rejectedExperimentalTurn.has(harness.command)) return false;
-  return rejectedExperimentalTurn.get(harness.command) === await harnessBinaryIdentity(harness.binary);
+  if (!rejectedTurnContract.has(harness.command)) return false;
+  return rejectedTurnContract.get(harness.command) === await harnessBinaryIdentity(harness.binary);
 }
 
 export async function rememberFallbackTurn(harness: AiLocalHarnessDefinition): Promise<void> {
-  rejectedExperimentalTurn.set(harness.command, await harnessBinaryIdentity(harness.binary));
+  rejectedTurnContract.set(harness.command, await harnessBinaryIdentity(harness.binary));
 }
 
 /** ACP `available_commands_update`, per ClikCode session, for the slash registry. */

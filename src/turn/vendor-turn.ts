@@ -508,9 +508,9 @@ export async function sendVendorTurn(input: {
         await checkpoint.persistNow();
         continue;
       }
-      // An `experimental` structured contract an older vendor build rejects
-      // outright: retry once on the proven fallback contract, and remember it.
-      if (failureKind === 'other' && !cliOutputStarted && harness.experimental && harness.fallbackTurn
+      // A turn contract an older vendor build rejects outright: retry once on
+      // the harness's declared fallback contract, and remember it for that build.
+      if (failureKind === 'other' && !cliOutputStarted && harness.fallbackTurn
         && (transport === 'structured-cli' || transport === 'text-cli') && !await usesFallbackTurn(harness)) {
         await rememberFallbackTurn(harness);
         prompter?.phase('using compatibility turn');
