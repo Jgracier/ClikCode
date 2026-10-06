@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  activityResult, endsWithSummary, exploreRuns, exploreSummary, pastePlaceholder, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
+  activityResult, endsWithSummary, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -46,6 +46,11 @@ describe('how a turn reads', () => {
     expect(turnStatus({ phase: 'thinking', thinkingMs: Number.NaN }).label).toBe('thinking');
     expect(turnStatus({ phase: 'generating response' }).label).toBe('generating response');
     expect(reasoningHeading('no heading here')).toBeUndefined();
+  });
+
+  it('shows the reasoning under the status line without its heading or emphasis', () => {
+    expect(reasoningBody('**Inspecting the parser** I should look at the **lexer** first')).toBe('I should look at the lexer first');
+    expect(reasoningBody('**Inspecting the parser**')).toBe('');
   });
 
   it('sweeps a highlight across the label', () => {

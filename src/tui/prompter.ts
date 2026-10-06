@@ -34,7 +34,7 @@ import { ActivityEntry, collapseToolRuns, activityLifecyclePhase, openToolsStatu
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
+import { reasoningBody, tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
 import { turnStalled } from '../harness/protocol/turn-pace.js';
 import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
@@ -1744,8 +1744,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       : [];
     let liveBandBudget = Math.max(0, optionalRows - paletteRows - approvalRows.length - 2);
     // The newest words of the reasoning: it is read as it is written.
-    const thoughtRows = this.turn && this.thought && !approval && liveBandBudget > 0
-      ? [`  ${chalk.dim(chalk.italic(`✻ ${visibleTail(this.thought.text, Math.max(1, inner - 2))}`))}`] : [];
+    const thought = this.thought ? reasoningBody(this.thought.text) : '';
+    const thoughtRows = this.turn && thought && !approval && liveBandBudget > 0
+      ? [`  ${chalk.dim(chalk.italic(`✻ ${visibleTail(thought, Math.max(1, inner - 2))}`))}`] : [];
     liveBandBudget -= thoughtRows.length;
     // A link sign-in's link is wrapped, never cut: on a phone it is read (and
     // its code typed) from here.
