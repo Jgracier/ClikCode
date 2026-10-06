@@ -97,6 +97,12 @@ export function reasoningHeading(thought: string | undefined): string | undefine
   return heading || undefined;
 }
 
+/** The reasoning under the status line: without the heading the status
+ * line already shows, and without its markdown emphasis. */
+export function reasoningBody(thought: string): string {
+  return thought.replace(/\*\*([^*\n]{3,80})\*\*/, '').replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim();
+}
+
 /** Claude Code's way of saying a long think is still a think. */
 const THINKING_WORDS: Array<[afterMs: number, words: string]> = [
   [45_000, 'deep in thought'], [30_000, 'thinking some more'], [20_000, 'thinking more'], [10_000, 'still thinking'], [0, 'thinking'],
