@@ -235,6 +235,20 @@ describe('kiro thread writer', () => {
     await golden('kiro.json', files.session);
   });
 
+  // kiro-cli 2.23.1 panicked on prompts that did not alternate with replies
+  // ("invalid conversation history received") and its ACP agent then hung.
+  it('alternates prompts and replies when a turn got no reply, and never ends on a prompt', () => {
+    const base = fixtureRecord();
+    const silent = (index: number, user: string): CanonicalTurn => ({ ...base.turns[0]!, index, user, parts: [], tools: [], assistant: '', touchedFiles: [], interrupted: true });
+    const record = { ...base, turns: [base.turns[0]!, silent(1, 'how are we doing?'), { ...base.turns[1]!, index: 2 }, silent(3, 'and now?')] };
+    const kinds = kiroThreadFiles(record, { sessionId: 's', workspace: WORKSPACE, now: NOW }).messages.trim().split('\n').map((line) => (JSON.parse(line) as { kind: string }).kind);
+    for (let at = 1; at < kinds.length; at++) {
+      expect([kinds[at - 1], kinds[at]], `at ${at}`).not.toEqual(['Prompt', 'Prompt']);
+      expect([kinds[at - 1], kinds[at]], `at ${at}`).not.toEqual(['AssistantMessage', 'AssistantMessage']);
+    }
+    expect(kinds.at(-1)).toBe('AssistantMessage');
+  });
+
   it('writes under the taking-over HOME, pinned to ACP, and declines other builds', async () => {
     const home = await mkdtemp(join(tmpdir(), 'kiro-writer-'));
     const writer = NATIVE_SESSION_STORES.kiro!.writer!;

@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { JsonRpcPeer, jsonRpcErrorDetail } from './jsonrpc-peer.js';
+import { JsonRpcPeer, jsonRpcErrorDetail, panicMessage } from './jsonrpc-peer.js';
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -59,6 +59,26 @@ describe('JSON-RPC peer', () => {
     child.stdout.write('"result":{"ok":true}}\n');
     await expect(result).resolves.toEqual({ ok: true });
     expect(peer.failureDetail()).toBe('Booting agent...');
+  });
+
+  // kiro-cli 2.23.1, a history it rejects: the panic is printed and the
+  // process stays up, answering nothing.
+  const KIRO_PANIC = '\u001b[31mThe application panicked (crashed).\u001b[0m\nMessage:  \u001b[36mfirst agent loop request should never fail: AgentLoopResponse(Custom("invalid conversation history received"))\u001b[0m\nLocation: \u001b[35mcrates/agent/src/agent/mod.rs\u001b[0m:\u001b[35m3544\u001b[0m\n';
+  it('fails what is pending and stops the agent when it panics but stays alive', async () => {
+    const child = new FakeChild();
+    const peer = peerFor(child);
+    const prompt = peer.request('session/prompt', {});
+    await tick();
+    child.stderr.write(KIRO_PANIC.slice(0, 60));
+    await tick();
+    expect(peer.closed).toBe(false);
+    child.stderr.write(KIRO_PANIC.slice(60));
+    await expect(prompt).rejects.toThrow('the agent crashed: first agent loop request should never fail: AgentLoopResponse(Custom("invalid conversation history received"))');
+    expect(child.killed).toContain('SIGTERM');
+  });
+  it('reads a panic only from a panic report', () => {
+    expect(panicMessage('warning: something\nMessage: hi\n')).toBeUndefined();
+    expect(panicMessage("thread 'main' panicked at src/main.rs:3:5:\nboom\nnote: run with RUST_BACKTRACE=1\n")).toBe('boom');
   });
 
   it('omits the jsonrpc member for servers that do not use it', async () => {

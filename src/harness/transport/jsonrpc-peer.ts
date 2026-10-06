@@ -10,6 +10,17 @@ type JsonRpcMessage = Record<string, any>;
 
 export const JSONRPC_SETUP_TIMEOUT_MS = 20_000;
 const NOISE_LIMIT = 8000;
+
+/** What a Rust panic report on stderr says went wrong ("The application
+ * panicked (crashed). Message: ..."), once its message line is complete;
+ * undefined for none. Colours are stripped. */
+export function panicMessage(stderr: string): string | undefined {
+  // eslint-disable-next-line no-control-regex
+  const plain = stderr.replace(/\u001b\[[0-9;]*m/g, '');
+  if (!/The application panicked|thread '[^']*' panicked at/.test(plain)) return undefined;
+  const message = /Message:\s*([^\n]*)\n/.exec(plain) ?? /panicked at [^\n]*:\n([^\n]+)\n/.exec(plain);
+  return message ? message[1]!.trim() || 'it panicked' : undefined;
+}
 /** `exit` can precede `close` indefinitely when a grandchild inherited the
  * pipes. Output completeness matters, so `close` is preferred, but callers
  * must never hang on a process that is already gone. */
@@ -122,7 +133,16 @@ export class JsonRpcPeer {
     child.stdout?.setEncoding?.('utf8');
     child.stderr?.setEncoding?.('utf8');
     child.stdout?.on('data', (chunk: string | Buffer) => this.receive(String(chunk)));
-    child.stderr?.on('data', (chunk: string | Buffer) => { this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-NOISE_LIMIT); });
+    child.stderr?.on('data', (chunk: string | Buffer) => {
+      this.stderrTail = `${this.stderrTail}${String(chunk)}`.slice(-NOISE_LIMIT);
+      const panic = panicMessage(this.stderrTail);
+      if (panic === undefined || this.isClosed) return;
+      // A Rust agent that panics keeps its process alive with nothing left to
+      // answer (kiro-cli 2.23.1: "first agent loop request should never fail"),
+      // and a turn waited on it until the idle ceiling.
+      this.handleClose(new Error(`the agent crashed: ${panic}`));
+      killProcessTreePortable(this.child, 'SIGTERM', this.options.detached === true);
+    });
     // A child that exits mid-write raises EPIPE asynchronously on the stream.
     // Without a listener that is an uncaught exception that kills ClikCode.
     child.stdin?.on('error', () => undefined);
