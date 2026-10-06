@@ -97,6 +97,35 @@ describe('keyRoutedScreen', () => {
     expect(own.asked).toEqual(['Pi API key, or Enter to choose a provider']);
   });
 
+  it('types into a list\'s own search entry, and passes over a default that is a search (Goose)', async () => {
+    endpoints('https://api.anthropic.com/');
+    const goose = [{ provider: 'anthropic', choose: ['Manual Configuration', 'Anthropic'] }] as const;
+    const ui = await keyRoutedScreen(multi, goose, screen({}, 'sk-ant-api03-x'), KEY_PROVIDERS);
+    expect(await ui.choose('How would you like to set up your provider?', ['OpenRouter Login (Recommended)', 'Manual Configuration'])).toBe(1);
+    expect(await ui.choose('Which model provider should we use?', ['AI/ML API', 'Amp', 'Search all providers...'])).toBe(2);
+    expect(await ui.ask('Search model providers', false)).toBe('Anthropic');
+    expect(await ui.choose('Which model provider should we use?', ['Anthropic (Claude and other models from Anthropic)', 'Databricks'])).toBe(0);
+    expect(await ui.ask('Provider Anthropic requires ANTHROPIC_API_KEY, please enter a value', true)).toBe('sk-ant-api03-x');
+    expect(await ui.choose('Select a model:', ['Search all models...', 'claude-sonnet-4.5'], 0)).toBe(1);
+  });
+
+  it('answers a `?label` menu when the vendor shows it, passes over it when not (OpenClaw\'s plugin install)', async () => {
+    endpoints('https://api.groq.com/');
+    const route = [{ provider: 'groq', choose: ['More…', 'Groq', '?Download from npm', 'Skip for now'] }] as const;
+    const providers = ['OpenAI', 'More…', 'Skip for now'];
+    const first = await keyRoutedScreen(multi, route, screen({}, 'gsk_x'), KEY_PROVIDERS);
+    await first.choose('Model/auth provider', providers);
+    await first.choose('Model/auth provider', ['Cerebras', 'Groq']);
+    expect(await first.choose('Install Groq plugin?', ['Download from npm (@openclaw/groq-provider)', 'Skip for now'])).toBe(0);
+    await first.ask('Enter Groq API key', true);
+    expect(await first.choose('Model/auth provider', providers, 0)).toBe(2);
+    const again = await keyRoutedScreen(multi, route, screen({}, 'gsk_x'), KEY_PROVIDERS);
+    await again.choose('Model/auth provider', providers);
+    await again.choose('Model/auth provider', ['Cerebras', 'Groq']);
+    await again.ask('Enter Groq API key', true);
+    expect(await again.choose('Model/auth provider', providers, 0)).toBe(2);
+  });
+
   it('an option is its label, or the label and then a mark -- never a longer name', () => {
     expect(optionFor(['Azure OpenAI • unconfigured', 'OpenAI • unconfigured'], 'OpenAI')).toBe(1);
     expect(optionFor(['Fireworks AI (OpenAI-compatible)', 'OpenAI ▸ (ChatGPT/Codex subscription)'], 'OpenAI')).toBe(1);
