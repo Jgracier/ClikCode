@@ -478,6 +478,8 @@ SCENARIOS = {
                    'blocks': ['The parser is fine.']}],
         'steps': [('type', 'check the parser'), ('wait_for', 'The parser is fine.', 30), ('settle', 2)],
         'watch': ['check the parser', 'The parser is fine.'], 'ever': ['Inspecting the parser · '],
+        # The reasoning row under it does not repeat the heading or its **.
+        'never': ['**Inspecting', '✻ Inspecting'],
     },
     # Reads and searches in a row are one row while they happen, growing in
     # place and settling once -- never a row per call and then a merged copy
@@ -580,13 +582,14 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
-            ('type', 'also run the linter'), ('wait_for', 'esc to edit', 10), ('settle', 0.5),
+            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('snap', 'taken-back'),
             ('wait_for', 'The build passed.', 40), ('settle', 3),
         ],
         'watch': ['start the build', 'The build passed.'],
-        # Still running: the waiting line is up on the open call, its clock going.
-        'snap_contains': {'taken-back': ['running $ · ']},
+        # Still running: the waiting line names the open call's program; the
+        # call's own row keeps the clock.
+        'snap_contains': {'taken-back': ['running sleep']},
         'never': ['Steered in: also run the linter.', 'Queued turn answered.', 'stopping', 'Stopped'],
     },
     # Ctrl+C is the one key that stops a turn.
