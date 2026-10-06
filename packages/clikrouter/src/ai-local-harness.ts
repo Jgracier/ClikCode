@@ -534,8 +534,10 @@ export interface AiLocalHarnessDefinition {
   /** Vendor-supported configuration root used for isolated local accounts. */
   profileEnv?: string;
   turn?: AiHarnessTurnDefinition;
-  /** Proven contract to retry with when an `experimental` structured `turn`
-   * is rejected by an older vendor build. */
+  /** Proven contract to retry with when `turn` is rejected outright, before
+   * any output, by an older vendor build; remembered for that build
+   * (turn/vendor-process.ts). Applies wherever it is declared, whatever the
+   * tier or `experimental`. */
   fallbackTurn?: AiHarnessTurnDefinition;
   /**
    * Source-backed native session invocation.  Omitted means ClikCode may
@@ -1098,8 +1100,13 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // output takes is not, and a parser declared against an unverified shape
   // fails at the one moment it matters.
   { command: 'cn', provider: 'continue', displayName: 'Continue', surface: 'terminal', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cn', npmPackage: '@continuedev/cli', loginArgv: [], authFiles: [{ path: '${CONTINUE_GLOBAL_DIR:-~/.continue}/config.yaml', contains: 'apiKey:' }], authEnv: ['ANTHROPIC_API_KEY'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--readonly'] }, bypass: { argv: ['--auto'] } }, turn: { startArgv: [], promptArgvPrefix: ['-p'], output: 'text' } },
-  // Official ACP entrypoints, source-checked but awaiting authenticated live
-  // turns. Keep them in the experimental picker tier until those probes pass.
+  // ACP entrypoints checked against each vendor's own source. Devin CLI and
+  // MiniMax Code also have session stores and native-thread writers, and
+  // their failover carry was verified live on 2026-10-05: Devin with signed-in
+  // ACP turns, MiniMax Code only against a local stub model (its sign-ins had
+  // expired). Deep Agents Code and Junie have run no turn. All four stay in
+  // the experimental picker tier until each has run signed-in turns on its
+  // own models through ClikCode's normal path.
   { command: 'dcode', provider: 'deepagents-code', displayName: 'Deep Agents Code', surface: 'terminal', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp'], optionPlacement: 'after' }, localAuth: ['api-key', 'vendor-cli'], binary: 'dcode', installer: HARNESS_INSTALLERS.dcode, loginArgv: [], loginKeyCommand: { providersArgv: ['auth', 'list'], setArgv: ['auth', 'set', '{provider}'] },
     // Its provider names (`dcode auth list`), for the key's provider.
     loginKeyRoutes: providerKeyRoutes([], { anthropic: 'anthropic', openai: 'openai', google: 'google_genai' }), authEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY'], modelArgvPrefix: ['--model'] },
