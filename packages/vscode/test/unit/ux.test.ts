@@ -5,7 +5,7 @@ import { mentionScore } from '../../src/text';
 import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../../src/webview/composer';
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
-import { modelWithEffort } from '../../src/webview/picker';
+import { modelWithEffort, toggleAgent } from '../../src/webview/picker';
 import { conversationSection, rowState } from '../../src/webview/screens';
 import { splitEditorContext } from '../../src/editor-context';
 import { pathIn, relativeTime } from '../../src/webview/format';
@@ -229,5 +229,31 @@ describe('a history row\'s state', () => {
   it('needs you when one of VS Code\'s own panels holds an approval, and still works on a bridge that sends no turn', () => {
     expect(rowState({ ...row, attention: 'waiting' }, now).text).toBe('needs you');
     expect(rowState({ ...row, activity: 'working' }, now)).toEqual({ kind: 'working', text: 'working' });
+  });
+});
+
+describe('the Gateway agents in the model menu', () => {
+  const list = {
+    provider: 'gateway', custom: false, models: [{ id: 'auto', label: 'Automatic', current: true }],
+    agents: [{ id: 'silas', name: 'Silas', current: false }, { id: 'vera', name: 'Vera', current: false }],
+  };
+
+  it('choosing an agent marks it alone and asks the bridge for it', () => {
+    const { list: next, choice } = toggleAgent(list, 'silas');
+    expect(choice).toEqual({ kind: 'agent', agent: 'silas' });
+    expect(next?.agents?.map((agent) => [agent.id, agent.current])).toEqual([['silas', true], ['vera', false]]);
+    expect(next?.models).toBe(list.models);
+  });
+
+  it('choosing the marked agent again clears it', () => {
+    const marked = toggleAgent(list, 'silas').list;
+    const { list: next, choice } = toggleAgent(marked, 'silas');
+    expect(choice).toEqual({ kind: 'agent', agent: null });
+    expect(next?.agents?.every((agent) => !agent.current)).toBe(true);
+  });
+
+  it('switching agents moves the one mark', () => {
+    const { list: next } = toggleAgent(toggleAgent(list, 'silas').list, 'vera');
+    expect(next?.agents?.map((agent) => [agent.id, agent.current])).toEqual([['silas', false], ['vera', true]]);
   });
 });

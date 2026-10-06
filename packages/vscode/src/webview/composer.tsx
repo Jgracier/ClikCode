@@ -16,7 +16,7 @@ import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { formatTurnUsage, titleCase } from './format';
-import { AccountMenu, choose, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
+import { AccountMenu, agentName, choose, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
 import { focusHere, Icon, KeyList, type ListRow } from './ui';
 
 type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefined;
@@ -488,7 +488,8 @@ export function Composer(props: {
           {footerButton('provider', <><span class="chip-text">{providerName}</span><Icon name="chevron-down" /></>, `Provider: ${providerName}`, 'provider-button')}
           {/* Model and effort are one choice, as in Claude Code: `Opus Medium`. */}
           {providerChoosesModel(model.providerId)
-            ? footerButton('model', <><span class="chip-text">{modelWithEffort(modelName, effort?.current)}</span><Icon name="chevron-down" /></>, `Model and effort: ${modelWithEffort(modelName, effort?.current)}`, 'model-button')
+            ? footerButton('model', <>{model.agentId ? <><Icon name="hubot" />{agentName(model.agentId) ? <span class="chip-text">{agentName(model.agentId)} ·</span> : null}</> : null}<span class="chip-text">{modelWithEffort(modelName, effort?.current)}</span><Icon name="chevron-down" /></>,
+              `${model.agentId ? `Agent: ${agentName(model.agentId) ?? 'selected'} · ` : ''}Model and effort: ${modelWithEffort(modelName, effort?.current)}`, 'model-button')
             : effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
           <span class="spacer" />
           {model.accountUsage ? (
