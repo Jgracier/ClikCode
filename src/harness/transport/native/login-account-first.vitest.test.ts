@@ -68,7 +68,7 @@ describe('accountFirst', () => {
     }, offer());
     expect(done).toBeUndefined();
     expect(answered).toBe('4/0-code');
-    expect(own.seen).toContain('ask Paste code here if prompted · or paste a Claude Code API key');
+    expect(own.seen).toContain('ask Paste code here if prompted · or paste your Claude Code API key');
   });
 
   it('a key pasted into the vendor\'s question is taken as the key', async () => {
