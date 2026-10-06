@@ -193,6 +193,21 @@ export function appendThought(prior: Thought | undefined, label: string, id?: st
   return withId(joined.replace(/\s+/g, ' ').trim());
 }
 
+/** A row's paths as ClikCode's own agent writes them: relative to the
+ * workspace. A vendor CLI names the absolute path it was given, and the
+ * chat's own directory then took up most of every row. Only the label and
+ * the diff's file names change; the call itself (`call`) is kept as made. */
+export function withWorkspacePaths<T extends Pick<HarnessActivityEvent, 'label' | 'diff'>>(event: T, workspace: string | undefined): T {
+  const root = workspace?.replace(/\/+$/, '');
+  if (!root || root.length < 2) return event;
+  const prefix = `${root}/`;
+  const relative = (text: string): string => (text.includes(prefix) ? text.split(prefix).join('') : text);
+  const label = relative(event.label);
+  const diff = event.diff?.some((file) => file.path?.startsWith(prefix))
+    ? event.diff.map((file) => (file.path?.startsWith(prefix) ? { ...file, path: file.path.slice(prefix.length) } : file)) : event.diff;
+  return label === event.label && diff === event.diff ? event : { ...event, label, ...(diff ? { diff } : {}) };
+}
+
 /** A sub-agent's work so far, as Claude Code counts it. */
 export function toolUses(count: number): string {
   return `${count} tool use${count === 1 ? '' : 's'}`;
