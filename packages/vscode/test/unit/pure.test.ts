@@ -322,6 +322,12 @@ describe('markdown', () => {
     expect(html).not.toContain('<img');
     expect(html).toContain('<pre class="code" data-lang="js"><code>&lt;b&gt;');
   });
+
+  it('highlights a fence in a language it knows, escaped, and leaves others plain', () => {
+    const html = renderMarkdown('```ts\nconst a = "<b>"; // note\n```\n\n```text\nconst x\n```');
+    expect(html).toContain('<span class="tok-keyword">const</span> a = <span class="tok-string">&quot;&lt;b&gt;&quot;</span>; <span class="tok-comment">// note</span>');
+    expect(html).toContain('<code>const x</code>');
+  });
 });
 
 describe('editor context', () => {
