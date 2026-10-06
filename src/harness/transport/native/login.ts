@@ -67,22 +67,79 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
   const local = hasLocalDisplay();
   try {
     if (spec.loginKeyCommand) {
-      const found = spec.loginKeyRoutes ? await keyRoute(spec, spec.loginKeyRoutes, screen) : undefined;
-      await signInWithKey(spec, spec.loginKeyCommand, envOverrides, screen, found && { provider: found.route.choose[0]!, key: found.key });
+      const key = spec.loginKeyRoutes ? await askKey(spec, screen) : '';
+      const route = key ? await routeFor(spec, spec.loginKeyRoutes!, key, screen.signal) : undefined;
+      await signInWithKey(spec, spec.loginKeyCommand, envOverrides, screen, route && { provider: route.choose[0]!, key });
       return;
     }
     // Over once the vendor writes its credential: several go on into their
     // own app afterwards (Droid, Vibe), and only the file says it worked.
     const before = spec.authFiles?.length ? await authFilesStamp(spec, envOverrides) : undefined;
-    await runVendorSignIn({
+    const run = (ui: SignInUi) => runVendorSignIn({
       ...(before !== undefined ? { signedIn: async () => (await authFilesStamp(spec, envOverrides)) !== before && authFilePresent(spec, envOverrides) } : {}),
       binary: spec.binary,
       args: !local && spec.loginRemoteArgv ? spec.loginRemoteArgv : spec.loginArgv ?? [],
       env: envOverrides, displayName: spec.displayName, local,
       ...(spec.loginSteps ? { steps: spec.loginSteps } : {}),
-      ui: spec.loginKeyRoutes && ownLogin(spec) ? await keyRoutedScreen(spec, spec.loginKeyRoutes, screen) : screen,
+      ui,
     });
+    if (!spec.loginKeyRoutes || !ownLogin(spec)) { await run(screen); return; }
+    const routes = spec.loginKeyRoutes;
+    // The vendor's own account sign-in, at once; a key pasted under its link
+    // (or Enter, for its other options) takes over from it.
+    const instead = spec.loginAccountChoose ? await accountFirst(spec.displayName, spec.loginAccountChoose, screen, run) : { key: undefined };
+    if (instead) await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), instead.key));
   } finally { if (!own) screen.stop(); }
+}
+
+/** The vendor's own account sign-in (Cline's, Kilo's, Nous Portal), its menus
+ * answered with `labels` so its link shows straight away -- opened in a
+ * local browser, shown for a phone. Under the link, a key may be pasted
+ * instead, or Enter pressed for the vendor's other sign-ins: then that run
+ * stops and the answer is returned (a key, or '' for its menus). Undefined:
+ * the account sign-in finished. A question of the vendor's own after its
+ * link (a pasted code) replaces the key field. */
+export async function accountFirst(
+  name: string, labels: readonly string[], screen: SignInScreen, run: (ui: SignInUi) => Promise<void>,
+): Promise<{ key: string } | undefined> {
+  const stop = new AbortController();
+  const signal = AbortSignal.any([screen.signal, stop.signal]);
+  const left = [...labels];
+  let offered = false;
+  let instead: string | undefined;
+  let answered: () => void = () => undefined;
+  const offer = new Promise<void>((resolve) => { answered = resolve; });
+  let current = 0;
+  const ui: SignInUi = {
+    signal,
+    show: (link) => {
+      screen.show(link);
+      if (offered) return;
+      offered = true;
+      const asked = ++current;
+      void screen.ask(`Or paste a ${name} API key · Enter for other sign-ins`, true, true).then((text) => {
+        if (asked !== current || signal.aborted) return;
+        instead = text.trim();
+        stop.abort();
+        answered();
+      });
+    },
+    choose: async (title, choices, selected) => {
+      const at = left.length ? optionFor(choices, left[0]!) : -1;
+      if (at >= 0) { left.shift(); return at; }
+      return screen.choose(title, choices, selected);
+    },
+    ask: (prompt, secret, optional) => { current++; return screen.ask(prompt, secret, optional); },
+  };
+  const finished = run(ui).then(() => true, (error: unknown) => {
+    if (instead !== undefined) return false;
+    throw error;
+  });
+  const done = await Promise.race([finished, offer.then(() => false)]);
+  if (done) return undefined;
+  await finished.catch(() => undefined);
+  if (screen.signal.aborted) throw new Error(`sign-in to ${name} was cancelled`);
+  return { key: instead ?? '' };
 }
 
 /** Whether `spec` runs the harness's own sign-in, the one its key routes
@@ -113,17 +170,18 @@ async function signInWithKey(
   await set(providers[index]!, key);
 }
 
-/** The key asked first, alone; then the vendor's menus answered from the
+/** The key, asked first and alone (or `given`, one already pasted); then the vendor's menus answered from the
  * route that accepts it (catalog loginKeyRoutes). A menu the route does not
  * name, or any other screen, still goes to the user; so does the vendor's
  * whole sign-in when no key is given (its browser sign-ins). */
 export async function keyRoutedScreen(
   spec: NativeHarnessSpec, routes: readonly AiHarnessKeyRoute[], screen: SignInScreen,
   providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>> = keyProviders(),
+  given?: string,
 ): Promise<SignInUi> {
-  const found = await keyRoute(spec, routes, screen, providers);
-  if (!found) return screen;
-  const { key, route } = found;
+  const key = given ?? await askKey(spec, screen);
+  if (!key) return screen;
+  const route = await routeFor(spec, routes, key, screen.signal, providers);
   const labels = [...route.choose];
   let searched: string | undefined;
   let keyGiven = false;
@@ -163,21 +221,24 @@ function isSearch(choice: string): boolean {
   return choice === SEARCH_CHOICE || /^search\b/i.test(choice);
 }
 
-/** The key, asked first and alone, and the first route whose endpoint
- * takes it; undefined when the user gave none (Enter: the vendor's own
- * sign-in). Throws when no route takes it. */
-async function keyRoute(
-  spec: NativeHarnessSpec, routes: readonly AiHarnessKeyRoute[], screen: SignInScreen,
-  providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>> = keyProviders(),
-): Promise<{ key: string; route: AiHarnessKeyRoute } | undefined> {
+/** The key, asked first and alone; '' when the user gave none (Enter: the
+ * vendor's own sign-in). */
+async function askKey(spec: NativeHarnessSpec, screen: SignInScreen): Promise<string> {
   const key = (await screen.ask(`${spec.displayName} API key, or Enter to choose a provider`, true, true)).trim();
   if (screen.signal.aborted) throw new Error(`sign-in to ${spec.displayName} was cancelled`);
-  if (!key) return undefined;
+  return key;
+}
+
+/** The first route whose endpoint takes `key`. Throws when none does. */
+async function routeFor(
+  spec: NativeHarnessSpec, routes: readonly AiHarnessKeyRoute[], key: string, signal: AbortSignal,
+  providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>> = keyProviders(),
+): Promise<AiHarnessKeyRoute> {
   const candidates = keyCandidates(routes, key, providers);
-  const accepted = await Promise.all(candidates.map((route) => acceptsKey(route, key, providers, screen.signal)));
+  const accepted = await Promise.all(candidates.map((route) => acceptsKey(route, key, providers, signal)));
   const route = candidates[accepted.indexOf(true)];
   if (!route) throw new Error(`no provider ${spec.displayName} signs in to accepts that key -- check it was copied whole`);
-  return { key, route };
+  return route;
 }
 
 /** Which of `choices` is `label`: the option itself, else one that starts
