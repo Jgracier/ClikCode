@@ -55,6 +55,19 @@ export function visibleTail(value: string, width: number): string {
   return `…${kept}`;
 }
 
+/** `…/clikcode`: a path cut from the left at a separator, so the folder it
+ * ends in -- the one that says where this is -- stays whole. */
+export function visiblePathTail(path: string, width: number): string {
+  if (terminalCellWidth(path) <= width) return path;
+  const parts = path.split(/(?=[\\/])/);
+  let kept = '';
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    if (terminalCellWidth(`…${parts[index]}${kept}`) > width) break;
+    kept = `${parts[index]}${kept}`;
+  }
+  return kept ? `…${kept}` : visibleSlice(`…${parts[parts.length - 1]}`, width);
+}
+
 /** A user-perceived character is a grapheme cluster, not a code point: a
  * combining accent, a skin-tone modifier, a variation selector, and a ZWJ
  * family emoji are all several code points the terminal draws -- and the user
