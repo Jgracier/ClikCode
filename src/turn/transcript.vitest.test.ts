@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { TurnTranscript, settledAnswerBlocks } from './transcript';
 import type { MessageBlock } from '../harness/prompter.js';
+import { createStreamingBlockParser, splitIntoBlocks } from '../tui/render/markdown.js';
+import { renderMessageBlocks } from '../tui/render/message-blocks.js';
 
 const text = (blocks: readonly MessageBlock[]): string[] =>
   blocks.map((block) => (block as { text?: string }).text ?? `[${block.kind}]`);
@@ -287,4 +289,33 @@ describe('a tool call closes the prose before it', () => {
     expect(third.live.join('\n')).not.toContain('spinner');
     expect(third.live.join('\n')).not.toContain('done Bash');
   });
+});
+
+describe('a streamed answer lays out as its saved copy does', () => {
+  // The real renderer: it opens every block after the first with a blank row,
+  // which is what a block retired in pieces must write only once.
+  const render = (blocks: readonly MessageBlock[], first: boolean): string[] => renderMessageBlocks(blocks, '·', 40, first);
+  const streamed = (answer: string, step: number): string[] => {
+    const transcript = new TurnTranscript();
+    const parse = createStreamingBlockParser();
+    const rows: string[] = [];
+    for (let end = step; end < answer.length + step; end += step) {
+      const content = answer.slice(0, Math.min(end, answer.length));
+      rows.push(...transcript.advance({ content, blocks: parse(content), tools: [], turnEnded: false, renderBlocks: render }).finished);
+    }
+    rows.push(...transcript.advance({ content: answer, blocks: parse(answer), tools: [], turnEnded: true, renderBlocks: render }).finished);
+    return rows;
+  };
+  const answers = {
+    'a fence after a list': '## Heading\n\n- a\n- b\n\n```ts\nexport function m(a: number) {\n  return a;\n}\n```\n\ndone',
+    'a nested list, a quote and a table': 'Intro paragraph that is long enough to wrap across more than one row.\n\n1. one\n2. two\n   - nested\n3. three\n\n> quoted\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nEnd.',
+    'a blank line inside a fence': 'Text then fence\n```py\nprint(1)\n\nprint(2)\n```\nafter',
+    'a fence inside a list item': '- item\n\n  ```sh\n  ls\n  ```\n- next\n\n---\n\n### Sub\n\nbye',
+  };
+  for (const [name, answer] of Object.entries(answers)) {
+    it(`writes ${name} with no extra or missing rows, however it is chunked`, () => {
+      const saved = renderMessageBlocks(splitIntoBlocks(answer), '·', 40);
+      for (const step of [1, 2, 3, 5, 7, 11, 30]) expect(streamed(answer, step), `chunks of ${step}`).toEqual(saved);
+    });
+  }
 });
