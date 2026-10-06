@@ -79,6 +79,8 @@ export const harnessSupportsImages = (harness: AiLocalHarnessDefinition): boolea
 /** The built-in catalog alone, and the adapter version it declares. */
 export const builtInHarnesses = (): readonly AiLocalHarnessDefinition[] => localCatalog().AI_LOCAL_HARNESSES;
 export const harnessAdapterVersion = (): number => localCatalog().AI_LOCAL_HARNESS_ADAPTER_VERSION;
+/** The API-key providers a key-first sign-in may route to (catalog KEY_PROVIDERS). */
+export const keyProviders = (): HarnessCatalogRuntime['KEY_PROVIDERS'] => localCatalog().KEY_PROVIDERS;
 /** Built-in catalog plus any registered custom ACP harnesses. */
 export const allLocalHarnesses = (): readonly AiLocalHarnessDefinition[] => localCatalog().allLocalHarnesses();
 export const harnessAcpLaunch = (

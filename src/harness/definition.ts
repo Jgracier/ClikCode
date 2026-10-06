@@ -9,11 +9,12 @@ import type { HarnessSession } from '../session/model.js';
  * type-only: erased at build, so the catalog bundle still loads lazily. */
 import type {
   AiCustomAcpHarnessInput, AiHarnessAcpLaunch, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessIntegrationLevel,
-  AiHarnessPermissionMode, AiHarnessTransport, AiHarnessTurnDefinition, AiLocalHarnessDefinition,
+  AiHarnessPermissionMode, AiHarnessTransport, AiHarnessTurnDefinition, AiKeyProvider, AiKeyProviderId, AiLocalHarnessDefinition,
 } from '@clikcode/router/ai-local-harness';
 export type {
   AiCustomAcpHarnessInput, AiHarnessAcpDefinition, AiHarnessAcpLaunch, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessInstallStep,
-  AiHarnessInstaller, AiHarnessIntegrationLevel, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiHarnessTransport, AiLocalHarnessDefinition,
+  AiHarnessInstaller, AiHarnessIntegrationLevel, AiHarnessKeyRoute, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiHarnessTransport,
+  AiKeyProvider, AiKeyProviderId, AiLocalHarnessDefinition,
 } from '@clikcode/router/ai-local-harness';
 
 /** ClikCode's own, not the catalog's: where a conversation runs, ClikCode
@@ -72,6 +73,7 @@ export interface AiRouterRuntime {
   streamAiChatTurn(input: Record<string, unknown>): Promise<any>;
   AI_LOCAL_HARNESS_ADAPTER_VERSION: number;
   AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[];
+  KEY_PROVIDERS: Readonly<Record<AiKeyProviderId, AiKeyProvider>>;
   /** A provider row when this id is a model API that can be addressed
    *  directly, undefined when it merely names a tool (see catalog.ts). */
   getAiProvider(id: string): { id: string; envKey?: string } | undefined;

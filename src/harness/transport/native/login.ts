@@ -6,7 +6,9 @@
 import { lifecycle } from '../../../runtime/lifecycle-log.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createInterface } from 'node:readline/promises';
-import { runVendorSignIn, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
+import { runVendorSignIn, SEARCH_CHOICE, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
+import { keyProviders, localHarnessForCommand } from '../../../runtime/lazy-bridge.js';
+import type { AiHarnessKeyRoute, AiKeyProvider, AiKeyProviderId } from '../../definition.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
 import { NativeHarnessSpec } from './binary.js';
 import { captureNativeHarnessOutput } from './command.js';
@@ -74,9 +76,16 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
       args: !local && spec.loginRemoteArgv ? spec.loginRemoteArgv : spec.loginArgv ?? [],
       env: envOverrides, displayName: spec.displayName, local,
       ...(spec.loginSteps ? { steps: spec.loginSteps } : {}),
-      ui: spec.loginKeyRoutes ? await keyRoutedScreen(spec, spec.loginKeyRoutes, screen) : screen,
+      ui: spec.loginKeyRoutes && ownLogin(spec) ? await keyRoutedScreen(spec, spec.loginKeyRoutes, screen) : screen,
     });
   } finally { if (!own) screen.stop(); }
+}
+
+/** Whether `spec` runs the harness's own sign-in, the one its key routes
+ * answer -- not one for a single provider (providerLoginArgv, a model's
+ * connect), whose screens are another's. */
+function ownLogin(spec: NativeHarnessSpec): boolean {
+  return JSON.stringify(spec.loginArgv ?? []) === JSON.stringify(localHarnessForCommand(spec.command)?.loginArgv ?? []);
 }
 
 /** A key stored by the vendor's own commands (loginKeyCommand): its
@@ -100,47 +109,90 @@ async function signInWithKey(
 
 /** The key asked first, alone; then the vendor's menus answered from the
  * route that accepts it (catalog loginKeyRoutes). A menu the route does not
- * name, or any other screen, still goes to the user. */
+ * name, or any other screen, still goes to the user; so does the vendor's
+ * whole sign-in when no key is given (its browser sign-ins). */
 export async function keyRoutedScreen(
-  spec: NativeHarnessSpec, routes: NonNullable<NativeHarnessSpec['loginKeyRoutes']>, screen: SignInScreen,
+  spec: NativeHarnessSpec, routes: readonly AiHarnessKeyRoute[], screen: SignInScreen,
+  providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>> = keyProviders(),
 ): Promise<SignInUi> {
-  const key = (await screen.ask(`${spec.displayName} API key`, true)).trim();
-  if (!key || screen.signal.aborted) throw new Error(`sign-in to ${spec.displayName} was cancelled`);
-  const accepted = await Promise.all(routes.map((route) => acceptsKey(route.url, key, screen.signal)));
-  const route = routes[accepted.indexOf(true)];
-  if (!route) throw new Error(`no ${spec.displayName} endpoint accepts that key -- check it was copied whole`);
+  const key = (await screen.ask(`${spec.displayName} API key, or Enter to choose a provider`, true, true)).trim();
+  if (screen.signal.aborted) throw new Error(`sign-in to ${spec.displayName} was cancelled`);
+  if (!key) return screen;
+  const candidates = keyCandidates(routes, key, providers);
+  const accepted = await Promise.all(candidates.map((route) => acceptsKey(route, key, providers, screen.signal)));
+  const route = candidates[accepted.indexOf(true)];
+  if (!route) throw new Error(`no provider ${spec.displayName} signs in to accepts that key -- check it was copied whole`);
   const labels = [...route.choose];
+  let searched: string | undefined;
   let keyGiven = false;
+  // Once the key is in and the route has nothing more to say, the vendor's
+  // own defaults: its menu's current option (a default model), a shown default.
+  const defaults = (): boolean => keyGiven && !labels.length;
   return {
     signal: screen.signal,
     show: (link) => screen.show(link),
-    choose: async (title, choices) => {
-      const at = labels.length ? choices.findIndex((choice) => choice.toLowerCase().includes(labels[0]!.toLowerCase())) : -1;
-      if (at < 0) return screen.choose(title, choices);
-      labels.shift();
-      return at;
+    choose: async (title, choices, selected) => {
+      const label = labels[0];
+      const at = label === undefined ? -1 : optionFor(choices, label);
+      if (at >= 0) { labels.shift(); searched = undefined; return at; }
+      // Not among those shown: typed into the list's own search, once.
+      if (label !== undefined && searched === undefined && choices.at(-1) === SEARCH_CHOICE) { searched = label; return choices.length - 1; }
+      if (defaults() && selected !== undefined) return selected;
+      return screen.choose(title, choices, selected);
     },
-    ask: async (prompt, secret) => {
+    ask: async (prompt, secret, optional) => {
+      if (searched !== undefined && prompt.startsWith('Search ')) return searched.replace(/\s*\(.*$/, '');
       if (secret && !keyGiven) { keyGiven = true; return key; }
-      return screen.ask(prompt, secret);
+      if (defaults() && /\[[^\]]+\]$/.test(prompt)) return '';
+      return screen.ask(prompt, secret, optional);
     },
   };
 }
 
-/** Whether `url` takes `key`: a request with no messages is refused either
- * for the key (401/403) or for being empty -- the key's answer, no model run. */
-async function acceptsKey(url: string, key: string, signal: AbortSignal): Promise<boolean> {
+/** Which of `choices` is `label`: the option itself, else one that starts
+ * with it and then a mark (Pi's `OpenAI • unconfigured`, Hermes's `OpenAI ▸
+ * (...)`) -- never `MiniMax CN` for `MiniMax`; -1 for none. */
+export function optionFor(choices: readonly string[], label: string): number {
+  const want = label.toLowerCase();
+  const lower = choices.map((choice) => choice.toLowerCase());
+  const exact = lower.indexOf(want);
+  return exact >= 0 ? exact : lower.findIndex((choice) => choice.startsWith(want) && /^\s+[^\p{L}\p{N}\s]/u.test(choice.slice(want.length)));
+}
+
+/** The routes `key` may be sent to: a provider's only when it could have
+ * issued that key (KEY_PROVIDERS prefixes); the vendor's own endpoints always. */
+export function keyCandidates(
+  routes: readonly AiHarnessKeyRoute[], key: string, providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>>,
+): AiHarnessKeyRoute[] {
+  const issues = (provider: AiKeyProvider): boolean => Boolean(provider.prefixes?.some((prefix) => key.startsWith(prefix)));
+  const claimed = Object.values(providers).some(issues);
+  return routes.filter((route) => {
+    if (!('provider' in route)) return true;
+    const provider = providers[route.provider];
+    return claimed ? issues(provider) : !provider.prefixes || Boolean(provider.unprefixed);
+  });
+}
+
+/** Whether a route's endpoint takes `key`, with no model run: a provider's
+ * probe answers 2xx; the vendor's own chat endpoint, sent no messages, is
+ * refused either for the key (401/403) or for being empty. */
+async function acceptsKey(
+  route: AiHarnessKeyRoute, key: string, providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>>, signal: AbortSignal,
+): Promise<boolean> {
+  const provider = 'provider' in route ? providers[route.provider] : undefined;
+  const auth = provider?.header ? { [provider.header]: key } : { authorization: `Bearer ${key}` };
   try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ model: 'probe', messages: [] }),
-      signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
-    });
+    const response = provider
+      ? await fetch(provider.probe, { headers: { ...auth, ...provider.headers }, signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) })
+      : await fetch((route as { url: string }).url, {
+        method: 'POST',
+        headers: { ...auth, 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'probe', messages: [] }),
+        signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+      });
     await response.body?.cancel();
-    return response.status !== 401 && response.status !== 403;
+    return provider ? response.ok : response.status !== 401 && response.status !== 403;
   } catch {
     return false;
   }
 }
-

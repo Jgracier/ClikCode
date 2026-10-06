@@ -35,10 +35,12 @@ export interface LoginLink { url: string; code?: string }
 /** What a sign-in needs from the screen showing it. */
 export interface SignInUi {
   show(link: LoginLink): void;
-  /** A typed answer. `secret`: a key, drawn as dots. */
-  ask(prompt: string, secret: boolean): Promise<string>;
-  /** One of `choices`, by index; undefined cancels the sign-in. */
-  choose(title: string, choices: readonly string[]): Promise<number | undefined>;
+  /** A typed answer. `secret`: a key, drawn as dots. `optional`: an empty
+   * answer is one (a shown default, a skipped key). */
+  ask(prompt: string, secret: boolean, optional?: boolean): Promise<string>;
+  /** One of `choices`, by index; undefined cancels the sign-in.
+   * `selected`: the one the vendor's menu has current (its default). */
+  choose(title: string, choices: readonly string[], selected?: number): Promise<number | undefined>;
   signal?: AbortSignal;
 }
 
@@ -82,10 +84,10 @@ export function chooseLoginLink(input: { printed?: string; opened?: string; loca
 /** Something the vendor's screen is waiting on. */
 export type ScreenPrompt =
   | { kind: 'choice'; title: string; choices: readonly string[]; selected: number; style: 'arrows' | 'yes-no' | 'number' | 'sideways'; searchable?: boolean }
-  | { kind: 'input'; prompt: string; secret: boolean };
+  | { kind: 'input'; prompt: string; secret: boolean; optional?: true };
 
-// `OPENROUTER_API_KEY` too: an underscore is no word boundary.
-const SECRET_WORDS = /api[ _-]?key|\b(?:key|token|secret|password)\b/i;
+// `OPENROUTER_API_KEY`, `HF_TOKEN` too: an underscore is no word boundary.
+const SECRET_WORDS = /api[ _-]?key|(?:\b|_)(?:key|token|secret|password)\b/i;
 /** A key or token, not a prompt that merely mentions one in a default
  * (`Label (optional, default: api-key-1)`). */
 function isSecret(prompt: string): boolean {
@@ -144,8 +146,9 @@ export function readScreenPrompt(shown: string | ScreenState): ScreenPrompt | un
       return { kind: 'choice', title: yesNo[1]!.trim(), choices: ['Yes', 'No'], selected: defaultNo ? 1 : 0, style: 'yes-no' };
     }
     // `Paste your API key:` `Label (optional, default: api-key-1):`
-    // `Paste code here if prompted >`
-    if (/[:>?]$/.test(last) && last.length <= 140 && !/https?:\/\//.test(last)) {
+    // `Paste code here if prompted >` `Base URL [https://api.deepseek.com/v1]:`
+    // -- a link outside the default is a sign-in page, not a question.
+    if (/[:>?]$/.test(last) && last.length <= 140 && !/https?:\/\//.test(last.replace(/\[[^\]]*\]/g, ''))) {
       const prompt = last.replace(/\s*[:>?]$/, '').trim();
       // `Choice [default 1]:` under a numbered list (Hermes): the list is the
       // question, answered by typing an option's number.
@@ -155,7 +158,9 @@ export function readScreenPrompt(shown: string | ScreenState): ScreenPrompt | un
         const fallback = /\[default (\d+)\]/i.exec(prompt)?.[1];
         return { ...list.prompt, title: list.prompt.title || prompt, selected: fallback ? Number(fallback) - 1 : list.prompt.selected, style: 'number' };
       }
-      if (prompt) return { kind: 'input', prompt, secret: isSecret(prompt) };
+      // `Label (optional, default: api-key-1)`, `Base URL [https://...]`:
+      // Enter alone answers it.
+      if (prompt) return { kind: 'input', prompt, secret: isSecret(prompt), ...(/\(optional\b|\bdefault\b|\[[^\]]+\]$/i.test(prompt) ? { optional: true as const } : {}) };
     }
   }
   // Of the menus and fields drawn since the last answer, the one drawn last
@@ -582,9 +587,9 @@ export async function runVendorSignIn(input: {
     lastPrompt = { key, at: Date.now() };
     let searched = false;
     void answer(async () => {
-      if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret)}\r`;
+      if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret, prompt.optional)}\r`;
       const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
-      const index = await ui.choose(prompt.title, choices);
+      const index = await ui.choose(prompt.title, choices, prompt.selected);
       if (index === undefined) return undefined;
       // Typed into the vendor's own search; the filtered list is read next,
       // under the same title -- not a redraw of the list just answered.

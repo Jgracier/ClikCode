@@ -394,13 +394,19 @@ export interface AiLocalHarnessDefinition {
    * from `providersArgv` (the first word of each line), asks which and the
    * key on its own screen, and pipes the key to `setArgv` ({provider}). */
   loginKeyCommand?: { providersArgv: readonly string[]; setArgv: readonly string[] };
-  /** A key-only sign-in through the vendor's own menus: ClikCode asks for
-   * the key alone, finds the first route whose `url` (a chat-completions
-   * endpoint) accepts it, and answers the vendor's menus with that route's
-   * `choose` labels, in order, and its key field with the key. A probe is a
-   * request with no messages: refused for the key (401/403) or for the empty
-   * request -- no model runs. Every other screen is still asked. */
-  loginKeyRoutes?: readonly { url: string; choose: readonly string[] }[];
+  /** A key-first sign-in through the vendor's own menus: ClikCode asks for
+   * the key alone, finds the first route whose endpoint accepts it, and
+   * answers the vendor's menus with that route's `choose` labels, in order
+   * (an option is the label, or starts with it and then a mark: `OpenAI •
+   * unconfigured`, `OpenAI ▸ (...)`; one not on screen is typed into the
+   * list's search), and its key field with the key. A route's endpoint is
+   * `url`, a chat-completions endpoint of the vendor's own (a request with
+   * no messages: refused for the key, 401/403, or for being empty), or
+   * `provider`, one of KEY_PROVIDERS. No model runs. Once the key is in, the
+   * vendor's defaults are taken (its current option, a question's shown
+   * default); every other screen is still asked. An empty key skips all of
+   * it: the vendor's own menus, for its browser sign-ins. */
+  loginKeyRoutes?: readonly AiHarnessKeyRoute[];
   /** Where a new chat's title comes from: `vendor` writes one into its own
    * session file and ClikCode reads it (Claude Code); `none` asks for none,
    * because the harness's own prompt outweighs the request (Aider answers
@@ -581,7 +587,14 @@ const OPENCODE_FAMILY = {
   surface: 'terminal', transport: 'acp', integration: 'structured', parser: 'opencode-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false,
   customCommandDirs: ['.opencode/command', '~/.config/opencode/command'],
   acp: { argv: ['acp'], inheritCliOptions: false, sharedSessions: true },
-  localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: ['auth', 'login'], providerLoginArgv: ['auth', 'login', '--provider', '{provider}'], authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json', contains: '"type"' }], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--dir'],
+  localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: ['auth', 'login'], providerLoginArgv: ['auth', 'login', '--provider', '{provider}'],
+  // Kilo's list (a fork) names them the same; both checked signed out.
+  loginKeyRoutes: providerKeyRoutes([], {
+    anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: ['OpenAI', 'Manually enter API Key'], google: 'Google', xai: ['xAI', 'Manually enter API Key'],
+    groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face', fireworks: 'Fireworks AI', mistral: 'Mistral', deepseek: 'DeepSeek',
+    moonshot: 'Moonshot AI', 'moonshot-cn': 'Moonshot AI (China)', zai: 'Z.AI', minimax: 'MiniMax (minimax.io)', together: 'Together AI',
+  }),
+  authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json', contains: '"type"' }], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--dir'],
   effortArgvPrefix: ['--variant'], effortValues: ['minimal', 'low', 'medium', 'high', 'max'],
   permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, normalizedPermissionOptionIds: ['auto-approve'],
   imageArgvPrefix: ['--file'],
@@ -631,6 +644,49 @@ const CURSOR_REPLY_ERRORS: readonly AiHarnessReplyErrorPattern[] = [
   { pattern: '(?:^|\\n\\n)Add a payment method to continue\\.?\\s*$', status: 402 },
   { pattern: '(?:^|\\n\\n)Please sign in to continue\\.?\\s*$', status: 401 },
 ];
+
+export type AiHarnessKeyRoute = { choose: readonly string[] } & ({ url: string } | { provider: AiKeyProviderId });
+
+/** API-key providers the multi-provider harnesses list, and how to ask one
+ * whether it takes a key without running a model: `probe` answers 2xx to
+ * a key it takes (a GET of its model list, or its key's own info where the
+ * list is public), sent as `header` (default: Authorization: Bearer) with
+ * `headers`.
+ * `prefixes`: how the provider's keys begin. A key with one of them is
+ * sent only to the providers that issue it; a key with none, only to those
+ * with no prefixes or with `unprefixed` (OpenAI's older `sk-` keys). A key
+ * never goes to a provider that could not have issued it. */
+export interface AiKeyProvider {
+  probe: string; header?: 'x-api-key' | 'x-goog-api-key'; headers?: Readonly<Record<string, string>>;
+  prefixes?: readonly string[]; unprefixed?: true;
+}
+export const KEY_PROVIDERS = {
+  anthropic: { probe: 'https://api.anthropic.com/v1/models', header: 'x-api-key', headers: { 'anthropic-version': '2023-06-01' }, prefixes: ['sk-ant-'] },
+  openrouter: { probe: 'https://openrouter.ai/api/v1/key', prefixes: ['sk-or-'] },
+  openai: { probe: 'https://api.openai.com/v1/models', prefixes: ['sk-proj-', 'sk-svcacct-', 'sk-admin-'], unprefixed: true },
+  google: { probe: 'https://generativelanguage.googleapis.com/v1beta/models', header: 'x-goog-api-key', prefixes: ['AIza'] },
+  xai: { probe: 'https://api.x.ai/v1/models', prefixes: ['xai-'] },
+  groq: { probe: 'https://api.groq.com/openai/v1/models', prefixes: ['gsk_'] },
+  cerebras: { probe: 'https://api.cerebras.ai/v1/models', prefixes: ['csk-'] },
+  huggingface: { probe: 'https://huggingface.co/api/whoami-v2', prefixes: ['hf_'] },
+  fireworks: { probe: 'https://api.fireworks.ai/inference/v1/models', prefixes: ['fw_'], unprefixed: true },
+  mistral: { probe: 'https://api.mistral.ai/v1/models' },
+  deepseek: { probe: 'https://api.deepseek.com/models' },
+  moonshot: { probe: 'https://api.moonshot.ai/v1/models' },
+  'moonshot-cn': { probe: 'https://api.moonshot.cn/v1/models' },
+  zai: { probe: 'https://api.z.ai/api/paas/v4/models' },
+  minimax: { probe: 'https://api.minimax.io/v1/models' },
+  together: { probe: 'https://api.together.xyz/v1/models' },
+} as const satisfies Record<string, AiKeyProvider>;
+export type AiKeyProviderId = keyof typeof KEY_PROVIDERS;
+
+/** A multi-provider harness's key routes: per provider, its option in the
+ * vendor's provider list and any menu after it, behind `first` (the
+ * vendor's own way into its API-key providers). */
+function providerKeyRoutes(first: readonly string[], labels: Partial<Record<AiKeyProviderId, string | readonly string[]>>): AiHarnessKeyRoute[] {
+  return (Object.entries(labels) as [AiKeyProviderId, string | readonly string[]][])
+    .map(([provider, label]) => ({ provider, choose: [...first, ...(typeof label === 'string' ? [label] : label)] }));
+}
 
 /** Vendor installers for the CLIs that are not npm packages. Each URL was
  * fetched and read before it was written here (and each one's Windows
@@ -837,7 +893,10 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // or checks credentials. The steps type /login, its method/provider menus
   // and key field are read on ClikCode's screen, and Ctrl+D leaves once it
   // says the credentials are saved (verified 2026-10-03, pi 0.87 signed out).
-  { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginSteps: [{ when: '/login to log into a provider', send: '/login{enter}' }, { when: 'Credentials saved to', send: '{ctrl-d}' }], authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
+  { command: 'pi', provider: 'pi', displayName: 'Pi Coding Agent', surface: 'terminal', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'pi-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: [], binary: 'pi', npmPackage: '@earendil-works/pi-coding-agent', loginSteps: [{ when: '/login to log into a provider', send: '/login{enter}' }, { when: 'Credentials saved to', send: '{ctrl-d}' }], loginKeyRoutes: providerKeyRoutes(['Sign in with an API key'], {
+    anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: 'OpenAI', google: 'Google', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
+    fireworks: 'Fireworks', mistral: 'Mistral', deepseek: 'DeepSeek', moonshot: 'Moonshot AI', 'moonshot-cn': 'Moonshot AI CN', zai: 'Z.AI', minimax: 'MiniMax', together: 'Together',
+  }), authFiles: [{ path: '${PI_CODING_AGENT_DIR:-~/.pi/agent}/auth.json', contains: '"type"' }], modelDiscoveryArgv: ['--list-models'], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], effortArgvPrefix: ['--thinking'], imageArgvPrefix: ['@'], imageArgvStyle: 'concatenated', profileEnv: 'PI_CODING_AGENT_DIR', turn: { startArgv: ['-p', '--mode', 'json'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session'], continueArgv: ['--continue'] } },
   // Checked against droid 0.223.0: `droid exec` takes -m/--model,
   // -r/--reasoning-effort, --cwd, -s/--session-id, --auto low|medium|high and
   // --skip-permissions-unsafe, all as declared here. Two things were missing:
@@ -874,7 +933,10 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // its own process group) that outlives the chat, and ClikCode's sandboxed
   // runs too. Measured on 3.0.68: same session files, session/load resumes,
   // and no daemon.
-  { command: 'cline', provider: 'cline', displayName: 'Cline CLI', planMode: { option: 'plan', value: true }, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'cline-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp'], permissionArgv: { auto: ['--auto-approve', 'true'] }, listsModels: true, usageFile: { path: '~/.cline/data/sessions/{id}/{id}.json', field: ['metadata', 'usage'] } }, effortValues: ['none', 'low', 'medium', 'high', 'xhigh'], normalizedPermissionOptionIds: ['auto-approve'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', authFiles: [{ path: '~/.cline/data/settings/providers.json', contains: '"auth"' }, { path: '~/.cline/data/settings/providers.json', contains: '"apiKey"' }], loginArgv: ['auth'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, turnEnv: { CLINE_SESSION_BACKEND_MODE: 'local' }, session: { resumeIdPrefix: ['--id'] } },
+  { command: 'cline', provider: 'cline', displayName: 'Cline CLI', planMode: { option: 'plan', value: true }, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'cline-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp'], permissionArgv: { auto: ['--auto-approve', 'true'] }, listsModels: true, usageFile: { path: '~/.cline/data/sessions/{id}/{id}.json', field: ['metadata', 'usage'] } }, effortValues: ['none', 'low', 'medium', 'high', 'xhigh'], normalizedPermissionOptionIds: ['auto-approve'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', authFiles: [{ path: '~/.cline/data/settings/providers.json', contains: '"auth"' }, { path: '~/.cline/data/settings/providers.json', contains: '"apiKey"' }], loginArgv: ['auth'], loginKeyRoutes: providerKeyRoutes(['Bring your own provider'], {
+    anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: 'OpenAI', google: 'Google Gemini', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
+    fireworks: 'Fireworks AI', mistral: 'Mistral', deepseek: 'DeepSeek', moonshot: 'Moonshot AI', 'moonshot-cn': 'Moonshot AI (China)', zai: 'Z.AI', minimax: 'MiniMax (minimax.io)', together: 'Together AI',
+  }), modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, turnEnv: { CLINE_SESSION_BACKEND_MODE: 'local' }, session: { resumeIdPrefix: ['--id'] } },
   { ...OPENCODE_FORK_BASE, command: 'kilo', provider: 'kilo', displayName: 'Kilo Code CLI', tier: 'more', binary: 'kilo', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }], npmPackage: '@kilocode/cli', permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } } },
   { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', planMode: { option: 'mode', value: 'plan' }, surface: 'terminal', tier: 'primary', transport: 'acp', acp: { argv: ['acp'], inheritCliOptions: false, listsModels: true }, integration: 'structured', parser: 'cursor-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.cursor/commands', '~/.cursor/commands'], normalizedPermissionOptionIds: ['auto-review', 'force'], replyErrorPatterns: CURSOR_REPLY_ERRORS, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cursor-agent', installer: HARNESS_INSTALLERS.cursor, loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { promptGuard: 'double-dash', startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Checked against the installed CLI. `hermes model` is an interactive picker
@@ -887,7 +949,11 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // (it prints a notice and exits 0), so signing in is `hermes model`, and a
   // single provider is `hermes auth add <provider>`, which picks OAuth or an
   // API key for that provider itself.
-  { command: 'hermes', provider: 'nous', displayName: 'Hermes', turboFit: true, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], listsModels: false, usageTotals: 'session' }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', installer: HARNESS_INSTALLERS.hermes, loginArgv: ['model'], providerLoginArgv: ['auth', 'add', '{provider}'], statusArgv: ['status'], logoutArgv: ['logout'], retiredOptionIds: ['provider'], replyErrorPatterns: HERMES_REPLY_ERRORS, modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text', discoverAllFolders: true } },
+  { command: 'hermes', provider: 'nous', displayName: 'Hermes', turboFit: true, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], listsModels: false, usageTotals: 'session' }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', installer: HARNESS_INSTALLERS.hermes, loginArgv: ['model'], loginKeyRoutes: providerKeyRoutes([], {
+    anthropic: ['Anthropic', 'Anthropic API key'], openrouter: 'OpenRouter', openai: ['OpenAI', 'OpenAI API'], google: 'Google AI Studio', xai: ['xAI Grok', 'xAI'],
+    huggingface: 'Hugging Face Inference Providers', fireworks: 'Fireworks AI', deepseek: 'DeepSeek', moonshot: ['Kimi / Moonshot', 'Kimi / Kimi Coding Plan'],
+    'moonshot-cn': ['Kimi / Moonshot', 'Kimi / Moonshot (China)'], zai: ['Z.AI / GLM', 'Global (https://api.z.ai/api/paas/v4)'], minimax: ['MiniMax', 'MiniMax'],
+  }), providerLoginArgv: ['auth', 'add', '{provider}'], statusArgv: ['status'], logoutArgv: ['logout'], retiredOptionIds: ['provider'], replyErrorPatterns: HERMES_REPLY_ERRORS, modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text', discoverAllFolders: true } },
   // Same kind of product as Hermes, not a fork; checked against a real
   // install (OpenClaw 2026.9.6). The one-shot turn is `agent --local --json`,
   // whose answer is `meta.finalAssistantVisibleText` -- the generic fields

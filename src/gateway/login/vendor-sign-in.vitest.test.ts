@@ -60,7 +60,9 @@ describe('reading what a vendor screen waits on, from real screens', () => {
   it('a line waiting for an answer: Hermes, Claude Code', () => {
     expect(readScreenPrompt('Paste your API key: ')).toEqual({ kind: 'input', prompt: 'Paste your API key', secret: true });
     expect(readScreenPrompt('OPENROUTER_API_KEY (or Enter to cancel): ')).toEqual({ kind: 'input', prompt: 'OPENROUTER_API_KEY (or Enter to cancel)', secret: true });
-    expect(readScreenPrompt('Paste your API key: *************\nLabel (optional, default: api-key-1):')).toEqual({ kind: 'input', prompt: 'Label (optional, default: api-key-1)', secret: false });
+    expect(readScreenPrompt('HF_TOKEN (or Enter to cancel): ')).toEqual({ kind: 'input', prompt: 'HF_TOKEN (or Enter to cancel)', secret: true });
+    expect(readScreenPrompt('API key saved.\nBase URL [https://api.deepseek.com/v1]: ')).toEqual({ kind: 'input', prompt: 'Base URL [https://api.deepseek.com/v1]', secret: false, optional: true });
+    expect(readScreenPrompt('Paste your API key: *************\nLabel (optional, default: api-key-1):')).toEqual({ kind: 'input', prompt: 'Label (optional, default: api-key-1)', secret: false, optional: true });
     expect(readScreenPrompt('Opening browser to sign in…\nIf the browser didn\'t open, visit: https://claude.com/cai/oauth/authorize?code=true\nPaste code here if prompted > '))
       .toEqual({ kind: 'input', prompt: 'Paste code here if prompted', secret: false });
   });
