@@ -4,6 +4,8 @@ import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
 import { gatewayModelDetail, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
+import { gatewayAgents, type GatewayAgent } from '../../gateway/agents.js';
+import type { GatewayModelList } from '../../gateway/models.js';
 import { modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { sessionOrProviderHarness } from '../slash/context.js';
 import { readState } from '../../session/state/read.js';
@@ -13,6 +15,7 @@ import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { TERMINAL } from '../active-terminal.js';
 import { aiSessionCommand } from '../slash/handlers.js';
+import { selectGatewayAgent } from '../../commands/ai/sessions.js';
 import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
@@ -89,7 +92,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
-  if (isGatewayService(session)) return gatewayModelPicker(rl, id, session.model ?? null);
+  if (isGatewayService(session)) return gatewayModelPicker(rl, id, session.model ?? null, session.gatewayAgentId);
   if (session.route === 'clikcode-local') return localModelPicker(rl, id, session.model);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
   const harness = sessionOrProviderHarness(session);
@@ -174,34 +177,65 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   }
 }
 
-/** A Gateway conversation's picker: the Gateway's own list for this account,
- * cheapest access first, with "Automatic" to hand the choice back. Whichever
- * model is chosen, the Gateway serves it from its cheapest provider --
- * subscription, then free, then paid -- and never swaps in another. */
-async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: string | null): Promise<void> {
-  // Open at once from the last list this machine received, and refresh it in
-  // place: the Gateway can take seconds to answer, and the picker must not.
-  let list = await savedGatewayModels();
-  const fresh = gatewayModels({ fresh: true }).then((latest) => { list = latest; });
-  if (!list) {
-    const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-    waiting?.startWaiting('finding ClikDeploy Gateway models…');
-    try { await fresh; } finally { waiting?.stopWaiting(); }
-  } else {
-    // fail-open-ok: the saved list is on screen; a failed refresh leaves it there.
-    fresh.catch(() => undefined);
-  }
-  const options = (): PickerOption<string>[] => [
-    { label: 'Automatic', detail: `· the Gateway chooses${list!.automatic ? ` (now ${list!.automatic})` : ''}${current ? '' : ' · current'}`, value: 'auto' },
-    ...list!.models.map((model) => {
+/** A Gateway conversation's picker: account-private agents first, then the
+ * Gateway's model list. An agent choice is stored locally until a separate
+ * platform-agent execution path exists. */
+type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string };
+
+/** Agent rows precede model rows. An agent remains a session selection only;
+ * choosing a model changes the model and closes the picker. */
+export function gatewayPickerRows(list: GatewayModelList, agents: readonly GatewayAgent[], current: string | null, currentAgent?: string): PickerOption<GatewayChoice>[] {
+  return [
+    ...(agents.length || currentAgent ? [{ label: currentAgent ? 'No agent' : '✓ No agent', detail: '· use ClikCode with the Gateway model', value: { kind: 'agent' as const }, group: 'Agents' }] : []),
+    ...agents.map((agent) => ({
+      label: `${agent.id === currentAgent ? '✓ ' : ''}${agent.name}`,
+      detail: agent.description ? `· ${agent.description}` : undefined,
+      value: { kind: 'agent' as const, id: agent.id },
+      group: 'Agents',
+    })),
+    { label: 'Automatic', detail: `· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}${current ? '' : ' · current'}`, value: { kind: 'model' as const, id: 'auto' }, group: 'Models' },
+    ...list.models.map((model) => {
       const price = gatewayModelDetail(model);
       return {
         label: model.id,
         detail: `${price ? `· ${price}` : ''}${model.id === current ? ' · current' : ''}`,
-        value: model.id,
+        value: { kind: 'model' as const, id: model.id },
+        group: 'Models',
       };
     }),
   ];
-  const selected = await chooseOption(rl, 'Choose a ClikDeploy Gateway model', options(), undefined, { refreshedOptions: options, refresh: fresh });
-  if (selected) await aiSessionCommand(id, `/model ${selected}`);
+}
+
+async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: string | null, currentAgent?: string): Promise<void> {
+  // The saved model list avoids another model-list wait. Agents are never
+  // cached locally, so opening waits for the authenticated private roster.
+  let list = await savedGatewayModels();
+  const fresh = gatewayModels({ fresh: true }).then((latest) => { list = latest; });
+  // The model request may finish before the roster request; attach rejection
+  // handling now so an early failure cannot become an unhandled rejection.
+  void fresh.catch(() => undefined);
+  // Account-private roster: always ask with the current key; never display
+  // another account's cached agents. A missing roster does not block models.
+  const agents = await gatewayAgents().catch((error: unknown) => {
+    rl.notice?.(`Could not load Gateway agents: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  });
+  if (!list) {
+    const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+    waiting?.startWaiting('finding ClikDeploy Gateway models…');
+    try { await fresh; } finally { waiting?.stopWaiting(); }
+  }
+  const options = (): PickerOption<GatewayChoice>[] => gatewayPickerRows(list!, agents, current, currentAgent);
+  for (;;) {
+    const selected = await chooseOption(rl, 'Choose an agent or ClikDeploy Gateway model', options(), undefined, { refreshedOptions: options, refresh: fresh });
+    if (!selected) return;
+    if (selected.kind === 'agent') {
+      currentAgent = selected.id === currentAgent ? undefined : selected.id;
+      await selectGatewayAgent(id, currentAgent);
+      if (currentAgent) rl.notice?.('Agent selected for this session. Platform agent execution is not connected yet.');
+      continue;
+    }
+    await aiSessionCommand(id, `/model ${selected.id}`);
+    return;
+  }
 }

@@ -67,6 +67,21 @@ export async function chooseGatewayModel(value: string): Promise<string | null> 
   return found.id;
 }
 
+/** Store a /model picker choice on this Gateway conversation. The selected
+ * agent is deliberately not passed to modelClientForSession: a model step is
+ * not a durable platform-agent run. */
+export async function selectGatewayAgent(id: string, agentId: string | undefined): Promise<void> {
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (!session || session.route !== 'gateway') throw new Error('Select a Gateway session before choosing an agent.');
+  if (agentId) session.gatewayAgentId = agentId;
+  else delete session.gatewayAgentId;
+  session.updatedAt = new Date().toISOString();
+  // A configured but still blank chat must survive a restart.
+  forceStoreSession(id);
+  await writeState(state);
+}
+
 /** Gateway routing owns these fields as one policy unit. Keeping the mutation
  * centralized prevents route switches, slash settings, and headless setters
  * from leaving stale local harness/account controls attached to a remote
@@ -79,6 +94,7 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   session.accountId = null;
   session.provider = 'gateway';
   if (!keepModel) session.model = null;
+  if (!keepModel) delete session.gatewayAgentId;
   // A level chosen on the Gateway stays; one from a vendor harness means nothing here.
   if (!keepModel || !gatewayEffort(session)) session.effort = GATEWAY_DEFAULT_EFFORT;
   session.accountFailover = 'never';
@@ -114,6 +130,7 @@ export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
   session.accountFailover = 'never';
   // gatewayConfirmed marks an explicit Gateway choice; this is not one.
   delete session.gatewayConfirmed;
+  delete session.gatewayAgentId;
   shedVendorHarness(session);
 }
 
@@ -134,6 +151,7 @@ export function applyFreshLocalSessionPolicy(state: HarnessState, session: Harne
   session.permissionMode = defaults.permissionMode;
   session.accountFailover = defaults.accountFailover;
   delete session.gatewayConfirmed;
+  delete session.gatewayAgentId;
   shedVendorHarness(session);
 }
 
@@ -434,6 +452,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };
+  if (effectiveRoute !== 'gateway') delete next.gatewayAgentId;
   if (effectiveRoute === 'gateway' || effectiveRoute === 'clikcode-local') applyClikCodeAgentSessionPolicy(next, effectiveRoute);
   else if (account) {
     if (turnBackendForAccount(account) === 'vendor' && selectedHarness && harnessCanRunTurns(selectedHarness)) {
