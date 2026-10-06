@@ -13,7 +13,7 @@ import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { answeredApproval, applyEvent, conversationAttention, emptyModel, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
-import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
+import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { applyHunks, fileHunks, turnChanges, unwindChanges } from './text';
@@ -22,6 +22,9 @@ import { DiffDocuments, fileNameIn, openSignInLink, runInTerminal } from './ui';
 import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
 import { mentionFromUri, pastedReference, searchWorkspaceFiles } from './mentions';
 import type { Mention } from './webview-protocol';
+
+/** What this editor handles beyond the base protocol (protocol.ts IdeFeature). */
+const IDE_FEATURES: readonly IdeFeature[] = ['copy', 'search-walk'];
 
 export interface ControllerHost {
   log: vscode.OutputChannel;
@@ -327,12 +330,12 @@ export class ClikCodeController implements vscode.Disposable {
       if (this.bridge !== bridge) return;
       const resume = sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
       const mode = resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue';
-      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}) }).catch(async (error: unknown) => {
+      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}), features: IDE_FEATURES }).catch(async (error: unknown) => {
         // A new chat nothing was sent in was never stored: reconnecting (a
         // rebuild, clikcode.restart) has nothing to resume, and failing here
         // left the panel dead. It is still a new chat.
         if (!resume || !/no chat matches/.test(errorText(error))) throw error;
-        await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode: 'new' });
+        await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode: 'new', features: IDE_FEATURES });
       });
     } catch (error) {
       if (this.bridge !== bridge) return; // replaced, or refused as incompatible (already reported)
@@ -453,6 +456,13 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       case 'conversations-changed':
         for (const surface of this.surfaces) surface.post({ type: 'conversations-changed' });
+        return;
+      case 'copy':
+        // This computer's clipboard, which Remote-SSH's bridge cannot reach.
+        void vscode.env.clipboard.writeText(event.text);
+        return;
+      case 'search':
+        this.post({ type: 'search', ...(event.focus ? { focus: event.focus } : {}) });
         return;
       case 'worker':
         this.onWorkerEvent(event.event);
@@ -663,7 +673,7 @@ export class ClikCodeController implements vscode.Disposable {
     const bridge = this.bridge;
     if (!bridge?.running) return;
     try {
-      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(sessionId ? { sessionId } : {}) });
+      await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(sessionId ? { sessionId } : {}), features: IDE_FEATURES });
     } catch (error) {
       this.note(errorText(error), 'error');
     }
@@ -786,6 +796,9 @@ export class ClikCodeController implements vscode.Disposable {
       case 'ui-response':
         this.panelQuestions.delete(message.id);
         this.bridge?.send({ type: 'ui-response', id: message.id, result: message.result });
+        return;
+      case 'search-key':
+        this.bridge?.send({ type: 'search-key', key: message.key });
         return;
       case 'command':
         if (message.command.startsWith('clikcode.')) {

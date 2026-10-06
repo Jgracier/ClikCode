@@ -258,6 +258,43 @@ describe('the bridge\'s revision-2 requests', () => {
     expect(changes()).toBe(after);
   });
 
+  it('offers the editor no terminal-only command, and says so when one is typed', async () => {
+    await home({ sessions: [session('s1', { status: 'active' })] });
+    const { bridge, inner, sent, result } = bridgeFor();
+    inner.sessionId = 's1';
+    bridge.handle({ type: 'query', requestId: 'c', query: 'slash-commands' });
+    const commands = ((await result('c'))!.data as Array<{ command: string }>).map((row) => row.command);
+    expect(commands).toContain('/copy');
+    for (const name of ['/select', '/redraw', '/exit']) expect(commands).not.toContain(name);
+    bridge.handle({ type: 'send', text: '/select' });
+    for (let i = 0; i < 100 && !sent.some((item) => item.type === 'notice'); i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sent.find((item) => item.type === 'notice')).toMatchObject({ message: expect.stringContaining('/select is for the terminal') });
+  });
+
+  it('copies on the editor\'s clipboard when the editor says it can', async () => {
+    await home({ sessions: [session('s1', { status: 'active', messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'the answer' }] })] });
+    const { bridge, inner, sent } = bridgeFor();
+    inner.sessionId = 's1';
+    (inner as unknown as { features: ReadonlySet<string> }).features = new Set(['copy']);
+    bridge.handle({ type: 'send', text: '/copy' });
+    for (let i = 0; i < 100 && !sent.some((item) => item.type === 'copy'); i += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sent.find((item) => item.type === 'copy')).toEqual({ type: 'copy', text: 'the answer' });
+  });
+
+  it('walks /search mention by mention with the editor\'s keys', async () => {
+    const { bridge, inner, sent } = bridgeFor();
+    inner.sessionId = 's1';
+    const screen = (bridge as unknown as { searchScreen(): import('../tui/slash/search-browse.js').MentionScreen }).searchScreen();
+    screen.showMention({ id: 's1' } as never, { messageIndex: 3, occurrence: 1, words: ['parser'], status: 'mention 2 of 4' });
+    const key = screen.mentionKey();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(sent.find((item) => item.type === 'search')).toEqual({ type: 'search', focus: { sessionId: 's1', messageIndex: 3, occurrence: 1, words: ['parser'], status: 'mention 2 of 4' } });
+    bridge.handle({ type: 'search-key', key: 'previous' });
+    expect(await key).toBe('previous');
+    screen.endMention();
+    expect(sent.at(-1)).toEqual({ type: 'search' });
+  });
+
   it('will not move a conversation to another provider under a running turn', async () => {
     const { bridge, inner, result } = bridgeFor();
     inner.sessionId = 's1';

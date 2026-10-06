@@ -128,6 +128,10 @@ function entry(
   };
 }
 
+/** Commands about the terminal itself -- its mouse, its screen, leaving it.
+ * An editor client neither lists nor runs them. */
+export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'redraw', 'exit']);
+
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
   entry('compact', 'Conversation', 'summarize the conversation and continue in a fresh native session', { argHint: '[focus]', availability: vendorCompaction }),

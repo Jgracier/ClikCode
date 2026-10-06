@@ -51,7 +51,7 @@ export type IdeUiResult =
 export type IdeRequest =
   /** Show a conversation: `resume` an id, `continue` the workspace's latest,
    * or start a `new` one in `workspace`. */
-  | { type: 'open'; requestId: string; workspace: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string }
+  | { type: 'open'; requestId: string; workspace: string; mode: 'new' | 'continue' | 'resume'; sessionId?: string; features?: readonly IdeFeature[] }
   /** A composer line, exactly as typed: conversation, `/command`, or `!shell`.
    * During a turn it steers (or queues); `id` comes back on the worker's
    * `submission` event. */
@@ -75,7 +75,22 @@ export type IdeRequest =
    * one is open the bridge sends `conversations-changed`. Counted, so two
    * open lists need two closes. An older bridge ignores it. */
   | { type: 'watch-conversations'; on: boolean }
+  /** A key while /search walks mentions (`search` events): ↓ next, ↑
+   * previous, Tab the next conversation, Esc done. */
+  | { type: 'search-key'; key: 'next' | 'previous' | 'chat' | 'done' }
   | { type: 'close' };
+
+/** What an editor handles beyond the base protocol, named with `open`; the
+ * bridge uses one only when the editor names it, so an older editor keeps
+ * the old behaviour. `copy`: /copy sends the text (a `copy` event) for the
+ * editor's own clipboard. `search-walk`: /search walks mention by mention
+ * (`search` events, answered by `search-key`) instead of a results panel. */
+export type IdeFeature = 'copy' | 'search-walk';
+
+/** Where /search is: the conversation open in the editor, the message and
+ * which occurrence of the first word in it, the words to mark, and the line
+ * that says where the walk is and which keys move it. */
+export interface IdeSearchFocus { sessionId: string; messageIndex: number; occurrence: number; words: string[]; status: string }
 
 export interface IdeSlashCommand {
   command: string; description: string; argHint?: string; group?: string;
@@ -275,6 +290,11 @@ export type IdeEvent =
   | { type: 'sign-in-link'; id: string; name: string; url?: string; code?: string; done?: boolean }
   | { type: 'open-file'; path: string }
   | { type: 'usage'; label?: string; reset?: string }
+  /** /copy: put this on the editor's clipboard (`copy` feature). */
+  | { type: 'copy'; text: string }
+  /** /search walking mentions (`search-walk` feature): show this one;
+   * no `focus` when the walk is over. */
+  | { type: 'search'; focus?: IdeSearchFocus }
   | { type: 'result'; requestId: string; ok: boolean; error?: string; data?: unknown }
   /** The conversation was left (/exit, /archive, /delete). */
   | { type: 'closed'; sessionId: string }

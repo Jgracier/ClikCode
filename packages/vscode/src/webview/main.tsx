@@ -6,7 +6,7 @@ import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
-import type { IdeConversation, IdePickItem, IdeUiResult } from '../protocol';
+import type { IdeConversation, IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, Transcript } from './chat';
@@ -14,6 +14,7 @@ import { Composer, type ComposerHandle } from './composer';
 import { relativeTime, tildePath } from './format';
 import { choose } from './picker';
 import { HistoryMenu } from './screens';
+import { markMention, SearchBar } from './search';
 import { Sheet, type OpenQuestion } from './sheet';
 import { focusHere, Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
 
@@ -210,6 +211,7 @@ function App(): JSX.Element {
   const [history, setHistory] = useState(false);
   const [questions, setQuestions] = useState<Array<OpenQuestion & { items?: readonly IdePickItem[] }>>([]);
   const [error, setError] = useState<string>();
+  const [search, setSearch] = useState<IdeSearchFocus>();
   const composer = useRef<ComposerHandle | null>(null);
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -247,6 +249,7 @@ function App(): JSX.Element {
       case 'ui-request': setQuestions((items) => [...items.filter((item) => item.id !== message.id), { id: message.id, request: message.request }]); return;
       case 'ui-update': setQuestions((items) => items.map((item) => (item.id === message.id ? { ...item, items: message.items } : item))); return;
       case 'ui-cancel': setQuestions((items) => items.filter((item) => item.id !== message.id)); return;
+      case 'search': setSearch(message.focus); return;
       case 'probe': post({ type: 'probeResult', id: message.id, result: probe(message) }); return;
       default: return;
     }
@@ -335,6 +338,15 @@ function App(): JSX.Element {
     if (element && stick.current) element.scrollTop = element.scrollHeight;
   });
 
+  // /search: the mention in view, once its conversation is drawn; reading
+  // there, the log no longer follows the bottom.
+  const searchFocus = search && search.sessionId === model?.sessionId ? search : undefined;
+  useLayoutEffect(() => {
+    if (markMention(searchFocus) && searchFocus) stick.current = false;
+  }, [searchFocus, model?.messages]);
+  // Back to the composer when the walk ends.
+  useEffect(() => { if (!search && document.hasFocus()) composer.current?.focus(); }, [search]);
+
   if (!model) return <div class="starting"><Logo size={36} /><span class="muted">Starting ClikCode…</span></div>;
 
   const empty = !model.messages.length && !model.pendingPrompt && !model.running && !model.notes.length;
@@ -349,7 +361,7 @@ function App(): JSX.Element {
           <Banner model={model} />
           {model.connection === 'starting' && !model.sessionId ? <div class="starting inline"><Icon name="loading" spin /><span class="muted">Starting ClikCode…</span></div> : null}
           {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onMenu={showMenu} /> : null}
-          {!empty ? <DrawGuard model={model}><Transcript model={model} /></DrawGuard> : null}
+          {!empty ? <DrawGuard model={model}><Transcript model={model} reveal={searchFocus?.messageIndex} /></DrawGuard> : null}
         </div>
         {model.approvals[0] ? (
           // One at a time, as the terminal asks: the rest wait their turn.
@@ -363,6 +375,7 @@ function App(): JSX.Element {
               }} />
           </div>
         ) : null}
+        {search ? <SearchBar focus={search} /> : null}
         <Composer model={model} handle={composer} onError={setError} />
       </main>
       {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)} /> : null}

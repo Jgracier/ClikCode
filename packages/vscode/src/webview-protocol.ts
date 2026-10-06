@@ -1,7 +1,10 @@
 /** Messages between the extension host and a chat webview. */
 import type { ChatModel } from './model';
 import type { ModelPatch } from './model-patch';
-import type { IdeChoice, IdeConversation, IdePickItem, IdeQueryName, IdeUiRequest, IdeUiResult } from './protocol';
+import type { IdeChoice, IdeConversation, IdePickItem, IdeQueryName, IdeRequest, IdeSearchFocus, IdeUiRequest, IdeUiResult } from './protocol';
+
+/** A key that moves /search's walk. */
+export type WebviewSearchKey = Extract<IdeRequest, { type: 'search-key' }>['key'];
 
 /** A composer attachment: a file (or a range of one) the next message names. */
 export interface Mention {
@@ -43,6 +46,8 @@ export type ToWebview =
   | { type: 'ui-request'; id: string; request: IdeUiRequest }
   | { type: 'ui-update'; id: string; items: readonly IdePickItem[] }
   | { type: 'ui-cancel'; id: string }
+  /** /search walking mentions: mark this one; none when the walk is over. */
+  | { type: 'search'; focus?: IdeSearchFocus }
   /** ClikCode saw the conversations change: an open list re-queries. */
   | { type: 'conversations-changed' }
   /** The view was shown or hidden. A retained page keeps running while
@@ -96,6 +101,8 @@ export type FromWebview =
   | { type: 'openFile'; path: string; line?: number }
   | { type: 'request'; id: string; request: WebviewRequest }
   | { type: 'ui-response'; id: string; result: IdeUiResult }
+  /** A key while /search walks mentions. */
+  | { type: 'search-key'; key: WebviewSearchKey }
   | { type: 'focusChanged'; focused: boolean }
   | { type: 'probeResult'; id: string; result: unknown }
   /** A page error, for the log. */
