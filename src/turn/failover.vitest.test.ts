@@ -291,3 +291,23 @@ describe('when a quota refusal says it ends', () => {
     expect(quotaRetryHint(new Error('usage limit reached, resets 8pm'), now)).toBeUndefined();
   });
 });
+
+describe('a limit named is not a limit reached', () => {
+  it.each([
+    'You have used 80% of your weekly limit.',
+    'Error: exceeded the session limit of 200 tool calls',
+    'The plan limit for file uploads is 10MB',
+    'context window exceeded: usage limit of 200000 tokens',
+  ])('does not read "%s" as spent usage', (text) => {
+    expect(classifyAccountFailure(new Error(text), { isResultError: true })).not.toBe('quota-exhausted');
+  });
+
+  it('reads a refusal that also mentions signing in or expiry as spent usage', () => {
+    expect(classifyAccountFailure(new Error('Your free trial has expired'), { isResultError: true })).toBe('quota-exhausted');
+    expect(classifyAccountFailure(new Error('Quota exceeded for this model. Please sign in to Google AI Studio to continue.'), { isResultError: true })).toBe('quota-exhausted');
+  });
+
+  it('reads a 429 written into the vendor text as it reads a 401 or 402 there', () => {
+    expect(classifyAccountFailure(new Error('API error (status 429): slow down'), { isResultError: true })).toBe('temporarily-throttled');
+  });
+});
