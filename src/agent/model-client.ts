@@ -53,6 +53,20 @@ export interface ModelStepRequest {
   signal?: AbortSignal;
   onTextDelta(text: string): void;
   onReasoningDelta?(text: string): void;
+  /** A tool call as it is being written: everything streamed for it so far.
+   * `id` is the one the finished call carries in `toolCalls`, so a row
+   * opened from this is the row the call settles. */
+  onToolCallDelta?(call: StreamingToolCall): void;
+  /** The model the server says is answering, as soon as it says so (the
+   * Gateway's first frame), with the window it serves when known. */
+  onServedModel?(model: string, contextWindow?: number): void;
+}
+
+export interface StreamingToolCall {
+  id: string;
+  name: string;
+  /** The JSON arguments received so far, possibly cut mid-value. */
+  arguments: string;
 }
 
 export interface ModelToolCall {

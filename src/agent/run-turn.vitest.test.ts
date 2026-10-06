@@ -635,5 +635,75 @@ describe('runGatewayHarnessTurn', () => {
       expect(resent.items.some((item) => item.type === 'summary' || (item.type === 'tool_result' && /elided/.test(item.output)))).toBe(true);
     });
   });
+
+  describe('what a Gateway model streams, shown as a vendor CLI shows it', () => {
+    it('opens a call\'s row while the call is written, named once its path has arrived', async () => {
+      await fs.writeFile(path.join(cwd, 'a.txt'), 'hello\n');
+      const h = harness([
+        {
+          before: (request) => {
+            request.onToolCallDelta?.({ id: 'c1', name: 'read_file', arguments: '' });
+            request.onToolCallDelta?.({ id: 'c1', name: 'read_file', arguments: '{"path":"a.t' });
+            request.onToolCallDelta?.({ id: 'c1', name: 'read_file', arguments: '{"path":"a.txt"' });
+          },
+          toolCalls: [{ id: 'c1', name: 'read_file', args: { path: 'a.txt' } }],
+        },
+        { text: 'Done.' },
+      ]);
+      await runGatewayHarnessTurn(h.input);
+      expect(h.events.map((event) => `${event.kind}:${event.id}:${event.label}`)).toEqual([
+        'tool-start:c1:Read', 'tool-start:c1:Read a.txt', 'tool-done:c1:Read a.txt',
+      ]);
+      expect(h.events[0]!.category).toBe('read');
+    });
+
+    it('settles the row of a call that never ran when its step fails and is sent again', async () => {
+      const failure = Object.assign(new Error('cut'), { code: 'incomplete_stream', kind: 'other', retryAfter: 0 });
+      const h = harness([
+        { before: (request) => request.onToolCallDelta?.({ id: 'lost', name: 'list_dir', arguments: '{"pa' }), error: failure },
+        { text: 'PONG' },
+      ]);
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result.text).toBe('PONG');
+      expect(h.events.filter((event) => event.id === 'lost').map((event) => event.kind)).toEqual(['tool-start', 'tool-error']);
+    });
+
+    it('carries on an answer cut off at the output limit, in the same paragraph', async () => {
+      const h = harness([{ text: 'The answer begins and is cu', stopReason: 'length' }, { text: 't off no more.' }]);
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result).toMatchObject({ text: 'The answer begins and is cut off no more.', stopReason: 'completed', steps: 2 });
+      expect(h.deltas.join('')).toBe('The answer begins and is cut off no more.');
+      expect(h.client.requests[1]!.items.at(-1)).toMatchObject({ type: 'text', role: 'user', text: expect.stringMatching(/output limit/) });
+    });
+
+    it('stops carrying on after three cut-off replies and says the answer was cut', async () => {
+      const usage: { stopReason?: string }[] = [];
+      const h = harness([], { onUsage: (report) => usage.push(report) }, { text: 'more', stopReason: 'length' });
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(h.client.requests).toHaveLength(4);
+      expect(result.stopReason).toBe('completed');
+      expect(usage.at(-1)?.stopReason).toBe('length');
+    });
+
+    it('tells the model a call cut off mid-arguments was cut by the output limit', async () => {
+      const h = harness([
+        { toolCalls: [{ id: 'w', name: 'write_file', args: {}, argumentsError: 'Unexpected end of JSON input' }], stopReason: 'length' },
+        { text: 'ok' },
+      ]);
+      await runGatewayHarnessTurn(h.input);
+      const answer = h.client.requests[1]!.items.find((item) => item.type === 'tool_result');
+      expect(answer).toMatchObject({ isError: true, output: expect.stringMatching(/reached the output limit/) });
+    });
+
+    it('names the model that answers before its first word', async () => {
+      const seen: string[] = [];
+      const h = harness([{ servedModel: 'glm-5', contextWindow: 200_000, text: 'hi', before: () => { seen.push('step'); } }], {
+        onUsage: (report) => seen.push(`usage ${report.servedModel} ${report.contextWindow}`),
+        onResponseDelta: (text) => seen.push(`text ${text}`),
+      });
+      await runGatewayHarnessTurn(h.input);
+      expect(seen.slice(0, 3)).toEqual(['step', 'usage glm-5 200000', 'text hi']);
+    });
+  });
 });
 

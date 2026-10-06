@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ConversationItem, ModelStepRequest } from '../model-client.js';
 import { isTurnCancelled } from '../cancellation.js';
 import { ModelClientError } from './gateway-client.js';
-import { OpenAIModelClient, parseToolArguments, toChatMessages } from './openai-client.js';
+import { completedArguments, fitToLimits, OpenAIModelClient, parseToolArguments, toChatMessages } from './openai-client.js';
 
 /** What the next request gets: SSE chunks written with a pause between them,
  * or a plain error response. */
@@ -233,6 +233,86 @@ describe('OpenAIModelClient', () => {
     expect(plain.acceptsImages).toBe(false);
     await plain.step(request(items));
     expect((received[1].body.messages as unknown[])[1]).toEqual({ role: 'user', content: 'what is this?\n\n[Attached image files: /tmp/a.png]' });
+  });
+});
+
+describe('a call shown while it is written', () => {
+  it('reports each call from its first fragment, under the id it finishes with', async () => {
+    reply = { chunks: [
+      delta({ tool_calls: [{ index: 0, id: 'call_a', type: 'function', function: { name: 'write_file', arguments: '' } }] }),
+      delta({ tool_calls: [{ index: 0, function: { arguments: '{"path":"src/a.ts",' } }] }),
+      delta({ tool_calls: [{ index: 0, function: { arguments: '"content":"export const a = 1;"}' } }] }),
+      delta({ tool_calls: [{ index: 1, type: 'function', function: { name: 'read_file', arguments: '{"path":"b.ts"}' } }] }),
+      delta({}, 'tool_calls'),
+    ] };
+    const seen: { id: string; name: string; arguments: string }[] = [];
+    const result = await new OpenAIModelClient({ baseUrl, model: 'm' }).step(request(undefined, { onToolCallDelta: (call) => seen.push(call) }));
+    expect(seen.map((call) => [call.id, call.name, call.arguments])).toEqual([
+      ['call_a', 'write_file', ''],
+      ['call_a', 'write_file', '{"path":"src/a.ts",'],
+      ['call_a', 'write_file', '{"path":"src/a.ts","content":"export const a = 1;"}'],
+      [seen[3]!.id, 'read_file', '{"path":"b.ts"}'],
+    ]);
+    // A call the server gave no id finishes under the one it was shown with.
+    expect(result.toolCalls.map((call) => call.id)).toEqual(['call_a', seen[3]!.id]);
+  });
+
+  it('is named from the fields that have arrived whole', () => {
+    expect(completedArguments('{"path":"src/a.ts","content":"export co')).toEqual({ path: 'src/a.ts' });
+    expect(completedArguments('{"command":"ls -la","timeout":')).toEqual({ command: 'ls -la' });
+    expect(completedArguments('{"edits":[{"a":1},{"b":"x, y"}],"path":"p"}')).toEqual({ edits: [{ a: 1 }, { b: 'x, y' }], path: 'p' });
+    expect(completedArguments('{"path":"a\\",b')).toEqual({});
+    expect(completedArguments('')).toEqual({});
+  });
+});
+
+describe('what a server says about the model', () => {
+  it('names the model and its window from the first frame, before any text', async () => {
+    reply = { chunks: [
+      { id: 'x', model: 'glm-5', context_length: 200_000, choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }] },
+      delta({ content: 'hi' }), delta({}, 'stop'),
+    ] };
+    const order: string[] = [];
+    const result = await new OpenAIModelClient({ baseUrl, model: 'auto' }).step(request(undefined, {
+      onServedModel: (model, window) => order.push(`model ${model} ${window}`), onTextDelta: (text) => order.push(`text ${text}`),
+    }));
+    // `maple-test` is the model the later frames carry (delta()).
+    expect(order.slice(0, 2)).toEqual(['model glm-5 200000', 'model maple-test 200000']);
+    expect(result.contextWindow).toBe(200_000);
+  });
+
+  it('keeps a stream open while keepalive comments arrive, however long the step', async () => {
+    reply = { chunks: [delta({ content: 'a' }), ...Array.from({ length: 6 }, () => ': keepalive\n\n'), delta({ content: 'b' }), delta({}, 'stop')], gapMs: 80 };
+    const result = await new OpenAIModelClient({ baseUrl, model: 'm', idleTimeoutMs: 200 }).step(request());
+    expect(result.text).toBe('ab');
+  });
+});
+
+describe('a request fitted to the server', () => {
+  it('asks for the model\'s output limit, less what the prompt takes of the window', async () => {
+    reply = { chunks: [delta({}, 'stop')] };
+    await new OpenAIModelClient({ baseUrl, model: 'm', maxOutputTokens: 32_000 }).step(request());
+    await new OpenAIModelClient({ baseUrl, model: 'm', maxOutputTokens: 32_000, contextWindow: 20_000 }).step(request([{ type: 'text', role: 'user', text: 'x'.repeat(40_000) }]));
+    expect(received[0]!.body.max_tokens).toBe(32_000);
+    expect(received[1]!.body.max_tokens).toBeLessThan(10_000);
+    await new OpenAIModelClient({ baseUrl, model: 'm' }).step(request());
+    expect(received[2]!.body).not.toHaveProperty('max_tokens');
+  });
+
+  it('trims tools and schemas and cuts the system prompt instead of being refused', () => {
+    const tool = (name: string, description = 'd') => ({ name, description, parameters: { type: 'object', properties: { a: { type: 'string', description } } } });
+    const fitted = fitToLimits('s'.repeat(100), [tool('a'), tool('big', 'x'.repeat(500)), tool('c'), tool('d')], { tools: 3, schemaBytes: 200, systemBytes: 80 });
+    expect(fitted.tools.map((entry) => entry.name)).toEqual(['a', 'big', 'c']);
+    expect(fitted.tools[1]!.parameters).toEqual({ type: 'object', properties: { a: { type: 'string' } } });
+    expect(Buffer.byteLength(fitted.system)).toBeLessThanOrEqual(80);
+    expect(fitted.system).toMatch(/cut to fit/);
+  });
+
+  it('asks the loop to compact a conversation with more messages than one request may carry', async () => {
+    const items = Array.from({ length: 6 }, (_, index): ConversationItem => ({ type: 'text', role: index % 2 ? 'assistant' : 'user', text: `m${index}` }));
+    const error = await new OpenAIModelClient({ baseUrl, model: 'm', limits: { messages: 5 } }).step(request(items)).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: 'CONTEXT_TOO_LARGE' });
+    expect(received).toHaveLength(0);
   });
 });
 

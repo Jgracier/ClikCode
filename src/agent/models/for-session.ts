@@ -29,8 +29,8 @@ export interface LocalModelHooks {
 }
 
 /** The Gateway's base URL and the credential for it, or the error that says
- * how to connect. Exported so the platform-assistant fallback, which talks to
- * the same service, resolves them identically. */
+ * how to connect. Exported so everything else that talks to the same service
+ * (its model list, its usage) resolves them identically. */
 export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: string } {
   const baseUrl = getApiUrl(config).replace(/\/$/, '');
   const apiKey = getApiKeyForUrl(config, baseUrl);
@@ -52,6 +52,26 @@ export const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
   insufficient_credits: 'AI_CREDIT_EXHAUSTED',
 };
 
+/** What the Gateway refuses with a 400 (`invalid_request`): a request is
+ * fitted to these, or compacted, before it is sent. */
+export const GATEWAY_REQUEST_LIMITS = { messages: 2_000, tools: 128, schemaBytes: 16 * 1024, systemBytes: 64 * 1024 } as const;
+
+/** A Gateway refusal with what to do about it added: the Gateway's own
+ * message names the model or the limit, and the hint says where to go next. */
+export function gatewayErrorMessage(error: { status?: number; code?: string; message: string; retryAfter?: number }): string | undefined {
+  const command = harnessCommand();
+  const wait = error.retryAfter === undefined ? 'Try again in a minute.'
+    : `Try again in ${error.retryAfter < 90 ? `${Math.ceil(error.retryAfter)}s` : `${Math.ceil(error.retryAfter / 60)} min`}.`;
+  const hint = {
+    insufficient_credits: `Run \`${command} gateway credit\` to add credit.`,
+    rate_limit_exceeded: wait,
+    model_not_found: 'Pick another model with /model, or let the Gateway choose (Automatic).',
+    no_model_available: 'No model can take this request right now: try again shortly, or pick one with /model.',
+    gateway_disabled: 'ClikDeploy Gateway is turned off for this account; switch provider with /model meanwhile.',
+  }[error.code ?? (error.status === 402 ? 'insufficient_credits' : error.status === 429 ? 'rate_limit_exceeded' : '')];
+  return hint ? `${error.message} ${hint}` : undefined;
+}
+
 /** ClikDeploy Gateway's OpenAI-compatible API (`{baseUrl}/v1`), the same one
  * any OpenAI client uses. `model` is a name from its list; none sends `auto`
  * and the Gateway picks. The session id keeps a conversation on one
@@ -59,7 +79,7 @@ export const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
  * choices (effort, speed: gateway/options.ts); `vision` sends images to a
  * model that takes them. */
 export function gatewayModelClient(input: {
-  baseUrl: string; apiKey: string; sessionId?: string; model?: string; contextWindow?: number;
+  baseUrl: string; apiKey: string; sessionId?: string; model?: string; contextWindow?: number; maxOutput?: number;
   vision?: boolean; options?: Readonly<Record<string, unknown>>; fetchImpl?: typeof fetch;
 }): OpenAIModelClient {
   return new OpenAIModelClient({
@@ -71,10 +91,15 @@ export function gatewayModelClient(input: {
     headers: { 'x-client': `clikcode/${CLIKCODE_VERSION}`, ...(input.sessionId ? { 'x-session-id': input.sessionId } : {}) },
     errorCodes: GATEWAY_ERROR_CODES,
     // A hosted model starts answering in seconds: the long first-chunk wait
-    // is for a CPU reading a deep prompt, not for a stalled connection.
+    // is for a CPU reading a deep prompt, not for a stalled connection. The
+    // Gateway sends a `: keepalive` comment every 15s while a step is open,
+    // and every byte of one restarts the clock (gateway-client.ts readWithin),
+    // so a step thinking or writing a long call is never cut and resent.
     firstChunkTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
-    creditHint: `Run \`${harnessCommand()} gateway credit\` to add credit.`,
+    limits: GATEWAY_REQUEST_LIMITS,
+    describeError: gatewayErrorMessage,
     ...(input.contextWindow ? { contextWindow: input.contextWindow } : {}),
+    ...(input.maxOutput ? { maxOutputTokens: input.maxOutput } : {}),
     ...(input.vision ? { vision: true } : {}),
     ...(input.options && Object.keys(input.options).length ? { body: input.options } : {}),
     ...(input.fetchImpl ? { fetchImpl: input.fetchImpl } : {}),
@@ -88,8 +113,9 @@ export function gatewayModelClient(input: {
 const MODEL_LIST_WAIT_MS = 2_000;
 
 /** What the Gateway lists for the model this session will run (its pick, or
- * the Gateway's automatic one): its window and whether it takes images. */
-async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ contextWindow?: number; vision?: boolean }> {
+ * the Gateway's automatic one): its window, the most it writes in one answer,
+ * and whether it takes images. */
+async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ contextWindow?: number; maxOutput?: number; vision?: boolean }> {
   let timer: NodeJS.Timeout | undefined;
   try {
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
@@ -100,7 +126,11 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
     ]);
     const id = session.model ?? list?.automatic;
     const model = list?.models.find((entry) => entry.id === id);
-    return { ...(model?.contextWindow ? { contextWindow: model.contextWindow } : {}), ...(model?.vision ? { vision: true } : {}) };
+    return {
+      ...(model?.contextWindow ? { contextWindow: model.contextWindow } : {}),
+      ...(model?.maxOutput ? { maxOutput: model.maxOutput } : {}),
+      ...(model?.vision ? { vision: true } : {}),
+    };
   } catch {
     // fail-open-ok: the window only tunes the context profile, and without a
     // known vision model images stay described in text; the turn runs either way

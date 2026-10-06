@@ -56,6 +56,59 @@ export interface OpenAIModelClientOptions {
   errorCodes?: Readonly<Record<string, string>>;
   /** Added to an out-of-credit refusal (HTTP 402): how to add credit. */
   creditHint?: string;
+  /** The most the model writes in one answer: sent as `max_tokens`, less
+   * whatever of the window the prompt already takes. */
+  maxOutputTokens?: number;
+  /** What the server refuses outright; a request is fitted to these before
+   * it is sent rather than sent to be rejected. */
+  limits?: RequestLimits;
+  /** The server's own error in words that say what to do about it; undefined
+   * keeps the server's message. */
+  describeError?: (error: { status?: number; code?: string; message: string; retryAfter?: number }) => string | undefined;
+}
+
+/** Hard limits on one request, as a server enforces them with a 400. */
+export interface RequestLimits {
+  /** Chat messages, the system prompt included. */
+  messages?: number;
+  tools?: number;
+  /** One tool's `parameters`, serialized. */
+  schemaBytes?: number;
+  systemBytes?: number;
+}
+
+const bytes = (text: string): number => Buffer.byteLength(text, 'utf8');
+
+/** A schema with its descriptions taken out: the first thing to go when one
+ * is over the size a server takes. */
+function withoutDescriptions(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutDescriptions);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).filter(([key, child]) => !(key === 'description' && typeof child === 'string')).map(([key, child]) => [key, withoutDescriptions(child)]));
+}
+
+/** The system prompt and the tools as the server takes them. Tools are kept
+ * in the order given (the built-in ones first), an oversized schema loses its
+ * descriptions before its tool is dropped, and a system prompt over the
+ * limit loses its end. A conversation with too many messages is not cut
+ * here: the loop compacts it (CONTEXT_TOO_LARGE). */
+export function fitToLimits(system: string, tools: readonly ToolSpec[], limits: RequestLimits): { system: string; tools: ToolSpec[] } {
+  const fitted: ToolSpec[] = [];
+  for (const tool of tools) {
+    if (limits.tools !== undefined && fitted.length >= limits.tools) break;
+    if (limits.schemaBytes === undefined || bytes(JSON.stringify(tool.parameters)) <= limits.schemaBytes) { fitted.push(tool); continue; }
+    const parameters = withoutDescriptions(tool.parameters) as Record<string, unknown>;
+    if (bytes(JSON.stringify(parameters)) <= limits.schemaBytes) fitted.push({ ...tool, parameters });
+  }
+  let fittedSystem = system;
+  if (limits.systemBytes !== undefined && bytes(system) > limits.systemBytes) {
+    const note = '\n\n[The rest of the system prompt was cut to fit the server\'s limit.]';
+    let keep = Buffer.from(system, 'utf8').subarray(0, Math.max(0, limits.systemBytes - bytes(note))).toString('utf8');
+    // A character cut in half decodes to U+FFFD; drop it.
+    keep = keep.replace(/\uFFFD$/, '');
+    fittedSystem = `${keep}${note}`;
+  }
+  return { system: fittedSystem, tools: fitted };
 }
 
 const FIRST_CHUNK_TIMEOUT_MS = 30 * 60_000;
@@ -141,6 +194,37 @@ export function parseToolArguments(raw: string): { args: Record<string, unknown>
   return { args: {}, error: `${failure}; received: ${text.length > 300 ? `${text.slice(0, 300)}…` : text}` };
 }
 
+/** The arguments of a call still being written, as far as they are known:
+ * every top-level field whose value has arrived whole. `{"path":"src/a.ts",
+ * "content":"export…` is `{ path: 'src/a.ts' }`, enough to name the row. */
+export function completedArguments(raw: string): Record<string, unknown> {
+  const text = raw.trim();
+  if (!text.startsWith('{')) return {};
+  const whole = parseToolArguments(text);
+  if (!whole.error) return whole.args;
+  // The commas between top-level fields, outside any string or nested value.
+  const ends: number[] = [];
+  let depth = 0;
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (char === '\\') index += 1;
+      else if (char === '"') inString = false;
+    } else if (char === '"') inString = true;
+    else if (char === '{' || char === '[') depth += 1;
+    else if (char === '}' || char === ']') depth -= 1;
+    else if (char === ',' && depth === 1) ends.push(index);
+  }
+  for (const end of ends.reverse()) {
+    try {
+      const value: unknown = JSON.parse(`${text.slice(0, end)}}`);
+      if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    } catch { /* an earlier field boundary may still parse */ }
+  }
+  return {};
+}
+
 const STOP_REASONS: Readonly<Record<string, string>> = { stop: 'stop', tool_calls: 'tool-calls', function_call: 'tool-calls', length: 'length', content_filter: 'content-filter' };
 
 /** Servers word "does not fit" differently; each becomes the Gateway's code,
@@ -157,7 +241,11 @@ function numberOf(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
 }
 
-interface PendingCall { id?: string; name: string; arguments: string; argsObject?: Record<string, unknown> }
+interface PendingCall { id?: string; name: string; arguments: string; argsObject?: Record<string, unknown>; shownId?: string }
+
+/** Tokens a request's text is taken to hold, for leaving the answer room in
+ * the window: a deliberately rough four characters each. */
+const roughTokens = (text: string): number => Math.ceil(text.length / 4);
 
 export class OpenAIModelClient implements ModelClient {
   readonly acceptsImages: boolean;
@@ -172,7 +260,24 @@ export class OpenAIModelClient implements ModelClient {
     };
   }
 
+  /** The window the server said it serves, from an earlier step. */
+  private servedWindow: number | undefined;
+
   private get label(): string { return this.options.label ?? 'The model server'; }
+
+  /** `max_tokens` for this request: the model's own limit, or less when the
+   * prompt leaves less than that of the window. */
+  private maxTokens(promptText: string): number | undefined {
+    const limit = this.options.maxOutputTokens;
+    if (!limit) return undefined;
+    const window = this.servedWindow ?? this.options.contextWindow;
+    if (!window) return limit;
+    return Math.max(1_024, Math.min(limit, window - roughTokens(promptText) - 1_024));
+  }
+
+  private describe(message: string, details: { status?: number; code?: string; retryAfter?: number }): string {
+    return this.options.describeError?.({ ...details, message }) ?? message;
+  }
 
   private endpoint(): string {
     const base = this.options.baseUrl.replace(/\/+$/, '');
@@ -183,8 +288,13 @@ export class OpenAIModelClient implements ModelClient {
     const startedAt = performance.now();
     const { options } = this;
     const doFetch = options.fetchImpl ?? fetch;
-    const messages = toChatMessages(request.system, request.items, this.acceptsImages);
-    const tools = toolsBody(request.tools, request.toolChoice);
+    const fitted = options.limits ? fitToLimits(request.system, request.tools, options.limits) : { system: request.system, tools: request.tools };
+    const messages = toChatMessages(fitted.system, request.items, this.acceptsImages);
+    if (options.limits?.messages !== undefined && messages.length > options.limits.messages) {
+      throw new ModelClientError(`${this.label}: the conversation has ${messages.length} messages, more than the ${options.limits.messages} one request may carry`, { kind: 'other', code: 'CONTEXT_TOO_LARGE' });
+    }
+    const tools = toolsBody(fitted.tools, request.toolChoice);
+    const maxTokens = this.maxTokens(JSON.stringify(messages) + JSON.stringify(tools.tools ?? []));
     if (options.beforeRequest) {
       try { await options.beforeRequest({ messages, ...(tools.tools ? { tools: tools.tools } : {}) }, request.signal); } catch (error) {
         if (request.signal?.aborted) throw turnCancelledError();
@@ -209,6 +319,7 @@ export class OpenAIModelClient implements ModelClient {
           // Without this OpenAI sends no usage at all on a stream; servers that
           // report usage anyway (llama-server) accept and ignore it.
           stream_options: { include_usage: true },
+          ...(maxTokens ? { max_tokens: maxTokens } : {}),
           ...options.body,
         }),
         ...(request.signal ? { signal: request.signal } : {}),
@@ -248,12 +359,17 @@ export class OpenAIModelClient implements ModelClient {
         const loopCode = isContextOverflow(400, code, message) ? 'CONTEXT_TOO_LARGE' : code ? options.errorCodes?.[code] : undefined;
         const retryAfter = parseRetryAfter(error.retry_after);
         const kind = code && QUOTA_CODES.has(code) ? 'quota' : 'other';
-        throw new ModelClientError(withRequestId(`${this.label}: ${message}`), { kind, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
+        const described = this.describe(`${this.label}: ${message}`, { ...(code ? { code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
+        throw new ModelClientError(withRequestId(described), { kind, ...(loopCode ? { code: loopCode } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
       }
-      if (typeof frame.model === 'string' && frame.model) servedModel = frame.model;
-      // Not OpenAI's: a gateway saying how large the serving model's window is.
-      const window = numberOf(frame.context_window);
-      if (window) servedWindow = window;
+      // Not OpenAI's: a gateway saying how large the serving model's window
+      // is (`context_length` as its model list names it).
+      const window = numberOf(frame.context_window) ?? numberOf(frame.context_length);
+      if (window) { servedWindow = window; this.servedWindow = window; }
+      if (typeof frame.model === 'string' && frame.model && frame.model !== servedModel) {
+        servedModel = frame.model;
+        request.onServedModel?.(servedModel, servedWindow);
+      }
       if (frame.usage && typeof frame.usage === 'object') usage = { ...usage, ...usageFrom(frame.usage as Record<string, unknown>) };
       if (frame.timings && typeof frame.timings === 'object') timings = frame.timings as LlamaTimings;
       const choice = Array.isArray(frame.choices) ? frame.choices[0] as Record<string, unknown> | undefined : undefined;
@@ -283,6 +399,13 @@ export class OpenAIModelClient implements ModelClient {
           if (typeof fn.name === 'string' && fn.name && call.name !== fn.name) call.name = call.name && !fn.name.startsWith(call.name) ? `${call.name}${fn.name}` : fn.name;
           if (typeof fn.arguments === 'string') call.arguments += fn.arguments;
           else if (fn.arguments && typeof fn.arguments === 'object' && !Array.isArray(fn.arguments)) call.argsObject = fn.arguments as Record<string, unknown>;
+          // Shown from the moment it has a name, under the id it will finish
+          // with: a call that streams its arguments is on screen while it is
+          // written, as a vendor CLI's is.
+          if (call.name && request.onToolCallDelta) {
+            call.shownId ??= call.id ?? `call_${pending.indexOf(call) + 1}_${Date.now().toString(36)}`;
+            request.onToolCallDelta({ id: call.shownId, name: call.name, arguments: call.argsObject && !call.arguments.trim() ? JSON.stringify(call.argsObject) : call.arguments });
+          }
         }
       }
       if (typeof choice.finish_reason === 'string' && choice.finish_reason) stopReason = STOP_REASONS[choice.finish_reason] ?? choice.finish_reason;
@@ -320,7 +443,7 @@ export class OpenAIModelClient implements ModelClient {
     }
 
     const toolCalls: ModelToolCall[] = pending.filter((call) => call.name).map((call, offset) => {
-      const id = call.id ?? `call_${offset + 1}_${Date.now().toString(36)}`;
+      const id = call.shownId ?? call.id ?? `call_${offset + 1}_${Date.now().toString(36)}`;
       if (call.argsObject && !call.arguments.trim()) return { id, name: call.name, args: call.argsObject };
       const parsed = parseToolArguments(call.arguments);
       return { id, name: call.name, args: parsed.args, ...(parsed.error ? { argumentsError: parsed.error } : {}) };
@@ -359,6 +482,7 @@ export class OpenAIModelClient implements ModelClient {
     // The server's own code is still in the message.
     if (code && !message.includes(code)) message = `${message} (${code})`;
     if (status === 402 && this.options.creditHint) message = `${message} ${this.options.creditHint}`;
+    message = this.describe(message, { status, ...(code ? { code } : {}), ...(retryAfter !== undefined ? { retryAfter } : {}) });
     const requestId = response.headers.get('x-request-id')?.trim();
     if (requestId) message = `${message} [request ${requestId}]`;
     const loopCode = isContextOverflow(status, code, message) ? 'CONTEXT_TOO_LARGE' : code ? this.options.errorCodes?.[code] : undefined;
