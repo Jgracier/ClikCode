@@ -91,7 +91,7 @@ export interface AiRouterRuntime {
   harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean;
   harnessIntegrationLevel(harness: AiLocalHarnessDefinition): AiHarnessIntegrationLevel;
   nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: {
-    prompt: string; nativeSessionId?: string; createdHere?: boolean; launchedBefore?: boolean;
+    prompt: string; nativeSessionId?: string; createdHere?: boolean;
     model?: string | null; workspace?: string | null; effort?: string | null;
     permissionMode?: AiHarnessPermissionMode;
     images?: readonly string[];

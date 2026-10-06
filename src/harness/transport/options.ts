@@ -41,9 +41,7 @@ export function declaredOptionArgv(
       if (items.length) argv.push(...option.argv, items.join(','));
       continue;
     }
-    for (const item of items) {
-      argv.push(...option.argv, option.argvStyle === 'config' ? `${option.configKey}=${JSON.stringify(item)}` : item);
-    }
+    for (const item of items) argv.push(...option.argv, item);
   }
   return argv;
 }
@@ -86,9 +84,6 @@ export function appServerThreadOverrides(
     if (inlineConfig && raw === true) {
       const [key, ...rest] = argv[1]!.split('=');
       config[key!] = parseConfigValue(rest.join('='));
-    } else if (option.argvStyle === 'config' && option.configKey) {
-      const items = renderedItems(option, raw);
-      if (items.length) config[option.configKey] = items.length === 1 ? items[0] : items;
     } else if (id === 'profile') config.profile = renderedItems(option, raw)[0];
     else if (id === 'search' && raw === true) config['tools.web_search'] = true;
     else if (id === 'add-dir') config['sandbox_workspace_write.writable_roots'] = renderedItems(option, raw);
