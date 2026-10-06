@@ -369,7 +369,7 @@ SCENARIOS = {
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[3~'), ('wait_for', 'Cancel', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
-        'watch': [], 'ever': ['Del disconnect', 'Cancel'], 'final_contains': ['reauth'],
+        'watch': [], 'ever': ['del disconnect', 'Cancel'], 'final_contains': ['reauth'],
     },
     # The same from a Mac or iPhone, whose "delete" key sends Backspace.
     'account-backspace-disconnects': {
@@ -379,7 +379,7 @@ SCENARIOS = {
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x7f'), ('wait_for', 'Cancel', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
-        'watch': [], 'ever': ['Del disconnect', 'Cancel'], 'final_contains': ['reauth'],
+        'watch': [], 'ever': ['del disconnect', 'Cancel'], 'final_contains': ['reauth'],
     },
     # Adding a Grok account: its sign-in is a link and a code, shown on
     # ClikCode's own screen -- the vendor's own text never takes it over.
