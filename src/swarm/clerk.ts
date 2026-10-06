@@ -16,6 +16,7 @@ import { recordClerkTurn } from '../turn/account-outcome.js';
 import { writeState } from '../session/state/write.js';
 import { classifyAccountFailure } from '../turn/failover.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
+import { SWARM_CLERK_ENV } from './publish.js';
 
 export async function runProviderPrompt(input: {
   harness: AiLocalHarnessDefinition;
@@ -60,7 +61,7 @@ export async function runProviderPrompt(input: {
     ...(mode ? { permissionMode: mode } : {}),
     ...(input.model ? { model: input.model } : {}),
   });
-  const environment = turnEnvironment(input.harness, input.account, mode);
+  const environment = { ...turnEnvironment(input.harness, input.account, mode), [SWARM_CLERK_ENV]: '1' };
   // A clerk's background tasks are its work too: its input stays open until
   // they finish (Claude stops them when its input ends), and each one gives
   // the idle watchdog its tool budget, as a chat's own turn does
@@ -138,7 +139,7 @@ async function runAcpClerk(
     ? input.permissionMode : 'ask';
   const launch = harnessAcpLaunch(input.harness, { permissionMode, ...(input.model ? { model: input.model } : {}) });
   if (!launch) throw new Error(`${input.harness.displayName} cannot take a headless turn`);
-  const environment = turnEnvironment(input.harness, input.account, permissionMode);
+  const environment = { ...turnEnvironment(input.harness, input.account, permissionMode), [SWARM_CLERK_ENV]: '1' };
   let usage: TurnUsage | undefined;
   try {
     const result = await runAcpTurn({

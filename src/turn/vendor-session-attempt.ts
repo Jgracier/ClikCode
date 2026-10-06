@@ -16,7 +16,7 @@ import { turnShareOf } from '../harness/protocol/turn-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { swarmIsOn } from '../swarm/policy.js';
-import { swarmAcpMcpServers } from '../swarm/publish.js';
+import { swarmAcpMcpServers, swarmCodexConfig } from '../swarm/publish.js';
 import { closePersistentTransport, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
@@ -78,11 +78,16 @@ export async function runVendorSessionAttempt(input: {
         ignoredOptionsSaid.set(session.id, ignored);
         prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${ignored}`));
       }
+      const swarmConfig = swarmIsOn(session) ? swarmCodexConfig(session.id) : {};
+      const configOverrides = {
+        ...(overrides.configOverrides ? overrides.configOverrides : {}),
+        ...swarmConfig,
+      };
       const codexInput: CodexAppServerTurnInput = {
         binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
         images, environment, signal, onSessionId,
-        ...(overrides.configOverrides ? { configOverrides: overrides.configOverrides } : {}),
+        ...(Object.keys(configOverrides).length ? { configOverrides } : {}),
         ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
         // Codex reports its own quota on this connection during the turn,
         // which is the same figure codexUsageProbe otherwise spawns a whole
@@ -103,7 +108,7 @@ export async function runVendorSessionAttempt(input: {
       if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
         throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
       }
-      const mcpServers = [...input.mcpServers ?? [], ...(swarmIsOn(session) ? swarmAcpMcpServers() : [])];
+      const mcpServers = [...input.mcpServers ?? [], ...(swarmIsOn(session) ? swarmAcpMcpServers(session.id) : [])];
       const acpInput: AcpTurnInput = {
         binary: launch.binary, command: harness.command, prompt: turnText,
         argv: launch.modeArgv, optionPlacement: launch.optionPlacement,

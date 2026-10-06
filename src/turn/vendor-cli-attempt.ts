@@ -25,6 +25,8 @@ import { stateDirectory } from '../session/store/paths.js';
 import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
 import { usesFallbackTurn, vendorBackgroundTurnHandlerFor } from './vendor-process.js';
 import { turnCancelledError } from '../agent/cancellation.js';
+import { swarmIsOn } from '../swarm/policy.js';
+import { swarmTurnArgv } from '../swarm/publish.js';
 
 function insideGitRepository(folder: string): boolean {
   for (let directory = resolve(folder); ; directory = dirname(directory)) {
@@ -92,6 +94,10 @@ export async function runVendorCliAttempt(input: {
     permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
   });
   if (turn.outsideRepoArgv && !insideGitRepository(session.workspace ?? process.cwd())) argv.unshift(...turn.outsideRepoArgv);
+  if (swarmIsOn(session)) {
+    const swarmArgv = await swarmTurnArgv(turn, session.id);
+    if (swarmArgv.length) argv.unshift(...swarmArgv);
+  }
   // Persist an allocated native identity before the provider starts so an
   // interrupted turn cannot accidentally fork the centralized conversation.
   if (createdHere) await checkpoint.persistNow();

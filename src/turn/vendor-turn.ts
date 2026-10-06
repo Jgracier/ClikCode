@@ -52,6 +52,7 @@ import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
 import { swarmIsOn } from '../swarm/policy.js';
+import { swarmProvisionEntry, swarmRidesTurn } from '../swarm/publish.js';
 import { markSwarmHost, openSwarmTurn } from '../swarm/store.js';
 import { emptySwarmFold, foldSwarmActivity, type SwarmFold } from '../swarm/fold.js';
 import { watchSwarmActivity } from '../swarm/spool.js';
@@ -378,11 +379,15 @@ export async function sendVendorTurn(input: {
     // is invisible to a process that is already running, so that process is
     // closed and this attempt starts one that can see it.
     const conversations = conversationsMcpEntry();
+    const swarmEntry = swarmProvisionEntry();
     const launcher = builtClikcodeLauncher();
     const provisioned = await provisionChosenHarness({
       ...(launcher ? { launcher } : {}),
       harness, account, workspace: session.workspace, stateDir: stateDirectory(),
-      ...(conversations ? { builtins: [conversations] } : {}),
+      builtins: [
+        ...(conversations ? [conversations] : []),
+        ...(!swarmRidesTurn(harness) && swarmEntry ? [swarmEntry] : []),
+      ],
     });
     // A server taken back out is just as invisible to a running process,
     // which would go on asking for its sign-in.

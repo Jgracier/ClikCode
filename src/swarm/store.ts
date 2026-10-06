@@ -70,6 +70,8 @@ export async function markSwarmHost(sessionId: string | undefined): Promise<void
 }
 
 export async function activeSwarmHost(): Promise<string | undefined> {
+  const envSession = process.env.CLIKCODE_SESSION_ID?.trim();
+  if (envSession) return envSession;
   try {
     const parsed = JSON.parse(await readFile(swarmActivePath(), 'utf8')) as { sessionId?: unknown };
     return typeof parsed.sessionId === 'string' ? parsed.sessionId : undefined;
