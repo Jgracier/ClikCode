@@ -190,7 +190,12 @@ async function reserve(
   const existing = board.roster.find((line) => line.key === key && line.status === 'working');
   if (existing) return { kind: 'attach', card: { summary: `${existing.provider} is already on this. ${existing.step}`, facts: [], paths, blockers: [], questions: [] } };
   const running = inflight.get(sessionId) ?? 0;
-  if (running >= policy.maxParallel || board.roster.filter((line) => line.status === 'working').length >= policy.maxWorkers) return { kind: 'capped' };
+  if (
+    (policy.maxParallel !== undefined && running >= policy.maxParallel)
+    || (policy.maxWorkers !== undefined && board.roster.filter((line) => line.status === 'working').length >= policy.maxWorkers)
+  ) {
+    return { kind: 'capped' };
+  }
   const workerId = randomUUID();
   const next: SwarmBoard = {
     ...board,

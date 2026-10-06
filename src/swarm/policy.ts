@@ -3,8 +3,10 @@
  * doing it here, and keeps the small ones. */
 
 export interface SwarmPolicy {
-  maxWorkers: number;
-  maxParallel: number;
+  /** Optional cap on concurrent workers for testing or constrained environments. Defaults to unlimited. */
+  maxWorkers?: number;
+  /** Optional cap on parallel calls for testing or constrained environments. Defaults to unlimited. */
+  maxParallel?: number;
   /** Tokens a clerk may be briefed with, including the board slice. */
   maxBriefTokens: number;
   /** Tokens the shared board may hold. */
@@ -13,10 +15,8 @@ export interface SwarmPolicy {
   maxCardTokens: number;
 }
 
-/** The caps for a conversation with swarm on. */
+/** The caps for a conversation with swarm on. No artificial limit on parallel workers. */
 export const SWARM_POLICY: SwarmPolicy = {
-  maxWorkers: 2,
-  maxParallel: 2,
   maxBriefTokens: 12000,
   maxBoardTokens: 400,
   maxCardTokens: 300,
