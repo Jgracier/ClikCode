@@ -164,7 +164,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private signInLines: string[] = [];
   /** What the waiting composer is for while a sign-in asks for a code or a
    * key: Enter hands the draft here instead of to the turn. */
-  private signInInput?: { secret: boolean; submit: (text: string) => void };
+  private signInInput?: { secret: boolean; optional?: boolean; submit: (text: string) => void };
   /** A sign-in is up: the wait is on the user, in their browser, so the band
    * holds still as it does for an approval -- the clock ticks, nothing spins. */
   private signingIn = false;
@@ -402,7 +402,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.suspendToShell();
     } else if (key === '\r' && this.signInInput) {
       const text = turn.draft.trim();
-      if (!text) return;
+      // A stray Enter answers nothing -- unless the question takes none (a
+      // key-first sign-in's Enter for the vendor's own providers).
+      if (!text && !this.signInInput.optional) return;
       turn.draft = '';
       turn.cursor = 0;
       this.signInInput.submit(text);
@@ -1042,14 +1044,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (live && aside) { live.draft = aside.draft; live.cursor = aside.cursor; }
       aside = undefined;
     };
-    const ask = (prompt: string, secret: boolean): Promise<string> => new Promise((resolve) => {
+    const ask = (prompt: string, secret: boolean, optional?: boolean): Promise<string> => new Promise((resolve) => {
       const live = this.turn;
       if (live) {
         aside ??= { draft: live.draft, cursor: live.cursor };
         live.draft = ''; live.cursor = 0; live.label = `${prompt} · type it and press Enter`;
       }
       this.signInInput = {
-        secret,
+        secret, optional,
         submit: (text) => {
           this.signInInput = undefined;
           putBack();
