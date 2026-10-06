@@ -4,13 +4,18 @@
  * placeholder ("Kiro CLI 1") or the name the user gave. */
 
 import { vendorAccountEmail } from './vendor-identity.js';
+import { apiKeyAccountEmail } from './api-key-identity.js';
+import { readProfileKey } from './profile-key.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 
 /** The email (or, for Copilot, the GitHub login) the harness itself reports
  * for the account in `profilePath`, read right after its sign-in. Undefined
  * -- never a fabricated name -- for a harness that keeps none; the numbered
  * placeholder below covers those. See vendor-identity.ts for each source. */
-export function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
+export async function deriveAccountLabel(harness: AiLocalHarnessDefinition, profilePath: string | undefined): Promise<string | undefined> {
+  // A key pasted at sign-in: the email behind it, where its vendor says.
+  const [saved] = Object.entries(readProfileKey(profilePath));
+  if (saved) return apiKeyAccountEmail({ provider: harness.provider, envName: saved[0], key: saved[1], harness });
   return vendorAccountEmail(harness, profilePath);
 }
 

@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDirectory } from '../../session/store/paths.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
+import { readProfileKey } from '../accounts/profile-key.js';
 
 /** Copilot with no sign-in of its own asks `gh auth token --hostname
  * github.com` and runs as the GitHub CLI's user -- verified on copilot 1.0.87:
@@ -66,6 +67,8 @@ export function nativeProfileEnvironment(
     } : {}),
     ...nativeProfile.extraEnv,
     ...copilotProfileEnvironment(nativeProfile, platform),
+    // A key pasted at sign-in (profile-key.ts), as the vendor's variable.
+    ...readProfileKey(nativeProfile.path),
   };
 }
 

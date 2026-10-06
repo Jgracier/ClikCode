@@ -25,6 +25,7 @@ import { accountCanTakeTurn, usageResetLabel } from '../harness/accounts/usage-r
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harness/accounts/labels.js';
+import { keyVariables, readProfileKey } from '../harness/accounts/profile-key.js';
 import { profileEnvironment, purgeAccountProfile, resolvePurgeableProfile } from '../harness/accounts/profiles.js';
 import { authEvidencePresent, harnessCanLogout, hasAuthEvidence, logoutNativeHarness } from '../harness/accounts/auth-files.js';
 import { vendorCredentialCapture } from '../harness/accounts/vendor-identity.js';
@@ -279,8 +280,11 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
   // a label. Skipping this for explicit labels created duplicate sign-ins of
   // one email under different names.
   const derived = await deriveAccountLabel(harness, profilePath);
+  // A pasted key is a credential of its own: never folded into a sign-in
+  // of the same email.
+  const keyed = Object.keys(readProfileKey(profilePath)).length > 0;
   if (derived) {
-    const existingMatch = await matchingVendorAccount(state.accounts, harness, derived);
+    const existingMatch = keyed ? undefined : await matchingVendorAccount(state.accounts, harness, derived);
     if (existingMatch) {
       const existingHasNativeSessions = state.sessions.some((session) => session.accountId === existingMatch.id && session.nativeSessionId);
       existingMatch.label = nameAccount(state.accounts, harness, derived, existingMatch.id);
@@ -390,6 +394,8 @@ export async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, envir
   // No status command: the credential the vendor keeps on disk, or an API-key
   // variable, is the answer. Cheap enough to read every time, and never stale
   // after a sign-in the way a cached answer would be.
+  // A key pasted at sign-in, saved in the profile, is its sign-in.
+  if (keyVariables(harness).some((name) => environment[name]?.trim())) return false;
   if (!harness.statusArgv) return hasAuthEvidence(harness) ? !await authEvidencePresent(harness, environment) : false;
   const envKey = Object.entries(environment).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join(';');
   const cacheKey = `${harness.command}:${envKey}`;

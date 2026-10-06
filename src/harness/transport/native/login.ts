@@ -8,12 +8,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createInterface } from 'node:readline/promises';
 import { runVendorSignIn, SEARCH_CHOICE, type SignInScreen, type SignInUi } from '../../../gateway/login/vendor-sign-in.js';
 import { keyProviders, localHarnessForCommand } from '../../../runtime/lazy-bridge.js';
-import type { AiHarnessKeyRoute, AiKeyProvider, AiKeyProviderId } from '../../definition.js';
+import type { AiHarnessKeyRoute, AiKeyProvider, AiKeyProviderId, AiLocalHarnessDefinition } from '../../definition.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../../../gateway/login/url.js';
 import { NativeHarnessSpec } from './binary.js';
 import { captureNativeHarnessOutput } from './command.js';
 import { ensureNativeHarness } from './inspect.js';
-import { authFilePresent, authFilesStamp } from '../../accounts/auth-files.js';
+import { authFilePresent, authFilesStamp, expandAuthPath } from '../../accounts/auth-files.js';
+import { keyVariables, writeProfileKey } from '../../accounts/profile-key.js';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 const screens = new AsyncLocalStorage<SignInScreen>();
 
@@ -83,63 +86,144 @@ async function loginNativeHarnessInner(spec: NativeHarnessSpec, envOverrides: Re
       ...(spec.loginSteps ? { steps: spec.loginSteps } : {}),
       ui,
     });
-    if (!spec.loginKeyRoutes || !ownLogin(spec)) { await run(screen); return; }
+    const harness = localHarnessForCommand(spec.command);
+    if (!harness || !ownLogin(spec)) { await run(screen); return; }
     const routes = spec.loginKeyRoutes;
-    // The vendor's own account sign-in, at once; a key pasted under its link
-    // (or Enter, for its other options) takes over from it.
-    const instead = spec.loginAccountChoose ? await accountFirst(spec.displayName, spec.loginAccountChoose, screen, run) : { key: undefined };
-    if (instead) await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), instead.key));
+    if (routes) {
+      // The vendor's own account sign-in at once, a key pasted under its link
+      // (or Enter, for its other options) taking over; else the key first.
+      const instead = spec.loginAccountChoose
+        ? await accountFirst(spec.displayName, spec.loginAccountChoose, screen, run, {
+          prompt: `Or paste a ${spec.displayName} API key · Enter for other sign-ins`, others: true,
+          isKey: async (text) => keyCandidates(routes, text, keyProviders()).length > 0 && Boolean(await routeFor(spec, routes, text, screen.signal).catch(() => undefined)),
+        })
+        : { key: undefined };
+      if (instead) await run(await keyRoutedScreen(spec, routes, screen, keyProviders(), instead.key));
+      return;
+    }
+    // A vendor that reads its key only from a variable: its own sign-in, with
+    // a key pasted instead saved where it runs (storeKey).
+    if (!harness.localAuth.includes('api-key') || spec.loginKeyCommand || !keyVariables(harness).length) { await run(screen); return; }
+    const instead = await accountFirst(spec.displayName, spec.loginAccountChoose ?? [], screen, run, {
+      prompt: `Or paste a ${spec.displayName} API key`, others: false,
+      isKey: async (text) => (await keyVariableFor(harness, text, screen.signal))?.checked === true,
+    });
+    if (instead?.key) await storeKey(harness, spec, envOverrides, instead.key, screen.signal);
   } finally { if (!own) screen.stop(); }
 }
 
-/** The vendor's own account sign-in (Cline's, Kilo's, Nous Portal), its menus
+/** What the sign-in screen offers beside the vendor's own sign-in. */
+export interface KeyOffer {
+  prompt: string;
+  /** Enter alone is an answer: the vendor's other sign-ins. */
+  others: boolean;
+  /** Whether text answered to a question of the vendor's own (a pasted
+   * code) is instead a key, proven by its endpoint. */
+  isKey(text: string): Promise<boolean>;
+}
+
+/** The vendor's own sign-in (Cline's account, Claude's OAuth), its menus
  * answered with `labels` so its link shows straight away -- opened in a
- * local browser, shown for a phone. Under the link, a key may be pasted
- * instead, or Enter pressed for the vendor's other sign-ins: then that run
- * stops and the answer is returned (a key, or '' for its menus). Undefined:
- * the account sign-in finished. A question of the vendor's own after its
- * link (a pasted code) replaces the key field. */
+ * local browser, shown for a phone -- with a key field open from the start.
+ * A key pasted there (or Enter, where `others`) stops that run and is
+ * returned ('' for Enter). Undefined: the vendor's sign-in finished (its
+ * callback). A question of the vendor's own shares the field: an answer that
+ * is a key (offer.isKey) is taken as one, anything else goes to the vendor. */
 export async function accountFirst(
-  name: string, labels: readonly string[], screen: SignInScreen, run: (ui: SignInUi) => Promise<void>,
+  name: string, labels: readonly string[], screen: SignInScreen, run: (ui: SignInUi) => Promise<void>, offer: KeyOffer,
 ): Promise<{ key: string } | undefined> {
   const stop = new AbortController();
   const signal = AbortSignal.any([screen.signal, stop.signal]);
   const left = [...labels];
-  let offered = false;
   let instead: string | undefined;
   let answered: () => void = () => undefined;
-  const offer = new Promise<void>((resolve) => { answered = resolve; });
+  const pasted = new Promise<void>((resolve) => { answered = resolve; });
+  const take = (key: string): void => { instead = key; stop.abort(); answered(); };
+  // Each ask replaces the one before on the screen; only the latest counts.
   let current = 0;
+  const openField = (): void => {
+    const asked = ++current;
+    void screen.ask(offer.prompt, true, offer.others).then((text) => {
+      if (asked === current && !signal.aborted) take(text.trim());
+    });
+  };
   const ui: SignInUi = {
     signal,
-    show: (link) => {
-      screen.show(link);
-      if (offered) return;
-      offered = true;
-      const asked = ++current;
-      void screen.ask(`Or paste a ${name} API key · Enter for other sign-ins`, true, true).then((text) => {
-        if (asked !== current || signal.aborted) return;
-        instead = text.trim();
-        stop.abort();
-        answered();
-      });
-    },
+    show: (link) => screen.show(link),
     choose: async (title, choices, selected) => {
       const at = left.length ? optionFor(choices, left[0]!) : -1;
       if (at >= 0) { left.shift(); return at; }
       return screen.choose(title, choices, selected);
     },
-    ask: (prompt, secret, optional) => { current++; return screen.ask(prompt, secret, optional); },
+    ask: async (prompt, secret, optional) => {
+      const asked = ++current;
+      const text = await screen.ask(`${prompt} · or paste a ${name} API key`, secret, optional);
+      if (asked === current && text.trim() && await offer.isKey(text.trim())) { take(text.trim()); return ''; }
+      if (!signal.aborted) openField();
+      return text;
+    },
   };
+  openField();
   const finished = run(ui).then(() => true, (error: unknown) => {
     if (instead !== undefined) return false;
     throw error;
   });
-  const done = await Promise.race([finished, offer.then(() => false)]);
-  if (done) return undefined;
+  const done = await Promise.race([finished, pasted.then(() => false)]);
+  if (done) { current++; return undefined; }
   await finished.catch(() => undefined);
   if (screen.signal.aborted) throw new Error(`sign-in to ${name} was cancelled`);
   return { key: instead ?? '' };
+}
+
+/** The variable a pasted key is given as: of the harness's key variables,
+ * the one whose provider's endpoint accepts it (`checked`); with one
+ * variable and no endpoint to ask (Amp, Cursor), that one, unchecked.
+ * Undefined: no endpoint takes it. */
+export async function keyVariableFor(
+  harness: Pick<AiLocalHarnessDefinition, 'authEnv' | 'provider'>, key: string, signal: AbortSignal,
+  providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>> = keyProviders(),
+): Promise<{ variable: string; checked: boolean } | undefined> {
+  const variables = keyVariables(harness);
+  const routes = variables.flatMap((variable) => {
+    const provider = providerOfVariable(variable, providers);
+    return provider ? [{ provider, choose: [variable] } as AiHarnessKeyRoute] : [];
+  });
+  const candidates = keyCandidates(routes, key, providers);
+  const accepted = await Promise.all(candidates.map((route) => acceptsKey(route, key, providers, signal)));
+  const found = candidates[accepted.indexOf(true)];
+  if (found) return { variable: found.choose[0]!, checked: true };
+  return variables.length === 1 && !routes.length ? { variable: variables[0]!, checked: false } : undefined;
+}
+
+/** ANTHROPIC_API_KEY -> anthropic; GEMINI_API_KEY and GOOGLE_API_KEY -> google. */
+function providerOfVariable(variable: string, providers: Readonly<Record<AiKeyProviderId, AiKeyProvider>>): AiKeyProviderId | undefined {
+  if (variable === 'GEMINI_API_KEY' || variable === 'GOOGLE_API_KEY') return 'google';
+  return (Object.keys(providers) as AiKeyProviderId[]).find((id) => `${id.toUpperCase().replace(/-/g, '_')}_API_KEY` === variable);
+}
+
+/** A pasted key, stored: by the vendor's own command where it has one
+ * (Codex's `login --with-api-key`, piped, never an argument), else saved in
+ * the account's profile as its variable, plus any setting the vendor needs
+ * to use it (Antigravity's apiKeySettings). */
+async function storeKey(
+  harness: AiLocalHarnessDefinition, spec: NativeHarnessSpec, env: Readonly<Record<string, string>>, key: string, signal: AbortSignal,
+): Promise<void> {
+  const found = await keyVariableFor(harness, key, signal);
+  if (!found) throw new Error(`${harness.displayName} does not accept that key -- check it was copied whole`);
+  if (harness.loginKeyStdinArgv) {
+    await captureNativeHarnessOutput(spec, harness.loginKeyStdinArgv, env, 30_000, undefined, `${key}\n`);
+    return;
+  }
+  const profile = harness.profileEnv ? env[harness.profileEnv] : undefined;
+  if (!profile) throw new Error(`${harness.displayName} keeps a pasted key in an account of its own -- add one from /account`);
+  await writeProfileKey(profile, found.variable, key);
+  if (harness.apiKeySettings) {
+    const path = expandAuthPath(harness.apiKeySettings.path, env);
+    let settings: Record<string, unknown> = {};
+    try { settings = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>; } catch { /* none yet */ }
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, `${JSON.stringify({ ...settings, ...harness.apiKeySettings.set }, null, 2)}\n`, 'utf8');
+  }
 }
 
 /** Whether `spec` runs the harness's own sign-in, the one its key routes
