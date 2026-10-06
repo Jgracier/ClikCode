@@ -161,9 +161,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action((chat) => aiSessionResume(config, chat));
   sessions.command('close <id>').description('Close a session without deleting its local history')
     .action((id) => aiSessionClose(id));
-  sessions.command('set <id>').description('Change route, account, provider, model, or effort')
+  sessions.command('set <id>').description('Change route, account, provider, model, agent, or effort')
     .option('--route <route>', 'local, gateway, or clikcode-local').option('--account <account>', 'Local account label or id')
     .option('--provider <provider>', 'Provider id').option('--model <model>', 'Model id')
+    .option('--agent <id>', 'Gateway agent ID, or none to use the normal Gateway')
     .option('--native-session <id>', 'Verified native session id to resume through its adapter')
     .option('--effort <effort>', 'low, medium, high, or xhigh').option('--permissions <mode>', 'ask, bypass, or auto')
     .option('--account-failover <mode>', 'never or on-quota-exhausted')
@@ -171,6 +172,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   sessions.command('create').description('Create a session')
     .option('--route <route>', 'local, gateway, or clikcode-local', 'local').option('--account <account>', 'Local account label or id')
     .option('--provider <provider>', 'Provider id').option('--model <model>', 'Model id')
+    .option('--agent <id>', 'Gateway agent ID')
     .option('--effort <effort>', 'Provider-native reasoning level').option('--account-failover <mode>', 'never or on-quota-exhausted')
     .action((options) => aiSessionCreate(options));
 }

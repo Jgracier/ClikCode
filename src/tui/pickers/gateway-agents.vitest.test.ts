@@ -61,6 +61,23 @@ describe('Gateway agents in /model', () => {
     expect(session.gatewayAgentId).toBeUndefined();
   });
 
+  it('validates a CLI agent choice against the connected account and clears its thread when changed', async () => {
+    root = await mkdtemp(join(tmpdir(), 'cc-gateway-cli-agent-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    state.sessions.push({ id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: null,
+      effort: 'platform-managed', accountFailover: 'never', createdAt: now, updatedAt: now,
+      status: 'active', gatewayAgentThreadId: 'old-thread' });
+    await writeState(state);
+    await expect(aiSessionSet('gw', { agent: 'other-account-agent' })).rejects.toThrow(/not available to this Gateway account/);
+    await aiSessionSet('gw', { agent: 'silas' });
+    expect((await readState()).sessions.find((item) => item.id === 'gw')).toMatchObject({ gatewayAgentId: 'silas' });
+    expect((await readState()).sessions.find((item) => item.id === 'gw')?.gatewayAgentThreadId).toBeUndefined();
+    await aiSessionSet('gw', { agent: 'none' });
+    expect((await readState()).sessions.find((item) => item.id === 'gw')?.gatewayAgentId).toBeUndefined();
+  });
+
   it('keeps the picker open after an agent and closes it after a model', async () => {
     root = await mkdtemp(join(tmpdir(), 'cc-gateway-picker-'));
     process.env.CLIKCODE_HOME = root;
