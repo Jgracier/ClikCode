@@ -4,6 +4,7 @@ import { liveConversationLines, rightLabeledRule, runningChatLine } from './wait
 import { appendThought, liveWaitKind, waitingSpinnerGlyph } from '../../harness/protocol/activity-view';
 import { waitingSpinnerFrame } from '../../harness/protocol/activity-view';
 import { visibleTail } from './width';
+import { thoughtLabel } from '../../harness/protocol/activity-events';
 
 describe('the waiting band', () => {
   it('packs four animation phases of a logical 4x4 grid into two Braille cells', () => {
@@ -70,6 +71,16 @@ describe('the waiting band', () => {
     const first = appendThought(undefined, 'first idea', 'r1');
     expect(appendThought(first, 'second idea', 'r2')).toEqual({ id: 'r2', text: 'second idea' });
     expect(appendThought(first, 'thinking', 'r1')).toBe(first);
+  });
+
+  it('rebuilds a long thought from running totals cut to their newest words', () => {
+    // thoughtLabel sends a thought past 240 characters as `…` and its tail.
+    // Each event was appended whole, so the row and the expanded reasoning
+    // repeated the same sentences over and over.
+    const words = Array.from({ length: 120 }, (_, index) => `word${index}`);
+    let thought: ReturnType<typeof appendThought>;
+    for (let count = 1; count <= words.length; count += 1) thought = appendThought(thought, thoughtLabel(words.slice(0, count).join(' ')), 'r1');
+    expect(thought?.text).toBe(words.join(' '));
   });
 
   it('keeps the newest words of a thought that does not fit', () => {
