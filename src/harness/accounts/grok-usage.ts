@@ -22,7 +22,6 @@
  * yields no reading rather than an invented one. */
 
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
-import type { HarnessSession } from '../../session/model.js';
 import { queryAcp } from './acp-query.js';
 import { type UsageReading, usageReading, usageWindow } from './usage-reading.js';
 
@@ -61,7 +60,7 @@ export function grokBillingReading(result: unknown): UsageReading | undefined {
 
 /** One short-lived `grok agent stdio`, asked `_x.ai/billing` and let go.
  * `--no-leader` keeps the probe off a shared leader another window owns. */
-export async function grokUsageReading(_session: HarnessSession, environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
+export async function grokUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
   let binary = 'grok';
   try { binary = localHarnessForCommand('grok')?.binary ?? binary; } catch { /* fail-open-ok: the catalog default is the documented binary */ }
   const result = await queryAcp(binary, ['agent', '--no-leader', 'stdio'], environment,

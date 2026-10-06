@@ -109,7 +109,7 @@ export async function nativeUsageReading(
     return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const reading: UsageReading | undefined = probe ? await probeOnce(cacheKey, () => probe(session, environment)) : undefined;
+  const reading: UsageReading | undefined = probe ? await probeOnce(cacheKey, () => probe(environment)) : undefined;
   // Carry the last known figure through a failure rather than blanking it --
   // but never past its own reset, when it stops describing anything. The
   // failed probe itself is not stored as usage.

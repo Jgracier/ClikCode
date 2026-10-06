@@ -27,7 +27,6 @@ import { resolveBinaryPath } from '../transport/native/binary.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { acpDiscoverySession, queryAcp } from './acp-query.js';
-import type { HarnessSession } from '../../session/model.js';
 import { type UsageReading, type UsageWindow, usageReading, usageWindow } from './usage-reading.js';
 import { planIsFree } from './free-plan.js';
 
@@ -115,7 +114,7 @@ function contentLengthRequest(binary: string, argv: readonly string[], environme
   });
 }
 
-export async function copilotUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function copilotUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   const binary = await resolveBinaryPath(catalogBinary('copilot', 'copilot'));
   if (!binary) return undefined;
   // --no-auto-update: a probe must not start a self-update.
@@ -178,7 +177,7 @@ async function antigravityAccessToken(environment: Environment): Promise<string 
  * pools from `fetchAvailableModels` for the project that answer names (sent
  * without it, every pool reads full). The token lasts an hour and only agy
  * renews it: `agy models` does, as it lists. */
-export async function antigravityUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function antigravityUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
     let token = await antigravityAccessToken(environment).catch(() => undefined);
     if (!token) {
@@ -230,7 +229,7 @@ export function kimiWebEndpoint(banner: string): { url: string; token: string } 
   return url && token ? { url, token } : undefined;
 }
 
-export async function kimiUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function kimiUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   const binary = await resolveBinaryPath(catalogBinary('kimi', 'kimi'));
   if (!binary) return undefined;
   // Port 0: never collides with a `kimi web` the user is running.
@@ -307,7 +306,7 @@ async function cursorAccessToken(environment: Environment): Promise<string | und
   return typeof parsed.accessToken === 'string' && parsed.accessToken ? parsed.accessToken : undefined;
 }
 
-export async function cursorUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function cursorUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   const ask = async (method: string): Promise<Response | undefined> => {
     const token = await cursorAccessToken(environment);
     if (!token) return undefined;
@@ -354,7 +353,7 @@ export function clineQuotaReading(result: unknown): UsageReading | undefined {
   return { windows: [], label: `$${dollars.toFixed(2)} credits left` };
 }
 
-export async function clineUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function clineUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
     const home = environment.HOME ?? homedir();
     const providers = JSON.parse(await readFile(join(home, '.cline', 'data', 'settings', 'providers.json'), 'utf8')) as Json;
@@ -382,7 +381,7 @@ export function vibeQuotaReading(status: number, requestsPerMinute: string | nul
   return undefined;
 }
 
-export async function vibeUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function vibeUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
     const home = environment.VIBE_HOME ?? join(environment.HOME ?? homedir(), '.vibe');
     const key = /^MISTRAL_API_KEY=["']?([^"'\s]+)/m.exec(await readFile(join(home, '.env'), 'utf8'))?.[1];
@@ -415,7 +414,7 @@ export function devinQuotaReading(planStatus: unknown): UsageReading | undefined
   return usageReading([window('daily', plan.dailyQuotaRemainingPercent, plan.dailyQuotaResetAtUnix), window('weekly', plan.weeklyQuotaRemainingPercent, plan.weeklyQuotaResetAtUnix)]);
 }
 
-export async function devinUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function devinUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
     const data = environment.XDG_DATA_HOME ?? join(environment.HOME ?? homedir(), '.local', 'share');
     const credentials = await readFile(join(data, 'devin', 'credentials.toml'), 'utf8');
@@ -451,7 +450,7 @@ export function hermesQuotaReading(account: unknown): UsageReading | undefined {
   return Number.isFinite(credits) ? { windows: [], label: `$${credits.toFixed(2)} credits left` } : undefined;
 }
 
-export async function hermesUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function hermesUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
     const home = environment.HERMES_HOME ?? join(environment.HOME ?? homedir(), '.hermes');
     const nous = ((JSON.parse(await readFile(join(home, 'auth.json'), 'utf8')) as Json).providers as Json | undefined)?.nous as Json | undefined;
@@ -477,7 +476,7 @@ export function kiroQuotaReading(data: unknown): UsageReading | undefined {
   return usageReading([usageWindow('monthly', (Number(credits.used) / Number(credits.limit)) * 100, record?.billingCycleReset)]);
 }
 
-export async function kiroUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function kiroUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   const harness = localHarnessForCommand('kiro');
   if (!harness?.acp) return undefined;
   return queryAcp(harness.acp.binary ?? harness.binary, harness.acp.argv, environment, async (request, capabilities) => {
@@ -513,7 +512,7 @@ export function commandCodeQuotaReading(result: unknown): UsageReading | undefin
   return balance > 0 ? { windows: [], label: `${Number.isInteger(balance) ? balance : balance.toFixed(2)} credits left` } : undefined;
 }
 
-export async function commandCodeUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function commandCodeUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   try {
     const home = environment.HOME ?? homedir();
     const auth = JSON.parse(await readFile(join(home, '.commandcode', 'auth.json'), 'utf8')) as { apiKey?: unknown };
@@ -564,7 +563,7 @@ export function auggieUsageLabel(raw: string): string | undefined {
   return `${Number.isInteger(remaining) ? remaining : remaining.toFixed(2)}${unit ? ` ${unit}` : ''} credits left`;
 }
 
-export async function auggieUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+export async function auggieUsageReading(environment: Environment): Promise<UsageReading | undefined> {
   let raw: string;
   try {
     const harness = localHarnessForCommand('auggie');
@@ -578,9 +577,9 @@ export async function auggieUsageReading(_session: HarnessSession, environment: 
   return { windows: [], label, ...(typeof plan === 'string' && plan ? { plan: { name: plan } } : {}) };
 }
 
-export const ampUsageProbe = (_session: HarnessSession, environment: Environment): Promise<string | undefined> =>
+export const ampUsageProbe = (environment: Environment): Promise<string | undefined> =>
   captureLabel('amp', ['usage'], environment, ampUsageLabel);
 
-export const kiloUsageProbe = (_session: HarnessSession, environment: Environment): Promise<string | undefined> =>
+export const kiloUsageProbe = (environment: Environment): Promise<string | undefined> =>
   captureLabel('kilo', ['profile'], environment, kiloProfileLabel);
 
