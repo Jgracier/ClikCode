@@ -69,7 +69,7 @@ describe('a ClikCode agent turn', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('records its tokens and says an answer was cut off at the output limit', async () => {
+  it('records its tokens, carries on a cut-off answer, and says so when it stays cut off', async () => {
     await serve([
       { choices: [{ delta: { content: 'A long answer that stops' } }] },
       { choices: [{ delta: {}, finish_reason: 'length' }] },
@@ -78,10 +78,23 @@ describe('a ClikCode agent turn', () => {
     await runSessionTurn(config, 's1', 'go', undefined, {});
     const state = await readState();
     const session = state.sessions.find((item) => item.id === 's1')!;
-    // Before, a ClikCode agent turn recorded no tokens at all.
-    expect(state.invocations.at(-1)).toMatchObject({ inputTokens: 1200, outputTokens: 30, cacheReadTokens: 1000 });
-    expect(session.lastUsage).toMatchObject({ input: 1200, output: 30, cacheRead: 1000, contextWindow: 32768, stopReason: 'max-tokens' });
+    // Every reply here is cut off: the loop carries it on three times, as a
+    // vendor CLI does, and then stops and says why. Before, a ClikCode agent
+    // turn recorded no tokens at all.
+    expect(state.invocations.at(-1)).toMatchObject({ inputTokens: 4 * 1200, outputTokens: 4 * 30, cacheReadTokens: 4 * 1000 });
+    expect(session.lastUsage).toMatchObject({ input: 4 * 1200, output: 4 * 30, cacheRead: 4 * 1000, contextWindow: 32768, stopReason: 'max-tokens' });
+    expect(session.messages?.at(-1)?.content).toBe('A long answer that stops'.repeat(4));
     expect(session.lastUsage?.contextUsed).toBeGreaterThan(0);
+  }, 30_000);
+
+  it('names the model that answered where a vendor\'s own report of its model goes', async () => {
+    await serve([
+      { model: 'served-7b', choices: [{ delta: { content: 'Hello' } }] },
+      { model: 'served-7b', choices: [{ delta: {}, finish_reason: 'stop' }] },
+    ], 'done');
+    await runSessionTurn(config, 's1', 'go', undefined, {});
+    const session = (await readState()).sessions.find((item) => item.id === 's1')!;
+    expect(session.reported?.model).toBe('served-7b');
   }, 30_000);
 
   it('keeps what streamed when the turn dies before it completes', async () => {

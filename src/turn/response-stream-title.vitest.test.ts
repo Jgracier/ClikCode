@@ -26,7 +26,7 @@ import { describe, expect, it } from 'vitest';
  */
 describe('streamed answers go through the title filter', () => {
   const turnSources = async (): Promise<string> => (await Promise.all(
-    ['turn-output.ts', 'vendor-turn.ts', 'vendor-cli-attempt.ts', 'vendor-session-attempt.ts', 'direct-turn.ts', 'agent-turn.ts', 'platform-assistant-turn.ts']
+    ['turn-output.ts', 'vendor-turn.ts', 'vendor-cli-attempt.ts', 'vendor-session-attempt.ts', 'direct-turn.ts', 'agent-turn.ts']
       .map((file) => readFile(new URL(file, import.meta.url), 'utf8')),
   )).join('\n');
 
@@ -73,13 +73,13 @@ describe('streamed answers go through the title filter', () => {
   it('routes every transport through the one shared delta emitter', async () => {
     const source = await turnSources();
     // The real invariant after consolidation: ONE filter site per sink, not
-    // one per transport. The two that remain are turnSink (the vendor path,
-    // where three transports share it, and the api-key path) and the gateway
-    // platform assistant, which also echoes to the terminal as it streams.
-    // A third is the regression to catch: it would mean a transport grew its
+    // one per transport. The one that remains is turnSink (the vendor path,
+    // where three transports share it, and the api-key path); ClikCode's own
+    // agent hands its filter to the loop (gateway/harness.ts responseFilter).
+    // A second is the regression to catch: it would mean a transport grew its
     // own copy back.
     const filterSites = [...source.matchAll(/titleStream \? titleStream\.push\(/g)];
-    expect(filterSites.length, 'the title filter has been copied again').toBe(2);
+    expect(filterSites.length, 'the title filter has been copied again').toBe(1);
     expect(source).toMatch(/export function turnSink\(/);
     // The two session protocols and CLI parser all use the shared observer.
     expect(source).toMatch(/onResponseDelta: sink\.response/);

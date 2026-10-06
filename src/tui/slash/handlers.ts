@@ -336,6 +336,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         });
       }
       session.model = trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value);
+      // The model that answered last was answering the previous choice.
+      if (session.reported?.model) delete session.reported.model;
       return saveSettings(state, session);
     }
     const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;

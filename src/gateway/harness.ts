@@ -1,19 +1,18 @@
-/** Wiring between ClikCode's local agent loop and the Gateway.
+/** Wiring between ClikCode's own coding agent and the model behind it.
  *
- * The endpoint this talks to says what the split is, in its own header: the
- * coding-agent loop runs LOCALLY, and `/api/clikcode/v1/turn` supplies model
- * intelligence and nothing else. It is stateless -- one request is one model
- * step -- it never executes a tool, and the calls the model makes come back as
- * frames for this machine to run.
+ * The agent loop runs LOCALLY (agent/run-turn.ts): the tools, the permission
+ * prompts, the file checkpoints and the conversation store are all on this
+ * machine. The Gateway supplies model intelligence and nothing else, through
+ * its OpenAI-compatible API (`POST {baseUrl}/v1/chat/completions`, one
+ * request per model step; agent/models/for-session.ts): it never executes a
+ * tool, and the calls the model makes stream back for this machine to run.
+ * ClikCode Local plugs a local model server in at the same seam.
  *
- * So the loop, the tools, the permission prompts, the file checkpoints and the
- * conversation store are all here (gateway-harness/), and this module is the
- * seam: it turns a ClikCode session into a GatewayHarnessTurnInput, and turns
- * the loop's callbacks back into the prompter's own transcript rows.
+ * This module turns a ClikCode session into a GatewayHarnessTurnInput, and the
+ * loop's callbacks back into the prompter's own transcript rows.
  */
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { McpServerSpec } from '../agent/mcp/config.js';
-import { ModelClientError } from '../agent/models/gateway-client.js';
 import { runGatewayHarnessTurn } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
 import { hooksForWorkspace, toolHooksFrom } from '../agent/hooks.js';
@@ -31,15 +30,6 @@ import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { TurnObserver } from '../turn/observer.js';
-
-/** The gateway's own refusals, as opposed to a turn that genuinely failed.
- * 503 CLIKCODE_DISABLED is the documented administrator kill switch, and a 404
- * is a deployment that predates the endpoint. Both mean "this route cannot
- * serve a harness turn right now", which the caller answers by falling back. */
-export function gatewayHarnessUnavailable(error: unknown): boolean {
-  if (!(error instanceof ModelClientError)) return false;
-  return error.statusCode === 404 || error.code === 'CLIKCODE_DISABLED';
-}
 
 interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   session: HarnessSession;
@@ -102,6 +92,7 @@ export async function runGatewayHarnessSessionTurn(
   });
   const hooks = toolHooksFrom(hookConfig, (message) => prompter?.activity(message));
   if (swarmIsOn(session)) await openSwarmTurn(session.id).catch(() => undefined);
+  let servedModel: string | undefined;
   const publishActivity = (event: GatewayActivityEvent): void => {
     const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);
     const classified = category && !event.category ? { ...event, category } : event;
@@ -153,6 +144,7 @@ export async function runGatewayHarnessSessionTurn(
     // Per model step, as it happens: the loop's running total and where the
     // context stands, in the shape every harness reports.
     onUsage: (report) => {
+      if (report.servedModel && report.servedModel !== servedModel) { servedModel = report.servedModel; input.onServedModel?.(servedModel); }
       const usage = agentTurnUsage(report);
       input.onUsage?.(usage);
       prompter?.setTurnUsage(usage);
@@ -167,13 +159,3 @@ export async function runGatewayHarnessSessionTurn(
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
   });
 }
-
-/** Human-readable reason a gateway harness turn could not run, for the
- * activity row that explains the fallback rather than hiding it. */
-export function gatewayHarnessFallbackNotice(error: unknown): string {
-  if (error instanceof ModelClientError && error.code === 'CLIKCODE_DISABLED') {
-    return 'the gateway coding agent is disabled by an administrator; using the platform assistant, which cannot read local files';
-  }
-  return 'this gateway does not serve coding-agent turns yet; using the platform assistant, which cannot read local files';
-}
-

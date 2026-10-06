@@ -55,6 +55,9 @@ export interface HarnessTurnObserver {
    * the answer: the WHOLE thought so far for reasoning item `id`, each call
    * replacing the last one for that id. Without an id, one standalone thought. */
   onThought?: (text: string, id?: string) => void;
+  /** The model the server says is answering, each time that changes: the
+   * Gateway's pick for Automatic, or the model chosen. */
+  onServedModel?: (model: string) => void;
   /** Something about the turn the user should be told beside the answer: the
    * vendor substituting another model, compacting the conversation. */
   onNotice?: (message: string) => void;

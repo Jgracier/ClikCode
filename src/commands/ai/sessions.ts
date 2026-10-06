@@ -117,6 +117,8 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
  * never offers it back as a vendor chat. */
 function shedVendorHarness(session: HarnessSession): void {
   forgetNativeThread(session);
+  // The model a vendor said it ran is not what the new route will run.
+  if (session.reported?.model) delete session.reported.model;
   delete session.nativeHarness;
   delete session.harnessOptions;
 }

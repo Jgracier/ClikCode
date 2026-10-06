@@ -1,5 +1,5 @@
-/** What every turn driver (vendor-turn, agent-turn, direct-turn,
- * platform-assistant-turn) writes the same way: the streamed answer and
+/** What every turn driver (vendor-turn, agent-turn, direct-turn) writes the
+ * same way: the streamed answer and
  * activity, the vendor's stop reason, and the turn's invocation record. */
 import { randomUUID } from 'node:crypto';
 import { stdout as output } from 'node:process';
