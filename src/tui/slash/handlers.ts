@@ -199,7 +199,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     }
     const mode = parseSendMode(words[0]);
     await aiSettingsSetGlobal('send', mode, false);
-    TERMINAL.active?.setSendMode(mode);
     return emitHarnessOutput({ panel: 'settings-updated', sendMode: mode, text: `Messages typed mid-turn: ${mode}` });
   },
   search: async ({ args }) => {

@@ -328,8 +328,9 @@ async function driveWorkerTurn(
           case 'plan':
             rl.setPlan(event.entries);
             return;
+          // The terminal's waiting line shows no token count; usage is
+          // recorded on the session (lastUsage) by the worker.
           case 'usage':
-            rl.setTurnUsage(event.usage);
             return;
           case 'approval-request':
             void rl.approval(event.title, event.detail, event.preview, event.rule).then((approved) => {

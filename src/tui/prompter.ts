@@ -35,6 +35,7 @@ import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activ
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
+import { turnStalled } from '../harness/protocol/turn-pace.js';
 import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
@@ -60,12 +61,9 @@ import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
-import { estimatedTokens, formatTurnUsage } from './render/usage-line.js';
-import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { appendThought, composerUsageLabel, liveConversationLines, liveWaitKind, paintTitleRule, paintUsageRule, runningChatLine, waitingSpinnerGlyph, type Thought } from './render/waiting.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { keyHint } from '../harness/protocol/wording.js';
-import type { SendMode } from '../turn/send-mode.js';
 import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
@@ -115,6 +113,10 @@ type WaitingTurn = {
   /** When the current stretch of thinking began -- the turn's start, or the
    * last call finishing or answer text arriving -- for turnStatus's words. */
   thinkingSince: number;
+  /** When the turn last did anything -- a word, a thought, a call -- or an
+   * approval was answered: quiet past turn-pace's threshold and the spinner
+   * turns yellow, by the same rule as a stalled row in the conversation list. */
+  activeAt: number;
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
@@ -154,10 +156,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingFrame = 0;
   /** Whether the pending tick is the spinner's (true) or the clock's. */
   private waitingTickFast = false;
-  /** Characters of answer and reasoning streamed this turn, and how many of
-   * them the vendor's last output-token count already covers. */
-  private streamedChars = 0;
-  private usageCharsCounted = 0;
   private activityEntries: ActivityEntry[] = [];
   /** A link sign-in's link and code, drawn above the waiting band while it
    * runs (linkWait). */
@@ -205,8 +203,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
   private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command'; unsteered?: boolean }> = [];
-  /** `/send`: what Enter on a message mid-turn does, as the band says it. */
-  private sendMode: SendMode = 'steer';
   private waitingSubmissionId = 0;
   private timelineSequence = 0;
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
@@ -275,7 +271,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** A short-lived hint (the Ctrl+C exit warning) that takes the notice row. */
   private transientNotice?: string;
   private transientNoticeTimer?: NodeJS.Timeout;
-  private turnUsage?: TurnUsage;
   private thought?: Thought;
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
@@ -457,13 +452,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     turn.draft = edited.value;
     turn.cursor = edited.cursor;
     this.updateWaiting();
-  }
-
-  /** `/send steer|queue`, from the setting (the loop) or the command. */
-  setSendMode(mode: SendMode): void {
-    if (mode === this.sendMode) return;
-    this.sendMode = mode;
-    if (this.turn) this.updateWaiting();
   }
 
   /** A message typed during this turn is waiting with its row on screen --
@@ -873,9 +861,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text; once the answer is arriving it is stale.
-    if (text) { this.thought = undefined; if (this.turn) this.turn.thinkingSince = Date.now(); }
-    // A replacement is usually the same answer again, so only its growth counts.
-    this.streamedChars += mode === 'replace' ? Math.max(0, text.length - this.liveResponse.length) : text.length;
+    if (text) { this.thought = undefined; if (this.turn) this.turn.thinkingSince = this.turn.activeAt = Date.now(); }
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -919,6 +905,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (live.index <= this.liveActivitiesShown) return;
       this.liveActivitiesShown = live.index;
     }
+    // Anything the turn or one of its sub-agents does means it has not stalled.
+    if (this.turn) this.turn.activeAt = Date.now();
     if (event.parentId) {
       // A sub-agent's own calls stay inside the agent row. They are not
       // separate messages, and they do not move the status line.
@@ -942,12 +930,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // Reasoning is one live row, never the transcript: the current item's
       // text as it accumulates (see appendThought). A bare "thinking" label
       // says nothing the spinner does not.
-      const prior = this.thought;
-      this.thought = appendThought(prior, sanitizeTerminalText(event.label, { singleLine: true }), event.id);
-      if (this.thought && this.thought !== prior) {
-        const extends_ = prior && prior.id === this.thought.id && this.thought.text.length > prior.text.length;
-        this.streamedChars += extends_ ? this.thought.text.length - prior.text.length : this.thought.text.length;
-      }
+      this.thought = appendThought(this.thought, sanitizeTerminalText(event.label, { singleLine: true }), event.id);
       this.schedulePaint();
       return;
     }
@@ -1183,6 +1166,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     const turn: WaitingTurn = {
       label: message, clock: early?.clock ?? startTurnClock(Date.now()), thinkingSince: early?.thinkingSince ?? Date.now(),
+      activeAt: early?.activeAt ?? Date.now(),
       draft: early?.draft ?? underSignIn ?? '', cursor: early?.cursor ?? underSignIn?.length ?? 0, cancelled: false,
       ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
       ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
@@ -1191,9 +1175,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.turn = turn;
     this.waitingSubmissions = [];
     this.waitingFrame = 0;
-    this.streamedChars = 0;
-    this.usageCharsCounted = 0;
-    this.turnUsage = undefined;
     this.thought = undefined;
     this.panelState = undefined;
     // Whatever the previous turn retired belongs to the terminal now. This one
@@ -1278,6 +1259,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const turn = this.turn;
     if (turn?.clock.pausedAt === undefined) return;
     turn.clock = resumeTurnClock(turn.clock, Date.now());
+    // Time spent on the user's answer is not the turn going quiet.
+    turn.activeAt = Date.now();
     if (turn.timer) this.scheduleWaitingTick();
   }
 
@@ -1483,16 +1466,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     for (const item of outstanding) item?.resolve(false);
   }
 
-  /** Optional: token counts for the turn in flight, shown beside the elapsed
-   * time. Cleared by the next startWaiting(). */
-  setTurnUsage(usage: TurnUsage): void {
-    this.turnUsage = { ...this.turnUsage, ...usage };
-    // The vendor's count covers everything streamed so far; only what streams
-    // after it is estimated.
-    if (usage.output !== undefined) this.usageCharsCounted = this.streamedChars;
-    this.updateWaiting();
-  }
-
   /** Esc on an empty composer, while a turn is parked for the quota reset:
    * the interactive loop's way to stop waiting (one press, then cleared). */
   idleEscape?: () => void;
@@ -1532,15 +1505,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return [provider, [model, effort].filter(Boolean).join(' '), context].filter(Boolean).join('  •  ');
   }
 
-  /** What the turn is doing, how long it has taken and how much it has
-   * written -- the style of a native CLI's own status row -- driven by what
-   * actually arrives: the open call names the verb, the clock stops for an
-   * approval, the token count is estimated from the stream until the vendor
-   * reports its own. */
+  /** `⠋  Reading prompter.ts · 1m 12s`: what the turn is doing and how long
+   * it has taken -- the style of a native CLI's own status row -- driven by
+   * what actually arrives: the open call names the verb, the clock stops for
+   * an approval. The spinner turns yellow once the turn has gone quiet.
+   *
+   * At most one hint, and only for a key whose effect is not obvious: with a
+   * message waiting and nothing typed, Enter stops the turn and sends it.
+   * Stopping (Ctrl+C), sending and leaving for the board are the same keys
+   * every time and are not spelled out on every frame. */
   private waitingLine(turn: WaitingTurn): string {
     const now = Date.now();
     const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
-    const tokens = formatTurnUsage(this.turnUsage, estimatedTokens(this.streamedChars - this.usageCharsCounted));
     // What it says and how it looks, by the shared rules (turn-flow.ts):
     // waiting on the user, the open call, the reasoning's heading, the
     // thinking in words.
@@ -1552,28 +1528,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       thinkingMs: now - turn.thinkingSince,
       asking: Boolean(this.pendingApproval),
     });
-    // The send mode (/send) is what Enter does with text: steer (each row
-    // then says whether the agent took it) or queue. With nothing typed and
-    // a message waiting, Enter again stops the turn and sends it.
-    const enterHint = turn.draft.trim() ? ` · enter to ${this.sendMode}`
-      : turn.cancel && !turn.cancelled && this.messageWaiting() ? ` · ${STEER_WORDS.stopAndSend}`
-        : ` · type and press Enter to ${this.sendMode}`;
-    const label = `${status.label} (${elapsed}${tokens ? ` · ${tokens}` : ''})`
-      + `${turn.cancel && !this.pendingApproval ? ` · ${keyHint('stop')}` : ''}`
-      + `${turn.leave && !this.pendingApproval && !turn.draft ? ' · ← conversations' : ''}`
-      + `${turn.submit && !this.pendingApproval ? enterHint : ''}`;
-    // What the agent is doing is essential and stays at full contrast; only the
-    // counters and key hints after it are dimmed.
-    const split = status.label.length;
+    const asking = Boolean(this.pendingApproval);
+    const hint = !asking && turn.submit && turn.cancel && !turn.cancelled && !turn.draft.trim() && this.messageWaiting()
+      ? ` · ${STEER_WORDS.stopAndSend}` : '';
+    // What the agent is doing is essential and stays at full contrast; the
+    // clock and the hint after it are dimmed.
+    const rest = asking ? '' : ` · ${elapsed}${hint}`;
     // One spinner, one motion, for every harness and every tool, the label
-    // shimmering with it; both hold still only while an approval waits.
-    const glyph = waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
+    // shimmering with it. An approval is the turn waiting on the user, not
+    // working: a still dot, and no clock (it is stopped).
+    const glyph = asking ? '●' : waitingSpinnerGlyph(this.reducedMotion ? 0 : this.waitingFrame);
     const painted = paintStatus({
-      glyph, label: label.slice(0, split), tone: status.tone,
+      glyph, label: status.label, tone: status.tone,
       ...(status.tone === 'tool' && tool?.category ? { category: tool.category } : {}),
       frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
+      stalled: !asking && !turn.cancelled && turnStalled(now - turn.activeAt),
     });
-    return `${painted.spinner}  ${painted.label}${chalk.dim(label.slice(split))}`;
+    return `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
   }
 
   private updateWaiting(): void {

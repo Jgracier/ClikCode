@@ -58,7 +58,6 @@ import { closeAllWorkerClients, followWorkerTurn, prepareSessionWorker, question
 import { shownSettingsKey } from '../../worker/protocol.js';
 import { retireStaleWorkers } from '../../worker/client.js';
 import { replaceCliWithNewBuild } from './build-replace.js';
-import { sendModeOf } from '../../turn/send-mode.js';
 
 /** Commands the terminal replaced with the board. `/resume` is ← on an empty
  * prompt; `/new` is ← and typing. They stay in the registry for the surfaces
@@ -376,8 +375,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const latestState = await readState({ transcripts: [id] });
         const latest = latestState.sessions.find((item) => item.id === id);
         if (!latest) break;
-        // `/send`, set here or in another window: the band says which.
-        terminal?.setSendMode(sendModeOf(latestState.globalSettings));
         warmCatalogFor(latest, latestState);
         // Whatever the last command or turn did to the conversation this
         // terminal shows, it holds a local model for that one alone.

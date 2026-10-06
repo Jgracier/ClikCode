@@ -268,7 +268,7 @@ SCENARIOS = {
         'cols': 70, 'rows': 56, 'env': {'FAKE_TOOL_MS': '1500'},
         'turns': [{'tools_first': 10, 'blocks': ['All ten parts pass.']}],
         'steps': [
-            ('type', 'run every part'), ('wait_for', 'ctrl+c to stop', 30), ('settle', 4),
+            ('type', 'run every part'), ('wait_for', 'vitest run part0', 30), ('settle', 4),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\r'),
@@ -286,7 +286,7 @@ SCENARIOS = {
             ('type', 'say something short'), ('wait_for', 'A short first answer.', 30), ('settle', 2),
             # A new conversation, started from the board by typing.
             ('keys', '\x1b[D'), ('settle', 2),
-            ('type', 'run every part'), ('wait_for', 'ctrl+c to stop', 30), ('settle', 4),
+            ('type', 'run every part'), ('wait_for', 'vitest run part0', 30), ('settle', 4),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'), ('settle', 2.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2),
@@ -328,7 +328,7 @@ SCENARIOS = {
             ('type', 'second conversation question'), ('wait_for', 'BETA answer lives here.', 30), ('settle', 2),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'ALPHA answer lives here.', 10), ('settle', 1),
-            ('type', 'run every part'), ('wait_for', 'ctrl+c to stop', 30), ('settle', 3),
+            ('type', 'run every part'), ('wait_for', 'vitest run part0', 30), ('settle', 3),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
             ('wait_for', 'BETA answer lives here.', 10), ('settle', 1.5),
             ('keys', '\x1b[D'), ('settle', 1.5), ('keys', '\x1b[A'), ('settle', 0.5), ('keys', '\r'),
@@ -385,7 +385,7 @@ SCENARIOS = {
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15),
                   ('wait_for', 'signed in to', 15), ('settle', 1)],
-        'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'ctrl+c to stop'],
+        'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'waiting for you to sign in'],
         'final_contains': ['signed in to'], 'never': ['Confirm this code in your browser', 'Waiting for authorization', 'not a tty'],
     },
     # A sign-in that asks for a key: asked under ClikCode's band, typed
@@ -474,7 +474,7 @@ SCENARIOS = {
         'turns': [{'thought': {'text': '**Inspecting the parser** I should look at the tokens first.', 'ms': 2500},
                    'blocks': ['The parser is fine.']}],
         'steps': [('type', 'check the parser'), ('wait_for', 'The parser is fine.', 30), ('settle', 2)],
-        'watch': ['check the parser', 'The parser is fine.'], 'ever': ['Inspecting the parser ('],
+        'watch': ['check the parser', 'The parser is fine.'], 'ever': ['Inspecting the parser · '],
     },
     # Reads and searches in a row are one row while they happen, growing in
     # place and settling once -- never a row per call and then a merged copy
@@ -505,6 +505,8 @@ SCENARIOS = {
             ('wait_for', 'Releasing with pnpm now.', 40), ('settle', 3),
         ],
         'watch': ['clean and release', 'Answers: reject, reject.', 'use pnpm instead', 'Releasing with pnpm now.'],
+        # While an approval waits the line is a still dot and no clock.
+        'ever': ['● waiting for you'],
     },
     # A long paste is a placeholder in the composer, and the whole text is
     # what is sent; the placeholder never reaches the transcript.
@@ -580,7 +582,8 @@ SCENARIOS = {
             ('wait_for', 'The build passed.', 40), ('settle', 3),
         ],
         'watch': ['start the build', 'The build passed.'],
-        'snap_contains': {'taken-back': ['ctrl+c to stop']},
+        # Still running: the waiting line is up on the open call, its clock going.
+        'snap_contains': {'taken-back': ['running $ · ']},
         'never': ['Steered in: also run the linter.', 'Queued turn answered.', 'stopping', 'Stopped'],
     },
     # Ctrl+C is the one key that stops a turn.
@@ -592,7 +595,8 @@ SCENARIOS = {
             ('keys', '\x1b'), ('settle', 1.5), ('snap', 'after-esc'),
             ('keys', '\x03'), ('wait_for', 'Stopped', 15), ('settle', 2),
         ],
-        'snap_contains': {'after-esc': ['ctrl+c to stop']},
+        # Still running: the waiting line is up, its clock going.
+        'snap_contains': {'after-esc': ['thinking · ']},
         'watch': ['start the long job'],
         'never': ['The long job is finished.'],
     },
@@ -604,7 +608,7 @@ SCENARIOS = {
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
             ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
-            ('type', 'start the build'), ('wait_for', 'press Enter to queue', 30),
+            ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
             ('type', 'also run the linter'), ('wait_for', 'queued for next turn', 10),
             ('wait_for', 'The build passed.', 40), ('wait_for', 'Queued turn answered.', 40), ('settle', 3),
         ],
@@ -1057,8 +1061,9 @@ def run(name, spec, entry, keep):
             return max(found) if found else None
         def bottom(name):
             lines = [line.rstrip() for line in snaps.get(name, [])]
-            band = next((i for i, line in enumerate(lines) if 'ctrl+c to stop' in line), len(lines))
-            return [line for line in lines[max(0, band - 12):band] if line.strip() and not regex.search(r'\(\d+s\)|\d+m \d+s', line)]
+            # The waiting line: the two-cell braille spinner, then its words.
+            band = next((i for i, line in enumerate(lines) if regex.match(r'\s*[\u2800-\u28ff]{2}  ', line)), len(lines))
+            return [line for line in lines[max(0, band - 12):band] if line.strip() and not regex.search(r'\(\d+s\)|\d+m \d+s| · \d+s$', line)]
         before, scrolled, back = newest('before'), newest('scrolled'), newest('back')
         if before is None: problems.append('scroll check: nothing matching the pattern on screen before scrolling')
         elif scrolled is not None and scrolled >= before:
