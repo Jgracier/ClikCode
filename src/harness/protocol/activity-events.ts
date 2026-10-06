@@ -9,7 +9,6 @@ import { claudeShaped, JsonRecord, opencodeShaped, asRecord } from './json-lines
 import { eventDiff, unifiedEventDiff } from '../../agent/line-diff.js';
 import { categoryOf, formatToolRow, toolLabel } from './tools.js';
 
-export { ACTIVITY_PREVIEW_LINES, CATEGORY_PREVIEW_LINES, previewLinesFor } from './activity-view.js';
 import { COMMAND_HEAD_LINES } from './activity-view.js';
 
 /** Lines of tool output an event carries -- more than any row shows, so the

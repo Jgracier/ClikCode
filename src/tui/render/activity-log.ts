@@ -7,7 +7,6 @@ import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import { mergeActivity, sameCall } from '../../harness/protocol/activity-view.js';
-export { activityLifecyclePhase, openToolsStatus, toolStatusVerb } from '../../harness/protocol/activity-view.js';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
 

@@ -26,7 +26,7 @@ import type { HarnessSession, TranscriptMessage } from './model.js';
 import { messageOrigin, sessionTranscriptMessages, touchedFilesFromActivity, type PendingTurnWithHints } from '../turn/checkpoint.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
 import { providerBoundaryNote } from '../turn/failover-prompt.js';
-import { conversationIdFor } from './options.js';
+import { conversationIdFor } from './conversation-rows.js';
 
 export const CANONICAL_RECORD_VERSION = 1;
 

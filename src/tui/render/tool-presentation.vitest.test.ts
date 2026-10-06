@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { collapseToolRuns, type ActivityEntry } from './activity-log.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
-import { CATEGORY_PREVIEW_LINES, previewLinesFor } from '../../harness/protocol/activity-events.js';
+import { CATEGORY_PREVIEW_LINES, previewLinesFor } from '../../harness/protocol/activity-view.js';
 import { terminalCellWidth } from './width.js';
 import type { ToolCategory } from '../../harness/prompter.js';
 

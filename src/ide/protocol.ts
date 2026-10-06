@@ -21,7 +21,6 @@ import type { HarnessSession } from '../session/model.js';
 import type { ClientCommand, WorkerEvent } from '../worker/protocol.js';
 
 export type { ClientCommand, WorkerEvent };
-export { IDE_PROTOCOL } from './protocol-version.js';
 
 /** One row of a picker. `actions` and `deleteAction` are the row's Tab
  * and Delete actions in the terminal picker; `inline` is a setting cycled in

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { activityLifecyclePhase, rebaseActivityOffsets, toolStatusVerb, transientAssistantRequired, upsertActivityEvent } from './activity-log';
+import { rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './activity-log';
+import { activityLifecyclePhase, toolStatusVerb } from '../../harness/protocol/activity-view';
 
 describe('the activity log', () => {
   it('updates repeated tool progress in place and ignores reasoning as chat activity', () => {

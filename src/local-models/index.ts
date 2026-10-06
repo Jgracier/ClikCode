@@ -36,9 +36,6 @@ import { ensureRuntime, selectRuntimeBuild, type RuntimeBuild } from './runtime.
 import { enforcePrefixCacheBudget, prefixCacheDir } from './prefix-cache.js';
 import { pidIsAlive } from '../session/store/locks.js';
 
-export { LOCAL_MODEL_CATALOG, localModelLabel, resolveLocalModelId } from './catalog.js';
-export { prefixCacheFor } from './prefix-cache.js';
-export type { CatalogModel } from './catalog.js';
 
 export interface LocalModelProgress {
   stage: 'probe' | 'runtime' | 'download' | 'start' | 'measure';

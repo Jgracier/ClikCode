@@ -25,10 +25,12 @@ import { writeState } from '../../session/state/write.js';
 import { allLocalHarnesses } from '../../runtime/lazy-bridge.js';
 import { livePendingTurns, liveWorkers } from '../../session/liveness.js';
 import { watchConversationList } from '../../session/list-watch.js';
-import { conversationRows, SECTION_TITLES, type ConversationRow } from '../../session/conversation-rows.js';
+import { conversationRows, type ConversationRow } from '../../session/conversation-rows.js';
+import { SECTION_TITLES } from '../../session/conversation-state.js';
 import { relativeTime } from '../../harness/protocol/format.js';
 import { conversationLabel, subagentOptions } from './conversation-activity.js';
-import { conversationIdFor, conversationOption, isBlankConversation } from '../../session/options.js';
+import { conversationOption, isBlankConversation } from '../../session/options.js';
+import { conversationIdFor } from '../../session/conversation-rows.js';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { chooseOption } from './choose.js';
 
