@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, compactionThreshold, environmentNote, needsEnvironmentNote, toolOutputCap } from './context.js';
+import { buildSystemPrompt, compactionThreshold, environmentNote, needsEnvironmentNote, staticInstructions, toolOutputCap } from './context.js';
 import type { ConversationItem } from './model-client.js';
 
 /** A fake git whose answers can change between calls, as a real repo's do. */
@@ -25,6 +25,17 @@ describe('system prompt stability', () => {
     expect(after).toBe(before);
     expect(before).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     expect(before).toContain('Git repository: /repo');
+  });
+});
+
+describe('how answers are laid out', () => {
+  it('asks every profile for Markdown shaped like a vendor CLI\'s answers', () => {
+    for (const full of [true, false]) {
+      const prompt = staticInstructions(full);
+      expect(prompt).toContain('# Formatting answers');
+      expect(prompt).toMatch(/fenced code blocks with a language tag/);
+      expect(prompt).toMatch(/`src\/app\.ts:42`/);
+    }
   });
 });
 
