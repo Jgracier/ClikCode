@@ -8,9 +8,10 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { activityLifecyclePhase } from '../harness/protocol/activity-view.js';
 import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { sessionPickerOptions } from '../session/options.js';
+import { conversationOption } from '../session/options.js';
+import { conversationRows } from '../session/conversation-rows.js';
 import { conversationState, turnFacts } from '../session/conversation-state.js';
-import { beginTurn, boardSlice, cardFromReply, emptyBoard, goalKey, keepOnHost } from './board.js';
+import { beginTurn, boardSlice, cardFromReply, emptyBoard, goalKey } from './board.js';
 import { swarmIsOn } from './policy.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { emptySwarmFold, foldSwarmActivity, isSwarmToolLabel } from './fold.js';
@@ -204,7 +205,6 @@ describe('a delegation', () => {
   });
 
   it('delegates any requested task to a clerk without artificial refusal', async () => {
-    expect(keepOnHost('What does src/app.ts export?')).toBe(false);
     const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
     process.env.CLIKCODE_HOME = dir;
     const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(38) });
@@ -416,7 +416,7 @@ describe('the board and the status line', () => {
   it('hides a clerk from the conversation list and counts its providers as agents in the row', () => {
     const chat = host({ id: 'shown', messages: [{ role: 'user', content: 'hi' }] });
     const clerk = host({ id: 'hidden', clerkOf: 'shown', messages: [{ role: 'user', content: 'task' }] });
-    const listed = sessionPickerOptions([chat, clerk], 'other', () => 'Claude').map((option) => option.value);
+    const listed = conversationRows([chat, clerk], { currentId: 'other' }).map((row) => conversationOption(row, () => 'Claude').value);
     expect(listed).toContain('shown');
     expect(listed).not.toContain('hidden');
     const pending = {

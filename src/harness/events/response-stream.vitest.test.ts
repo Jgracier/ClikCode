@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createStreamState, nativeResponseUpdate } from './adapters';
+import { createStreamState, parseHarnessLine } from './adapters';
 import { nativeSessionIds } from '../protocol/session-ids';
 import { codex } from '../protocol/vendor-fixtures.vitest';
-import type { AiLocalHarnessDefinition } from '../types';
+import type { AiLocalHarnessDefinition } from '../definition';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
+
+/** The live assistant text one line carries. */
+const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnessLine(...line).response;
 
 describe('native harness response streams', () => {
   // The stream shape is the one the catalog declares for that command.
@@ -11,7 +14,7 @@ describe('native harness response streams', () => {
 
   it('extracts documented Antigravity deltas and conversation ids', () => {
     const line = JSON.stringify({ event: 'step_update', step_update: { conversation_id: 'c3b66b04-872b-4fbe-a3a4-058a026ef20a', step_type: 'agent_response', text_delta: 'chunk' } });
-    expect(nativeResponseUpdate(harness('antigravity'), line, createStreamState())).toEqual({ text: 'chunk', mode: 'append' });
+    expect(responseOf(harness('antigravity'), line, createStreamState())).toEqual({ text: 'chunk', mode: 'append' });
     expect([...nativeSessionIds(line, 'json-lines')]).toContain('c3b66b04-872b-4fbe-a3a4-058a026ef20a');
   });
 
@@ -25,26 +28,26 @@ describe('native harness response streams', () => {
 
   it('extracts Claude/Qwen stream events, Cursor deltas, and Cline snapshots', () => {
     const streamEvent = JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'A' } } });
-    expect(nativeResponseUpdate(harness('claude'), streamEvent, createStreamState())).toEqual({ text: 'A', mode: 'append' });
-    expect(nativeResponseUpdate(harness('qwen'), streamEvent, createStreamState())).toEqual({ text: 'A', mode: 'append' });
-    expect(nativeResponseUpdate(harness('cursor'), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'C' }] } }), createStreamState()))
+    expect(responseOf(harness('claude'), streamEvent, createStreamState())).toEqual({ text: 'A', mode: 'append' });
+    expect(responseOf(harness('qwen'), streamEvent, createStreamState())).toEqual({ text: 'A', mode: 'append' });
+    expect(responseOf(harness('cursor'), JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'C' }] } }), createStreamState()))
       .toEqual({ text: 'C', mode: 'append' });
-    expect(nativeResponseUpdate(harness('cline'), JSON.stringify({ type: 'say', text: 'Current', partial: true }), createStreamState()))
+    expect(responseOf(harness('cline'), JSON.stringify({ type: 'say', text: 'Current', partial: true }), createStreamState()))
       .toEqual({ text: 'Current', mode: 'replace' });
-    expect(nativeResponseUpdate(harness('pi'), JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'D' } }), createStreamState()))
+    expect(responseOf(harness('pi'), JSON.stringify({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'D' } }), createStreamState()))
       .toEqual({ text: 'D', mode: 'append' });
-    expect(nativeResponseUpdate(harness('goose'), JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'E' }] } }), createStreamState()))
+    expect(responseOf(harness('goose'), JSON.stringify({ type: 'message', message: { role: 'assistant', content: [{ type: 'text', text: 'E' }] } }), createStreamState()))
       .toEqual({ text: 'E', mode: 'append' });
     const openCodeText = JSON.stringify({ type: 'text', part: { text: 'F' } });
-    expect(nativeResponseUpdate(harness('opencode'), openCodeText, createStreamState())).toEqual({ text: 'F', mode: 'append' });
-    expect(nativeResponseUpdate(harness('kilo'), openCodeText, createStreamState())).toEqual({ text: 'F', mode: 'append' });
+    expect(responseOf(harness('opencode'), openCodeText, createStreamState())).toEqual({ text: 'F', mode: 'append' });
+    expect(responseOf(harness('kilo'), openCodeText, createStreamState())).toEqual({ text: 'F', mode: 'append' });
   });
 
   it('shows Codex agent messages as they arrive without rendering tool JSON as response text', () => {
-    expect(nativeResponseUpdate(harness('codex'), JSON.stringify({
+    expect(responseOf(harness('codex'), JSON.stringify({
       type: 'item.completed', item: { type: 'agent_message', text: 'I am checking that now.' },
     }), createStreamState())).toEqual({ text: 'I am checking that now.\n\n', mode: 'append' });
-    expect(nativeResponseUpdate(harness('codex'), JSON.stringify({
+    expect(responseOf(harness('codex'), JSON.stringify({
       type: 'item.completed', item: { type: 'mcp_tool_call', name: 'search', arguments: { query: 'test' } },
     }), createStreamState())).toBeUndefined();
   });

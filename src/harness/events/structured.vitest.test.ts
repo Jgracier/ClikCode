@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { reportStructuredLine } from './structured';
 import { createStreamState } from './adapters';
 import type { HarnessTurnObserver } from './turn-observer';
-import type { AiLocalHarnessDefinition } from '../types';
+import type { AiLocalHarnessDefinition } from '../definition';
 
 const harness = { command: 'claude', parser: 'claude-stream-json' } as unknown as AiLocalHarnessDefinition;
 

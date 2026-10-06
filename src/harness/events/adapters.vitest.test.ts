@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
-import { createStreamState, nativeResponseUpdate } from './adapters.js';
+import { createStreamState, parseHarnessLine } from './adapters.js';
 import { harnessTurnTransport } from '../transport/select.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
+
+/** The live assistant text one line carries. */
+const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnessLine(...line).response;
 
 const harness = (command: string, output: 'text' | 'json' | 'json-lines' = 'json-lines'): AiLocalHarnessDefinition => ({
   command, provider: command, displayName: command, surface: 'terminal', localAuth: ['vendor-cli'], binary: command,
@@ -11,7 +14,7 @@ const harness = (command: string, output: 'text' | 'json' | 'json-lines' = 'json
 });
 
 const update = (command: string, value: unknown, output: 'text' | 'json' | 'json-lines' = 'json-lines') =>
-  nativeResponseUpdate(harness(command, output), typeof value === 'string' ? value : JSON.stringify(value), createStreamState());
+  responseOf(harness(command, output), typeof value === 'string' ? value : JSON.stringify(value), createStreamState());
 
 describe('vendor response parsers', () => {
   it('keeps each declared vendor shape mapped to its own stream', () => {
@@ -34,12 +37,12 @@ describe('generic streaming fallback', () => {
   it('streams Claude-style stream-json from a harness with no vendor parser', () => {
     const turn = createStreamState();
     const kiro = harness('kiro');
-    expect(nativeResponseUpdate(kiro, JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] } }), turn))
+    expect(responseOf(kiro, JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'partial' }] } }), turn))
       .toEqual({ text: 'partial', mode: 'append' });
     // The final report after text has streamed is a repeat at best, and often
     // only the last part. It used to REPLACE the streamed answer, which wiped
     // everything before it off the screen as the turn ended.
-    expect(nativeResponseUpdate(kiro, JSON.stringify({ type: 'result', result: 'final answer' }), turn)).toBeUndefined();
+    expect(responseOf(kiro, JSON.stringify({ type: 'result', result: 'final answer' }), turn)).toBeUndefined();
   });
 
   it('shows a terminal result when it is the only thing that carried the answer', () => {
@@ -120,7 +123,7 @@ describe('catalog streaming coverage', () => {
       const sample = entry.turn.output === 'text'
         ? 'a line of answer'
         : JSON.stringify(VENDOR_SAMPLES[entry.command] ?? GENERIC_SAMPLE);
-      return !nativeResponseUpdate(entry, sample, createStreamState());
+      return !responseOf(entry, sample, createStreamState());
     }).map((entry: AiLocalHarnessDefinition) => entry.command);
     expect(silent).toEqual([]);
   });
@@ -129,7 +132,7 @@ describe('catalog streaming coverage', () => {
     for (const [command, sample] of Object.entries(VENDOR_SAMPLES)) {
       const entry = AI_LOCAL_HARNESSES.find((item: AiLocalHarnessDefinition) => item.command === command);
       expect(entry, `${command} is missing from the catalog`).toBeDefined();
-      expect(nativeResponseUpdate(entry!, JSON.stringify(sample), createStreamState()), `${command} stopped parsing its own shape`)
+      expect(responseOf(entry!, JSON.stringify(sample), createStreamState()), `${command} stopped parsing its own shape`)
         .toMatchObject({ text: expect.stringContaining('hi') });
     }
   });

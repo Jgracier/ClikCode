@@ -256,10 +256,6 @@ function nativeResponseUpdateFromValue(harness: AiLocalHarnessDefinition, record
   return (familyParser(harness) ?? genericParser)(record, harness, turn);
 }
 
-export function nativeResponseUpdate(harness: AiLocalHarnessDefinition, lineText: string, turn: StreamState): NativeResponseUpdate | undefined {
-  return parseHarnessLine(harness, lineText, turn).response;
-}
-
 export interface HarnessLineError { message: string; statusCode?: number; kind?: string }
 
 interface ParsedHarnessLine {

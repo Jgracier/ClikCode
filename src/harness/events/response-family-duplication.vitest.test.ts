@@ -11,8 +11,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
-import { createStreamState, nativeResponseUpdate } from './adapters';
+import { createStreamState, parseHarnessLine } from './adapters';
 import { StreamingTitle } from '../../session/title';
+
+/** The live assistant text one line carries. */
+const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnessLine(...line).response;
 
 const harnessFor = (command: string) => allLocalHarnesses().find((item) => item.command === command)!;
 
@@ -31,7 +34,7 @@ function streamOneBlock(command: string, session: string, text: string): string[
     JSON.stringify({ type: 'assistant', session_id: session, message: { role: 'assistant', content: [{ type: 'text', text }] } }),
   ];
   return lines.flatMap((line) => {
-    const update = nativeResponseUpdate(harness, line, turn);
+    const update = responseOf(harness, line, turn);
     return update?.text ? [update.text] : [];
   });
 }
@@ -59,8 +62,8 @@ describe('every harness that speaks claude-stream-json', () => {
     // message is the only carrier, and dropping it would print nothing.
     const harness = harnessFor('grok');
     const turn = createStreamState();
-    nativeResponseUpdate(harness, JSON.stringify({ type: 'system', subtype: 'init', session_id: 'no-deltas' }), turn);
-    const update = nativeResponseUpdate(harness, JSON.stringify({
+    responseOf(harness, JSON.stringify({ type: 'system', subtype: 'init', session_id: 'no-deltas' }), turn);
+    const update = responseOf(harness, JSON.stringify({
       type: 'assistant', session_id: 'no-deltas',
       message: { role: 'assistant', content: [{ type: 'text', text: 'only the whole thing' }] },
     }), turn);
@@ -71,7 +74,7 @@ describe('every harness that speaks claude-stream-json', () => {
     const harness = harnessFor('grok');
     const session = 'two-blocks';
     const turn = createStreamState();
-    const emit = (record: unknown) => nativeResponseUpdate(harness, JSON.stringify(record), turn)?.text ?? '';
+    const emit = (record: unknown) => responseOf(harness, JSON.stringify(record), turn)?.text ?? '';
     emit({ type: 'system', subtype: 'init', session_id: session });
     let out = emit({ type: 'stream_event', session_id: session, event: { type: 'content_block_delta', delta: { text: 'Let me check.' } } });
     emit({ type: 'stream_event', session_id: session, event: { type: 'content_block_start', content_block: { type: 'text' } } });
@@ -98,7 +101,7 @@ describe('every harness that speaks claude-stream-json', () => {
     const turn = createStreamState();
     let shown = '';
     const feed = (record: unknown) => {
-      const update = nativeResponseUpdate(harness, JSON.stringify(record), turn);
+      const update = responseOf(harness, JSON.stringify(record), turn);
       if (!update?.text) return;
       const visible = title.push(update.text, update.mode);
       if (visible !== undefined) shown += visible;

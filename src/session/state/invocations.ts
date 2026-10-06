@@ -14,7 +14,7 @@ import { open } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { HarnessState } from '../model.js';
 import type { StateIndex } from './index-file.js';
-import { hidden, sameData } from '../store/data.js';
+import { sameData } from '../store/data.js';
 import { cachedFile } from '../store/cached-file.js';
 import { atomicWriteFile, ensurePrivateDirectory } from '../store/files.js';
 import { stateDirectory } from '../store/paths.js';
@@ -147,35 +147,4 @@ export const STATE_ROLLUPS = Symbol('clikcode.invocationRollups');
 /** Per-day totals of invocations folded out of the log. */
 export function invocationRollups(state: HarnessState): InvocationRollup[] {
   return Object.values((state as HarnessState & { [STATE_ROLLUPS]?: Record<string, InvocationRollup> })[STATE_ROLLUPS] ?? {});
-}
-
-interface InvocationTotals { calls: number; inputTokens: number; outputTokens: number; latencyMs: number }
-
-/** All-time totals: the retained records plus everything rolled up. `match`
- * narrows by account/provider/model (the dimensions a rollup preserves). */
-function invocationTotals(
-  state: HarnessState,
-  match: (entry: { accountId: string; provider: string; model?: string }) => boolean = () => true,
-): InvocationTotals {
-  const totals: InvocationTotals = { calls: 0, inputTokens: 0, outputTokens: 0, latencyMs: 0 };
-  for (const invocation of state.invocations ?? []) {
-    if (!match(invocation)) continue;
-    totals.calls += 1;
-    totals.inputTokens += invocation.inputTokens ?? 0;
-    totals.outputTokens += invocation.outputTokens ?? 0;
-    totals.latencyMs += invocation.latencyMs ?? 0;
-  }
-  for (const rollup of invocationRollups(state)) {
-    if (!match(rollup)) continue;
-    totals.calls += rollup.calls;
-    totals.inputTokens += rollup.inputTokens;
-    totals.outputTokens += rollup.outputTokens;
-    totals.latencyMs += rollup.latencyMs;
-  }
-  return totals;
-}
-
-export function totalsOf(invocations: readonly Invocation[], rollups: Record<string, InvocationRollup>): InvocationTotals {
-  const state = hidden({ invocations } as unknown as HarnessState, STATE_ROLLUPS, rollups);
-  return invocationTotals(state);
 }
