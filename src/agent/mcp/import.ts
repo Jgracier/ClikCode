@@ -13,7 +13,7 @@
  *
  * Duplicates. One server fanned out by `clikcode mcp add` appears under the
  * same name in many files, so a name is imported once. When two vendors
- * disagree about a name, SOURCES order decides -- Claude Code first, because
+ * disagree about a name, vendorSources order decides -- Claude Code first, because
  * its entries carry the transport type, env and headers explicitly, so its
  * copy is the least likely to have lost something in a vendor's own
  * translation. A second name for an identical command or URL is skipped too:
@@ -28,55 +28,28 @@ import { chmod, mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { MCP_SERVERS_KEY, mcpConfigFilePath, parseMcpServerEntry } from './config.js';
+import type { AiHarnessMcpServerFile } from '@clikcode/router/ai-local-harness';
 import { CONVERSATIONS_MCP_NAME } from '../../search/mcp-entry.js';
+import { allLocalHarnesses, localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 
-type Format = 'json' | 'jsonc' | 'toml' | 'yaml';
-type Dialect = 'mcp-servers' | 'gemini' | 'opencode' | 'goose' | 'codex';
+/** One vendor file, as the catalog records it (managers.mcp.serverFiles),
+ * with the vendor it belongs to. */
+type VendorSource = AiHarnessMcpServerFile & { vendor: string; command: string };
 
-/** One vendor file. `homeRelative` is where it sits under the user's home;
- * `rootRelative` is where it sits under the vendor's own directory variable
- * (CLAUDE_CONFIG_DIR, CODEX_HOME), which is what an isolated ClikCode account
- * profile points at. Paths are the ones mcp-registry's installs write through
- * each vendor's `mcp add`, or its config file where it has no add. */
-interface VendorSource {
-  vendor: string;
-  command: string;
-  homeRelative: readonly string[];
-  rootRelative?: readonly string[];
-  format: Format;
-  /** Path of the server table inside the file. */
-  key: readonly string[];
-  dialect: Dialect;
+/** Every vendor's MCP files, in precedence order: on a name conflict the
+ * earlier source wins, and the catalog lists Claude Code first. Only Claude's
+ * top-level table is read: `projects[path].mcpServers` is its local scope, a
+ * server the user tied to one repository (a database, a staging API), and
+ * this agent reads mcp.json in every directory. */
+export function vendorSources(): VendorSource[] {
+  return allLocalHarnesses().flatMap((harness) => (localHarnessCapabilityManifest(harness).managers?.mcp?.serverFiles ?? [])
+    .map((file) => ({ ...file, vendor: harness.displayName, command: harness.command })));
 }
 
-/** Precedence order: on a name conflict the earlier source wins. */
-export const SOURCES: readonly VendorSource[] = [
-  // Top level only. `projects[path].mcpServers` is Claude's local scope: the
-  // user tied that server to one repository (a database, a staging API), and
-  // this agent reads mcp.json in every directory.
-  { vendor: 'Claude Code', command: 'claude', homeRelative: ['.claude.json'], rootRelative: ['.claude.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Codex', command: 'codex', homeRelative: ['.codex', 'config.toml'], rootRelative: ['config.toml'], format: 'toml', key: ['mcp_servers'], dialect: 'codex' },
-  { vendor: 'Gemini CLI', command: 'gemini', homeRelative: ['.gemini', 'settings.json'], format: 'json', key: ['mcpServers'], dialect: 'gemini' },
-  { vendor: 'Qwen Code', command: 'qwen', homeRelative: ['.qwen', 'settings.json'], format: 'json', key: ['mcpServers'], dialect: 'gemini' },
-  { vendor: 'Grok', command: 'grok', homeRelative: ['.grok', 'config.toml'], format: 'toml', key: ['mcp_servers'], dialect: 'codex' },
-  { vendor: 'Copilot', command: 'copilot', homeRelative: ['.copilot', 'mcp-config.json'], rootRelative: ['mcp-config.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Cursor', command: 'cursor', homeRelative: ['.cursor', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Kimi', command: 'kimi', homeRelative: ['.kimi-code', 'mcp.json'], rootRelative: ['mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Factory Droid', command: 'droid', homeRelative: ['.factory', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Kiro', command: 'kiro', homeRelative: ['.kiro', 'settings', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Cline', command: 'cline', homeRelative: ['.cline', 'data', 'settings', 'cline_mcp_settings.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Auggie', command: 'auggie', homeRelative: ['.augment', 'settings.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Amp', command: 'amp', homeRelative: ['.config', 'amp', 'settings.json'], format: 'json', key: ['amp.mcpServers'], dialect: 'mcp-servers' },
-  { vendor: 'Hermes', command: 'hermes', homeRelative: ['.hermes', 'config.yaml'], format: 'yaml', key: ['mcp_servers'], dialect: 'mcp-servers' },
-  { vendor: 'Goose', command: 'goose', homeRelative: ['.config', 'goose', 'config.yaml'], format: 'yaml', key: ['extensions'], dialect: 'goose' },
-  { vendor: 'opencode', command: 'opencode', homeRelative: ['.config', 'opencode', 'opencode.json'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' },
-  { vendor: 'opencode', command: 'opencode', homeRelative: ['.config', 'opencode', 'opencode.jsonc'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' },
-  { vendor: 'Kilo', command: 'kilo', homeRelative: ['.config', 'kilo', 'kilo.json'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' },
-  { vendor: 'Kilo', command: 'kilo', homeRelative: ['.config', 'kilo', 'kilo.jsonc'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' },
-  // `cmd mcp add -s user` writes ~/.commandcode/mcp.json. Verified against
-  // Command Code's own MCP reference (user scope).
-  { vendor: 'Command Code', command: 'command', homeRelative: ['.commandcode', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' },
-];
+/** What mcp-import.json called a vendor before it took the catalog's name. */
+const EARLIER_VENDOR_NAMES: Readonly<Record<string, string>> = {
+  Grok: 'grok', Copilot: 'copilot', Cursor: 'cursor', Kimi: 'kimi', Kiro: 'kiro', Cline: 'cline', Auggie: 'auggie', opencode: 'opencode', Kilo: 'kilo',
+};
 
 export const IMPORT_MARKER_FILE = 'mcp-import.json';
 
@@ -134,7 +107,7 @@ const STDIO_TYPES = new Set(['stdio', 'local']);
 const HTTP_TYPES = new Set(['http', 'streamable-http', 'streamable_http', 'streamablehttp', 'remote']);
 
 /** One vendor entry in mcp.json's shape, or the reason it does not carry over. */
-export function normalize(dialect: Dialect, raw: unknown): Normalized {
+export function normalize(dialect: AiHarnessMcpServerFile['dialect'], raw: unknown): Normalized {
   if (!isRecord(raw)) return { skip: 'is not an object' };
   if (raw.disabled === true || raw.enabled === false) return { skip: 'is disabled there' };
   // A working directory changes what a relative command or path resolves
@@ -261,7 +234,7 @@ async function namesInVendorFile(path: string, source: VendorSource): Promise<Se
 export async function vendorMcpServerNames(
   command: string, home: string, profile?: { env: string; path: string },
 ): Promise<{ known: boolean; names: Set<string>; unreadable?: string }> {
-  const sources = SOURCES.filter((source) => source.command === command);
+  const sources = vendorSources().filter((source) => source.command === command);
   const names = new Set<string>();
   if (!sources.length) return { known: false, names };
   for (const source of sources) {
@@ -283,7 +256,7 @@ export async function vendorMcpServerUrls(
   command: string, home: string, profile?: { env: string; path: string },
 ): Promise<Map<string, string>> {
   const urls = new Map<string, string>();
-  for (const source of SOURCES.filter((item) => item.command === command)) {
+  for (const source of vendorSources().filter((item) => item.command === command)) {
     for (const path of vendorConfigCandidates(source, home, profile)) {
       for (const [name, raw] of Object.entries(await readServerTable(path, source) ?? {})) {
         const normalized = normalize(source.dialect, raw);
@@ -303,7 +276,7 @@ export async function importedFromCommand(stateDir: string, name: string): Promi
     const parsed: unknown = JSON.parse(await readFile(join(stateDir, IMPORT_MARKER_FILE), 'utf8'));
     const imported = isRecord(parsed) && Array.isArray(parsed.imported) ? parsed.imported as unknown[] : [];
     const found = imported.find((item): item is ImportedServer => isRecord(item) && item.name === name && typeof item.from === 'string');
-    return found ? SOURCES.find((source) => source.vendor === found.from)?.command : undefined;
+    return found ? vendorSources().find((source) => source.vendor === found.from)?.command ?? EARLIER_VENDOR_NAMES[found.from] : undefined;
   } catch { return undefined; }
 }
 
@@ -315,7 +288,7 @@ export async function removeFromVendorJsonFile(
   command: string, name: string, home: string, profile?: { env: string; path: string },
 ): Promise<{ ok: boolean; detail?: string }> {
   let removed = false;
-  for (const source of SOURCES.filter((item) => item.command === command && item.format !== 'toml' && item.format !== 'yaml')) {
+  for (const source of vendorSources().filter((item) => item.command === command && item.format !== 'toml' && item.format !== 'yaml')) {
     for (const path of vendorConfigCandidates(source, home, profile)) {
       const text = await readFile(path, 'utf8').catch(() => undefined);
       if (!text?.trim()) continue;
@@ -379,7 +352,7 @@ export async function importVendorMcpServers(
   const skipped: SkippedServer[] = [];
   const added: Record<string, Record<string, unknown>> = {};
 
-  for (const source of SOURCES) {
+  for (const source of vendorSources()) {
     for (const path of await candidatePaths(source, home, stateDir)) {
       const table = await readServerTable(path, source);
       if (!table) continue;

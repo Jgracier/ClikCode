@@ -197,8 +197,15 @@ export interface AiHarnessManagerDefinition {
    *  (2026-10-05). opencode and Kilo have none -- their `mcp logout` drops
    *  only the OAuth token. */
   remove?: { argv: readonly string[] };
-  /** Where this harness READS its MCP servers from, for one that has no
-   *  usable `mcp add`.
+  /** Where this vendor keeps its MCP servers: each file it reads them from,
+   *  in the order to read them. The one record of it: ClikCode's first-run
+   *  import reads every vendor's (agent/mcp/import.ts), provisioning reads a
+   *  harness's to see what it already has, and `writesServerFile` writes the
+   *  first. Paths are the ones each vendor's `mcp add` writes, or its config
+   *  file where it has no add. */
+  serverFiles?: readonly AiHarnessMcpServerFile[];
+  /** ClikCode adds a server by writing `serverFiles[0]` itself, for a
+   *  harness that has no usable `mcp add`.
    *
    *  Writing a vendor's config is a second-best route and is used only where
    *  the first is absent: Cursor has every mcp subcommand except add, and
@@ -207,29 +214,28 @@ export interface AiHarnessManagerDefinition {
    *  asking the vendor to list it back -- Cursor found all three servers,
    *  including one already in the file.
    *
-   *  Only JSON is written. Hermes and Goose keep their servers in YAML, and
-   *  rewriting a user's YAML would cost them their comments and formatting
-   *  for a gain a new dependency does not justify. */
-  configFile?: {
-    /** Directory env var the vendor honours, when it has one. */
-    rootEnv?: string;
-    /** Otherwise HOME plus these segments. */
-    homeRelativeDir: readonly string[];
-    file: string;
-    /** The object key holding the name -> server map. */
-    key: string;
-    /** Default json. `yaml` is written through a document parse so the
-     *  user's comments and formatting survive -- a vendor config is their
-     *  file, and losing their provider settings to gain one MCP server would
-     *  be a bad trade. */
-    format?: 'json' | 'yaml';
-    /** How ONE server is spelled in this vendor's file. `mcp-servers` is the
-     *  common `{ command, args } | { url }` convention. `goose-extension` is
-     *  Goose's own shape, verified by writing it and reading it back with
-     *  `goose info -v`: { name, type: stdio|streamable_http, cmd + args | uri,
-     *  enabled }. */
-    entryShape?: 'mcp-servers' | 'goose-extension';
-  };
+   *  JSON is written as JSON; YAML (Goose) through a document parse so the
+   *  user's comments and formatting survive -- a vendor config is their
+   *  file. A Goose server is spelled its own way, verified by writing it and
+   *  reading it back with `goose info -v`: { name, type: stdio|streamable_http,
+   *  cmd + args | uri, enabled }. */
+  writesServerFile?: true;
+}
+
+/** One file a vendor reads its MCP servers from. */
+export interface AiHarnessMcpServerFile {
+  /** Under the user's home (or an isolated profile that is a whole HOME). */
+  homeRelative: readonly string[];
+  /** Under the vendor's own directory variable (CLAUDE_CONFIG_DIR,
+   *  CODEX_HOME), which is what an isolated account profile points at. */
+  rootRelative?: readonly string[];
+  /** That variable, where ClikCode writes the file and the vendor honours one. */
+  rootEnv?: string;
+  format: 'json' | 'jsonc' | 'toml' | 'yaml';
+  /** Path of the name -> server table inside the file. */
+  key: readonly string[];
+  /** How one server is spelled there. */
+  dialect: 'mcp-servers' | 'gemini' | 'opencode' | 'goose' | 'codex';
 }
 
 export interface AiHarnessCapabilityManifest {
@@ -1160,7 +1166,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     managers: {
       // User scope: Claude's default is the current folder only. `--` keeps a
       // local server's own dash arguments from being read as Claude's options.
-      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add', '--scope', 'user'], shape: 'doubledash-local', transportPrefix: ['--transport'], headerPrefix: ['--header'], envPrefix: ['--env'] } },
+      mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.claude.json'], rootRelative: ['.claude.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add', '--scope', 'user'], shape: 'doubledash-local', transportPrefix: ['--transport'], headerPrefix: ['--header'], envPrefix: ['--env'] } },
       plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },
@@ -1182,7 +1188,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('strict-config', 'Strict configuration', 'Fail on unrecognized configuration keys', 'safety', ['--strict-config']),
     ],
     managers: {
-      mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'url-or-doubledash' }},
+      mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.codex', 'config.toml'], rootRelative: ['config.toml'], format: 'toml', key: ['mcp_servers'], dialect: 'codex' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'url-or-doubledash' }},
       plugins: { label: 'Plugins', listArgv: ['plugin', 'list'], manageArgv: ['plugin'] },
       agents: { label: 'Agents', listArgv: ['agents'], manageArgv: ['agents'] },
     },
@@ -1198,7 +1204,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('fork-native-session', 'Fork native session', 'Fork before continuing the selected session', 'session', ['--fork'], { appliesTo: 'resume', requiresNewSession: true }),
       flag('share', 'Share session', 'Publish the native session through OpenCode', 'session', ['--share']),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], remoteOnly: true } }, agents: { label: 'Agents', manageArgv: ['agent'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.config', 'opencode', 'opencode.json'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' }, { homeRelative: ['.config', 'opencode', 'opencode.jsonc'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], remoteOnly: true } }, agents: { label: 'Agents', manageArgv: ['agent'] } },
     features: ['plugins', 'commands', 'remote server attachment'],
   },
   copilot: {
@@ -1217,7 +1223,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('no-remote-export', 'Disable remote export', 'Do not export this session to GitHub remote clients', 'safety', ['--no-remote-export']),
       flag('worktree', 'Managed worktree', 'Run in a separate managed Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list', '--json'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'doubledash-local', transportPrefix: ['--transport'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, agents: { label: 'Instructions and agents', manageArgv: ['instruction'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.copilot', 'mcp-config.json'], rootRelative: ['mcp-config.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list', '--json'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'doubledash-local', transportPrefix: ['--transport'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, agents: { label: 'Instructions and agents', manageArgv: ['instruction'] } },
     features: ['skills', 'custom agents', 'hooks', 'plugins', 'built-in GitHub MCP'],
   },
   aider: {
@@ -1252,7 +1258,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('with-builtin', 'Built-in extensions', 'Built-in extensions enabled for the run', 'tools', ['--with-builtin'], 'string-list'),
       flag('ephemeral', 'Ephemeral session', 'Do not store the Goose session', 'session', ['--no-session'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['configure'], configFile: { homeRelativeDir: ['.config', 'goose'], file: 'config.yaml', key: 'extensions', format: 'yaml', entryShape: 'goose-extension' } }, skills: { label: 'Skills', listArgv: ['skills', 'list'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.config', 'goose', 'config.yaml'], format: 'yaml', key: ['extensions'], dialect: 'goose' }], writesServerFile: true, manageArgv: ['configure'] }, skills: { label: 'Skills', listArgv: ['skills', 'list'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['extensions', 'recipes', 'ACP', 'scheduled recipes', 'session export'],
   },
   // MCP surfaces read from each CLI's own --help on a real install. These
@@ -1283,7 +1289,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('worktree', 'Managed worktree', 'Start the session in a new Git worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('fork-session', 'Fork on resume', 'Create a new session id when resuming', 'session', ['--fork-session'], { appliesTo: 'resume', requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add'], shape: 'positional' }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.grok', 'config.toml'], format: 'toml', key: ['mcp_servers'], dialect: 'codex' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add'], shape: 'positional' }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['skills', 'plugins', 'subagents', 'plan mode', 'memory'],
   },
   kimi: {
@@ -1300,7 +1306,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
     // No MCP here: `kimi --help` lists export/fork/provider/session/acp/web/
     // server/rc/login/doctor/vis/install-desktop and mentions mcp nowhere.
     // An earlier entry claimed one on a misreading of that list.
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'], configFile: { rootEnv: 'KIMI_CODE_HOME', homeRelativeDir: ['.kimi-code'], file: 'mcp.json', key: 'mcpServers' } },},
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.kimi-code', 'mcp.json'], rootRelative: ['mcp.json'], rootEnv: 'KIMI_CODE_HOME', format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], writesServerFile: true, manageArgv: ['mcp'] },},
     features: ['skills', 'agents', 'ACP'],
   },
   openhands: {
@@ -1327,7 +1333,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('fast', 'Fast mode', 'Use Amp Fast mode for this invocation', 'mode', ['--fast']),
       value('plugin-ready-timeout', 'Plugin startup timeout', 'Wait this many seconds for plugins before starting', 'tools', ['--plugin-ready-timeout'], 'number'),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'doubledash-local' }} },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.config', 'amp', 'settings.json'], format: 'json', key: ['amp.mcpServers'], dialect: 'mcp-servers' }], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'doubledash-local' }} },
     features: ['skills', 'plugins', 'orbs', 'settings layers'],
   },
   antigravity: {
@@ -1377,7 +1383,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('worktree', 'Managed worktree', 'Run in an isolated Droid worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('mission', 'Mission mode', 'Run multi-agent mission orchestration', 'mode', ['--mission']),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--type'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.factory', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--type'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['skills', 'custom droids', 'hooks', 'missions', 'auto/spec modes', 'JSON-RPC permission transport'],
   },
   kiro: {
@@ -1386,7 +1392,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('trusted-tools', 'Trusted tools', 'Tool categories approved in advance', 'permissions', ['--trust-tools'], 'string-list', { argvStyle: 'csv' }),
       flag('require-mcp-startup', 'Require MCP startup', 'Fail the run if any MCP server cannot start', 'tools', ['--require-mcp-startup']),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'global', '--name'] }, add: { argv: ['mcp', 'add', '--scope', 'global', '--force'], shape: 'named-flags', namePrefix: ['--name'], urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--args'], argsStyle: 'json-array' } } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.kiro', 'settings', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'global', '--name'] }, add: { argv: ['mcp', 'add', '--scope', 'global', '--force'], shape: 'named-flags', namePrefix: ['--name'], urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--args'], argsStyle: 'json-array' } } },
     features: ['skills', 'custom agents', 'hooks', 'steering', 'powers', 'plan mode'],
   },
   // Every flag here read from `gemini --help` on a real install. --safe-mode
@@ -1403,7 +1409,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('include-directories', 'Additional directories', 'Additional directories included in context', 'context', ['--include-directories'], 'path-list'),
       value('extensions', 'Extensions', 'Extensions to load; all are used when unset', 'tools', ['--extensions'], 'string-list'),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--transport'] }}, plugins: { label: 'Extensions', listArgv: ['extensions', 'list'], manageArgv: ['extensions'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.gemini', 'settings.json'], format: 'json', key: ['mcpServers'], dialect: 'gemini' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['--transport'] }}, plugins: { label: 'Extensions', listArgv: ['extensions', 'list'], manageArgv: ['extensions'] } },
     features: ['skills', 'agents', 'extensions', 'custom commands', 'memory'],
   },
   qwen: {
@@ -1415,7 +1421,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('max-tool-calls', 'Maximum tool calls', 'Cumulative tool-call limit', 'safety', ['--max-tool-calls'], 'number'),
       flag('safe-mode', 'Safe mode', 'Disable context, hooks, extensions, skills, MCP, subagents, and memory', 'safety', ['--safe-mode']),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['-t'] } }, skills: { label: 'Skills', manageArgv: ['skills'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.qwen', 'settings.json'], format: 'json', key: ['mcpServers'], dialect: 'gemini' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add'], shape: 'positional', transportPrefix: ['-t'] } }, skills: { label: 'Skills', manageArgv: ['skills'] } },
     features: ['skills', 'extensions', 'subagents', 'workflows', 'memory', 'plan mode'],
   },
   cline: {
@@ -1431,7 +1437,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('plan', 'Plan mode', 'Run read-only planning behavior', 'mode', ['--plan']),
       flag('worktree', 'Managed worktree', 'Run in a detached managed worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add', '--yes'], shape: 'doubledash-local', transportPrefix: ['--transport'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, hooks: { label: 'Hooks', manageArgv: ['hook'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.cline', 'data', 'settings', 'cline_mcp_settings.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], manageArgv: ['mcp'] , remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add', '--yes'], shape: 'doubledash-local', transportPrefix: ['--transport'] }}, plugins: { label: 'Plugins', manageArgv: ['plugin'] }, skills: { label: 'Skills', manageArgv: ['skill'] }, hooks: { label: 'Hooks', manageArgv: ['hook'] } },
     features: ['skills', 'rules', 'checkpoints', 'plan/act modes', 'schedules'],
   },
   kilo: {
@@ -1444,7 +1450,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('cloud-fork', 'Fork cloud session', 'Fetch and fork the selected cloud session locally', 'session', ['--cloud-fork'], { appliesTo: 'resume', requiresNewSession: true }),
       flag('share', 'Share session', 'Publish the native session through Kilo', 'session', ['--share']),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], remoteOnly: true } }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.config', 'kilo', 'kilo.json'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' }, { homeRelative: ['.config', 'kilo', 'kilo.jsonc'], format: 'jsonc', key: ['mcp'], dialect: 'opencode' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], remoteOnly: true } }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['skills', 'architect/ask/debug/orchestrator modes', 'custom agents'],
   },
   cursor: {
@@ -1459,7 +1465,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('force', 'Force commands', 'Allow commands unless explicitly denied', 'permissions', ['--force'], { dangerous: true }),
       flag('worktree', 'Managed worktree', 'Start in an isolated Cursor worktree', 'session', ['--worktree'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], configFile: { homeRelativeDir: ['.cursor'], file: 'mcp.json', key: 'mcpServers' } }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.cursor', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], writesServerFile: true, listArgv: ['mcp', 'list'], manageArgv: ['mcp'] }, plugins: { label: 'Plugins', manageArgv: ['plugin'] } },
     features: ['plugins', 'rules', 'worktrees', 'plan/ask modes'],
   },
   // Hermes is deliberately absent from the `mcp add` grammars even though it
@@ -1492,7 +1498,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('ephemeral', 'Do not save session', 'Do not save conversation history', 'session', ['--dont-save-session'], { requiresNewSession: true }),
       value('augment-cache-dir', 'Cache directory', 'Cache directory, defaults to ~/.augment', 'advanced', ['--augment-cache-dir'], 'path'),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['-t'], urlPrefix: ['-u'], commandPrefix: ['-c'], argsPrefix: ['--args'], argsStyle: 'joined' } } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.augment', 'settings.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'named-flags', transportPrefix: ['-t'], urlPrefix: ['-u'], commandPrefix: ['-c'], argsPrefix: ['--args'], argsStyle: 'joined' } } },
   },
   vibe: {
     // Options read from `vibe --help`. --smart-approve and --auto-approve are
@@ -1557,7 +1563,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('ignore-rules', 'Ignore rules', 'Skip AGENTS.md, memory, and preloaded skills', 'safety', ['--ignore-rules']),
       flag('yolo', 'Bypass approvals', 'Bypass dangerous-command approvals', 'permissions', ['--yolo'], { dangerous: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--args'], argsStyle: 'list', confirmStdin: 'y\n' } }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, tools: { label: 'Tools', manageArgv: ['tools'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.hermes', 'config.yaml'], format: 'yaml', key: ['mcp_servers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove'] }, add: { argv: ['mcp', 'add'], shape: 'named-flags', urlPrefix: ['--url'], commandPrefix: ['--command'], argsPrefix: ['--args'], argsStyle: 'list', confirmStdin: 'y\n' } }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Plugins', manageArgv: ['plugins'] }, tools: { label: 'Tools', manageArgv: ['tools'] }, hooks: { label: 'Hooks', manageArgv: ['hooks'] } },
     features: ['skills', 'bundles', 'plugins', 'hooks', 'memory', 'fallback providers', 'toolsets'],
   },
   command: {
@@ -1575,7 +1581,7 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       flag('worktree', 'Managed worktree', 'Run in an isolated managed worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('ephemeral', 'Ephemeral session', 'Do not persist the native session', 'session', ['--no-session'], { requiresNewSession: true }),
     ],
-    managers: { mcp: { label: 'MCP servers', listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add', '-s', 'user'], shape: 'positional', transportPrefix: ['-t'] } }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Mods', manageArgv: ['mods'] } },
+    managers: { mcp: { label: 'MCP servers', serverFiles: [{ homeRelative: ['.commandcode', 'mcp.json'], format: 'json', key: ['mcpServers'], dialect: 'mcp-servers' }], listArgv: ['mcp', 'list'], manageArgv: ['mcp'], remove: { argv: ['mcp', 'remove', '--scope', 'user'] }, add: { argv: ['mcp', 'add', '-s', 'user'], shape: 'positional', transportPrefix: ['-t'] } }, skills: { label: 'Skills', manageArgv: ['skills'] }, plugins: { label: 'Mods', manageArgv: ['mods'] } },
     features: ['skills', 'mods', 'taste learning', 'MCP', 'managed worktrees', 'plan mode'],
   },
   // Continue: these are the raw vendor rows for the flags `cn --help` really
