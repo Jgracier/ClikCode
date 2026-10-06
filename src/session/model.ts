@@ -58,6 +58,8 @@ export interface HarnessSession {
   /** Gateway only: the account-private platform agent chosen in /model.
    * UI state until a separate durable-agent execution path exists. */
   gatewayAgentId?: string;
+  /** The private Gateway DM this session uses for the chosen agent. */
+  gatewayAgentThreadId?: string;
   effort: string;
   /** `effort` as refused by the vendor for one harness and model
    * (`<harness> <model> <effort>`): turns there run at the vendor's own

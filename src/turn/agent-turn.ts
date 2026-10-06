@@ -19,6 +19,7 @@ import { sessionTranscriptMessages } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
 import { runPlatformAssistantTurn } from './platform-assistant-turn.js';
 import { recordInvocation, showStopReason } from './turn-output.js';
+import { runGatewayAgentTurn } from './gateway-agent-turn.js';
 
 /** A turn on a route that runs ClikCode's own agent: the Gateway, or
  * ClikCode Local. Only the Gateway has a platform assistant to fall back to. */
@@ -26,6 +27,7 @@ export async function runAgentTurn(input: {
   config: Conf; state: HarnessState; session: HarnessSession; prompt: string; signal?: AbortSignal; run: TurnRunOptions;
 }): Promise<void> {
   const { config, state, session, prompt, signal, run } = input;
+  if (session.route === 'gateway' && session.gatewayAgentId) return runGatewayAgentTurn(input);
   const prompter = run.prompter;
   const gatewayService = isGatewayService(session);
   // Attribution for the invocation log and the output payload: the route's

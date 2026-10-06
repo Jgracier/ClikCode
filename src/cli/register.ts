@@ -19,6 +19,7 @@ import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSession
 import { aiGatewayModels, aiGatewayStatus, aiGatewayUsage, aiGatewayCredit, aiModelsList, aiUsage } from '../commands/ai/status.js';
 import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
 import { gatewayLogin } from '../commands/gateway.js';
+import { gatewayAgentList, gatewayAgentTools, gatewayAgentCreate, gatewayAgentUpdate, gatewayAgentRemove } from '../commands/gateway-agents.js';
 import { runSessionWorker } from '../worker/session-worker.js';
 
 export function registerClikCodeCommands(program: Command, config: Conf): void {
@@ -113,10 +114,26 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   mcp.command('targets')
     .description('Show how each harness would be given a server, when you choose it')
     .action(mcpTargets);
-  const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for remote models');
+  const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for models and private agents');
   gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
   gateway.command('models').description('List the models ClikDeploy Gateway offers you, cheapest access first')
     .action(() => aiGatewayModels(config));
+  const gatewayAgents = gateway.command('agents').description('List and build agents private to your Gateway account');
+  gatewayAgents.command('list').description('List your Gateway agents').action(() => gatewayAgentList(config));
+  gatewayAgents.command('tools').description('List tools available to your Gateway agents').action(() => gatewayAgentTools(config));
+  const agentOptions = (command: Command) => command
+    .option('--name <name>', 'Agent name')
+    .option('--description <text>', 'Short description')
+    .option('--instructions-file <path>', 'UTF-8 file containing the agent instructions')
+    .option('--capability <name>', 'Account-scoped read tool; repeat for more', (value: string, prior: string[]) => [...prior, value], [] as string[])
+    .option('--model <id>', 'Agent default model (requires --provider)')
+    .option('--provider <id>', 'Provider for the agent default model');
+  agentOptions(gatewayAgents.command('create <handle>').description('Build an account-owned agent'))
+    .action((handle: string, options) => gatewayAgentCreate(config, handle, options));
+  agentOptions(gatewayAgents.command('update <id>').description('Change one of your agents'))
+    .action((id: string, options) => gatewayAgentUpdate(config, id, options));
+  gatewayAgents.command('remove <id>').description('Delete one of your agents')
+    .action((id: string) => gatewayAgentRemove(config, id));
   gateway.command('usage').description('Show your AI use and credit as ClikDeploy Gateway records it')
     .option('--days <days>', 'Window in days, 1-90 (default 30)')
     .action((options: { days?: string }) => aiGatewayUsage(config, options));
