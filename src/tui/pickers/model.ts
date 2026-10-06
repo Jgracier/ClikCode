@@ -4,7 +4,7 @@ import { freePlanModels } from '../../harness/accounts/free-plan.js';
 import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
-import { gatewayModelDetail, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
+import { gatewayModelDetail, gatewayModelLabel, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
 import { gatewayAgents, type GatewayAgent } from '../../gateway/agents.js';
 import type { GatewayModelList } from '../../gateway/models.js';
 import { modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
@@ -203,7 +203,7 @@ export function gatewayPickerRows(list: GatewayModelList, agents: readonly Gatew
     ...list.models.map((model) => {
       const price = gatewayModelDetail(model);
       return {
-        label: model.id,
+        label: gatewayModelLabel(model),
         detail: `${price ? `· ${price}` : ''}${model.id === current ? ' · current' : ''}`,
         value: { kind: 'model' as const, id: model.id },
         group: 'Models',

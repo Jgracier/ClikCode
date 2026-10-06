@@ -27,6 +27,17 @@ export interface GatewayModel {
    * discount in force, and the price charged. Absent when the account is not
    * charged (unlimited) or the Gateway predates prices. */
   price?: GatewayModelPrice;
+  /** Which tier the Gateway serves it from right now. Sent to the super admin
+   * only: everyone else sees the model alone. */
+  access?: GatewayAccess;
+}
+
+export type GatewayAccess = 'subscription' | 'free' | 'paid';
+const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
+
+/** A model as a row names it: `claude-opus-5-5 (subscription)` where the Gateway says which tier serves it. */
+export function gatewayModelLabel(model: GatewayModel): string {
+  return model.access ? `${model.id} (${model.access})` : model.id;
 }
 
 export interface GatewayModelPrice {
@@ -130,7 +141,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
   for (const raw of data) {
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as {
-      id?: unknown; root?: unknown; type?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
+      id?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
       capabilities?: { vision?: unknown; reasoning?: unknown }; pricing?: Record<string, unknown>;
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
@@ -145,6 +156,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     const charged = { inMTok: num('input_per_mtok'), outMTok: num('output_per_mtok') };
     models.push({
       id: entry.id,
+      ...(typeof entry.access === 'string' && ACCESS.has(entry.access) ? { access: entry.access as GatewayAccess } : {}),
       ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
       ...(entry.capabilities?.vision === true ? { vision: true } : {}),
       ...(entry.capabilities?.reasoning === true ? { reasoning: true } : {}),

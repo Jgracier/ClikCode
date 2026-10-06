@@ -14,7 +14,9 @@ const roster = vi.fn(async () => [
 vi.mock('../gateway/agents.js', () => ({ gatewayAgents: roster }));
 vi.mock('../gateway/models.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../gateway/models.js')>(),
-  savedGatewayModels: async () => ({ automatic: 'model-a', models: [{ id: 'model-a' }, { id: 'model-b' }] }),
+  // Asked afresh on every open: the saved copy must not be what the menu shows.
+  gatewayModels: async () => ({ automatic: 'model-a', models: [{ id: 'model-a', access: 'subscription' }, { id: 'model-b' }] }),
+  savedGatewayModels: async () => ({ automatic: 'stale', models: [{ id: 'stale' }] }),
 }));
 
 const { modelList } = await import('./queries.js');
@@ -51,6 +53,8 @@ describe('the Gateway model menu', () => {
       { id: 'vera', name: 'Vera', current: false },
     ]);
     expect(list.models.map((model) => model.id)).toEqual(['auto', 'model-a', 'model-b']);
+    // The tier serving it, where the Gateway says (the super admin's list); a bare name where it does not.
+    expect(list.models.map((model) => model.label)).toEqual(['Automatic', 'model-a (subscription)', 'model-b']);
     expect(list.agentsError).toBeUndefined();
   });
 
