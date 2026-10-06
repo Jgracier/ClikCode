@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { modelDisplayId, modelIdFromDisplay, AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsModelSelection, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessLaunchArgv, nativeHarnessTurnArgv } from './ai-local-harness';
+import { modelDisplayId, modelIdFromDisplay, AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsModelSelection, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessTurnArgv } from './ai-local-harness';
 
 
 describe('local harness catalog', () => {
@@ -60,11 +60,11 @@ describe('local harness catalog', () => {
   });
 
   it('declares exact resume arguments only for harnesses with a verified native contract', () => {
-    expect(localHarnessForCommand('claude')?.session).toEqual({ idKind: 'uuid', createIdPrefix: ['--session-id'], continueArgv: ['--continue'], resumeIdPrefix: ['--resume'] });
-    expect(localHarnessForCommand('codex')?.session).toEqual({ continueArgv: ['resume', '--last'], resumeIdPrefix: ['resume'] });
-    expect(localHarnessForCommand('gemini')?.session).toMatchObject({ continueArgv: ['--resume', 'latest'], resumeIdPrefix: ['--resume'] });
-    expect(localHarnessForCommand('opencode')?.session).toMatchObject({ continueArgv: ['--continue'], resumeIdPrefix: ['--session'] });
-    expect(localHarnessForCommand('aider')?.session).toEqual({ idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'] });
+    expect(localHarnessForCommand('claude')?.session).toEqual({ idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'] });
+    expect(localHarnessForCommand('codex')?.session).toEqual({ resumeIdPrefix: ['resume'] });
+    expect(localHarnessForCommand('gemini')?.session).toMatchObject({ resumeIdPrefix: ['--resume'] });
+    expect(localHarnessForCommand('opencode')?.session).toMatchObject({ resumeIdPrefix: ['--session'] });
+    expect(localHarnessForCommand('aider')?.session).toEqual({ idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'] });
   });
 
   it('carries no editor-extension-only product and binds the real terminal binaries', () => {
@@ -385,35 +385,6 @@ describe('local harness catalog', () => {
       .not.toContain('/tmp/screen.png');
   });
 
-  it('builds exact create, resume, continuation, and selector argv from adapter declarations', () => {
-    const claude = localHarnessForCommand('claude')!;
-    expect(nativeHarnessLaunchArgv(claude, { nativeSessionId: 'new-id', createdHere: true, model: 'opus', effort: 'high' }))
-      .toEqual(['--session-id', 'new-id', '--model', 'opus', '--effort', 'high']);
-    expect(nativeHarnessLaunchArgv(claude, { nativeSessionId: 'old-id' })).toEqual(['--resume', 'old-id']);
-    expect(nativeHarnessLaunchArgv(claude, { launchedBefore: true })).toEqual(['--continue']);
-
-    const aider = localHarnessForCommand('aider')!;
-    expect(nativeHarnessLaunchArgv(aider, { nativeSessionId: '/tmp/chat.md' }))
-      .toEqual(['--chat-history-file', '/tmp/chat.md', '--restore-chat-history']);
-
-    const codex = localHarnessForCommand('codex')!;
-    expect(nativeHarnessLaunchArgv(codex, { nativeSessionId: 'thread-id', model: 'gpt-5', workspace: '/repo' }))
-      .toEqual(['resume', 'thread-id', '--model', 'gpt-5', '--cd', '/repo']);
-
-    const kiro = localHarnessForCommand('kiro')!;
-    expect(nativeHarnessLaunchArgv(kiro, {})).toEqual(['chat']);
-    expect(nativeHarnessLaunchArgv(kiro, { nativeSessionId: 'chat-id' })).toEqual(['chat', '--resume-id', 'chat-id']);
-
-    const pi = localHarnessForCommand('pi')!;
-    expect(nativeHarnessLaunchArgv(pi, { nativeSessionId: 'new-id', createdHere: true, effort: 'xhigh' }))
-      .toEqual(['--session-id', 'new-id', '--thinking', 'xhigh']);
-    expect(nativeHarnessLaunchArgv(pi, { nativeSessionId: 'old-id' })).toEqual(['--session', 'old-id']);
-
-    const cline = localHarnessForCommand('cline')!;
-    expect(nativeHarnessLaunchArgv(cline, { nativeSessionId: 'session-id', model: 'openai/gpt-5', workspace: '/repo', effort: 'high' }))
-      .toEqual(['--id', 'session-id', '--model', 'openai/gpt-5', '--cwd', '/repo', '--thinking', 'high']);
-  });
-
   it('declares transport, integration, tier, parser and memory file on every entry', () => {
     const transports = ['codex-app-server', 'acp', 'structured-cli', 'text-cli'];
     const parsers = ['claude-stream-json', 'codex-items', 'opencode-json', 'gemini-stream-json', 'cursor-stream-json', 'pi-json', 'cline-json', 'antigravity', 'goose', 'generic-json', 'text', 'aider'];
@@ -477,7 +448,7 @@ describe('local harness catalog', () => {
       .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp', '--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: ['--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], optionPlacement: 'after' });
     expect(harnessAcpLaunch(localHarnessForCommand('copilot')!, { model: 'gpt-5', effort: 'high', permissionMode: 'bypass' }))
       .toMatchObject({ binary: 'copilot', argv: ['--model', 'gpt-5', '--effort', 'high', '--allow-all', '--acp', '--stdio'] });
-    expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { effort: 'low', permissionMode: 'auto' }))
+    expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { effort: 'low', permissionMode: 'bypass' }))
       .toMatchObject({ binary: 'cline', argv: ['--thinking', 'low', '--auto-approve', 'true', '--acp'] });
     expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { permissionMode: 'ask' })).toMatchObject({ binary: 'cline', argv: ['--acp'], optionArgv: [] });
     expect(harnessAcpLaunch(localHarnessForCommand('hermes')!, { permissionMode: 'bypass', effort: 'max' }))

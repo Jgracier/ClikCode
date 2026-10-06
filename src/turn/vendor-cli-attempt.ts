@@ -90,7 +90,7 @@ export async function runVendorCliAttempt(input: {
   }
   const argv = nativeHarnessTurnArgv(cliHarness, {
     prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
-    launchedBefore: Boolean(session.nativeStartedAt), model, workspace: session.workspace, effort,
+    model, workspace: session.workspace, effort,
     permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
   });
   if (turn.outsideRepoArgv && !insideGitRepository(session.workspace ?? process.cwd())) argv.unshift(...turn.outsideRepoArgv);

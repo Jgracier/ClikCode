@@ -122,7 +122,6 @@ export async function aiDoctor(): Promise<void> {
         preallocatedSessionIdentity: Boolean(harness.session?.createIdPrefix || harness.session?.createSessionArgv),
         sessionDiscovery: Boolean(harness.session?.discoverArgv || FS_SESSION_DISCOVERY[harness.command]),
         transcriptImport: Boolean(ADOPTED_TRANSCRIPT_READERS[harness.command]),
-        continueLatest: Boolean(harness.session?.continueArgv),
       },
     };
   }));
