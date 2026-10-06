@@ -30,10 +30,16 @@ export const STOPPED = 'Stopped';
 /** The VS Code command that stops the turn, as the palette lists it. */
 export const STOP_TURN_COMMAND = 'Stop Turn';
 
-/** `ctrl+c to stop`: a hint in the terminal's dim status band. */
+/** `ctrl+c stop`: an action's key and verb, as every hint words it. */
 export function keyHint(action: Action): string {
   const { verb, key } = ACTIONS[action];
-  return `${key.toLowerCase()} to ${verb}`;
+  return keyHintFor(key, verb);
+}
+
+/** `esc close`: a key and what it does, lower case -- the one way every hint
+ * in the terminal's dim bands is worded, joined by ` · `. */
+export function keyHintFor(key: string, verb: string): string {
+  return `${key.toLowerCase()} ${verb}`;
 }
 
 /** `Stop (Ctrl+C)`: a button's title and accessible name. */
