@@ -24,8 +24,8 @@
  * of assistant text saying what ran, so the history still says it happened. */
 
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, resolve } from 'node:path';
 import { withProviderNote, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
+import { absolutePath, shellQuote } from './thread-writer-files.js';
 
 /** The harness command whose calls are already Claude Code's own. */
 const CLAUDE_ORIGIN = 'claude';
@@ -113,14 +113,10 @@ function shellCommand(call: CanonicalToolCall): string | undefined {
   return str(command) ?? pick(input, 'script', 'commandLine') ?? call.target;
 }
 
-function absolute(path: string, cwd: string): string {
-  return isAbsolute(path) ? path : resolve(cwd, path);
-}
-
 function callPath(call: CanonicalToolCall, cwd: string): string | undefined {
   const path = pick(call.input ?? {}, 'file_path', 'filePath', 'path', 'file', 'filename', 'absolute_path', 'target_file')
     ?? call.files[0] ?? call.target;
-  return path ? absolute(path, cwd) : undefined;
+  return path ? absolutePath(cwd, path) : undefined;
 }
 
 /** `*** Begin Patch` text (Codex apply_patch) as Claude edits: an added file
@@ -155,7 +151,7 @@ function patchUses(patch: string, cwd: string): ClaudeToolUse[] {
     const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line);
     if (header) {
       flush();
-      file = { op: header[1]!.toLowerCase() as 'add' | 'update' | 'delete', path: absolute(header[2]!.trim(), cwd), lines: [] };
+      file = { op: header[1]!.toLowerCase() as 'add' | 'update' | 'delete', path: absolutePath(cwd, header[2]!.trim()), lines: [] };
       continue;
     }
     if (/^\*\*\* End Patch/.test(line)) break;
@@ -172,7 +168,7 @@ function patchUses(patch: string, cwd: string): ClaudeToolUse[] {
 function diffUses(call: CanonicalToolCall, cwd: string): ClaudeToolUse[] {
   const uses: ClaudeToolUse[] = [];
   for (const file of call.diff ?? []) {
-    const path = file.path ? absolute(file.path, cwd) : callPath(call, cwd);
+    const path = file.path ? absolutePath(cwd, file.path) : callPath(call, cwd);
     if (!path) continue;
     if ((file.change === 'add' || (file.priorUnknown && !file.removals)) && !file.omitted && !file.lines.some((line) => line.kind === 'gap')) {
       uses.push({ name: 'Write', input: { file_path: path, content: file.lines.map((line) => line.text).join('\n') + '\n' } });
@@ -214,10 +210,6 @@ function editUses(call: CanonicalToolCall, cwd: string): ClaudeToolUse[] {
   return diffUses(call, cwd);
 }
 
-function shellQuote(text: string): string {
-  return /^[\w@%+=:,./-]+$/.test(text) ? text : `'${text.replace(/'/g, `'\\''`)}'`;
-}
-
 /** The Claude Code tool call(s) that stand for one recorded call; [] when
  * Claude has no equivalent (it is written as a line of text instead). A call
  * Claude Code itself made keeps its name and input. */
@@ -241,12 +233,12 @@ export function claudeToolUses(call: CanonicalToolCall, cwd: string, origin?: st
     case 'grep': {
       const pattern = pick(input, 'pattern', 'query', 'regex', 'search', 'q') ?? call.target;
       const path = pick(input, 'path', 'dir', 'directory');
-      return pattern ? [{ name: 'Grep', input: { pattern, ...(path ? { path: absolute(path, cwd) } : {}) } }] : [];
+      return pattern ? [{ name: 'Grep', input: { pattern, ...(path ? { path: absolutePath(cwd, path) } : {}) } }] : [];
     }
     case 'glob': {
       const pattern = pick(input, 'pattern', 'glob', 'query') ?? call.target;
       const path = pick(input, 'path', 'dir', 'directory');
-      return pattern ? [{ name: 'Glob', input: { pattern, ...(path ? { path: absolute(path, cwd) } : {}) } }] : [];
+      return pattern ? [{ name: 'Glob', input: { pattern, ...(path ? { path: absolutePath(cwd, path) } : {}) } }] : [];
     }
     case 'websearch': {
       const query = pick(input, 'query', 'q', 'search') ?? call.target;

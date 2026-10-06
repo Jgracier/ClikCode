@@ -44,6 +44,7 @@ import type { CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../ca
 import { atomicWriteFile } from '../../store/files.js';
 import type { NativeThreadWriteContext, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
 import { reconcileCodexThreadRow } from './codex-store.js';
+import { absolutePath, shellQuote } from './thread-writer-files.js';
 
 /** Builds whose rollout layout this writer was checked against, live. */
 export const CODEX_WRITER_TESTED_VERSIONS = ['codex-cli 0.155.1'] as const;
@@ -92,14 +93,6 @@ function text(value: unknown): string | undefined {
   return undefined;
 }
 
-function shellQuote(value: string): string {
-  return /^[\w./@%+=:,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function absolute(path: string, workspace: string): string {
-  return isAbsolute(path) ? path : resolve(workspace, path);
-}
-
 function patchLines(prefix: '+' | '-', body: string): string[] {
   const lines = body.split('\n');
   if (lines.length > 1 && lines.at(-1) === '') lines.pop();
@@ -127,7 +120,7 @@ function patchOf(call: CanonicalToolCall, workspace: string): Extract<CodexCall,
   if (raw?.includes('*** Begin Patch')) {
     const changes: Record<string, { type: 'add' | 'update' | 'delete'; unified_diff: string }> = {};
     for (const match of raw.matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)) {
-      changes[absolute(match[2]!.trim(), workspace)] = { type: match[1]!.toLowerCase() as 'add' | 'update' | 'delete', unified_diff: '' };
+      changes[absolutePath(workspace, match[2]!.trim())] = { type: match[1]!.toLowerCase() as 'add' | 'update' | 'delete', unified_diff: '' };
     }
     return { kind: 'patch', patch: raw, changes };
   }
@@ -139,13 +132,13 @@ function patchOf(call: CanonicalToolCall, workspace: string): Extract<CodexCall,
     return before !== undefined && after !== undefined ? [['@@', ...patchLines('-', before), ...patchLines('+', after)].join('\n')] : [];
   });
   if (file && hunks.length) {
-    const path = absolute(file, workspace);
+    const path = absolutePath(workspace, file);
     const body = hunks.join('\n');
     return { kind: 'patch', patch: `*** Begin Patch\n*** Update File: ${path}\n${body}\n*** End Patch`, changes: { [path]: { type: 'update', unified_diff: body } } };
   }
   const content = text(input.content) ?? text(input.file_text);
   if (file && content !== undefined) {
-    const path = absolute(file, workspace);
+    const path = absolutePath(workspace, file);
     const body = patchLines('+', content).join('\n');
     return { kind: 'patch', patch: `*** Begin Patch\n*** Add File: ${path}\n${body}\n*** End Patch`, changes: { [path]: { type: 'add', unified_diff: `@@\n${body}` } } };
   }
@@ -154,7 +147,7 @@ function patchOf(call: CanonicalToolCall, workspace: string): Extract<CodexCall,
   if (!diffs.length) return undefined;
   const changes: Record<string, { type: 'add' | 'update' | 'delete'; unified_diff: string }> = {};
   const sections = diffs.map((diff) => {
-    const path = absolute(diff.path!, workspace);
+    const path = absolutePath(workspace, diff.path!);
     const body = diff.lines.map((line) => (line.kind === 'gap' ? '@@' : `${line.kind === 'removed' ? '-' : line.kind === 'added' ? '+' : ' '}${line.text}`)).join('\n');
     const type = diff.change === 'add' ? 'add' : diff.change === 'delete' ? 'delete' : 'update';
     changes[path] = { type, unified_diff: body };
