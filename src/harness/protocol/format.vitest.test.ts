@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compactCount, dollars, formatDuration, formatElapsed, relativeTime, shortDuration, tildePath } from './format';
+import { compactCount, dollars, formatDuration, formatElapsed, relativeTime, tildePath } from './format';
 
 const S = 1000;
 const M = 60 * S;
@@ -13,10 +13,6 @@ describe('one time format for every surface', () => {
 
   it('gives a finished call tenths only under ten seconds', () => {
     expect([3_400, 12_300, 65 * S].map(formatDuration)).toEqual(['3.4s', '12s', '1m 5s']);
-  });
-
-  it('drops the seconds in a shared row once there are minutes', () => {
-    expect([45 * S, 4 * M + 5 * S, 2 * H + 5 * M, 27 * H + 23 * M].map(shortDuration)).toEqual(['45s', '4m', '2h 5m', '1d 3h']);
   });
 
   it('says how long ago, then the date', () => {

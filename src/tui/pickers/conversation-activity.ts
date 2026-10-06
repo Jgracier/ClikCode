@@ -6,7 +6,7 @@
 
 import chalk from 'chalk';
 import { waitingSpinnerGlyph } from '../render/waiting.js';
-import { shortDuration } from '../../harness/protocol/format.js';
+import { formatElapsed } from '../../harness/protocol/format.js';
 import { turnStalled } from '../../harness/protocol/turn-pace.js';
 import type { PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession } from '../../session/model.js';
@@ -39,7 +39,7 @@ export function subagentOptions(
     const stalled = turnStalled(now - Date.parse(agent.stepAt ?? agent.startedAt));
     return {
       label: `${(stalled ? chalk.yellow : chalk.green)('●')} ${agent.label}`,
-      detail: `${agent.step ?? 'starting'} · ${shortDuration(now - Date.parse(agent.startedAt))}`,
+      detail: `${agent.step ?? 'starting'} · ${formatElapsed(now - Date.parse(agent.startedAt))}`,
       value: conversationValue,
     };
   });
