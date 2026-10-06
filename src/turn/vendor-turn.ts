@@ -495,7 +495,7 @@ export async function sendVendorTurn(input: {
       });
       lifecycle('worker.turn.attempt-failed', {
         kind: failureKind, transport, account: account.id.slice(0, 8),
-        message: (failure instanceof Error ? failure.message : String(failure)).replace(/\s+/g, ' ').slice(0, 240),
+        message: (failure instanceof Error ? failure.message : String(failure)).slice(0, 8000),
       });
       // A reasoning level the model does not take. Which levels a model
       // takes is often only stated by the refusal itself ("Unknown effort
