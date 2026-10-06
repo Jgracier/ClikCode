@@ -1532,8 +1532,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const hint = !asking && turn.submit && turn.cancel && !turn.cancelled && !turn.draft.trim() && this.messageWaiting()
       ? ` · ${STEER_WORDS.stopAndSend}` : '';
     // What the agent is doing is essential and stays at full contrast; the
-    // clock and the hint after it are dimmed.
-    const rest = asking ? '' : ` · ${elapsed}${hint}`;
+    // clock and the hint after it are dimmed. An open call's row keeps its
+    // own clock, so this line does not show a second one beside it.
+    const rest = asking ? '' : `${tool ? '' : ` · ${elapsed}`}${hint}`;
     // One spinner, one motion, for every harness and every tool, the label
     // shimmering with it. An approval is the turn waiting on the user, not
     // working: a still dot, and no clock (it is stopped).

@@ -14,24 +14,17 @@ function units(ms: number): [number, string, number, string] | [number, string] 
   return hours < 24 ? [hours, 'h', minutes % 60, 'm'] : [Math.floor(hours / 24), 'd', hours % 24, 'h'];
 }
 
-/** `42s`, `3m 5s`, `1h 15m`, `2d 3h`: a clock counting up -- the waiting
- * band's, a running call's, "Worked for …". */
+/** `42s`, `3m`, `3m 5s`, `1h 15m`, `2d 3h`: a clock counting up -- the waiting
+ * band's, a running call's, a board row's, "Worked for …". */
 export function formatElapsed(ms: number): string {
   const [major, majorUnit, minor, minorUnit] = units(ms);
-  return minorUnit === undefined ? `${major}${majorUnit}` : `${major}${majorUnit} ${minor}${minorUnit}`;
+  return minorUnit === undefined || !minor ? `${major}${majorUnit}` : `${major}${majorUnit} ${minor}${minorUnit}`;
 }
 
 /** A finished call's run time: `3.4s` under ten seconds, then as
  * {@link formatElapsed}. */
 export function formatDuration(ms: number): string {
   return ms < 10_000 ? `${(Math.max(0, ms) / 1000).toFixed(1)}s` : formatElapsed(ms);
-}
-
-/** `45s`, `4m`, `2h 5m`, `1d 3h`: {@link formatElapsed} without the seconds
- * once there are minutes, for a row that shares its width. */
-export function shortDuration(ms: number): string {
-  const [major, majorUnit, minor, minorUnit] = units(ms);
-  return minorUnit === undefined || minorUnit === 's' ? `${major}${majorUnit}` : `${major}${majorUnit} ${minor}${minorUnit}`;
 }
 
 /** `just now`, `4m ago`, `2h ago`, `3d ago`, then a date (`Oct 4`, with the

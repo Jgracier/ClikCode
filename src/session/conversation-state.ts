@@ -10,7 +10,7 @@
  *
  * Chalk free and dependency free, so the webview bundle can import it. */
 
-import { quotaResetPhrase, relativeTime, shortDuration } from '../harness/protocol/format.js';
+import { quotaResetPhrase, relativeTime, formatElapsed } from '../harness/protocol/format.js';
 import { turnStalled } from '../harness/protocol/turn-pace.js';
 
 /** Where a row is listed: generating, changed in the last 24 hours, older.
@@ -79,12 +79,12 @@ export function conversationState(facts: ConversationStateFacts, now: number): C
   if (facts.turn) {
     const active = parsed(facts.turn.activeAt);
     const quiet = Number.isFinite(active) ? now - active : 0;
-    if (turnStalled(quiet)) return { kind: 'stalled', text: `stalled ${shortDuration(quiet)}` };
+    if (turnStalled(quiet)) return { kind: 'stalled', text: `stalled ${formatElapsed(quiet)}` };
     const agents = facts.turn.agents ?? 0;
     const started = parsed(facts.turn.startedAt);
     return {
       kind: 'working',
-      text: `working${Number.isFinite(started) ? ` ${shortDuration(now - started)}` : ''}${agents ? ` · ${agents} agent${agents === 1 ? '' : 's'}` : ''}`,
+      text: `working${Number.isFinite(started) ? ` ${formatElapsed(now - started)}` : ''}${agents ? ` · ${agents} agent${agents === 1 ? '' : 's'}` : ''}`,
     };
   }
   if (facts.resumeAt && Number.isFinite(parsed(facts.resumeAt))) {
