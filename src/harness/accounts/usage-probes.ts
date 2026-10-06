@@ -97,8 +97,11 @@ async function codexUsageReading(_session: HarnessSession, environment: Readonly
     timer.unref();
   });
   const reading = codexRateLimitsReading(response?.rateLimits);
-  const plan = reading ? await codexPlan(environment) : undefined;
-  return reading && plan ? { ...reading, plan: { name: plan } } : reading;
+  // The plan is in the id token on disk, readable even when the rate-limit
+  // read is not (a spent token): a plan alone carries no figure.
+  const plan = await codexPlan(environment);
+  if (!plan) return reading;
+  return reading ? { ...reading, plan: { name: plan } } : { windows: [], plan: { name: plan } };
 }
 
 /** The ChatGPT plan Codex signed in with ("free", "plus", "pro"): a claim
