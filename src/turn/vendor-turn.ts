@@ -184,7 +184,7 @@ export async function sendVendorTurn(input: {
     });
     lifecycle('thread.take-up', {
       harness: harness.command, how: start.kind, turns: record.turns.length, interrupted: options.interrupted,
-      ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : {}),
+      ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : { omitted: start.omitted, contextWindow }),
     });
     if (start.kind === 'native') {
       session.nativeSessionId = start.written.nativeId;

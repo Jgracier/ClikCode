@@ -34,7 +34,7 @@ export const TRANSFER_MAX_BYTES = 200 * 1024;
 export const TRANSFER_WINDOW_SHARE = 0.2;
 /** UTF-8 bytes per token, for English prose and code alike (a conservative
  * average: tokenizers run 3.5-4.5). */
-const BYTES_PER_TOKEN = 4;
+export const BYTES_PER_TOKEN = 4;
 /** Room argv needs beside the prompt (flags, ids, paths). */
 const ARGV_HEADROOM_BYTES = 4 * 1024;
 
