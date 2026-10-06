@@ -43,10 +43,11 @@
 
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
 import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
+import { absolutePath, shellQuote } from './thread-writer-files.js';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { captureNativeHarnessOutput } from '../../../harness/transport/native/command.js';
 import type { CanonicalPart, CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../canonical.js';
 import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionStore, type NativeThreadWriteContext, type NativeThreadWriter, type NativeThreadWritten } from '../stores.js';
@@ -77,10 +78,6 @@ function text(value: unknown): string | undefined {
   return undefined;
 }
 
-function absolute(path: string, workspace: string): string {
-  return isAbsolute(path) ? path : resolve(workspace, path);
-}
-
 /** One call as OpenCode would have made it. */
 export interface OpenCodeCall {
   tool: string;
@@ -109,7 +106,7 @@ function patchCalls(patch: string, workspace: string): OpenCodeCall[] {
   for (const section of sections) {
     const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/m.exec(section);
     if (!header) continue;
-    const path = absolute(header[2]!.trim(), workspace);
+    const path = absolutePath(workspace, header[2]!.trim());
     const body = section.split('\n').slice(1).filter((line) => line !== '' && !/^\*\*\* (End Patch|Move to:|End of File)/.test(line));
     if (header[1] === 'Delete') {
       calls.push({ tool: 'bash', input: { command: `rm ${shellQuote(path)}`, description: `Delete ${path}` }, title: `rm ${path}` });
@@ -134,10 +131,6 @@ function patchCalls(patch: string, workspace: string): OpenCodeCall[] {
   return calls;
 }
 
-function shellQuote(value: string): string {
-  return /^[\w./@%+=:,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 /** The edit(s) a recorded change amounts to, from its arguments or, for a
  *  call recorded without them, from the diff ClikCode drew. */
 function editCalls(call: CanonicalToolCall, workspace: string): OpenCodeCall[] {
@@ -152,17 +145,17 @@ function editCalls(call: CanonicalToolCall, workspace: string): OpenCodeCall[] {
     return before !== undefined && after !== undefined ? [{ before, after }] : [];
   });
   if (file && pairs.length) {
-    const path = absolute(file, workspace);
+    const path = absolutePath(workspace, file);
     return pairs.map(({ before, after }) => ({ tool: 'edit', input: { filePath: path, oldString: before, newString: after }, title: path }));
   }
   const content = text(input.content) ?? text(input.file_text) ?? text(input.text);
   if (file && content !== undefined) {
-    const path = absolute(file, workspace);
+    const path = absolutePath(workspace, file);
     return [{ tool: 'write', input: { filePath: path, content }, title: path }];
   }
   return (call.diff ?? []).flatMap((diff): OpenCodeCall[] => {
     if (!diff.path || !diff.lines.length) return [];
-    const path = absolute(diff.path, workspace);
+    const path = absolutePath(workspace, diff.path);
     if (diff.change === 'delete') return [{ tool: 'bash', input: { command: `rm ${shellQuote(path)}`, description: `Delete ${path}` }, title: `rm ${path}` }];
     const lines = diff.lines.filter((line) => line.kind !== 'gap');
     const newString = lines.filter((line) => line.kind !== 'removed').map((line) => line.text).join('\n');
@@ -197,12 +190,12 @@ export function openCodeCallsFor(call: CanonicalToolCall, workspace: string): Op
   }
   const file = filePathOf(input) ?? (call.category === 'read' || READ_TOOLS.has(name) ? call.target : undefined);
   if ((call.category === 'read' || READ_TOOLS.has(name)) && file && name !== 'list' && name !== 'ls') {
-    const path = absolute(file, workspace);
+    const path = absolutePath(workspace, file);
     return [{ tool: 'read', input: { filePath: path }, title: path }];
   }
   const pattern = text(input.pattern) ?? text(input.query) ?? text(input.regex);
   const searchPath = text(input.path) ?? text(input.dir_path) ?? text(input.directory);
-  const scoped = searchPath ? { path: absolute(searchPath, workspace) } : {};
+  const scoped = searchPath ? { path: absolutePath(workspace, searchPath) } : {};
   if (GLOB_TOOLS.has(name) && (pattern ?? call.target)) {
     return [{ tool: 'glob', input: { pattern: pattern ?? call.target!, ...scoped }, title: pattern ?? call.target! }];
   }

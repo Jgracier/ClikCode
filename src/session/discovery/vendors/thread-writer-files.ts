@@ -69,6 +69,11 @@ export function absolutePath(workspace: string, path: string): string {
   return isAbsolute(path) ? path : join(workspace, path);
 }
 
+/** One argument for a shell command line, quoted only when it needs it. */
+export function shellQuote(value: string): string {
+  return /^[\w./@%+=:,-]+$/.test(value) ? value : `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 /** The path a file call acted on. */
 export function callPath(call: CanonicalToolCall): string | undefined {
   return inputString(call, 'file_path', 'path', 'filePath', 'absolute_path', 'filename', 'file')
