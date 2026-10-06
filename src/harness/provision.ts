@@ -71,6 +71,8 @@ export interface ProvisionInput {
    * `mcp remove`. */
   signIn?: (entry: McpServerEntry, headersReach: boolean) => Promise<McpSignInAnswer>;
   remove?: typeof removeMcpFromHarness;
+  /** Tests pass the check; production asks the local server (localServerDown). */
+  serverDown?: (target: string) => Promise<boolean>;
   /** ClikCode's own servers (search/mcp-entry.ts), given to every harness
    * by the same rules as the user's: never over a name already there. */
   builtins?: readonly McpServerEntry[];
@@ -98,6 +100,21 @@ export function skillRoot(
 ): string {
   if (!profile || profile.env === 'HOME') return join(profile?.path ?? home, ...parts);
   return join(profile.path, ...parts.slice(1));
+}
+
+/** Whether a server on this machine is down: a refused (or silent)
+ * connection. A remote server is never judged here. */
+export async function localServerDown(target: string): Promise<boolean> {
+  let url: URL;
+  try { url = new URL(target); } catch { return false; }
+  if (!/^(?:localhost|127(?:\.\d+){3}|\[::1\])$/.test(url.hostname)) return false;
+  try {
+    const response = await fetch(target, { method: 'HEAD', signal: AbortSignal.timeout(1_500) });
+    await response.body?.cancel().catch(() => undefined);
+    return false;
+  } catch {
+    return true;
+  }
 }
 
 function specToEntry(spec: McpServerSpec): McpServerEntry {
@@ -155,9 +172,32 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   // Remote servers are asked at once, not one after another.
   const answers = new Map(await Promise.all(entries.filter((entry) => isRemoteTarget(entry.target))
     .map(async (entry) => [entry.name, await signIn(entry, headersReach)] as const)));
+  // Grok quits outright when an HTTP server it was given does not answer
+  // ("worker quit with fatal: Transport channel closed", 2026-10-06: a local
+  // dev server that was down), where every other vendor goes on without it.
+  // So Grok gets a local server only while it is up; asking costs nothing,
+  // since a refused connection fails at once.
+  const down = input.harness.command === 'grok'
+    ? new Set((await Promise.all(entries.filter((entry) => isRemoteTarget(entry.target))
+      .map(async (entry) => (await (input.serverDown ?? localServerDown)(entry.target)) ? entry.name : undefined))).filter(Boolean))
+    : new Set<string | undefined>();
   const ownership = await mcpOwnership(stateDir, input, home, profile, present.known);
   for (const entry of entries) {
     if (present.unreadable) { mcpSkipped.push(entry.name); continue; }
+    if (down.has(entry.name)) {
+      mcpSkipped.push(entry.name);
+      // ClikCode's earlier copy comes back out, and goes back in once the
+      // server answers; one the user put there is theirs.
+      const there = present.known ? ownership.urls.get(entry.name) === entry.target : ownership.recorded(entry.name);
+      if (there && await ownership.owns(entry.name)) {
+        const removed = await (input.remove ?? removeMcpFromHarness)(input.harness, entry.name, input.account, home);
+        if (removed.ok) {
+          mcpRemoved.push(entry.name);
+          await forgetProvisioned(stateDir, input, entry.name);
+        } else mcpRemoveFailed.push({ name: entry.name, ...(removed.detail ? { detail: removed.detail } : {}) });
+      }
+      continue;
+    }
     const answer = answers.get(entry.name);
     if (answer && answer !== 'open') {
       // Never handed to a vendor: each one keeps its own sign-in, so it

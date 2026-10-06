@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
 import type { AiHarnessAccount } from './definition.js';
-import { provisionChosenHarness, skillRoot } from './provision.js';
+import { localServerDown, provisionChosenHarness, skillRoot } from './provision.js';
 import { vendorMcpServerNames } from '../agent/mcp/import.js';
 import { writeMcpConfigEntry } from './mcp-registry.js';
 import { mcpServerNeedsSignIn } from './mcp-sign-in.js';
@@ -306,5 +306,40 @@ describe('a remote MCP server that needs a browser sign-in', () => {
     // `mine` was the user's before ClikCode looked, and no import says otherwise.
     expect(removed).toEqual(['svc']);
     expect(later.mcpRemoved).toEqual(['svc']);
+  });
+
+  // Grok quit with "worker quit with fatal: Transport channel closed" when a
+  // local dev server it was given was down (2026-10-06).
+  it('gives Grok a local server only while it is up, and takes back its own copy when it is down', async () => {
+    const { home, state, workspace } = await layout();
+    const grok = allLocalHarnesses().find((item) => item.command === 'grok')!;
+    const profile = join(state, 'profiles', 'grok', 'acct');
+    await mkdir(join(profile, '.grok'), { recursive: true });
+    await writeFile(join(profile, '.grok', 'config.toml'), '');
+    const DEV = 'http://127.0.0.1:3000/mcp';
+    await clikcodeList(state, { dev: { url: DEV } });
+    const installed: string[] = [];
+    const install: NonNullable<Parameters<typeof provisionChosenHarness>[0]['install']> = async (_harness, entry) => {
+      installed.push(entry.name);
+      await writeFile(join(profile, '.grok', 'config.toml'), `[mcp_servers.${entry.name}]\nurl = "${entry.target}"\n`);
+      return { harness: 'grok', ok: true };
+    };
+    const whileDown = await provisionChosenHarness({ harness: grok, account: account(profile), workspace, stateDir: state, home, signIn: async () => 'open', install, serverDown: async () => true });
+    expect(installed).toEqual([]);
+    expect(whileDown.mcpSkipped).toEqual(['dev']);
+    await provisionChosenHarness({ harness: grok, account: account(profile), workspace, stateDir: state, home, signIn: async () => 'open', install, serverDown: async () => false });
+    expect(installed).toEqual(['dev']);
+    const removed: string[] = [];
+    const later = await provisionChosenHarness({
+      harness: grok, account: account(profile), workspace, stateDir: state, home, signIn: async () => 'open', install, serverDown: async () => true,
+      remove: async (_harness, name) => { removed.push(name); return { harness: 'grok', ok: true }; },
+    });
+    expect(removed).toEqual(['dev']);
+    expect(later.mcpRemoved).toEqual(['dev']);
+  });
+
+  it('asks only a server on this machine whether it is down', async () => {
+    expect(await localServerDown('https://mcp.figma.com/mcp')).toBe(false);
+    expect(await localServerDown('http://127.0.0.1:1/mcp')).toBe(true);
   });
 });
