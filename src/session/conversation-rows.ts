@@ -17,7 +17,6 @@ import type { HarnessSession } from './model.js';
 import { sessionActivity, type WorkerLiveness } from './liveness.js';
 import type { ConversationSection } from './conversation-state.js';
 
-export { SECTION_TITLES, type ConversationSection } from './conversation-state.js';
 
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
 

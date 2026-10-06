@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './width';
-import { appendThought, liveConversationLines, liveWaitKind, rightLabeledRule, runningChatLine, waitingSpinnerGlyph } from './waiting';
+import { liveConversationLines, rightLabeledRule, runningChatLine } from './waiting';
+import { appendThought, liveWaitKind, waitingSpinnerGlyph } from '../../harness/protocol/activity-view';
 import { waitingSpinnerFrame } from '../../harness/protocol/activity-view';
 import { visibleTail } from './width';
 

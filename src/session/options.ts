@@ -58,7 +58,6 @@ export type ProviderAccountChoice =
   | { kind: 'account'; harness: string; accountId: string }
   | { kind: 'add-account'; harness: string };
 
-export { conversationIdFor } from './conversation-rows.js';
 
 export function hasConversationContent(session: HarnessSession): boolean {
   return Boolean(session.nativeSessionId || session.pendingTurn || (session.messages ?? []).length > 0);

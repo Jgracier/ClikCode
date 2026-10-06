@@ -1,7 +1,8 @@
 /** A tool's output as its row shows it: while it runs and once it settles. */
 import { describe, expect, it } from 'vitest';
 import { outputPreviewRows, renderActivityLine } from '../../harness/protocol/activity-line.js';
-import { activityLifecyclePhase, upsertActivityEvent } from './activity-log.js';
+import { upsertActivityEvent } from './activity-log.js';
+import { activityLifecyclePhase } from '../../harness/protocol/activity-view.js';
 
 const plain = (rows: string[]) => rows.map((row) => row.replace(/\u001b\[[0-9;]*m/g, '').trim());
 

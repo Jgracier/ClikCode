@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type Conf from 'conf';
 import { IdeBridge } from './bridge.js';
 import type { WorkerEvent } from '../worker/protocol.js';
-import { IDE_PROTOCOL } from './protocol.js';
+import { IDE_PROTOCOL } from './protocol-version.js';
 
 interface Internals {
   sessionId: string | undefined;

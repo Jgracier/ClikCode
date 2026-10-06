@@ -5,7 +5,7 @@
  * (session/options.ts); this is only the part a terminal paints. */
 
 import chalk from 'chalk';
-import { waitingSpinnerGlyph } from '../render/waiting.js';
+import { waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
 import { formatElapsed } from '../../harness/protocol/format.js';
 import { turnStalled } from '../../harness/protocol/turn-pace.js';
 import type { PickerOption } from '../../harness/prompter.js';

@@ -57,7 +57,8 @@ import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../work
 import { shownSettingsKey, type WorkerEvent } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
 import { watchConversationList, type ListWatch } from '../session/list-watch.js';
-import { encodeTerminalSpec, IDE_PROTOCOL, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
+import { encodeTerminalSpec, type IdeChoice, type IdeEvent, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
+import { IDE_PROTOCOL } from './protocol-version.js';
 import { sessionEvent } from './session-event.js';
 import { selectProviderConversation } from '../tui/pickers/conversation.js';
 import {

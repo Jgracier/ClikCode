@@ -7,7 +7,6 @@ import chalk from 'chalk';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { wrapCodeLine, wrapWords } from './wrap.js';
-export { APPROVAL_GUARD_MS, approvalKeyAction } from './approval-keys.js';
 
 export type ApprovalPreview = {
   /** What the call would change, file by file -- the same hunks an edit's

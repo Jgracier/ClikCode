@@ -35,7 +35,7 @@ const { accountList, conversationList, creditOf } = await import('./queries.js')
 const { readState } = await import('../session/state/read.js');
 const { writeState } = await import('../session/state/write.js');
 const { IdeBridge } = await import('./bridge.js');
-const { IDE_PROTOCOL } = await import('./protocol.js');
+const { IDE_PROTOCOL } = await import('./protocol-version.js');
 const { ensureWorkersDirectory, writeWorkerRecord } = await import('../worker/registry.js');
 
 const previousHome = process.env.CLIKCODE_HOME;
