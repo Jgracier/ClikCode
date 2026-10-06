@@ -177,18 +177,27 @@ export function kiroThreadFiles(record: CanonicalRecord, options: KiroThreadOpti
   const add = (kind: string, data: Record<string, unknown>): void => {
     lines.push({ version: 'v1', kind, data: { message_id: messageId(), ...data } });
   };
+  // Kiro panics on a history whose prompts and replies do not alternate
+  // ("first agent loop request should never fail: invalid conversation
+  // history received", kiro-cli 2.23.1) and its ACP agent then hangs: a
+  // turn that got no reply (failed, interrupted) says so instead.
+  const lastKind = (): string | undefined => (lines.at(-1) as { kind?: string } | undefined)?.kind;
+  const noReply = (): void => add('AssistantMessage', { content: [{ kind: 'text', data: '(No reply: this turn was interrupted.)' }] });
   for (const turn of record.turns) {
     const request = requestText(turn);
     if (request.trim() || !lines.length) {
+      if (lastKind() === 'Prompt') noReply();
       add('Prompt', { content: [{ kind: 'text', data: request.trim() ? request : '(continue)' }], meta: { timestamp: seconds } });
     }
     for (const step of assistantSteps(turn, map, callId)) {
-      add('AssistantMessage', {
-        content: [
-          ...(step.text ? [{ kind: 'text', data: step.text }] : []),
-          ...step.calls.map((call) => ({ kind: 'toolUse', data: { toolUseId: call.id, name: call.name, input: call.args } })),
-        ],
-      });
+      const said = [
+        ...(step.text ? [{ kind: 'text', data: step.text }] : []),
+        ...step.calls.map((call) => ({ kind: 'toolUse', data: { toolUseId: call.id, name: call.name, input: call.args } })),
+      ];
+      // A reply after a reply (text, no call between): one message.
+      const previous = lines.at(-1) as { kind?: string; data: { content: unknown[] } } | undefined;
+      if (previous?.kind === 'AssistantMessage') previous.data.content.push(...said);
+      else add('AssistantMessage', { content: said });
       if (!step.calls.length) continue;
       const results: Record<string, unknown> = {};
       const content = step.calls.map((call) => {
@@ -204,6 +213,7 @@ export function kiroThreadFiles(record: CanonicalRecord, options: KiroThreadOpti
       add('ToolResults', { content, results });
     }
   }
+  if (lastKind() === 'Prompt') noReply();
   const at = options.now.toISOString();
   const title = record.turns.find((turn) => turn.user.trim())?.user.trim().replace(/\s+/g, ' ').slice(0, 120) ?? null;
   const session = {
