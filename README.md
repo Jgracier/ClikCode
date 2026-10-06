@@ -239,7 +239,12 @@ there:
 ```sh
 clikcode mcp targets                        # how each harness would receive it
 clikcode mcp add postgres -- npx -y pg-mcp  # record it; install on choose
+clikcode mcp list                           # what is recorded, and which harnesses have it
+clikcode mcp remove postgres                # forget it, and take ClikCode's copies back out
 ```
+
+`mcp remove` takes out only the copies ClikCode itself wrote. A server you
+added to a tool by hand stays where you put it.
 
 ClikCode does not host or proxy these servers. Each tool talks to them
 directly, exactly as it would if you had configured it by hand. Skills follow
@@ -261,6 +266,8 @@ when you would rather type than pick.
 | `clikcode accounts list` / `status` / `logout` / `remove` | Your accounts: what they are called, and what is left on each |
 | `clikcode models`, `clikcode usage` | Models you can pick, and how much each account has left |
 | `clikcode sessions list` / `show` / `create` / `open` / `resume` / `send` / `set` / `close` | Your conversations, including ones a tool started on its own |
+| `clikcode send <prompt> [--chat <id\|name\|last>] [--harness <tool>] [--model <model>]` | Send one message without opening a session: a new chat, or continue one |
+| `clikcode logs [--session <id>] [--role <role>] [--since 10m] [-f]` | What every ClikCode window, worker and editor bridge did, in order; the first place to look when something went wrong |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
 | `clikcode gateway login [--github]` / `gateway status` | ClikDeploy Gateway sign-in (Google by default) |
 | `clikcode gateway usage [--days N]` | Your AI use and credit as ClikDeploy Gateway records it: every call, by surface and model |
