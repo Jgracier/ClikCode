@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ampUsageLabel, auggieUsageLabel, commandCodeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
+import { ampUsageLabel, auggieUsageLabel, clineQuotaReading, commandCodeQuotaReading, copilotQuotaReading, cursorQuotaReading, kiloProfileLabel, kimiQuotaReading, kimiWebEndpoint, kiroQuotaReading } from './cli-usage-probes.js';
 
 const NOW = Date.parse('2026-09-30T04:42:49.300Z');
 
@@ -98,6 +98,20 @@ describe('Cursor plan usage', () => {
   });
   it('has nothing to say without plan usage', () => {
     expect(cursorQuotaReading({ displayMessage: 'x' })).toBeUndefined();
+  });
+});
+
+describe('Cline credits balance', () => {
+  // GET /api/v1/users/{id}/balance, 2026-10-06: turns on this account answered
+  // "Insufficient balance. Your Cline Credits balance is $-0.20".
+  // Its :free models still answered on all 12 such accounts: not spent.
+  it('a balance at or below zero is out of credits, but the account still runs free models', () => {
+    const spent = clineQuotaReading({ data: { userId: 'usr-1', balance: -195907 }, success: true });
+    expect(spent).toEqual({ windows: [{ name: 'credits', usedPct: 100, advisory: true }], label: 'Out of credits · free models only' });
+  });
+  it('a positive balance is dollars left, and never spent', () => {
+    expect(clineQuotaReading({ data: { balance: 450000 } })).toEqual({ windows: [], label: '$0.45 credits left' });
+    expect(clineQuotaReading({ error: 'x' })).toBeUndefined();
   });
 });
 
