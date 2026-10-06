@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import { serveStdioMcp, type McpSend } from '../harness/mcp-stdio-server.js';
 import { readState } from '../session/state/read.js';
-import { activeSwarmHost } from './store.js';
+import { currentConversationSession } from '../worker/current-session.js';
 import { swarmIsOn } from './policy.js';
 import { runSwarmDelegation, swarmModelList } from './run.js';
 import { SWARM_CLERK_ENV } from './publish.js';
@@ -48,7 +48,7 @@ const TOOL_SCHEMA = {
 async function toolSpec(): Promise<{ name: string; description: string; inputSchema: typeof TOOL_SCHEMA } | undefined> {
   if (process.env[SWARM_CLERK_ENV]) return undefined;
   let description = 'Hand one self-contained task to a model that has usage left. This chat shows it as one subagent: its steps appear under the row, and you get back a short card, not that model\'s conversation.';
-  const sessionId = await activeSwarmHost();
+  const sessionId = currentConversationSession();
   if (sessionId) {
     const state = await readState({ transcripts: [] });
     const host = state.sessions.find((session) => session.id === sessionId);
@@ -64,8 +64,8 @@ async function callTool(args: Record<string, unknown> | undefined, onStep?: (lab
   if (!prompt) return 'A swarm task needs a prompt.';
   const description = typeof args?.description === 'string' ? args.description.trim() : undefined;
   const model = typeof args?.model === 'string' && args.model.trim() ? args.model.trim() : undefined;
-  const sessionId = await activeSwarmHost();
-  if (!sessionId) return 'No host turn is using the swarm right now. Do this yourself.';
+  const sessionId = currentConversationSession();
+  if (!sessionId) return 'No ClikCode conversation is running this tool. Do this yourself.';
   const state = await readState({ transcripts: [] });
   const host = state.sessions.find((session) => session.id === sessionId);
   if (!host || !swarmIsOn(host)) return 'This conversation has no swarm on. Do this yourself.';
@@ -110,7 +110,7 @@ async function dispatch(message: RpcMessage, send: McpSend): Promise<unknown> {
           send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress, message: label } });
         })
         : `Unknown tool ${message.params?.name ?? ''}`;
-      const isError = text.startsWith('No host') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage') || text.startsWith('No other account with usage');
+      const isError = text.startsWith('No ClikCode conversation') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage') || text.startsWith('No other account with usage');
       return respond(message.id, { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
     } catch (error) {
       return fail(message.id, error instanceof Error ? error.message : String(error));

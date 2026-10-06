@@ -2,7 +2,7 @@
  * spool live beside the session index so a clerk's turn cannot rewrite the
  * host's transcript to share them. */
 
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { readFile, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { atomicWriteFile } from '../session/store/files.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -18,10 +18,6 @@ function boardPath(sessionId: string): string {
 
 export function swarmActivityPath(sessionId: string): string {
   return join(directory(), `activity-${sessionId}.jsonl`);
-}
-
-export function swarmActivePath(): string {
-  return join(directory(), 'active.json');
 }
 
 /** A missing board is a new one. A board that is there but unreadable is
@@ -57,25 +53,4 @@ export async function openSwarmTurn(sessionId: string): Promise<SwarmBoard> {
   const board = beginTurn(await readBoard(sessionId));
   await writeBoard(sessionId, board);
   return board;
-}
-
-export async function markSwarmHost(sessionId: string | undefined): Promise<void> {
-  const dir = directory();
-  await mkdir(dir, { recursive: true });
-  if (!sessionId) {
-    await writeFile(swarmActivePath(), '{}\n', 'utf8');
-    return;
-  }
-  await writeFile(swarmActivePath(), JSON.stringify({ sessionId }), 'utf8');
-}
-
-export async function activeSwarmHost(): Promise<string | undefined> {
-  const envSession = process.env.CLIKCODE_SESSION_ID?.trim();
-  if (envSession) return envSession;
-  try {
-    const parsed = JSON.parse(await readFile(swarmActivePath(), 'utf8')) as { sessionId?: unknown };
-    return typeof parsed.sessionId === 'string' ? parsed.sessionId : undefined;
-  } catch {
-    return undefined;
-  }
 }

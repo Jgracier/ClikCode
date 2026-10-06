@@ -34,7 +34,7 @@ describe('stored-usage account switch', () => {
     const key = account('key', { provider: 'aider', authKind: 'api-key', credentialRef: 'env:OPENAI_API_KEY' });
     expect(turnBackendForAccount(key)).toBe('vendor');
     expect(nextUsableFailoverAccount(
-      state([current, key]), current, (candidate) => turnBackendForAccount(candidate) === 'vendor', new Set(),
+      state([current, key]), current, (candidate) => turnBackendForAccount(candidate) === 'vendor', new Map(),
     )?.id).toBe('key');
   });
 
@@ -43,20 +43,37 @@ describe('stored-usage account switch', () => {
     // the turn said "All accounts exhausted" with A back a minute earlier.
     const back = account('back', { quotaState: 'exhausted', quotaRetryAt: earlier });
     const current = account('current', { quotaState: 'exhausted', quotaRetryAt: later });
-    expect(nextUsableFailoverAccount(state([current, back]), current, () => true, new Set(['back']))?.id).toBe('back');
+    const triedBefore = Date.now() - 2 * 86_400_000;
+    expect(nextUsableFailoverAccount(state([current, back]), current, () => true, new Map([['back', triedBefore]]))?.id).toBe('back');
     const stillOut = account('still-out', { quotaState: 'exhausted', quotaRetryAt: later });
-    expect(nextUsableFailoverAccount(state([current, stillOut]), current, () => true, new Set(['still-out']))).toBeUndefined();
+    expect(nextUsableFailoverAccount(state([current, stillOut]), current, () => true, new Map([['still-out', triedBefore]]))).toBeUndefined();
     // Tried and refused for something that names no reset: not again this turn.
-    expect(nextUsableFailoverAccount(state([current, account('throttled')]), current, () => true, new Set(['throttled']))).toBeUndefined();
+    expect(nextUsableFailoverAccount(state([current, account('throttled')]), current, () => true, new Map([['throttled', triedBefore]]))).toBeUndefined();
+  });
+
+  it('does not walk two throttled accounts A, B, A forever on resets that had passed before they were tried', async () => {
+    const a = account('a', { quotaState: 'exhausted', quotaRetryAt: earlier });
+    const b = account('b', { quotaState: 'exhausted', quotaRetryAt: earlier });
+    const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
+    const session = { accountFailover: 'on-quota-exhausted' } as HarnessSession;
+    const held = state([a, b]);
+    const after = (from: AiHarnessAccount) => accountAfterFailure({
+      state: held, session, account: from, failure: new Error('429 too many requests'), kind: 'temporarily-throttled',
+      matchesBackend: () => true, tally, persist: async () => undefined,
+    });
+    expect((await after(a)).id).toBe('b');
+    const failure = await after(b).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe('429 too many requests');
   });
 
   it('skips a known spent account before the turn and records that attempt', () => {
     const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
     const next = account('next');
-    const attempted = new Set<string>();
+    const attempted = new Map<string, number>();
     expect(initialAccountChoice(state([current, next]), current, 'on-quota-exhausted', () => true, attempted))
       .toEqual({ kind: 'switch', account: next });
-    expect([...attempted]).toEqual(['current']);
+    expect([...attempted.keys()]).toEqual(['current']);
   });
 
   it('keeps direct API failover on an account that serves the selected model', () => {
@@ -72,7 +89,7 @@ describe('stored-usage account switch', () => {
     const quotaFailure = new Error('quota reached');
     const otherFailure = new Error('connection reset');
     const result = terminalFailoverError({
-      state: state([spent, crashed]), current: crashed, attempted: new Set(['spent', 'crashed']),
+      state: state([spent, crashed]), current: crashed, attempted: new Map([['spent', 0], ['crashed', 0]]),
       matchesBackend: () => true, exhaustedAny: true, lastFailure: quotaFailure, lastOtherFailure: otherFailure,
     });
     expect(result).toBe(otherFailure);
@@ -81,7 +98,7 @@ describe('stored-usage account switch', () => {
   it('reports exhaustion only after every matching account is spent', () => {
     const spent = account('spent', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
     const result = terminalFailoverError({
-      state: state([spent]), current: spent, attempted: new Set(['spent']),
+      state: state([spent]), current: spent, attempted: new Map([['spent', 0]]),
       matchesBackend: () => true, exhaustedAny: true, lastFailure: new Error('quota reached'),
     });
     expect(result).toBeInstanceOf(Error);
@@ -97,7 +114,7 @@ describe('stored-usage account switch', () => {
       usage: { at: new Date().toISOString(), label: 'weekly 80% left', windows: [{ name: 'weekly', usedPct: 20, resetsAt: later }] } as AiHarnessAccount['usage'],
     });
     const current = account('current', { quotaState: 'exhausted' });
-    const picked = nextUsableFailoverAccount(state([current, empty, full]), current, () => true, new Set());
+    const picked = nextUsableFailoverAccount(state([current, empty, full]), current, () => true, new Map());
     expect(picked?.id).toBe('full');
     expect(empty.quotaState).toBe('exhausted');
   });
@@ -107,7 +124,7 @@ describe('stored-usage account switch', () => {
       usage: { at: new Date().toISOString(), label: 'weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: later }] } as AiHarnessAccount['usage'],
     });
     const next = account('next');
-    expect(initialAccountChoice(state([spent, next]), spent, 'on-quota-exhausted', () => true, new Set()))
+    expect(initialAccountChoice(state([spent, next]), spent, 'on-quota-exhausted', () => true, new Map()))
       .toEqual({ kind: 'switch', account: next });
     expect(spent.quotaState).toBeUndefined();
   });
@@ -118,8 +135,8 @@ describe('stored-usage account switch', () => {
       usage: { at: new Date().toISOString(), label: 'weekly 10% left', windows: [{ name: 'weekly', usedPct: 90, resetsAt: later }] } as AiHarnessAccount['usage'],
     });
     const current = account('current', { quotaState: 'exhausted' });
-    expect(nextUsableFailoverAccount(state([current, unknown, room]), current, () => true, new Set())?.id).toBe('room');
-    expect(nextUsableFailoverAccount(state([current, unknown]), current, () => true, new Set())?.id).toBe('unknown');
+    expect(nextUsableFailoverAccount(state([current, unknown, room]), current, () => true, new Map())?.id).toBe('room');
+    expect(nextUsableFailoverAccount(state([current, unknown]), current, () => true, new Map())?.id).toBe('unknown');
   });
 
   it('ignores a positive percent that has no window, so it cannot outrank a real reading or clear a refusal', () => {
@@ -131,7 +148,7 @@ describe('stored-usage account switch', () => {
       usage: { at: new Date().toISOString(), label: 'weekly 5% left', windows: [{ name: 'weekly', usedPct: 95, resetsAt: later }] } as AiHarnessAccount['usage'],
     });
     const current = account('current');
-    expect(nextUsableFailoverAccount(state([current, stale, room]), current, () => true, new Set())?.id).toBe('room');
+    expect(nextUsableFailoverAccount(state([current, stale, room]), current, () => true, new Map())?.id).toBe('room');
     expect(stale.quotaState).toBe('exhausted');
   });
 
@@ -148,8 +165,8 @@ describe('stored-usage account switch', () => {
       { id: `turn-${id}`, accountId: id, provider: 'anthropic', at: new Date().toISOString(), totalTokens: 5_000_000, latencyMs: 1 }
     ));
     const held = state([roomy, half], invocations);
-    expect(nextUsableFailoverAccount(held, account('current'), () => true, new Set())?.id).toBe('roomy');
-    expect(nextUsableFailoverAccount(held, account('current'), () => true, new Set(['roomy']))?.id).toBe('half');
+    expect(nextUsableFailoverAccount(held, account('current'), () => true, new Map())?.id).toBe('roomy');
+    expect(nextUsableFailoverAccount(held, account('current'), () => true, new Map([['roomy', Date.now()]]))?.id).toBe('half');
     expect([roomy.quotaState, half.quotaState]).toEqual([undefined, undefined]);
   });
 
@@ -160,7 +177,7 @@ describe('stored-usage account switch', () => {
     const invocations = [
       { id: 'later-turn', accountId: 'spent', provider: 'anthropic', at: new Date().toISOString(), totalTokens: 50, latencyMs: 1 },
     ];
-    expect(nextUsableFailoverAccount(state([spent], invocations), account('current'), () => true, new Set())).toBeUndefined();
+    expect(nextUsableFailoverAccount(state([spent], invocations), account('current'), () => true, new Map())).toBeUndefined();
   });
 
   it('lets a refused account back in once every spent window has reset', () => {
@@ -168,7 +185,7 @@ describe('stored-usage account switch', () => {
       quotaState: 'exhausted',
       usage: { at: earlier, label: 'weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: earlier }] } as AiHarnessAccount['usage'],
     });
-    expect(nextUsableFailoverAccount(state([returned]), account('current'), () => true, new Set())?.id).toBe('returned');
+    expect(nextUsableFailoverAccount(state([returned]), account('current'), () => true, new Map())?.id).toBe('returned');
   });
 
   it('fails over to a same-provider account whose quota came back, ahead of one with nothing known', () => {
@@ -178,20 +195,20 @@ describe('stored-usage account switch', () => {
     });
     const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
     const other = account('other', { provider: 'openai' });
-    expect(nextUsableFailoverAccount(state([current, other, recovered]), current, () => true, new Set())?.id).toBe('recovered');
+    expect(nextUsableFailoverAccount(state([current, other, recovered]), current, () => true, new Map())?.id).toBe('recovered');
   });
 
   it('never fails over to an account waiting on verification', () => {
     const pending = account('pending', { quotaState: 'available', verification: { at: new Date().toISOString() } });
     const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
-    expect(nextUsableFailoverAccount(state([current, pending]), current, () => true, new Set())).toBeUndefined();
+    expect(nextUsableFailoverAccount(state([current, pending]), current, () => true, new Map())).toBeUndefined();
   });
 
   it('tries an unreadable-vendor account again once its refusal expired, and not before', () => {
     const expired = account('expired', { provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: new Date(Date.now() - 6 * 3_600_000).toISOString() });
     const recent = account('recent', { provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: new Date(Date.now() - 3_600_000).toISOString() });
     const current = account('current', { provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
-    expect(nextUsableFailoverAccount(state([current, recent, expired]), current, () => true, new Set())?.id).toBe('expired');
+    expect(nextUsableFailoverAccount(state([current, recent, expired]), current, () => true, new Map())?.id).toBe('expired');
   });
 
   it('calls a provider exhausted only when none of its accounts can take the turn', () => {
@@ -207,7 +224,7 @@ describe('stored-usage account switch', () => {
 
 describe('the failover step both account backends take', () => {
   const step = (input: { accounts: AiHarnessAccount[]; failure: unknown; kind: AccountFailureKind; signal?: AbortSignal; failover?: 'never' | 'on-quota-exhausted' }) => {
-    const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
+    const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
     const persist = vi.fn(async () => undefined);
     const session = { accountFailover: input.failover ?? 'on-quota-exhausted' } as HarnessSession;
     const result = accountAfterFailure({

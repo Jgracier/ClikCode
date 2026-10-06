@@ -44,9 +44,13 @@ export function reportedRoom(state: HarnessState, account: AiHarnessAccount, now
   return Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPct)));
 }
 
-function resetPassed(account: AiHarnessAccount, now: number): boolean {
+/** Whether a reset this account named came after the turn tried it and has
+ * passed since. A `quotaRetryAt` already past when it was tried is a stale
+ * mark, not news: honouring it walked two throttled accounts A, B, A, ...
+ * forever. */
+function resetPassedSince(account: AiHarnessAccount, triedAt: number, now: number): boolean {
   const at = account.quotaRetryAt ? Date.parse(account.quotaRetryAt) : Number.NaN;
-  return Number.isFinite(at) && at <= now;
+  return Number.isFinite(at) && at > triedAt && at <= now;
 }
 
 /** The account a failover moves to: same provider and transport, signed in,
@@ -58,7 +62,8 @@ export function nextUsableFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesTransport: (candidate: AiHarnessAccount) => boolean,
-  attempted: ReadonlySet<string>,
+  /** Accounts this turn already tried, and when. */
+  attempted: ReadonlyMap<string, number>,
   now: number = Date.now(),
 ): AiHarnessAccount | undefined {
   const room = (account: AiHarnessAccount): number => reportedRoom(state, account, now) ?? -1;
@@ -66,7 +71,7 @@ export function nextUsableFailoverAccount(
     // One this turn already tried is tried again only once the reset its
     // refusal named has passed: "All accounts exhausted" was said a minute
     // after the first account had come back.
-    .filter((candidate) => candidate.id !== current.id && (!attempted.has(candidate.id) || resetPassed(candidate, now))
+    .filter((candidate) => candidate.id !== current.id && (!attempted.has(candidate.id) || resetPassedSince(candidate, attempted.get(candidate.id)!, now))
       && candidate.provider === current.provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now))
     .sort((left, right) => room(right) - room(left))[0];
 }
@@ -77,10 +82,10 @@ export function initialAccountChoice(
   current: AiHarnessAccount,
   policy: HarnessSession['accountFailover'],
   matchesBackend: (candidate: AiHarnessAccount) => boolean,
-  attempted: Set<string>,
+  attempted: Map<string, number>,
 ): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount } | { kind: 'exhausted'; error: Error } {
   if (policy !== 'on-quota-exhausted' || !accountQuotaSpent(current)) return { kind: 'continue' };
-  attempted.add(current.id);
+  attempted.set(current.id, Date.now());
   const fallback = nextUsableFailoverAccount(state, current, matchesBackend, attempted);
   if (fallback) return { kind: 'switch', account: fallback };
   return {
@@ -93,7 +98,7 @@ export function initialAccountChoice(
 export function terminalFailoverError(input: {
   state: HarnessState;
   current: AiHarnessAccount;
-  attempted: ReadonlySet<string>;
+  attempted: ReadonlyMap<string, number>;
   matchesBackend: (candidate: AiHarnessAccount) => boolean;
   exhaustedAny: boolean;
   lastFailure: unknown;
@@ -109,8 +114,9 @@ export function terminalFailoverError(input: {
 
 /** Where a turn stands across its failed attempts. */
 export interface FailoverTally {
-  /** Accounts already tried, each at most once, so a broken harness cannot cycle. */
-  attempted: Set<string>;
+  /** Accounts already tried, and when: each at most once, unless a reset it
+   * named since has passed, so a broken harness cannot cycle. */
+  attempted: Map<string, number>;
   /** Whether any account actually ran out, as opposed to failing some other
    * way. Decides whether "Usage Exhausted" is the truth at the end. */
   exhaustedAny: boolean;
@@ -165,11 +171,12 @@ export async function accountAfterFailure(input: {
     await input.persist();
     throw failure;
   }
+  // Tried before the refusal is recorded, so the reset it names is after.
+  tally.attempted.set(account.id, Date.now());
   if (kind === 'quota-exhausted') {
     recordQuotaRefusal(state, account, failure);
     tally.exhaustedAny = true;
   } else tally.lastOtherFailure = failure;
-  tally.attempted.add(account.id);
   const verification = kind === 'account-ineligible' ? accountVerification(failure) : undefined;
   if (verification) {
     account.verification = { ...verification, at: new Date().toISOString() };
@@ -232,7 +239,7 @@ export function turnAccounts(input: {
   beforeSwitch?: () => Promise<void>;
 }) {
   const { state, session, prompter, matchesBackend, persist } = input;
-  const tally: FailoverTally = { attempted: new Set(), exhaustedAny: false };
+  const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
   const recordAccount = turnAccountRecorder(session, persist);
   let switchedFrom: string | undefined;
   /** Why the turn left that account: the failure it met there. */
