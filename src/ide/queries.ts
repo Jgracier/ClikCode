@@ -9,7 +9,7 @@
  * pickers end in.
  */
 import { sendModeOf } from '../turn/send-mode.js';
-import { turnPace } from '../harness/protocol/turn-pace.js';
+import { turnFacts } from '../session/conversation-state.js';
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
 import { savedGatewayModels, gatewayModels, gatewayModelDetail } from '../gateway/models.js';
@@ -33,11 +33,10 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
 import { compareProviders, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
-import { livePendingTurns, liveWorkerSessions } from '../session/liveness.js';
+import { livePendingTurns, liveWorkers } from '../session/liveness.js';
 import { conversationRows } from '../session/conversation-rows.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { textTranscript } from '../turn/turn-activities.js';
-import { sessionModelLabel } from '../harness/output.js';
 import { modelRow } from '../tui/pickers/model.js';
 import { swarmIsOn } from '../swarm/policy.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
@@ -153,13 +152,14 @@ export async function conversationList(state: HarnessState, currentId: string | 
     .filter((session) => !session.clerkOf)
     .filter((session) => session.status !== 'archived' || session.id === currentId)
     .filter((session) => session.id === currentId || !isBlankConversation(session));
-  const live = await liveWorkerSessions();
-  const pending = await livePendingTurns(sessions, live);
-  return conversationRows(sessions, { workerIsLive: live, pending, ...(currentId ? { currentId } : {}) }).map((row): IdeConversation => {
+  const workers = await liveWorkers();
+  const pending = await livePendingTurns(sessions, workers.isLive);
+  return conversationRows(sessions, { workerIsLive: workers.isLive, awaitingYou: workers.awaitingYou, pending, ...(currentId ? { currentId } : {}) }).map((row): IdeConversation => {
     const latest = row.latest;
     const opened = transcriptWasLoaded(latest) || latest.messages !== undefined || latest.pendingTurn !== undefined;
     const messages = opened ? textTranscript(sessionTranscriptMessages(latest)) : [];
-    const last = opened ? messages.at(-1)?.content.replace(/\s+/g, ' ').trim() : conversationPreview(latest, 140);
+    // The last thing the user asked, as the terminal's row has it.
+    const last = conversationPreview(latest, 140);
     const titled = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim()
       || (opened ? messages.find((message) => message.role === 'user')?.content.replace(/\s+/g, ' ').trim().slice(0, 80) : latest.listPreview)
       || 'Untitled chat';
@@ -168,14 +168,15 @@ export async function conversationList(state: HarnessState, currentId: string | 
       id: latest.id,
       title: titled,
       ...(latest.route === 'gateway' ? { provider: 'ClikDeploy Gateway' } : latest.route === 'clikcode-local' ? { provider: CLIKCODE_LOCAL_LABEL } : harness ? { provider: harness.displayName } : {}),
-      ...(latest.model ? { model: sessionModelLabel(latest) ?? latest.model } : {}),
       updatedAt: latest.updatedAt,
       messages: opened ? messages.length : (latest.listMessageCount ?? 0),
       ...(last ? { preview: last.slice(0, 140) } : {}),
       // Only a live generating turn is `working` (animated). An idle worker
       // still marks the row, but Active vs Past is by recency, not liveness.
       ...(row.activity ? { activity: row.activity } : {}),
-      ...(row.activity === 'working' && row.pending ? { pace: turnPace(row.pending.updatedAt, Date.now()) } : {}),
+      ...(row.activity === 'working' && row.pending ? { turn: turnFacts(row.pending) } : {}),
+      ...(row.needsYou ? { needsYou: true } : {}),
+      ...(latest.resumeAt ? { resumeAt: latest.resumeAt.at } : {}),
       section: row.section,
       current: row.current,
     };

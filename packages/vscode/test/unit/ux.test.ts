@@ -6,7 +6,7 @@ import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../..
 import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { noticeLevel } from '../../src/text';
 import { modelWithEffort } from '../../src/webview/picker';
-import { conversationSection } from '../../src/webview/screens';
+import { conversationSection, rowState } from '../../src/webview/screens';
 import { splitEditorContext } from '../../src/editor-context';
 import { pathIn, relativeTime } from '../../src/webview/format';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
@@ -210,8 +210,24 @@ describe('the history menu lists the terminal board\'s sections', () => {
     expect(conversationSection({ ...row, section: 'active' }, now)).toBe('active');
     expect(conversationSection({ ...row, activity: 'working' }, now)).toBe('working');
     expect(conversationSection({ ...row, updatedAt: '2026-10-03T01:00:00.000Z' }, now)).toBe('active');
-    // Yesterday is Active by the 24-hour rule, not "Previous 7 days".
+    // Yesterday is Recent by the 24-hour rule, not "Previous 7 days".
     expect(conversationSection({ ...row, updatedAt: '2026-10-02T13:00:00.000Z' }, now)).toBe('active');
     expect(conversationSection(row, now)).toBe('past');
+  });
+});
+
+describe('a history row\'s state', () => {
+  const now = Date.parse('2026-10-03T12:00:00.000Z');
+  const row = { id: 'a', title: 't', updatedAt: '2026-10-03T11:55:00.000Z', messages: 1, current: false };
+  it('is the terminal\'s: when, working, stalled, needs you', () => {
+    expect(rowState(row, now)).toEqual({ kind: 'idle', text: '5m ago' });
+    expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:57:00.000Z', activeAt: '2026-10-03T11:59:50.000Z', agents: 2 } }, now).text).toBe('working 3m · 2 agents');
+    expect(rowState({ ...row, activity: 'working', turn: { startedAt: '2026-10-03T11:40:00.000Z', activeAt: '2026-10-03T11:56:00.000Z' } }, now).text).toBe('stalled 4m');
+    expect(rowState({ ...row, needsYou: true }, now).kind).toBe('needs-you');
+  });
+
+  it('needs you when one of VS Code\'s own panels holds an approval, and still works on a bridge that sends no turn', () => {
+    expect(rowState({ ...row, attention: 'waiting' }, now).text).toBe('needs you');
+    expect(rowState({ ...row, activity: 'working' }, now)).toEqual({ kind: 'working', text: 'working' });
   });
 });

@@ -9,7 +9,7 @@ import { activityLifecyclePhase } from '../harness/protocol/activity-view.js';
 import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { sessionPickerOptions } from '../session/options.js';
-import { workingDetail } from '../tui/pickers/conversation-activity.js';
+import { conversationState, turnFacts } from '../session/conversation-state.js';
 import { beginTurn, boardSlice, cardFromReply, emptyBoard, goalKey, keepOnHost } from './board.js';
 import { swarmIsOn } from './policy.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -381,7 +381,7 @@ describe('the board and the status line', () => {
     expect(phase.phase).toBe('waiting on Cursor (62% left), Codex (18% left)');
   });
 
-  it('hides a clerk from the conversation list and counts providers in the row', () => {
+  it('hides a clerk from the conversation list and counts its providers as agents in the row', () => {
     const chat = host({ id: 'shown', messages: [{ role: 'user', content: 'hi' }] });
     const clerk = host({ id: 'hidden', clerkOf: 'shown', messages: [{ role: 'user', content: 'task' }] });
     const listed = sessionPickerOptions([chat, clerk], 'other', () => 'Claude').map((option) => option.value);
@@ -394,7 +394,7 @@ describe('the board and the status line', () => {
         { id: 'b', label: 'Codex', startedAt: ISO, provider: 'codex' },
       ],
     };
-    expect(workingDetail(pending, NOW).replace(/\u001b\[[0-9;]*m/g, '')).toContain('2 providers ←');
+    expect(conversationState({ updatedAt: ISO, turn: turnFacts(pending) }, NOW).text).toContain('2 agents');
   });
 });
 

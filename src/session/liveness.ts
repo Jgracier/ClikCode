@@ -64,18 +64,27 @@ export function sessionIsLive(
  * and opening each chat's record was O(conversations) for a handful of live
  * workers; the directory is O(workers). */
 export async function liveWorkerSessions(): Promise<(sessionId: string) => boolean> {
+  return (await liveWorkers()).isLive;
+}
+
+/** The same pass, and which live workers have an approval waiting on the
+ * user: the record a worker keeps beside its pid (onAwaitingApproval), so a
+ * list can say a conversation needs the user without attaching to it. */
+export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; awaitingYou: (sessionId: string) => boolean }> {
   const live = new Set<string>();
+  const awaiting = new Set<string>();
   const records = await listWorkerRecords().catch(() => []);
   await Promise.all(records.map(async (record) => {
     try {
       process.kill(record.pid, 0);
-      live.add(record.sessionId);
     } catch (error) {
       // EPERM means it exists and belongs to someone else, which still counts.
-      if ((error as NodeJS.ErrnoException).code === 'EPERM') live.add(record.sessionId);
+      if ((error as NodeJS.ErrnoException).code !== 'EPERM') return;
     }
+    live.add(record.sessionId);
+    if (record.awaitingApproval) awaiting.add(record.sessionId);
   }));
-  return (sessionId: string) => live.has(sessionId);
+  return { isLive: (sessionId) => live.has(sessionId), awaitingYou: (sessionId) => awaiting.has(sessionId) };
 }
 
 /** The turn each live-worker session is generating, read from its transcript.

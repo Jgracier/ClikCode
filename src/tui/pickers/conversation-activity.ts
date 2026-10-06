@@ -1,44 +1,32 @@
-/** How a running conversation reads in the conversation list: the dot, the
- * pace of its turn, and the sub-agents it has running.
+/** How a conversation row starts in the terminal's lists: the glyph column
+ * in front of its title, and its running sub-agents as an inner list.
  *
- * The look follows Claude Code's own session list -- sections with their size
- * beside them, a dot per running session, and a pace that turns from flowing
- * to slowing to stuck as a turn goes quiet -- with conversations where it has
- * background jobs. The thresholds are in harness/protocol/turn-pace.ts. */
+ * A row's words -- title, state, last thing asked -- are conversationOption's
+ * (session/options.ts); this is only the part a terminal paints. */
 
 import chalk from 'chalk';
 import { waitingSpinnerGlyph } from '../render/waiting.js';
 import { shortDuration } from '../../harness/protocol/format.js';
-import { turnPace, type TurnPace } from '../../harness/protocol/turn-pace.js';
+import { turnStalled } from '../../harness/protocol/turn-pace.js';
 import type { PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession } from '../../session/model.js';
 
-const PACE_COLOR: Record<TurnPace, (text: string) => string> = {
-  flowing: chalk.green, slowing: chalk.yellow, stuck: chalk.red,
-};
+type RowActivity = NonNullable<PickerOption<string>['activity']>;
 
-/** The mark a row starts with: a coloured dot for a turn in flight, a hollow
- * one for a conversation open between turns, and blank space for one to
- * resume, so every title starts in the same column. */
-export function activityGlyph(activity: 'working' | 'idle' | undefined, pace?: TurnPace): string {
-  if (activity === 'working') return PACE_COLOR[pace ?? 'flowing']('●');
-  if (activity === 'idle') return chalk.dim('○');
-  return ' ';
+/** The glyph column, three cells so every title starts in the same column: a
+ * running turn's spinner (green, yellow once stalled), a blue dot for a
+ * conversation waiting on the user, blank otherwise. `frame` animates the
+ * spinner where the list can; a list that cannot passes 0. */
+export function conversationLabel(option: Pick<PickerOption<string>, 'label' | 'activity'>, frame: number): string {
+  if (option.activity === 'needs-you') return `${chalk.blue('●')}  ${option.label}`;
+  if (option.activity) return `${workingSpinner(frame, option.activity)} ${option.label}`;
+  return `   ${option.label}`;
 }
 
-/** The detail a working conversation leads with: how long, whether it has
- * gone quiet, and how many sub-agents it has out. */
-export function workingDetail(pending: NonNullable<HarnessSession['pendingTurn']>, now: number): string {
-  const pace = turnPace(pending.updatedAt, now);
-  const agents = pending.subagents ?? [];
-  const providers = agents.filter((agent) => agent.provider).length;
-  const count = agents.length;
-  const word = providers && providers === count ? 'provider' : 'subagent';
-  return [
-    `· working ${shortDuration(now - Date.parse(pending.startedAt))}`,
-    ...(pace === 'flowing' ? [] : [PACE_COLOR[pace](pace)]),
-    ...(count ? [`${count} ${word}${count === 1 ? '' : 's'} ←`] : []),
-  ].join(' · ');
+/** A running turn's spinner in the conversation list: the same two-cell
+ * spinner as the waiting line, yellow once the turn has stalled. */
+export function workingSpinner(frame: number, activity: Exclude<RowActivity, 'needs-you'>): string {
+  return (activity === 'stalled' ? chalk.yellow : chalk.green)(waitingSpinnerGlyph(frame));
 }
 
 /** A conversation's running sub-agents as rows of their own. Each opens the
@@ -47,21 +35,15 @@ export function subagentOptions(
   pending: NonNullable<HarnessSession['pendingTurn']>, conversationValue: string, now: number,
 ): PickerOption<string>[] {
   return (pending.subagents ?? []).map((agent) => {
-    const pace = turnPace(agent.stepAt ?? agent.startedAt, now);
+    const stalled = turnStalled(now - Date.parse(agent.stepAt ?? agent.startedAt));
     return {
-      label: `${PACE_COLOR[pace]('●')} ${agent.label}`,
+      label: `${(stalled ? chalk.yellow : chalk.green)('●')} ${agent.label}`,
       detail: [
         `· ${agent.step ?? 'starting'}`,
         shortDuration(now - Date.parse(agent.startedAt)),
-        ...(pace === 'flowing' ? [] : [pace]),
+        ...(stalled ? ['stalled'] : []),
       ].join(' · '),
       value: conversationValue,
     };
   });
-}
-
-/** A running turn's spinner in the conversation list: the same two-cell
- * spinner as the waiting line, coloured by how the turn is going. */
-export function workingSpinner(frame: number, pace: TurnPace): string {
-  return PACE_COLOR[pace](waitingSpinnerGlyph(frame));
 }

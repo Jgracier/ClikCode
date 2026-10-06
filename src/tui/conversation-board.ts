@@ -23,7 +23,7 @@ import { takeTerminalKeys } from './input-decoder.js';
 import { reducedMotion } from './capabilities.js';
 import { pickerDeletesSelection } from './command-palette.js';
 import { asideOpener, confirmRowDelete, redrawOnRefresh, type OptionPickerHost } from './option-picker.js';
-import { workingSpinner } from './pickers/conversation-activity.js';
+import { conversationLabel } from './pickers/conversation-activity.js';
 import { SPIN_MS } from '../harness/protocol/timings.js';
 
 
@@ -219,6 +219,9 @@ export function boardStartRow(rows: readonly PickerOption<string>[], initial?: s
   return at >= 0 ? at : rows.length ? 0 : -1;
 }
 
+/** A row whose turn is running: its spinner is what the board ticks for. */
+const spins = (row: PickerOption<string>): boolean => row.activity === 'working' || row.activity === 'stalled';
+
 /** Everything but the list: the rule and hint around it, and the composer
  * block beneath (usage rule, input, title rule, provider line, spacing). */
 const BOARD_CHROME_ROWS = 5;
@@ -261,7 +264,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     const stopSpin = (): void => { clearInterval(spin); spin = undefined; };
     const tick = (): void => {
       if (finished || aside) return;
-      const anyWorking = rows().some((row) => row.working);
+      const anyWorking = rows().some(spins);
       const hadWorking = wasWorking;
       if (settled(anyWorking)) return;
       // One more draw after the last running row finishes, or its spinner
@@ -280,7 +283,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     const draw = (): void => {
       const showing = rows();
       drawn = { rows: showing, key: drawKey() };
-      if (!spin && showing.some((row) => row.working)) {
+      if (!spin && showing.some(spins)) {
         spin = setInterval(tick, SPIN_MS);
         spin.unref();
       }
@@ -288,7 +291,8 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       // The whole page: the list takes every row the composer does not.
       const capacity = Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
       host.paint(state.draft, showing.map((row) => ({
-        label: row.working ? `${workingSpinner(frame, row.working)} ${row.label}` : row.label, detail: row.detail, value: '', group: row.group,
+        // Conversations get the glyph column, the spinner animated; commands do not.
+        label: boardShowsCommands(state) ? row.label : conversationLabel(row, frame), detail: row.detail, value: '', group: row.group,
       })),
         state.selected, '› ', state.draft.length, { capacity, headings: true, hint: boardHint(state, showing) });
     };

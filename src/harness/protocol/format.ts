@@ -55,6 +55,26 @@ export function relativeTime(iso: string | undefined, now = Date.now()): string 
   });
 }
 
+/** `5:34PM`, or `5:34PM Friday Sep 25` when the reset is not today.
+ *
+ * The calendar day decides, not the window's name: a five-hour window that
+ * rolls over after midnight needs its date as much as a weekly one does. */
+export function quotaResetPhrase(reset: Date, now: number = Date.now()): string {
+  const hours24 = reset.getHours();
+  const time = `${hours24 % 12 || 12}:${reset.getMinutes().toString().padStart(2, '0')}${hours24 >= 12 ? 'PM' : 'AM'}`;
+  const today = new Date(now);
+  const sameDay = reset.getFullYear() === today.getFullYear()
+    && reset.getMonth() === today.getMonth() && reset.getDate() === today.getDate();
+  if (sameDay) return time;
+  // Spelled out rather than taken from toLocaleDateString: that follows the
+  // machine's locale, so the same reset reads "Sat 26 Sept" on one box and
+  // "sam. 26 sept." on another, and a test written against either is wrong
+  // somewhere else.
+  const weekday = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][reset.getDay()];
+  const month = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][reset.getMonth()];
+  return `${time} ${weekday} ${month} ${reset.getDate()}`;
+}
+
 /** A count in a few characters: 999, 1.2k, 37k, 7.2M. A full comma-separated
  * count is what wrapped mid-number on a phone. */
 export function compactCount(count: number): string {

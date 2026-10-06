@@ -17,7 +17,6 @@ import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent } from './route.js';
 import chalk from 'chalk';
 import { commonControlFor, optionIdsForControl } from '../harness/options.js';
 import { harnessTierRank } from '../runtime/lazy-bridge.js';
-import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { sessionProviderLabel } from '../harness/protocol/labels.js';
 import { relativeTime } from '../harness/protocol/format.js';
 import { harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
@@ -29,6 +28,7 @@ import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { forgetNativeThread } from './native-thread.js';
 import { conversationRows, type ConversationRow } from './conversation-rows.js';
+import { conversationState, turnFacts } from './conversation-state.js';
 import { parseSendMode } from '../turn/send-mode.js';
 
 /** Effort words every harness understands, narrowed per harness by
@@ -128,8 +128,10 @@ export function sessionPickerOptions(
   return conversationRows(listed, { currentId, now }).map((row) => conversationOption(row, providerLabel, now));
 }
 
-/** A conversation row as a picker option: title, who answered, how long ago,
- * the last thing asked; its forks under Branches. */
+/** A conversation row as a picker option, in three parts: its title, the one
+ * state it is in (conversation-state.ts), and the last thing asked; its forks
+ * under Branches. Who answered and on which model are not on the row: they
+ * are the conversation's settings, shown once it is open. */
 export function conversationOption(
   row: ConversationRow,
   providerLabel: ((session: HarnessSession) => string) | undefined = sessionProviderLabel,
@@ -159,18 +161,18 @@ export function conversationOption(
   };
   const latest = row.latest;
   const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
-  const model = nativeModelLabel(latest.nativeHarness, latest.model);
   const preview = conversationPreview(latest);
+  const state = conversationState({
+    updatedAt: latest.updatedAt,
+    ...(row.pending ? { turn: turnFacts(row.pending) } : {}),
+    ...(row.needsYou ? { needsYou: true } : {}),
+    ...(latest.resumeAt ? { resumeAt: latest.resumeAt.at } : {}),
+  }, now);
+  const activity = state.kind === 'working' || state.kind === 'stalled' || state.kind === 'needs-you' ? state.kind : undefined;
   return {
     label: title,
-    // The model segment is dropped entirely when there is no real one,
-    // rather than printed as "default" -- see resolveNativeModel.
-    // Branches stay on Tab. The row is the conversation: who
-    // answered, how long ago, and the last thing that was asked.
-    detail: [
-      `· ${labelFor(latest)}${row.current ? ' · current' : ''}`,
-      model, relativeTime(latest.updatedAt, now), preview,
-    ].filter(Boolean).join(' · '),
+    detail: [`· ${state.kind === 'stalled' ? chalk.yellow(state.text) : state.text}`, preview].filter(Boolean).join(' · '),
+    ...(activity ? { activity } : {}),
     value: latest.id,
     alternates: history.length > 1 ? history.map((session) => ({
       label: `${'  '.repeat(depthFor(session))}${labelFor(session)} · ${session.fork ? 'fork' : 'original'}${session.id === latest.id ? ' · latest' : ''} · ${relativeTime(session.updatedAt, now)}`,

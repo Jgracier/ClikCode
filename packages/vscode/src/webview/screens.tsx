@@ -4,13 +4,13 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { ListedConversation } from '../webview-protocol';
 import { listen, request } from './bus';
-import { relativeTime } from './format';
+import { conversationState, SECTION_TITLES, type ConversationSection } from '../../../../src/session/conversation-state';
 import { choose } from './picker';
 import { Icon, IconButton, KeyList, Popover, type ListRow } from './ui';
 
-type Section = NonNullable<ListedConversation['section']>;
-/** The terminal board's sections, in its order (session/conversation-rows.ts). */
-const SECTIONS: ReadonlyArray<[Section, string]> = [['working', 'Working'], ['active', 'Active'], ['past', 'Past']];
+type Section = ConversationSection;
+/** The terminal board's sections, in its order and words (session/conversation-state.ts). */
+const SECTIONS = (['working', 'active', 'past'] as const).map((section): [Section, string] => [section, SECTION_TITLES[section]]);
 const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
 /** Re-query while generating when ClikCode has not reported a change. */
 const FALLBACK_POLL_MS = 10_000;
@@ -24,8 +24,23 @@ export function conversationSection(row: ListedConversation, now = Date.now()): 
   return !Number.isNaN(at) && now - at < ACTIVE_WITHIN_MS ? 'active' : 'past';
 }
 
+/** A row's one state, by the terminal's rule. An approval VS Code is showing
+ * in one of its own panels (`attention`) needs the user as much as one the
+ * worker recorded. A bridge from before `turn` still says it is working. */
+export function rowState(row: ListedConversation, now = Date.now()): ReturnType<typeof conversationState> {
+  const turn = row.turn ?? (row.activity === 'working' ? { startedAt: '', activeAt: '' } : undefined);
+  return conversationState({
+    updatedAt: row.updatedAt,
+    ...(turn ? { turn } : {}),
+    ...(row.needsYou || row.attention === 'waiting' ? { needsYou: true } : {}),
+    ...(row.resumeAt ? { resumeAt: row.resumeAt } : {}),
+  }, now);
+}
+
 /** The conversations, as a list dropped from the header's history button:
- * search, then Working, Active and Past, as the terminal's board lists them. Rename, open in a tab and
+ * search, then Working, Recent and Older, as the terminal's board lists them.
+ * Each row is its title, its one state and, dim under it, the last thing
+ * asked -- the terminal's three parts. Rename, open in a tab and
  * delete are on each row; the rest (fork, archive) are slash commands. */
 export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
   const [rows, setRows] = useState<ListedConversation[]>();
@@ -80,13 +95,14 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
       if (!items.length) continue;
       result.push({ key: `h:${title}`, heading: true, render: () => <>{title}</> });
       for (const row of items) {
+        const state = rowState(row);
         result.push({
           key: row.id,
           onSelect: () => (renaming === row.id ? undefined : open(row)),
           render: () => (
             <div class={`conversation${row.current ? ' current' : ''}`} title={row.preview}>
-              {row.attention === 'waiting' ? <Icon name="bell-dot" label="waiting for your answer" />
-                : row.activity === 'working' ? <span class={`conversation-dot working ${row.pace ?? 'flowing'}`} aria-label={row.pace && row.pace !== 'flowing' ? `working · ${row.pace}` : 'working'} />
+              {state.kind === 'needs-you' ? <Icon name="bell-dot" label="waiting for your answer" />
+                : row.activity === 'working' ? <span class={`conversation-dot working${state.kind === 'stalled' ? ' stalled' : ''}`} aria-label={state.text} />
                   : row.current ? <Icon name="check" label="this chat" />
                     : row.attention === 'unread' ? <span class="conversation-dot unread" aria-label="finished" /> : <span class="conversation-dot" aria-hidden="true" />}
               <div class="conversation-main">
@@ -101,8 +117,9 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
                       onKeyDown={(event) => { if (event.key === 'Escape') { event.stopPropagation(); setRenaming(undefined); } }} />
                   </form>
                 ) : <div class="conversation-title">{row.title}</div>}
+                {row.preview && renaming !== row.id ? <div class="conversation-preview">{row.preview}</div> : null}
               </div>
-              <span class="conversation-meta">{[row.provider, relativeTime(row.updatedAt)].filter(Boolean).join(' · ')}</span>
+              <span class="conversation-meta">{state.text}</span>
               <div class="row-actions" data-row-action>
                 <IconButton icon="link-external" label="Open in new tab" onClick={() => { props.onClose(); void request({ method: 'openInTab', sessionId: row.id }); }} />
                 <IconButton icon="edit" label="Rename" onClick={() => setRenaming(row.id)} />

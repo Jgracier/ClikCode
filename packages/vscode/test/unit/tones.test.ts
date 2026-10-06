@@ -13,7 +13,7 @@ describe('tool colours in the panel', () => {
     expect(new Set(variables).size).toBe(colours.length);
   });
 
-  it('colour a working conversation by its pace, as the terminal does', () => {
-    for (const pace of ['slowing', 'stuck']) expect(css).toContain(`.conversation-dot.working.${pace}`);
+  it('colour a stalled conversation yellow, as the terminal does', () => {
+    expect(css).toContain('.conversation-dot.working.stalled');
   });
 });

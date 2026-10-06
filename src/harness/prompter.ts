@@ -166,7 +166,8 @@ export interface PickerOption<T> {
   /** A list inside this row, opened with Left Arrow -- a conversation's
    * running sub-agents. Left from inside it comes back out. */
   inner?: { title: string; options: readonly PickerOption<T>[] };
-  /** A turn is running in this row's conversation, at this pace: a list that
-   * can animate draws a spinner in front of the label, one that cannot a dot. */
-  working?: 'flowing' | 'slowing' | 'stuck';
+  /** A conversation row's glyph (conversation-activity.ts): a turn is
+   * running in it (a spinner, animated where the list can), has stalled
+   * (the spinner yellow), or is waiting on the user (a dot). */
+  activity?: 'working' | 'stalled' | 'needs-you';
 }

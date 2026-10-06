@@ -1,7 +1,7 @@
 /** What a usage reading is -- a window, a remaining fraction, a reset time --
  * and how one is labelled, cached and judged current. No probing here. */
 
-import { quotaResetPhrase } from '../../turn/usage-exhausted.js';
+import { quotaResetPhrase } from '../protocol/format.js';
 import type { AiHarnessAccount } from '../definition.js';
 
 /** One quota window as the vendor reported it. `usedPct` is the unrounded

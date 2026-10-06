@@ -16,7 +16,7 @@
  * so a worker that learns a new event needs no change here -- and an editor
  * that does not know one ignores it.
  */
-import type { TurnPace } from '../harness/protocol/turn-pace.js';
+import type { ConversationSection, TurnFacts } from '../session/conversation-state.js';
 import type { HarnessSession } from '../session/model.js';
 import type { ClientCommand, WorkerEvent } from '../worker/protocol.js';
 
@@ -135,19 +135,23 @@ export interface IdeModels {
 export interface IdeConversation {
   id: string;
   title: string;
+  /** Not drawn on the row; the history menu's search still matches it. */
   provider?: string;
-  /** Its label beside `provider`, not the stored id. */
-  model?: string;
   updatedAt: string;
   messages: number;
-  /** First words of the last message, for the list. */
+  /** First words of the last thing the user asked, for the list. */
   preview?: string;
   activity?: 'working' | 'idle';
-  /** A working row's pace: its dot's colour, as in the terminal board. */
-  pace?: TurnPace;
-  /** Where the terminal board lists it: Working (generating), Active (last
-   * 24 hours), Past. Absent from a bridge before this field. */
-  section?: 'working' | 'active' | 'past';
+  /** The generating turn, when `working`: what the row's state is read from
+   * (conversationState). Absent from a bridge before this field. */
+  turn?: TurnFacts;
+  /** An approval in it is waiting on the user. */
+  needsYou?: boolean;
+  /** A turn parked until the quota resets: when it sends again. */
+  resumeAt?: string;
+  /** Where the terminal board lists it: Working (generating), Recent (last
+   * 24 hours), Older. Absent from a bridge before this field. */
+  section?: ConversationSection;
   current: boolean;
 }
 
