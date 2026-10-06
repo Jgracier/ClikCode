@@ -5,10 +5,11 @@ import { mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { carryNativeSession } from './carry';
+import { carryNativeSession, moveThreadToAccount } from './carry';
 import { resetNativeSessionDiscoveryCache } from './discovery/cache';
-import type { AiLocalHarnessDefinition } from '../harness/definition';
-import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition';
+import type { HarnessSession } from './model';
+import { allLocalHarnesses, localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { NATIVE_SESSION_STORES } from './discovery/registry';
 
 const harnessFor = (command: string): AiLocalHarnessDefinition => ({ command } as AiLocalHarnessDefinition);
@@ -292,5 +293,29 @@ describe('carrying a vendor session between account profiles', () => {
       .filter((harness) => !NATIVE_SESSION_STORES[harness.command] && harness.profileEnv);
     expect(isolatedWithoutStore.length).toBeGreaterThan(0);
     expect(isolatedWithoutStore.every((harness) => Boolean(harness.profileEnv))).toBe(true);
+  });
+});
+
+describe('moving a conversation to another account', () => {
+  const claude = localHarnessForCommand('claude')!;
+  const account = (id: string): AiHarnessAccount => ({
+    id, provider: 'anthropic', label: id, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${id}`,
+  });
+  const session = (extra: Partial<HarnessSession> = {}): HarnessSession =>
+    ({ id: 's', nativeHarness: 'claude', nativeSessionId: 'thread-1', workspace: WORKSPACE, ...extra }) as HarnessSession;
+
+  it('keeps a confirmed thread both accounts read from the same vendor home', async () => {
+    const confirmed = session();
+    await expect(moveThreadToAccount(confirmed, claude, account('a'), account('b'))).resolves.toBe('present');
+    expect(confirmed.nativeSessionId).toBe('thread-1');
+  });
+
+  it('has nothing to carry for an id ClikCode minted that the vendor never confirmed', async () => {
+    // A first attempt refused before the vendor created the thread: the next
+    // account must be sent the whole request, not only "carry on".
+    const minted = session({ nativeSessionPreallocated: true });
+    await expect(moveThreadToAccount(minted, claude, account('a'), account('b'))).resolves.toBeUndefined();
+    expect(minted.nativeSessionId).toBeUndefined();
+    expect(minted.nativeSessionPreallocated).toBeUndefined();
   });
 });
