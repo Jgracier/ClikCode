@@ -45,15 +45,15 @@ describe('a refused Cursor turn', () => {
 });
 
 describe("Cursor's plan windows", () => {
-  const account = (total: number, api: number) => ({
+  const account = (auto: number, api: number) => ({
     id: 'a', provider: 'cursor', label: 'a@example.com', authKind: 'vendor-cli', models: [], status: 'ready',
-    usage: { at: new Date().toISOString(), ...cursorQuotaReading({ billingCycleEnd: String(Date.now() + 86_400_000), planUsage: { totalPercentUsed: total, apiPercentUsed: api } }) },
+    usage: { at: new Date().toISOString(), ...cursorQuotaReading({ billingCycleEnd: String(Date.now() + 86_400_000), planUsage: { autoPercentUsed: auto, apiPercentUsed: api, totalPercentUsed: (auto + api) / 2 } }) },
   }) as unknown as AiHarnessAccount;
 
   it('keeps an account whose named-model share is spent: Auto still runs', () => {
     expect(accountQuotaSpent(account(40, 100))).toBe(false);
   });
-  it('marks it spent once the plan total is', () => {
-    expect(accountQuotaSpent(account(100, 100))).toBe(true);
+  it('marks it spent once the Auto share is, though the total reads half', () => {
+    expect(accountQuotaSpent(account(100, 0))).toBe(true);
   });
 });

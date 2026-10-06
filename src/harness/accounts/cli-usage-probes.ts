@@ -178,10 +178,13 @@ export async function kimiUsageReading(_session: HarnessSession, environment: En
 
 // ---------------------------------------------------------------- Cursor
 
-/** A `GetCurrentPeriodUsage` answer as windows. `totalPercentUsed` is the
- * plan's included usage -- what Cursor's own "You've used 7% of your
- * included total usage" rounds -- and `apiPercentUsed` the separate share for
- * named (non-Auto) models. Both reset at `billingCycleEnd`, epoch ms. */
+/** A `GetCurrentPeriodUsage` answer as windows. The plan has two shares,
+ * each resetting at `billingCycleEnd` (epoch ms): `autoPercentUsed`, spent by
+ * Auto and the other `autoBucketModels` (ClikCode's default, `default[]`) --
+ * at 100 their turns answer "You've hit your usage limit" -- and
+ * `apiPercentUsed`, for named models only. `totalPercentUsed` is their
+ * average (Auto 100 + API 0 read "50%"), so it is never the figure:
+ * read once, it showed a spent account half full. */
 export function cursorQuotaReading(result: unknown): UsageReading | undefined {
   const plan = (result as Json | undefined)?.planUsage as Json | undefined;
   if (!plan) return undefined;
@@ -189,7 +192,7 @@ export function cursorQuotaReading(result: unknown): UsageReading | undefined {
   const reset = Number.isFinite(end) && end > 0 ? end : undefined;
   const api = usageWindow('API', plan.apiPercentUsed, reset);
   // The API share is advisory: spent, it stops named models, not Auto.
-  return usageReading([usageWindow('monthly', plan.totalPercentUsed, reset), api ? { ...api, advisory: true as const } : undefined]);
+  return usageReading([usageWindow('auto', plan.autoPercentUsed ?? plan.totalPercentUsed, reset), api ? { ...api, advisory: true as const } : undefined]);
 }
 
 async function cursorAccessToken(environment: Environment): Promise<string | undefined> {
