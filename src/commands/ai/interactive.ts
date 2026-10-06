@@ -14,6 +14,7 @@ import { isClikCodeAgent } from '../../session/route.js';
 import { reconcileLocalModelLeases } from './local-model.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
 import { isUsageExhaustedMessage, resumeWaitLabel } from '../../turn/usage-exhausted.js';
+import { failureLine } from '../../harness/protocol/stderr-line.js';
 import { isShellCommandLine, shellMessageContent, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
 import { createInterface } from 'node:readline/promises';
@@ -332,11 +333,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
    * the turn another window carried on). */
   const handleTurnFailure = async (error: unknown, failed: { line?: string; sent?: string; queuedTurnId?: string }): Promise<void> => {
     const message = error instanceof Error ? error.message : String(error);
+    // The whole vendor text is for `clikcode logs`; the screen gets one line.
+    lifecycle('window.turn.error', { message: message.slice(0, 8000) });
     // A prompt held for a turn that never started is not drawn on.
     terminal?.submitted(undefined);
     const next = await afterTurnFailure(terminal, id, error, { ...failed, guard: exhaustionGuard });
     if (next.cancelled && terminal) { notice = STOPPED; return; }
-    if (!terminal) { emitHarnessOutput({ panel: 'error', message }); return; }
+    if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message) }); return; }
     if ('retry' in next) { resend = next.retry; return; }
     if ('moved' in next) { id = next.moved.id; resend = next.moved.prompt; return; }
     if (next.waiting) {
@@ -348,7 +351,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       if (parked) refreshUsage(parked, parkedState);
       return;
     }
-    notice = isUsageExhaustedMessage(message) ? message : `Error: ${message}`;
+    notice = isUsageExhaustedMessage(message) ? message : `Error: ${failureLine(message)}`;
     if (next.back.length) terminal.restoreDraft(next.back.join('\n\n'));
   };
   try {

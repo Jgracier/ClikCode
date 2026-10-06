@@ -19,6 +19,7 @@ import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
+import { failureLine } from '../../../src/harness/protocol/stderr-line';
 
 /** One tool call, as the terminal's activity log keeps it: the harness's own
  * event fields (cleaned of escapes), merged frame by frame with the CLI's
@@ -510,7 +511,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // limit, red for a failure. The colour is the level.
       return withNote(model, { kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message) });
     case 'turn-error':
-      return withNote(model, { kind: 'notice', level: 'error', text: stripAnsi(event.message) });
+      return withNote(model, { kind: 'notice', level: 'error', text: failureLine(stripAnsi(event.message)) });
     case 'submission':
       return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item)) };
     case 'shutdown':

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { firstUsefulLine } from './stderr-line';
+import { failureLine, firstUsefulLine } from './stderr-line';
 
 describe('the one line of a failed process worth showing', () => {
   it('passes over warnings to the complaint (Pi)', () => {
@@ -23,5 +23,20 @@ describe('the one line of a failed process worth showing', () => {
 
   it('falls back to the first line when nothing complains', () => {
     expect(firstUsefulLine('Goodbye\n')).toBe('Goodbye');
+  });
+});
+
+describe('a failed turn put to a person', () => {
+  it('drops the provider report and its JSON body', () => {
+    const message = 'Internal error: The request exceeds the model\'s context window. (provider reported: Failed to create stream: request failed with status 400: {"error":{"message":"too long","type":"invalid_request_error"}})';
+    expect(failureLine(message)).toBe('Internal error: The request exceeds the model\'s context window.');
+  });
+
+  it('keeps one line of a long stderr dump', () => {
+    expect(failureLine(`claude exited 1: Error: invalid api key\n${'    at frame\n'.repeat(200)}`)).toBe('claude exited 1: Error: invalid api key');
+  });
+
+  it('drops a trailing JSON body', () => {
+    expect(failureLine('request failed with status 429: {"error":"slow down"}')).toBe('request failed with status 429');
   });
 });

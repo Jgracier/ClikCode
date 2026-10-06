@@ -32,3 +32,15 @@ export function firstUsefulLine(stderr: string, limit = 200): string {
   const fallback = plain.trim().split(/\r?\n/)[0]?.trim() ?? '';
   return cut(fallback);
 }
+
+/** A failed turn's message as the one line a person reads. The provider's
+ * own report (`(provider reported: …)`) and a JSON body are for the log,
+ * which keeps the whole message; classify a failure before shortening it. */
+export function failureLine(message: string, limit = 200): string {
+  const line = firstUsefulLine(message, Number.POSITIVE_INFINITY)
+    .replace(/\s*\(provider reported:.*$/i, '')
+    .replace(/[:\s]*(?:\{\s*"|\[\s*\{).*$/, '')
+    .trim();
+  const text = line || firstUsefulLine(message, Number.POSITIVE_INFINITY);
+  return text.length > limit ? `${text.slice(0, limit - 1).trimEnd()}…` : text;
+}
