@@ -45,6 +45,8 @@ describe('how a turn reads', () => {
     expect(turnStatus({ phase: 'thinking', thinkingMs: -400 }).label).toBe('thinking');
     expect(turnStatus({ phase: 'thinking', thinkingMs: Number.NaN }).label).toBe('thinking');
     expect(turnStatus({ phase: 'generating response' }).label).toBe('generating response');
+    expect(turnStatus({ phase: 'thinking', writing: true }).label).toBe('writing');
+    expect(turnStatus({ phase: 'thinking', writing: true, toolPhase: 'running git' }).label).toBe('running git');
     expect(reasoningHeading('no heading here')).toBeUndefined();
   });
 

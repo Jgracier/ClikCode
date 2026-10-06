@@ -601,8 +601,8 @@ SCENARIOS = {
             ('keys', '\x1b'), ('settle', 1.5), ('snap', 'after-esc'),
             ('keys', '\x03'), ('wait_for', 'Stopped', 15), ('settle', 2),
         ],
-        # Still running: the waiting line is up, its clock going.
-        'snap_contains': {'after-esc': ['thinking · ']},
+        # Still running: the waiting line is up, writing, its clock going.
+        'snap_contains': {'after-esc': ['writing · ']},
         'watch': ['start the long job'],
         'never': ['The long job is finished.'],
     },

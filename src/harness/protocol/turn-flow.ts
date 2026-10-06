@@ -111,10 +111,11 @@ const THINKING_WORDS: Array<[afterMs: number, words: string]> = [
 export type StatusTone = 'thinking' | 'tool' | 'asking';
 
 /** What the status line says and how it looks: waiting on the user, else the
- * open call's verb, else the reasoning's own heading, else how long the
- * thinking has gone on in words; and its tone. */
+ * open call's verb, else the reasoning's own heading, else "writing" while
+ * answer text arrives, else how long the thinking has gone on in words; and
+ * its tone. */
 export function turnStatus(state: {
-  phase?: string; toolPhase?: string; thought?: string; thinkingMs?: number; asking?: boolean;
+  phase?: string; toolPhase?: string; thought?: string; thinkingMs?: number; asking?: boolean; writing?: boolean;
 }): { label: string; tone: StatusTone } {
   if (state.asking) return { label: 'waiting for you', tone: 'asking' };
   if (state.toolPhase) return { label: state.toolPhase, tone: 'tool' };
@@ -124,7 +125,7 @@ export function turnStatus(state: {
   // A clock read a moment before the thinking began gives a negative time
   // (or none at all): that is still just "thinking", never no words.
   const thinkingMs = Number.isFinite(state.thinkingMs) ? Math.max(0, state.thinkingMs!) : 0;
-  const label = heading ?? (thinking ? THINKING_WORDS.find(([after]) => thinkingMs >= after)![1] : phase!);
+  const label = heading ?? (!thinking ? phase! : state.writing ? 'writing' : THINKING_WORDS.find(([after]) => thinkingMs >= after)![1]);
   return { label, tone: 'thinking' };
 }
 

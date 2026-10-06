@@ -40,7 +40,7 @@ import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
-import { NOTICE_MS, PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
+import { NOTICE_MS, PAINT_COALESCE_MS, WRITING_MS } from '../harness/protocol/timings.js';
 import { APPROVAL_GUARD_MS, ApprovalPreview, ApprovalRequest, approvalBlockRows, approvalKeyAction } from './render/approval-block.js';
 import { frameRowBudget } from './render/frame-budget.js';
 import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
@@ -113,6 +113,8 @@ type WaitingTurn = {
   /** When the current stretch of thinking began -- the turn's start, or the
    * last call finishing or answer text arriving -- for turnStatus's words. */
   thinkingSince: number;
+  /** When answer text last arrived: the status line says "writing". */
+  writingAt?: number;
   /** When the turn last did anything -- a word, a thought, a call -- or an
    * approval was answered: quiet past turn-pace's threshold and the spinner
    * turns yellow, by the same rule as a stalled row in the conversation list. */
@@ -861,7 +863,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text; once the answer is arriving it is stale.
-    if (text) { this.thought = undefined; if (this.turn) this.turn.thinkingSince = this.turn.activeAt = Date.now(); }
+    if (text) { this.thought = undefined; if (this.turn) this.turn.thinkingSince = this.turn.activeAt = this.turn.writingAt = Date.now(); }
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -1531,6 +1533,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
       thinkingMs: now - turn.thinkingSince,
       asking: Boolean(this.pendingApproval),
+      writing: turn.writingAt !== undefined && now - turn.writingAt < WRITING_MS,
     });
     const asking = Boolean(this.pendingApproval);
     // What the agent is doing is essential and stays at full contrast; the
