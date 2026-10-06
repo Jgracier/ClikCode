@@ -27,6 +27,7 @@ import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import { nativeTurnFailure, type NativeTurnResult } from '../harness/protocol/turn-result.js';
+import { withWorkspacePaths } from '../harness/protocol/activity-view.js';
 import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { writeState } from '../session/state/write.js';
 import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
@@ -315,7 +316,7 @@ export async function sendVendorTurn(input: {
     const folded = foldSwarmActivity(swarmFold, event);
     swarmFold = folded.fold;
     if (!event.swarm) pendingWork.note(event);
-    if (folded.event) sink.activity(folded.event);
+    if (folded.event) sink.activity(withWorkspacePaths(folded.event, session.workspace));
   };
   if (swarmIsOn(session)) {
     await openSwarmTurn(session.id).catch(() => undefined);

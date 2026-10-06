@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { terminalCellWidth } from './width';
 import { liveConversationLines, rightLabeledRule, runningChatLine } from './waiting';
-import { appendThought, liveWaitKind, waitingSpinnerGlyph } from '../../harness/protocol/activity-view';
+import { appendThought, liveWaitKind, waitingSpinnerGlyph, withWorkspacePaths } from '../../harness/protocol/activity-view';
 import { waitingSpinnerFrame } from '../../harness/protocol/activity-view';
 import { visibleTail } from './width';
 import { thoughtLabel } from '../../harness/protocol/activity-events';
@@ -87,5 +87,14 @@ describe('the waiting band', () => {
     expect(visibleTail('short', 10)).toBe('short');
     expect(visibleTail('the start of a long thought and its end', 12)).toBe('…and its end');
     expect(terminalCellWidth(visibleTail('the start of a long thought and its end', 12))).toBeLessThanOrEqual(12);
+  });
+});
+
+describe('a vendor row\'s paths', () => {
+  it('read relative to the chat\'s workspace, as ClikCode\'s own agent writes them', () => {
+    const event = { kind: 'tool-start' as const, label: 'Read /home/me/app/src/a.ts', diff: [{ path: '/home/me/app/src/a.ts', lines: [], additions: 0, removals: 0 }] };
+    expect(withWorkspacePaths(event, '/home/me/app')).toMatchObject({ label: 'Read src/a.ts', diff: [{ path: 'src/a.ts' }] });
+    expect(withWorkspacePaths({ kind: 'tool-start' as const, label: 'Read /etc/hosts' }, '/home/me/app').label).toBe('Read /etc/hosts');
+    expect(withWorkspacePaths({ kind: 'tool-start' as const, label: 'Read /home/me/application/x' }, '/home/me/app').label).toBe('Read /home/me/application/x');
   });
 });
