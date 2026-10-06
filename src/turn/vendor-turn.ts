@@ -26,7 +26,7 @@ import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
-import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
+import { nativeTurnFailure, type NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { writeState } from '../session/state/write.js';
 import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
@@ -463,7 +463,7 @@ export async function sendVendorTurn(input: {
       } else if (onScreen) {
         editAnswer('clear');
       }
-      result = { ...result, isError: true, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
+      result = { ...result, isError: true, errorMessage: replyError.notice, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     }
     if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
     if (!result.isError && !session.nativeSessionPreallocated) await adoptListedNativeId(harness, session, environment);
@@ -483,14 +483,14 @@ export async function sendVendorTurn(input: {
     // empty `text` after tool work (`noAssistantText`) is success everywhere.
     if (caughtTurnFailure || result.isError) {
       const carried = (caughtTurnFailure ?? {}) as { statusCode?: number; errorKind?: string };
-      const failure = caughtTurnFailure ?? Object.assign(new Error(`${harness.displayName}: ${result.text}`), { statusCode: result.statusCode });
+      // A thrown transport error carries its own stderr/streams.
+      const declared = caughtTurnFailure ? undefined : nativeTurnFailure(harness, result);
+      const failure = caughtTurnFailure ?? declared!.failure;
       const failureKind = classifyAccountFailure(failure, {
         statusCode: result.statusCode ?? carried.statusCode ?? streamError?.statusCode,
         errorKind: result.errorKind ?? carried.errorKind ?? streamError?.kind,
         ...(result.rateLimitStatus ? { rateLimitStatus: result.rateLimitStatus } : {}),
-        // Only the vendor's own declared error result is safe to read as
-        // wording; a thrown transport error carries its own stderr/streams.
-        ...(caughtTurnFailure ? {} : { isResultError: true }),
+        ...(declared ? { isResultError: declared.isResultError } : {}),
       });
       lifecycle('worker.turn.attempt-failed', {
         kind: failureKind, transport, account: account.id.slice(0, 8),

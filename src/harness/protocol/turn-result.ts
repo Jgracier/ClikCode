@@ -11,6 +11,9 @@ export interface NativeTurnResult {
   text: string;
   nativeSessionId?: string;
   isError?: boolean;
+  /** On a failed turn, the vendor's own error -- never the model's text,
+   * which `text` may be. The only failure wording safe to classify. */
+  errorMessage?: string;
   statusCode?: number;
   /** The turn did real work (tool calls) but the model wrote no prose. `text`
    * is empty; this is a successful turn, not a failure. */
@@ -141,6 +144,9 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     if (terminalEnvelope && (record.is_error === true || record.error === true || (typeof record.status === 'string' && /^(error|failed)$/i.test(record.status)))) {
       isError = true;
       if (typeof record.subtype === 'string' && /^error/i.test(record.subtype)) errorKind = record.subtype;
+      // A failed Claude-shaped result says why in its own `result`.
+      const declared = [...fields].map((key) => record[key]).find((child): child is string => typeof child === 'string' && Boolean(child.trim()));
+      if (declared) errorMessage ??= declared.trim();
     }
     if (typeof record.api_error_status === 'number') statusCode = record.api_error_status;
     else if (typeof record.status === 'number' && record.status >= 400) statusCode = record.status;
@@ -207,6 +213,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   const extras = {
     ...(ids.size ? { nativeSessionId: [...ids][0] } : {}),
     ...(stateless ? { nativeSessionStateless: true } : {}),
+    ...(isError && errorMessage ? { errorMessage } : {}),
     ...(statusCode ? { statusCode } : {}), ...(errorKind ? { errorKind } : {}),
     ...(rateLimitStatus ? { rateLimitStatus } : {}), ...(usage ? { usage } : {}),
   };
@@ -248,6 +255,17 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     );
   }
   return { text, ...(isError ? { isError } : {}), ...extras };
+}
+
+/** A failed turn as failover classifies it. Its wording is read only when
+ * the vendor declared it (`errorMessage`): otherwise `text` is the model's
+ * newest sentence, and one that mentions a usage limit marked a working
+ * account spent. */
+export function nativeTurnFailure(harness: Pick<AiLocalHarnessDefinition, 'displayName'>, result: NativeTurnResult): { failure: Error; isResultError: boolean } {
+  return {
+    failure: Object.assign(new Error(`${harness.displayName}: ${result.errorMessage ?? result.text}`), { statusCode: result.statusCode }),
+    isResultError: result.errorMessage !== undefined,
+  };
 }
 
 /** Render provider JSONL as a small provider-neutral activity stream. */

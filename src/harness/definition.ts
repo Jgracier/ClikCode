@@ -102,7 +102,7 @@ export interface AiRouterRuntime {
   registerCustomHarnesses(definitions: readonly AiLocalHarnessDefinition[]): readonly AiLocalHarnessDefinition[];
   customAcpHarness(definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition;
   harnessLoginArgvForModel(harness: AiLocalHarnessDefinition, model: string | null | undefined): readonly string[] | undefined;
-  harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { statusCode?: number; withoutNotice?: string } | undefined;
+  harnessReplyError(harness: AiLocalHarnessDefinition, text: string): { notice: string; statusCode?: number; withoutNotice?: string } | undefined;
   modelProvider(harness: AiLocalHarnessDefinition, model: string): string | undefined;
   modelDisplayId(harness: AiLocalHarnessDefinition, model: string): string;
   modelIdFromDisplay(harness: AiLocalHarnessDefinition, typed: string): string;
