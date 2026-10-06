@@ -16,25 +16,30 @@ export function paletteRows(
 ): string[] {
   const rows = ['─'.repeat(width - 1)];
   const visibleRows = capacity - 2;
+  // A list with sections (the conversation board, /resume) starts at the
+  // edge: its rows already carry a pointer and a status column, and the
+  // palette's two-cell margin in front of those put titles seven cells in --
+  // too far on a phone's 70 columns.
+  const margin = settings.headings ? '' : '  ';
   const windowed = paletteDisplayRows(options, selected, visibleRows);
   for (const row of windowed) {
     if ('header' in row) {
       // A picker's sections read as headings, the way Claude Code's session
       // list does; the command palette keeps its quieter rule.
       rows.push(settings.headings
-        ? `  ${chalk.bold(visibleSlice(row.header, Math.max(1, width - 4)))}`
+        ? `${margin}${chalk.bold(visibleSlice(row.header, Math.max(1, width - 4)))}`
         : `  ${chalk.dim(visibleSlice(`── ${row.header}`, Math.max(1, width - 4)))}`);
       continue;
     }
     const selectedOption = row.index === selected;
-    const available = Math.max(1, width - 4);
+    const available = Math.max(1, width - 2 - margin.length);
     const label = visibleSlice(row.option.label, available);
     const remaining = available - terminalCellWidth(label);
     const detail = row.option.detail && remaining > 3 ? visibleSlice(row.option.detail, remaining - 2) : '';
-    rows.push(`  ${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
+    rows.push(`${margin}${selectedOption ? chalk.cyan('❯') : ' '} ${selectedOption ? chalk.bold(label) : label}${detail ? `  ${chalk.dim(detail)}` : ''}`);
   }
   for (let index = windowed.length; index < visibleRows; index++) rows.push('');
-  rows.push(`  ${chalk.dim(visibleSlice(settings.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
+  rows.push(`${margin}${chalk.dim(visibleSlice(settings.hint ?? '↑↓ select · Tab complete · Enter run', width - 2))}`);
   return rows;
 }
 

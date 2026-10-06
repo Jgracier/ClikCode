@@ -20,9 +20,9 @@ describe('the palette band', () => {
     expect(rows[7]).toBe('  ↑↓ select · Tab complete · Enter run');
   });
 
-  it('reads sections as counted headings in a picker, with its own hint', () => {
+  it('reads sections as headings in a picker, from the edge, with its own hint', () => {
     const rows = paletteRows([{ label: 'one', value: 'a', group: 'Running 2' }], 0, 4, 40, { headings: true, hint: 'Esc exit' }).map(plain);
-    expect(rows).toEqual(['─'.repeat(39), '  Running 2', '  ❯ one', '  Esc exit']);
+    expect(rows).toEqual(['─'.repeat(39), 'Running 2', '❯ one', 'Esc exit']);
   });
 
   it('drops a detail that has no room rather than squeezing it', () => {
