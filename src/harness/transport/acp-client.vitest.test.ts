@@ -3,29 +3,24 @@ import { describe, expect, it } from 'vitest';
 import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, runAcpTurn } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
-  it.each(['session/new', 'session/prompt'])('authenticates once over ACP when %s requires it', async (authAt) => {
+  // Devin 2026-10-06: signing in over ACP (`authenticate`) ran its own
+  // browser login, with no link on ClikCode's screen, and from a phone waited
+  // for ever. The refusal goes to the turn, which signs in on ClikCode's screen.
+  it.each(['session/new', 'session/prompt'])('never signs in over ACP: a sign-in refusal at %s reaches the caller', async (authAt) => {
     const agent = `
       const authAt = ${JSON.stringify(authAt)};
       const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
-      const calls = []; let signedIn = false; let buf = '';
+      let buf = '';
       process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
-        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1); calls.push(m.method);
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+        if (m.method === 'authenticate') process.exit(7);
         if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [{ id: 'browser', name: 'Browser sign-in' }] } });
-        else if (m.method === 'authenticate') { signedIn = true; send({ id: m.id, result: {} }); }
-        else if (m.method === authAt && !signedIn) send({ id: m.id, error: { code: -32000, message: 'Authentication is required before this operation can be performed.' } });
+        else if (m.method === authAt) send({ id: m.id, error: { code: -32000, message: 'Please log in to use Devin. Use /login to authenticate again.' } });
         else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
-        else if (m.method === 'session/prompt') {
-          send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(calls) } } } });
-          send({ id: m.id, result: { stopReason: 'end_turn' } });
-        }
       } });
     `;
-    const authenticated: string[] = [];
-    const result = await runAcpTurn({ binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(),
-      prompt: 'check', environment: {}, permissionMode: 'ask', allowAgentAuth: true,
-      onAuthenticated: async () => { authenticated.push('consent-complete'); } });
-    expect(JSON.parse(result.text)).toEqual(['initialize', 'session/new', ...(authAt === 'session/new' ? ['authenticate', 'session/new', 'session/prompt'] : ['session/prompt', 'authenticate', 'session/prompt'])]);
-    expect(authenticated).toEqual(['consent-complete']);
+    await expect(runAcpTurn({ binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(), prompt: 'check', environment: {}, permissionMode: 'ask' }))
+      .rejects.toThrow(/Please log in to use Devin/);
   });
 
   it('hands a session the MCP servers the caller named', async () => {
