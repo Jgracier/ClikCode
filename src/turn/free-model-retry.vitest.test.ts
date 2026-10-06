@@ -17,6 +17,13 @@ describe('a paid model refused for spent credits', () => {
     expect(freeModelAfterCreditRefusal(cline, 'qwen/qwen3.8-27b:free', REFUSAL, LISTED)).toBeUndefined();
     expect(freeModelAfterCreditRefusal(cline, '~anthropic/claude-opus-latest', new Error('Rate limited'), LISTED)).toBeUndefined();
     expect(freeModelAfterCreditRefusal(cline, '~anthropic/claude-opus-latest', REFUSAL, ['openai/gpt-6.1-sol'])).toBeUndefined();
-    expect(freeModelAfterCreditRefusal(localHarnessForCommand('kilo')!, 'x', REFUSAL, LISTED)).toBeUndefined();
+    expect(freeModelAfterCreditRefusal(localHarnessForCommand('opencode')!, 'x', REFUSAL, LISTED)).toBeUndefined();
+  });
+  // kilo, 2026-10-06: ClikCode's model (the first listed,
+  // kilo/aion-labs/aion-2.0) answered this; Kilo's :free models need no credits.
+  it('on Kilo too, in its own words', () => {
+    const kilo = localHarnessForCommand('kilo')!;
+    const refusal = new Error('Internal error: Add credits to continue, or switch to a free model');
+    expect(freeModelAfterCreditRefusal(kilo, 'kilo/aion-labs/aion-2.0', refusal, ['kilo/aion-labs/aion-2.0', 'kilo/cohere/north-mini-code:free'])).toBe('kilo/cohere/north-mini-code:free');
   });
 });

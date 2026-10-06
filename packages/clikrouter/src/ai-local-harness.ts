@@ -684,6 +684,15 @@ export interface AiKeyProvider {
   probe: string; header?: 'x-api-key' | 'x-goog-api-key'; headers?: Readonly<Record<string, string>>;
   prefixes?: readonly string[]; unprefixed?: true;
 }
+/** Hermes is signed in by a portal or provider login (auth.json) or a
+ * provider key (.env). Not `hermes status`: it exits 0 with neither -- "Model:
+ * (not set)", every key "not set" (2026-10-06) -- and two empty profiles read
+ * as signed in. */
+const HERMES_AUTH_FILES = [
+  { path: '${HERMES_HOME:-~/.hermes}/auth.json', contains: '"access_token"' },
+  { path: '${HERMES_HOME:-~/.hermes}/.env', contains: '_API_KEY=' },
+] as const;
+
 export const KEY_PROVIDERS = {
   anthropic: { probe: 'https://api.anthropic.com/v1/models', header: 'x-api-key', headers: { 'anthropic-version': '2023-06-01' }, prefixes: ['sk-ant-'] },
   openrouter: { probe: 'https://openrouter.ai/api/v1/key', prefixes: ['sk-or-'] },
@@ -965,7 +974,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
     anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: 'OpenAI', google: 'Google Gemini', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
     fireworks: 'Fireworks AI', mistral: 'Mistral', deepseek: 'DeepSeek', moonshot: 'Moonshot AI', 'moonshot-cn': 'Moonshot AI (China)', zai: 'Z.AI', minimax: 'MiniMax (minimax.io)', together: 'Together AI',
   }), modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, turnEnv: { CLINE_SESSION_BACKEND_MODE: 'local' }, session: { resumeIdPrefix: ['--id'] } },
-  { ...OPENCODE_FORK_BASE, command: 'kilo', loginAccountChoose: ['Kilo Gateway'], provider: 'kilo', displayName: 'Kilo Code CLI', tier: 'more', binary: 'kilo', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }], npmPackage: '@kilocode/cli', permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } } },
+  { ...OPENCODE_FORK_BASE, command: 'kilo', creditFreeModels: { suffix: ':free', refusal: 'add credits to continue' }, loginAccountChoose: ['Kilo Gateway'], provider: 'kilo', displayName: 'Kilo Code CLI', tier: 'more', binary: 'kilo', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }], npmPackage: '@kilocode/cli', permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } } },
   { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', planMode: { option: 'mode', value: 'plan' }, surface: 'terminal', tier: 'primary', transport: 'acp', acp: { argv: ['acp'], inheritCliOptions: false, listsModels: true }, integration: 'structured', parser: 'cursor-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.cursor/commands', '~/.cursor/commands'], normalizedPermissionOptionIds: ['auto-review', 'force'], replyErrorPatterns: CURSOR_REPLY_ERRORS, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cursor-agent', installer: HARNESS_INSTALLERS.cursor, loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { promptGuard: 'double-dash', startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'], continueArgv: ['--continue'] } },
   // Checked against the installed CLI. `hermes model` is an interactive picker
   // and there is no `models list`; the configured model is `hermes config get
@@ -981,7 +990,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
     anthropic: ['Anthropic', 'Anthropic API key'], openrouter: 'OpenRouter', openai: ['OpenAI', 'OpenAI API'], google: 'Google AI Studio', xai: ['xAI Grok', 'xAI'],
     huggingface: 'Hugging Face Inference Providers', fireworks: 'Fireworks AI', deepseek: 'DeepSeek', moonshot: ['Kimi / Moonshot', 'Kimi / Kimi Coding Plan'],
     'moonshot-cn': ['Kimi / Moonshot', 'Kimi / Moonshot (China)'], zai: ['Z.AI / GLM', 'Global (https://api.z.ai/api/paas/v4)'], minimax: ['MiniMax', 'MiniMax'],
-  }), providerLoginArgv: ['auth', 'add', '{provider}'], statusArgv: ['status'], logoutArgv: ['logout'], retiredOptionIds: ['provider'], replyErrorPatterns: HERMES_REPLY_ERRORS, modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text', discoverAllFolders: true } },
+  }), providerLoginArgv: ['auth', 'add', '{provider}'], authFiles: HERMES_AUTH_FILES, logoutArgv: ['logout'], retiredOptionIds: ['provider'], replyErrorPatterns: HERMES_REPLY_ERRORS, modelArgvPrefix: ['--model'], modelProviderArgvPrefix: ['--provider'], workspaceArgvPrefix: ['--in'], effortArgvPrefix: ['--reasoning'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yolo'] } }, imageArgvPrefix: ['--image'], profileEnv: 'HERMES_HOME', turn: { startArgv: ['chat', '--quiet'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['--query'], output: 'text' }, session: { resumeIdPrefix: ['--resume'], continueArgv: ['--continue'], discoverArgv: ['sessions', 'list', '--limit', '50'], discoverFormat: 'text', discoverAllFolders: true } },
   // Same kind of product as Hermes, not a fork; checked against a real
   // install (OpenClaw 2026.9.6). The one-shot turn is `agent --local --json`,
   // whose answer is `meta.finalAssistantVisibleText` -- the generic fields
