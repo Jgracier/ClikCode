@@ -14,27 +14,21 @@ import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
 import { savedGatewayModels, gatewayModels, gatewayModelDetail, gatewayModelLabel } from '../gateway/models.js';
 import { gatewayAgents } from '../gateway/agents.js';
-import { gatewayEffort, GATEWAY_EFFORTS } from '../gateway/options.js';
-import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspect.js';
-import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
-import { authEvidencePresent, hasAuthEvidence, harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { accountUsageReading } from '../harness/accounts/account-usage.js';
 import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
-import { accountQuotaSpent, usageReadingIsCurrent, vendorWindows, type UsageWindow } from '../harness/accounts/usage-reading.js';
-import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { nativeModelCatalogForPicker } from '../harness/accounts/model-catalog.js';
 import { freePlanModels } from '../harness/accounts/free-plan.js';
-import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import {
-  allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort, harnessSupportsModelSelection,
+  allLocalHarnesses, harnessCanRunTurns, harnessSupportsModelSelection,
   localHarnessForCommand, localHarnessForProvider,
 } from '../runtime/lazy-bridge.js';
 import { localModelChoices } from '../local-models/index.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { conversationPreview, transcriptWasLoaded } from '../session/list-facts.js';
-import { compareProviders, integrationLabel, isBlankConversation, optionForHarness, sessionPermissionModes, VALID_EFFORTS } from '../session/options.js';
+import { compareProviders, isBlankConversation, sessionPermissionModes } from '../session/options.js';
+import { accountRow, accountUsage, effortChoices, GATEWAY_ID, harnessCanAddAccount, LOCAL_ID, providerRows, usageWindows } from '../session/picker-rows.js';
 import { livePendingTurns, liveWorkers } from '../session/liveness.js';
 import { conversationRows } from '../session/conversation-rows.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
@@ -43,11 +37,9 @@ import { modelRow } from '../tui/pickers/model.js';
 import { swarmIsOn } from '../swarm/policy.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import type {
-  IdeAccount, IdeAccounts, IdeChatSettings, IdeConversation, IdeGateway, IdeModel, IdeModels, IdeProvider, IdeUsageWindow,
+  IdeAccount, IdeAccounts, IdeChatSettings, IdeConversation, IdeGateway, IdeModel, IdeModels,
 } from './protocol.js';
 
-export const GATEWAY_ID = 'gateway';
-export const LOCAL_ID = 'clikcode-local';
 /** How long the editor's model menu waits for a harness to list its models. */
 const IDE_MODEL_DISCOVERY_WAIT_MS = 45_000;
 
@@ -65,39 +57,8 @@ function accountFor(state: HarnessState, session: HarnessSession | undefined, ha
   return state.accounts.find((item) => item.provider === harness.provider && item.status === 'ready');
 }
 
-/** Every provider the terminal's /provider lists, in its order: the two
- * ClikCode routes, then compareProviders. */
-export async function providerList(config: Conf, state: HarnessState, session: HarnessSession | undefined): Promise<IdeProvider[]> {
-  const harnesses = allLocalHarnesses().filter((harness) => harnessCanRunTurns(harness));
-  const inspected = await Promise.all(harnesses.map(async (harness) => ({ harness, inspection: await inspectNativeHarnessForPicker(harness) })));
-  inspected.sort((left, right) => compareProviders(
-    { harness: left.harness, installed: left.inspection.installed }, { harness: right.harness, installed: right.inspection.installed }));
-  const ready = new Set(state.accounts.filter((item) => item.status === 'ready').map((item) => item.provider));
-  const gatewayConnected = Boolean(getApiKeyForUrl(config, getApiUrl(config)));
-  const rows: IdeProvider[] = [
-    {
-      id: GATEWAY_ID, kind: 'gateway', name: 'ClikDeploy Gateway', installed: true, install: 'ready',
-      signedIn: gatewayConnected, current: session?.route === 'gateway', choosesModel: true,
-    },
-    {
-      id: LOCAL_ID, kind: 'clikcode-local', name: CLIKCODE_LOCAL_LABEL, installed: true, install: 'ready',
-      signedIn: true, current: session?.route === 'clikcode-local', choosesModel: true,
-    },
-  ];
-  for (const { harness, inspection } of inspected) {
-    const signedIn = ready.has(harness.provider) || (inspection.installed && hasAuthEvidence(harness) && await authEvidencePresent(harness, {}).catch(() => false));
-    rows.push({
-      id: harness.command, kind: 'harness', name: harness.displayName, installed: inspection.installed,
-      ...(inspection.version ? { version: inspection.version } : {}),
-      install: inspection.installed ? 'ready' : harnessInstallRoute(harness).kind !== 'none' ? 'auto' : 'manual',
-      integration: integrationLabel(harness),
-      signedIn,
-      current: session?.route === 'local' && session.nativeHarness === harness.command,
-      choosesModel: harnessSupportsModelSelection(harness),
-    });
-  }
-  return rows;
-}
+/** Every provider the terminal's /provider lists, in its order. */
+export const providerList = providerRows;
 
 /** A provider's models, as its /model picker lists them. */
 export async function modelList(config: Conf, state: HarnessState, session: HarnessSession | undefined, provider: string): Promise<IdeModels> {
@@ -199,10 +160,6 @@ export async function conversationList(state: HarnessState, currentId: string | 
   });
 }
 
-function windowsOf(windows: readonly UsageWindow[] | undefined): IdeUsageWindow[] {
-  return (windows ?? []).map((window) => ({ name: window.name, usedPct: window.usedPct, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }));
-}
-
 /** Every account, grouped by provider, with its usage: what the account
  * record last published when `network` is off (instant), a fresh reading from
  * the vendor when it is on -- the terminal's account picker does both, in
@@ -211,41 +168,14 @@ export async function accountList(state: HarnessState, session: HarnessSession |
   const now = Date.now();
   const accounts = await Promise.all(state.accounts.map(async (account): Promise<IdeAccount> => {
     const harness = localHarnessForProvider(account.provider);
-    let usage: IdeAccount['usage'];
-    if (harness && account.authKind === 'vendor-cli') {
-      if (network && NATIVE_USAGE_PROBES[harness.command]) {
-        const reading = await accountUsageReading(account, state, { network: true }).catch(() => undefined);
-        if (reading) usage = { ...(reading.label ? { label: reading.label } : {}), windows: windowsOf(reading.windows) };
-      } else {
-        const windows = vendorWindows(account);
-        if (windows.length && usageReadingIsCurrent({ windows }, now)) {
-          usage = { ...(account.usage?.label ? { label: account.usage.label } : {}), windows: windowsOf(windows) };
-        }
-      }
-    }
-    if (!usage) {
-      // A harness that reports nothing: what its refusals have taught.
-      const learned = learnedReading(state, account, now);
-      if (learned) usage = { ...(learned.label ? { label: learned.label } : {}), windows: windowsOf(learned.windows), learned: true };
-    }
-    const problem: IdeAccount['problem'] = account.verification ? 'verify'
-      : account.status === 'needs_login' ? 'reauth'
-        : accountQuotaSpent(account, now) ? 'out-of-usage' : undefined;
-    const actions: IdeAccount['actions'] = [
-      ...(harness?.loginArgv && account.authKind === 'vendor-cli' && account.status !== 'ready' ? ['reauthenticate' as const] : []),
-      ...(account.verification ? ['verified' as const] : []),
-      harness && harnessCanLogout(harness) && account.authKind === 'vendor-cli' && account.status === 'ready' ? 'disconnect' as const : 'remove' as const,
-    ];
-    return {
-      id: account.id, provider: account.provider, ...(harness ? { harness: harness.command } : {}),
-      providerName: harness?.displayName ?? account.provider, label: account.label, status: account.status,
-      ...(problem ? { problem } : {}), current: account.id === session?.accountId,
-      ...(usage ? { usage } : {}), actions,
-    };
+    const asked = network && harness && account.authKind === 'vendor-cli' && NATIVE_USAGE_PROBES[harness.command]
+      ? await accountUsageReading(account, state, { network: true }).catch(() => undefined) : undefined;
+    const usage: IdeAccount['usage'] = asked ? { ...(asked.label ? { label: asked.label } : {}), windows: usageWindows(asked.windows) } : accountUsage(account, state, now);
+    return { ...accountRow(account, harness, session, now), ...(usage ? { usage } : {}) };
   }));
   accounts.sort((left, right) => left.providerName.localeCompare(right.providerName) || left.label.localeCompare(right.label));
   const addable = allLocalHarnesses()
-    .filter((harness) => harnessCanRunTurns(harness) && (harness.localAuth.includes('api-key') || Boolean(harness.loginArgv)))
+    .filter((harness) => harnessCanRunTurns(harness) && harnessCanAddAccount(harness))
     .sort((left, right) => compareProviders({ harness: left }, { harness: right }))
     .map((harness) => ({ provider: harness.command, name: harness.displayName }));
   const chatHarness = session?.route === 'local' && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
@@ -260,17 +190,9 @@ export async function accountList(state: HarnessState, session: HarnessSession |
 export async function chatSettings(state: HarnessState, session: HarnessSession): Promise<IdeChatSettings> {
   const harness = harnessOf(session);
   const settings: IdeChatSettings = { send: sendModeOf(state.globalSettings) };
-  if (isGatewayService(session)) {
-    const current = gatewayEffort(session);
-    settings.effort = { ...(current ? { current } : {}), choices: [...GATEWAY_EFFORTS] };
-    settings.fast = session.speed === 'fast';
-  } else if (harness && harnessSupportsEffort(harness)) {
-    const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-    const discovered = (await effortChoicesFor(harness, account, session.model).catch(() => ({ values: [] as string[] }))).values;
-    const fromCatalog = optionForHarness(harness, 'effort')?.values ?? [];
-    const choices = discovered.length ? discovered : fromCatalog.length ? fromCatalog : [...VALID_EFFORTS];
-    settings.effort = { ...(session.effort && session.effort !== 'platform-managed' ? { current: session.effort } : {}), choices: [...choices] };
-  }
+  const effort = await effortChoices(state, session, harness);
+  if (effort) settings.effort = { ...(effort.current ? { current: effort.current } : {}), choices: effort.choices };
+  if (isGatewayService(session)) settings.fast = session.speed === 'fast';
   const permissions = sessionPermissionModes(session, isClikCodeAgent(session) ? undefined : harness);
   if (permissions.length) settings.permissions = { current: session.permissionMode ?? 'ask', choices: [...permissions] };
   const swarmOn = swarmIsOn(session);

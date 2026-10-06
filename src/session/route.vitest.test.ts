@@ -3,7 +3,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService } from './route';
-import { providerPickerOptions, sessionPermissionModes, VALID_PERMISSION_MODES } from './options';
+import { sessionPermissionModes, VALID_PERMISSION_MODES } from './options';
+import { providerPickerOptions } from '../tui/pickers/engine';
 import { sessionProviderLabel } from '../harness/protocol/labels';
 import { applyClikCodeLocalSessionPolicy, applyGatewaySessionPolicy } from '../commands/ai/sessions';
 import { newConversationSession } from '../commands/ai/conversations';
@@ -111,11 +112,16 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
 
 describe('the provider picker', () => {
   it('always lists ClikCode Local, right after the Gateway, and marks it current', () => {
-    const rows = providerPickerOptions([], session(), false);
+    // The two rows picker-rows.ts providerRows always starts with.
+    const ours = (on: 'gateway' | 'clikcode-local' | 'local') => providerPickerOptions([
+      { id: 'gateway', kind: 'gateway', name: 'ClikDeploy Gateway', installed: true, install: 'ready', signedIn: false, current: on === 'gateway', choosesModel: true },
+      { id: 'clikcode-local', kind: 'clikcode-local', name: 'ClikCode Local', installed: true, install: 'ready', signedIn: true, current: on === 'clikcode-local', choosesModel: true },
+    ]);
+    const rows = ours('local');
     expect(rows.map((row) => row.label)).toEqual(['ClikDeploy Gateway', 'ClikCode Local']);
-    expect(rows[1]).toMatchObject({ value: { kind: 'clikcode-local' }, detail: '· local models on this machine' });
-    expect(providerPickerOptions([], local(), false)[1]!.detail).toContain('current');
-    expect(providerPickerOptions([], gateway(), true)[1]!.detail).not.toContain('current');
+    expect(rows[1]).toMatchObject({ value: 'clikcode-local', detail: '· local models on this machine' });
+    expect(ours('clikcode-local')[1]!.detail).toContain('current');
+    expect(ours('gateway')[1]!.detail).not.toContain('current');
   });
 });
 

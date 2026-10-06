@@ -13,11 +13,56 @@ import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accoun
 import { NATIVE_USAGE_PROBES } from '../../harness/accounts/usage-probes.js';
 import { aiAccountLogin, aiAccountRemove, signOutAccount, syncAccountIdentityAfterLogin, withSignIn } from '../../commands/account.js';
 import { TerminalHarnessPrompter } from '../prompter.js';
-import { accountPickerOptions, type ProviderAccountChoice } from '../../session/options.js';
+import type { AiHarnessAccount } from '../../harness/definition.js';
+import type { HarnessSession } from '../../session/model.js';
+import { accountRow, harnessCanAddAccount } from '../../session/picker-rows.js';
+import chalk from 'chalk';
 import { aiSessionCommand } from '../slash/handlers.js';
 import { hasLocalDisplay, openLoginUrl } from '../../gateway/login/url.js';
 import { verificationNotice } from '../../turn/failover.js';
 import { chooseOption } from './choose.js';
+
+export type ProviderAccountChoice =
+  | { kind: 'account'; harness: string; accountId: string }
+  | { kind: 'add-account'; harness: string };
+
+const ACCOUNT_ACTION_LABELS = { reauthenticate: 'Reauthenticate', verified: 'I’ve verified it', disconnect: 'Disconnect', remove: 'Remove' } as const;
+const ACCOUNT_PROBLEM_WORDS = { verify: 'verify', reauth: 'reauth', 'out-of-usage': 'out of usage' } as const;
+
+/** One provider's accounts (picker-rows.ts accountRow) as the terminal shows
+ * them, then "+ Add account…" where one can be added. Usage is loaded only
+ * after its provider is opened, avoiding a wall of rows and quota probes for
+ * providers the user never views. */
+export function accountPickerOptions(
+  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string; usagePending?: boolean }>,
+  session: HarnessSession,
+  harness: AiLocalHarnessDefinition,
+): PickerOption<ProviderAccountChoice>[] {
+  const mine = accounts.filter(({ account }) => account.provider === harness.provider)
+    .sort((left, right) => left.account.label.localeCompare(right.account.label));
+  return [
+    ...mine.map(({ account, usage, usagePending }) => {
+      const row = accountRow(account, harness, session);
+      const deleteWith = row.actions.at(-1)!;
+      return {
+        label: row.label,
+        // One state per row: a problem outranks usage, so the eye lands on
+        // the single thing that matters. Provider/auth kind is not shown.
+        detail: [
+          row.problem ? chalk.yellow(ACCOUNT_PROBLEM_WORDS[row.problem]) : usage ?? (usagePending ? '…' : ''),
+          row.current ? '· current' : '',
+        ].filter(Boolean).join(' '),
+        value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
+        actions: row.actions.slice(0, -1).map((value) => ({ label: ACCOUNT_ACTION_LABELS[value], value })),
+        deleteAction: { label: ACCOUNT_ACTION_LABELS[deleteWith], value: deleteWith },
+      };
+    }),
+    // The only way to connect a second login from inside /account.
+    ...(harnessCanAddAccount(harness)
+      ? [{ label: '+ Add account…', detail: `· ${harness.displayName}`, value: { kind: 'add-account' as const, harness: harness.command } }]
+      : []),
+  ];
+}
 
 /** Makes the account just added (by label) the conversation's own. */
 export async function useAddedAccount(id: string, harness: AiLocalHarnessDefinition, label: string): Promise<string> {

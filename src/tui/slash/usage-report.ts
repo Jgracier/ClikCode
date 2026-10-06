@@ -6,8 +6,8 @@ import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactCount, dollars } from '../../harness/protocol/format.js';
 import { invocationRollups } from '../../session/state/invocations.js';
-import { learnedReading } from '../../harness/accounts/learned-usage.js';
-import { accountQuotaSpent, usageReadingIsCurrent, vendorWindows, usageResetLabel, usageWindowTitle, type AccountUsageReading, type UsageWindow } from '../../harness/accounts/usage-reading.js';
+import { accountQuotaSpent, accountUsageText, usageResetLabel } from '../../harness/accounts/usage-reading.js';
+import { accountUsage } from '../../session/picker-rows.js';
 
 type Invocation = HarnessState['invocations'][number];
 
@@ -41,20 +41,12 @@ function sumInvocations(invocations: readonly Invocation[]): UsageReportTotals {
 }
 
 function allowance(account: AiHarnessAccount, state: HarnessState, now: number): { label: string; reset?: string } {
-  const stored = account.usage as AccountUsageReading | undefined;
-  const windows = vendorWindows(account);
-  const current: readonly UsageWindow[] | undefined = windows.length > 0 && usageReadingIsCurrent({ windows }, now) ? windows : undefined;
-  if (current?.length) {
-    const label = current.map((window) => `${usageWindowTitle(window.name)} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`).join(' · ');
-    return { label, ...(usageResetLabel(current, now) ? { reset: usageResetLabel(current, now) } : {}) };
+  const usage = accountUsage(account, state, now);
+  const label = usage && accountUsageText(usage);
+  if (usage && label) {
+    const reset = usageResetLabel(usage.windows, now);
+    return { label, ...(reset ? { reset } : {}) };
   }
-  const learned = learnedReading(state, account, now);
-  if (learned?.label) {
-    const reset = usageResetLabel(learned.windows, now);
-    return { label: `${learned.label} · estimated`, ...(reset ? { reset } : {}) };
-  }
-  // A balance: a label with no windows (Auggie, Amp, Kilo).
-  if (stored?.label && !stored.failed && !stored.windows?.length) return { label: stored.label };
   if (account.status === 'needs_login') return { label: 'needs reauthentication' };
   if (accountQuotaSpent(account, now)) return { label: 'out of usage' };
   return { label: 'not reported yet' };

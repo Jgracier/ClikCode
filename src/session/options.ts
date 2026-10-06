@@ -2,31 +2,28 @@
  * How a session and its harness are described and configured.
  *
  * Pure functions: what a conversation's identity is, what options a harness
- * accepts and how one is applied, and how sessions, providers and accounts
- * become rows in a picker. No I/O, no prompter, no turn.
+ * accepts and how one is applied, and how a conversation
+ * becomes a row in a picker. No I/O, no prompter, no turn.
  *
  * It is split out because two callers need exactly this and nothing else --
  * the turn loop and the interactive pickers -- and while it sat inside the
  * turn loop's file the pickers could not be lifted out without the two
- * importing each other.
+ * importing each other. The pickers' rows as data are session/picker-rows.ts.
  */
 import { conversationPreview, sessionFromIndex, transcriptWasLoaded } from './list-facts.js';
 import { isConversationChat } from './conversation-rows.js';
 
 export { conversationPreview };
-import { CLIKCODE_LOCAL_LABEL, isClikCodeAgent } from './route.js';
+import { isClikCodeAgent } from './route.js';
 import chalk from 'chalk';
 import { commonControlFor, optionIdsForControl } from '../harness/options.js';
 import { harnessTierRank } from '../runtime/lazy-bridge.js';
 import { sessionProviderLabel } from '../harness/protocol/labels.js';
 import { relativeTime } from '../harness/protocol/format.js';
 import { harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
-import type { AiHarnessAccount, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessOptionDefinition, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { PickerOption } from '../harness/prompter.js';
 import type { HarnessDefaultSettings, HarnessSession } from './model.js';
-import { harnessCanLogout } from '../harness/accounts/auth-files.js';
-import { accountQuotaSpent } from '../harness/accounts/usage-reading.js';
-import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { forgetNativeThread } from './native-thread.js';
 import type { ConversationRow } from './conversation-rows.js';
 import { conversationState, turnFacts } from './conversation-state.js';
@@ -48,16 +45,6 @@ export function sessionPermissionModes(
   if (isClikCodeAgent(session)) return VALID_PERMISSION_MODES;
   return harness ? VALID_PERMISSION_MODES.filter((mode) => harnessSupportsPermissionMode(harness, mode)) : [];
 }
-
-type ProviderChoice =
-  | { kind: 'gateway' }
-  | { kind: 'clikcode-local' }
-  | { kind: 'provider'; harness: string };
-
-export type ProviderAccountChoice =
-  | { kind: 'account'; harness: string; accountId: string }
-  | { kind: 'add-account'; harness: string };
-
 
 export function hasConversationContent(session: HarnessSession): boolean {
   return Boolean(session.nativeSessionId || session.pendingTurn || (session.messages ?? []).length > 0);
@@ -300,8 +287,6 @@ export function integrationLabel(harness: AiLocalHarnessDefinition): string {
   } as const)[harnessIntegrationLevel(harness)];
 }
 
-/** Keep the provider list deliberately sparse. Account switching belongs to
- * the composer shortcut and /account, not this provider-only menu. */
 /** The providers listed first, in this order, after the ClikDeploy Gateway
  * and ClikCode Local. The user's own ranking; every other harness follows,
  * installed ones first, then by catalog tier. */
@@ -320,96 +305,4 @@ export function compareProviders(
   return rank(left.harness) - rank(right.harness)
     || Number(Boolean(right.installed)) - Number(Boolean(left.installed))
     || harnessTierRank(left.harness) - harnessTierRank(right.harness);
-}
-
-export function providerPickerOptions(
-  available: ReadonlyArray<{ harness: AiLocalHarnessDefinition; inspection: { installed: boolean; version?: string } }>,
-  session: HarnessSession,
-  gatewayConnected: boolean,
-  configuredProviders: ReadonlySet<string> = new Set(),
-): PickerOption<ProviderChoice>[] {
-  // PROVIDER_ORDER, then installed, then tier, then catalog order (the sort
-  // is stable).
-  const ordered = [...available].sort((left, right) => compareProviders(
-    { harness: left.harness, installed: left.inspection.installed }, { harness: right.harness, installed: right.inspection.installed }));
-  // Every provider, in one list. Splitting it left the catalog's own entries
-  // behind a "More providers…" row, so the answer to "what can I use?" was
-  // two screens deep and looked like a shorter catalog than it is. Installed
-  // ones still sort to the top, which is what the split was really for.
-  const visible = ordered;
-  return [{
-    label: 'ClikDeploy Gateway',
-    detail: `· ${gatewayConnected ? 'connected' : 'sign in with OAuth'}${session.route === 'gateway' ? ' · current' : ''}`,
-    value: { kind: 'gateway' },
-  }, {
-    // Always listed, engine or not: choosing it is how a user learns what it
-    // is, and a turn on it says plainly when this build cannot serve one yet.
-    label: CLIKCODE_LOCAL_LABEL,
-    detail: `· local models on this machine${session.route === 'clikcode-local' ? ' · current' : ''}`,
-    value: { kind: 'clikcode-local' },
-  }, ...visible.map(({ harness, inspection }) => ({
-      label: harness.displayName,
-      detail: `${inspection.installed
-        ? `· installed${inspection.version ? ` ${inspection.version}` : ''}`
-        : harnessInstallRoute(harness).kind !== 'none' ? '· installs when chosen' : '· install it yourself'} · ${integrationLabel(harness)}${session.route === 'local' && session.nativeHarness === harness.command ? ' · current' : ''}`,
-      value: { kind: 'provider' as const, harness: harness.command },
-    })),
-  ];
-}
-
-/** Whether the account menu can actually complete an add operation. */
-function harnessCanAddAccount(harness: AiLocalHarnessDefinition): boolean {
-  return harness.localAuth.includes('api-key') || Boolean(harness.loginArgv);
-}
-
-/** Account usage is loaded only after its provider is opened, avoiding a
- * wall of rows and avoiding quota probes for providers the user never views. */
-function providerAccountPickerOptions(
-  harness: AiLocalHarnessDefinition,
-  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string; usagePending?: boolean }>,
-  session: HarnessSession,
-): PickerOption<ProviderAccountChoice>[] {
-  return [
-    ...[...accounts].sort((left, right) => left.account.label.localeCompare(right.account.label)).map(({ account, usage, usagePending }) => {
-      const actions = [
-        ...(harness.loginArgv && account.authKind === 'vendor-cli' && account.status !== 'ready'
-          ? [{ label: 'Reauthenticate', value: 'reauthenticate' }] : []),
-        ...(account.verification ? [{ label: 'I’ve verified it', value: 'verified' }] : []),
-      ];
-      const deleteAction = harnessCanLogout(harness) && account.authKind === 'vendor-cli' && account.status === 'ready'
-        ? { label: 'Disconnect', value: 'disconnect' }
-        : { label: 'Remove', value: 'remove' };
-      return {
-        label: account.label,
-        // One state per row: a problem outranks usage, so the eye lands on
-        // the single thing that matters. Provider/auth kind is not shown.
-        detail: [
-          account.verification ? chalk.yellow('verify')
-            : account.status === 'needs_login' ? chalk.yellow('reauth')
-              : accountQuotaSpent(account) ? chalk.yellow('out of usage')
-                : usage ?? (usagePending ? '…' : ''),
-          account.id === session.accountId ? '· current' : '',
-        ].filter(Boolean).join(' '),
-        value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
-        actions,
-        deleteAction,
-      };
-    }),
-    ...(harnessCanAddAccount(harness)
-      ? [{ label: '+ Add account…', detail: `· ${harness.displayName}`, value: { kind: 'add-account' as const, harness: harness.command } }]
-      : []),
-  ];
-}
-
-/** Composer account choices are scoped to the selected provider. */
-export function accountPickerOptions(
-  accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string; usagePending?: boolean }>,
-  session: HarnessSession,
-  harness: AiLocalHarnessDefinition,
-): PickerOption<ProviderAccountChoice>[] {
-  // Every row the builder produces, including the trailing "+ Add account…".
-  // Filtering to kind === 'account' here is what made that row unreachable:
-  // it is the only way to connect a second login from inside /account, and
-  // this is the only caller, so it was dead.
-  return providerAccountPickerOptions(harness, accounts.filter(({ account }) => account.provider === harness.provider), session);
 }

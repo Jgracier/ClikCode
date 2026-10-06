@@ -74,6 +74,14 @@ function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined 
   return parts.length ? parts.join(' · ') : undefined;
 }
 
+/** An account's usage in one line, wherever it is shown (/usage, the
+ * editor's account menu): its windows' figures, else the label of a reading
+ * with none (a balance); a learned estimate says it is one. */
+export function accountUsageText(usage: { label?: string; windows: readonly UsageWindow[]; learned?: boolean }): string | undefined {
+  const text = usage.learned ? usage.label ?? usageReadingLabel(usage.windows) : usageReadingLabel(usage.windows) ?? usage.label;
+  return text && usage.learned ? `${text} · estimated` : text;
+}
+
 /** "resets at 8:00PM", derived from the same vendor-reported `resetsAt` the
  * usage windows already carry -- not computed independently. Only speaks for
  * a window that is actually exhausted right now (matches accountQuotaSpent's
