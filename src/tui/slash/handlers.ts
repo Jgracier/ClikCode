@@ -52,7 +52,7 @@ import { textTranscript } from '../../turn/turn-activities.js';
 import { moveToProvider, newConversationSession } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { aiSessionClose, aiSessionLeave, applyClikCodeAgentSessionPolicy, applyFreshLocalSessionPolicy, applyGatewaySessionPolicy, assertRealModel, chooseGatewayModel } from '../../commands/ai/sessions.js';
-import { gatewayModelDetail, gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
+import { gatewayModelDetail, gatewayModelLabel, gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
 import { capabilitiesText } from './capabilities-text.js';
 import { compactConversation } from './compact.js';
@@ -324,7 +324,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         return emitHarnessOutput({
           panel: 'models',
           // The model and its price only: which provider serves it is the Gateway's decision.
-          models: models.map((model) => ({ model: model.id, price: gatewayModelDetail(model) })),
+          models: models.map((model) => ({ model: model.id, label: gatewayModelLabel(model), price: gatewayModelDetail(model) })),
           selected: session.model ?? automatic,
         });
       }

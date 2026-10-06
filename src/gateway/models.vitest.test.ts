@@ -19,7 +19,7 @@ const WIRE = {
       id: 'gpt-5.6-sol', object: 'model', created: 0, owned_by: 'openai', context_length: 400_000,
       pricing: { prompt: '0.000003', completion: '0.000015', input_per_mtok: 3, output_per_mtok: 15, full_input_per_mtok: 4, full_output_per_mtok: 20, discount_percent: 25 },
     },
-    { id: 'qwen/qwen3.8-27b', object: 'model', created: 0, owned_by: 'qwen', context_length: 131_072 },
+    { id: 'qwen/qwen3.8-27b', object: 'model', created: 0, owned_by: 'qwen', context_length: 131_072, access: 'free' },
     {
       id: 'claude-opus-5', object: 'model', created: 0, owned_by: 'anthropic', type: 'chat',
       capabilities: { tools: true, vision: true, reasoning: true, json_output: true }, max_output_tokens: 64000, tokens_per_second: 71.3,
@@ -32,7 +32,7 @@ const LIST = {
   automatic: 'qwen/qwen3.8-27b',
   models: [
     { id: 'gpt-5.6-sol', contextWindow: 400_000, price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 25, charged: { inMTok: 3, outMTok: 15 } } },
-    { id: 'qwen/qwen3.8-27b', contextWindow: 131_072 },
+    { id: 'qwen/qwen3.8-27b', access: 'free', contextWindow: 131_072 },
     { id: 'claude-opus-5', vision: true, reasoning: true, maxOutput: 64000, tokensPerSecond: 71.3 },
   ],
 };
@@ -66,6 +66,13 @@ describe('the Gateway\'s model list', () => {
     expect(gatewayModelDetail(LIST.models[1] as never)).toBe('');
     expect(gatewayModelDetail({ ...LIST.models[1], price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 0, charged: { inMTok: 4, outMTok: 20 } } } as never))
       .toBe('$4/$20 per 1M');
+  });
+
+  it('names the tier serving a model beside it, where the Gateway says which (the super admin\'s list)', async () => {
+    const { gatewayModelLabel, fromOpenAIModelList } = await import('./models.js');
+    expect(gatewayModelLabel({ id: 'claude-opus-5-5', access: 'subscription' })).toBe('claude-opus-5-5 (subscription)');
+    expect(gatewayModelLabel({ id: 'glm-5' })).toBe('glm-5');
+    expect(fromOpenAIModelList([{ id: 'x', access: 'somewhere' }]).models[0]).toEqual({ id: 'x' });
   });
 
   it('keeps the last list on disk, so /model opens at once from it', async () => {

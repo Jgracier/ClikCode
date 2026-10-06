@@ -13,6 +13,7 @@ vi.mock('../../gateway/models.js', () => ({
   savedGatewayModels: async () => ({ automatic: 'gpt', models: [{ id: 'gpt' }] }),
   gatewayModels: async () => ({ automatic: 'gpt', models: [{ id: 'gpt' }] }),
   gatewayModelDetail: () => '',
+  gatewayModelLabel: (model: { id: string; access?: string }) => (model.access ? `${model.id} (${model.access})` : model.id),
   isAutomaticModelWord: (word: string) => word === 'auto',
 }));
 vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => {
