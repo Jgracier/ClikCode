@@ -41,9 +41,26 @@ if (argv[0] === 'login') {
   // FAKE_LOGIN_KEY: a sign-in that asks for a key on its own prompt line, as
   // Hermes's does, and succeeds only with that key.
   if (process.env.FAKE_LOGIN_KEY) {
+    process.stdin.setEncoding('utf8');
+    let buffered = '';
+    process.stdin.on('data', (chunk) => { buffered += chunk; });
+    const line = async () => {
+      while (!/[\r\n]/.test(buffered)) await new Promise((resolve) => setTimeout(resolve, 20));
+      const [typed, ...rest] = buffered.split(/\r\n?|\n/);
+      buffered = rest.join('\n');
+      return typed.trim();
+    };
     process.stdout.write('Paste your API key: ');
-    const typed = await new Promise((resolve) => { let line = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', (chunk) => { line += chunk; if (line.includes('\n') || line.includes('\r')) resolve(line.trim()); }); });
+    const typed = await line();
     process.stdout.write('\n');
+    // FAKE_LOGIN_DEFAULT: then a question with a shown default, as Hermes's
+    // `Base URL [...]:`, that Enter alone must answer.
+    if (process.env.FAKE_LOGIN_DEFAULT) {
+      process.stdout.write('Base URL [https://api.example.test/v1]: ');
+      const base = await line();
+      process.stdout.write('\n');
+      if (base) process.exit(5);
+    }
     process.exit(typed === process.env.FAKE_LOGIN_KEY ? 0 : 4);
   }
   console.log('To sign in, open this URL in your browser:\n  https://accounts.x.ai/oauth2/device?user_code=AB12-CD34\nConfirm this code in your browser:\n  AB12-CD34\nWaiting for authorization...');
