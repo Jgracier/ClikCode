@@ -22,6 +22,7 @@ import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
 import { accountQuotaSpent, usageReadingIsCurrent, vendorWindows, type UsageWindow } from '../harness/accounts/usage-reading.js';
 import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { nativeModelCatalogForPicker } from '../harness/accounts/model-catalog.js';
+import { freePlanModels } from '../harness/accounts/free-plan.js';
 import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import {
@@ -133,12 +134,14 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
   const onIt = session?.route === 'local' && session.nativeHarness === harness.command ? session : undefined;
   // The terminal's picker gives discovery 3 s and redraws when it lands; the
   // editor's menu shows a spinner and draws once, so it waits for the list.
-  const catalog = await nativeModelCatalogForPicker(harness, accountFor(state, session, harness), IDE_MODEL_DISCOVERY_WAIT_MS);
+  const account = accountFor(state, session, harness);
+  const catalog = await nativeModelCatalogForPicker(harness, account, IDE_MODEL_DISCOVERY_WAIT_MS);
+  const free = freePlanModels(harness, account, catalog);
   const effective = onIt?.model ?? catalog.configured ?? undefined;
   const models: IdeModel[] = [...catalog.models]
     .sort((left, right) => (left === effective ? -1 : right === effective ? 1 : left.localeCompare(right)))
     .map((model) => {
-      const row = modelRow(harness, catalog, model, effective);
+      const row = modelRow(harness, catalog, model, effective, false, free);
       const detail = row.detail?.replace(/^·\s*/, '').replace(/(?:^|\s·\s)current$/, '').trim();
       return { id: model, label: row.label, ...(detail ? { detail } : {}), current: Boolean(onIt) && model === effective };
     });

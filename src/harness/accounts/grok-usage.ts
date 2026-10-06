@@ -49,7 +49,9 @@ export function grokBillingReading(result: unknown): UsageReading | undefined {
   if (!period || typeof period !== 'object') return undefined;
   const type = typeof period.type === 'string' ? period.type : '';
   const name = PERIOD_NAMES[type] ?? (type.replace(/^USAGE_PERIOD_TYPE_/, '').toLowerCase() || 'plan');
-  return usageReading([usageWindow(name, protoNumber(config!.creditUsagePercent) ?? 0, period.end ?? config!.billingPeriodEnd)]);
+  const reading = usageReading([usageWindow(name, protoNumber(config!.creditUsagePercent) ?? 0, period.end ?? config!.billingPeriodEnd)]);
+  const tier = (result as Json).subscription_tier;
+  return reading && typeof tier === 'string' && tier ? { ...reading, plan: { name: tier } } : reading;
 }
 
 /** One short-lived `grok agent stdio`, asked `_x.ai/billing` and let go.

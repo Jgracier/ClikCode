@@ -67,7 +67,7 @@ const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|tem
  *  the user was told "account failed" -- true but useless, since it names
  *  neither the problem nor the fix. Signing in again cannot help, which is
  *  why this is distinct from authentication-required. */
-const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|no valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available)/i;
+const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|(?:no|not have a) valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
  * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity

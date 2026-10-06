@@ -29,6 +29,7 @@ import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { acpDiscoverySession, queryAcp } from './acp-query.js';
 import type { HarnessSession } from '../../session/model.js';
 import { type UsageReading, type UsageWindow, usageReading, usageWindow } from './usage-reading.js';
+import { planIsFree } from './free-plan.js';
 
 type Json = Record<string, any>;
 type Environment = Readonly<Record<string, string>>;
@@ -118,7 +119,26 @@ export async function copilotUsageReading(_session: HarnessSession, environment:
   const binary = await resolveBinaryPath(catalogBinary('copilot', 'copilot'));
   if (!binary) return undefined;
   // --no-auto-update: a probe must not start a self-update.
-  return copilotQuotaReading(await contentLengthRequest(binary, ['--headless', '--no-auto-update', '--stdio'], environment, 'account.getQuota', {}));
+  const quota = await contentLengthRequest(binary, ['--headless', '--no-auto-update', '--stdio'], environment, 'account.getQuota', {});
+  const reading = copilotQuotaReading(quota);
+  // Every paid Copilot plan has unlimited chat; only Copilot Free meters it
+  // (200 a month), which is how its own quota answer tells them apart.
+  const chat = (quota as Json | undefined)?.quotaSnapshots?.chat as Json | undefined;
+  return reading && chat?.isUnlimitedEntitlement === false ? { ...reading, plan: { name: 'Copilot Free' } } : reading;
+}
+
+/** The models Copilot serves THIS account (`models.list` on its own
+ * server): what its plan runs right now, where models.dev lists everything
+ * Copilot offers anyone. A Free account with its chat spent lists `auto`
+ * alone (2026-10-06), and that is the truth: nothing else would answer. */
+export async function copilotAccountModels(environment: Environment): Promise<{ models: string[]; labels: Record<string, string> } | undefined> {
+  const binary = await resolveBinaryPath(catalogBinary('copilot', 'copilot'));
+  if (!binary) return undefined;
+  const listed = (await contentLengthRequest(binary, ['--headless', '--no-auto-update', '--stdio'], environment, 'models.list', {}))?.models;
+  if (!Array.isArray(listed)) return undefined;
+  const labels: Record<string, string> = {};
+  for (const model of listed as Json[]) if (typeof model?.id === 'string') labels[model.id] = typeof model.name === 'string' ? model.name : model.id;
+  return Object.keys(labels).length ? { models: Object.keys(labels), labels } : undefined;
 }
 
 // ---------------------------------------------------------------- Kimi
@@ -202,6 +222,19 @@ export function cursorQuotaReading(result: unknown, planName?: string): UsageRea
   return usageReading([usageWindow('auto', auto, reset), api ? { ...api, advisory: true as const } : undefined]);
 }
 
+/** `AiService/AvailableModels`: the models Cursor does not count as named. */
+async function cursorUnnamedModels(environment: Environment): Promise<string[] | undefined> {
+  const token = await cursorAccessToken(environment);
+  if (!token) return undefined;
+  const response = await fetch('https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels', {
+    method: 'POST', body: '{}', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
+  });
+  if (!response.ok) return undefined;
+  const models = (await response.json() as Json).models;
+  return Array.isArray(models) ? models.filter((model: Json) => model?.namedModelSectionIndex === undefined && typeof model?.name === 'string').map((model: Json) => model.name as string) : undefined;
+}
+
 async function cursorAccessToken(environment: Environment): Promise<string | undefined> {
   const home = environment.HOME ?? homedir();
   const config = environment.XDG_CONFIG_HOME ?? process.env.XDG_CONFIG_HOME ?? join(home, '.config');
@@ -228,7 +261,13 @@ export async function cursorUsageReading(_session: HarnessSession, environment: 
     }
     if (!response?.ok) return undefined;
     const plan = await ask('GetPlanInfo').then(async (answer) => answer?.ok ? (await answer.json() as Json).planInfo?.planName as string | undefined : undefined).catch(() => undefined);
-    return cursorQuotaReading(await response.json(), plan);
+    const reading = cursorQuotaReading(await response.json(), plan);
+    if (!reading || !plan) return reading;
+    // A Free plan runs only what Cursor does not file as a "named" model
+    // (`namedModelSectionIndex`): Auto. Its refusal says the same, "Named
+    // models unavailable. Free plans can only use Auto" (2026-10-06).
+    const models = planIsFree({ name: plan }) ? await cursorUnnamedModels(environment).catch(() => undefined) : undefined;
+    return { ...reading, plan: { name: plan, ...(models?.length ? { models } : {}) } };
   } catch {
     return undefined; // fail-open-ok: no figure beats a wrong one
   }
@@ -241,7 +280,7 @@ export async function cursorUsageReading(_session: HarnessSession, environment: 
  * model answers "Insufficient balance. Your Cline Credits balance is $-0.20"
  * (-195907, 2026-10-06) while the `:free` models still answer -- checked on
  * all 12 accounts -- so spent credits are advisory, never a spent account
- * (catalog creditFreeModels moves the turn to a free model). */
+ * (catalog freePlan moves the turn to a free model). */
 export function clineQuotaReading(result: unknown): UsageReading | undefined {
   const balance = Number(((result as Json | undefined)?.data as Json | undefined)?.balance);
   if (!Number.isFinite(balance)) return undefined;
@@ -324,7 +363,11 @@ export async function devinUsageReading(_session: HarnessSession, environment: E
       headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
       body: JSON.stringify({ metadata: { apiKey: key, ideName: 'windsurf', ideVersion: '1.0.0', extensionName: 'windsurf', extensionVersion: '1.0.0' } }),
     });
-    return response.ok ? devinQuotaReading(((await response.json() as Json).userStatus as Json | undefined)?.planStatus) : undefined;
+    if (!response.ok) return undefined;
+    const status = (await response.json() as Json).userStatus as Json | undefined;
+    const reading = devinQuotaReading(status?.planStatus);
+    const plan = status?.planStatus?.planInfo?.planName ?? status?.planInfo?.planName;
+    return reading && typeof plan === 'string' ? { ...reading, plan: { name: plan } } : reading;
   } catch {
     return undefined; // fail-open-ok: no figure beats a wrong one
   }
@@ -378,7 +421,10 @@ export async function kiroUsageReading(_session: HarnessSession, environment: En
     const sessionId = typeof started.sessionId === 'string' ? started.sessionId : undefined;
     if (!sessionId) return undefined;
     const answer = await request('_kiro.dev/commands/execute', { sessionId, command: { command: 'usage', args: {} } });
-    return answer.success === false ? undefined : kiroQuotaReading(answer.data);
+    if (answer.success === false) return undefined;
+    const reading = kiroQuotaReading(answer.data);
+    const plan = (answer.data as Json | undefined)?.planName;
+    return reading && typeof plan === 'string' ? { ...reading, plan: { name: plan } } : reading;
   }, PROBE_TIMEOUT_MS).catch(() => undefined);
 }
 
@@ -453,8 +499,19 @@ export function auggieUsageLabel(raw: string): string | undefined {
   return `${Number.isInteger(remaining) ? remaining : remaining.toFixed(2)}${unit ? ` ${unit}` : ''} credits left`;
 }
 
-export const auggieUsageProbe = (_session: HarnessSession, environment: Environment): Promise<string | undefined> =>
-  captureLabel('auggie', ['account', 'status', '--json'], environment, auggieUsageLabel);
+export async function auggieUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  let raw: string;
+  try {
+    const harness = localHarnessForCommand('auggie');
+    if (!harness) return undefined;
+    raw = await captureNativeHarnessOutput(harness, ['account', 'status', '--json'], environment, PROBE_TIMEOUT_MS);
+  } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
+  const label = auggieUsageLabel(raw);
+  if (label === undefined) return undefined;
+  let plan: unknown;
+  try { plan = (JSON.parse(raw) as Json).planName; } catch { /* the label already parsed it */ }
+  return { windows: [], label, ...(typeof plan === 'string' && plan ? { plan: { name: plan } } : {}) };
+}
 
 export const ampUsageProbe = (_session: HarnessSession, environment: Environment): Promise<string | undefined> =>
   captureLabel('amp', ['usage'], environment, ampUsageLabel);

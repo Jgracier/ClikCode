@@ -21,6 +21,7 @@ describe('grok plan allowance (_x.ai/billing)', () => {
     expect(grokBillingReading(billing)).toEqual({
       windows: [{ name: 'weekly', usedPct: 0, resetsAt: '2026-10-05T23:16:51.066Z' }],
       label: 'Weekly 100% left',
+      plan: { name: 'SuperGrok' },
     });
   });
 

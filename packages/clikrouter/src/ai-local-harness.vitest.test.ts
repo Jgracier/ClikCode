@@ -496,8 +496,8 @@ describe('local harness catalog', () => {
   });
 
   it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
-    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, ...opencode } = localHarnessForCommand('opencode')!;
-    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, authFiles: _kaf, loginAccountChoose: _kac, creditFreeModels: _kcf, ...kilo } = localHarnessForCommand('kilo')!;
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
     // Only OpenCode's free models were proven to answer signed out.

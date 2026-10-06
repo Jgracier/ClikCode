@@ -41,3 +41,24 @@ export async function discoverOpencodeConnect(
   const cacheJson = await readFile(join(cacheRoot, harness.binary, 'models.json'), 'utf8').catch(() => '');
   return cacheJson ? opencodeConnect(cacheJson, connectedModels) : [];
 }
+
+/** `<cli> models --verbose`: each model's `provider/model` line, then its
+ * metadata as JSON. A model is free when the vendor says so: Kilo's
+ * `isFree` (its zero-priced routers `kilo-auto/balanced` are not), else a
+ * zero input and output price (OpenCode Zen's free models carry no flag;
+ * `big-pickle` has no `-free` in its id either). Checked 2026-10-06 against
+ * a real paid refusal and a free answer on each. */
+export function opencodeVerboseModels(raw: string): { models: string[]; free: string[] } {
+  const models: string[] = [];
+  const free: string[] = [];
+  const blocks = raw.replace(/\u001b\[[0-9;]*m/g, '').split(/^([^\s{}"]+\/\S+)[ \t]*$/m);
+  for (let index = 1; index < blocks.length; index += 2) {
+    const id = blocks[index]!;
+    models.push(id);
+    let meta: { isFree?: unknown; cost?: { input?: unknown; output?: unknown } };
+    try { meta = JSON.parse(blocks[index + 1] ?? '') as typeof meta; } catch { continue; }
+    const isFree = typeof meta.isFree === 'boolean' ? meta.isFree : meta.cost?.input === 0 && meta.cost?.output === 0;
+    if (isFree) free.push(id);
+  }
+  return { models, free };
+}

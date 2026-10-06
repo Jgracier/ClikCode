@@ -1,7 +1,8 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
+import { freeModelAfterPlanRefusal, freePlanModels } from '../harness/accounts/free-plan.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 import { nativeModelCatalog, resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../session/state/paths.js';
 import chalk from 'chalk';
@@ -63,19 +64,6 @@ import { watchSwarmActivity } from '../swarm/spool.js';
  */
 /** A vendor refusing the reasoning level itself, in the words the CLIs use. */
 const EFFORT_REJECTED = /\b(?:unknown|invalid|unsupported|not supported)\b[^\n]{0,40}\b(?:reasoning[ _-]?)?effort\b|\beffort\b[^\n]{0,40}\b(?:is not supported|not supported|unsupported|invalid)\b/i;
-
-/** The free model a refused turn goes on with: the first the vendor lists,
- * when the refusal is the harness's spent-credits one (creditFreeModels) and
- * the model refused is a paid one. Undefined: not this refusal, or nothing
- * free to go on with. */
-export function freeModelAfterCreditRefusal(
-  harness: Pick<AiLocalHarnessDefinition, 'creditFreeModels'>, model: string | null | undefined, failure: unknown, listed: readonly string[],
-): string | undefined {
-  const credit = harness.creditFreeModels;
-  if (!credit || !model || model.endsWith(credit.suffix)) return undefined;
-  if (!(failure instanceof Error ? failure.message : String(failure)).toLowerCase().includes(credit.refusal)) return undefined;
-  return listed.find((id) => id.endsWith(credit.suffix));
-}
 
 /** Whether a failed turn is the vendor refusing the reasoning level: an ACP
  * session that offers no such level (acp-client.ts), or a CLI saying so in
@@ -523,15 +511,17 @@ export async function sendVendorTurn(input: {
         await checkpoint.persistNow();
         continue;
       }
-      // A paid model refused for spent credits on an account whose free
-      // models still answer (Cline): the model's refusal, not the account's
-      // -- marking the account spent failed over every one, all refused the
-      // same paid model, while each would have answered on a free one.
-      if (!freeModelRetried && !cliOutputStarted && harness.creditFreeModels) {
-        const free = freeModelAfterCreditRefusal(harness, model, failure, (await nativeModelCatalog(harness, account).catch(() => undefined))?.models ?? []);
+      // A model the account's plan does not run, refused while its free
+      // models still answer (Cline on spent credits, a Cursor Free account on a
+      // named model): the model's refusal, not the account's -- marking the
+      // account spent failed over every one, all refused the same model,
+      // while each would have answered on a free one.
+      if (!freeModelRetried && !cliOutputStarted && harness.freePlan?.refusals) {
+        const catalog = await nativeModelCatalog(harness, account).catch(() => undefined);
+        const free = freeModelAfterPlanRefusal(harness, model, failure, freePlanModels(harness, account, catalog ?? { models: [] }));
         if (free) {
           freeModelRetried = true;
-          prompter?.activity(chalk.yellow(`${account.label} has no ${harness.displayName} credits for ${model}; continuing on ${free}, which needs none`));
+          prompter?.activity(chalk.yellow(`${account.label}'s ${harness.displayName} plan does not run ${model}; continuing on ${free}, which it does`));
           model = free;
           session.model = free;
           await checkpoint.persistNow();
