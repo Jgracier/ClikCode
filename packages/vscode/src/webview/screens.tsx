@@ -89,7 +89,10 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
     // The chat on screen is listed once it is a conversation, not while empty.
     const matching = (rows ?? []).filter((row) => !(row.current && !row.messages))
       .filter((row) => !query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
-    const sections: Array<[string, ListedConversation[]]> = SECTIONS.map(([section, title]) => [title, matching.filter((row) => conversationSection(row) === section)]);
+    // Within a section one that needs you comes first, as on the terminal's
+    // board; ClikCode's order otherwise (the sort is stable).
+    const needsYouFirst = (left: ListedConversation, right: ListedConversation): number => Number(rowState(right).kind === 'needs-you') - Number(rowState(left).kind === 'needs-you');
+    const sections: Array<[string, ListedConversation[]]> = SECTIONS.map(([section, title]) => [title, matching.filter((row) => conversationSection(row) === section).sort(needsYouFirst)]);
     const result: ListRow[] = [];
     for (const [title, items] of sections) {
       if (!items.length) continue;

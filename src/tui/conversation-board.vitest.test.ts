@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { PickerOption } from '../harness/prompter';
-import { boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
+import { boardHint, boardKey, boardRows, boardSessionsSettled, boardSettlePending, boardStartRow, type BoardState } from './conversation-board';
 
 const UP = '\u001b[A';
 const DOWN = '\u001b[B';
@@ -9,7 +9,7 @@ const LEFT = '\u001b[D';
 
 const subagent: PickerOption<string> = { label: 'Agent(Explore)', value: 'busy' };
 const conversations: PickerOption<string>[] = [
-  { label: 'Busy', value: 'busy', inner: { title: 'Subagents', options: [subagent] }, actions: [{ label: 'Rename', value: 'rename' }] },
+  { label: 'Busy', value: 'busy', inner: { title: 'Agents', options: [subagent] }, actions: [{ label: 'Rename', value: 'rename' }] },
   { label: 'Old', value: 'old', deleteAction: { label: 'Delete', value: 'delete' } },
 ];
 const commands: PickerOption<string>[] = [
@@ -59,10 +59,11 @@ describe('the conversation board', () => {
     expect(state).toEqual({ draft: 'h', selected: -1 });
   });
 
-  it('opens a working conversation’s sub-agents with Left, and closes on one without', () => {
+  it('goes into a working conversation’s agents with Right; Enter still opens it, and Left closes', () => {
     const state = fresh();
-    expect(press(state, DOWN, LEFT)).toEqual({ kind: 'inner', option: conversations[0] });
-    expect(press(state, DOWN, LEFT)).toEqual({ kind: 'close' });
+    expect(press(state, DOWN, RIGHT)).toEqual({ kind: 'inner', option: conversations[0] });
+    expect(press(state, '\r')).toEqual({ kind: 'finish', result: { open: 'busy' } });
+    expect(press(state, LEFT)).toEqual({ kind: 'close' });
   });
 
   it('closes with Left from an empty composer but not from a draft', () => {
@@ -96,6 +97,27 @@ describe('the conversation board', () => {
   it('deletes on Backspace with no draft, since Mac and iPhone keyboards have no forward Delete', () => {
     const state = fresh();
     expect(press(state, DOWN, DOWN, '\u007f')).toEqual({ kind: 'delete', option: conversations[1] });
+  });
+});
+
+describe('the board\'s footer', () => {
+  const hint = (state: BoardState): string => boardHint(state, boardRows(state, conversations, commands));
+
+  it('names only the keys that act on the selected row', () => {
+    expect(hint({ draft: '', selected: 0 })).toBe('enter open · → agents · tab options · ← close');
+    expect(hint({ draft: '', selected: 1 })).toBe('enter open · del delete · ← close');
+  });
+
+  it('on the composer, says how to start, find and reach the chats', () => {
+    expect(hint(fresh())).toBe('type to start a new chat · ctrl+f find · ↑↓ chats');
+    expect(hint({ draft: 'fix it', selected: -1 })).toBe('enter start a new chat · esc clear');
+  });
+
+  it('keeps find and command mode as terse', () => {
+    expect(hint({ draft: '', selected: 0, finding: true, query: 'ol' })).toBe('find: ol · enter open · esc clear');
+    expect(hint({ draft: '', selected: -1, finding: true, query: 'zz' })).toBe('find: zz · no match · esc clear');
+    expect(hint({ draft: '/m', selected: 0 })).toBe('enter run · esc clear');
+    expect(hint({ draft: '/zz', selected: 0 })).toBe('no command matches · esc clear');
   });
 });
 

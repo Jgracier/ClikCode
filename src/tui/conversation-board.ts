@@ -2,15 +2,16 @@
  * composer under it.
  *
  * Opened with Left from an empty chat composer (or /resume). It follows the
- * shape of Claude Code's session list -- running work first, sections with
- * their size -- and adds what that list does not have, a composer: with no
- * conversation selected, what is typed and sent starts a NEW conversation in
- * the provider and model shown below it, and a `/` line offers the commands
- * that change those first.
+ * shape of Claude Code's session list -- running work first, in sections --
+ * and adds what that list does not have, a composer: with no conversation
+ * selected, what is typed and sent starts a NEW conversation in the provider
+ * and model shown below it, and a `/` line offers the commands that change
+ * those first.
  *
  *   ↑↓      move between the composer and the list
- *   → Enter open the selected conversation (Enter with a draft: start one)
- *   ←       a working conversation's sub-agents; otherwise close
+ *   Enter   open the selected conversation (with a draft: start one)
+ *   →       a working conversation's agents; otherwise open it
+ *   ←       close
  *   Tab/Del a conversation's options / delete it
  *   Esc     clear the draft, then close
  *
@@ -121,17 +122,18 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
       if (rows.length) state.selected = Math.min(rows.length - 1, state.selected + 1);
       return { kind: 'draw' };
     }
-    if (key === RIGHT) return row ? { kind: 'finish', result: { open: row.value } } : { kind: 'none' };
+    // Right goes in: to a row's inner list where it has one, else into the
+    // conversation. Left always comes back out.
+    if (key === RIGHT) {
+      if (row?.inner?.options.length) return { kind: 'inner', option: row };
+      return row ? { kind: 'finish', result: { open: row.value } } : { kind: 'none' };
+    }
     if (key === '\r' || key === '\n') {
       if (row) return { kind: 'finish', result: { open: row.value } };
       const text = state.draft.trim();
       return text ? { kind: 'finish', result: { compose: text } } : { kind: 'none' };
     }
-    if (key === LEFT) {
-      if (row?.inner?.options.length) return { kind: 'inner', option: row };
-      if (row || !state.draft) return { kind: 'close' };
-      return { kind: 'none' };
-    }
+    if (key === LEFT) return row || !state.draft ? { kind: 'close' } : { kind: 'none' };
     if (key === '\t') return row?.actions?.length ? { kind: 'actions', option: row } : { kind: 'none' };
     if (pickerDeletesSelection(key, state.draft)) return row?.deleteAction ? { kind: 'delete', option: row } : { kind: 'none' };
   }
@@ -151,24 +153,22 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
   return { kind: 'none' };
 }
 
+/** Only the keys that act on what is selected, in a few words each. */
 export function boardHint(state: BoardState, rows: readonly PickerOption<string>[]): string {
   if (state.finding && !boardShowsCommands(state)) {
     const query = state.query ?? '';
-    return rows.length
-      ? `find${query ? `: ${query}` : ''} · ↑↓ choose · Enter open · Esc clear`
-      : `find${query ? `: ${query}` : ''} · no conversation matches · Esc clear`;
+    return `find${query ? `: ${query}` : ''} · ${rows.length ? 'enter open' : 'no match'} · esc clear`;
   }
-  if (boardShowsCommands(state)) return rows.length ? '↑↓ choose · Enter open · Esc clear' : 'no command matches · Esc clear';
+  if (boardShowsCommands(state)) return rows.length ? 'enter run · esc clear' : 'no command matches · esc clear';
   const row = state.selected >= 0 ? rows[state.selected] : undefined;
-  if (!row) {
-    return state.draft
-      ? 'Enter start a new conversation · Esc clear'
-      : 'type to start a new conversation · Ctrl+F find · / provider and model · ↑↓ conversations · ← close';
-  }
-  const back = row.inner?.options.length ? `← ${row.inner.title.toLowerCase()}` : '← close';
-  const tab = row.actions?.length ? ' · Tab options' : '';
-  const del = row.deleteAction ? ` · Del ${row.deleteAction.label.toLowerCase()}` : '';
-  return `→/Enter open · ${back}${tab}${del} · ↑↓ move · type to start new`;
+  if (!row) return state.draft ? 'enter start a new chat · esc clear' : 'type to start a new chat · ctrl+f find · ↑↓ chats';
+  return [
+    'enter open',
+    ...(row.inner?.options.length ? [`→ ${row.inner.title.toLowerCase()}`] : []),
+    ...(row.actions?.length ? ['tab options'] : []),
+    ...(row.deleteAction ? [`del ${row.deleteAction.label.toLowerCase()}`] : []),
+    '← close',
+  ].join(' · ');
 }
 
 export interface ConversationBoardSettings {

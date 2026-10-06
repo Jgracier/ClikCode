@@ -19,12 +19,10 @@ export function paletteRows(
   const windowed = paletteDisplayRows(options, selected, visibleRows);
   for (const row of windowed) {
     if ('header' in row) {
-      // A picker's sections read as headings with their size beside them,
-      // the way Claude Code's session list does; the command palette keeps
-      // its quieter rule.
-      const counted = settings.headings ? /^(.*?)(?: (\d+))?$/.exec(row.header) : null;
-      rows.push(counted
-        ? `  ${chalk.bold(visibleSlice(counted[1] ?? '', Math.max(1, width - 10)))}${counted[2] ? ` ${chalk.dim(counted[2])}` : ''}`
+      // A picker's sections read as headings, the way Claude Code's session
+      // list does; the command palette keeps its quieter rule.
+      rows.push(settings.headings
+        ? `  ${chalk.bold(visibleSlice(row.header, Math.max(1, width - 4)))}`
         : `  ${chalk.dim(visibleSlice(`── ${row.header}`, Math.max(1, width - 4)))}`);
       continue;
     }

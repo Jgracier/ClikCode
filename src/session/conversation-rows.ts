@@ -77,8 +77,8 @@ const timestamp = (value: string): number => {
   return Number.isNaN(at) ? -Infinity : at;
 };
 
-/** One row per conversation: Working first, then Active, then Past, newest
- * first within each. A clerk (a swarm's helper chat) is never a row. Which
+/** One row per conversation: Working first, then Recent, then Older; within
+ * each, one that needs the user first, then newest first. A clerk (a swarm's helper chat) is never a row. Which
  * chats count as conversations at all (blank ones) is the caller's filter. */
 export function conversationRows(sessions: readonly HarnessSession[], facts: ConversationRowFacts = {}): ConversationRow[] {
   const now = facts.now ?? Date.now();
@@ -116,5 +116,6 @@ export function conversationRows(sessions: readonly HarnessSession[], facts: Con
     const section: ConversationSection = activity === 'working' ? 'working' : recencySection(updatedAtMs, now);
     rows.push({ root, chats, latest, updatedAtMs, ...(activity ? { activity } : {}), ...(pending ? { pending } : {}), needsYou, current, section });
   }
-  return rows.sort((left, right) => sectionRank(left.section) - sectionRank(right.section) || right.updatedAtMs - left.updatedAtMs);
+  return rows.sort((left, right) => sectionRank(left.section) - sectionRank(right.section)
+    || Number(right.needsYou) - Number(left.needsYou) || right.updatedAtMs - left.updatedAtMs);
 }
