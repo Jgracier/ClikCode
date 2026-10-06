@@ -769,13 +769,14 @@ SCENARIOS = {
         'snap_contains': {'waiting': ['waiting for reset ·']},
         'final_contains': ['Stopped waiting for the reset'],
     },
-    # /usage all: every provider, then the last seven days, a turn's tokens
-    # on today's row and its cost unknown (the fake reports none) -- never $0.
+    # /usage all: every provider, then the days with use: today's row has its
+    # one turn, and no tokens or cost (the fake reports none) -- never $0, and
+    # never a field that only says it is unknown.
     'usage-all': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
                   ('type', '/usage all'), ('wait_for', 'Last 7 days', 10), ('settle', 1)],
-        'watch': [], 'final_contains': ['Grok Build', 'Last 7 days', 'tokens unknown · 1 turn · cost unknown'], 'never': ['$0.00'],
+        'watch': [], 'final_contains': ['Grok Build', 'Last 7 days', '1 turn'], 'never': ['$0.00', 'unknown'],
     },
     # /fork with no N: a picker of the user's messages, newest first; the fork
     # after message 1 holds only that exchange, and says files are not rewound.
