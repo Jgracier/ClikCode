@@ -9,6 +9,17 @@ import { emitHarnessOutput } from '../harness/output.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 
 const MAX_WAIT_MS = 10 * 60_000;
+/** The efforts the server's agents take; anything else (auto, a vendor's own word) is the agent's own. */
+const AGENT_EFFORTS = new Set(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+/** This session's settings for the agent's turn: they win over the agent's own. */
+export function agentTurnSettings(session: Pick<HarnessSession, 'model' | 'effort' | 'permissionMode'>): Record<string, string | null> {
+  return {
+    model: session.model,
+    permissionMode: session.permissionMode ?? 'ask',
+    ...(AGENT_EFFORTS.has(session.effort) ? { effort: session.effort } : {}),
+  };
+}
 
 async function requestJson(url: string, key: string, init: RequestInit): Promise<Record<string, unknown>> {
   const response = await fetch(url, {
@@ -37,7 +48,7 @@ export async function runGatewayAgentTurn(input: {
   try {
     const posted = await requestJson(endpoint, apiKey, {
       method: 'POST', signal,
-      body: JSON.stringify({ message: prompt, threadId: session.gatewayAgentThreadId ?? null, model: session.model }),
+      body: JSON.stringify({ message: prompt, threadId: session.gatewayAgentThreadId ?? null, ...agentTurnSettings(session) }),
     });
     if (typeof posted.threadId !== 'string' || typeof posted.messageId !== 'string') throw new Error('Gateway agent did not return a conversation and message ID.');
     session.gatewayAgentThreadId = posted.threadId;
