@@ -77,10 +77,16 @@ describe('Cursor plan usage', () => {
     planUsage: { totalSpend: 13, bonusSpend: 13, autoPercentUsed: 13, apiPercentUsed: 0, totalPercentUsed: 6.5 },
     displayMessage: "You've used 0% of your included usage",
   };
-  it('reads the included and API shares as monthly windows resetting at the cycle end', () => {
+  it('reads the Auto and API shares as windows resetting at the cycle end', () => {
     const reading = cursorQuotaReading(answer);
-    expect(reading?.label).toBe('Monthly 94% left · API 100% left');
-    expect(reading?.windows[0]).toEqual({ name: 'monthly', usedPct: 6.5, resetsAt: new Date(1792605310084).toISOString() });
+    expect(reading?.label).toBe('Auto 87% left · API 100% left');
+    expect(reading?.windows[0]).toEqual({ name: 'auto', usedPct: 13, resetsAt: new Date(1792605310084).toISOString() });
+  });
+  // GetCurrentPeriodUsage, 2026-10-06, an account whose turns answer "You've
+  // hit your usage limit": the total is the shares' average, half full.
+  it('a spent Auto share is a spent account, whatever the total says', () => {
+    const spent = cursorQuotaReading({ billingCycleEnd: '1793508407644', planUsage: { autoPercentUsed: 100, apiPercentUsed: 0, totalPercentUsed: 50 } });
+    expect(spent?.label).toBe('Auto 0% left · API 100% left');
   });
   it('has nothing to say without plan usage', () => {
     expect(cursorQuotaReading({ displayMessage: 'x' })).toBeUndefined();
