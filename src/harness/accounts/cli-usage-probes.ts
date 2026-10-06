@@ -185,14 +185,18 @@ export async function kimiUsageReading(_session: HarnessSession, environment: En
  * `apiPercentUsed`, for named models only. `totalPercentUsed` is their
  * average (Auto 100 + API 0 read "50%"), so it is never the figure:
  * read once, it showed a spent account half full. */
-export function cursorQuotaReading(result: unknown): UsageReading | undefined {
+export function cursorQuotaReading(result: unknown, planName?: string): UsageReading | undefined {
   const plan = (result as Json | undefined)?.planUsage as Json | undefined;
   if (!plan) return undefined;
   const end = Number((result as Json).billingCycleEnd);
   const reset = Number.isFinite(end) && end > 0 ? end : undefined;
   const api = usageWindow('API', plan.apiPercentUsed, reset);
+  // A Free plan's agent usage is all bonus: with none left (`remainingBonus:
+  // false`) its turns answer "Upgrade your plan to continue" even at 0% used
+  // (GetPlanInfo "Free", 2026-10-06). A paid plan's included usage is not bonus.
+  const auto = planName === 'Free' && plan.remainingBonus === false ? 100 : plan.autoPercentUsed ?? plan.totalPercentUsed;
   // The API share is advisory: spent, it stops named models, not Auto.
-  return usageReading([usageWindow('auto', plan.autoPercentUsed ?? plan.totalPercentUsed, reset), api ? { ...api, advisory: true as const } : undefined]);
+  return usageReading([usageWindow('auto', auto, reset), api ? { ...api, advisory: true as const } : undefined]);
 }
 
 async function cursorAccessToken(environment: Environment): Promise<string | undefined> {
@@ -203,23 +207,25 @@ async function cursorAccessToken(environment: Environment): Promise<string | und
 }
 
 export async function cursorUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
-  const ask = async (): Promise<Response | undefined> => {
+  const ask = async (method: string): Promise<Response | undefined> => {
     const token = await cursorAccessToken(environment);
     if (!token) return undefined;
-    return fetch('https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage', {
+    return fetch(`https://api2.cursor.sh/aiserver.v1.DashboardService/${method}`, {
       method: 'POST', body: '{}', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
     });
   };
   try {
-    let response = await ask();
+    let response = await ask('GetCurrentPeriodUsage');
     if (response?.status === 401) {
       // An expired token: the CLI refreshes its own on `status`, then ask once more.
       const harness = localHarnessForCommand('cursor');
       if (harness) await captureNativeHarnessOutput(harness, ['status'], environment, PROBE_TIMEOUT_MS).catch(() => '');
-      response = await ask();
+      response = await ask('GetCurrentPeriodUsage');
     }
-    return response?.ok ? cursorQuotaReading(await response.json()) : undefined;
+    if (!response?.ok) return undefined;
+    const plan = await ask('GetPlanInfo').then(async (answer) => answer?.ok ? (await answer.json() as Json).planInfo?.planName as string | undefined : undefined).catch(() => undefined);
+    return cursorQuotaReading(await response.json(), plan);
   } catch {
     return undefined; // fail-open-ok: no figure beats a wrong one
   }
