@@ -19,6 +19,7 @@ import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleP
 import { installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
 import { PUSH_TITLE, notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle, type FocusState } from './terminal-signals.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
+import { sessionModelLabel } from '../harness/output.js';
 import { stripRepeatedTitles } from '../session/title.js';
 import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -1501,11 +1502,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // harness publishes nothing at all. Showing no model is honest; showing
     // a fabricated one is not.
     const rawModel = harness?.modelArgvPrefix ? session.reported?.model ?? session.model ?? undefined : undefined;
-    // A Gateway conversation shows the model its user chose; none chosen, the
-    // Gateway picks per step and the line names no model. ClikCode Local's
+    // A Gateway conversation shows the model that answered, as a vendor's
+    // report of its own model is shown: the one chosen, or for Automatic the
+    // Gateway's pick, named once its first frame says which. ClikCode Local's
     // model is its engine's catalog entry, named by label.
     const model = session.route === 'clikcode-local' ? localModelLabel(session.model)
-      : isGatewayService(session) ? session.model ?? undefined : nativeModelLabel(harness?.command, rawModel);
+      : isGatewayService(session) ? sessionModelLabel(session, session.reported?.model ?? session.model) : nativeModelLabel(harness?.command, rawModel);
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title is not on this line: it sits on the rule under the composer,
     // so a long one never truncates the provider, model or directory.

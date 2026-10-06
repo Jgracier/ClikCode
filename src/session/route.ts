@@ -8,8 +8,8 @@
  * for both: no vendor harness or native slash commands, no vendor accounts,
  * ClikCode's own permission modes, tools, MCP, skills and context compaction.
  * Only what the ClikDeploy service itself provides -- its login, its credit
- * and usage reporting, its platform-managed model and effort routing, its
- * platform-assistant fallback -- belongs to the Gateway alone.
+ * and usage reporting, its platform-managed model and effort routing --
+ * belongs to the Gateway alone.
  *
  * A check of `route === 'gateway'` has to pick one of those meanings; these
  * two names make the pick visible at the call site. */

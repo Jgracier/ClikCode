@@ -2,8 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { gatewayHarnessFallbackNotice, gatewayHarnessUnavailable, runGatewayHarnessSessionTurn } from './harness';
-import { ModelClientError } from '../agent/models/gateway-client';
+import { runGatewayHarnessSessionTurn } from './harness';
 import { ScriptedModelClient } from '../agent/testing';
 import type { HarnessSession } from '../session/model';
 
@@ -89,7 +88,7 @@ describe('a headless turn', () => {
   });
 });
 
-describe('a gateway that cannot serve a harness turn', () => {
+describe('a titled first reply', () => {
   it('streams a titled first reply without its title tag', async () => {
     // Production 2026-09-27: the tag the first turn asks for streamed to the
     // screen, and the streamed copy then won over the stripped answer when the
@@ -130,24 +129,5 @@ describe('a gateway that cannot serve a harness turn', () => {
     expect(shown.trim()).toBe('Fixed it.');
     expect(title.title).toBe('Fix math add');
     expect(stripRepeatedTitles(extractSessionTitle(result.text).text)).toBe('Fixed it.');
-  });
-
-  it('is recognised from the administrator kill switch and a missing endpoint', () => {
-    expect(gatewayHarnessUnavailable(new ModelClientError('off', { kind: 'server', statusCode: 503, code: 'CLIKCODE_DISABLED' }))).toBe(true);
-    expect(gatewayHarnessUnavailable(new ModelClientError('gone', { kind: 'server', statusCode: 404 }))).toBe(true);
-  });
-
-  it('is not confused with a turn that genuinely failed', () => {
-    // A 500 or a quota refusal is a real failure of a real turn. Falling back
-    // to the platform assistant there would answer a coding question with an
-    // assistant that cannot see the code, and look like success.
-    expect(gatewayHarnessUnavailable(new ModelClientError('boom', { kind: 'server', statusCode: 500 }))).toBe(false);
-    expect(gatewayHarnessUnavailable(new Error('socket hang up'))).toBe(false);
-  });
-
-  it('says why it fell back, and what the fallback cannot do', () => {
-    const notice = gatewayHarnessFallbackNotice(new ModelClientError('off', { kind: 'server', statusCode: 503, code: 'CLIKCODE_DISABLED' }));
-    expect(notice).toContain('disabled by an administrator');
-    expect(notice, 'the user is not told what they lose').toContain('cannot read local files');
   });
 });

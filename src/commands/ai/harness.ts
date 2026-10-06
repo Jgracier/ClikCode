@@ -334,6 +334,7 @@ async function startOrResumeAgentChat(options: { route: 'clikcode-local' | 'gate
       // (served from its cheapest listing), or `auto` to hand it back.
       const { chooseGatewayModel } = await import('./sessions.js');
       session.model = await chooseGatewayModel(options.model);
+      if (session.reported?.model) delete session.reported.model;
     } else {
       const { resolveLocalModelId } = await import('../../local-models/catalog.js');
       session.model = resolveLocalModelId(options.model);
