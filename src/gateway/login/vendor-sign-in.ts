@@ -588,6 +588,9 @@ export async function runVendorSignIn(input: {
     if (lastPrompt && lastPrompt.key === key && Date.now() - lastPrompt.at < REDRAW_MS) return;
     lastPrompt = { key, at: Date.now() };
     void answer(async () => {
+      // Signed in already: what the vendor asks next (Cline's model pick
+      // after its browser sign-in) is its own setup, never put to the user.
+      if (await landed()) { await new Promise((resolve) => setTimeout(resolve, SIGNED_IN_GRACE_MS)); return undefined; }
       if (prompt.kind === 'input') return `${await ui.ask(prompt.prompt, prompt.secret, prompt.optional)}\r`;
       const choices = prompt.searchable ? [...prompt.choices, SEARCH_CHOICE] : prompt.choices;
       const index = await ui.choose(prompt.title, choices, prompt.selected);
@@ -623,13 +626,13 @@ export async function runVendorSignIn(input: {
   };
 
   let succeeded = false;
+  const landed = async (): Promise<boolean> => {
+    if (!succeeded && input.signedIn) succeeded = await input.signedIn().catch(() => false);
+    return succeeded;
+  };
   const watch = input.signedIn ? setInterval(() => {
     if (succeeded) return;
-    void input.signedIn!().then((done) => {
-      if (!done || succeeded) return;
-      succeeded = true;
-      setTimeout(abort, SIGNED_IN_GRACE_MS);
-    }, () => undefined);
+    void landed().then((done) => { if (done) setTimeout(abort, SIGNED_IN_GRACE_MS); });
   }, SIGNED_IN_POLL_MS) : undefined;
   const poll = standIns ? setInterval(() => {
     void readFile(standIns.log, 'utf8').then((text) => {
