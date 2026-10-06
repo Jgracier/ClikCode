@@ -46,8 +46,6 @@ export interface HarnessTurnObserver {
   /** The harness's own id for this conversation, once it is known, so the next
    * turn can resume rather than start again. */
   onSessionId?: (id: string) => void | Promise<void>;
-  /** Browser consent completed; the caller can refresh the account identity. */
-  onAuthenticated?: () => void | Promise<void>;
   /** Answer text as it streams. `replace` rewrites what has been shown so far;
    * the default appends. */
   onResponseDelta?: (text: string, mode?: 'append' | 'replace') => void;

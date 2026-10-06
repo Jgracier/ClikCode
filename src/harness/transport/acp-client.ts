@@ -13,7 +13,6 @@ import { categoryOf, commandText, formatToolRow, isAgentToolName, toolLabel } fr
 import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput, toolCall } from '../protocol/activity-events.js';
-import { classifyAccountFailure } from '../../turn/failover.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
@@ -54,9 +53,6 @@ export interface AcpTurnInput extends HarnessTurnObserver {
    * are selected over the protocol, and what its usage readings mean. */
   acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'usageTotals' | 'cumulativeChunks'>;
   modelProviderSeparator?: string;
-  /** An interactive client can let a single advertised agent-auth method
-   * finish its OAuth flow over ACP when the vendor asks for sign-in. */
-  allowAgentAuth?: boolean;
   /** Local image paths, sent as ACP image blocks when the agent advertises
    * `promptCapabilities.image`. Otherwise the turn fails before the prompt
    * with `acpUnsupportedImages` so the caller can use its image-capable CLI. */
@@ -349,7 +345,6 @@ interface LiveAgent {
   /** The loaded session's model state (`currentModelId`, `availableModels`). */
   models?: Json;
   modes?: Json;
-  authMethods?: Json[];
   configOptions?: Json[];
   /** The agent takes `_session/steering` (InitializeResponse
    * `_meta.steering.supported`; claude-agent-acp 0.84). */
@@ -561,24 +556,15 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
       }, setup);
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
-      live.authMethods = Array.isArray(initialized.authMethods) ? initialized.authMethods : [];
       live.steering = initialized._meta?.steering?.supported === true;
       stillRunning();
     }
-    const requestWithAuth = async (method: string, params: Json, options: { timeoutMs?: number; idleReset?: boolean } = setup): Promise<Json> => {
-      try { return await peer.request(method, params, options); }
-      catch (error) {
-        const choices = (live.authMethods ?? []).filter((candidate) =>
-          typeof candidate.id === 'string' && (candidate.type ?? candidate._meta?.type ?? 'agent') === 'agent');
-        if (!input.allowAgentAuth || choices.length !== 1 || classifyAccountFailure(error) !== 'authentication-required'
-          || (method === 'session/prompt' && (turn.sawActivity || turn.text))) throw error;
-        input.onPhase?.(`signing in to ${input.command}…`);
-        await peer.request('authenticate', { methodId: choices[0]!.id }, { timeoutMs: 300_000 });
-        await input.onAuthenticated?.();
-        stillRunning();
-        return await peer.request(method, params, options);
-      }
-    };
+    // A vendor that says it is signed out is not signed in over ACP
+    // (`authenticate`): its own browser login showed no link on ClikCode's
+    // screen and, from a phone, waited for ever (Devin, 2026-10-06). The error
+    // reaches the turn, which signs in on ClikCode's screen like any other.
+    const call = (method: string, params: Json, options: { timeoutMs?: number; idleReset?: boolean } = setup): Promise<Json> =>
+      peer.request(method, params, options);
     const capabilities = live.capabilities;
     const mcpServers = input.mcpServers ?? [];
     const images = input.images ?? [];
@@ -595,8 +581,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // is the startup budget, not the handshake's.
         const loading = { ...control, idleReset: true };
         this.sessionTotals = {};
-        if (capabilities.sessionCapabilities?.resume) loaded = await requestWithAuth('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
-        else if (capabilities.loadSession) loaded = await requestWithAuth('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
+        if (capabilities.sessionCapabilities?.resume) loaded = await call('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
+        else if (capabilities.loadSession) loaded = await call('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
         else throw new Error(`${input.command} ACP cannot load sessions`);
         stillRunning();
         live.sessionId = wanted;
@@ -608,7 +594,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       turn.sessionId = wanted;
     } else {
       this.sessionTotals = {};
-      const started = await waitOnStart(requestWithAuth('session/new', { cwd: input.cwd, mcpServers }, control));
+      const started = await waitOnStart(call('session/new', { cwd: input.cwd, mcpServers }, control));
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
@@ -693,7 +679,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError(input.command, afterMs)));
     // No wall-clock timeout: a prompt legitimately runs for hours, and the
     // idle watchdog above is its only ceiling.
-    turn.prompt = requestWithAuth('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
+    turn.prompt = call('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
     if (live.steering) input.onSteerReady?.((text, hold) => this.steer(turn, text, hold));
     const completed = await turn.prompt as Json;
     // The answer ends the turn: nothing held can be steered into it any more

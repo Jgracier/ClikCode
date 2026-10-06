@@ -451,10 +451,6 @@ export async function sendVendorTurn(input: {
         result = await runVendorSessionAttempt({
           harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint,
           sharedObserver, effort: turnEffort(), onSessionId, mcpServers: sessionMcpServers,
-          onAuthenticated: async () => {
-            account = await syncAccountIdentityAfterLogin(harness, account, state);
-            session.accountId = account.id;
-          },
           runCli: runStructuredCliTurn,
         });
       }

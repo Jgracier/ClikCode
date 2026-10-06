@@ -39,12 +39,11 @@ export async function runVendorSessionAttempt(input: {
   sharedObserver: HarnessTurnObserver;
   effort?: string;
   onSessionId: (id: string) => Promise<void>;
-  onAuthenticated?: () => Promise<void>;
   /** MCP servers to hand an ACP session, beside the swarm's. */
   mcpServers?: readonly Record<string, unknown>[];
   runCli: () => Promise<NativeTurnResult>;
 }): Promise<NativeTurnResult> {
-  const { harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, onAuthenticated, runCli } = input;
+  const { harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, runCli } = input;
   const prompter = run.prompter;
   let result: NativeTurnResult;
   // ACP and the app-server own session identity: never hand them an id
@@ -117,8 +116,6 @@ export async function runVendorSessionAttempt(input: {
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
         acp: harness.acp,
         modelProviderSeparator: harness.modelProviderSeparator,
-        allowAgentAuth: Boolean(prompter),
-        onAuthenticated,
         // Claude Code's quota, carried by the turn itself: published like a
         // stream reading, so the composer and the account picker see it.
         onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
