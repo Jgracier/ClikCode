@@ -63,4 +63,9 @@ describe('grok per-turn usage on its stream', () => {
     expect(readings[1]).toMatchObject({ input: 20482, output: 28, cacheRead: 1280, contextUsed: 21790 });
     expect(readings[2]).toMatchObject({ input: 20482, output: 28, cacheRead: 1280, costUsd: 0.01420248, stopReason: 'completed' });
   });
+
+  // Its limit is tokens over 24 hours, which the answer never states.
+  it('says only "Free plan" for a Free account, with no window to clear a refusal', () => {
+    expect(grokBillingReading({ ...billing, subscription_tier: 'Free' })).toEqual({ windows: [], label: 'Free plan', plan: { name: 'Free' } });
+  });
 });

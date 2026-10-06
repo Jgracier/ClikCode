@@ -260,6 +260,8 @@ describe('when a quota refusal says it ends', () => {
   });
   it('reads spelled-out units and retry-after seconds', () => {
     expect(quotaRetryHint(new Error("You've hit your usage limit. Try again in 2 days 3 hours 5 minutes."), now)).toBe(at(((2 * 24 + 3) * 60 + 5) * 60_000));
+    // Grok Free, 2026-10-06.
+    expect(quotaRetryHint(new Error("Rate limited: API error (status 429 Too Many Requests): subscription:free-usage-exhausted: You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 603117/500000"), now)).toBe(at(24 * 3_600_000));
     expect(quotaRetryHint(new Error('quota exceeded, retry after 3600 seconds'), now)).toBe(at(3_600_000));
   });
   it("reads Codex's wall-clock time as its next occurrence, here", () => {
