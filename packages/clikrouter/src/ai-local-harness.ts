@@ -435,6 +435,12 @@ export interface AiLocalHarnessDefinition {
    * offers it, instead of the first one its discovery lists (Claude Code:
    * `opus`). */
   defaultModel?: string;
+  /** Models the account runs without credits, and the refusal a paid model
+   * gets once they are spent (Cline: `:free` models answer on a negative
+   * balance; anything else answers "Insufficient balance"). That refusal is
+   * the model's, not the account's: the turn goes on, on the same account,
+   * on the first free model the vendor lists. */
+  creditFreeModels?: { suffix: string; refusal: string };
   /** Environment a new account profile carries beyond its root, on every
    * spawn under it; `{profile}/...` is a path inside that profile. Antigravity
    * checks the OS keyring (tied to the D-Bus login session, not $HOME) before
@@ -955,7 +961,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // its own process group) that outlives the chat, and ClikCode's sandboxed
   // runs too. Measured on 3.0.68: same session files, session/load resumes,
   // and no daemon.
-  { command: 'cline', provider: 'cline', displayName: 'Cline CLI', planMode: { option: 'plan', value: true }, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'cline-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp'], permissionArgv: { auto: ['--auto-approve', 'true'] }, listsModels: true, usageFile: { path: '~/.cline/data/sessions/{id}/{id}.json', field: ['metadata', 'usage'] } }, effortValues: ['none', 'low', 'medium', 'high', 'xhigh'], normalizedPermissionOptionIds: ['auto-approve'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', authFiles: [{ path: '~/.cline/data/settings/providers.json', contains: '"auth"' }, { path: '~/.cline/data/settings/providers.json', contains: '"apiKey"' }], loginArgv: ['auth'], loginAccountChoose: ['Sign in with Cline'], loginKeyRoutes: providerKeyRoutes(['Bring your own provider'], {
+  { command: 'cline', creditFreeModels: { suffix: ':free', refusal: 'insufficient balance' }, provider: 'cline', displayName: 'Cline CLI', planMode: { option: 'plan', value: true }, surface: 'terminal', tier: 'more', transport: 'acp', integration: 'structured', parser: 'cline-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp'], permissionArgv: { auto: ['--auto-approve', 'true'] }, listsModels: true, usageFile: { path: '~/.cline/data/sessions/{id}/{id}.json', field: ['metadata', 'usage'] } }, effortValues: ['none', 'low', 'medium', 'high', 'xhigh'], normalizedPermissionOptionIds: ['auto-approve'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cline', npmPackage: 'cline', authFiles: [{ path: '~/.cline/data/settings/providers.json', contains: '"auth"' }, { path: '~/.cline/data/settings/providers.json', contains: '"apiKey"' }], loginArgv: ['auth'], loginAccountChoose: ['Sign in with Cline'], loginKeyRoutes: providerKeyRoutes(['Bring your own provider'], {
     anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: 'OpenAI', google: 'Google Gemini', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
     fireworks: 'Fireworks AI', mistral: 'Mistral', deepseek: 'DeepSeek', moonshot: 'Moonshot AI', 'moonshot-cn': 'Moonshot AI (China)', zai: 'Z.AI', minimax: 'MiniMax (minimax.io)', together: 'Together AI',
   }), modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, turnEnv: { CLINE_SESSION_BACKEND_MODE: 'local' }, session: { resumeIdPrefix: ['--id'] } },

@@ -231,6 +231,38 @@ export async function cursorUsageReading(_session: HarnessSession, environment: 
   }
 }
 
+// ---------------------------------------------------------------- Cline
+
+/** `GET /api/v1/users/{id}/balance` (cline 2.x's own fetchBalance): the
+ * Cline account's credits in millionths of a dollar. At or below zero a paid
+ * model answers "Insufficient balance. Your Cline Credits balance is $-0.20"
+ * (-195907, 2026-10-06) while the `:free` models still answer -- checked on
+ * all 12 accounts -- so spent credits are advisory, never a spent account
+ * (catalog creditFreeModels moves the turn to a free model). */
+export function clineQuotaReading(result: unknown): UsageReading | undefined {
+  const balance = Number(((result as Json | undefined)?.data as Json | undefined)?.balance);
+  if (!Number.isFinite(balance)) return undefined;
+  const dollars = balance / 1_000_000;
+  if (dollars <= 0) return { windows: [{ name: 'credits', usedPct: 100, advisory: true }], label: 'Out of credits · free models only' };
+  return { windows: [], label: `$${dollars.toFixed(2)} credits left` };
+}
+
+export async function clineUsageReading(_session: HarnessSession, environment: Environment): Promise<UsageReading | undefined> {
+  try {
+    const home = environment.HOME ?? homedir();
+    const providers = JSON.parse(await readFile(join(home, '.cline', 'data', 'settings', 'providers.json'), 'utf8')) as Json;
+    // Signed in to a Cline account; a provider key of its own has no balance here.
+    const auth = providers?.providers?.cline?.settings?.auth as Json | undefined;
+    if (typeof auth?.accessToken !== 'string' || typeof auth.accountId !== 'string') return undefined;
+    const response = await fetch(`https://api.cline.bot/api/v1/users/${encodeURIComponent(auth.accountId)}/balance`, {
+      headers: { Authorization: `Bearer ${auth.accessToken}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    });
+    return response.ok ? clineQuotaReading(await response.json()) : undefined;
+  } catch {
+    return undefined; // fail-open-ok: no figure beats a wrong one
+  }
+}
+
 // ---------------------------------------------------------------- Kiro
 
 /** Kiro's `/usage` result: each `usageBreakdowns` entry a resource with a
