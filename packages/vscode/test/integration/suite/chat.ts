@@ -51,6 +51,25 @@ export function chatSuite(): void {
       await waitFor(api, '#composer-input', 'the chat screen again');
     });
 
+    it('walks /search mention by mention, as the terminal does', async () => {
+      const entry = vscode.workspace.getConfiguration('clikcode').get<string>('path')!;
+      const clikcode = (...args: string[]): string => execFileSync('node', [entry, ...args], { encoding: 'utf8', env: process.env });
+      const id = (JSON.parse(clikcode('sessions', 'create', '--route', 'gateway')) as { session: { id: string } }).session.id;
+      clikcode('sessions', 'command', id, '/rename', 'Zanzibar parser notes');
+      // A transcript message without a vendor turn: a shell line's output.
+      clikcode('sessions', 'command', id, '!echo the zanzibar parser is done');
+      const from = api.state.sessionId;
+      await api.send('/search zanzibar');
+      // The conversation opens in the panel at the mention, with the terminal's status line and keys.
+      await waitFor(api, '.search-bar', 'the search bar', 30_000, (found) => /mention 1 of \d+.*esc done/.test(found.text));
+      await until(api, (state) => state.sessionId === id, 'the conversation the search found');
+      await screenshot('search-walk', 800);
+      await key(api, '.search-bar', 'Escape');
+      await waitFor(api, '.search-bar', 'the walk over', 10_000, (found) => found.count === 0);
+      assert.notStrictEqual(id, from);
+      assert.strictEqual(api.state.sessionId, id, 'the walk ends on the conversation it showed');
+    });
+
     it('lists only this provider\'s accounts, and sets effort beside the model', async () => {
       await waitFor(api, '#account-button', 'the account under the message box');
       await click(api, '#account-button');
