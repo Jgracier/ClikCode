@@ -47,6 +47,25 @@ export function sameData(left: unknown, right: unknown): boolean {
   return defined === otherDefined;
 }
 
+/** Three-way merge of one record's fields: a field this process changed since
+ * `baseline` takes `working`'s value (or stays deleted), every other field
+ * comes from `disk`. Fields are taken whole: merging whole records let one
+ * stale field in a long-lived snapshot revert another process's update to the
+ * same record, and merging inside a field could pair one writer's half with
+ * the other's. */
+export function mergeFields<T extends object>(baseline: T | undefined, working: T, disk: T | undefined): T {
+  if (!disk) return working;
+  const before = (baseline ?? {}) as Record<string, unknown>;
+  const after = (working ?? {}) as Record<string, unknown>;
+  const result = { ...(disk as Record<string, unknown>) };
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    if (sameData(before[key], after[key])) continue;
+    if (after[key] === undefined) delete result[key];
+    else result[key] = after[key];
+  }
+  return result as T;
+}
+
 export function hidden<T extends object>(target: T, key: PropertyKey, value: unknown): T {
   // Non-enumerable so it never reaches JSON.stringify, spreads, equality
   // checks, or any panel that prints state.

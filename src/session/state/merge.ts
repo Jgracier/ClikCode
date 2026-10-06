@@ -5,7 +5,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../model.js';
-import { cloneData, hidden, sameData } from '../store/data.js';
+import { cloneData, hidden, mergeFields, sameData } from '../store/data.js';
 import { mergeLearning } from '../../harness/accounts/usage-learning.js';
 import { transcriptOf, type SessionTranscript } from '../store/transcripts.js';
 import type { StateIndex } from './index-file.js';
@@ -15,22 +15,6 @@ import { HARNESS_STATE_VERSION } from './paths.js';
 export type SessionMeta = Omit<HarnessSession, 'messages' | 'pendingTurn' | 'claim'>;
 
 type Identified = { id: string };
-
-/** Three-way merge of one record's fields: a field this process changed wins,
- * every other field comes from disk. Merging whole records let one stale field
- * in a long-lived snapshot revert another terminal's update to the same record. */
-function mergeFields<T extends object>(baseline: T | undefined, working: T, disk: T | undefined): T {
-  if (!disk) return working;
-  const before = (baseline ?? {}) as Record<string, unknown>;
-  const after = (working ?? {}) as Record<string, unknown>;
-  const result = { ...(disk as Record<string, unknown>) };
-  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-    if (sameData(before[key], after[key])) continue;
-    if (after[key] === undefined) delete result[key];
-    else result[key] = after[key];
-  }
-  return result as T;
-}
 
 function mergeAccount(baseline: AiHarnessAccount | undefined, working: AiHarnessAccount, disk: AiHarnessAccount | undefined): AiHarnessAccount {
   const merged = mergeFields(baseline, working, disk);

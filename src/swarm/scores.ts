@@ -2,8 +2,9 @@
  * them off the swarm tool and picks a model. Swarm does not fetch them
  * again on every call. */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { atomicWriteFile } from '../session/store/files.js';
 import { stateDirectory } from '../session/store/paths.js';
 
 export interface ModelScore {
@@ -144,9 +145,7 @@ export async function loadScoreCache(now = Date.now(), fetchBody?: () => Promise
         return response.text();
       });
     const next: ScoreCache = { version: CACHE_VERSION, fetchedAt: now, byKey: scoresFromOpenRouter(body) };
-    const path = cachePath();
-    await mkdir(join(path, '..'), { recursive: true });
-    await writeFile(path, JSON.stringify(next), 'utf8');
+    await atomicWriteFile(cachePath(), JSON.stringify(next));
     return next;
   } catch {
     return cached ?? { fetchedAt: 0, byKey: {} };

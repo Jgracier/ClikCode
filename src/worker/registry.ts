@@ -9,10 +9,11 @@
  */
 import { createHash, randomBytes } from 'node:crypto';
 import { statSync } from 'node:fs';
-import { link, mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'node:fs/promises';
+import { link, mkdir, readdir, readFile, stat, unlink, utimes, writeFile } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { atomicWriteFile } from '../session/store/files.js';
 import { breakStaleLock, pidIsAlive } from '../session/store/locks.js';
 import { stateDirectory } from '../session/store/paths.js';
 
@@ -157,19 +158,8 @@ export async function listWorkerRecords(): Promise<WorkerRuntimeRecord[]> {
 /** `existing`: only rewrite a record that is there -- never recreate the
  * directory, which would bring back a state home that was deleted. */
 export async function writeWorkerRecord(record: WorkerRuntimeRecord, options: { existing?: boolean } = {}): Promise<void> {
-  if (options.existing) {
-    if (!await stat(recordPath(record.sessionId)).then(() => true, () => false)) return;
-  } else await mkdir(workersDirectory(), { recursive: true, mode: 0o700 });
-  const target = recordPath(record.sessionId);
-  const temporary = `${target}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`;
-  try {
-    await writeFile(temporary, `${JSON.stringify(record, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-    await rename(temporary, target);
-  } finally {
-    await unlink(temporary).catch((error: NodeJS.ErrnoException) => {
-      if (error.code !== 'ENOENT') throw error;
-    });
-  }
+  if (options.existing && !await stat(recordPath(record.sessionId)).then(() => true, () => false)) return;
+  await atomicWriteFile(recordPath(record.sessionId), `${JSON.stringify(record, null, 2)}\n`);
 }
 
 export function generateWorkerToken(): string {
