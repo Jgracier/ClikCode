@@ -36,10 +36,11 @@ describe('model patches', () => {
       if (patch) {
         const wire = JSON.parse(JSON.stringify(patch));
         if (event.type === 'worker' && (event.event as { type: string }).type === 'delta' && (event.event as { mode: string }).mode === 'append') {
-          // A delta is its text and a timestamp, not the transcript.
+          // A delta is its text and its timestamps, not the transcript. The first one also closes
+          // the open thought (its text and how long it ran), so the bound leaves room for that.
           expect(Object.keys(wire.set)).toEqual([]);
           expect(wire.live.append).toBe((event.event as { text: string }).text);
-          expect(JSON.stringify(wire).length).toBeLessThan(200);
+          expect(JSON.stringify(wire).length).toBeLessThan(300);
         }
         page = applyModelPatch(page, wire);
       }
