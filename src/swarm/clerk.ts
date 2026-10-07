@@ -18,6 +18,22 @@ import { classifyAccountFailure } from '../turn/failover.js';
 import { turnEnvironment } from '../turn/turn-environment.js';
 import { SWARM_CLERK_ENV } from './publish.js';
 
+/** The host's permission mode when this harness has it. Otherwise a mode that
+ * does not wait for an approval the host chat cannot see, and a line saying so. */
+export function clerkPermission(
+  harness: Pick<AiLocalHarnessDefinition, 'displayName' | 'permissionModes' | 'permissionArgv' | 'permissionEnv'>,
+  asked?: AiHarnessPermissionMode,
+): { mode?: AiHarnessPermissionMode; note?: string } {
+  const supports = (mode: AiHarnessPermissionMode): boolean => Boolean(
+    harness.permissionModes?.includes(mode) && (harness.permissionArgv?.[mode] || harness.permissionEnv?.[mode]),
+  );
+  if (!asked) return {};
+  if (supports(asked)) return { mode: asked };
+  const fallback = (['bypass', 'auto', 'ask'] as const).find((mode) => supports(mode));
+  if (!fallback) return { note: `${harness.displayName} has no ${asked} permission mode, so this clerk used its own default.` };
+  return { mode: fallback, note: `${harness.displayName} has no ${asked} permission mode, so this clerk ran with ${fallback}.` };
+}
+
 export async function runProviderPrompt(input: {
   harness: AiLocalHarnessDefinition;
   account: AiHarnessAccount;
@@ -51,10 +67,7 @@ export async function runProviderPrompt(input: {
   // Kiro's print stream exposes partial answer chunks as separate `text`
   // records. Its ACP reply is the assembled final message.
   if (!input.harness.turn || (input.harness.command === 'kiro' && input.harness.acp)) return runAcpClerk(input, note);
-  const asked = input.permissionMode;
-  const mode = asked && input.harness.permissionModes?.includes(asked)
-    && (input.harness.permissionArgv?.[asked] || input.harness.permissionEnv?.[asked])
-    ? asked : undefined;
+  const mode = input.permissionMode;
   const argv = nativeHarnessTurnArgv(input.harness, {
     prompt: input.prompt,
     ...(input.workspace ? { workspace: input.workspace } : {}),

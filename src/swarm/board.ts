@@ -108,10 +108,41 @@ export function formatCard(card: SwarmCard): string {
   ].filter(Boolean).join('\n');
 }
 
-function clip(text: string, tokens: number): string {
+function clip(text: string, tokens: number): { text: string; clipped: boolean } {
   const limit = Math.max(16, tokens * 4);
   const trimmed = text.trim();
-  return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit - 1).trimEnd()}…`;
+  if (trimmed.length <= limit) return { text: trimmed, clipped: false };
+  return { text: `${trimmed.slice(0, limit - 1).trimEnd()}…`, clipped: true };
+}
+
+/** A cut card tells the host where the rest is, instead of ending on an ellipsis. */
+function withRest(summary: string, clipped: boolean, paths: readonly string[]): string {
+  if (!clipped) return summary;
+  const where = [...new Set(paths.map((path) => path.trim()).filter(Boolean))];
+  return where.length ? `${summary}\nThe rest is in ${where.join(', ')}.` : `${summary}\nThe rest was cut.`;
+}
+
+/** True when an implementer already holds this path, a parent, a child, or the whole workspace (`*`). */
+export function pathsOverlap(left: string, right: string): boolean {
+  const a = left.trim().replace(/\/+$/, '');
+  const b = right.trim().replace(/\/+$/, '');
+  if (!a || !b || a === '*' || b === '*') return true;
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
+}
+
+/** The implementers already holding any of these paths. Explore and review do not take a lease.
+ * An implement task with no paths holds the workspace. */
+export function leaseConflict(board: SwarmBoard, role: SwarmRole, paths: readonly string[]): string | undefined {
+  if (role !== 'implement') return undefined;
+  const wanted = paths.length ? paths : ['*'];
+  const hits = board.roster.filter((line) => {
+    if (line.status !== 'working' || line.role !== 'implement') return false;
+    const held = line.paths.split(',').map((path) => path.trim()).filter(Boolean);
+    const heldPaths = held.length ? held : ['*'];
+    return wanted.some((path) => heldPaths.some((heldPath) => pathsOverlap(path, heldPath)));
+  });
+  if (!hits.length) return undefined;
+  return hits.map((line) => `${line.provider} holds ${line.paths && line.paths !== '*' ? line.paths : 'the workspace'}`).join('; ');
 }
 
 function asStrings(value: unknown, limit: number): string[] {
@@ -120,8 +151,9 @@ function asStrings(value: unknown, limit: number): string[] {
 }
 
 /** A clerk's reply becomes a card. JSON is parsed when present; otherwise the
- * reply itself is safely used as the summary, cut to the cap. */
-export function cardFromReply(reply: string, capTokens: number): SwarmCard {
+ * reply itself is safely used as the summary, cut to the cap. `hintPaths` is
+ * where a cut summary tells the host to read the rest. */
+export function cardFromReply(reply: string, capTokens: number, hintPaths: readonly string[] = []): SwarmCard {
   if (!reply.trim()) throw new Error('The clerk returned no answer');
   const start = reply.indexOf('{');
   const end = reply.lastIndexOf('}');
@@ -141,19 +173,24 @@ export function cardFromReply(reply: string, capTokens: number): SwarmCard {
                 : undefined;
       if (rawSummary) {
         const summary = clip(rawSummary, capTokens);
+        const paths = asStrings(parsed.paths, 20);
         const card: SwarmCard = {
-          summary,
-          facts: asStrings(parsed.facts, 20).map((fact) => clip(fact, 200)),
-          paths: asStrings(parsed.paths, 20),
-          blockers: asStrings(parsed.blockers, 10).map((line) => clip(line, 200)),
-          questions: asStrings(parsed.questions, 10).map((line) => clip(line, 200)),
+          summary: withRest(summary.text, summary.clipped, paths.length ? paths : hintPaths),
+          facts: asStrings(parsed.facts, 20).map((fact) => clip(fact, 200).text),
+          paths,
+          blockers: asStrings(parsed.blockers, 10).map((line) => clip(line, 200).text),
+          questions: asStrings(parsed.questions, 10).map((line) => clip(line, 200).text),
         };
-        if (typeof parsed.diffstat === 'string' && parsed.diffstat.trim()) card.diffstat = clip(parsed.diffstat, 100);
+        if (typeof parsed.diffstat === 'string' && parsed.diffstat.trim()) card.diffstat = clip(parsed.diffstat, 100).text;
         return card;
       }
     } catch { /* if JSON parsing or object shape is invalid, gracefully treat full reply as summary */ }
   }
-  return { summary: clip(reply, capTokens), facts: [], paths: [], blockers: [], questions: [] };
+  const summary = clip(reply, capTokens);
+  return {
+    summary: withRest(summary.text, summary.clipped, hintPaths.length ? hintPaths : pathsIn(reply)),
+    facts: [], paths: [], blockers: [], questions: [],
+  };
 }
 
 /** Fold a card into the board. The worker's roster line becomes its summary.
