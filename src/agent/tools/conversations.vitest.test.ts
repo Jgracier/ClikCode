@@ -25,7 +25,7 @@ describe("ClikCode's agent sees other conversations", () => {
       ['search_conversations', 'read'], ['read_conversation', 'read'], ['active_conversations', 'read'], ['hindsight', 'read'],
     ]);
     const search = tools[0]!;
-    expect(search.label({ query: 'stripe webhook' })).toBe('Search conversations "stripe webhook"');
+    expect(search.label({ query: 'stripe webhook' })).toBe('Search conversation "stripe webhook"');
     const result = await search.run({ query: 'stripe webhook' }, { sessionId: 'this-chat-0002' } as ToolContext);
     expect(result.output).toContain('Billing webhook');
     expect(result.output).not.toContain('Here —');
