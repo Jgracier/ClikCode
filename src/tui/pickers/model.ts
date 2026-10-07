@@ -237,7 +237,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
     if (!selected) return;
     if (selected.kind === 'agent') {
       currentAgent = selected.id === currentAgent ? undefined : selected.id;
-      await selectGatewayAgent(id, currentAgent);
+      await selectGatewayAgent(id, currentAgent, agents.find((agent) => agent.id === currentAgent)?.name);
       if (currentAgent) rl.notice?.('Agent selected for this session. Choose a model, or Automatic, to finish.');
       continue;
     }

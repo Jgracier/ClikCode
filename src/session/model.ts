@@ -60,6 +60,8 @@ export interface HarnessSession {
   gatewayAgentId?: string;
   /** The private Gateway DM this session uses for the chosen agent. */
   gatewayAgentThreadId?: string;
+  /** The chosen agent's display name, for the footer (set when chosen and by each turn). */
+  gatewayAgentName?: string;
   effort: string;
   /** `effort` as refused by the vendor for one harness and model
    * (`<harness> <model> <effort>`): turns there run at the vendor's own
