@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
-import { agentTurnSettings, readAgentStream, runGatewayAgentTurn, type AgentStreamEvent } from './gateway-agent-turn.js';
+import { agentToolLabel, agentTurnSettings, readAgentStream, runGatewayAgentTurn, type AgentStreamEvent } from './gateway-agent-turn.js';
 
 vi.mock('../agent/models/for-session.js', () => ({
   gatewayConnection: () => ({ baseUrl: 'https://app.test', apiKey: 'account-key' }),
@@ -162,5 +162,13 @@ describe('readAgentStream', () => {
     const body = new ReadableStream<Uint8Array>({ start() {} });
     const read = readAgentStream(body, 20);
     await expect(read.next()).rejects.toThrow('went silent');
+  });
+});
+
+describe('agentToolLabel', () => {
+  it('names a platform tool under its agent, and its tool search as what it is', () => {
+    expect(agentToolLabel('silas', 'admin_jobs', { limit: 5 })).toBe('silas › admin_jobs limit=5');
+    expect(agentToolLabel('silas', 'search_tools', { query: 'deploy logs' })).toBe('Search tools deploy logs');
+    expect(agentToolLabel('silas', 'load_tools', { names: ['admin_jobs', 'admin_builder_status'] })).toBe('Load tools admin_jobs, admin_builder_status');
   });
 });

@@ -89,6 +89,22 @@ export async function* readAgentStream(
   }
 }
 
+/** The agent finding or loading one of its own tools (either transport reports it this way). */
+function isToolDiscovery(name: string): boolean {
+  return name === 'search_tools' || name === 'load_tools';
+}
+
+/** A row for one of the agent's calls: its platform tools read as an MCP server's
+ * (`silas › admin_jobs limit=5`); finding its tools reads as what it is. */
+export function agentToolLabel(handle: string, name: string, input: Record<string, unknown>): string {
+  if (name === 'search_tools') return `Search tools${typeof input.query === 'string' ? ` ${input.query}` : ''}`;
+  if (name === 'load_tools') {
+    const names = Array.isArray(input.names) ? input.names.filter((n): n is string => typeof n === 'string') : [];
+    return `Load tools${names.length ? ` ${names.join(', ')}` : ''}`;
+  }
+  return toolLabel(`mcp__${handle}__${name}`, input);
+}
+
 /** The agent's usage in the shape every harness reports. */
 function turnUsage(usage: AgentStreamUsage): TurnUsage {
   return { input: usage.promptTokens, output: usage.outputTokens, cacheRead: usage.cachedInputTokens };
@@ -156,9 +172,9 @@ export async function runGatewayAgentTurn(input: {
           sink.response(event.text, 'append');
           break;
         case 'tool-start': {
-          // The agent's platform tools read as an MCP server's: `silas › admin_jobs limit=5`.
           const row: HarnessActivityEvent = {
-            kind: 'tool-start', id: event.id, label: toolLabel(`mcp__${handle}__${event.name}`, event.input),
+            kind: 'tool-start', id: event.id, label: agentToolLabel(handle, event.name, event.input),
+            ...(isToolDiscovery(event.name) ? { category: 'search' as const } : {}),
             call: { name: event.name, input: event.input },
           };
           rows.set(event.id, row);
