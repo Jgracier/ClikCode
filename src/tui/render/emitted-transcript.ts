@@ -82,7 +82,9 @@ export class EmittedTranscript {
   /** One message has been written. */
   wrote(message: TranscriptMessage): void {
     this.lastMessage = messageKey(message);
-    if (message.role === 'user') this.retired.add(message.content);
+    // A steer carries its id. The text is the fallback for a user message
+    // that was never given one.
+    if (message.role === 'user') this.retired.add(message.id ?? message.content);
   }
 
   /** Whether a steer with this text has already gone out as a real message.

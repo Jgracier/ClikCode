@@ -110,10 +110,10 @@ export interface LiveTurn {
   steers: Array<{ text: string; offset: number }>;
   startedAt: number;
   /** When the model last went back to thinking -- the turn began, or its
-   * last open call closed: how long it has thought, for the status line's
-   * words ("still thinking"). Not moved by the answer's deltas, which stay
-   * an append and a timestamp on the wire. */
+   * last open call closed. Not moved by the answer's deltas. */
   thinkingSince: number;
+  /** When answer text last arrived: the working line says "writing". */
+  writingAt?: number;
   /** When the turn last did anything (a word, a thought, a call) or an
    * approval was answered: quiet past turn-pace's threshold and the working
    * line's spinner turns yellow, as the terminal's does. */
@@ -479,7 +479,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
         reasoning: rebaseOffsets(after.reasoning, live.text, text),
       } : {};
-      return { ...model, live: { ...after, ...placed, text, activeAt: Date.now() } };
+      return { ...model, live: { ...after, ...placed, text, activeAt: Date.now(), ...(event.text ? { writingAt: Date.now() } : {}) } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');

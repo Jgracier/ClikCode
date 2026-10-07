@@ -23,6 +23,9 @@ export type TurnActivity = { event: HarnessActivityEvent; responseOffset: number
  * over later still learns what an earlier request was about. */
 export type TranscriptMessage = {
   role: 'user' | 'assistant'; content: string; activities?: TurnActivity[]; attachments?: string[];
+  /** The steer this user message was, when it was typed into a running turn.
+   *  The live copy and this one are the same message, matched by this id. */
+  id?: string;
   /** Whose turn a message was: an answer is stamped when its turn is
    * committed (checkpoint.ts sessionTranscriptMessages), every message when
    * the conversation moves to another provider (leaveProvider). The

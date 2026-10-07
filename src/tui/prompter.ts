@@ -114,15 +114,12 @@ type WaitingTurn = {
   /** Elapsed less approvals, and the last delta or event, which is what
    * "stalled" means (see activity-view.ts). */
   clock: TurnClock;
-  /** When the current stretch of thinking began -- the turn's start, or the
-   * last call finishing or answer text arriving -- for turnStatus's words. */
-  thinkingSince: number;
-  /** When answer text last arrived: the status line says "writing". */
-  writingAt?: number;
   /** When the turn last did anything -- a word, a thought, a call -- or an
    * approval was answered: quiet past turn-pace's threshold and the spinner
    * turns yellow, by the same rule as a stalled row in the conversation list. */
   activeAt: number;
+  /** When answer text last arrived: the status line says "writing". */
+  writingAt?: number;
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
@@ -867,7 +864,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text; once the answer is arriving it is stale.
-    if (text) { this.thought = undefined; if (this.turn) this.turn.thinkingSince = this.turn.activeAt = this.turn.writingAt = Date.now(); }
+    if (text) { this.thought = undefined; if (this.turn) this.turn.activeAt = this.turn.writingAt = Date.now(); }
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -914,8 +911,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Anything the turn or one of its sub-agents does means it has not stalled.
     if (this.turn) this.turn.activeAt = Date.now();
     if (event.parentId) {
-      // A sub-agent's own calls stay inside the agent row. They are not
-      // separate messages, and they do not move the status line.
+      // A sub-agent's own calls stay inside the agent row, which keeps its
+      // spinner. They are not separate messages, and they do not move the
+      // status line. The step under the row is what animates.
       // What it is doing (a call) or saying (its prose, its thinking) now.
       if (event.kind === 'tool-start' || event.kind === 'thinking') this.childActivity.set(event.parentId, event.label);
       else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.childActivity.delete(event.parentId);
@@ -944,12 +942,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const anchor = this.turn ? this.activityAnchor : this.restingAnchor();
     const responseOffset = this.turn ? live?.responseOffset ?? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
-    // The status line follows the work: "running tests", "editing app.ts"
-    // while a call is open, the turn's own phase otherwise. The call itself
-    // is also one row in the live transcript, below.
+    // The status line names the open call. The transcript row under the
+    // answer is that call's output, not a second clock.
     const lifecycle = activityLifecyclePhase(this.activeTools, event);
-    // The last open call finishing starts a new stretch of thinking.
-    if (this.turn && this.activeTools.size && !lifecycle.activeTools.size) this.turn.thinkingSince = Date.now();
     this.activeTools = lifecycle.activeTools;
     this.schedulePaint();
   }
@@ -1171,7 +1166,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the transient assistant at this same index.
     this.activityAnchor = this.currentSession?.messages?.length ?? 0;
     const turn: WaitingTurn = {
-      label: message, clock: early?.clock ?? startTurnClock(Date.now()), thinkingSince: early?.thinkingSince ?? Date.now(),
+      label: message, clock: early?.clock ?? startTurnClock(Date.now()),
       activeAt: early?.activeAt ?? Date.now(),
       draft: early?.draft ?? underSignIn ?? '', cursor: early?.cursor ?? underSignIn?.length ?? 0, cancelled: false,
       ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
@@ -1529,22 +1524,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const now = Date.now();
     const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
     // What it says and how it looks, by the shared rules (turn-flow.ts):
-    // waiting on the user, the open call, the reasoning's heading, the
-    // thinking in words.
+    // waiting on the user, the open call, the reasoning's heading, or the
+    // phase the turn reported. The clock stays on this line. The call's row
+    // does not keep a second one.
     const tool = this.toolStatus();
     const status = turnStatus({
       phase: turn.label,
       ...(!turn.cancelled && tool ? { toolPhase: tool.phase } : {}),
       ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
-      thinkingMs: now - turn.thinkingSince,
       asking: Boolean(this.pendingApproval),
       writing: turn.writingAt !== undefined && now - turn.writingAt < WRITING_MS,
     });
     const asking = Boolean(this.pendingApproval);
     // What the agent is doing is essential and stays at full contrast; the
-    // clock is dimmed. An open call's row keeps its own clock, so this line
-    // does not show a second one beside it.
-    const rest = asking || tool ? '' : ` · ${elapsed}`;
+    // clock is dimmed. An approval stops the clock, so it is not shown.
+    const rest = asking ? '' : ` · ${elapsed}`;
     // One spinner, one motion, for every harness and every tool, the label
     // shimmering with it. An approval is the turn waiting on the user, not
     // working: a still dot, and no clock (it is stopped).
@@ -1860,16 +1854,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       }
       const kind = entry.event?.swarm ? 'swarm' as const : (liveWaitKind(entry.event!) ?? 'tool');
       const child = entry.event?.id ? this.childActivity.get(entry.event.id) : undefined;
+      const frame = this.reducedMotion ? 0 : this.waitingFrame;
       const row = runningChatLine(
-        tensedLabel(entry.event?.label ?? '', true), this.reducedMotion ? 0 : this.waitingFrame, kind, entry.startedAt ? Date.now() - entry.startedAt : 0,
+        tensedLabel(entry.event?.label ?? '', true), frame, kind, entry.event?.category,
       ).trim();
+      // The agent's own step keeps a spinner under its row. Folding the call
+      // into that row does not replace it with the turn's thinking line.
+      const step = child
+        ? `    ${chalk.cyan(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child}${entry.event?.childTools ? ` · ${toolUses(entry.event.childTools)}` : ''}`)}`
+        : undefined;
       // What it has printed so far, newest last, under the spinner -- a long
       // build or test run is visibly working instead of a bare timer.
       const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES)
         .map((line) => `  ${visibleSlice(line, Math.max(1, conversationInner - 2))}`) : [];
       return {
         id, done: false, responseOffset: entry.responseOffset,
-        lines: ['', `  ${row}`, ...(child ? [`    ${chalk.dim(`${child}${entry.event?.childTools ? ` · ${toolUses(entry.event.childTools)}` : ''}`)}`] : []), ...live, ''],
+        lines: ['', `  ${row}`, ...(step ? [step] : []), ...live, ''],
       };
     };
     /** A run of reads and searches as one row (explore-groups.ts): the
@@ -1880,7 +1880,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const { summary, calls, running } = mergedExploreLines(group.members.map((member) => member.event), ended);
       const under = calls.map((call) => `    ${visibleSlice(call, Math.max(1, conversationInner - 4))}`);
       if (running && !group.done) {
-        const row = runningChatLine(summary, this.reducedMotion ? 0 : this.waitingFrame, 'tool', first.startedAt ? Date.now() - first.startedAt : 0).trim();
+        const row = runningChatLine(summary, this.reducedMotion ? 0 : this.waitingFrame, 'tool', first.event?.category).trim();
         return { id: group.key, done: false, responseOffset: first.responseOffset, lines: ['', `  ${row}`, ...under, ''] };
       }
       const { line, category } = mergedExploreSummaryLine(group.members.map((member) => member.event), summary);

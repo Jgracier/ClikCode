@@ -36,14 +36,12 @@ describe('how a turn reads', () => {
     expect(exploreSummary(rows.slice(0, 2))).toBe('Read 1 file, searched 1 pattern');
   });
 
-  it('says what the turn is doing: you, the call, the reasoning, then the thinking in words', () => {
+  it('says what the turn is doing: you, the call, the reasoning, then writing or thinking', () => {
     expect(turnStatus({ asking: true, toolPhase: 'running tests' })).toEqual({ label: 'waiting for you', tone: 'asking' });
     expect(turnStatus({ toolPhase: 'running tests' })).toEqual({ label: 'running tests', tone: 'tool' });
     expect(turnStatus({ thought: '**Inspecting the parser** I should look at…', phase: 'thinking' }).label).toBe('Inspecting the parser');
-    expect(turnStatus({ phase: 'thinking', thinkingMs: 25_000 }).label).toBe('thinking more');
-    // A clock read just before the thinking began: still words, never a crash.
-    expect(turnStatus({ phase: 'thinking', thinkingMs: -400 }).label).toBe('thinking');
-    expect(turnStatus({ phase: 'thinking', thinkingMs: Number.NaN }).label).toBe('thinking');
+    expect(turnStatus({ phase: 'thinking' }).label).toBe('thinking');
+    expect(turnStatus({}).label).toBe('thinking');
     expect(turnStatus({ phase: 'generating response' }).label).toBe('generating response');
     expect(turnStatus({ phase: 'thinking', writing: true }).label).toBe('writing');
     expect(turnStatus({ phase: 'thinking', writing: true, toolPhase: 'running git' }).label).toBe('running git');

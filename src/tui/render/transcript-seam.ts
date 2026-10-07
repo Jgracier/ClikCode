@@ -14,7 +14,7 @@
  * tests, rather than conditions buried in a 480-line paint.
  */
 
-export type TranscriptMessage = { role: string; content: string };
+export type TranscriptMessage = { role: string; content: string; id?: string };
 
 export function messageKey(message: TranscriptMessage): string {
   return `${message.role}:${message.content}`;

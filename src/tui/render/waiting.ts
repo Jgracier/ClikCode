@@ -5,7 +5,8 @@ import chalk from 'chalk';
 import { terminalCellWidth, visibleSlice } from './width.js';
 import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from './usage-words.js';
 import { waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
-import { formatElapsed } from '../../harness/protocol/format.js';
+import type { ToolCategory } from '../../harness/prompter.js';
+import { TOOL_CATEGORY } from '../../harness/protocol/tool-category.js';
 
 export { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent };
 
@@ -19,17 +20,20 @@ export function rightLabeledRule(width: number, label?: string): string {
 
 /** One open call, drawn under the answer that is still streaming: the row it
  * settles into, the spinner in its glyph's place (a command's `$ make`, not
- * `running $ make`). A sub-agent says so. The row is
- * repainted, not appended, and the status line is a different place. A call
- * running for a second or more shows for how long, the way a native CLI
- * times its own shell commands. */
-export function runningChatLine(label: string, frame: number, kind: 'command' | 'agent' | 'tool' | 'swarm', elapsedMs = 0): string {
-  const spinner = kind === 'command' ? chalk.yellow(waitingSpinnerGlyph(frame))
-    : kind === 'agent' || kind === 'swarm' ? chalk.cyan(waitingSpinnerGlyph(frame))
-      : chalk.dim(waitingSpinnerGlyph(frame));
+ * `running $ make`). A sub-agent says so. The row is repainted, not appended.
+ * Its colour is the call's category, the same one the status line uses. The
+ * turn's clock stays on that line, so this row has none. */
+export function runningChatLine(
+  label: string, frame: number, kind: 'command' | 'agent' | 'tool' | 'swarm', category?: ToolCategory,
+): string {
+  const colour = category ? TOOL_CATEGORY[category].colour
+    : kind === 'command' ? 'yellow' as const
+      : kind === 'agent' || kind === 'swarm' ? 'cyan' as const
+        : undefined;
+  const glyph = waitingSpinnerGlyph(frame);
+  const spinner = colour ? chalk[colour](glyph) : chalk.dim(glyph);
   const verb = kind === 'agent' ? 'agent ' : '';
-  const timer = elapsedMs >= 1000 ? chalk.dim(` (${formatElapsed(elapsedMs)})`) : '';
-  return `  ${spinner}  ${verb}${label}${timer}`;
+  return `  ${spinner}  ${verb}${label}`;
 }
 
 /** A live response must end on content, not its decorative separator. On a
