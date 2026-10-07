@@ -57,10 +57,8 @@ export function steerTranscriptRows(input: {
   durable: readonly DurableSteer[];
   live: readonly LiveSubmission[];
   materializedPendingTurn: boolean;
-  /** Steers already retired this session, by TEXT: once the pending turn is
-   *  materialized the live copy has no identity left to match on, so the text
-   *  is all there is. Two steers that say the same thing are still two
-   *  steers, which is why this only applies after materialization. */
+  /** Steers already retired this session. A steer with an id is matched by
+   *  that id. Text is only for one that was stored without an id. */
   retiredThisSession: ReadonlySet<string>;
   render: (text: string) => string[];
 }): SteerRow[] {
@@ -74,7 +72,7 @@ export function steerTranscriptRows(input: {
     // Already drawn from the durable side -- by identity where both carry
     // one, so two steers that say the same thing are still two steers.
     if (hasDurableSteer(item, durable)) continue;
-    if (input.materializedPendingTurn && input.retiredThisSession.has(item.text)) continue;
+    if (input.materializedPendingTurn && input.retiredThisSession.has(item.id ?? item.text)) continue;
     rows.push({ id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: input.render(item.text) });
   }
   return rows;

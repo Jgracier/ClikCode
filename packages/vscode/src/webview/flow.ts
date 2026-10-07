@@ -6,6 +6,7 @@ import { exploreRuns, exploreSummary, tensedLabel, turnStatus, type StatusTone }
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import type { Activity, LiveTurn } from '../model';
+import { WRITING_MS } from '../../../../src/harness/protocol/timings';
 import { titleCase } from './format';
 
 export interface WorkingStatus {
@@ -18,15 +19,15 @@ export interface WorkingStatus {
 }
 
 /** The working line, by turn-flow's rule: waiting on the user, else the open
- * call's verb, else the reasoning's heading, else how long the model has
- * thought, in words. */
+ * call's verb, else the reasoning's heading, else "writing" while answer
+ * text arrives, else "thinking". */
 export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: number): WorkingStatus {
   const status = turnStatus({
     phase: live ? live.phase ?? live.waitingLabel : 'starting',
     ...(live?.toolPhase ? { toolPhase: live.toolPhase } : {}),
     ...(live?.thought ? { thought: live.thought.text } : {}),
-    thinkingMs: live ? now - (live.thinkingSince ?? live.startedAt) : 0,
     asking,
+    writing: live?.writingAt !== undefined && now - live.writingAt < WRITING_MS,
   });
   const open = live?.openTools[live.openTools.length - 1]?.[1];
   const toneClass = status.tone === 'asking' ? 'tone-permission'

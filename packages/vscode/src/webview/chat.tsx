@@ -133,7 +133,7 @@ export function Spinner({ tone = '', still = false }: { tone?: string; still?: b
 
 /** A tool label with the path in it made a link to the file. */
 function ActivityLabel({ label, workspace, shimmer }: { label: string; workspace?: string; shimmer?: boolean }): JSX.Element {
-  const className = shimmer ? 'activity-text swarm-name' : 'activity-text';
+  const className = shimmer ? 'activity-text live-name' : 'activity-text';
   const style = shimmer ? shimmerStyle(label) : undefined;
   const found = pathIn(label);
   if (!found) return <span class={className} style={style} title={label}>{relative(label, workspace)}</span>;
@@ -239,7 +239,8 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const result = activityResult(activity);
   const outcome = activityOutcome(activity);
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
-  const swarmRunning = status === 'running' && Boolean(activity.swarm);
+  const agentRunning = status === 'running' && (Boolean(activity.swarm) || Boolean(activity.agent)
+    || liveWaitKind({ kind: 'tool-start', label: activity.label, agent: activity.agent, category: activity.category }) === 'agent');
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
     event.stopPropagation();
     post({ type: 'change', action, key: activity.key, ...(userIndex === undefined ? {} : { userIndex }) });
@@ -247,12 +248,13 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
-        {/* One thing moves on screen while a turn runs: the working line's
-            spinner. A running call wears its category's icon, still. */}
+        {/* The working line moves for the turn. A running sub-agent or swarm
+            agent also keeps its own spinner here: that animation belongs on
+            its chat row, not only on the thinking line. */}
         <span class={`activity-status ${activity.swarm ? 'tone-cyan' : toneOf(activity)}`} aria-label={status}>
-          {status === 'error' ? <Icon name="error" /> : swarmRunning ? <Spinner tone="tone-cyan" /> : <Icon name={activityIcon(activity)} />}
+          {status === 'error' ? <Icon name="error" /> : agentRunning ? <Spinner tone="tone-cyan" /> : <Icon name={activityIcon(activity)} />}
         </span>
-        <ActivityLabel label={tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={swarmRunning} />
+        <ActivityLabel label={tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning} />
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {result ? <span class="activity-outcome activity-result">{result}</span> : null}
@@ -269,7 +271,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
           </button>
         ) : null}
       </div>
-      {status === 'running' && activity.child ? <div class="activity-child" title={activity.child}><Icon name="arrow-small-right" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {status === 'running' && activity.child ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
       {/* A running call shows what it has printed so far, newest last -- a
           long build is visibly working instead of a bare timer. */}
       {status === 'running' && !open && activity.output?.length ? <OutputView activity={{ ...activity, outputTail: true }} budget={LIVE_OUTPUT_LINES} /> : null}
@@ -502,11 +504,12 @@ function Plan({ plan, folded = false, running = false }: { plan: ChatModel['plan
 /** Rows of one run of calls shown before the earlier ones fold away. */
 const VISIBLE_ACTIVITIES = 6;
 
-/** The working line, the one thing on screen that moves while a turn runs:
- * what the turn is doing (turn-flow's rule: waiting on you, the open call's
- * verb, the reasoning's own heading, or how long it has thought), in the
- * colour of that work, a shimmer passing over it (CSS). The thought being had is its tooltip, and opens under it.
- * Ticks on its own. */
+/** The working line: what the turn is doing (turn-flow's rule: waiting on you,
+ * the open call's verb, the reasoning's own heading, or how long it has
+ * thought), in the colour of that work, a shimmer passing over it (CSS). A
+ * running sub-agent or swarm agent keeps its own spinner on its chat row.
+ * The thought being had is this line's tooltip, and opens under it. Ticks
+ * on its own. */
 function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; elsewhere: boolean; asking: boolean }): JSX.Element {
   const now = useNow();
   const [open, setOpen] = useState(false);

@@ -104,29 +104,21 @@ export function reasoningBody(thought: string): string {
   return thought.replace(/\*\*([^*\n]{3,80})\*\*/, '').replace(/^\s*\*\*[^*\n]*$/, '').replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim();
 }
 
-/** Claude Code's way of saying a long think is still a think. */
-const THINKING_WORDS: Array<[afterMs: number, words: string]> = [
-  [45_000, 'deep in thought'], [30_000, 'thinking some more'], [20_000, 'thinking more'], [10_000, 'still thinking'], [0, 'thinking'],
-];
-
 export type StatusTone = 'thinking' | 'tool' | 'asking';
 
 /** What the status line says and how it looks: waiting on the user, else the
  * open call's verb, else the reasoning's own heading, else "writing" while
- * answer text arrives, else how long the thinking has gone on in words; and
- * its tone. */
+ * answer text arrives, else "thinking". A quiet clock does not invent a
+ * longer phrase. */
 export function turnStatus(state: {
-  phase?: string; toolPhase?: string; thought?: string; thinkingMs?: number; asking?: boolean; writing?: boolean;
+  phase?: string; toolPhase?: string; thought?: string; asking?: boolean; writing?: boolean;
 }): { label: string; tone: StatusTone } {
   if (state.asking) return { label: 'waiting for you', tone: 'asking' };
   if (state.toolPhase) return { label: state.toolPhase, tone: 'tool' };
   const heading = reasoningHeading(state.thought);
   const phase = state.phase?.replace(/(…|\.\.\.)$/, '').trim();
   const thinking = !phase || /^thinking$/i.test(phase);
-  // A clock read a moment before the thinking began gives a negative time
-  // (or none at all): that is still just "thinking", never no words.
-  const thinkingMs = Number.isFinite(state.thinkingMs) ? Math.max(0, state.thinkingMs!) : 0;
-  const label = heading ?? (!thinking ? phase! : state.writing ? 'writing' : THINKING_WORDS.find(([after]) => thinkingMs >= after)![1]);
+  const label = heading ?? (!thinking ? phase! : state.writing ? 'writing' : 'thinking');
   return { label, tone: 'thinking' };
 }
 

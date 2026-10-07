@@ -147,9 +147,11 @@ describe('the working line', () => {
     expect(status).toMatchObject({ label: 'Running tests…', tone: 'tool', toneClass: 'tone-yellow' });
   });
 
-  it("shows the reasoning's own heading, else escalating thinking words", () => {
+  it("shows the reasoning's own heading, else writing, else thinking", () => {
     expect(workingStatus(live({ thought: { text: '**Inspecting the parser** first' }}), false, 2000).label).toBe('Inspecting the parser…');
-    expect(workingStatus(live({ thinkingSince: 0 }), false, 25_000).label).toBe('Thinking more…');
+    expect(workingStatus(live({ writingAt: 2_000 }), false, 2_500).label).toBe('Writing…');
+    expect(workingStatus(live({ writingAt: 0 }), false, 3_000).label).toBe('Thinking…');
+    expect(workingStatus(live({ thinkingSince: 0 }), false, 25_000).label).toBe('Thinking…');
     expect(workingStatus(live(), false, 3_000)).toMatchObject({ label: 'Thinking…', toneClass: 'tone-cyan' });
   });
 

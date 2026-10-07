@@ -18,6 +18,7 @@ describe('the waiting band', () => {
     expect(runningChatLine('$ npm test', 0, 'command')).toMatch(/ {2}\$ npm test$/);
     expect(runningChatLine('Task(review)', 0, 'agent')).toContain('agent Task(review)');
     expect(runningChatLine('Bash(npm test)', 0, 'command')).not.toBe(runningChatLine('Bash(npm test)', 1, 'command'));
+    expect(runningChatLine('Read a.ts', 0, 'tool', 'read')).not.toMatch(/\(\d/);
   });
 
   it('shows a chat row for a command or a sub-agent and for nothing else', () => {
@@ -53,9 +54,8 @@ describe('the waiting band', () => {
     expect(line.startsWith('───')).toBe(true);
   });
 
-  it('times a call that has run for a second or more, and not one that has not', () => {
-    expect(runningChatLine('Bash(make)', 0, 'command', 400)).not.toContain('(0s)');
-    expect(runningChatLine('Bash(make)', 0, 'command', 12_300)).toContain('(12s)');
+  it('names the call and leaves the clock to the status line', () => {
+    expect(runningChatLine('Bash(make)', 0, 'command', 'run')).not.toMatch(/\(\d/);
   });
 
   it('accumulates reasoning fragments into one thought instead of replacing it', () => {
