@@ -152,7 +152,7 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
     const steerOffset = Math.max(responseOffset, Math.min(response.length, steer.responseOffset ?? 0));
     const before = assistant(responseOffset, steerOffset);
     if (before) messages.push(before);
-    messages.push({ role: 'user', content: steer.text });
+    messages.push({ role: 'user', content: steer.text, ...(steer.id ? { id: steer.id } : {}) });
     responseOffset = steerOffset;
   }
   const remaining = assistant(responseOffset, undefined);
@@ -189,7 +189,15 @@ export function runningActivityLabel(pending: HarnessSession['pendingTurn']): st
  * streamed delta: it is an index field, and the index is not rewritten while
  * an answer streams (writeTranscriptCheckpoint). */
 export function beginPendingTurn(session: HarnessSession, prompt: string, now: string): void {
-  if (session.pendingTurn) session.messages = sessionTranscriptMessages(session);
+  const pending = session.pendingTurn;
+  // The same request, and it never produced output. A retry is that one
+  // line, not a second copy of it in the transcript.
+  if (pending && pending.prompt.trim() === prompt.trim() && !pending.outputStarted) {
+    pending.updatedAt = now;
+    session.updatedAt = now;
+    return;
+  }
+  if (pending) session.messages = sessionTranscriptMessages(session);
   session.pendingTurn = {
     prompt, ...(session.attachments?.length ? { attachments: [...session.attachments] } : {}),
     startedAt: now, updatedAt: now, outputStarted: false,

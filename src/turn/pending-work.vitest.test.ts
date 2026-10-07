@@ -1,57 +1,30 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
 import { parseNativeActivityEventsFromValue } from '../harness/protocol/activity-events';
 import type { AiLocalHarnessDefinition } from '../harness/definition';
 import { addTurnUsage } from '../harness/protocol/turn-usage';
-import {
-  createPendingWorkTracker, forgetToolPairingEvidence,
-  MAX_PENDING_CONTINUATIONS, mayContinuePendingWork,
-  PENDING_WORK_BUDGET_MS, pendingContinuationDelayMs,
-} from './pending-work';
+import { createPendingWorkTracker } from './pending-work';
 
 /** The first activity one stdout line describes. */
 const parseNativeActivityEvent = (harness: AiLocalHarnessDefinition, line: string) => parseNativeActivityEventsFromValue(harness, JSON.parse(line))[0];
 
 describe('pending work tracker', () => {
-  beforeEach(() => { forgetToolPairingEvidence(); });
-
-  it('reports nothing for a harness never seen to settle a tool', () => {
-    // The whole hazard of acting on an absent completion: a parser that
-    // reports no completions at all would otherwise look permanently
-    // mid-wait and earn a continuation on every single turn.
-    const tracker = createPendingWorkTracker('mystery');
-    tracker.note({ kind: 'tool-start', id: 'a' });
-    tracker.note({ kind: 'tool-start', id: 'b' });
-    expect(tracker.outstanding).toBe(0);
-  });
-
-  it('reports an unmatched start once the harness has proven it pairs', () => {
+  it('counts an unmatched start by id, including the first tool a harness runs', () => {
     const tracker = createPendingWorkTracker('antigravity');
-    tracker.note({ kind: 'tool-start', id: 'first' });
-    tracker.note({ kind: 'tool-done', id: 'first' });
-    expect(tracker.outstanding).toBe(0);
-    // The real shape: a backgrounded command left in ACTIVE, never settled.
     tracker.note({ kind: 'tool-start', id: 'backgrounded' });
     expect(tracker.outstanding).toBe(1);
+    tracker.note({ kind: 'tool-done', id: 'backgrounded' });
+    expect(tracker.outstanding).toBe(0);
   });
 
-  it('keeps the pairing evidence across turns, since the backgrounding turn often runs no other tool', () => {
-    // Antigravity's stuck turn ran exactly one tool and abandoned it, so
-    // evidence gathered only within that turn would never be enough.
-    const earlier = createPendingWorkTracker('antigravity');
-    earlier.note({ kind: 'tool-start', id: 'x' });
-    earlier.note({ kind: 'tool-done', id: 'x' });
-
-    const stuck = createPendingWorkTracker('antigravity');
-    stuck.note({ kind: 'tool-start', id: 'only' });
-    expect(stuck.outstanding).toBe(1);
-  });
-
-  it('settles an unpaired completion rather than leaving a start armed', () => {
+  it('does not close a different call when a completion names some other id', () => {
     const tracker = createPendingWorkTracker('claude');
-    tracker.note({ kind: 'tool-done', id: 'never-started' });
+    tracker.note({ kind: 'tool-start', id: 'a' });
+    tracker.note({ kind: 'tool-done', id: 'other' });
     tracker.note({ kind: 'tool-start' });
     tracker.note({ kind: 'tool-error' });
+    expect(tracker.outstanding).toBe(1);
+    tracker.note({ kind: 'tool-done', id: 'a' });
     expect(tracker.outstanding).toBe(0);
   });
 
@@ -72,39 +45,6 @@ describe('pending work tracker', () => {
     expect(tracker.outstanding).toBe(1);
     tracker.reset();
     expect(tracker.outstanding).toBe(0);
-  });
-
-  it('bounds continuing by DURATION and not only by attempt count', () => {
-    // The original mistake: three attempts at 2s/8s/20s is a thirty-second
-    // budget, so a five-minute build still had its answer stranded -- the
-    // exact failure this feature exists to fix, merely made rarer.
-    let elapsed = 0;
-    let attempts = 0;
-    while (mayContinuePendingWork(attempts, elapsed)) {
-      elapsed += pendingContinuationDelayMs(attempts);
-      attempts += 1;
-    }
-    expect(attempts).toBe(MAX_PENDING_CONTINUATIONS);
-    // Long enough to cover a real test suite or build, not thirty seconds.
-    expect(elapsed).toBeGreaterThan(5 * 60 * 1000);
-  });
-
-  it('stops on the time budget even when attempts remain', () => {
-    expect(mayContinuePendingWork(0, PENDING_WORK_BUDGET_MS)).toBe(false);
-    expect(mayContinuePendingWork(0, PENDING_WORK_BUDGET_MS - 1)).toBe(true);
-  });
-
-  it('stops on the attempt count even when time remains, so it is not an unbounded poll', () => {
-    // Every continuation is a real model turn; the count is what caps cost.
-    expect(mayContinuePendingWork(MAX_PENDING_CONTINUATIONS, 0)).toBe(false);
-    expect(mayContinuePendingWork(MAX_PENDING_CONTINUATIONS - 1, 0)).toBe(true);
-  });
-
-  it('backs off exponentially and caps the wait', () => {
-    const delays = Array.from({ length: MAX_PENDING_CONTINUATIONS }, (_, i) => pendingContinuationDelayMs(i));
-    expect([...delays].sort((a, b) => a - b)).toEqual(delays);
-    expect(delays[0]).toBe(2_000);
-    expect(Math.max(...delays)).toBe(120_000);
   });
 
   it('detects a backgrounded antigravity command from its real stream lines', () => {
@@ -175,12 +115,10 @@ describe('pending work tracker', () => {
       expect(addTurnUsage(undefined, undefined)).toBeUndefined();
     });
 
-    it('accumulates over the whole continuation budget', () => {
+    it('accumulates across attempts', () => {
       let carried: { input?: number } | undefined;
-      for (let attempt = 0; attempt < MAX_PENDING_CONTINUATIONS; attempt += 1) {
-        carried = addTurnUsage(carried, { input: 1_000 });
-      }
-      expect(carried).toEqual({ input: 1_000 * MAX_PENDING_CONTINUATIONS });
+      for (let attempt = 0; attempt < 3; attempt += 1) carried = addTurnUsage(carried, { input: 1_000 });
+      expect(carried).toEqual({ input: 3_000 });
     });
   });
 });

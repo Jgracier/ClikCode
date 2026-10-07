@@ -5,9 +5,8 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
 import { harnessCommand } from '../session/state/paths.js';
 import chalk from 'chalk';
-import { setTimeout as sleep } from 'node:timers/promises';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { createPendingWorkTracker, mayContinuePendingWork, pendingContinuationDelayMs, PENDING_CONTINUATION_PROMPT } from './pending-work.js';
+import { createPendingWorkTracker } from './pending-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
 import { classifyAccountFailure } from './failover.js';
@@ -43,14 +42,14 @@ import { sessionTurnTransport } from '../harness/transport/select.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessCanRunTurns, harnessLoginArgvForModel, harnessReplyError, modelProvider } from '../runtime/lazy-bridge.js';
 import { prepareAttachments } from '../session/attachments.js';
-import { addTurnUsage, type TurnUsage } from '../harness/protocol/turn-usage.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
-import { durableAnswer, sessionTranscriptMessages } from './checkpoint.js';
+import { sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
 import { builtClikcodeLauncher, conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
+import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
 import { swarmIsOn } from '../swarm/policy.js';
 import { swarmProvisionEntry, swarmRidesTurn } from '../swarm/publish.js';
@@ -196,11 +195,13 @@ export async function sendVendorTurn(input: {
     }
     return start.prompt;
   };
-  /** A retry on a fresh thread (the old one already forgotten): the interrupted
-   * request, taken up with the answer so far, which is cleared or continued
-   * in a new paragraph. Returns what to send. */
-  const retellInterrupted = async (edit: keyof typeof RETRY_EDITS): Promise<string> => {
-    const prompt = await takeUp(INTERRUPTED_TURN_REQUEST, { interrupted: true, withJournal: true, requestContext });
+  /** A retry on a fresh thread (the old one already forgotten). A turn that
+   * already wrote is taken up with the answer so far and the continuation.
+   * One that produced nothing is taken up as the request itself. The answer
+   * is cleared, or continued in a new paragraph. Returns what to send. */
+  const retell = async (request: string, edit: keyof typeof RETRY_EDITS): Promise<string> => {
+    const continuing = request === INTERRUPTED_TURN_REQUEST;
+    const prompt = await takeUp(request, { interrupted: continuing, withJournal: continuing, requestContext });
     continueAnswer(edit);
     return prompt;
   };
@@ -281,17 +282,11 @@ export async function sendVendorTurn(input: {
   let turnUsage: TurnUsage | undefined;
   const noteUsage = (usage: TurnUsage): void => {
     turnUsage = { ...turnUsage, ...usage };
-    const shown = addTurnUsage(carriedPendingUsage, turnUsage)!;
+    const shown = turnUsage!;
     session.lastUsage = { ...shown, at: new Date().toISOString() };
     prompter?.setTurnUsage(shown);
   };
   const pendingWork = createPendingWorkTracker(harness.command);
-  let pendingContinuations = 0;
-  const pendingWorkStartedAt = Date.now();
-  /** Tokens from earlier attempts of this same continued turn; the loop
-   *  clears turnUsage on every pass, which is right for a failover and
-   *  wrong for a continuation. */
-  let carriedPendingUsage: TurnUsage | undefined;
   /** The response-delta rule, in one place. Every transport owes the same
    * three steps -- through the title filter, then to the checkpoint and to
    * the screen -- and they differed only in which default mode they passed.
@@ -303,10 +298,6 @@ export async function sendVendorTurn(input: {
    * drift from itself. */
   const sink = turnSink(checkpoint, prompter, {
     title: () => titleStream,
-    // A later snapshot that is not a longer copy of what is already on
-    // screen must not replace it. Vendors resend only the last block; taking
-    // that as the whole answer is what made earlier paragraphs vanish.
-    keep: (visible, mode) => mode !== 'replace' || durableAnswer(session.pendingTurn?.response ?? '', visible) === visible,
   });
   let swarmFold: SwarmFold = emptySwarmFold();
   const onActivity = (event: HarnessActivityEvent): void => {
@@ -373,6 +364,10 @@ export async function sendVendorTurn(input: {
     onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
   } satisfies HarnessTurnObserver;
   let activeTransport: ReturnType<typeof sessionTurnTransport> | undefined;
+  // The request this turn was asked, before a retry replaces it. A failover
+  // that produced no output sends this again; rebuilding the transcript
+  // would repeat the whole conversation on top of a thread that already has it.
+  const askedText = turnText;
   for (;;) {
     // Before this attempt spawns the vendor. A server, skill, or same-format
     // hook that is already in the harness is left as it is. A new MCP server
@@ -548,57 +543,48 @@ export async function sendVendorTurn(input: {
         nativeThreadRetried = true;
         await closePersistentTransport(session.id);
         forgetNativeThread(session);
-        turnText = await retellInterrupted('clear');
+        turnText = await retell(session.pendingTurn?.outputStarted || cliOutputStarted ? INTERRUPTED_TURN_REQUEST : askedText, 'clear');
         continue;
       }
       const fallback = await accounts.after(failure, failureKind, signal);
       const carriedThread = await moveThreadToAccount(session, harness, account, fallback);
       await accounts.switchTo(fallback, failureKind);
       nativeThreadRetried = false;
-      // The answer on screen stays: the next account is told to carry on
-      // without repeating it, so clearing it made the first half of the
-      // answer vanish and a continuation appear in its place. The
-      // continuation starts a new paragraph instead of running into it.
+      // The answer on screen stays when this attempt already wrote one: the
+      // next account carries on from it, so clearing it made the first half
+      // vanish. An attempt that produced nothing is asked again in the
+      // request's own words. "Continue" there points at the previous
+      // finished turn, and retelling the transcript repeats a conversation
+      // the carried thread already holds.
+      const wrote = Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
       const edit = session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear';
+      const nextRequest = wrote ? INTERRUPTED_TURN_REQUEST : askedText;
       if (carriedThread) {
-        // The same thread, under a new account: it holds the conversation,
-        // the interrupted request and every tool call it had already made.
-        // All it is owed is the word to carry on. ('present' counts as much
-        // as 'carried': both accounts run this harness against one vendor
-        // home, so the thread never had to move.)
-        turnText = INTERRUPTED_TURN_REQUEST;
-        continueAnswer(edit);
+        // ('present' counts as much as 'carried': both accounts run this
+        // harness against one vendor home, so the thread never had to move.)
+        turnText = nextRequest;
+        if (wrote) continueAnswer(edit);
       } else {
         // Built while the interrupted attempt's touched-file hints are still
-        // on the checkpoint.
-        turnText = await retellInterrupted(edit);
+        // on the checkpoint. The only path that rewrites the conversation:
+        // this vendor's thread cannot be copied across.
+        turnText = await retell(nextRequest, edit);
       }
       continue;
     }
     session.nativeStartedAt ??= new Date().toISOString();
     delete session.nativeSessionPreallocated;
-    // The harness ended the turn with a tool it never settled -- it
-    // backgrounded a command and stopped. Re-drive it so it goes and reads
-    // the result, instead of leaving the answer stranded in a task log and
-    // the session looking finished. See pending-work.ts.
-    if (pendingWork.outstanding > 0
-      && mayContinuePendingWork(pendingContinuations, Date.now() - pendingWorkStartedAt)) {
-      const waited = pendingContinuationDelayMs(pendingContinuations);
-      pendingContinuations += 1;
-      prompter?.phase('waiting on background command');
-      // Stopping ends the wait at once, not when its backoff (up to two
-      // minutes) runs out.
-      await sleep(waited, undefined, signal ? { signal } : {}).catch(() => undefined);
-      if (signal?.aborted) throw turnCancelledError();
-      // Plumbing, not news: the phase above already said what the wait was.
-      lifecycle('turn.pending-continuation', { session: session.id, harness: harness.command, attempt: pendingContinuations, waitedMs: waited });
-      carriedPendingUsage = addTurnUsage(carriedPendingUsage, turnUsage);
-      turnText = PENDING_CONTINUATION_PROMPT;
-      continue;
+    // The harness exited with a tool it never settled. Another model turn
+    // cannot collect output from a process that has already gone.
+    if (pendingWork.outstanding > 0) {
+      const count = pendingWork.outstanding;
+      prompter?.activity(chalk.yellow(count === 1
+        ? 'The harness exited while a tool was still running.'
+        : `The harness exited while ${count} tools were still running.`));
     }
-    // One invocation for the whole turn, however many continuations it took:
-    // recording one per pass counted every earlier pass again each time.
-    const usage = addTurnUsage(carriedPendingUsage, turnUsage);
+    // The assignment inside noteUsage is invisible to control-flow, which
+    // otherwise treats this as definitely undefined.
+    const usage = turnUsage as TurnUsage | undefined;
     const invocation = recordInvocation(state, { sessionId: session.id, accountId: account.id, provider: harness.provider, model, startedAt, usage });
     recordSuccessfulAccountTurn(state, account, invocation);
     showStopReason(prompter, usage?.stopReason);

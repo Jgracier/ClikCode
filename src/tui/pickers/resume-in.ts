@@ -143,24 +143,17 @@ export async function resumeIn(
   });
 }
 
-/** `prompt` is what was typed, `sent` what the turn actually ran when that
- * differs (a slash command such as /review expands to its own prompt). */
-export async function interruptedTurnResumePrompt(id: string, prompt: string, sent = prompt): Promise<string> {
-  // The interrupted turn is kept in the conversation's transcript file: read
-  // without it there was never a pending turn, the original words were sent
-  // again, and the provider taking the turn over ran the request twice.
-  const state = await readState({ transcripts: [id] });
-  const pending = state.sessions.find((item) => item.id === id)?.pendingTurn;
-  return resumePromptForPendingTurn(pending, prompt, sent);
-}
-
-/** The continuation when the interrupted turn on record is the one that was
- * sent -- compared with what the turn recorded, which is the sent prompt,
- * trimmed: comparing the typed line re-sent an expanded /review whole, and
- * the request ran twice. Otherwise the turn never started, and the typed line
- * is what to send. */
+/** What to send after the turn on record failed.
+ *
+ * Compared with what the turn recorded, which is the sent prompt, trimmed:
+ * comparing the typed line re-sent an expanded /review whole. The continuation
+ * is only for a turn that already wrote an answer or ran a tool. One that
+ * died before any output is sent again in those same words: "continue the
+ * interrupted request" points at the previous finished turn. A turn that
+ * never started sends the typed line. */
 export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'], prompt: string, sent = prompt): string {
-  return pending && pending.prompt.trim() === sent.trim() ? INTERRUPTED_TURN_REQUEST : prompt;
+  if (!pending || pending.prompt.trim() !== sent.trim()) return prompt;
+  return pending.outputStarted ? INTERRUPTED_TURN_REQUEST : sent;
 }
 
 /** What carries a turn on after it ran out of usage on every account:
@@ -190,9 +183,15 @@ export async function carryOnAfterExhaustion(
 ): Promise<ExhaustedTurnNext> {
   const key = (text: string): string => `${id}\n${text}`;
   if (guard.autoResent !== key(prompt) && await sameProviderCanTakeTurn(id)) {
-    const continuation = await interruptedTurnResumePrompt(id, prompt, sent);
-    guard.autoResent = key(continuation);
-    return { retry: continuation };
+    const state = await readState({ transcripts: [id] });
+    const session = state.sessions.find((item) => item.id === id);
+    // Failover off cannot leave the spent account, so a second submit only
+    // spends another process on the refusal that just came back.
+    if (session?.accountFailover === 'on-quota-exhausted') {
+      const continuation = resumePromptForPendingTurn(session.pendingTurn, prompt, sent);
+      guard.autoResent = key(continuation);
+      return { retry: continuation };
+    }
   }
   const moved = await interactiveResumeInPicker(rl, id, prompt, sent);
   if (moved && 'waiting' in moved) return moved;

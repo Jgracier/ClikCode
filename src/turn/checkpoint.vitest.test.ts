@@ -110,14 +110,15 @@ describe('durable turn checkpoints', () => {
   it('retains bounded tool activity when a provider fails before prose', () => {
     const target = session();
     beginPendingTurn(target, 'Fix it', '2026-01-02T00:00:00.000Z');
-    recordPendingActivity(target, { kind: 'tool-start', label: 'inspect repository' }, '2026-01-02T00:00:01.000Z');
-    recordPendingActivity(target, { kind: 'tool-done', label: 'inspect repository' }, '2026-01-02T00:00:02.000Z');
+    recordPendingActivity(target, { kind: 'tool-start', label: 'inspect repository', id: 'inspect' }, '2026-01-02T00:00:01.000Z');
+    recordPendingActivity(target, { kind: 'tool-done', label: 'inspect repository', id: 'inspect' }, '2026-01-02T00:00:02.000Z');
 
     // The call itself is kept with the turn, one record per call -- drawn
-    // where it happened when the chat is opened again.
+    // where it happened when the chat is opened again. The id is what makes
+    // the two frames one call.
     expect(sessionTranscriptMessages(target).at(-1)).toEqual({
       role: 'assistant', content: '',
-      activities: [{ event: { kind: 'tool-done', label: 'inspect repository' }, responseOffset: 0 }], ...by,
+      activities: [{ event: { kind: 'tool-done', label: 'inspect repository', id: 'inspect' }, responseOffset: 0 }], ...by,
     });
     // A text-only reader (a replay into another provider) is told of it.
     expect(textTranscript(sessionTranscriptMessages(target)).at(-1)).toEqual({ role: 'assistant', content: 'Tool calls: inspect repository.' });
@@ -161,6 +162,16 @@ describe('durable turn checkpoints', () => {
     beginPendingTurn(target, 'Edit me', '2026-01-02T00:00:00.000Z');
     expect(discardPendingTurn(target, 'Edit me')).toBe(true);
     expect(sessionTranscriptMessages(target)).toEqual(target.messages);
+  });
+
+  it('keeps one line when the same request is retried before it produced output', () => {
+    const target = session();
+    const before = target.messages?.map((message) => message.content);
+    beginPendingTurn(target, 'Fix the parser', '2026-01-02T00:00:00.000Z');
+    beginPendingTurn(target, 'Fix the parser', '2026-01-02T00:00:02.000Z');
+    expect(target.messages?.map((message) => message.content)).toEqual(before);
+    expect(target.pendingTurn?.prompt).toBe('Fix the parser');
+    expect(sessionTranscriptMessages(target).map((message) => message.content)).toEqual([...(before ?? []), 'Fix the parser']);
   });
 
   it('commits an older failed turn before beginning the next one', () => {
