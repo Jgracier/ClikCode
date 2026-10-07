@@ -29,6 +29,12 @@ describe('where usage is learned', () => {
     // A vendor figure on the account wins, windows or a balance alike.
     expect(learnsUsage(account('google', { usage: { at: new Date(NOW).toISOString(), label: '$3 left' } }))).toBe(false);
     expect(learnsUsage(account('google', { authKind: 'api-key' }))).toBe(false);
+    // Grok's probe answers paid plans. A Free account's "Free plan" label is
+    // the tier, not a figure, so the refusal can teach the allowance.
+    const free = { plan: { name: 'Free' }, usage: { at: new Date(NOW).toISOString(), label: 'Free plan' } };
+    expect(learnsUsage(account('xai', free))).toBe(true);
+    expect(learnsUsage(account('xai', { usage: { at: new Date(NOW).toISOString(), label: 'Weekly 100% left', windows: [{ name: 'weekly', usedPct: 0 }] } as AiHarnessAccount['usage'] }))).toBe(false);
+    expect(learnsUsage(account('xai'))).toBe(false);
   });
 });
 
@@ -85,5 +91,44 @@ describe('learning from turns as they happen', () => {
     const codex = account('openai', { usage: { at: new Date(NOW).toISOString(), label: '5h 70% left', windows: [{ name: '5h', usedPct: 30, resetsAt: new Date(NOW + HOUR).toISOString() }] } as AiHarnessAccount['usage'] });
     expect(reportedRoom(state, codex, NOW)).toBe(70);
     expect(learnedReading(state, codex, NOW)).toBeUndefined();
+  });
+});
+
+const GROK_FREE = "Rate limited: API error (status 429 Too Many Requests): subscription:free-usage-exhausted: You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 603117/500000";
+
+describe('a Grok free account that has run out', () => {
+  it('shows the learned daily usage and when it resets, from the turns it allowed', () => {
+    const user = account('xai', { plan: { name: 'Free' }, usage: { at: new Date(NOW).toISOString(), label: 'Free plan' } });
+    const invocations: HarnessState['invocations'] = [];
+    const state = { accounts: [user], sessions: [], invocations } as unknown as HarnessState;
+    // One turn before the window, so the ledger covers it, then ten inside
+    // it. The oldest of those ages out an hour from now.
+    invocations.push({ id: 'before', accountId: user.id, provider: 'xai', at: new Date(NOW - 25 * HOUR).toISOString(), latencyMs: 0, totalTokens: 100 });
+    for (let index = 0; index < 10; index += 1) {
+      const start = NOW - 23 * HOUR + index * HOUR;
+      invocations.push({ id: `t${index}`, accountId: user.id, provider: 'xai', at: new Date(start).toISOString(), latencyMs: 0, totalTokens: 100 });
+    }
+    recordQuotaRefusal(state, user, new Error(GROK_FREE), NOW);
+    const reading = learnedReading(state, user, NOW);
+    expect(reading?.windows[0]?.name).toBe('daily');
+    expect(reading?.windows[0]?.usedPct).toBeGreaterThanOrEqual(100);
+    expect(reading?.label).toMatch(/^Daily ~0% left$/);
+    // The oldest spend inside the 24h ages out before a full day from now.
+    const reset = Date.parse(reading!.windows[0]!.resetsAt!);
+    expect(reset).toBeGreaterThan(NOW);
+    expect(reset).toBeLessThan(NOW + 24 * HOUR);
+    expect(user.quotaRetryAt).toBe(reading!.windows[0]!.resetsAt);
+  });
+
+  it('still says when a first refusal ends before any turn was recorded', () => {
+    const user = account('xai');
+    const state = { accounts: [user], sessions: [], invocations: [] } as unknown as HarnessState;
+    recordQuotaRefusal(state, user, new Error(GROK_FREE), NOW);
+    expect(user.plan).toEqual({ name: 'Free' });
+    const reading = learnedReading(state, user, NOW);
+    expect(reading?.label).toBe('Daily ~0% left');
+    expect(reading?.windows[0]?.usedPct).toBe(100);
+    expect(user.quotaRetryAt).toBe(new Date(NOW + 24 * HOUR).toISOString());
+    expect(reading?.windows[0]?.resetsAt).toBe(user.quotaRetryAt);
   });
 });
