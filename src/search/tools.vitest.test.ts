@@ -4,6 +4,8 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { resetHarnessStateCaches } from '../session/state/index-file.js';
 import { rm } from 'node:fs/promises';
+import { appendTurnChanges } from '../session/turn-changes.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { workersDirectory, writeWorkerRecord } from '../worker/registry.js';
 import { resetCorpusCache } from './corpus.js';
 import { conversationTool } from './tools.js';
@@ -145,6 +147,68 @@ describe('read_conversation', () => {
     expect((await run('read_conversation', { id: 'zzzzzzzz' })).isError).toBe(true);
     expect((await run('read_conversation', { id: OTHER, at: 'soon' })).isError).toBe(true);
     expect((await run('read_conversation', { id: OTHER, at: '400' })).isError).toBe(true);
+  });
+});
+
+describe('hindsight', () => {
+  async function replaceCurrent(messages: TranscriptMessage[], extra: Partial<HarnessSession> = {}): Promise<void> {
+    const state = await readState();
+    const current = state.sessions.find((session) => session.id === CURRENT)!;
+    Object.assign(current, extra, { messages });
+    await writeState(state);
+    resetCorpusCache();
+  }
+
+  it('is this chat, and says so when the call has none', async () => {
+    expect((await run('hindsight', {})).text).toBe('hindsight is this conversation, and this call has none.');
+    expect((await run('hindsight', { back: 1, query: 'x' }, CURRENT)).isError).toBe(true);
+  });
+
+  it('steps back one topic, quoting the decision and the files the turn log kept', async () => {
+    const messages: TranscriptMessage[] = [
+      { role: 'user', content: 'Publish the CLI through ClikDeploy' },
+      { role: 'assistant', content: 'The publish workflow is in place.', origin: { harness: 'grok', route: 'local', provider: 'xai', model: 'grok-4' } },
+      { role: 'user', content: 'Fix the quota reprint' },
+      { role: 'assistant', content: 'Retried the same line.', activities: [{ responseOffset: 0, event: { kind: 'tool-done', label: 'Read src/turn/vendor-turn.ts', id: 't1', output: ['resumePrompt'] } }], origin: { harness: 'grok', route: 'local', provider: 'xai', model: 'grok-4.7' } },
+      { role: 'user', content: 'that is a bandaid' },
+      { role: 'assistant', content: 'Removed the patch.', origin: { harness: 'grok', route: 'local', provider: 'xai', model: 'grok-4.7' } },
+      { role: 'user', content: 'ok do it' },
+      { role: 'assistant', content: 'The patch is gone.' },
+    ];
+    await replaceCurrent(messages, {
+      accountId: 'be5aaaf2-656e-4b8c-a6e1-3e2da14ad646',
+      pendingTurn: {
+        prompt: 'build the hindsight tool', startedAt: new Date(NOW - 60_000).toISOString(), updatedAt: new Date(NOW).toISOString(), outputStarted: true, response: '',
+        activities: [{ responseOffset: 0, event: { kind: 'tool-start', label: 'Read src/search/tools.ts', id: 't2' } }],
+      },
+    });
+    await appendTurnChanges(stateDirectory(), CURRENT, { at: new Date(NOW - 3 * 3_600_000).toISOString(), prompt: 'Publish the CLI through ClikDeploy', changes: [{ path: 'src/cli/register.ts', lines: [], additions: 1, removals: 0 }] });
+    await appendTurnChanges(stateDirectory(), CURRENT, { at: new Date(NOW - 10 * 60_000).toISOString(), prompt: 'Fix the quota reprint', changes: [{ path: 'src/turn/vendor-turn.ts', lines: [], additions: 4, removals: 1 }] });
+    const list = await run('hindsight', {}, CURRENT);
+    expect(list.text).toContain('account be5aaaf2 now');
+    expect(list.text).toContain('In progress: not in the transcript yet · in progress · claude · gpt-5');
+    expect(list.text).toContain('build the hindsight tool');
+    expect(list.text).toContain('1. #2–#7 · answered · grok grok-4.7');
+    expect(list.text).toContain('2. #0–#1 · answered · grok grok-4');
+    expect(list.text).not.toContain('Auth refresh bug');
+    const back = await run('hindsight', { back: 1 }, CURRENT);
+    expect(back.text).toContain('Topic back 1 of 2');
+    expect(back.text).toContain('#4 "that is a bandaid"');
+    expect(back.text).toContain('#6 "ok do it"');
+    expect(back.text).toContain('files: src/turn/vendor-turn.ts (+4 -1)');
+    expect(back.text).toContain('tools: Read src/turn/vendor-turn.ts');
+    expect(back.text).toContain('finished: The patch is gone.');
+    expect(back.text).toContain('not the current tree');
+    const older = await run('hindsight', { back: 1, before: '30m' }, CURRENT);
+    expect(older.text).toContain('Publish the CLI through ClikDeploy');
+    expect(older.text).toContain('src/cli/register.ts');
+    expect(older.text).not.toContain('that is a bandaid');
+    const found = await run('hindsight', { query: 'resumePrompt' }, CURRENT);
+    expect(found.text).toContain('#3 assistant (tool call)');
+    const read = await run('hindsight', { from: 2, to: 3 }, CURRENT);
+    expect(read.text).toContain('[#2 user] Fix the quota reprint');
+    expect(read.text).toContain('⏺ Read src/turn/vendor-turn.ts');
+    expect(read.text).toContain('resumePrompt');
   });
 });
 

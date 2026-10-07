@@ -57,7 +57,7 @@ function reader(child: ChildProcessWithoutNullStreams): { next(id: number): Prom
 }
 
 describe('clikcode conversations-mcp', () => {
-  it('lists the three tools and answers calls over newline JSON and Content-Length frames', async () => {
+  it('lists the conversation tools and answers calls over newline JSON and Content-Length frames', async () => {
     const state = await readState();
     state.sessions.push(chat('other-0001-aaaa', 'Webhook retries', 'the webhook retry storm'), chat('current-0002-bbbb', 'Mine', 'webhook retry storm here too'));
     await writeState(state);
@@ -71,10 +71,11 @@ describe('clikcode conversations-mcp', () => {
       const init = await answers.next(1);
       expect(init.result?.protocolVersion).toBe('2025-06-18');
       expect(String(init.result?.instructions)).toContain('search_conversations');
+      expect(String(init.result?.instructions)).toContain('hindsight');
       child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' })}\n`);
       send(2, 'tools/list');
       const tools = (await answers.next(2)).result?.tools as Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
-      expect(tools.map((tool) => tool.name)).toEqual(['search_conversations', 'read_conversation', 'active_conversations']);
+      expect(tools.map((tool) => tool.name)).toEqual(['search_conversations', 'read_conversation', 'active_conversations', 'hindsight']);
       expect(Object.keys(tools[0]!.inputSchema.properties)).toContain('in');
       expect(Object.keys(tools[1]!.inputSchema.properties)).toContain('full');
       send(3, 'tools/call', { name: 'search_conversations', arguments: { query: 'webhook retry storm' } });

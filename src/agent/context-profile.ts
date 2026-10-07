@@ -124,6 +124,7 @@ const TERSE_DESCRIPTIONS: Readonly<Record<string, string>> = {
   search_conversations: 'Search the user\'s other ClikCode conversations; returns matching chats with snippets and anchors.',
   read_conversation: 'Read another conversation\'s messages around an anchor, or its latest turns.',
   active_conversations: 'What the user\'s other conversations are doing now.',
+  hindsight: 'This chat\'s earlier topics, one topic, a phrase, or the stored messages.',
 };
 
 function withoutClosedObjects(schema: unknown): unknown {
