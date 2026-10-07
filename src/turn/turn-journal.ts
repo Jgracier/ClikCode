@@ -249,9 +249,15 @@ export async function startTurnCheckpoint(
 /** Apply the successful turn's common state changes before the durable write. */
 export async function completeTurnCheckpoint(
   session: HarnessSession, checkpoint: DurableTurnCheckpoint, response: string,
-  sources: { title?: string; vendor?: () => Promise<string | undefined> } = {},
+  sources: {
+    title?: string;
+    vendor?: () => Promise<string | undefined>;
+    /** The turn asked for a name and `response` is the raw reply: a bare first-line title is one
+     * (session/title.ts bareTitle). Never for a reply whose title was already taken off. */
+    bare?: boolean;
+  } = {},
 ): Promise<string> {
-  const answer = extractSessionTitle(response);
+  const answer = extractSessionTitle(response, { bare: sources.bare === true });
   session.attachments = [];
   session.shellNotes = [];
   await nameSession(session, { ...sources, title: sources.title ?? answer.title });

@@ -606,6 +606,7 @@ export async function sendVendorTurn(input: {
     // filtered an earlier attempt was replaced during a retry.
     const completedText = await completeTurnCheckpoint(session, checkpoint, result.text, {
       title: titleStream?.title,
+      bare: titleStream?.naming === true,
       ...(titleSource === 'vendor'
         ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
         : {}),
