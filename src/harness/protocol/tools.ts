@@ -27,8 +27,26 @@ export function formatToolRow(name: string, detail?: string, category?: ToolCate
   return shown ? `${verb} ${shown}` : verb;
 }
 
+/** The conversation tools, as a row. The server name repeats the word
+ * "conversation", so `clikcode-conversations › search_conversations` is just
+ * `Search conversation`. */
+const CONVERSATION_ROWS: Record<string, string> = {
+  search_conversations: 'Search conversation',
+  read_conversation: 'Read conversation',
+  active_conversations: 'Active conversations',
+  hindsight: 'Hindsight',
+};
+
+function conversationRow(name: string): string | undefined {
+  const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
+  if (mcp && mcp[1].replace(/-/g, '') !== 'clikcodeconversations') return undefined;
+  return CONVERSATION_ROWS[mcp ? mcp[2] : name];
+}
+
 /** The word a row starts with. `$` for a shell command. */
 function toolVerb(name: string, category: ToolCategory | undefined): string {
+  const conversation = conversationRow(name);
+  if (conversation) return conversation;
   const mcp = /^mcp__(.+?)__(.+)$/.exec(name);
   if (mcp) return `${mcp[1]} › ${mcp[2]}`;
   if (isAgentToolName(name)) return 'Agent';

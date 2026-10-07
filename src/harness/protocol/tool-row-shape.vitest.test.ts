@@ -30,6 +30,11 @@ describe('formatToolRow is the single shape', () => {
     expect(formatToolRow('WebSearch', 'vitest docs')).toBe('Web search vitest docs');
     expect(formatToolRow('Task', 'review the tests')).toBe('Agent review the tests');
     expect(formatToolRow('mcp__github__create_issue', 'title=x')).toBe('github › create_issue title=x');
+    expect(formatToolRow('mcp__clikcode-conversations__search_conversations', 'webhook')).toBe('Search conversation webhook');
+    expect(formatToolRow('mcp__clikcode-conversations__read_conversation', 'id=365f1f74')).toBe('Read conversation id=365f1f74');
+    expect(formatToolRow('search_conversations', 'webhook')).toBe('Search conversation webhook');
+    expect(formatToolRow('hindsight')).toBe('Hindsight');
+    expect(formatToolRow('active_conversations')).toBe('Active conversations');
   });
 
   it('keeps an unclassified tool\'s own name, bare when there is no detail', () => {
