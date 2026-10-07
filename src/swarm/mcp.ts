@@ -41,7 +41,7 @@ const TOOL_SCHEMA = {
   properties: {
     prompt: { type: 'string', description: 'The complete task: what to do, where to look, and what the card should answer.' },
     description: { type: 'string', description: 'A 3-6 word label shown in the host chat, e.g. "Find the refresh handler".' },
-    model: { type: 'string', description: 'Optional model id from the swarm tool list, or omit to auto-select the best available account.' },
+    model: { type: 'string', description: 'A model id from the list on this tool. Pass "list" to see every model. Omit it to use the account with the most usage left.' },
   },
 };
 
@@ -61,9 +61,9 @@ async function toolSpec(): Promise<{ name: string; description: string; inputSch
 async function callTool(args: Record<string, unknown> | undefined, onStep?: (label: string) => void): Promise<string> {
   if (process.env[SWARM_CLERK_ENV]) return 'A swarm clerk cannot start another swarm.';
   const prompt = typeof args?.prompt === 'string' ? args.prompt.trim() : '';
-  if (!prompt) return 'A swarm task needs a prompt.';
   const description = typeof args?.description === 'string' ? args.description.trim() : undefined;
   const model = typeof args?.model === 'string' && args.model.trim() ? args.model.trim() : undefined;
+  if (!prompt && model?.toLowerCase() !== 'list') return 'A swarm task needs a prompt.';
   const sessionId = currentConversationSession();
   if (!sessionId) return 'No ClikCode conversation is running this tool. Do this yourself.';
   const state = await readState({ transcripts: [] });
@@ -110,7 +110,7 @@ async function dispatch(message: RpcMessage, send: McpSend): Promise<unknown> {
           send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress, message: label } });
         })
         : `Unknown tool ${message.params?.name ?? ''}`;
-      const isError = text.startsWith('No ClikCode conversation') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage') || text.startsWith('No other account with usage');
+      const isError = text.startsWith('No ClikCode conversation') || text.startsWith('A swarm task needs') || text.startsWith('Choose a model') || text.startsWith('No account with usage') || text.startsWith('No other account with usage') || text.startsWith('Path lease');
       return respond(message.id, { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) });
     } catch (error) {
       return fail(message.id, error instanceof Error ? error.message : String(error));

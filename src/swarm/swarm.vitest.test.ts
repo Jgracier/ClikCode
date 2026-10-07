@@ -11,12 +11,12 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { conversationOption } from '../session/options.js';
 import { conversationRows } from '../session/conversation-rows.js';
 import { conversationState, turnFacts } from '../session/conversation-state.js';
-import { beginTurn, boardSlice, cardFromReply, emptyBoard, goalKey } from './board.js';
+import { beginTurn, boardSlice, cardFromReply, emptyBoard, goalKey, leaseConflict } from './board.js';
 import { swarmIsOn } from './policy.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { emptySwarmFold, foldSwarmActivity, isSwarmToolLabel } from './fold.js';
 import { swarmProgressLabel } from './mcp.js';
-import { formatSwarmOffers, swarmChoiceNote, swarmOffers } from './offers.js';
+import { formatSwarmOffers, shownSwarmOffers, swarmChoiceNote, swarmOffers } from './offers.js';
 import { clerkAccounts, pickClerkAccount, runSwarmDelegation } from './run.js';
 import { lookupScore, scoresFromOpenRouter } from './scores.js';
 import { readBoard, writeBoard } from './store.js';
@@ -163,6 +163,28 @@ describe('the model list', () => {
     expect(offers.map((offer) => offer.model)).toEqual(['claude-opus-4.5', 'claude-sonnet-4.5', 'claude-haiku-4.5']);
     expect(formatSwarmOffers(offers)).toContain('claude-haiku-4.5 · coding 40 · intelligence 45 · $1 in / $5 out · 80% left');
     expect(swarmChoiceNote(offers)).toContain('cheaper model');
+    expect(swarmChoiceNote(offers)).not.toContain('Pass model "list"');
+  });
+
+  it('shows the strongest and the cheapest, and keeps the rest behind model list', () => {
+    const models = Array.from({ length: 12 }, (_, index) => `model-${index}`);
+    const accounts = [account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(10), models })];
+    const byKey: Record<string, { coding: number; promptPerM: number; completionPerM: number }> = {};
+    models.forEach((model, index) => {
+      byKey[model.replace(/-/g, '')] = {
+        coding: 100 - index,
+        promptPerM: index >= 10 ? 1 : 50,
+        completionPerM: index >= 10 ? 1 : 50,
+      };
+    });
+    const offers = swarmOffers(clerkAccounts(state(accounts), host(), NOW), { fetchedAt: NOW, byKey });
+    const shown = shownSwarmOffers(offers);
+    expect(shown.map((offer) => offer.model)).toContain('model-0');
+    expect(shown.map((offer) => offer.model)).toContain('model-11');
+    expect(shown).toHaveLength(8);
+    expect(swarmChoiceNote(offers)).toContain('4 more');
+    expect(swarmChoiceNote(offers)).toContain('Pass model "list"');
+    expect(swarmChoiceNote(offers)).not.toContain('model-6');
   });
 
   it('keeps every account model, including a cheap one and one with no score', () => {
@@ -278,17 +300,80 @@ describe('a delegation', () => {
     expect(done?.output).toContain('architecture analyzed');
   });
 
-  it('gracefully falls back when an unmatched model is requested instead of failing', async () => {
+  it('rejects a model that no account lists, and shows the models that are listed', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
     process.env.CLIKCODE_HOME = dir;
     const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70), models: ['claude-sonnet-4.5'] });
+    let started = false;
     const done = await runSwarmDelegation({
       host: host({ id: 'fallback-pick' }), state: state([cursor]),
       request: { prompt: 'Analyze architecture', model: 'unknown-model-xyz', callId: 'fallback-call' },
-      runClerk: async () => '{"summary":"completed via fallback"}',
+      runClerk: async () => { started = true; return '{"summary":"completed via fallback"}'; },
     });
-    expect(done?.output).toContain('completed via fallback');
-    expect(done?.isError).toBeFalsy();
+    expect(started).toBe(false);
+    expect(done?.isError).toBe(true);
+    expect(done?.output).toContain('No account with usage lists unknown-model-xyz');
+    expect(done?.output).toContain('claude-sonnet-4.5');
+  });
+
+  it('returns the full model list when the host asks for it', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70), models: ['claude-sonnet-4.5', 'claude-haiku-4.5'] });
+    const done = await runSwarmDelegation({
+      host: host({ id: 'list-models' }), state: state([cursor]),
+      request: { prompt: '', model: 'list', callId: 'list-call' },
+      runClerk: async () => { throw new Error('listing models starts no clerk'); },
+    });
+    expect(done?.output).toContain('claude-sonnet-4.5');
+    expect(done?.output).toContain('claude-haiku-4.5');
+  });
+
+  it('holds a path for an implementer and lets a different path run', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(70), models: ['claude-sonnet-4.5'] });
+    let release: (value: string) => void = () => undefined;
+    const gate = new Promise<string>((resolve) => { release = resolve; });
+    let started = false;
+    const first = runSwarmDelegation({
+      host: host({ id: 'lease' }), state: state([cursor]),
+      request: { prompt: 'Implement the fix in src/a.ts', model: 'claude-sonnet-4.5', callId: 'lease-1' },
+      runClerk: async () => { started = true; return gate; },
+    });
+    while (!started) await new Promise((resolve) => setTimeout(resolve, 5));
+    const blocked = await runSwarmDelegation({
+      host: host({ id: 'lease' }), state: state([cursor]),
+      request: { prompt: 'Implement another fix in src/a.ts', model: 'claude-sonnet-4.5', callId: 'lease-2' },
+      runClerk: async () => { throw new Error('the leased path should not start'); },
+    });
+    expect(blocked?.isError).toBe(true);
+    expect(blocked?.output).toContain('Path lease');
+    expect(blocked?.output).toContain('src/a.ts');
+    const other = runSwarmDelegation({
+      host: host({ id: 'lease' }), state: state([cursor]),
+      request: { prompt: 'Implement the fix in src/b.ts', model: 'claude-sonnet-4.5', callId: 'lease-3' },
+      runClerk: async () => '{"summary":"edited b"}',
+    });
+    release('{"summary":"edited a"}');
+    const [finished, edited] = await Promise.all([first, other]);
+    expect(finished?.output).toContain('edited a');
+    expect(edited?.output).toContain('edited b');
+    expect(leaseConflict(emptyBoard(), 'implement', ['src/a.ts'])).toBeUndefined();
+  });
+
+  it('runs a clerk with a mode that harness has when the host mode would wait unseen', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
+    process.env.CLIKCODE_HOME = dir;
+    const openhands = account({ id: 'oh', provider: 'openhands', label: 'Hands', usage: windows(10), models: ['claude'] });
+    let mode: string | undefined;
+    const done = await runSwarmDelegation({
+      host: host({ id: 'perm' }), state: state([openhands]),
+      request: { prompt: 'Review src/a.ts and src/b.ts', model: 'claude', callId: 'perm' },
+      runClerk: async (input) => { mode = input.permissionMode; return '{"summary":"ok"}'; },
+    });
+    expect(mode).toBe('bypass');
+    expect(done?.output).toContain('ran with bypass');
   });
 
   it('says so when nobody has published an amount with room left', async () => {
@@ -393,6 +478,10 @@ describe('the board and the status line', () => {
     const card = cardFromReply('note {"summary":"ok","facts":["src/a.ts: one"],"paths":["src/a.ts"]}', 300);
     expect(card.summary).toBe('ok');
     expect(card.facts).toEqual(['src/a.ts: one']);
+    const cut = cardFromReply(JSON.stringify({ summary: 'x'.repeat(80), paths: ['src/a.ts'] }), 10);
+    expect(cut.summary).toContain('The rest is in src/a.ts.');
+    const bare = cardFromReply('y'.repeat(80), 10);
+    expect(bare.summary).toContain('The rest was cut.');
   });
 
   it('drops facts until the slice fits', () => {

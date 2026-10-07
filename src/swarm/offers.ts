@@ -81,9 +81,36 @@ function byStrength<T extends OfferRow>(left: SwarmOffer<T>, right: SwarmOffer<T
   return rank(right.score) - rank(left.score) || cost(left.score) - cost(right.score) || (right.seats[0]?.candidate.leftPct ?? 0) - (left.seats[0]?.candidate.leftPct ?? 0) || left.model.localeCompare(right.model);
 }
 
-/** The paragraph the host reads on the tool. */
+/** How many models the tool description shows. The rest stay available through model "list". */
+const SHOWN_MODELS = 8;
+
+/** The strongest models, plus the cheapest, so a routine task still has something to choose. */
+export function shownSwarmOffers<T>(offers: readonly SwarmOffer<T>[]): SwarmOffer<T>[] {
+  if (offers.length <= SHOWN_MODELS) return [...offers];
+  const shown = new Set<string>();
+  for (const offer of offers) {
+    if (shown.size >= SHOWN_MODELS - 2) break;
+    shown.add(offer.model);
+  }
+  const cheapest = [...offers].sort((left, right) => cost(left.score) - cost(right.score));
+  for (const offer of cheapest) {
+    if (shown.size >= SHOWN_MODELS) break;
+    if (cost(offer.score) === Number.POSITIVE_INFINITY) continue;
+    shown.add(offer.model);
+  }
+  for (const offer of offers) {
+    if (shown.size >= SHOWN_MODELS) break;
+    shown.add(offer.model);
+  }
+  return offers.filter((offer) => shown.has(offer.model));
+}
+
+/** The paragraph the host reads on the tool. A long catalog stays off this text. */
 export function swarmChoiceNote(offers: readonly SwarmOffer[]): string {
-  return `Pass one of these model ids exactly. They are the models on accounts that still have usage. Do not invent a model. Match the task to the index, and use a cheaper model when a lower index is enough. Prices are OpenRouter list rates in USD per million tokens, in then out; subscription charges may differ. You get one subagent row and a short card, not that model's conversation.\n${formatSwarmOffers(offers)}`;
+  const shown = shownSwarmOffers(offers);
+  const hidden = offers.length - shown.length;
+  const more = hidden > 0 ? `\n${hidden} more. Pass model "list" to see every model.` : '';
+  return `Pass one of these model ids exactly. They are the models on accounts that still have usage. Do not invent a model. Match the task to the index, and use a cheaper model when a lower index is enough. Prices are OpenRouter list rates in USD per million tokens, in then out; subscription charges may differ. You get one subagent row and a short card, not that model's conversation.\n${formatSwarmOffers(shown)}${more}`;
 }
 
 function money(amount: number): string {
@@ -113,19 +140,13 @@ export function formatSwarmOffers(offers: readonly SwarmOffer[]): string {
   }).join('\n');
 }
 
+/** Exact id, or the same id once punctuation is ignored. A prefix or a typo does not match. */
 export function matchSwarmOffer<T>(offers: readonly SwarmOffer<T>[], model: string): SwarmOffer<T> | undefined {
   const trimmed = model.trim().toLowerCase();
   const exact = offers.find((offer) => offer.model.toLowerCase() === trimmed);
   if (exact) return exact;
   const key = scoreKey(model);
-  const hits = offers.filter((offer) => scoreKey(offer.model) === key);
-  if (hits.length > 0) return hits[0];
-  const substring = offers.find((offer) => {
-    const o = offer.model.toLowerCase();
-    return o.includes(trimmed) || trimmed.includes(o);
-  });
-  if (substring) return substring;
-  return undefined;
+  return offers.find((offer) => scoreKey(offer.model) === key);
 }
 
 /** The account that has this model and the most usage left, skipping one that is already working when another is free. */
