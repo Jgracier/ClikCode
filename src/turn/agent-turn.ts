@@ -118,7 +118,8 @@ export async function runAgentTurn(input: {
       // attribute time and quality to it (agent/context-profile.ts).
       contextProfile: harnessTurn.contextProfile,
     });
-    const extracted = extractSessionTitle(harnessTurn.text);
+    // The turn that asked for a name reads a bare first-line title as one, as its stream did.
+    const extracted = extractSessionTitle(harnessTurn.text, { bare: titleStream?.naming === true });
     const named = { ...extracted, text: stripRepeatedTitles(extracted.text) };
     const completedText = await completeTurnCheckpoint(session, checkpoint, named.text, { title: titleStream?.title ?? named.title });
     showStopReason(prompter, usage.stopReason);

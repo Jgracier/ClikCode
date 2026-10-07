@@ -135,8 +135,34 @@ export function normalizeSessionTitle(raw: string): string | undefined {
  * `**Title:** …`) on the first line. Explicit enough to remove. */
 const PLAIN_TITLE = /^\s*(?:\*\*)?title:(?:\*\*)?[ \t]*([^\r\n]+?)(?:\*\*)?[ \t]*\r?\n(?:[ \t]*\r?\n)?/i;
 
-export function extractSessionTitle(answer: string): { title?: string; text: string } {
-  const match = new RegExp(`^\\s*${OPEN}([\\s\\S]*?)${CLOSE}[ \\t]*\\r?\\n?`).exec(answer) ?? PLAIN_TITLE.exec(answer);
+/** The longest first line read as a title a model wrote without its tags. */
+const BARE_TITLE_MAX = 40;
+
+/**
+ * A model that drops the tags AND the word, and writes the title as the reply's own first line,
+ * set off by a blank line: "9973 primality\n\nYes — 9973 is prime …" (deepseek-v4.1-flash on the
+ * Gateway, 2026-10-06, headless — the line reached the answer). Read as a title ONLY on the turn
+ * that asked for one (`bare`), and only when it cannot be the start of an answer: two to six
+ * words, no closing punctuation, no Markdown, and an answer after it.
+ */
+function bareTitle(answer: string): RegExpExecArray | null {
+  const match = /^[ \t]*([^\r\n]+?)[ \t]*\r?\n[ \t]*\r?\n/.exec(answer);
+  if (!match) return null;
+  const line = (match[1] ?? '').replace(/^\*\*(.+)\*\*$/, '$1').trim();
+  if (line.length < 3 || line.length > BARE_TITLE_MAX) return null;
+  if (/[.!?:;,…)\]]$/.test(line)) return null;
+  if (/^(?:[#>|`\-*+_~[(]|\d+[.)]\s)/.test(line)) return null;
+  const words = line.split(/\s+/).length;
+  if (words < 2 || words > 6) return null;
+  if (!answer.slice(match[0].length).trim()) return null;
+  match[1] = line;
+  return match;
+}
+
+export function extractSessionTitle(answer: string, options: { bare?: boolean } = {}): { title?: string; text: string } {
+  const match = new RegExp(`^\\s*${OPEN}([\\s\\S]*?)${CLOSE}[ \\t]*\\r?\\n?`).exec(answer)
+    ?? PLAIN_TITLE.exec(answer)
+    ?? (options.bare ? bareTitle(answer) : null);
   if (!match) return { text: answer };
   const title = normalizeSessionTitle(match[1] ?? '');
   const text = answer.slice(match[0].length);
@@ -184,9 +210,9 @@ export class StreamingTitle {
     // from the cleaned one that gets persisted; the transcript then treated
     // the saved copy as new text and emitted the whole reply a second time.
     // That is the duplicated response.
-    if (this.settled) return mode === 'replace' ? extractSessionTitle(text).text : text;
+    if (this.settled) return mode === 'replace' ? extractSessionTitle(text, { bare: this.naming }).text : text;
     this.buffer = mode === 'replace' ? text : this.buffer + text;
-    const extracted = extractSessionTitle(this.buffer);
+    const extracted = extractSessionTitle(this.buffer, { bare: this.naming && !this.couldStillOpen() });
     if (extracted.title !== undefined || !this.couldStillOpen()) {
       this.settled = true;
       this.found = extracted.title;
@@ -220,7 +246,7 @@ export class StreamingTitle {
   flush(): string | undefined {
     if (this.settled) return undefined;
     this.settled = true;
-    const extracted = extractSessionTitle(this.buffer);
+    const extracted = extractSessionTitle(this.buffer, { bare: this.naming });
     this.found = extracted.title;
     return extracted.text;
   }
@@ -232,7 +258,23 @@ export class StreamingTitle {
     if (plain.length < 'title:'.length ? 'title:'.startsWith(plain) : plain.startsWith('title:') && !/\r?\n/.test(head)) {
       return this.buffer.length < DECIDE_AFTER + OPEN.length;
     }
-    if (head.length < OPEN.length) return OPEN.startsWith(head);
-    return head.startsWith(OPEN) && this.buffer.length < DECIDE_AFTER + OPEN.length;
+    if (head.length < OPEN.length && OPEN.startsWith(head)) return true;
+    if (head.startsWith(OPEN)) return this.buffer.length < DECIDE_AFTER + OPEN.length;
+    // On the turn that asked, a first line may be a title written bare (bareTitle): held until
+    // the line has ended and what follows it says whether it was set off by a blank line.
+    if (this.naming) {
+      const line = /^[^\r\n]*/.exec(head)![0];
+      if (line.length > BARE_TITLE_MAX + 4) return false;
+      // Settled early by what a bare title never has: closing punctuation, more than six words,
+      // or a Markdown opening (bareTitle's own rules).
+      if (/[.!?:;,…]\s*$/.test(line) || line.trim().split(/\s+/).length > 6) return false;
+      if (/^(?:[#>|`\-*+_~[(]|\d+[.)]\s)/.test(line.replace(/^\*\*/, ''))) return false;
+      const rest = head.slice(line.length);
+      if (!rest) return true;
+      // The line ended: held while only line breaks follow it (at most the blank line that sets a
+      // bare title off); the first text after them settles it.
+      return /^\r?\n(?:[ \t]*\r?\n)?[ \t]*$/.test(rest);
+    }
+    return false;
   }
 }

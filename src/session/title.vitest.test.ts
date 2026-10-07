@@ -58,8 +58,11 @@ describe('a title arriving one delta at a time', () => {
 
   it('releases the head as soon as it is clear no title is coming', () => {
     const stream = new StreamingTitle();
-    expect(stream.push('Here', 'append')).toBe('Here');
-    expect(stream.push(' is what I found.', 'append')).toBe(' is what I found.');
+    // On the turn that asked, a short first line may still be a title written bare (no tags), so
+    // it waits for the words that say it is not one — here, a sentence's full stop.
+    expect(stream.push('Here', 'append')).toBeUndefined();
+    expect(stream.push(' is what I found.', 'append')).toBe('Here is what I found.');
+    expect(stream.push(' More.', 'append')).toBe(' More.');
     expect(stream.title).toBeUndefined();
   });
 
@@ -253,5 +256,66 @@ describe('a title on a turn that did not ask for one', () => {
 
   it('is asked for once, and the request says so', () => {
     expect(withTitleRequest('fix it')).toMatch(/this reply only/);
+  });
+});
+
+describe('a title written bare, without its tags (the 9973 leak)', () => {
+  // deepseek-v4.1-flash on the Gateway, headless, 2026-10-06: the reply opened with the title the
+  // turn asked for as its own first line, and the line reached the answer.
+  const LEAKED = '9973 primality\n\nYes — 9973 is prime (√9973 ≈ 99.9, and no prime up to 97 divides it).';
+
+  it('is the title on the turn that asked for one', () => {
+    expect(extractSessionTitle(LEAKED, { bare: true })).toEqual({
+      title: '9973 primality',
+      text: 'Yes — 9973 is prime (√9973 ≈ 99.9, and no prime up to 97 divides it).',
+    });
+  });
+
+  it('is never read on a turn that did not ask', () => {
+    expect(extractSessionTitle(LEAKED)).toEqual({ text: LEAKED });
+  });
+
+  it('is never an answer\'s own opening line', () => {
+    for (const answer of [
+      'Yes.\n\nBecause no prime divides it.',
+      'Yes\n\nBecause no prime divides it.',
+      '## Result\n\nIt is prime.',
+      '1. Check the root\n\nThen divide.',
+      '- First point here\n\nmore',
+      'It is prime because nothing below its root divides it\n\nDetails follow.',
+      'Here is what I found:\n\nAll green.',
+      'Two words\n\n',
+    ]) {
+      expect(extractSessionTitle(answer, { bare: true }), answer).toEqual({ text: answer });
+    }
+  });
+
+  it('a streaming reply holds the line until it is settled, and never shows it', () => {
+    const stream = new StreamingTitle();
+    const shown: string[] = [];
+    for (const delta of ['9973 prim', 'ality', '\n', '\n', 'Yes — 9973 ', 'is prime.']) {
+      const visible = stream.push(delta, 'append');
+      if (visible) shown.push(visible);
+    }
+    expect(shown.join('')).toBe('Yes — 9973 is prime.');
+    expect(stream.title).toBe('9973 primality');
+  });
+
+  it('a streaming reply whose first line is an answer is released as soon as the next text says so', () => {
+    const stream = new StreamingTitle();
+    expect(stream.push('Yes it is prime', 'append')).toBeUndefined();
+    expect(stream.push('\nBecause', 'append')).toBe('Yes it is prime\nBecause');
+    expect(stream.title).toBeUndefined();
+  });
+
+  it('a long first line is released without waiting for its end', () => {
+    const stream = new StreamingTitle();
+    const long = 'This reply opens with a sentence much longer than any title would be';
+    expect(stream.push(long, 'append')).toBe(long);
+  });
+
+  it('on a turn that did not ask, nothing is held for it', () => {
+    const stream = new StreamingTitle({ naming: false });
+    expect(stream.push('9973 primality', 'append')).toBe('9973 primality');
   });
 });
