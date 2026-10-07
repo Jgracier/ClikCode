@@ -78,6 +78,9 @@ export interface QuotaRefusal {
   costs: Record<string, number>;
   /** The vendor's own "resets in", as an instant. */
   retryAt?: string;
+  /** The vendor named this window's length — "a rolling 24-hour window" —
+   * without saying when the current one ends. Not a reset instant. */
+  windowMs?: number;
   /** When the first turn after it was allowed: the window had reset by then. */
   cleared?: string;
 }
@@ -167,15 +170,21 @@ export function recordAllowedTurn(learning: UsageLearning | undefined, start: nu
   return next;
 }
 
-/** A turn refused for quota at `at`, with the vendor's reset when it gave one. */
-export function recordRefusal(learning: UsageLearning | undefined, at: number, retryAt?: string): UsageLearning {
+/** A turn refused for quota at `at`. `retryAt` is the vendor's reset instant,
+ * when it gave one. `windowMs` is a length it named ("rolling 24-hour")
+ * instead of an instant. */
+export function recordRefusal(learning: UsageLearning | undefined, at: number, retryAt?: string, windowMs?: number): UsageLearning {
   const next = copy(learning);
   const ledger = new Ledger(next, at);
   const costs: Record<string, number> = {};
   for (const window of CANDIDATE_WINDOWS) {
     if (ledger.covers(at - window.ms)) costs[window.name] = ledger.spent(at - window.ms, at);
   }
-  const hit: QuotaRefusal = { at: new Date(at).toISOString(), costs, ...(retryAt ? { retryAt } : {}) };
+  const namedLength = CANDIDATE_WINDOWS.some((window) => window.ms === windowMs) ? windowMs : undefined;
+  const hit: QuotaRefusal = {
+    at: new Date(at).toISOString(), costs,
+    ...(retryAt ? { retryAt } : {}), ...(namedLength ? { windowMs: namedLength } : {}),
+  };
   // Refused again with nothing allowed since: the same episode. The later
   // refusal is the tighter bound -- less was spent and it still said no --
   // and its reset is the fresher one, so it replaces the earlier.
@@ -201,6 +210,7 @@ export function normalizeLearning(value: unknown): UsageLearning | undefined {
     return [{
       at: hit.at, costs: daily === undefined ? costs : { ...costs, daily },
       ...(typeof hit.retryAt === 'string' ? { retryAt: hit.retryAt } : {}),
+      ...(CANDIDATE_WINDOWS.some((window) => window.ms === hit.windowMs) ? { windowMs: hit.windowMs } : {}),
       ...(typeof hit.cleared === 'string' ? { cleared: hit.cleared } : {}),
     }];
   });
@@ -315,6 +325,7 @@ function hypothesis(ledger: Ledger, window: CandidateWindow, hits: readonly Quot
     }
     return undefined;
   };
+  const namesLength = (hit: QuotaRefusal): boolean => hit.windowMs === window.ms;
   const tolerance = Math.max(30 * MINUTE, window.ms * 0.05);
   // Named resets this window does not reproduce are not its refusals. The
   // limit is then the lowest level among those that are.
@@ -341,11 +352,14 @@ function hypothesis(ledger: Ledger, window: CandidateWindow, hits: readonly Quot
   // Each refusal is at or a little over the limit, measured with noise: the
   // middle one is the estimate, the lowest and highest bracket it.
   limit = median(explained);
-  // Without a named reset, refusals of one window land at about one level.
-  const unnamed = explained.filter(({ hit }) => !hit.retryAt);
+  // A named reset, or a named window length, identifies the window on its
+  // own. With neither, refusals of one window land at about one level, and
+  // one of them is not enough.
+  const identifies = (hit: QuotaRefusal): boolean => Boolean(hit.retryAt) || namesLength(hit);
+  const unnamed = explained.filter(({ hit }) => !identifies(hit));
   const named = explained.length - unnamed.length;
   const sameLevel = unnamed.filter(({ level }) => level <= limit * SAME_LEVEL && level >= limit / SAME_LEVEL);
-  const kept = [...explained.filter(({ hit }) => hit.retryAt), ...sameLevel];
+  const kept = [...explained.filter(({ hit }) => identifies(hit)), ...sameLevel];
   if (!named && sameLevel.length < 2) return undefined;
   // How far its resets fall from the ones the vendor named, in total.
   const hintError = explained.reduce((total, { hit, at }) => {

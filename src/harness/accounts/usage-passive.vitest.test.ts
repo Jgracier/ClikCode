@@ -18,6 +18,7 @@ vi.mock('./usage-probes.js', async (original) => ({
 vi.mock('../../session/state/write.js', () => ({ writeState: vi.fn(async () => undefined) }));
 
 const { cachedAccountUsageLabel, nativeUsageReading } = await import('./account-usage.js');
+const { recordQuotaRefusal } = await import('../../turn/account-outcome.js');
 const { nativeUsageCache } = await import('./usage-reading.js');
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 
@@ -70,6 +71,40 @@ describe('usage on a passive paint', () => {
     expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession, signedOut, { network: true })).toBeUndefined();
     expect(await nativeUsageReading({ id: 's', nativeHarness: 'grok' } as HarnessSession, stateWith(), { network: true })).toBeUndefined();
     expect(grok).not.toHaveBeenCalled();
+  });
+
+  it('shows a free Grok account its learned usage once it has run out, and keeps the plan name off the window', async () => {
+    const weekly = { windows: [{ name: 'weekly', usedPercent: 0, resetsAt: '2999-01-01T00:00:00.000Z' }], label: 'weekly 100% left' };
+    grok.mockResolvedValue({ windows: [], label: 'Free plan', plan: { name: 'Free' } });
+    try {
+      const now = Date.now();
+      const hour = 60 * 60_000;
+      const user = {
+        ...account, id: 'a', provider: 'xai', label: 'grok', plan: { name: 'Free' },
+        usage: { at: new Date(now - hour).toISOString(), label: 'Free plan' },
+      };
+      const invocations: HarnessState['invocations'] = [
+        { id: 'before', accountId: 'a', provider: 'xai', at: new Date(now - 25 * hour).toISOString(), latencyMs: 0, totalTokens: 100 },
+      ];
+      for (let index = 0; index < 10; index += 1) {
+        invocations.push({ id: `t${index}`, accountId: 'a', provider: 'xai', at: new Date(now - 23 * hour + index * hour).toISOString(), latencyMs: 0, totalTokens: 100 });
+      }
+      const state = { accounts: [user], sessions: [], invocations } as unknown as HarnessState;
+      recordQuotaRefusal(state, user, new Error('subscription:free-usage-exhausted: Usage resets over a rolling 24-hour window — tokens (actual/limit): 603117/500000'), now);
+      const session = { id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession;
+      const reading = await nativeUsageReading(session, state);
+      expect(reading?.label).toBe('Daily ~0% left');
+      expect(reading?.windows[0]?.resetsAt).toBe(user.quotaRetryAt);
+      expect(Date.parse(reading!.windows[0]!.resetsAt!)).toBeGreaterThan(now);
+      expect(reading?.plan).toEqual({ name: 'Free' });
+      expect(user.usage).toMatchObject({ label: 'Free plan' });
+      expect(user.usage).not.toHaveProperty('windows');
+      const again = await nativeUsageReading(session, state);
+      expect(again?.label).toBe('Daily ~0% left');
+      expect(grok).toHaveBeenCalledTimes(1);
+    } finally {
+      grok.mockResolvedValue(weekly);
+    }
   });
 
   it('reuses a windowless balance for a few minutes instead of asking on every tick', async () => {

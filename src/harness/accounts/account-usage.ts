@@ -9,7 +9,7 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES } from './usage-probes.js';
 import { AccountUsageReading, UsageCacheEntry, UsageReading, accountQuotaSpent, nativeUsageCache, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
-import { learnedReading, learnsUsage } from './learned-usage.js';
+import { learnedReading, learnsUsage, preferLearnedReading } from './learned-usage.js';
 
 /** How long a windowless balance reading is reused before its harness is
  * asked again (a turn on the account asks sooner). */
@@ -43,6 +43,8 @@ export async function nativeUsageReading(
   // Nothing to ask and nothing on the stream: what its refusals have taught,
   // if anything yet.
   if (!probe && !reportsOnStream) return account ? learnedReading(state, account) : undefined;
+  const shownReading = (reading: UsageReading | undefined): UsageReading | undefined =>
+    account ? preferLearnedReading(state, account, reading) : reading;
   const cacheKey = usageCacheKey(session.nativeHarness, account?.id, session.nativeSessionId);
   const cached = nativeUsageCache.get(cacheKey);
   // The account's own record is the shared reading: every terminal sees it, so
@@ -76,7 +78,7 @@ export async function nativeUsageReading(
   // That is not a cached figure; there is no figure.
   if (entry?.failed && Number.isFinite(entry.at) && Date.now() - entry.at < NATIVE_USAGE_FAILURE_TTL_MS && !options.network) {
     // The probe errored. A vendor figure the error carried forward answers.
-    return entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
+    return shownReading(entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
   }
   // A turn STARTED on the account since the reading makes it old news.
   // Started, not ended: a reading a turn published about itself (Codex's
@@ -100,13 +102,13 @@ export async function nativeUsageReading(
     : undefined;
   if (reusable && !options.network) {
     nativeUsageCache.set(cacheKey, reusable);
-    return { windows: reusable.windows ?? [], ...(reusable.label === undefined ? {} : { label: reusable.label }) };
+    return shownReading({ windows: reusable.windows ?? [], ...(reusable.label === undefined ? {} : { label: reusable.label }) });
   }
   // A probe spawns the vendor CLI, and a CLI run while signed out can start a
   // login or onboarding (Kiro's session list did). Only an account that is
   // signed in is asked; anything else keeps what it last had.
   if (!account || account.status !== 'ready') {
-    return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
+    return shownReading(entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
   }
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const reading: UsageReading | undefined = probe ? await probeOnce(cacheKey, () => probe(environment)) : undefined;
@@ -140,7 +142,11 @@ export async function nativeUsageReading(
   // anything another terminal changed meanwhile.
   await writeState(state).catch(() => undefined);
   const shown = !reading?.label && carried?.windows?.length ? carried : next;
-  return { windows: shown.windows ?? [], ...(shown.label === undefined ? {} : { label: shown.label }) };
+  return shownReading({
+    windows: shown.windows ?? [],
+    ...(shown.label === undefined ? {} : { label: shown.label }),
+    ...(reading?.plan ? { plan: reading.plan } : {}),
+  });
 }
 
 function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, harnessCommand: string): HarnessSession {

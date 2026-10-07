@@ -120,6 +120,19 @@ describe('learning a limit the vendor never states', () => {
     expect(learnedWindows(learning, T0 + 4 * MINUTE)).toEqual([]);
   });
 
+  it('identifies a rolling day from one refusal that names the window length', () => {
+    let learning: UsageLearning | undefined;
+    for (let index = 0; index < 10; index += 1) learning = recordAllowedTurn(learning, T0 - 10 * HOUR + index * HOUR, 100, T0);
+    learning = recordRefusal(learning, T0, undefined, DAY);
+    const [window] = learnedWindows(learning, T0);
+    expect(window?.name).toBe('daily');
+    expect(window?.fixed).toBeUndefined();
+    expect(window?.limit).toBe(1000);
+    const reading = learnedUsageReading(learning, T0);
+    expect(reading?.label).toBe('Daily ~0% left');
+    expect(Date.parse(reading!.windows[0]!.resetsAt!)).toBe(T0 - 10 * HOUR + DAY);
+  });
+
   it('publishes nothing on one unhinted refusal: a single point is not a limit', () => {
     let learning: UsageLearning | undefined;
     for (let index = 0; index < 10; index += 1) learning = recordAllowedTurn(learning, T0 + index * MINUTE, 100);
