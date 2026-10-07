@@ -1,15 +1,23 @@
-/** The three conversation tools, once, for every agent: ClikCode's own
+/** The conversation tools, once, for every agent: ClikCode's own
  * (agent/tools/conversations.ts wraps them as native tools) and every vendor
  * harness (search/mcp.ts serves them over MCP). Read-only.
  *
- * The conversation the agent is asking from is left out unless it asks for
- * it: it already has that one. */
+ * Search, read, and active leave out the conversation the agent is asking
+ * from unless it asks for that one: it already has it. Hindsight is that
+ * conversation and no other. */
 
+import { readTurnActivities } from '../turn/turn-activities.js';
+import type { HarnessSession } from '../session/model.js';
+import { loadIndex } from '../session/state/index-file.js';
+import { stateDirectory } from '../session/store/paths.js';
+import { readSessionTranscript } from '../session/store/transcripts.js';
+import { readTurnChanges } from '../session/turn-changes.js';
 import { activeConversations } from './active.js';
 import { conversationGroups, conversationTitle, findConversation, type ConversationGroup } from './conversations.js';
 import { conversationView, type ConversationView } from './corpus.js';
 import { parseSince, searchConversations, type ConversationHit } from './engine.js';
 import { ago, duration, hitSnippets, mentionCount, parseAnchor, renderFullMessage, renderMessage, runsOn, shortId } from './format.js';
+import { oneLine, presentTopics, rangeLabel, topicsBefore, type HindsightMessage, type PresentedTopic } from './hindsight.js';
 import { maskSecrets } from './secrets.js';
 
 export interface ConversationToolContext {
@@ -21,7 +29,7 @@ export interface ConversationToolContext {
 export interface ConversationToolResult { text: string; isError?: boolean }
 
 export interface ConversationTool {
-  name: 'search_conversations' | 'read_conversation' | 'active_conversations';
+  name: 'search_conversations' | 'read_conversation' | 'active_conversations' | 'hindsight';
   description: string;
   inputSchema: Record<string, unknown>;
   run(args: Record<string, unknown>, context: ConversationToolContext): Promise<ConversationToolResult>;
@@ -31,7 +39,7 @@ export interface ConversationTool {
  * ClikCode's own agent, the MCP server's instructions for vendors. When to
  * reach for the tools is said here, once; each description says only what
  * its tool does, and the anchor format is described once, on search. */
-export const CONVERSATION_TOOLS_NOTE = 'The user\'s other ClikCode conversations (any provider) are searchable: when they mention other work, another chat or agent, use search_conversations, read_conversation and active_conversations instead of guessing or asking them to paste it.';
+export const CONVERSATION_TOOLS_NOTE = 'The user\'s other ClikCode conversations (any provider) are searchable: when they mention other work, another chat or agent, use search_conversations, read_conversation and active_conversations instead of guessing or asking them to paste it. What this chat was doing before is hindsight, which reads only this conversation.';
 
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 20;
@@ -223,7 +231,224 @@ const activeTool: ConversationTool = {
   },
 };
 
-export const CONVERSATION_TOOLS: readonly ConversationTool[] = [searchTool, readTool, activeTool];
+const LIST_CAP = 12;
+const QUERY_CAP = 15;
+const READ_CAP = 40;
+
+function optionalInteger(value: unknown): number | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  const number = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : Number.NaN;
+  return Number.isFinite(number) ? Math.round(number) : Number.NaN;
+}
+
+function accountPhrase(session: HarnessSession, accounts: readonly { id: string; label?: string; plan?: { name?: string } }[]): string | undefined {
+  if (!session.accountId) return undefined;
+  const account = accounts.find((item) => item.id === session.accountId);
+  const plan = account?.plan?.name?.trim();
+  const label = account?.label?.trim();
+  const extra = plan || (label && !label.includes('@') && label.length <= 24 ? label : '');
+  const id = shortId(session.accountId);
+  return extra ? `account ${id} (${extra}) now` : `account ${id} now`;
+}
+
+function topicTools(topic: PresentedTopic): string {
+  return topic.tools.join(', ');
+}
+
+function fileLine(topic: PresentedTopic): string {
+  const files = topic.files.map((file) => `${file.path} (+${file.additions} -${file.removals})`);
+  if (topic.unnamedEdits) files.push(`${topic.unnamedEdits} unnamed edit${topic.unnamedEdits === 1 ? '' : 's'}`);
+  if (files.length) return `files: ${files.join(', ')}`;
+  return topic.logged ? 'files: none recorded for this span' : 'files: none kept (the turn log holds the last 20 turns)';
+}
+
+function whenLine(topic: PresentedTopic, now: number): string {
+  if (!topic.at) return 'time unknown';
+  const at = Date.parse(topic.at);
+  return Number.isNaN(at) ? 'time unknown' : ago(at, now);
+}
+
+function listRow(topic: PresentedTopic, now: number): string {
+  return `${rangeLabel(topic)} · ${topic.status} · ${topic.origin} · ${whenLine(topic, now)} · ${oneLine(topic.requests[0]?.text ?? '')}`;
+}
+
+function detailText(topic: PresentedTopic, which: string, now: number): string {
+  const lines = [`${which} · ${rangeLabel(topic)} · ${topic.status} · ${topic.origin} · ${whenLine(topic, now)}`];
+  lines.push('requests:');
+  for (const request of topic.requests) lines.push(`  ${request.index !== undefined ? `#${request.index} ` : ''}${oneLine(request.text, 160)}`);
+  if (topic.decisions.length) {
+    lines.push('decisions:');
+    for (const decision of topic.decisions) lines.push(`  ${decision.index !== undefined ? `#${decision.index} ` : ''}"${oneLine(decision.text, 180)}"`);
+  }
+  if (topic.finished) lines.push(`finished: ${topic.finished}`);
+  if (topic.unfinished) lines.push(`unfinished: ${topic.unfinished}`);
+  const tools = topicTools(topic);
+  if (tools) lines.push(`tools: ${tools}`);
+  lines.push(fileLine(topic));
+  if (topic.from !== undefined && topic.to !== undefined) lines.push(`read these messages: hindsight(from=${topic.from}, to=${topic.to})`);
+  return lines.join('\n');
+}
+
+async function hindsightMessages(session: HarnessSession, group: ConversationGroup): Promise<{ messages: HindsightMessage[]; pending?: HarnessSession['pendingTurn'] }> {
+  const view = await conversationView(group);
+  const transcript = await readSessionTranscript(session.id);
+  const raw = transcript.messages ?? [];
+  const positions = view.positions.get(session.id);
+  return {
+    // The running turn lives on the transcript. The index row does not carry it.
+    pending: transcript.pendingTurn ?? session.pendingTurn,
+    messages: raw.map((message, local) => ({
+      index: positions?.[local] ?? local,
+      role: message.role,
+      content: message.content ?? '',
+      ...(message.origin ? { origin: { ...(message.origin.harness ? { harness: message.origin.harness } : {}), provider: message.origin.provider, model: message.origin.model } } : {}),
+      ...(message.role === 'assistant' ? { tools: readTurnActivities(message.activities, (message.content ?? '').length).map((activity) => activity.event.label).filter(Boolean) } : {}),
+    })),
+  };
+}
+
+const hindsightTool: ConversationTool = {
+  name: 'hindsight',
+  description: 'This conversation only, cut into topics from the stored transcript. No arguments lists earlier topics, newest first, with message numbers. back=1 is the topic before the one in progress (0 is the one in progress): its requests, what finished, what was left unfinished, the user\'s direction-changing lines quoted with their message numbers, tool calls, and the files the turn log still has for those requests. before ("12h", "2d", or a date) keeps topics from before then. query finds a phrase in this chat. from and to, or at, read the stored messages and their tool calls; a span that was compacted is the summary that replaced it. One of back, query, or from/to. A record of this chat, not of the current tree.',
+  inputSchema: {
+    type: 'object', additionalProperties: false,
+    properties: {
+      back: { type: 'integer', minimum: 0, description: 'How many topics before the one in progress. 0 is that one, 1 is the one just before it.' },
+      before: { type: 'string', description: 'Only topics from before this: "12h", "2d", "1w" or a date. Narrows the list and back.' },
+      query: { type: 'string', description: 'A phrase to find in this chat, with message numbers.' },
+      at: { type: 'string', description: 'One stored message: a message number or an anchor ("6e647d75:14").' },
+      from: { type: 'integer', minimum: 0, description: 'First stored message to read, inclusive.' },
+      to: { type: 'integer', minimum: 0, description: 'Last stored message to read, inclusive.' },
+      full: { type: 'boolean', description: 'With at, from, or to: the one message (or the first of the range) unshortened, tool output included.' },
+      maxChars: { type: 'integer', minimum: 500, maximum: MAX_READ_CHARS, description: `Output cap when reading messages (default ${DEFAULT_READ_CHARS}).` },
+    },
+  },
+  async run(args, context) {
+    if (!context.currentSessionId) return { text: 'hindsight is this conversation, and this call has none.', isError: true };
+    const back = optionalInteger(args.back);
+    if (Number.isNaN(back) || (back !== undefined && back < 0)) return { text: 'hindsight back is a message count of 0 or more. 1 is the topic before the one in progress.', isError: true };
+    const fromArg = optionalInteger(args.from);
+    const toArg = optionalInteger(args.to);
+    if (Number.isNaN(fromArg) || Number.isNaN(toArg) || (fromArg !== undefined && fromArg < 0) || (toArg !== undefined && toArg < 0)) return { text: 'hindsight from and to are message numbers.', isError: true };
+    const query = typeof args.query === 'string' ? args.query.trim() : '';
+    const reading = args.at !== undefined && args.at !== null && args.at !== '' || fromArg !== undefined || toArg !== undefined;
+    const modes = [back !== undefined, Boolean(query), reading].filter(Boolean).length;
+    if (modes > 1) return { text: 'hindsight takes one of back, query, or from/to. before narrows back and the list.', isError: true };
+    const now = context.now ?? Date.now();
+    const beforeMs = parseSince(typeof args.before === 'string' ? args.before : undefined, now);
+    if (typeof args.before === 'string' && args.before.trim() && beforeMs === undefined) return { text: `Cannot read before="${args.before}". Use "2d", "12h", "1w" or a date.`, isError: true };
+    if (query && beforeMs !== undefined) return { text: 'before narrows topics. A phrase search is query on its own.', isError: true };
+    const found = findConversation(await conversationGroups(), context.currentSessionId);
+    if (!found) return { text: 'This conversation has no saved chat to look back through.', isError: true };
+    const wanted = context.currentSessionId.toLowerCase();
+    const session = found.group.branches.find((item) => item.id.toLowerCase() === wanted) ?? found.branch ?? found.group.newest;
+    const loaded = await hindsightMessages(session, found.group);
+    const messages = loaded.messages;
+    const index = await loadIndex();
+    const records = await readTurnChanges(stateDirectory(), session.id);
+    const pendingTurn = loaded.pending;
+    const pending = pendingTurn?.prompt?.trim()
+      ? {
+          prompt: pendingTurn.prompt,
+          startedAt: pendingTurn.startedAt,
+          tools: readTurnActivities(pendingTurn.activities, (pendingTurn.response ?? '').length).map((activity) => activity.event.label).filter(Boolean),
+          steers: (pendingTurn.steers ?? []).map((steer) => steer.text),
+        }
+      : undefined;
+    const originFallback = runsOn({ provider: session.provider ?? null, model: session.model ?? null, ...(session.nativeHarness ? { harness: session.nativeHarness } : {}) });
+    const presented = presentTopics(messages, { ...(pending ? { pending } : {}), records, originFallback });
+    const account = accountPhrase(session, index?.accounts ?? []);
+    const header = [
+      `${maskSecrets(conversationTitle(session))} — id ${shortId(found.group.id)}`,
+      originFallback,
+      ...(account ? [account] : []),
+    ].join(' · ');
+    const note = 'This is the stored chat, not the current tree.';
+    if (query) {
+      const needle = query.toLowerCase().replace(/\s+/g, ' ');
+      const pattern = new RegExp(needle.split(' ').map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+'));
+      const view = await conversationView(found.group);
+      const hits: string[] = [];
+      for (const message of messages) {
+        const doc = view.entries[message.index]?.message;
+        const haystack = doc?.lower ?? message.content.toLowerCase();
+        const at = haystack.search(pattern);
+        if (at < 0) continue;
+        const line = doc ? snippetLine(message.index, doc, at) : `#${message.index} ${message.role}: ${oneLine(message.content, 160)}`;
+        hits.push(line);
+        if (hits.length >= QUERY_CAP) break;
+      }
+      if (!hits.length) return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" does not come up in this chat.\n${note}`) };
+      const more = messages.filter((message) => (view.entries[message.index]?.message.lower ?? message.content.toLowerCase()).search(pattern) >= 0).length;
+      const extra = more > hits.length ? `\n(${more - hits.length} more)` : '';
+      return { text: maskSecrets(`${header}\n"${oneLine(query, 80)}" in this chat:\n${hits.map((hit) => `  ${hit}`).join('\n')}${extra}\n${note}`) };
+    }
+    if (reading) {
+      const anchor = args.at === undefined || args.at === null || args.at === '' ? undefined : parseAnchor(args.at);
+      if (args.at !== undefined && args.at !== null && args.at !== '' && !anchor) return { text: `Cannot read at="${String(args.at)}". Use a message number or an anchor like "6e647d75:14".`, isError: true };
+      const view = await conversationView(found.group);
+      const numbers = new Set(messages.map((message) => message.index));
+      let at = anchor ? resolveAnchor(anchor, found.group, view, await conversationGroups()) : undefined;
+      if (anchor && (at === undefined || !numbers.has(at))) return { text: `${header}\nThere is no message ${String(args.at)} in this chat.`, isError: true };
+      let from = fromArg ?? at ?? toArg!;
+      let to = toArg ?? at ?? fromArg!;
+      if (from > to) [from, to] = [to, from];
+      if (!numbers.has(from) || !numbers.has(to)) return { text: `${header}\nMessages ${from}–${to} are not both in this chat. A topic's from and to are the numbers hindsight listed.`, isError: true };
+      const maxChars = integer(args.maxChars, DEFAULT_READ_CHARS, 500, MAX_READ_CHARS);
+      const picked = messages.filter((message) => message.index >= from && message.index <= to);
+      if (!picked.length) return { text: `${header}\nMessages ${from}–${to} are not in this chat.`, isError: true };
+      if (args.full === true) {
+        const index = at ?? picked[0]!.index;
+        const entry = view.entries[index]?.message;
+        if (!entry) return { text: `${header}\nThere is no message ${index} in this chat.`, isError: true };
+        return { text: [header, 'Stored transcript. A compacted span is the summary that replaced it.', renderFullMessage(index, entry, Math.max(200, maxChars - header.length - 80)), note].join('\n') };
+      }
+      const shown = picked.slice(0, READ_CAP);
+      const share = Math.max(200, Math.floor((maxChars - header.length - 200) / shown.length));
+      const blocks = shown.map((message) => {
+        const entry = view.entries[message.index]?.message;
+        return entry ? renderMessage(message.index, entry, share).text : `[#${message.index} ${message.role}] ${oneLine(message.content, share)}`;
+      });
+      const tail = shown.length < picked.length ? [`(stopped at #${shown.at(-1)!.index}; the range runs to #${picked.at(-1)!.index})`] : [];
+      const first = shown[0]!.index;
+      const last = shown.at(-1)!.index;
+      return { text: [header, `Stored messages ${first}–${last}. A compacted span is the summary that replaced it.`, ...blocks, ...tail, note].join('\n') };
+    }
+    const earlier = topicsBefore(presented.earlier, beforeMs).reverse();
+    const dropped = beforeMs !== undefined ? presented.earlier.length - earlier.length : 0;
+    if (back !== undefined) {
+      const chosen = back === 0 ? presented.current : earlier[back - 1];
+      if (!chosen) {
+        const howMany = earlier.length;
+        return { text: `${header}\nThis chat has ${howMany} earlier topic${howMany === 1 ? '' : 's'}${dropped ? ` from before ${args.before}` : ''}. back=${back} is before the start.`, isError: true };
+      }
+      const which = back === 0 ? 'Topic in progress' : `Topic back ${back} of ${earlier.length}`;
+      return { text: maskSecrets(`${header}\n${detailText(chosen, which, now)}\n${note}`) };
+    }
+    const shown = earlier.slice(0, LIST_CAP);
+    const lines = [header];
+    if (presented.current) lines.push(`${presented.current.status === 'in progress' ? 'In progress' : 'Latest'}: ${listRow(presented.current, now)}`);
+    else lines.push('Latest: none.');
+    if (!shown.length) lines.push(dropped ? `No earlier topic is from before ${args.before}.` : 'No earlier topic.');
+    else {
+      lines.push(`Earlier, newest first${dropped ? `, from before ${args.before}` : ''} (hindsight(back=1) opens the one just before this):`);
+      shown.forEach((topic, index) => lines.push(`${index + 1}. ${listRow(topic, now)}`));
+      if (earlier.length > shown.length) lines.push(`(${earlier.length - shown.length} more; hindsight(back=${shown.length + 1}) reaches the next)`);
+    }
+    lines.push(note);
+    return { text: maskSecrets(lines.join('\n')) };
+  },
+};
+
+function snippetLine(index: number, message: { role: string; text: string; lower: string; contentLength: number }, at: number): string {
+  const source = message.text;
+  const start = Math.max(0, at - 40);
+  const excerpt = source.slice(start, at + 80).replace(/\s+/g, ' ').trim();
+  const where = at >= message.contentLength ? `${message.role} (tool call)` : message.role;
+  return `#${index} ${where}: ${start > 0 ? '…' : ''}${excerpt}`;
+}
+
+export const CONVERSATION_TOOLS: readonly ConversationTool[] = [searchTool, readTool, activeTool, hindsightTool];
 
 export function conversationTool(name: string): ConversationTool | undefined {
   return CONVERSATION_TOOLS.find((tool) => tool.name === name);
