@@ -69,13 +69,17 @@ export async function chooseGatewayModel(value: string): Promise<string | null> 
 }
 
 /** Store the selected platform agent on this Gateway conversation. */
-export async function selectGatewayAgent(id: string, agentId: string | undefined): Promise<void> {
+export async function selectGatewayAgent(id: string, agentId: string | undefined, agentName?: string): Promise<void> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || session.route !== 'gateway') throw new Error('Select a Gateway session before choosing an agent.');
-  if (agentId !== session.gatewayAgentId) delete session.gatewayAgentThreadId;
+  if (agentId !== session.gatewayAgentId) {
+    delete session.gatewayAgentThreadId;
+    delete session.gatewayAgentName;
+  }
   if (agentId) session.gatewayAgentId = agentId;
   else delete session.gatewayAgentId;
+  if (agentId && agentName) session.gatewayAgentName = agentName;
   session.updatedAt = new Date().toISOString();
   // A configured but still blank chat must survive a restart.
   forceStoreSession(id);
@@ -104,6 +108,7 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   if (!keepModel) session.model = null;
   if (!keepModel) delete session.gatewayAgentId;
   if (!keepModel) delete session.gatewayAgentThreadId;
+  if (!keepModel) delete session.gatewayAgentName;
   // A level chosen on the Gateway stays; one from a vendor harness means nothing here.
   if (!keepModel || !gatewayEffort(session)) session.effort = GATEWAY_DEFAULT_EFFORT;
   session.accountFailover = 'never';
@@ -143,6 +148,7 @@ export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
   delete session.gatewayConfirmed;
   delete session.gatewayAgentId;
   delete session.gatewayAgentThreadId;
+  delete session.gatewayAgentName;
   shedVendorHarness(session);
 }
 
@@ -165,6 +171,7 @@ export function applyFreshLocalSessionPolicy(state: HarnessState, session: Harne
   delete session.gatewayConfirmed;
   delete session.gatewayAgentId;
   delete session.gatewayAgentThreadId;
+  delete session.gatewayAgentName;
   shedVendorHarness(session);
 }
 
@@ -473,8 +480,12 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (effectiveRoute !== 'gateway') {
     delete next.gatewayAgentId;
     delete next.gatewayAgentThreadId;
+    delete next.gatewayAgentName;
   } else if (options.agent !== undefined) {
-    if (gatewayAgentId !== next.gatewayAgentId) delete next.gatewayAgentThreadId;
+    if (gatewayAgentId !== next.gatewayAgentId) {
+      delete next.gatewayAgentThreadId;
+      delete next.gatewayAgentName;
+    }
     if (gatewayAgentId) next.gatewayAgentId = gatewayAgentId;
     else delete next.gatewayAgentId;
   }

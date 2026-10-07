@@ -27,6 +27,11 @@ export function line(label: string, value: unknown): string {
  * is), a harness's model without the harness's own name (nativeModelLabel). */
 export function sessionModelLabel(session: HarnessSession, model: string | null | undefined = session.model): string | undefined {
   if (session.route === 'clikcode-local') return localModelLabel(model);
+  // An agent's conversation names the agent, and the model that served its last turn.
+  if (session.route === 'gateway' && session.gatewayAgentId) {
+    const agent = session.gatewayAgentName ?? 'Agent';
+    return model ? `${agent} · ${model}` : agent;
+  }
   // Automatic names the model the Gateway picked once one has answered.
   if (session.route === 'gateway') return model && !session.model ? `Automatic · ${model}` : model ?? undefined;
   return nativeModelLabel(session.nativeHarness, model);

@@ -20,3 +20,19 @@ describe('the model a Gateway conversation is shown running', () => {
     expect(sessionEvent(gateway('glm-5', 'glm-5')).modelLabel).toEqual({ model: 'glm-5', label: 'glm-5' });
   });
 });
+
+describe('an agent conversation in the footer', () => {
+  const base = {
+    id: 's', route: 'gateway' as const, accountId: null, provider: 'gateway', model: null, effort: 'platform-managed',
+    accountFailover: 'never' as const, createdAt: '', updatedAt: '', status: 'active' as const,
+  };
+  it('names the agent and the model that served its last turn', () => {
+    expect(sessionModelLabel({ ...base, gatewayAgentId: 'a1', gatewayAgentName: 'Silas' }, 'claude-opus-5-5')).toBe('Silas · claude-opus-5-5');
+  });
+  it('names the agent before any turn has said which model served it', () => {
+    expect(sessionModelLabel({ ...base, gatewayAgentId: 'a1', gatewayAgentName: 'Silas' }, null)).toBe('Silas');
+  });
+  it('a Gateway model conversation is unchanged', () => {
+    expect(sessionModelLabel({ ...base }, 'deepseek-v4.1-flash')).toBe('Automatic · deepseek-v4.1-flash');
+  });
+});
