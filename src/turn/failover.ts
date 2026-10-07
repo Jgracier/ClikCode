@@ -163,11 +163,24 @@ export function quotaRetryHint(error: unknown, now: number = Date.now()): string
   const stamp = /(?:resets?|try again|retry(?: again)?)\s+(?:at|after)\s+(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/i.exec(text)?.[1];
   const at = stamp ? Date.parse(stamp) : Number.NaN;
   if (Number.isFinite(at) && at > now) return new Date(at).toISOString();
-  // "Usage resets over a rolling 24-hour window" (Grok Free): what the turn
-  // spent comes back only as the window rolls past it.
-  const rolling = /rolling (\d+)[- ]hour window/i.exec(text)?.[1];
-  if (rolling) return new Date(now + Number(rolling) * 3_600_000).toISOString();
+  // "Usage resets over a rolling 24-hour window" (Grok Free) names the
+  // window's length, not the instant the oldest spend ages out. Holding the
+  // account for the whole window is the fallback for when nothing recorded
+  // can say sooner. The learned reset replaces it once it can.
+  const rolling = quotaRollingWindowMs(error);
+  if (rolling) return new Date(now + rolling).toISOString();
   return clockTimeHint(text, now);
+}
+
+/** A refusal that names a rolling window's length ("rolling 24-hour
+ * window"), in milliseconds. That is not a reset instant — see
+ * quotaRetryHint, which parks the account for the whole window only until a
+ * learned reset exists. */
+export function quotaRollingWindowMs(error: unknown): number | undefined {
+  const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
+  const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
+  const hours = Number(/rolling (\d+)[- ]hour window/i.exec(text)?.[1]);
+  return hours > 0 ? hours * 3_600_000 : undefined;
 }
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
@@ -265,7 +278,10 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   if (/subscription:[\w-]*usage-exhausted/i.test(text)) return 'quota-exhausted';
   const fromKind = errorKind ? kindFromErrorKind(errorKind) : undefined;
   if (fromKind) return fromKind;
-  const effectiveStatus = status ?? embeddedStatus(text || message);
+  // Status embedded in the vendor's own diagnostic text. Not in `message`
+  // once streams exist: that string can carry the model's stdout, and a
+  // sentence about a 402 is not the account running out.
+  const effectiveStatus = status ?? (text ? embeddedStatus(text) : undefined);
   if (effectiveStatus === 401) return 'authentication-required';
   if (effectiveStatus === 402) return 'quota-exhausted';
   // 403 is also "this model is not on your plan", "region blocked", a WAF, or

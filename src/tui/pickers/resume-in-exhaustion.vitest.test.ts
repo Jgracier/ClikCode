@@ -62,6 +62,16 @@ describe('running out of usage', () => {
     expect(await carryOnAfterExhaustion(noPicker, 's1', INTERRUPTED_TURN_REQUEST, guard)).toEqual({ stayed: [] });
   });
 
+  it('asks an unstarted request again instead of continuing the previous turn', async () => {
+    await chat([account('a1', false)], { pendingTurn: { prompt: 'fix the parser', startedAt: '', updatedAt: '', outputStarted: false } });
+    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ retry: 'fix the parser' });
+  });
+
+  it('does not spend another attempt when this chat will not leave the spent account', async () => {
+    await chat([account('a1', true), account('a2', false)], { accountFailover: 'never', pendingTurn: { prompt: 'fix the parser', startedAt: '', updatedAt: '', outputStarted: false } });
+    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ stayed: [] });
+  });
+
   it('hands the messages queued behind back once, when nothing here can run them and the chat stays', async () => {
     await chat([account('a1', true)], { queuedTurns: queue() });
     expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ stayed: ['and then this', 'and this too'] });

@@ -21,6 +21,10 @@ describe('resume in', () => {
   it('continues an interrupted request the conversation carries instead of submitting it twice', () => {
     expect(resumePromptForPendingTurn({ prompt: 'finish the edit', response: 'changed a.ts', startedAt: '', updatedAt: '', outputStarted: true }, 'finish the edit'))
       .toBe(INTERRUPTED_TURN_REQUEST);
+    // Quota died before any output. The request is asked again; "continue"
+    // would point at the previous finished turn.
+    expect(resumePromptForPendingTurn({ prompt: 'finish the edit', startedAt: '', updatedAt: '', outputStarted: false }, 'finish the edit'))
+      .toBe('finish the edit');
     expect(resumePromptForPendingTurn(undefined, 'finish the edit')).toBe('finish the edit');
     const moved = {
       id: 'original', route: 'local', accountId: 'old', provider: 'old', model: null,
@@ -35,6 +39,8 @@ describe('resume in', () => {
   it('compares what the turn recorded, not the typed line, so an expanded /review is continued rather than run again', () => {
     const review = { prompt: 'Review the uncommitted changes for bugs.', response: 'Looked at a.ts', startedAt: '', updatedAt: '', outputStarted: true };
     expect(resumePromptForPendingTurn(review, '/review', 'Review the uncommitted changes for bugs.\n')).toBe(INTERRUPTED_TURN_REQUEST);
+    const unstarted = { prompt: 'Review the uncommitted changes for bugs.\n', startedAt: '', updatedAt: '', outputStarted: false };
+    expect(resumePromptForPendingTurn(unstarted, '/review', 'Review the uncommitted changes for bugs.\n')).toBe('Review the uncommitted changes for bugs.\n');
     // The recorded turn is an older one: this request never started, and the
     // typed line is what goes.
     expect(resumePromptForPendingTurn(review, '/init', 'Write an AGENTS.md for this repository.')).toBe('/init');
