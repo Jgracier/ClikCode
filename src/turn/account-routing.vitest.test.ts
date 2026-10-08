@@ -77,6 +77,23 @@ describe('stored-usage account switch', () => {
     expect([...attempted.keys()]).toEqual(['current']);
   });
 
+  it('after a refusal, tries an account whose spent mark nobody confirmed within a minute', async () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString();
+    const current = account('current');
+    const stale = account('stale', { quotaState: 'exhausted', quotaExhaustedAt: old, quotaRetryAt: later });
+    const fresh = account('fresh', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString(), quotaRetryAt: later });
+    const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
+    const held = state([current, fresh, stale]);
+    const after = (from: AiHarnessAccount) => accountAfterFailure({
+      state: held, account: from, failure: new Error('usage limit reached'), kind: 'quota-exhausted',
+      matchesBackend: () => true, tally, persist: async () => undefined,
+    });
+    expect((await after(current)).id).toBe('stale');
+    // Refused too: it is now confirmed, and the just-confirmed one is not tried.
+    const failure = await after(stale).catch((error: unknown) => error);
+    expect((failure as Error).message).toBe('All accounts exhausted');
+  });
+
   it('never refuses a turn itself: with nothing better, the vendor is asked', () => {
     // Held on a guess, or on a reset the vendor named: either can be stale.
     for (const fields of [{}, { quotaRetryAt: later }]) {
