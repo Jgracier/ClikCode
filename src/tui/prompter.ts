@@ -1017,9 +1017,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * and say what it is running, instead of "thinking (0s)". */
   joinedWaiting(startedAt?: number, activity?: string): void {
     if (!this.turn) return;
-    // Clear any draft when joining a running turn - sub-agent activity shouldn't show in composer
-    this.turn.draft = '';
-    this.turn.cursor = 0;
     if (startedAt !== undefined) this.turn.clock = joinTurnClock(this.turn.clock, startedAt);
     if (activity) this.turn.label = activity;
     this.updateWaiting();
