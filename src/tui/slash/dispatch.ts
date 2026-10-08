@@ -45,7 +45,7 @@ import { sessionHarness, slashRouteContextFor } from './context.js';
 import { enqueueCommandLine } from './queue.js';
 import { impliedHarnessCommand } from './infer-provider.js';
 import { capabilitiesText } from './capabilities-text.js';
-import { forkPoint, forkPointOptions } from './fork-at.js';
+import { forkPoint, forkPointOptions, userMessageIndexes } from './fork-at.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { compactConversation } from './compact.js';
 import { searchConversations } from '../../search/engine.js';
@@ -282,6 +282,33 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       const outcome = await viaHeadless(options.length > 1 ? `/fork @${at}` : text);
       // Said here too: the panel is drawn on the conversation being left.
       return at === undefined ? outcome : { ...outcome, notice: `Forked after message ${at} · files on disk are not rewound: /changes lists each turn's edits, /undo takes them back` };
+    },
+    // `/redo`: which prompt to go back to (newest first, arrows and Enter),
+    // then whether its edits and later ones are put back; the prompt lands in
+    // the message box to send again, as it was or edited.
+    redo: async () => {
+      const messages = sessionTranscriptMessages(session);
+      let at = forkPoint(route.words[0]);
+      if (at === undefined) {
+        if (!host.canPick) throw new Error('usage: /redo @N [keep]');
+        const options = forkPointOptions(messages);
+        if (!options.length) return { notice: 'No prompts to redo yet' };
+        at = await chooseOption(rl, 'Redo from which prompt?', options);
+        if (at === undefined) return {};
+      }
+      // Asked unless the line says (VS Code's redo icon sends only @N).
+      let keep = route.words.includes('keep');
+      if (!keep && !route.words.includes('restore') && host.canPick) {
+        const files = await chooseOption(rl, 'Its edits and later ones', [
+          { label: 'Put files back as they were', value: false }, { label: 'Keep files as they are', value: true },
+        ]);
+        if (files === undefined) return {};
+        keep = files;
+      }
+      const outcome = await viaHeadless(`/redo @${at}${keep ? ' keep' : ''}`);
+      const users = userMessageIndexes(messages);
+      const prompt = messages[users[at - 1] ?? -1]?.content;
+      return prompt === undefined ? outcome : { ...outcome, draft: prompt };
     },
     // No "[y/N]": archiving is undone by resuming it. A confirmation earns
     // its keypress only for what cannot be taken back -- /delete keeps its own.

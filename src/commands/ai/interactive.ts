@@ -694,6 +694,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           id = outcome.id;
           await claimConversation(id).catch(() => undefined);
         }
+        if (outcome.draft !== undefined) terminal?.restoreDraft(outcome.draft);
         if (outcome.prompt) await runInteractiveTurn(id, outcome.prompt, { echo: outcome.echo !== false });
       } catch (error) {
         // A queued message is handed back, and one that ran out of usage is

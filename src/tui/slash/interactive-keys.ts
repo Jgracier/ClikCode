@@ -9,7 +9,7 @@ import { type SlashHandlerKey } from './registry.js';
 const INTERACTIVE_SLASH_HANDLER_KEYS = [
   'exit', 'new', 'redraw', 'provider', 'accounts', 'model', 'effort', 'permissions', 'send', 'swarm', 'options', 'capabilities',
   'settings', 'sessions', 'resume', 'search', 'rename', 'archive', 'delete', 'mention', 'review', 'init', 'native', 'compact',
-  'export', 'memory', 'doctor', 'login', 'logout', 'fork',
+  'export', 'memory', 'doctor', 'login', 'logout', 'fork', 'redo',
 ] as const satisfies readonly SlashHandlerKey[];
 
 export type InteractiveSlashHandlerKey = typeof INTERACTIVE_SLASH_HANDLER_KEYS[number];
@@ -21,5 +21,7 @@ export interface InteractiveSlashOutcome {
   notice?: string;
   /** Run this as a turn on the (possibly just adopted) session. */
   prompt?: string;
+  /** Put this in the message box to edit and send (/redo). */
+  draft?: string;
   echo?: boolean;
 }

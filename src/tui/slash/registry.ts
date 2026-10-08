@@ -42,7 +42,7 @@ export const SLASH_HANDLER_KEYS = [
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'swarm', 'permissions', 'send', 'options', 'capabilities', 'settings',
-  'sessions', 'resume', 'search', 'rename', 'fork', 'archive', 'delete',
+  'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
   'usage', 'doctor',
 ] as const;
 export type SlashHandlerKey = typeof SLASH_HANDLER_KEYS[number];
@@ -200,6 +200,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('search', 'Sessions', 'open the conversation that mentions something most, at each mention', { argHint: '<words>' }),
   entry('rename', 'Sessions', 'name this conversation', { argHint: '[name]' }),
   entry('fork', 'Sessions', 'branch this conversation, or only through message N', { argHint: '[@N] [name]' }),
+  entry('redo', 'Conversation', 'go back to before one of your prompts and send it again, edited or not; its edits and later ones are put back unless "keep"', { argHint: '[@N] [keep]' }),
   entry('archive', 'Sessions', 'archive this conversation'),
   entry('delete', 'Sessions', 'delete this conversation', { argHint: '[confirm]' }),
 
