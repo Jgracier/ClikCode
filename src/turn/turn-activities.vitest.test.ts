@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandOutputPreview, diffPreview, DIFF_PREVIEW_LINES, outputPreview } from '../harness/protocol/activity-view.js';
 import type { TurnActivity } from '../session/model.js';
-import { boundTurnActivities, MAX_OUTPUT_LINES, MAX_TURN_ACTIVITY_BYTES, readTurnActivities, recordTurnActivity, textTranscript } from './turn-activities.js';
+import { boundTurnActivities, MAX_OUTPUT_LINES, MAX_TURN_ACTIVITY_BYTES, readTurnActivities, recordTurnActivity, runningTurnActivity, textTranscript } from './turn-activities.js';
 
 const lines = (count: number, prefix = 'line'): string[] => Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`);
 
@@ -15,13 +15,17 @@ describe('a turn\'s calls, as kept', () => {
     expect(calls).toEqual([{ responseOffset: 10, event: { kind: 'tool-done', label: '$ npm test', id: 'a', category: 'run', output: ['one'], exitCode: 0 } }]);
   });
 
-  it('never keeps a thought, and counts a sub-agent\'s calls on its row', () => {
+  it('keeps a sub-agent\'s completed work for recovery while counting it on the parent row', () => {
     let calls: TurnActivity[] = [];
     calls = recordTurnActivity(calls, { kind: 'thinking', label: 'hmm' }, 0);
     calls = recordTurnActivity(calls, { kind: 'tool-start', label: 'Task(look)', id: 'agent' }, 0);
     calls = recordTurnActivity(calls, { kind: 'tool-start', label: 'Read(a.ts)', id: 'c1', parentId: 'agent' }, 0);
     calls = recordTurnActivity(calls, { kind: 'tool-start', label: 'Read(b.ts)', id: 'c2', parentId: 'agent' }, 0);
-    expect(calls.map((call) => [call.event.label, call.event.childTools])).toEqual([['Task(look)', 2]]);
+    calls = recordTurnActivity(calls, { kind: 'tool-done', label: 'tool', id: 'c1', parentId: 'agent', output: ['found important result'] }, 0);
+    expect(calls.map((call) => call.event.label)).toEqual(['Task(look)', 'Read(a.ts)', 'Read(b.ts)']);
+    expect(calls[0]!.event.childTools).toBe(2);
+    expect(calls[1]!.event).toMatchObject({ kind: 'tool-done', parentId: 'agent', output: ['found important result'] });
+    expect(runningTurnActivity(calls)?.id).toBe('agent');
   });
 
   it('keeps a long command\'s head and tail, so its row reads the same', () => {

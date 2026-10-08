@@ -327,9 +327,8 @@ describe('running sub-agents in the turn journal', () => {
     beginPendingTurn(target, 'Work', at(0));
     recordPendingActivity(target, { kind: 'tool-start', label: 'Task(Fix it)', id: 'a1' }, at(1));
     recordPendingActivity(target, { kind: 'tool-start', label: 'Edit(src/a.ts)', category: 'edit', id: 'e', parentId: 'a1' }, at(2));
-    // Not a row of its own: it counts toward the agent's, and the replay
-    // hints still say the workspace changed.
-    expect(target.pendingTurn?.activities?.map((item) => item.event.label)).toEqual(['Task(Fix it)']);
+    // Kept for recovery, while only the agent's row is shown in chat.
+    expect(target.pendingTurn?.activities?.map((item) => item.event.label)).toEqual(['Task(Fix it)', 'Edit(src/a.ts)']);
     expect(target.pendingTurn?.activities?.[0]?.event.childTools).toBe(1);
     expect((target.pendingTurn as PendingTurnWithHints).touchedFiles).toEqual(['src/a.ts']);
     expect((target.pendingTurn as PendingTurnWithHints).mutatingActivity).toBe(true);

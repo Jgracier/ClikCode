@@ -28,7 +28,7 @@ export interface HarnessActivityEvent {
    * them on its result (Claude Code's Task result, `totalTokens`). */
   childTokens?: number;
   /** Set when this call belongs to a sub-agent (Claude's parent_tool_use_id).
-   * It is not its own row; the parent agent row carries it. */
+   * It is journaled for recovery; the parent agent row carries its display. */
   parentId?: string;
   /** Vendor tool-call identity, when emitted, lets the TUI update an in-flight
    * row instead of appending a detached completion at the bottom. */

@@ -1,4 +1,5 @@
-/** Claude Code: `<CLAUDE_CONFIG_DIR>/projects/<cwd-as-name>/<id>.jsonl`.
+/** Claude Code: `<CLAUDE_CONFIG_DIR>/projects/<cwd-as-name>/<id>.jsonl`
+ * plus `<id>/subagents` and `<id>/tool-results` when that turn used them.
  *
  * Project-scoped, so the same id under a different workspace is a different
  * file -- which is why locate() takes the workspace and tries every name the
@@ -8,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import type { CanonicalRecord } from '../../canonical.js';
 import {
   nativeDataRoot,
@@ -18,6 +19,7 @@ import {
 import { claudeProjectDirectoryNames } from './claude.js';
 import { testedVersion, versionNumber } from './thread-writer-files.js';
 import { claudeProjectDirectoryName, claudeThreadJsonl } from './claude-thread.js';
+import { placeArtifact } from '../../carry-artifact.js';
 
 const CLAUDE_TESTED_VERSIONS = ['2.1.288'] as const;
 
@@ -27,9 +29,9 @@ function claudeConfigDir(environment: NativeSessionEnvironment): string {
   return nativeDataRoot(environment, 'CLAUDE_CONFIG_DIR', join(environment.HOME?.trim() || homedir(), '.claude'));
 }
 
-/** A new session file, `<config>/projects/<cwd as name>/<uuid>.jsonl`, staged
- *  under a temporary name and renamed into place. Claude Code keeps no index:
- *  the file is the whole session, for its CLI and its ACP agent alike. */
+/** A new parent session file, staged under a temporary name and renamed into
+ * place. Claude Code keeps no index; its own turns may later create a sibling
+ * directory for subagent transcripts and tool results. */
 async function writeClaudeThread(record: CanonicalRecord, context: NativeThreadWriteContext): Promise<NativeThreadWritten | undefined> {
   const sessionId = randomUUID();
   const directory = join(claudeConfigDir(context.environment), 'projects', claudeProjectDirectoryName(context.workspace));
@@ -67,6 +69,24 @@ export const claudeSessionStore: NativeSessionStore = {
       if (await stat(path).then(() => true, () => false)) return { path, root };
     }
     return undefined;
+  },
+  async carry({ nativeId, workspace, from, to }): Promise<boolean> {
+    // Claude keeps subagent transcripts and tool results beside the main
+    // JSONL, under a directory named after the session. The parent file
+    // alone resumes, but loses the work its child agents had already done.
+    const sourceRoot = join(claudeConfigDir(from), 'projects');
+    const source = await claudeSessionStore.locate!(sourceRoot, nativeId, workspace, from);
+    if (!source) return false;
+    const targetRoot = join(claudeConfigDir(to), 'projects');
+    const target = join(targetRoot, relative(sourceRoot, source.path));
+    const sourceChildren = source.path.slice(0, -'.jsonl'.length);
+    const targetChildren = target.slice(0, -'.jsonl'.length);
+    // Stage the children first. If that copy fails, do not publish a parent
+    // transcript which appears resumable while its child artifacts are absent.
+    if (await stat(sourceChildren).then((entry) => entry.isDirectory(), () => false)) {
+      if (!await placeArtifact(sourceChildren, targetChildren)) return false;
+    }
+    return placeArtifact(source.path, target);
   },
   writer: claudeThreadWriter,
 };

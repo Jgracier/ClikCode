@@ -36,6 +36,8 @@ export type CanonicalToolStatus = 'done' | 'failed' | 'unfinished';
 export interface CanonicalToolCall {
   /** The vendor's own call id, when it sent one. */
   id?: string;
+  /** Parent agent call when this is work performed inside a sub-agent. */
+  parentId?: string;
   /** ClikCode's classifier's verdict (harness/protocol/tools.ts); absent when
    * the evidence did not settle it. A writer maps this to its own tool. */
   category?: ToolCategory;
@@ -149,6 +151,7 @@ function canonicalCall(event: HarnessActivityEvent): CanonicalToolCall {
   ]);
   return {
     ...(event.id ? { id: event.id } : {}),
+    ...(event.parentId ? { parentId: event.parentId } : {}),
     ...(event.category ? { category: event.category } : {}),
     name: event.call?.name ?? row.name,
     ...(event.call?.input ? { input: event.call.input } : {}),
