@@ -1,3 +1,5 @@
+import { zonedResetTime } from '../harness/accounts/usage-reading.js';
+
 /** `request-invalid` is the odd one out and the reason it exists: every other
  *  kind describes something about the ACCOUNT, so trying the next account is a
  *  sensible response. A rejected request is about the REQUEST -- the same argv
@@ -163,6 +165,11 @@ export function quotaRetryHint(error: unknown, now: number = Date.now()): string
   const stamp = /(?:resets?|try again|retry(?: again)?)\s+(?:at|after)\s+(\d{4}-\d{2}-\d{2}T[\d:.]+(?:Z|[+-]\d{2}:?\d{2}))/i.exec(text)?.[1];
   const at = stamp ? Date.parse(stamp) : Number.NaN;
   if (Number.isFinite(at) && at > now) return new Date(at).toISOString();
+  // "resets 11am (America/Denver)" / "resets Oct 10, 1pm (America/Denver)":
+  // Claude names the zone, so the time is that zone's, not this machine's.
+  const zoned = /resets?\s+(?:at\s+)?([^(\n·]+?)\s*\(([A-Za-z]+(?:\/[A-Za-z_+-]+)+|UTC)\)/i.exec(text);
+  const zonedAt = zoned ? zonedResetTime(zoned[1]!, zoned[2]!, now) : undefined;
+  if (zonedAt && Date.parse(zonedAt) > now) return zonedAt;
   // "Usage resets over a rolling 24-hour window" (Grok Free) names the
   // window's length, not the instant the oldest spend ages out. Holding the
   // account for the whole window is the fallback for when nothing recorded

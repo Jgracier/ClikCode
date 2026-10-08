@@ -3,3 +3,8 @@ dist/
 coverage/
 *.tsbuildinfo
 clikcode-*.tgz
+.aider*
+.claude/worktrees/
+.tmp/
+llama.log
+__pycache__/

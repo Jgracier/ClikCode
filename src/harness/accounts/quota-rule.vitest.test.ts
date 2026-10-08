@@ -114,6 +114,12 @@ describe('which accounts are re-read', () => {
     expect(accountsDueForUsageRecheck(state([undated]), now, askable).map((item) => item.id)).toEqual(['u']);
   });
 
+  it('re-reads a refusal held only on a guess, but not one the vendor dated', () => {
+    const guessed = account({ id: 'g', quotaState: 'exhausted', quotaExhaustedAt: minutes(-30) });
+    const dated = account({ id: 'd', quotaState: 'exhausted', quotaExhaustedAt: minutes(-30), quotaRetryAt: minutes(60) });
+    expect(accountsDueForUsageRecheck(state([guessed, dated]), now, askable).map((item) => item.id)).toEqual(['g']);
+  });
+
   it('re-reads an expired refusal with no reading since, but not a vendor it cannot ask', () => {
     const expired = account({ id: 'e', quotaState: 'exhausted', quotaExhaustedAt: minutes(-400) });
     const unreadable = account({ id: 'g', provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: minutes(-400) });

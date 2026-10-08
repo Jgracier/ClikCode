@@ -59,6 +59,9 @@ export function nativeProfileEnvironment(
       XDG_CONFIG_HOME: `${profileHome}/.config`,
       XDG_DATA_HOME: `${profileHome}/.local/share`,
       XDG_STATE_HOME: `${profileHome}/.local/state`,
+      // The profile is the vendor's home, not ClikCode's: a `clikcode` the
+      // harness runs still reads this install's accounts and chats.
+      CLIKCODE_HOME: stateDirectory(),
     } : {}),
     ...(platform === 'win32' && profileHome ? {
       USERPROFILE: profileHome,
