@@ -98,6 +98,9 @@ export async function nativeUsageReading(
   // The plan rides on the same answer; it says which models are free
   // (free-plan.ts), and stays as last said when a reading leaves it out.
   if (reading?.plan) account.plan = reading.plan;
+  // The vendor's word on the account itself is what the account is now.
+  if (reading?.account === 'signed-out') account.status = 'needs_login';
+  else if (reading?.account) account.verification = { ...(reading.account.verify ? { url: reading.account.verify } : {}), at: new Date(probedAt).toISOString() };
   if (reading?.label !== undefined) {
     account.usage = accountUsageFrom(next);
     // The moment a reading shows room, the refusal it overtakes is cleared on
@@ -178,17 +181,26 @@ function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
   return Boolean(command && NATIVE_USAGE_PROBES[command]);
 }
 
-/** Accounts held out of turns that may have room again, on a harness that
- * can be asked: a refusal on record (dated by the vendor or not) or a spent
- * window, not asked about by anyone for USAGE_RECHECK_MS. A stated reset is
- * not waited for -- vendors round them ("resets 11am" came back at 10:50) --
- * and a reading that shows room clears the hold the moment it lands. */
+/** How long a signed-in account that is not held is left before it is read
+ * again. Every account, not only held ones: Amp and Kilo showed a failure two
+ * days old because nothing asked again, and a sign-in the vendor rejected
+ * went unnoticed. Longer than USAGE_RECHECK_MS because there are many -- a
+ * hundred accounts on a one-minute clock is a vendor process a second. */
+export const USAGE_IDLE_RECHECK_MS = 15 * 60_000;
+
+/** Signed-in accounts on a harness that can be asked, due to be read again:
+ * one held out of turns (a refusal on record, dated or not, or a spent
+ * window) once nobody has asked for USAGE_RECHECK_MS -- a stated reset is not
+ * waited for, vendors round them ("resets 11am" came back at 10:50) -- and
+ * any other once nobody has for USAGE_IDLE_RECHECK_MS. */
 export function accountsDueForUsageRecheck(
   state: HarnessState, now: number = Date.now(), canBeAsked: (account: AiHarnessAccount) => boolean = accountUsageCanBeAsked,
 ): AiHarnessAccount[] {
-  return state.accounts.filter((account) => account.authKind === 'vendor-cli' && account.status === 'ready' && canBeAsked(account)
-    && (account.quotaState === 'exhausted' || vendorWindows(account).some(windowSpent))
-    && now - usageAskedAt(account) >= USAGE_RECHECK_MS);
+  return state.accounts.filter((account) => {
+    if (account.authKind !== 'vendor-cli' || account.status !== 'ready' || !canBeAsked(account)) return false;
+    const held = account.quotaState === 'exhausted' || vendorWindows(account).some(windowSpent);
+    return now - usageAskedAt(account) >= (held ? USAGE_RECHECK_MS : USAGE_IDLE_RECHECK_MS);
+  });
 }
 
 /** Re-read every account that is due (see above). Each probe stamps the

@@ -42,6 +42,7 @@ function harnessBinary(command: string, fallback: string = command): string {
  * A harness that publishes no window publishes no usage.
  */
 async function codexUsageReading(environment: Readonly<Record<string, string>>): Promise<UsageReading | undefined> {
+  let signedOut = false;
   const binary = harnessBinary('codex');
   const response = await new Promise<Record<string, unknown> | undefined>((resolveUsage) => {
     const child = spawn(binary, ['app-server', '--listen', 'stdio://'], {
@@ -67,7 +68,7 @@ async function codexUsageReading(environment: Readonly<Record<string, string>>):
       buffer = lines.pop() ?? '';
       for (const line of lines) {
         try {
-          const message = JSON.parse(line) as { id?: unknown; result?: unknown };
+          const message = JSON.parse(line) as { id?: unknown; result?: unknown; error?: { message?: unknown } };
           if (message.id === 1 && message.result && typeof message.result === 'object') {
             if (initialized) return;
             initialized = true;
@@ -78,6 +79,12 @@ async function codexUsageReading(environment: Readonly<Record<string, string>>):
             ask.unref();
           } else if (message.id === 2 && message.result && typeof message.result === 'object') {
             return finish(message.result as Record<string, unknown>);
+          } else if (message.id === 2 && message.error) {
+            // An answer too, and a prompt one: it used to be waited out to the
+            // timeout. "Provided authentication token is expired. Please try
+            // signing in again." is the account signed out.
+            signedOut = /token_expired|sign(?:ing)? in again|401 Unauthorized/i.test(String(message.error.message ?? ''));
+            return finish();
           }
         } catch { /* Ignore logs and unrelated notifications. */ }
       }
@@ -89,12 +96,17 @@ async function codexUsageReading(environment: Readonly<Record<string, string>>):
     const timer = setTimeout(() => finish(), 8_000);
     timer.unref();
   });
+  if (signedOut) return { windows: [], account: 'signed-out' };
   const reading = codexRateLimitsReading(response?.rateLimits);
   // The plan is in the id token on disk, readable even when the rate-limit
   // read is not (a spent token): a plan alone carries no figure.
   const plan = await codexPlan(environment);
   if (!plan) return reading;
-  return reading ? { ...reading, plan: { name: plan } } : { windows: [], plan: { name: plan } };
+  if (reading) return { ...reading, plan: { name: plan } };
+  // Codex answered and reported no limits (its free plan): that is the
+  // answer, not a failed read. Without a label it was counted as one, and a
+  // five-day-old "Monthly 0% left" was carried forward instead.
+  return response ? { windows: [], label: /^free$/i.test(plan) ? 'Free plan' : `${plan} plan`, plan: { name: plan } } : { windows: [], plan: { name: plan } };
 }
 
 /** The ChatGPT plan Codex signed in with ("free", "plus", "pro"): a claim

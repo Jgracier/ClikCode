@@ -25,6 +25,12 @@ export interface UsageReading {
   windows: UsageWindow[]; label?: string;
   /** The account's plan as the vendor named it, when the same answer says. */
   plan?: NonNullable<AiHarnessAccount['plan']>;
+  /** What the vendor said about the account itself instead of a figure:
+   * its sign-in was rejected (Kimi: "re-login required"), or it must be
+   * held by the vendor (Antigravity: VALIDATION_REQUIRED with the link to
+   * verify, RESTRICTED_AGE with none). Was read as "no figure", and the
+   * account stayed ready. */
+  account?: 'signed-out' | { verify?: string };
 }
 
 /** What is stored on `account.usage`. `windows` is persisted alongside the

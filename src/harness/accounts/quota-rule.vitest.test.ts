@@ -117,6 +117,12 @@ describe('which accounts are re-read', () => {
     expect(accountsDueForUsageRecheck(state([undated]), now, askable).map((item) => item.id)).toEqual(['u']);
   });
 
+  it('re-reads every other signed-in account too, every quarter hour', () => {
+    const idle = account({ id: 'i', usage: reading(minutes(-16), [{ name: '5h', usedPct: 10, resetsAt: minutes(100) }]) });
+    const recent = account({ id: 'r', usage: reading(minutes(-5), [{ name: '5h', usedPct: 10, resetsAt: minutes(100) }]) });
+    expect(accountsDueForUsageRecheck(state([idle, recent]), now, askable).map((item) => item.id)).toEqual(['i']);
+  });
+
   it('re-reads an expired refusal with no reading since, but not a vendor it cannot ask', () => {
     const expired = account({ id: 'e', quotaState: 'exhausted', quotaExhaustedAt: minutes(-400) });
     const unreadable = account({ id: 'g', provider: 'antigravity', quotaState: 'exhausted', quotaExhaustedAt: minutes(-400) });
