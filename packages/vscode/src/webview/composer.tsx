@@ -6,7 +6,7 @@ import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, providerDisplayName, queuedRowLabel, stopAndSendReady, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, enterAgainReady, providerDisplayName, queuedRowLabel, type ChatModel } from '../model';
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
@@ -148,7 +148,7 @@ export function Composer(props: {
     focus: () => textarea.current?.focus(),
     hasText: () => Boolean(text.trim()) || attachments.length > 0,
     insert: (value) => update(text ? `${text.replace(/\s*$/, '')}\n\n${value}` : value),
-    setDraft: (value) => update(value),
+    setDraft: (value) => update(text.trim() ? `${value}\n\n${text}` : value),
     mention: (mention) => {
       if (mention.text) {
         setAttachments((items) => [...items, { key: uid(), kind: 'selection', label: `${mention.label.split('/').pop()}:${mention.startLine}${mention.endLine !== mention.startLine ? `-${mention.endLine}` : ''}`, mention }]);
@@ -238,9 +238,9 @@ export function Composer(props: {
   }, [tokenKey, token?.query, model.sessionId, model.providerId, model.model]);
 
   const send = (): void => {
-    // Enter again: nothing typed, a message already waiting in the queue --
-    // stop the turn, and what waits is sent next at once.
-    if (!text.trim() && !attachments.length && stopAndSendReady(model)) { post({ type: 'cancel', restoreDraft: false }); return; }
+    // Enter again: nothing typed, a message already waiting. It goes into
+    // the chat. The turn, and any sub-agent it started, keeps running.
+    if (!text.trim() && !attachments.length && enterAgainReady(model)) { post({ type: 'send-queued' }); return; }
     if (!text.trim() && !attachments.length) { setHeld(false); return; }
     const message = composeMessage(text, attachments);
     if (!message) return;
@@ -410,9 +410,9 @@ export function Composer(props: {
   const usage = !model.running && model.turnUsage && { ...model.turnUsage, contextUsed: undefined, contextWindow: undefined, contextPercent: undefined };
   const tokens = (usage && formatTurnUsage(usage)) || undefined;
 
-  // Enter on an empty box stops the turn and sends what waits: the hint goes
-  // on the first message that would go, and only while Enter would do it.
-  const stopAndSend = stopAndSendReady(model) && !text.trim() && !attachments.length;
+  // Enter on an empty box puts the oldest waiting message into the chat.
+  // The hint goes on that message, and only while Enter would do it.
+  const enterAgain = enterAgainReady(model) && !text.trim() && !attachments.length;
   const firstWaiting = model.queued.findIndex((item) => !item.notification && !item.command);
   const placeholder = !connected ? 'ClikCode is not connected'
     : model.running ? (model.chatSettings?.send === 'queue' ? 'Queue a message for after this turn…' : 'Steer the running turn…')
@@ -443,7 +443,7 @@ export function Composer(props: {
           ) : (
             <div key={item.id} class="queued-item">
               <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
-              <span class="muted">{queuedRowLabel(model, item, index === firstWaiting && stopAndSend)}</span>
+              <span class="muted">{queuedRowLabel(model, item, index === firstWaiting && enterAgain)}</span>
               <button type="button" class="icon-button tiny" title="Edit: take it back into the message box" aria-label="Edit queued message"
                 onClick={() => post({ type: 'unqueue', id: item.id, edit: true })}><Icon name="edit" /></button>
               <button type="button" class="icon-button tiny" title="Remove from the queue" aria-label="Remove queued message"
@@ -501,7 +501,7 @@ export function Composer(props: {
           {model.running ? (
             <button type="button" id="stop-button" class="send stop" aria-label="Stop" title="Stop" onClick={() => post({ type: 'cancel', restoreDraft: !text })}><Icon name="debug-stop" /></button>
           ) : null}
-          {stopAndSend ? (
+          {enterAgain ? (
             <button type="button" id="send-button" class="send" data-stop-and-send="true" aria-label={buttonTitle('sendNow')} title={buttonTitle('sendNow')}
               disabled={!connected} onClick={send}><Icon name="debug-step-over" /></button>
           ) : !model.running || text.trim() ? (

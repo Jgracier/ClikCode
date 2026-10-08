@@ -6,7 +6,7 @@ import type { LiveTurnSubmission } from './live-input.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { readState } from '../session/state/read.js';
 import { writeState, writeTranscriptCheckpoint } from '../session/state/write.js';
-import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, updatePendingResponse } from './checkpoint.js';
+import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, updatePendingResponse } from './checkpoint.js';
 
 /** Name a chat, once, from a title the model produced.
  *
@@ -56,6 +56,14 @@ export async function discardInterruptedTurn(id: string, prompt: string): Promis
   if (!session || !discardPendingTurn(session, prompt)) return;
   session.updatedAt = new Date().toISOString();
   await writeState(state);
+}
+
+/** End the live status after a failed turn without losing the request and
+ * partial answer that a later account or provider may continue. */
+export async function markFailedTurn(id: string, prompt: string): Promise<void> {
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  if (session && failPendingTurn(session, prompt, new Date().toISOString())) await writeState(state);
 }
 
 const QUEUED_TURN_ALREADY_RUN = 'ERR_QUEUED_TURN_ALREADY_RUN';
@@ -252,12 +260,12 @@ export async function completeTurnCheckpoint(
   sources: {
     title?: string;
     vendor?: () => Promise<string | undefined>;
-    /** The turn asked for a name and `response` is the raw reply: a bare first-line title is one
-     * (session/title.ts bareTitle). Never for a reply whose title was already taken off. */
-    bare?: boolean;
+    /** This turn asked for a name. Only then is the title marker taken off
+     * the reply. Every other reply is stored as the model wrote it. */
+    asked?: boolean;
   } = {},
 ): Promise<string> {
-  const answer = extractSessionTitle(response, { bare: sources.bare === true });
+  const answer = sources.asked ? extractSessionTitle(response) : { text: response };
   session.attachments = [];
   session.shellNotes = [];
   await nameSession(session, { ...sources, title: sources.title ?? answer.title });

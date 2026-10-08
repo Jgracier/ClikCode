@@ -1,7 +1,7 @@
 /** Settings: everything about how this chat runs, on one screen.
  *
  * One row per thing -- provider, account, model, effort, permissions,
- * failover -- then the harness's own options, its tools, and the defaults new
+ * then the harness's own options, its tools, and the defaults new
  * chats start from. A row with a few values is chosen right in the row
  * (←/→ or its number); one with more opens its own list and comes back here.
  * ← in a list goes back one screen, Esc leaves Settings.
@@ -41,7 +41,7 @@ import { harnessManagers, interactiveToolsPicker } from './tools.js';
  * more opens its own list. Four still reads as a choice beside its label. */
 const INLINE_MAX_CHOICES = 4;
 
-type DefaultKey = 'model' | 'effort' | 'permissions' | 'failover';
+type DefaultKey = 'model' | 'effort' | 'permissions';
 
 /** Tab on a row: keep this value for new chats. */
 function defaultActions(harness: AiLocalHarnessDefinition | undefined, key: DefaultKey): PickerOption<string>['actions'] {
@@ -63,14 +63,13 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
     const effort = await effortChoices(state, session, harness);
     const permissions = sessionPermissionModes(session, isClikCodeAgent(session) ? undefined : harness);
-    const failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
     const inline = (choices: readonly { label: string; value: string }[], current: string, apply: (value: string) => Promise<void>) => (
       choices.length >= 2 && choices.length <= INLINE_MAX_CHOICES ? { inline: { choices, current, apply } } : {}
     );
     const optionCount = harness ? vendorFacingOptions(localHarnessCapabilityManifest(harness).options, harness).length : 0;
     const setOptions = Object.keys(session.harnessOptions ?? {}).length;
     const values: Record<DefaultKey, string | undefined> = {
-      model: session.model ?? undefined, effort: session.effort || undefined, permissions: session.permissionMode ?? 'ask', failover,
+      model: session.model ?? undefined, effort: session.effort || undefined, permissions: session.permissionMode ?? 'ask',
     };
 
     const rows: PickerOption<string>[] = [
@@ -86,14 +85,6 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
             choices: VALID_PERMISSION_MODES.map((value) => ({ label: settingLabel(value), value })),
             current: state.globalSettings.permissionMode,
             apply: (value: string) => aiSettingsSetGlobal('permissions', value, false),
-          },
-        },
-        {
-          label: 'Every harness · failover', detail: settingLabel(state.globalSettings.accountFailover === 'never' ? 'never' : 'auto'), value: 'global-failover',
-          inline: {
-            choices: [{ label: 'Auto', value: 'auto' }, { label: 'Never', value: 'never' }],
-            current: state.globalSettings.accountFailover === 'never' ? 'never' : 'auto',
-            apply: (value: string) => aiSettingsSetGlobal('failover', value, false),
           },
         },
       ] : []),
@@ -121,11 +112,6 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
         label: 'Swarm', detail: 'hand work to other accounts when it makes sense', value: 'swarm',
         inline: swarmSwitch(session, id),
       },
-      ...(harness ? [{
-        label: 'Failover', detail: failover === 'auto' ? 'switch accounts when one runs out' : 'stop when an account runs out', value: 'failover',
-        actions: defaultActions(harness, 'failover'),
-        ...inline([{ label: 'Auto', value: 'auto' }, { label: 'Never', value: 'never' }], failover, (value) => applyToChat(id, 'failover', value)),
-      }] : []),
       // One Plan mode for every harness that has a read-only planning mode,
       // whatever the vendor calls it.
       ...(harness?.planMode ? [{

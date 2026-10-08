@@ -34,7 +34,7 @@ async function onClaude(fields: Partial<HarnessSession> = {}): Promise<void> {
   const now = new Date().toISOString();
   state.sessions.push({
     id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'anthropic', model: 'opus', nativeHarness: 'claude',
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     nativeSessionId: 'claude-thread', nativeTransport: 'acp', reported: { at: now, model: 'opus' }, lastUsage: { at: now } as HarnessSession['lastUsage'],
     harnessOptions: { verbose: true },
     messages: [{ role: 'user', content: 'what is the codeword' }, { role: 'assistant', content: 'PLUM' }],

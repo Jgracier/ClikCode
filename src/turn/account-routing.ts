@@ -23,13 +23,22 @@ export function matchesDirectTurnModel(account: AiHarnessAccount, model: string)
   return turnBackendForAccount(account) === 'direct' && account.models.includes(model);
 }
 
+/** A vendor-CLI turn. An API key on a direct model provider is the other backend. */
+export function matchesVendorTurn(account: AiHarnessAccount): boolean {
+  return turnBackendForAccount(account) === 'vendor';
+}
+
 /** Whether any account of this provider, on this transport, can still take
  * the turn by the one rule. "All accounts exhausted" -- and the offer to
- * resume on another provider that follows it -- is only true when not. */
+ * resume on another provider that follows it -- is only true when not.
+ * An account this turn already tried does not count until the reset its
+ * refusal named has passed: its stored windows can still show room. */
 export function providerHasAccountForTurn(
   state: HarnessState, provider: string, matchesTransport: (candidate: AiHarnessAccount) => boolean, now: number = Date.now(),
+  attempted?: ReadonlyMap<string, number>,
 ): boolean {
-  return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now));
+  return state.accounts.some((candidate) => candidate.provider === provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now)
+    && !(attempted?.has(candidate.id) && !resetPassedSince(candidate, attempted.get(candidate.id)!, now)));
 }
 
 /** Room left on this account, in percent: the tightest window that can stop
@@ -80,11 +89,10 @@ export function nextUsableFailoverAccount(
 export function initialAccountChoice(
   state: HarnessState,
   current: AiHarnessAccount,
-  policy: HarnessSession['accountFailover'],
   matchesBackend: (candidate: AiHarnessAccount) => boolean,
   attempted: Map<string, number>,
 ): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount } | { kind: 'exhausted'; error: Error } {
-  if (policy !== 'on-quota-exhausted' || !accountQuotaSpent(current)) return { kind: 'continue' };
+  if (!accountQuotaSpent(current)) return { kind: 'continue' };
   attempted.set(current.id, Date.now());
   const fallback = nextUsableFailoverAccount(state, current, matchesBackend, attempted);
   if (fallback) return { kind: 'switch', account: fallback };
@@ -99,11 +107,36 @@ export function terminalFailoverError(input: {
   exhaustedAny: boolean;
   lastFailure: unknown;
   lastOtherFailure?: unknown;
+  /** Accounts this turn already tried, and when. The one that just refused
+   * is not "an account that can still run" while its stored windows lag. */
+  attempted?: ReadonlyMap<string, number>;
 }): unknown {
-  const { state, current, matchesBackend, exhaustedAny, lastFailure, lastOtherFailure } = input;
+  const { state, current, matchesBackend, exhaustedAny, lastFailure, lastOtherFailure, attempted } = input;
   if (!exhaustedAny) return lastFailure;
-  if (providerHasAccountForTurn(state, current.provider, matchesBackend)) return lastOtherFailure ?? lastFailure;
+  if (providerHasAccountForTurn(state, current.provider, matchesBackend, Date.now(), attempted)) return lastOtherFailure ?? lastFailure;
   return new Error(usageExhaustedMessage());
+}
+
+/** Copy the eligibility fields a probe or another chat wrote, onto the
+ * accounts this turn is holding. A turn keeps the copy it read at the start,
+ * so a window that came back during the turn was still "spent" here and the
+ * usage refusal ended as an error instead of moving. The account that just
+ * refused is left as this turn recorded it. */
+async function adoptStoredEligibility(state: HarnessState, exceptId?: string): Promise<void> {
+  const stored = await readState({ transcripts: [] });
+  const byId = new Map(stored.accounts.map((account) => [account.id, account]));
+  for (const account of state.accounts) {
+    if (account.id === exceptId) continue;
+    const fresh = byId.get(account.id);
+    if (!fresh) continue;
+    account.status = fresh.status;
+    account.verification = fresh.verification;
+    account.quotaState = fresh.quotaState;
+    account.quotaExhaustedAt = fresh.quotaExhaustedAt;
+    account.quotaRetryAt = fresh.quotaRetryAt;
+    account.usage = fresh.usage;
+    account.plan = fresh.plan;
+  }
 }
 
 /** Where a turn stands across its failed attempts. */
@@ -143,7 +176,6 @@ const ACCOUNT_FAILURES: ReadonlySet<AccountFailureKind> = new Set(['quota-exhaus
  * refusal marks the account spent. */
 export async function accountAfterFailure(input: {
   state: HarnessState;
-  session: HarnessSession;
   account: AiHarnessAccount;
   failure: unknown;
   kind: AccountFailureKind;
@@ -154,7 +186,7 @@ export async function accountAfterFailure(input: {
   persist: () => Promise<void>;
   notice?: (message: string) => void;
 }): Promise<AiHarnessAccount> {
-  const { state, session, account, failure, kind, tally } = input;
+  const { state, account, failure, kind, tally } = input;
   // Stopped, not failed: whatever the attempt died of, it died because it was
   // cancelled, and no other account is owed the request.
   if (input.signal?.aborted || isTurnCancelled(failure)) {
@@ -177,19 +209,16 @@ export async function accountAfterFailure(input: {
     input.notice?.(verificationNotice(verification));
   }
   await input.persist();
-  // Running out reads the same whether or not failover is on. With it off
-  // there is simply nowhere to switch to, which is the same outcome as having
-  // switched everywhere and found nothing -- so it says the same thing rather
-  // than whatever the vendor happened to call it ("Payment Required").
-  if (session.accountFailover !== 'on-quota-exhausted') {
-    if (!tally.exhaustedAny) throw failure;
-    throw new Error(usageExhaustedMessage());
-  }
+  // Other chats and the usage probe write the account record this turn is
+  // not holding. Re-read them after the refusal is saved, so an account that
+  // has usage now is the one the turn moves to.
+  await adoptStoredEligibility(state, account.id);
   const fallback = nextUsableFailoverAccount(state, account, input.matchesBackend, tally.attempted);
   if (fallback) return fallback;
   throw terminalFailoverError({
     state, current: account, matchesBackend: input.matchesBackend,
     exhaustedAny: tally.exhaustedAny, lastFailure: failure, lastOtherFailure: tally.lastOtherFailure,
+    attempted: tally.attempted,
   });
 }
 
@@ -254,7 +283,8 @@ export function turnAccounts(input: {
     /** Moves off a spent account before the first attempt; true when it did.
      * `carry` runs first, while the account is still the old one. */
     async start(carry?: (to: AiHarnessAccount) => Promise<void>): Promise<boolean> {
-      const initial = initialAccountChoice(state, input.current(), session.accountFailover, matchesBackend, tally.attempted);
+      await adoptStoredEligibility(state);
+      const initial = initialAccountChoice(state, input.current(), matchesBackend, tally.attempted);
       if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
       if (initial.kind !== 'switch') return false;
       await carry?.(initial.account);
@@ -263,7 +293,7 @@ export function turnAccounts(input: {
     },
     /** accountAfterFailure for the current account. */
     after: (failure: unknown, kind: AccountFailureKind, signal?: AbortSignal): Promise<AiHarnessAccount> => accountAfterFailure({
-      state, session, account: input.current(), failure, kind, signal, matchesBackend, tally, persist,
+      state, account: input.current(), failure, kind, signal, matchesBackend, tally, persist,
       notice: (message) => prompter?.activity(chalk.yellow(message)),
     }),
     /** What the turn's output says about a move, when there was one. */

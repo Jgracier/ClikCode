@@ -16,7 +16,7 @@ const minutesAgo = (minutes: number): string => new Date(NOW - minutes * 60_000)
 function chat(id: string, messages: TranscriptMessage[], extra: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id, route: 'local', accountId: null, provider: 'openai', model: 'gpt-5', effort: 'medium', permissionMode: 'ask',
-    accountFailover: 'never', createdAt: minutesAgo(600), updatedAt: minutesAgo(30), status: 'active', nativeHarness: 'codex',
+createdAt: minutesAgo(600), updatedAt: minutesAgo(30), status: 'active', nativeHarness: 'codex',
     messages, ...extra,
   } as HarnessSession;
 }

@@ -154,7 +154,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('mention', 'Workspace', 'attach a file to the next request; alone, lists what is attached', { aliases: ['attachments'], argHint: '[path|clear]' }),
 
   entry('provider', 'Provider', 'choose a provider', { aliases: ['switch'] }),
-  entry('account', 'Provider', 'switch, add or remove accounts', { aliases: ['accounts'], handlerKey: 'accounts', argHint: '[label|login|add|remove|failover …]', duringTurn: 'apply' }),
+  entry('account', 'Provider', 'switch, add or remove accounts', { aliases: ['accounts'], handlerKey: 'accounts', argHint: '[label|login|add|remove …]', duringTurn: 'apply' }),
   entry('login', 'Provider', 'sign in to the current provider', { availability: needsHarness('signing in') }),
   entry('logout', 'Provider', 'sign the current account out', { availability: needsHarness('signing out') }),
   entry('gateway', 'Provider', 'route this conversation through ClikDeploy Gateway'),
@@ -193,7 +193,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),
-  entry('settings', 'Settings', 'configure this workspace', { argHint: '[tools|model|effort|permissions|failover|option|global|provider …]' }),
+  entry('settings', 'Settings', 'configure this workspace', { argHint: '[tools|model|effort|permissions|option|global|provider …]' }),
 
   entry('sessions', 'Sessions', 'manage conversations', { argHint: '[list|show|open|close <id>]' }),
   entry('resume', 'Sessions', 'resume another conversation'),

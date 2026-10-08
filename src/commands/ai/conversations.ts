@@ -47,7 +47,6 @@ export function newConversationSession(
     // ClikCode Local carries it: its agent honours the mode, and a fresh chat
     // silently dropping `auto` back to `ask` would read as a new policy.
     ...(isGatewayService(source) ? {} : { permissionMode: source.permissionMode ?? defaults.permissionMode }),
-    accountFailover: source.accountFailover ?? defaults.accountFailover,
     workspace: source.workspace ?? process.cwd(),
     createdAt: now, updatedAt: now, status: 'active',
   };
@@ -138,7 +137,7 @@ export async function moveToProvider(
   leaveProvider(current);
   Object.assign(current, {
     route: 'local', provider: harness.provider, nativeHarness: harness.command, accountId, model,
-    effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
+    effort: defaults.effort, permissionMode: defaults.permissionMode,
   });
   await writeState(state);
   await aiHarnessSelect(harnessCommandName, id, selection.prompter ? { prompter: selection.prompter } : {});

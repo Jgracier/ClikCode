@@ -50,7 +50,7 @@ async function interrupted(startedAt: string): Promise<void> {
   const now = new Date().toISOString();
   state.sessions.push({
     id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'anthropic', model: null, nativeHarness: 'claude',
-    effort: 'medium', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [],
+    effort: 'medium', createdAt: now, updatedAt: now, status: 'active', messages: [],
     pendingTurn: { prompt: 'fix the parser', response: 'half', startedAt, updatedAt: startedAt, outputStarted: true },
   } as HarnessSession);
   forceStoreSession('s1');

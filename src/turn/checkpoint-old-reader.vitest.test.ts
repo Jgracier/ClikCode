@@ -34,7 +34,7 @@ async function started(): Promise<{ checkpoint: DurableTurnCheckpoint; session: 
   const at = new Date(Date.now() - 60_000).toISOString();
   const session = {
     id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-    accountFailover: 'never', createdAt: at, updatedAt: at, status: 'active', messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'yes' }],
+createdAt: at, updatedAt: at, status: 'active', messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'yes' }],
   } as HarnessSession;
   state.sessions.push(session);
   await writeState(state);

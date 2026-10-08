@@ -21,6 +21,7 @@ import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { moveThreadToAccount } from '../session/carry.js';
+import { applyManualAccount, isManualAccountSwitch, linkAbortSignals, manualAccountSwitchError, manualSwitchPending } from './manual-account.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -126,10 +127,10 @@ export async function sendVendorTurn(input: {
   // worker picking up a session whose terminal took the lease).
   model = await ensureTurboFitForTurn(harness, account, session.id, model);
   if (model) session.model = model;
-  // An unnamed chat gets a title from the harness that writes one, and asks
-  // the model for one where the harness does not. The request rides on this
-  // turn's text only -- never on what is stored as the user's message -- and
-  // the answer is stripped of it before anyone sees it.
+  // An unnamed chat gets a title from the harness that writes one. Where the
+  // harness does not, one turn asks, once the user has said enough to name
+  // the chat. The request rides on that turn's text only -- never on what is
+  // stored as the user's message -- and only that reply drops the marker.
   const titleSource = sessionTitleSource(harness);
   const titleRequest = titleSource === 'ask' ? prepareSessionTitle(session, turnText) : undefined;
   let titleStream = titleRequest?.stream;
@@ -362,13 +363,36 @@ export async function sendVendorTurn(input: {
     // is stated rather than implied.
     onApproval: async (title: string, detail?: string, preview?: ApprovalPreview) => (await prompter?.approval(title, detail, preview)) === true,
     onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
+    // A tool call just settled and nothing else is open: the next model call
+    // has not started. A manual account change takes effect here.
+    onBetweenCalls: () => {
+      const move = manualSwitchPending(session.id);
+      const to = move && state.accounts.find((item) => item.id === move.toId);
+      if (to && to.id !== account.id && to.provider === harness.provider && turnBackendForAccount(to) === 'vendor') switchNow.run();
+    },
   } satisfies HarnessTurnObserver;
+  /** Aborts the vendor prompt so the loop can continue it on the account
+   * the user picked. Replaced at each attempt; a spent controller cannot
+   * be reset. */
+  const switchNow: { run: () => void } = { run: () => undefined };
   let activeTransport: ReturnType<typeof sessionTurnTransport> | undefined;
   // The request this turn was asked, before a retry replaces it. A failover
   // that produced no output sends this again; rebuilding the transcript
   // would repeat the whole conversation on top of a thread that already has it.
   const askedText = turnText;
+  const canRunVendor = (item: AiHarnessAccount): boolean => item.provider === harness.provider && turnBackendForAccount(item) === 'vendor';
   for (;;) {
+    const switchController = new AbortController();
+    switchNow.run = () => { if (!switchController.signal.aborted) switchController.abort(manualAccountSwitchError()); };
+    const attemptSignal = linkAbortSignals(signal, switchController.signal);
+    // A pick made before this attempt, or left over from the previous one.
+    account = await applyManualAccount({
+      sessionId: session.id, accounts: state.accounts, current: account, canRun: canRunVendor,
+      carry: async (from, to) => {
+        await closePersistentTransport(session.id);
+        if (from.id !== to.id) await moveThreadToAccount(session, harness, from, to);
+      },
+    });
     // Before this attempt spawns the vendor. A server, skill, or same-format
     // hook that is already in the harness is left as it is. A new MCP server
     // is invisible to a process that is already running, so that process is
@@ -418,9 +442,9 @@ export async function sendVendorTurn(input: {
     // has five retry paths and each one either keeps this prompt or replaces
     // it; deciding here, from the prompt itself, is what makes that true for
     // all five instead of the ones someone remembered.
-    titleStream = titleStreamForAttempt(titleStream, turnText, session);
+    titleStream = titleStreamForAttempt(titleStream, turnText);
     const runStructuredCliTurn = (): Promise<NativeTurnResult> => runVendorCliAttempt({
-      harness, session, turnText, model, environment, images, signal, run, checkpoint,
+      harness, session, turnText, model, environment, images, signal: attemptSignal, run, checkpoint,
       effort: turnEffort(), sharedObserver,
       onOutputStart: () => { cliOutputStarted = true; },
       onStreamError: (error) => { streamError = error; },
@@ -430,12 +454,33 @@ export async function sendVendorTurn(input: {
         result = await runStructuredCliTurn();
       } else {
         result = await runVendorSessionAttempt({
-          harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint,
+          harness, account, session, transport, turnText, model, environment, images, signal: attemptSignal, run, checkpoint,
           sharedObserver, effort: turnEffort(), onSessionId, mcpServers: sessionMcpServers,
           runCli: runStructuredCliTurn,
         });
       }
     } catch (error) {
+      // The user picked another account of this provider between calls.
+      // The prompt stopped at that boundary; this same turn continues there.
+      if (isManualAccountSwitch(error)) {
+        const before = account.id;
+        account = await applyManualAccount({
+          sessionId: session.id, accounts: state.accounts, current: account, canRun: canRunVendor,
+          carry: async (from, to) => {
+            await closePersistentTransport(session.id);
+            if (from.id !== to.id) await moveThreadToAccount(session, harness, from, to);
+          },
+        });
+        if (account.id === before) throw error;
+        const wrote = Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
+        const nextRequest = wrote ? INTERRUPTED_TURN_REQUEST : askedText;
+        if (!session.nativeSessionId) turnText = await retell(nextRequest, wrote && session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear');
+        else {
+          turnText = nextRequest;
+          if (wrote) continueAnswer(session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear');
+        }
+        continue;
+      }
       if (isTurnCancelled(error)) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') throw error;
       caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
@@ -592,7 +637,7 @@ export async function sendVendorTurn(input: {
     // filtered an earlier attempt was replaced during a retry.
     const completedText = await completeTurnCheckpoint(session, checkpoint, result.text, {
       title: titleStream?.title,
-      bare: titleStream?.naming === true,
+      asked: titleStream !== undefined,
       ...(titleSource === 'vendor'
         ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
         : {}),

@@ -11,6 +11,7 @@ import { localApiKey } from '../daemon/server.js';
 import { classifyAccountFailure } from './failover.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
+import { applyManualAccount } from './manual-account.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
@@ -33,8 +34,8 @@ export async function sendDirectApiTurn(input: {
   if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
   const baseMessages = textTranscript(sessionTranscriptMessages(session));
-  // No harness on this path writes its own titles, so the first turns of a
-  // conversation ask the model for one and the answer is stripped of it.
+  // No harness on this path writes its own titles. One turn asks, once the
+  // user has said enough to name the chat, and no other turn touches the reply.
   const directTitle = prepareSessionTitle(session, turnText);
   turnText = directTitle.prompt;
   let titleStream = directTitle.stream;
@@ -61,10 +62,17 @@ export async function sendDirectApiTurn(input: {
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
   for (;;) {
+    // A manual pick lands on the next request. One already on the wire
+    // finishes; this loop is the boundary between requests.
+    account = await applyManualAccount({
+      sessionId: session.id, accounts: state.accounts, current: account,
+      canRun: (item) => matchesDirectTurnModel(item, model),
+      carry: async () => undefined,
+    });
     // Same rule as the vendor path. This path re-sends the whole prompt on a
     // switch, title request included, so the stream restarts rather than
     // being dropped -- which is a consequence of the rule, not a second rule.
-    titleStream = titleStreamForAttempt(titleStream, turnText, session);
+    titleStream = titleStreamForAttempt(titleStream, turnText);
     try {
       turn = await invoke(account);
       break;
@@ -78,7 +86,7 @@ export async function sendDirectApiTurn(input: {
     usage: { input: turn.usage.inputTokens, output: turn.usage.outputTokens },
   });
   recordSuccessfulAccountTurn(state, account, invocation);
-  const completedText = await completeTurnCheckpoint(session, checkpoint, turn.text, { title: titleStream?.title, bare: titleStream?.naming === true });
+  const completedText = await completeTurnCheckpoint(session, checkpoint, turn.text, { title: titleStream?.title, asked: titleStream !== undefined });
   if (!prompter) emitHarnessOutput({ session, text: completedText, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...accounts.switched() });
   } finally {
     await checkpoint.flush();

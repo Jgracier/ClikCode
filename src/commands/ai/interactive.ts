@@ -343,8 +343,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     const message = error instanceof Error ? error.message : String(error);
     // The whole vendor text is for `clikcode logs`; the screen gets one line.
     lifecycle('window.turn.error', { message: message.slice(0, 8000) });
-    // A prompt held for a turn that never started is not drawn on.
-    terminal?.submitted(undefined);
+    // Keep the submitted message visible when there's an error, so the user sees what failed
+    // (don't clear it like we would for a turn that never started properly)
     const next = await afterTurnFailure(terminal, id, error, { ...failed, guard: exhaustionGuard });
     if (next.cancelled && terminal) { notice = STOPPED; return; }
     if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message) }); return; }
@@ -360,7 +360,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       return;
     }
     notice = isUsageExhaustedMessage(message) ? message : `Error: ${failureLine(message)}`;
-    if (next.back.length) terminal.restoreDraft(next.back.join('\n\n'));
+    if (next.back.length) terminal?.restoreDraft(next.back.join('\n\n'));
   };
   try {
     while (true) {

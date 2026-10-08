@@ -1,4 +1,4 @@
-/** Esc / "stop & send" cancels the turn, not the vendor: the next turn runs on
+/** Stopping a turn cancels that turn, not the vendor: the next turn runs on
  * the same warm child (and so the same MCP servers), while a real failure
  * still drops it. Driven through runVendorSessionAttempt with a real child
  * speaking ACP that answers a cancel with stopReason `cancelled`. */

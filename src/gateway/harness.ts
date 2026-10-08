@@ -45,6 +45,7 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
    * modelClientForSession (agent/models/for-session.ts) chose for the route. */
   modelClient: ModelClient;
+  modelClientForStep?: () => Promise<ModelClient | 'switch' | undefined>;
 }
 
 /** The agent loop's usage in the shape every harness reports. Cost arrives
@@ -110,9 +111,9 @@ export async function runGatewayHarnessSessionTurn(
     // (ask -> bypass) applies to the rest of this turn.
     currentPermissionMode: async () => (await loadIndex())?.sessions.find((item) => item.id === session.id)?.permissionMode,
     modelClient,
+    ...(input.modelClientForStep ? { modelClientForStep: input.modelClientForStep } : {}),
     stateDir,
     ...(mcp.tools.length ? { extraTools: mcp.tools } : {}),
-    ...(session.contextProfile ? { contextProfile: session.contextProfile } : {}),
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.images?.length ? { images: input.images } : {}),
     onResponseDelta: (text, mode) => {

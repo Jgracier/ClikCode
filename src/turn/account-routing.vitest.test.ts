@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
 import type { AccountFailureKind } from './failover.js';
 import { nextUsableFailoverAccount, providerHasAccountForTurn } from './account-routing.js';
-import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, terminalFailoverError, turnBackendForAccount, type FailoverTally } from './account-routing.js';
+import { accountAfterFailure, initialAccountChoice, matchesDirectTurnModel, terminalFailoverError, turnAccounts, turnBackendForAccount, type FailoverTally } from './account-routing.js';
 
 vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../runtime/lazy-bridge.js')>(),
@@ -20,7 +22,7 @@ function account(id: string, extra: Partial<AiHarnessAccount> = {}): AiHarnessAc
 function state(accounts: AiHarnessAccount[], invocations: HarnessState['invocations'] = []): HarnessState {
   return {
     version: 1, installationId: 'test', localApiToken: 't', devicePrivateKeyPem: '', devicePublicKey: {},
-    accounts, sessions: [], invocations, globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' },
+    accounts, sessions: [], invocations, globalSettings: { effort: 'medium', permissionMode: 'ask' },
     providerSettings: {},
   };
 }
@@ -55,10 +57,9 @@ describe('stored-usage account switch', () => {
     const a = account('a', { quotaState: 'exhausted', quotaRetryAt: earlier });
     const b = account('b', { quotaState: 'exhausted', quotaRetryAt: earlier });
     const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
-    const session = { accountFailover: 'on-quota-exhausted' } as HarnessSession;
     const held = state([a, b]);
     const after = (from: AiHarnessAccount) => accountAfterFailure({
-      state: held, session, account: from, failure: new Error('429 too many requests'), kind: 'temporarily-throttled',
+      state: held, account: from, failure: new Error('429 too many requests'), kind: 'temporarily-throttled',
       matchesBackend: () => true, tally, persist: async () => undefined,
     });
     expect((await after(a)).id).toBe('b');
@@ -71,7 +72,7 @@ describe('stored-usage account switch', () => {
     const current = account('current', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
     const next = account('next');
     const attempted = new Map<string, number>();
-    expect(initialAccountChoice(state([current, next]), current, 'on-quota-exhausted', () => true, attempted))
+    expect(initialAccountChoice(state([current, next]), current, () => true, attempted))
       .toEqual({ kind: 'switch', account: next });
     expect([...attempted.keys()]).toEqual(['current']);
   });
@@ -93,6 +94,15 @@ describe('stored-usage account switch', () => {
       matchesBackend: () => true, exhaustedAny: true, lastFailure: quotaFailure, lastOtherFailure: otherFailure,
     });
     expect(result).toBe(otherFailure);
+  });
+
+  it('does not treat the account that just refused as one that can still run', () => {
+    const open = account('open');
+    const result = terminalFailoverError({
+      state: state([open]), current: open, matchesBackend: () => true, exhaustedAny: true,
+      lastFailure: new Error("You've hit your usage limit"), attempted: new Map([['open', Date.now()]]),
+    });
+    expect((result as Error).message).toContain('All accounts exhausted');
   });
 
   it('reports exhaustion only after every matching account is spent', () => {
@@ -124,7 +134,7 @@ describe('stored-usage account switch', () => {
       usage: { at: new Date().toISOString(), label: 'weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: later }] } as AiHarnessAccount['usage'],
     });
     const next = account('next');
-    expect(initialAccountChoice(state([spent, next]), spent, 'on-quota-exhausted', () => true, new Map()))
+    expect(initialAccountChoice(state([spent, next]), spent, () => true, new Map()))
       .toEqual({ kind: 'switch', account: next });
     expect(spent.quotaState).toBeUndefined();
   });
@@ -223,12 +233,11 @@ describe('stored-usage account switch', () => {
 });
 
 describe('the failover step both account backends take', () => {
-  const step = (input: { accounts: AiHarnessAccount[]; failure: unknown; kind: AccountFailureKind; signal?: AbortSignal; failover?: 'never' | 'on-quota-exhausted' }) => {
+  const step = (input: { accounts: AiHarnessAccount[]; failure: unknown; kind: AccountFailureKind; signal?: AbortSignal }) => {
     const tally: FailoverTally = { attempted: new Map(), exhaustedAny: false };
     const persist = vi.fn(async () => undefined);
-    const session = { accountFailover: input.failover ?? 'on-quota-exhausted' } as HarnessSession;
     const result = accountAfterFailure({
-      state: state(input.accounts), session, account: input.accounts[0]!, failure: input.failure, kind: input.kind,
+      state: state(input.accounts), account: input.accounts[0]!, failure: input.failure, kind: input.kind,
       ...(input.signal ? { signal: input.signal } : {}), matchesBackend: () => true, tally, persist,
     });
     return { result, tally, persist };
@@ -284,8 +293,40 @@ describe('the failover step both account backends take', () => {
     await expect(step({ accounts: [account('a'), account('b')], failure: refused, kind: 'request-invalid' }).result).rejects.toBe(refused);
   });
 
-  it('says usage ran out, not the vendor wording, when failover is off', async () => {
-    const { result } = step({ accounts: [account('only'), account('other')], failure: new Error('Payment Required'), kind: 'quota-exhausted', failover: 'never' });
-    await expect(result).rejects.toThrow(/Usage Exhausted|exhausted/i);
+  it('moves a usage refusal to the account whose usage came back on disk', async () => {
+    const current = account('current');
+    const stale = account('other', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const disk = await readState({ transcripts: [] });
+    disk.accounts.push(account('other'));
+    await writeState(disk);
+    const accounts = turnAccounts({
+      state: state([current, stale]), session: { id: 's', accountId: current.id } as HarnessSession,
+      matchesBackend: () => true, persist: async () => undefined, current: () => current, adopt: () => undefined,
+    });
+    expect((await accounts.after(new Error("You've hit your usage limit. try again at 12:12 PM."), 'quota-exhausted')).id).toBe('other');
+  });
+
+  it('stops on model capacity instead of trying the account that still has usage', async () => {
+    const current = account('current');
+    const open = account('other');
+    const failure = new Error('Selected model is at capacity. Please try a different model.');
+    const accounts = turnAccounts({
+      state: state([current, open]), session: { id: 's', accountId: current.id } as HarnessSession,
+      matchesBackend: () => true, persist: async () => undefined, current: () => current, adopt: () => undefined,
+    });
+    await expect(accounts.after(failure, 'other')).rejects.toBe(failure);
+  });
+
+  it('tries another account on a usage limit', async () => {
+    const first = account('first');
+    const other = account('other');
+    const accounts = turnAccounts({
+      state: state([first, other]), session: { accountId: first.id } as HarnessSession,
+      matchesBackend: () => true, persist: async () => undefined, current: () => first, adopt: () => undefined,
+    });
+    expect((await accounts.after(new Error('quota reached'), 'quota-exhausted')).id).toBe('other');
+    const spent = account('only');
+    const exhausted = step({ accounts: [spent], failure: new Error('quota reached'), kind: 'quota-exhausted' });
+    await expect(exhausted.result).rejects.toThrow(/Usage Exhausted|exhausted/i);
   });
 });

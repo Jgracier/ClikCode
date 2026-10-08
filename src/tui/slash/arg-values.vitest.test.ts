@@ -20,7 +20,7 @@ const harness = {
 } as AiLocalHarnessDefinition;
 const session = {
   id: 'chat', route: 'local', accountId: null, provider: 'grok', nativeHarness: 'grok', model: null,
-  effort: 'medium', accountFailover: 'never', createdAt: '', updatedAt: '', status: 'active',
+  effort: 'medium', createdAt: '', updatedAt: '', status: 'active',
 } as HarnessSession;
 
 function account(label: string, provider: string, status: AiHarnessAccount['status'] = 'ready'): AiHarnessAccount {

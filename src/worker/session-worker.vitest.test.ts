@@ -73,7 +73,7 @@ async function isolatedSession(): Promise<HarnessSession> {
   const now = new Date().toISOString();
   const session: HarnessSession = {
     id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
   // A blank draft is normally process-local. The test launches a separate
@@ -179,7 +179,7 @@ describe('session worker (real spawned process, real socket)', () => {
     const now = new Date().toISOString();
     const second: HarnessSession = {
       id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
-      effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+      effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(second);
     forceStoreSession(second.id);

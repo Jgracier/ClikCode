@@ -30,12 +30,12 @@ vi.mock('../local-models/index', async (importOriginal) => ({
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'local', accountId: 'acct', provider: 'vendor', model: 'm', effort: 'high',
-  permissionMode: 'auto', accountFailover: 'on-quota-exhausted', nativeHarness: 'vendor', nativeSessionId: 'native-1',
+  permissionMode: 'auto', nativeHarness: 'vendor', nativeSessionId: 'native-1',
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active', ...overrides,
 });
-const local = (): HarnessSession => session({ route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: null, effort: 'auto', accountFailover: 'never', nativeHarness: undefined, nativeSessionId: undefined });
-const gateway = (): HarnessSession => session({ route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', accountFailover: 'never', nativeHarness: undefined, nativeSessionId: undefined });
-const emptyState = (): HarnessState => ({ sessions: [], accounts: [], invocations: [], providerSettings: {}, globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' } } as unknown as HarnessState);
+const local = (): HarnessSession => session({ route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: null, effort: 'auto', nativeHarness: undefined, nativeSessionId: undefined });
+const gateway = (): HarnessSession => session({ route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', nativeHarness: undefined, nativeSessionId: undefined });
+const emptyState = (): HarnessState => ({ sessions: [], accounts: [], invocations: [], providerSettings: {}, globalSettings: { effort: 'medium', permissionMode: 'ask' } } as unknown as HarnessState);
 
 describe('the two meanings of a route', () => {
   it('ClikCode\'s own agent runs on the Gateway and on ClikCode Local; the Gateway service is the Gateway alone', () => {
@@ -91,7 +91,7 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
   it('switching to it sheds the vendor harness and keeps the approval mode', () => {
     const switched = session();
     applyClikCodeLocalSessionPolicy(switched);
-    expect(switched).toMatchObject({ route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: null, effort: 'auto', permissionMode: 'auto', accountFailover: 'never' });
+    expect(switched).toMatchObject({ route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: null, effort: 'auto', permissionMode: 'auto' });
     expect(switched.nativeHarness).toBeUndefined();
     expect(switched.nativeSessionId).toBeUndefined();
     expect(switched.gatewayConfirmed).toBeUndefined();

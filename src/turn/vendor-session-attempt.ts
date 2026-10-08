@@ -176,7 +176,7 @@ export async function runVendorSessionAttempt(input: {
     // not a failure: the transport asked the vendor to stop and either saw it
     // settle (the child stays, resumable) or killed the child itself
     // (persistent-session.ts settleCancel). Closing here as well respawned the
-    // vendor and every MCP server it starts on each Esc / stop & send.
+    // vendor and every MCP server it starts on each stop.
     if (persistent && !isTurnCancelled(error)) await closePersistentTransport(session.id);
     throw error;
   }

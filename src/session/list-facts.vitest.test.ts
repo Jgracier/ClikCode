@@ -5,8 +5,7 @@ import type { HarnessSession } from './model';
 function session(overrides: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id: 's1', conversationId: 'c1', route: 'local', accountId: null, provider: null, model: null,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never',
-    createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', status: 'active',
     ...overrides,
   } as HarnessSession;
 }

@@ -6,9 +6,11 @@
  *    `/effort high`, `/permissions plan`, `/account work`. These need no
  *    picker and show no panel: their own handlers end in a `settings` payload,
  *    which in the TUI is a status-line render and nothing else, so the change
- *    simply appears where the model and mode are already shown. The running
- *    turn keeps the model and permission mode it was spawned with -- those are
- *    fixed in its argv and environment -- and the next turn uses the new ones.
+ *    simply appears where the model and mode are already shown. A manual
+ *    account change is picked up at the next model call. A model or
+ *    permission change is read again where that turn already re-reads it,
+ *    and otherwise on the next turn: a vendor process keeps the argv and
+ *    environment it was spawned with.
  *  - **at the turn boundary** for everything else, because a picker or a panel
  *    needs the screen the answer is being written on. That is the next moment
  *    it could run, and it runs there silently: no queued row, no notice.

@@ -31,7 +31,7 @@ import { LiveTurnInputBroker } from '../turn/live-input.js';
 import { deliverTyped } from '../turn/send-mode.js';
 import { CLIKCODE_NOTICE_TAG } from '../session/clikcode-notice.js';
 import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning, setVendorBackgroundTurnHandler } from '../turn/vendor-process.js';
-import { discardInterruptedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
+import { discardInterruptedTurn, markFailedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
 import { FrameDecoder, type ClientCommand } from './protocol.js';
@@ -527,15 +527,21 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         // worth keeping (text or tool activity already streamed) is
         // preserved as an interrupted turn a future turn can carry on from;
         // nothing yet is simply discarded, as if it was never sent.
-        const outputStarted = observer.turnOutputStarted;
-        if (outputStarted) await preserveInterruptedTurn(sessionId, command.text, observer.liveResponseText, true);
+        // Text or a tool row is an answer. Thinking, and a notice, are not:
+        // the prompt comes back when the client asked, and the turn is not
+        // kept. An answer is kept even when the client asked for the draft.
+        const answered = observer.turnHasAnswer;
+        if (answered) await preserveInterruptedTurn(sessionId, command.text, observer.liveResponseText, true);
         else {
           await discardInterruptedTurn(sessionId, command.text);
           if (activeRestoreDraft) observer.broadcast({ type: 'restore-draft', text: command.text });
         }
-        broadcastNotice(!outputStarted && activeRestoreDraft ? `${STOPPED} · draft restored` : STOPPED);
+        broadcastNotice(!answered && activeRestoreDraft ? `${STOPPED} · draft restored` : STOPPED);
       } else {
         const message = error instanceof Error ? error.message : String(error);
+        await markFailedTurn(sessionId, command.text).catch((saveError: unknown) => {
+          lifecycle('worker.turn.failed-journal-error', { message: saveError instanceof Error ? saveError.message : String(saveError) });
+        });
         observer.broadcast({ type: 'turn-error', message });
         // The one retry after the reset ran out too: it is not parked again.
         if (resumed && isUsageExhaustedMessage(message)) broadcastNotice('Still out of usage after the reset · not retrying again');
@@ -672,6 +678,50 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       observer.broadcast({ type: 'queue-changed' });
       // Every window drops it now, a turn running or not.
       void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);
+      return;
+    }
+    if (command.type === 'send-queued') {
+      // Enter again. The oldest message the user queued goes into this turn
+      // at the next pause. The turn is not cancelled, so a sub-agent it
+      // started keeps running. A command or a notice stays for the turn's end.
+      const answer = (disposition: 'steered' | 'queued' | 'error', id?: string, message?: string, unsteered?: boolean): void => {
+        if (id) sendEvent(socket, { type: 'submission', id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}) });
+      };
+      if (!activeLiveInput) return;
+      const liveInput = activeLiveInput;
+      let item: { id: string; text: string } | undefined;
+      try {
+        const state = await readState({ transcripts: [sessionId] });
+        const session = state.sessions.find((entry) => entry.id === sessionId);
+        const queued = session?.queuedTurns?.find((entry) => entry.kind !== 'command' && entry.kind !== 'notification');
+        if (!session || !queued) return;
+        if (liveInput.holding(queued.id)) {
+          answer('queued', queued.id);
+          return;
+        }
+        if (!consumeSessionTurn(session, queued.id)) return;
+        await writeState(state);
+        item = { id: queued.id, text: queued.text };
+      } catch (error) {
+        answer('error', undefined, error instanceof Error ? error.message : String(error));
+        return;
+      }
+      if (!item) return;
+      const queuedItem = item;
+      observer.broadcast({ type: 'queue-changed' });
+      const handled = (async () => {
+        try {
+          const result = await liveInput.submit(queuedItem.text, queuedItem.id, { queue: false });
+          answer(result.disposition === 'steered' ? 'steered' : 'queued', queuedItem.id, undefined, result.unsteered);
+          if (result.disposition !== 'steered') broadcastQueueChanged();
+          else showEveryWindow();
+          void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
+        } catch (error) {
+          answer('error', queuedItem.id, error instanceof Error ? error.message : String(error));
+        }
+      })();
+      activeSubmissions?.add(handled);
+      await handled;
       return;
     }
     if (command.type === 'cancel') {

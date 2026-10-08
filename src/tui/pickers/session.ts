@@ -472,8 +472,7 @@ export async function interactiveSessionPicker(
   const pinned = cliThreadTransport(match.harness);
   const adopted: HarnessSession = {
     id, conversationId: id, route: 'local', accountId: account?.id ?? null, provider: match.harness.provider,
-    model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, accountFailover: defaults.accountFailover,
-    createdAt: now, updatedAt: now, status: 'active',
+    model: null, effort: defaults.effort, permissionMode: defaults.permissionMode, createdAt: now, updatedAt: now, status: 'active',
     nativeHarness: match.harness.command, nativeSessionId: nativeId, nativeStartedAt: now,
     ...(pinned ? { nativeTransport: pinned } : {}),
     // Named only from a title the harness itself wrote. The resume list also

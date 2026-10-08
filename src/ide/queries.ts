@@ -180,7 +180,7 @@ export async function accountList(state: HarnessState, session: HarnessSession |
     .map((harness) => ({ provider: harness.command, name: harness.displayName }));
   const chatHarness = session?.route === 'local' && session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   return {
-    accounts, addable, failover: (session?.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto',
+    accounts, addable,
     ...(chatHarness ? { chat: { provider: chatHarness.command, name: chatHarness.displayName } } : {}),
   };
 }
@@ -206,7 +206,6 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
     }],
   };
   if (harness) {
-    settings.failover = (session.accountFailover ?? 'on-quota-exhausted') === 'never' ? 'never' : 'auto';
     if (harness.planMode) settings.plan = session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
   }
   return settings;

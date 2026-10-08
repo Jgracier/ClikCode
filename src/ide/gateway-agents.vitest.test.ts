@@ -32,8 +32,7 @@ afterEach(() => {
 });
 
 const gatewaySession = (extra: Record<string, unknown> = {}) => ({
-  id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', accountFailover: 'never',
-  createdAt: '2026-10-06T00:00:00.000Z', updatedAt: '2026-10-06T00:00:00.000Z', status: 'active', ...extra,
+  id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', createdAt: '2026-10-06T00:00:00.000Z', updatedAt: '2026-10-06T00:00:00.000Z', status: 'active', ...extra,
 });
 
 async function home(sessions: unknown[]): Promise<void> {

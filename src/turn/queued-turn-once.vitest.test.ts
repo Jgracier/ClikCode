@@ -48,7 +48,7 @@ describe('a queued turn submitted twice', () => {
     const state = await readState();
     const session = {
       id: 's1', conversationId: 's1', route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: 'test-model', effort: 'auto',
-      permissionMode: 'auto', accountFailover: 'never', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      permissionMode: 'auto', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
       status: 'active', workspace: home, title: 'named', name: 'named', nameSource: 'user',
     } as HarnessSession;
     enqueueSessionTurn(session, { id: 'q1', text: 'do the thing', submittedAt: '2026-01-01T00:00:01.000Z' }, '2026-01-01T00:00:01.000Z');

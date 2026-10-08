@@ -446,6 +446,9 @@ async function driveWorkerTurn(
             return await Promise.race([answered, new Promise<TakeBackOutcome>((resolveLate) => { setTimeout(() => resolveLate('error'), SUBMISSION_ANSWER_MS).unref(); })]);
           } finally { pendingTakeBacks.delete(id); }
         },
+        // Enter again: into the chat at the next pause. The worker does not
+        // cancel the turn, so a sub-agent it started keeps running.
+        () => { client.send({ type: 'send-queued' }); },
       );
       // This follow lasts exactly as long as the display it drives: ended
       // by anything else, the loop asks the worker again -- it follows the

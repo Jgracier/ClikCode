@@ -57,6 +57,8 @@ export type IdeRequest =
    * `submission` event. */
   | { type: 'send'; text: string; id?: string }
   | { type: 'cancel'; restoreDraft: boolean }
+  /** Enter again: the oldest queued user message goes into the running turn. */
+  | { type: 'send-queued' }
   /** Take a queued message back before its turn (see the worker's `unqueue`). */
   | { type: 'unqueue'; id: string }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
@@ -205,8 +207,6 @@ export interface IdeAccounts {
   accounts: IdeAccount[];
   /** Harnesses an account can be added to, by `choose add-account`. */
   addable: Array<{ provider: string; name: string }>;
-  /** This chat's: switch accounts automatically when one runs out. */
-  failover: 'auto' | 'never';
   /** The provider this chat runs on, as the bridge reads it now: what the
    * account menu titles, lists and adds to. The panel's own copy can lag a
    * switch, and a menu built from both once added a Grok account under a
@@ -217,7 +217,6 @@ export interface IdeAccounts {
 export interface IdeChatSettings {
   effort?: { current?: string; choices: string[] };
   permissions?: { current: string; choices: string[] };
-  failover?: 'auto' | 'never';
   plan?: boolean;
   fast?: boolean;
   /** One switch. Off until this chat turns it on. `current` and `choices`
@@ -243,7 +242,6 @@ export type IdeChoice =
   | { kind: 'agent'; agent: string | null }
   | { kind: 'effort'; value: string }
   | { kind: 'permissions'; value: string }
-  | { kind: 'failover'; value: 'auto' | 'never' }
   | { kind: 'plan'; on: boolean }
   /** ClikDeploy Gateway: served by the fastest provider instead of the cheapest. */
   | { kind: 'fast'; on: boolean }

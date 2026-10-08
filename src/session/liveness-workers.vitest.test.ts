@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { liveWorkerSessions } from './liveness.js';
+import { liveWorkerSessions, sessionActivity } from './liveness.js';
+import type { HarnessSession } from './model.js';
 import { ensureWorkersDirectory, writeWorkerRecord } from '../worker/registry.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
@@ -43,4 +44,14 @@ describe('liveWorkerSessions reads the worker directory once', () => {
     expect(live('dead')).toBe(false);
     expect(live('chat-0')).toBe(false);
   });
+});
+
+it('does not call a failed turn working when its worker remains open', () => {
+  const now = new Date().toISOString();
+  const session = {
+    id: 'chat', status: 'active', pendingTurn: { prompt: 'go', startedAt: now, updatedAt: now, outputStarted: true, failedAt: now },
+  } as HarnessSession;
+  expect(sessionActivity(session, () => true)).toBe('idle');
+  delete session.pendingTurn!.failedAt;
+  expect(sessionActivity(session, () => true)).toBe('working');
 });

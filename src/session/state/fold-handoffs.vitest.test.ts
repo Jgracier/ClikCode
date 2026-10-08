@@ -34,7 +34,7 @@ function chat(id: string, harness: string, minute: number, messages: TranscriptM
   // may still carry `handoff`, and from the last one before this, nothing.
   return {
     id, conversationId: 'root', route: 'local', accountId: null, provider: harness, model: `${harness}-model`, nativeHarness: harness,
-    effort: 'medium', accountFailover: 'never', createdAt: at(minute), updatedAt: at(minute), status: 'active', messages,
+    effort: 'medium', createdAt: at(minute), updatedAt: at(minute), status: 'active', messages,
     nativeSessionId: `${harness}-thread`,
     ...(parent ? { parentSessionId: parent, ...(handoff ? { handoff: { fromSessionId: parent, fromHarness: 'x', at: at(minute) } } : { fork: true }) } : {}),
   } as HarnessSession;

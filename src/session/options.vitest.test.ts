@@ -32,7 +32,7 @@ vi.mock('../runtime/lazy-bridge', () => ({
 }));
 
 import {
-  applyDefaultSetting, conversationOption, normalizeFailoverWord, optionForControl, optionForHarness,
+  applyDefaultSetting, conversationOption, optionForControl, optionForHarness,
   parseHarnessOption, setSessionHarnessOption, VALID_EFFORTS, VALID_PERMISSION_MODES,
 } from './options';
 import type { AiHarnessOptionDefinition, AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -53,7 +53,6 @@ const harness = (overrides: Partial<AiLocalHarnessDefinition> = {}): AiLocalHarn
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 'sess-1', conversationId: 'sess-1', route: 'local', accountId: null,
   provider: 'acme', model: null, effort: 'medium', permissionMode: 'ask',
-  accountFailover: 'on-quota-exhausted',
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active',
   ...overrides,
 });
@@ -147,20 +146,6 @@ describe('parseHarnessOption', () => {
   });
 });
 
-describe('normalizeFailoverWord', () => {
-  it('maps auto to on-quota-exhausted', () => {
-    expect(normalizeFailoverWord('auto')).toBe('on-quota-exhausted');
-  });
-
-  it('leaves never as never', () => {
-    expect(normalizeFailoverWord('never')).toBe('never');
-  });
-
-  it('rejects anything else', () => {
-    expect(() => normalizeFailoverWord('sometimes')).toThrow('failover must be auto or never');
-  });
-});
-
 describe('applyDefaultSetting', () => {
   // `'model' in target` is an own-property check, so a target that CAN carry
   // a model must actually have the key present (even as undefined) for the
@@ -192,7 +177,7 @@ describe('applyDefaultSetting', () => {
     // through to the same unknown-key branch as any other unrecognised key.
     const target: Partial<HarnessDefaultSettings> = {};
     expect(() => applyDefaultSetting(target as Partial<HarnessDefaultSettings & { model: string }>, 'model', 'gpt-5'))
-      .toThrow('unknown setting "model"; choose effort, permissions, send, or failover');
+      .toThrow('unknown setting "model"; choose effort, permissions, or send');
   });
 
   it('sets effort when no harness is given to gate against', () => {
@@ -253,12 +238,6 @@ describe('applyDefaultSetting', () => {
       .toThrow("Acme CLI does not map ClikCode's permission modes to a real flag; setting one here would silently do nothing.");
   });
 
-  it('sets failover through the same normalizeFailoverWord rules', () => {
-    const target = settings();
-    applyDefaultSetting(target, 'failover', 'auto');
-    expect(target.accountFailover).toBe('on-quota-exhausted');
-  });
-
   it('is case-insensitive on the key', () => {
     const target = settings();
     applyDefaultSetting(target, 'EFFORT', 'high');
@@ -267,13 +246,13 @@ describe('applyDefaultSetting', () => {
 
   it('rejects an unknown key, mentioning model only when the target has one', () => {
     const target = settings();
-    expect(() => applyDefaultSetting(target, 'bogus', 'x')).toThrow('unknown setting "bogus"; choose model, effort, permissions, or failover');
+    expect(() => applyDefaultSetting(target, 'bogus', 'x')).toThrow('unknown setting "bogus"; choose model, effort, or permissions');
   });
 
   it('omits model from the unknown-key message when the target has no model field', () => {
     const target: Partial<HarnessDefaultSettings> = {};
     expect(() => applyDefaultSetting(target as Partial<HarnessDefaultSettings & { model: string }>, 'bogus', 'x'))
-      .toThrow('unknown setting "bogus"; choose effort, permissions, send, or failover');
+      .toThrow('unknown setting "bogus"; choose effort, permissions, or send');
   });
 
   it('takes send (steer or queue) as a global default only', () => {

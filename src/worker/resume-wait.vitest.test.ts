@@ -45,7 +45,7 @@ async function chat(fields: Partial<HarnessSession> = {}, accounts = [spentUntil
   const now = new Date(T0).toISOString();
   state.sessions.push({
     id: 's1', conversationId: 's1', route: 'local', accountId: 'a1', provider: 'anthropic', model: null, nativeHarness: 'claude',
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'done' }], ...fields,
   } as HarnessSession);
   forceStoreSession('s1');
@@ -63,6 +63,8 @@ describe('resumeStep', () => {
   it('sends once the reset passed and an account of the same provider can take it', () => {
     expect(resumeStep(resumeAt, [spentUntilReset()], 'anthropic', RESET)).toBe('send');
     expect(resumeStep(resumeAt, [spentUntilReset()], 'openai', RESET)).toEqual({ wait: RESUME_RECHECK_MS });
+    // The same transport check the turn uses. An account it cannot run on does not wake the wait.
+    expect(resumeStep(resumeAt, [spentUntilReset()], 'anthropic', RESET, () => false)).toEqual({ wait: RESUME_RECHECK_MS });
   });
   it('keeps looking past the reset for a while, then gives up', () => {
     const held = { ...spentUntilReset(), status: 'signed-out' } as unknown as AiHarnessAccount;

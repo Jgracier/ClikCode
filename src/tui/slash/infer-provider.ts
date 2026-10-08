@@ -48,7 +48,7 @@ export function providerImpliedBy(
   }
   if (route.head === 'account' || route.head === 'accounts') {
     // `/account work` and `/accounts use work` name the same thing. Any other
-    // /accounts subcommand (add, remove, failover, a bare list) is not naming
+    // /accounts subcommand (add, remove, a bare list) is not naming
     // one, so there is nothing to derive from it.
     const label = route.head === 'accounts'
       ? (/^use\s+/i.test(args) ? args.replace(/^use\s+/i, '') : '')

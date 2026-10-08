@@ -74,10 +74,6 @@ export interface HarnessSession {
   /** ClikDeploy Gateway only: `fast` asks to be served by the fastest
    * measured provider of the model rather than the cheapest (/fast). */
   speed?: 'fast';
-  /** How much context ClikCode's own agent spends (agent/context-profile.ts):
-   * absent, it is chosen from the model's window and speed. A per-session
-   * pin for comparing profiles; CLIKCODE_CONTEXT_PROFILE overrides it. */
-  contextProfile?: 'minimal' | 'lean' | 'full';
   name?: string;
   /** Who named it. `user` is a /rename and is never overwritten; `provider` is
    * the harness's own title, or one the first turn asked the model for. A name
@@ -85,7 +81,6 @@ export interface HarnessSession {
   nameSource?: 'user' | 'provider';
   /** Whether this conversation has spent its one embedded title request. */
   titleAttempts?: number;
-  accountFailover: 'never' | 'on-quota-exhausted';
   createdAt: string;
   updatedAt: string;
   /** A closed chat is retained for history but is never reopened implicitly. */
@@ -150,6 +145,9 @@ export interface HarnessSession {
     startedAt: string;
     updatedAt: string;
     outputStarted: boolean;
+    /** The worker ended this attempt with an error. Keep its partial work
+     * for a later continuation, but do not show it as a live turn. */
+    failedAt?: string;
     /** Sub-agents this turn has running, so another terminal's conversation
      * list can show them. Part of the journal, so it ends with the turn. */
     subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string; provider?: string }>;
@@ -193,7 +191,6 @@ export interface HarnessSession {
 export interface HarnessDefaultSettings {
   effort: string;
   permissionMode: AiHarnessPermissionMode;
-  accountFailover: 'never' | 'on-quota-exhausted';
   /** Global only: what a message typed mid-turn does (`/send`,
    *  turn/send-mode.ts). Absent means steer. */
   sendMode?: 'steer' | 'queue';

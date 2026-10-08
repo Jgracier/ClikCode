@@ -10,12 +10,12 @@ import type { HarnessSession, HarnessState } from './model';
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'vendor', model: 'm', effort: 'high',
-  permissionMode: 'auto', accountFailover: 'never', nativeHarness: 'vendor', messages: [{ role: 'user', content: 'hi' }],
+  permissionMode: 'auto', nativeHarness: 'vendor', messages: [{ role: 'user', content: 'hi' }],
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active', ...overrides,
 });
 const stateWith = (...sessions: HarnessSession[]): HarnessState => ({
   sessions, accounts: [], invocations: [], providerSettings: {},
-  globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' },
+  globalSettings: { effort: 'medium', permissionMode: 'ask' },
 } as unknown as HarnessState);
 const stored = async (id = 's1'): Promise<HarnessSession | undefined> => (await readState({ transcripts: [id] })).sessions.find((item) => item.id === id);
 /** A live claim another client, on another host, holds. */

@@ -28,8 +28,7 @@ describe('resume in', () => {
     expect(resumePromptForPendingTurn(undefined, 'finish the edit')).toBe('finish the edit');
     const moved = {
       id: 'original', route: 'local', accountId: 'old', provider: 'old', model: null,
-      effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted',
-      createdAt: '', updatedAt: '', status: 'active', messages: [{ role: 'user', content: 'earlier request' }],
+      effort: 'medium', permissionMode: 'ask', createdAt: '', updatedAt: '', status: 'active', messages: [{ role: 'user', content: 'earlier request' }],
       pendingTurn: { prompt: 'finish the edit', response: 'changed a.ts', startedAt: '', updatedAt: '', outputStarted: true },
     } as HarnessSession;
     leaveProvider(moved);

@@ -14,14 +14,14 @@ function account(id: string, extra: Partial<AiHarnessAccount> = {}): AiHarnessAc
 function session(accountId: string): HarnessSession {
   return {
     id: 'chat', route: 'local', accountId, provider: 'anthropic', nativeHarness: 'claude', model: null,
-    effort: 'medium', accountFailover: 'on-quota-exhausted', createdAt: '', updatedAt: '', status: 'active',
+    effort: 'medium', createdAt: '', updatedAt: '', status: 'active',
   };
 }
 
 function state(accounts: AiHarnessAccount[], invocations: HarnessState['invocations'] = []): HarnessState {
   return {
     version: 1, installationId: 't', localApiToken: 't', devicePrivateKeyPem: '', devicePublicKey: {},
-    accounts, sessions: [], invocations, globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' },
+    accounts, sessions: [], invocations, globalSettings: { effort: 'medium', permissionMode: 'ask' },
     providerSettings: {},
   };
 }

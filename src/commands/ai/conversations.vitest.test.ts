@@ -6,14 +6,13 @@ const now = new Date().toISOString();
 const state = {
   version: 1, installationId: 't', localApiToken: 't', devicePrivateKeyPem: '', devicePublicKey: {},
   accounts: [], sessions: [], invocations: [],
-  globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' },
+  globalSettings: { effort: 'medium', permissionMode: 'ask' },
   providerSettings: {},
 } as unknown as HarnessState;
 
 const source = {
   id: 'old', conversationId: 'old', route: 'local', accountId: 'acct', provider: 'anthropic', model: 'opus',
-  nativeHarness: 'claude', effort: 'xhigh', permissionMode: 'bypass', accountFailover: 'never',
-  harnessOptions: { verbose: true }, workspace: '/work', createdAt: now, updatedAt: now, status: 'active',
+  nativeHarness: 'claude', effort: 'xhigh', permissionMode: 'bypass', harnessOptions: { verbose: true }, workspace: '/work', createdAt: now, updatedAt: now, status: 'active',
   messages: [{ role: 'user', content: 'the old conversation' }], nativeSessionId: 'thread-1',
 } as unknown as HarnessSession;
 
@@ -22,7 +21,7 @@ describe('/new', () => {
     const fresh = newConversationSession(state, source);
     expect(fresh).toMatchObject({
       provider: 'anthropic', nativeHarness: 'claude', model: 'opus', accountId: 'acct',
-      effort: 'xhigh', permissionMode: 'bypass', accountFailover: 'never', workspace: '/work',
+      effort: 'xhigh', permissionMode: 'bypass', workspace: '/work',
       harnessOptions: { verbose: true },
     });
   });

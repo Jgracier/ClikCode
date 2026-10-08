@@ -36,7 +36,7 @@ beforeEach(async () => {
   const now = new Date().toISOString();
   state.sessions.push({
     id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: null, model: null,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     messages: [{ role: 'user', content: 'hi' }],
   } as unknown as HarnessSession);
   await writeState(state);

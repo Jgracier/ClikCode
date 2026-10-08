@@ -18,7 +18,7 @@ const daysAgo = (days: number): string => new Date(NOW - days * 86_400_000).toIS
 function chat(id: string, messages: TranscriptMessage[], extra: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id, route: 'local', accountId: null, provider: 'anthropic', model: 'sonnet', effort: 'medium', permissionMode: 'ask',
-    accountFailover: 'never', createdAt: daysAgo(30), updatedAt: daysAgo(1), status: 'active', nativeHarness: 'claude',
+createdAt: daysAgo(30), updatedAt: daysAgo(1), status: 'active', nativeHarness: 'claude',
     messages, ...extra,
   } as HarnessSession;
 }

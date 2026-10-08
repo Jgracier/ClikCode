@@ -24,7 +24,7 @@ describe('the model a Gateway conversation is shown running', () => {
 describe('an agent conversation in the footer', () => {
   const base = {
     id: 's', route: 'gateway' as const, accountId: null, provider: 'gateway', model: null, effort: 'platform-managed',
-    accountFailover: 'never' as const, createdAt: '', updatedAt: '', status: 'active' as const,
+createdAt: '', updatedAt: '', status: 'active' as const,
   };
   it('names the agent and the model that served its last turn', () => {
     expect(sessionModelLabel({ ...base, gatewayAgentId: 'a1', gatewayAgentName: 'Silas' }, 'claude-opus-5-5')).toBe('Silas · claude-opus-5-5');

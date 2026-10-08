@@ -43,7 +43,7 @@ function windows(usedPct: number, extra?: { advisory?: true; resetsAt?: string }
 function host(extra: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id: 'host', conversationId: 'host', route: 'local', accountId: 'claude-acct', provider: 'anthropic', model: 'sonnet',
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: ISO, updatedAt: ISO, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: ISO, updatedAt: ISO, status: 'active',
     nativeHarness: 'claude', swarm: ['lean'], ...extra,
   } as HarnessSession;
 }

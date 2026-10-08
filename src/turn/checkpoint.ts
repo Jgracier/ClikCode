@@ -193,6 +193,7 @@ export function beginPendingTurn(session: HarnessSession, prompt: string, now: s
   // The same request, and it never produced output. A retry is that one
   // line, not a second copy of it in the transcript.
   if (pending && pending.prompt.trim() === prompt.trim() && !pending.outputStarted) {
+    delete pending.failedAt;
     pending.updatedAt = now;
     session.updatedAt = now;
     return;
@@ -347,5 +348,15 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
 export function discardPendingTurn(session: HarnessSession, prompt?: string): boolean {
   if (!session.pendingTurn || (prompt !== undefined && session.pendingTurn.prompt !== prompt)) return false;
   delete session.pendingTurn;
+  return true;
+}
+
+/** A failed attempt can still have a partial answer and tool rows worth
+ * resuming. Keep those facts, while telling the conversation list that the
+ * worker is no longer generating this turn. */
+export function failPendingTurn(session: HarnessSession, prompt: string, now: string): boolean {
+  if (!session.pendingTurn || session.pendingTurn.prompt.trim() !== prompt.trim()) return false;
+  session.pendingTurn.failedAt = now;
+  session.updatedAt = now;
   return true;
 }

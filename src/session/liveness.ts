@@ -100,7 +100,7 @@ export async function livePendingTurns(
   const pending = new Map<string, PendingTurn>();
   await Promise.all(sessions.filter((session) => session.status === 'active' && workerIsLive(session.id)).map(async (session) => {
     const turn = (await loadSessionFile(session.id).catch(() => undefined))?.pendingTurn;
-    if (turn) pending.set(session.id, turn);
+    if (turn && !turn.failedAt) pending.set(session.id, turn);
   }));
   return pending;
 }
@@ -121,5 +121,5 @@ export function sessionActivity(
   pending: HarnessSession['pendingTurn'] = session.pendingTurn,
 ): 'working' | 'idle' | undefined {
   if (!sessionIsLive(session, workerIsLive, now, host)) return undefined;
-  return pending && workerIsLive(session.id) ? 'working' : 'idle';
+  return pending && !pending.failedAt && workerIsLive(session.id) ? 'working' : 'idle';
 }

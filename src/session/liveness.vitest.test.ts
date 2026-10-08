@@ -12,7 +12,7 @@ const workerFor = (id: string) => (sessionId: string) => sessionId === id;
 function session(overrides: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id: 'session-1', conversationId: 'c1', route: 'local', accountId: null, provider: null, model: null,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never',
+    effort: 'medium', permissionMode: 'ask',
     // Deliberately ancient: age is not evidence of anything here, which is the
     // whole point of deriving liveness instead of ageing a cached status out.
     createdAt: ago(86_400_000), updatedAt: ago(86_400_000), status: 'active', ...overrides,

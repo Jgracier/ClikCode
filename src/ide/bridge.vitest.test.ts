@@ -115,7 +115,7 @@ describe('the editor bridge draining a stuck queue', () => {
     const now = new Date().toISOString();
     state.sessions.push({
       id: 'stuck', conversationId: 'stuck', route: 'local', accountId: null, provider: 'anthropic', model: null, nativeHarness: 'claude',
-      effort: 'medium', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+      effort: 'medium', createdAt: now, updatedAt: now, status: 'active',
       messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'done' }],
       queuedTurns: [{ id: 'q1', text: 'send me', submittedAt: now }],
     } as never);
@@ -181,7 +181,7 @@ describe('the editor bridge running a `!` line', () => {
     const now = new Date().toISOString();
     state.sessions.push({
       id: 'shell', conversationId: 'shell', route: 'local', accountId: null, provider: 'anthropic', model: null, nativeHarness: 'claude',
-      effort: 'medium', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', workspace: process.cwd(), messages: [],
+      effort: 'medium', createdAt: now, updatedAt: now, status: 'active', workspace: process.cwd(), messages: [],
     } as never);
     await writeState(state);
     const bridge = new IdeBridge({} as Conf, { send: () => undefined });

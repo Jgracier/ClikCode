@@ -8,8 +8,6 @@
 
 export type AiHarnessRoute = 'local' | 'gateway';
 export type AiHarnessAuthKind = 'oauth' | 'api-key' | 'vendor-cli';
-/** Automatic failover is deliberately limited to a known usage/quota exhaustion. */
-export type AiHarnessAccountFailover = 'never' | 'on-quota-exhausted';
 export type AiHarnessPermissionMode = 'ask' | 'bypass' | 'auto';
 /** Honest integration depth. This describes the transport ClikCode actually
  * uses today, not every feature the vendor product happens to offer. */

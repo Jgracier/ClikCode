@@ -10,7 +10,7 @@ function chat(id: string, name: string, content: string): HarnessSession {
   const at = new Date().toISOString();
   return {
     id, route: 'local', accountId: null, provider: 'google', model: 'gemini-3', effort: 'medium', permissionMode: 'ask',
-    accountFailover: 'never', createdAt: at, updatedAt: at, status: 'active', nativeHarness: 'gemini', name,
+createdAt: at, updatedAt: at, status: 'active', nativeHarness: 'gemini', name,
     messages: [{ role: 'user', content }, { role: 'assistant', content: 'ok' }],
   } as HarnessSession;
 }

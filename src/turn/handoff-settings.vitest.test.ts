@@ -6,17 +6,16 @@ import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { carriedHandoffModel, carriedHandoffSettings, carriedPermissionMode, permissionLevel } from './handoff.js';
 import type { HarnessDefaultSettings } from '../session/model.js';
 
-const defaults: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask', accountFailover: 'never' };
+const defaults: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask' };
 const codex = localHarnessForCommand('codex')!;
 const opencode = localHarnessForCommand('opencode')!;
 const cn = localHarnessForCommand('cn')!;
-const source = { effort: 'xhigh', permissionMode: 'auto', accountFailover: 'on-quota-exhausted' } as const;
+const source = { effort: 'xhigh', permissionMode: 'auto' } as const;
 
 describe('carriedHandoffSettings', () => {
   it('carries effort and permission mode the target takes', () => {
     expect(carriedHandoffSettings(source, codex, defaults, ['low', 'medium', 'high', 'xhigh'])).toEqual({
-      effort: 'xhigh', permissionMode: 'auto', accountFailover: 'on-quota-exhausted',
-    });
+      effort: 'xhigh', permissionMode: 'auto' });
     // Levels unknown: carried, and the vendor's own refusal decides.
     expect(carriedHandoffSettings(source, codex, defaults).effort).toBe('xhigh');
   });

@@ -63,7 +63,7 @@ async function isolatedSession(): Promise<HarnessSession> {
   const now = new Date().toISOString();
   const session: HarnessSession = {
     id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
   };
   state.sessions.push(session);
   forceStoreSession(session.id);
@@ -110,10 +110,11 @@ describe('runTurnThroughWorker (real spawned worker, fake terminal)', () => {
     const rl = fakePrompter();
     await expect(runTurnThroughWorker(session.id, rl, 'hello', { echo: true }))
       .rejects.toThrow(/no account selected/);
-    // Five callbacks: stop, a message steered into the turn, a slash command
+    // Six callbacks: stop, a message steered into the turn, a slash command
     // typed during it (queued, then run when the turn ends), stepping away,
-    // and taking a waiting message back (Esc).
-    expect(rl.calls).toContain('startWaiting("thinking",[fn],[fn],[fn],[fn],[fn])');
+    // taking a waiting message back (Esc), and putting one into the chat
+    // (Enter again).
+    expect(rl.calls).toContain('startWaiting("thinking",[fn],[fn],[fn],[fn],[fn],[fn])');
     expect(rl.calls).toContain('stopWaiting()');
     // No worker attached yet: the spinner went up before it answered.
     expect(rl.calls.indexOf('turnStarting()')).toBeLessThan(rl.calls.findIndex((call) => call.startsWith('render(')));

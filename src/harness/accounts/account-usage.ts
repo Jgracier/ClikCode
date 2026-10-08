@@ -153,7 +153,7 @@ function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, ha
   const related = state.sessions.find((item) => item.accountId === account.id && item.nativeSessionId);
   return related ?? {
     id: `account:${account.id}`, route: 'local', accountId: account.id, provider: account.provider,
-    model: null, effort: 'medium', accountFailover: 'never', createdAt: '', updatedAt: '', status: 'active',
+    model: null, effort: 'medium', createdAt: '', updatedAt: '', status: 'active',
     nativeHarness: harnessCommand,
   };
 }

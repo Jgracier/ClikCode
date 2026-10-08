@@ -12,6 +12,9 @@ describe('ClikCode account failover', () => {
     expect(classifyAccountFailure(Object.assign(new Error('too many requests'), { statusCode: 429 }))).toBe('temporarily-throttled');
     expect(classifyAccountFailure(new Error('weekly usage limit reached'))).toBe('quota-exhausted');
     expect(classifyAccountFailure(new Error("You've hit your limit · resets tomorrow"))).toBe('quota-exhausted');
+    expect(classifyAccountFailure(new Error("You've hit your usage limit. Upgrade to Pro or try again at 12:12 PM."))).toBe('quota-exhausted');
+    // The model is full. Another account is refused the same way, so this is not a switch.
+    expect(classifyAccountFailure(new Error('Selected model is at capacity. Please try a different model.'))).toBe('other');
     expect(classifyAccountFailure(Object.assign(new Error('payment required'), { statusCode: 402 }))).toBe('quota-exhausted');
     expect(classifyAccountFailure(new Error('Rate limited: API error (status 429 Too Many Requests): subscription:free-usage-exhausted'), { isResultError: true }))
       .toBe('quota-exhausted');

@@ -20,6 +20,7 @@ vi.mock('../../runtime/lazy-bridge', async (importOriginal) => {
 const { aiSessionCommand } = await import('./handlers');
 const { readState } = await import('../../session/state/read');
 const { writeState } = await import('../../session/state/write');
+const { clearManualAccountSwitch, manualSwitchPending } = await import('../../turn/manual-account');
 
 const saved = { ...process.env };
 let root: string;
@@ -33,6 +34,7 @@ beforeEach(async () => {
   vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
 });
 afterEach(async () => {
+  clearManualAccountSwitch('s1');
   vi.restoreAllMocks();
   resetNativeSessionDiscoveryCache();
   for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
@@ -60,7 +62,7 @@ async function chatOnAccountA(threadFileExists: boolean): Promise<{ workspace: s
   state.sessions.push({
     id: 's1', conversationId: 's1', route: 'local', accountId: 'a', provider: 'anthropic', model: null, nativeHarness: 'claude',
     nativeSessionId: THREAD, nativeTransport: 'acp', nativeStartedAt: now, workspace,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     messages: [{ role: 'user', content: 'hello' }, { role: 'assistant', content: 'hi' }],
   } as HarnessSession);
   await writeState(state);
@@ -75,6 +77,26 @@ describe('switching account by hand', () => {
     expect(session.accountId).toBe('b');
     expect(session.nativeSessionId).toBe(THREAD);
     await expect(readFile(join(root, 'profiles', 'b', 'projects', project, `${THREAD}.jsonl`), 'utf8')).resolves.toBe('{"type":"user"}\n');
+  });
+
+  it('waits for the next call while a turn is in flight, and keeps the thread where the live process has it', async () => {
+    const { project } = await chatOnAccountA(true);
+    const state = await readState();
+    const session = state.sessions.find((item) => item.id === 's1')!;
+    const now = new Date().toISOString();
+    session.pendingTurn = { prompt: 'hello', response: '', startedAt: now, updatedAt: now, outputStarted: false };
+    await writeState(state);
+    await aiSessionCommand('s1', '/accounts use b');
+    const stored = (await readState()).sessions.find((item) => item.id === 's1')!;
+    expect(stored.accountId).toBe('b');
+    expect(stored.nativeSessionId).toBe(THREAD);
+    expect(manualSwitchPending('s1')).toEqual({ fromId: 'a', toId: 'b' });
+    await expect(readFile(join(root, 'profiles', 'a', 'projects', project, `${THREAD}.jsonl`), 'utf8')).resolves.toBe('{"type":"user"}\n');
+    await expect(readFile(join(root, 'profiles', 'b', 'projects', project, `${THREAD}.jsonl`), 'utf8')).rejects.toThrow();
+    await aiSessionCommand('s1', '/accounts use a');
+    expect(manualSwitchPending('s1')).toBeUndefined();
+    expect((await readState()).sessions.find((item) => item.id === 's1')!.accountId).toBe('a');
+    await expect(readFile(join(root, 'profiles', 'a', 'projects', project, `${THREAD}.jsonl`), 'utf8')).resolves.toBe('{"type":"user"}\n');
   });
 
   it('starts a fresh thread when the old one cannot be carried', async () => {

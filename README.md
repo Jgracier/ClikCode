@@ -196,9 +196,8 @@ into the next account and resumes it there, so the model continues the real
 thread instead of a summary of it. It does not re-read your project, and it
 does not forget what it just said.
 
-This is on by default. Turn it off for the current conversation with
-`/accounts failover never`, or for a new one with
-`clikcode sessions create --account-failover never`.
+This happens automatically whenever another usable account for the same
+provider and transport is available.
 
 ## Resume anything, from anywhere
 
@@ -334,7 +333,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | Command | What it does |
 | --- | --- |
 | `/provider` (also `/switch`) | choose a provider |
-| `/account [label\|login\|add\|remove\|failover auto\|never]` (also `/accounts`) | switch, add or remove accounts |
+| `/account [label\|login\|add\|remove]` (also `/accounts`) | switch, add or remove accounts |
 | `/login` | sign in to the current provider |
 | `/logout` | sign the current account out |
 | `/gateway` | route this conversation through ClikDeploy Gateway |

@@ -9,8 +9,7 @@ const HOUR = 60 * 60 * 1000;
 function chat(id: string, overrides: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id, conversationId: id, route: 'local', accountId: null, provider: null, model: null,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never',
-    createdAt: ago(100 * HOUR), updatedAt: ago(HOUR), status: 'active', ...overrides,
+    effort: 'medium', permissionMode: 'ask', createdAt: ago(100 * HOUR), updatedAt: ago(HOUR), status: 'active', ...overrides,
   } as HarnessSession;
 }
 

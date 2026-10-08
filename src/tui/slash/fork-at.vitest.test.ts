@@ -60,7 +60,7 @@ describe('/fork @N', () => {
     const now = new Date().toISOString();
     state.sessions.push({
       id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'anthropic', model: null, nativeHarness: 'claude',
-      effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
+      effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
       nativeSessionId: 'vendor-thread', messages: conversation,
     } as HarnessSession);
     forceStoreSession('s1');

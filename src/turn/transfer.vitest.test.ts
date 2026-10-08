@@ -15,7 +15,7 @@ const KB = 1024;
 function session(messages: TranscriptMessage[], fields: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id: 's1', route: 'local', accountId: null, provider: 'anthropic', model: 'opus', nativeHarness: 'claude', effort: 'high',
-    accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', workspace: '/w', messages, ...fields,
+createdAt: now, updatedAt: now, status: 'active', workspace: '/w', messages, ...fields,
   };
 }
 

@@ -6,16 +6,17 @@
  */
 
 export const ACTIONS = {
-  /** End the running turn. Ctrl+C, the stop button, the palette's command --
-   *  never Esc, which only ever backs out of something of the user's own. */
+  /** End the running turn. Ctrl+C, the stop button, and the palette's
+   *  command. Esc does too, once the turn has an answer. Before that, Esc
+   *  puts the prompt back in the composer. */
   stop: { verb: 'stop', key: 'Ctrl+C' },
   /** Mid-turn, a message waiting: take the newest back into the composer to
    *  edit. Nothing running is touched. */
   takeBack: { verb: 'edit', key: 'Esc' },
-  /** Mid-turn, nothing typed, a message already waiting: stop the turn and
-   *  send what waits next, at once. Enter AGAIN -- the first Enter is the one
-   *  that sent the message. Says "stop": it ends the turn's sub-agents too. */
-  sendNow: { verb: 'stop & send', key: 'Enter again' },
+  /** Mid-turn, nothing typed, a message already waiting: put it into the
+   *  chat at the next pause. The turn keeps running, and so do its
+   *  sub-agents. Enter AGAIN -- the first Enter is the one that queued it. */
+  sendNow: { verb: 'send into the chat', key: 'Enter again' },
   /** Send what is typed: steered into the turn or queued behind it (/send). */
   send: { verb: 'send', key: 'Enter' },
   /** Take the highlighted command from the palette. */

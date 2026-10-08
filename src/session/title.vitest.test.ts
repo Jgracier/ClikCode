@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  SESSION_TITLE_MAX, StreamingTitle, TITLE_REQUEST_ATTEMPTS, extractSessionTitle, normalizeSessionTitle,
+  SESSION_TITLE_MAX, StreamingTitle, contextRichEnough, extractSessionTitle, normalizeSessionTitle,
   prepareSessionTitle, sessionTitleSource, shouldRequestTitle, titleStreamForAttempt, withTitleRequest,
 } from './title.js';
 import { localHarnessForCommand } from '@clikcode/router/ai-local-harness';
@@ -56,13 +56,10 @@ describe('a title arriving one delta at a time', () => {
     expect(stream.title).toBe('Parser crash');
   });
 
-  it('releases the head as soon as it is clear no title is coming', () => {
+  it('releases an ordinary opening immediately', () => {
     const stream = new StreamingTitle();
-    // On the turn that asked, a short first line may still be a title written bare (no tags), so
-    // it waits for the words that say it is not one — here, a sentence's full stop.
-    expect(stream.push('Here', 'append')).toBeUndefined();
-    expect(stream.push(' is what I found.', 'append')).toBe('Here is what I found.');
-    expect(stream.push(' More.', 'append')).toBe(' More.');
+    expect(stream.push('Here', 'append')).toBe('Here');
+    expect(stream.push(' is what I found.', 'append')).toBe(' is what I found.');
     expect(stream.title).toBeUndefined();
   });
 
@@ -156,102 +153,81 @@ describe('an account switch mid-turn', () => {
     expect(shown).not.toContain('<clikcode-title>');
   });
 
-  it('never re-asks after the one title request was spent', () => {
-    const session = { name: undefined, titleAttempts: 1 };
-    expect(shouldRequestTitle(session)).toBe(false);
-    const later = prepareSessionTitle(session, 'continue');
-    expect(later.prompt).toBe('continue');
-    expect(later.stream.naming).toBe(false);
-    expect(session.titleAttempts).toBe(1);
-  });
-
-  it('spends the request exactly once and leaves named chats alone', () => {
-    const fresh = { name: undefined, titleAttempts: 0 };
+  it('waits until the user has said enough, then asks once', () => {
+    const fresh = { name: undefined, titleAttempts: 0, messages: [] };
+    expect(contextRichEnough(fresh, 'hi')).toBe(false);
+    expect(contextRichEnough(fresh, 'do it')).toBe(false);
+    expect(shouldRequestTitle(fresh, 'hi')).toBe(false);
+    const waiting = prepareSessionTitle(fresh, 'hi');
+    expect(waiting.prompt).toBe('hi');
+    expect(waiting.stream).toBeUndefined();
+    expect(fresh.titleAttempts).toBe(0);
     const first = prepareSessionTitle(fresh, 'fix the parser');
     expect(first.prompt).toContain(OPEN);
     expect(first.stream).toBeInstanceOf(StreamingTitle);
     expect(fresh.titleAttempts).toBe(1);
-    expect(prepareSessionTitle(fresh, 'continue').prompt).toBe('continue');
-    const named = { name: 'Prod Disk Cleanup', titleAttempts: TITLE_REQUEST_ATTEMPTS };
-    expect(prepareSessionTitle(named, 'continue').prompt).toBe('continue');
-    expect(shouldRequestTitle(named)).toBe(false);
+    expect(prepareSessionTitle(fresh, 'the login button still fails').prompt).toBe('the login button still fails');
+    expect(fresh.titleAttempts).toBe(1);
+  });
+
+  it('never re-asks after the one title request was spent', () => {
+    const session = { name: undefined, titleAttempts: 1, messages: [] };
+    expect(shouldRequestTitle(session, 'fix the parser')).toBe(false);
+    const later = prepareSessionTitle(session, 'fix the parser');
+    expect(later.prompt).toBe('fix the parser');
+    expect(later.stream).toBeUndefined();
+    expect(session.titleAttempts).toBe(1);
+  });
+
+  it('leaves a chat that already has a name alone', () => {
+    const named = { name: 'Prod Disk Cleanup', titleAttempts: 0, messages: [] };
+    expect(prepareSessionTitle(named, 'fix the parser').prompt).toBe('fix the parser');
+    expect(shouldRequestTitle(named, 'fix the parser')).toBe(false);
+    expect(named.titleAttempts).toBe(0);
   });
 });
 
 /** One rule, at the top of the retry loop, instead of five retry sites each
  * remembering. The prompt about to be sent is the whole input. */
 describe('the title stream for one attempt', () => {
-  const session = (titleAttempts: number) => ({ titleAttempts });
-
   it('starts one when the prompt asks, and starts it over on the next attempt', () => {
     const asked = withTitleRequest('clean up the prod disk');
-    const first = titleStreamForAttempt(undefined, asked, session(1));
+    const first = titleStreamForAttempt(undefined, asked);
     expect(first).toBeDefined();
     first!.push('Looking at the workspace', 'append');
-    const second = titleStreamForAttempt(first, asked, session(1));
+    const second = titleStreamForAttempt(first, asked);
     // Same object, but no longer settled: the new reply's marker gets stripped.
     expect(second).toBe(first);
     expect(second!.push('<clikcode-title>Prod Disk Cleanup</clikcode-title>\nOn it.', 'append')).toBe('On it.');
     expect(second!.title).toBe('Prod Disk Cleanup');
   });
 
-  it('does not refund a title request replaced by a retry', () => {
-    const state = session(1);
-    const stream = titleStreamForAttempt(undefined, withTitleRequest('clean up the prod disk'), state);
+  it('drops the filter when a retry replaces the request', () => {
+    const stream = titleStreamForAttempt(undefined, withTitleRequest('clean up the prod disk'));
     stream!.push('Looking at the wor', 'append');
     // What the vendor-CLI failover sends instead: carry on with the thread.
-    const next = titleStreamForAttempt(stream, 'Continue the interrupted latest request.', state);
-    expect(next.naming).toBe(false);
-    expect(state.titleAttempts).toBe(1);
-  });
-
-  it('does not refund across repeated retries', () => {
-    const state = session(1);
-    const stream = titleStreamForAttempt(undefined, withTitleRequest('x'), state);
-    let next = titleStreamForAttempt(stream, 'carry on', state);
-    next = titleStreamForAttempt(next, 'carry on', state);
-    expect(next.naming).toBe(false);
-    expect(state.titleAttempts).toBe(1);
+    expect(titleStreamForAttempt(stream, 'Continue the interrupted latest request.')).toBeUndefined();
   });
 
   it('keeps a title it already found, whatever the next prompt says', () => {
-    const state = session(1);
-    const stream = titleStreamForAttempt(undefined, withTitleRequest('x'), state);
+    const stream = titleStreamForAttempt(undefined, withTitleRequest('x'));
     stream!.push('<clikcode-title>Prod Disk Cleanup</clikcode-title>\nOn it.', 'append');
-    // The background-command continuation: a new prompt, mid-reply, that asks
-    // for no name. The name is already this chat's.
-    const next = titleStreamForAttempt(stream, 'Continue: read the background command output.', state);
+    const next = titleStreamForAttempt(stream, 'Continue: read the background command output.');
     expect(next).toBe(stream);
     expect(next!.title).toBe('Prod Disk Cleanup');
-    expect(state.titleAttempts).toBe(1);
   });
 
   it('never names from a prompt that never asked', () => {
-    const stream = titleStreamForAttempt(undefined, 'a plain prompt', session(0));
-    expect(stream.naming).toBe(false);
+    expect(titleStreamForAttempt(undefined, 'a plain prompt')).toBeUndefined();
   });
 });
 
-/** Reported: every later turn of a Grok chat opened with a fresh
- * <clikcode-title> line, shown raw in the chat. The vendor keeps its history,
- * so the model copies its first reply's habit, unasked. */
-describe('a title on a turn that did not ask for one', () => {
-  it('is stripped from the reply and never becomes the name', () => {
-    const named = { name: 'Add mc-brain MCP', titleAttempts: 1 };
+describe('a turn that did not ask', () => {
+  it('does not filter the reply', () => {
+    const named = { name: 'Add mc-brain MCP', titleAttempts: 1, messages: [] };
     const { prompt, stream } = prepareSessionTitle(named, 'does that make sense?');
     expect(prompt).not.toContain(OPEN);
-    let shown = '';
-    for (const delta of ['<clikcode-ti', 'tle>Shared harness', ' features</clikcode-title>\n', 'That matches the goal.']) {
-      const visible = stream.push(delta, 'append');
-      if (visible !== undefined) shown += visible;
-    }
-    expect(shown).toBe('That matches the goal.');
-    expect(stream.title).toBeUndefined();
-  });
-
-  it('leaves a reply without one untouched', () => {
-    const { stream } = prepareSessionTitle({ name: 'X', titleAttempts: 1 }, 'go');
-    expect(stream.push('Yes. The cross-harness part', 'append')).toBe('Yes. The cross-harness part');
+    expect(stream).toBeUndefined();
   });
 
   it('is asked for once, and the request says so', () => {
@@ -259,63 +235,20 @@ describe('a title on a turn that did not ask for one', () => {
   });
 });
 
-describe('a title written bare, without its tags (the 9973 leak)', () => {
-  // deepseek-v4.1-flash on the Gateway, headless, 2026-10-06: the reply opened with the title the
-  // turn asked for as its own first line, and the line reached the answer.
+describe('a reply that is not the title marker', () => {
   const LEAKED = '9973 primality\n\nYes — 9973 is prime (√9973 ≈ 99.9, and no prime up to 97 divides it).';
 
-  it('is the title on the turn that asked for one', () => {
-    expect(extractSessionTitle(LEAKED, { bare: true })).toEqual({
-      title: '9973 primality',
-      text: 'Yes — 9973 is prime (√9973 ≈ 99.9, and no prime up to 97 divides it).',
+  it('is left as the model wrote it', () => {
+    expect(extractSessionTitle(LEAKED)).toEqual({ text: LEAKED });
+    expect(extractSessionTitle('Title: Remembering LANTERN\n\nYou asked me to remember LANTERN.')).toEqual({
+      text: 'Title: Remembering LANTERN\n\nYou asked me to remember LANTERN.',
     });
   });
 
-  it('is never read on a turn that did not ask', () => {
-    expect(extractSessionTitle(LEAKED)).toEqual({ text: LEAKED });
-  });
-
-  it('is never an answer\'s own opening line', () => {
-    for (const answer of [
-      'Yes.\n\nBecause no prime divides it.',
-      'Yes\n\nBecause no prime divides it.',
-      '## Result\n\nIt is prime.',
-      '1. Check the root\n\nThen divide.',
-      '- First point here\n\nmore',
-      'It is prime because nothing below its root divides it\n\nDetails follow.',
-      'Here is what I found:\n\nAll green.',
-      'Two words\n\n',
-    ]) {
-      expect(extractSessionTitle(answer, { bare: true }), answer).toEqual({ text: answer });
-    }
-  });
-
-  it('a streaming reply holds the line until it is settled, and never shows it', () => {
+  it('streams an ordinary first line straight through', () => {
     const stream = new StreamingTitle();
-    const shown: string[] = [];
-    for (const delta of ['9973 prim', 'ality', '\n', '\n', 'Yes — 9973 ', 'is prime.']) {
-      const visible = stream.push(delta, 'append');
-      if (visible) shown.push(visible);
-    }
-    expect(shown.join('')).toBe('Yes — 9973 is prime.');
-    expect(stream.title).toBe('9973 primality');
-  });
-
-  it('a streaming reply whose first line is an answer is released as soon as the next text says so', () => {
-    const stream = new StreamingTitle();
-    expect(stream.push('Yes it is prime', 'append')).toBeUndefined();
-    expect(stream.push('\nBecause', 'append')).toBe('Yes it is prime\nBecause');
-    expect(stream.title).toBeUndefined();
-  });
-
-  it('a long first line is released without waiting for its end', () => {
-    const stream = new StreamingTitle();
-    const long = 'This reply opens with a sentence much longer than any title would be';
-    expect(stream.push(long, 'append')).toBe(long);
-  });
-
-  it('on a turn that did not ask, nothing is held for it', () => {
-    const stream = new StreamingTitle({ naming: false });
     expect(stream.push('9973 primality', 'append')).toBe('9973 primality');
+    expect(stream.push('\n\nYes — 9973 is prime.', 'append')).toBe('\n\nYes — 9973 is prime.');
+    expect(stream.title).toBeUndefined();
   });
 });

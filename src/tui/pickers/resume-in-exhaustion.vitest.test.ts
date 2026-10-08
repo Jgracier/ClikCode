@@ -39,7 +39,7 @@ async function chat(accounts: AiHarnessAccount[], fields: Partial<HarnessSession
   const now = new Date().toISOString();
   state.sessions.push({
     id, conversationId: id, route: 'local', accountId: accounts[0]?.id ?? null, provider: 'anthropic', model: null, nativeHarness: 'claude',
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     messages: [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'done' }], ...fields,
   } as HarnessSession);
   forceStoreSession(id);
@@ -67,9 +67,9 @@ describe('running out of usage', () => {
     expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ retry: 'fix the parser' });
   });
 
-  it('does not spend another attempt when this chat will not leave the spent account', async () => {
-    await chat([account('a1', true), account('a2', false)], { accountFailover: 'never', pendingTurn: { prompt: 'fix the parser', startedAt: '', updatedAt: '', outputStarted: false } });
-    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ stayed: [] });
+  it('retries through another account despite a saved never preference', async () => {
+    await chat([account('a1', true), account('a2', false)], {pendingTurn: { prompt: 'fix the parser', startedAt: '', updatedAt: '', outputStarted: false } });
+    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ retry: 'fix the parser' });
   });
 
   it('hands the messages queued behind back once, when nothing here can run them and the chat stays', async () => {

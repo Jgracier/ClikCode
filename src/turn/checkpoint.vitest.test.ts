@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
-  beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
+  beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
   runningActivityLabel, sessionTranscriptMessages, settledTranscriptMessages, updatePendingResponse, type PendingTurnWithHints,
 } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
@@ -19,13 +19,50 @@ const stamp = (second: number): string => `2026-01-02T00:00:${String(second).pad
 function session(): HarnessSession {
   return {
     id: 'session', route: 'local', accountId: null, provider: 'openai', model: null,
-    effort: 'medium', accountFailover: 'never', createdAt: '2026-01-01T00:00:00.000Z',
+    effort: 'medium', createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z', status: 'active',
     messages: [{ role: 'user', content: 'Earlier' }, { role: 'assistant', content: 'Done' }],
   };
 }
 
 describe('durable turn checkpoints', () => {
+  it('saves a failed partial turn without listing its still-open worker as generating', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clikcode-failed-turn-'));
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    try {
+      const { markFailedTurn, startTurnCheckpoint } = await import('./turn-journal.js');
+      const { readState } = await import('../session/state/read.js');
+      const { livePendingTurns } = await import('../session/liveness.js');
+      const target = { ...session(), id: randomUUID() };
+      const checkpoint = await startTurnCheckpoint({ v: 1, sessions: [target], accounts: [] } as never, target, 'Continue', {});
+      checkpoint.response('Partial answer');
+      await checkpoint.persistNow();
+      await markFailedTurn(target.id, 'Continue');
+      const saved = (await readState({ transcripts: [target.id] })).sessions.find((item) => item.id === target.id)!;
+      expect(saved.pendingTurn).toMatchObject({ prompt: 'Continue', response: 'Partial answer', failedAt: expect.any(String) });
+      expect((await livePendingTurns([saved], () => true)).has(target.id)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME;
+      else process.env.CLIKCODE_HOME = previous;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a failed partial turn for continuation and reopens an empty retry', () => {
+    const target = session();
+    beginPendingTurn(target, 'Continue', stamp(0));
+    updatePendingResponse(target, 'Partial answer', 'append', stamp(1));
+    expect(failPendingTurn(target, 'Continue', stamp(2))).toBe(true);
+    expect(target.pendingTurn).toMatchObject({ response: 'Partial answer', failedAt: stamp(2) });
+    expect(sessionTranscriptMessages(target).at(-1)?.content).toBe('Partial answer');
+
+    const empty = session();
+    beginPendingTurn(empty, 'Try again', stamp(0));
+    failPendingTurn(empty, 'Try again', stamp(1));
+    beginPendingTurn(empty, 'Try again', stamp(2));
+    expect(empty.pendingTurn?.failedAt).toBeUndefined();
+  });
   it('persists the title and cleaned answer with the completed turn', async () => {
     const home = await mkdtemp(join(tmpdir(), 'clikcode-complete-'));
     const previous = process.env.CLIKCODE_HOME;
@@ -37,6 +74,7 @@ describe('durable turn checkpoints', () => {
       const checkpoint = await startTurnCheckpoint(state, target, 'Fix the parser', {});
       const answer = await completeTurnCheckpoint(
         target, checkpoint, '<clikcode-title>Parser Repair</clikcode-title>\nFixed it.',
+        { asked: true },
       );
       expect(answer).toBe('Fixed it.');
       const { readState } = await import('../session/state/read.js');

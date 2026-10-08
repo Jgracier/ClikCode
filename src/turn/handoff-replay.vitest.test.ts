@@ -64,7 +64,7 @@ async function handedOff(pendingTurn?: HarnessSession['pendingTurn'], fields: Pa
   const source: HarnessSession = {
     id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: 'anthropic', model: null,
     nativeHarness: 'claude', nativeSessionId: randomUUID(), workspace: root,
-    effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     messages: [
       { role: 'user', content: 'rename the parser', attachments: [join(root, 'spec.md')] },
       { role: 'assistant', content: 'renamed it to Reader', activities: [

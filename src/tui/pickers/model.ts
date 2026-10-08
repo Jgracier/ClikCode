@@ -173,7 +173,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const typed = selected === '__custom__' ? (await rl.question(discoveredModels.length ? 'Model ID › ' : `${harness?.displayName ?? 'This provider'} lists no models — model ID › `)).trim() : undefined;
   const value = typed !== undefined ? (harness && typed ? modelIdFromLabel(harness, catalog.models, modelIdFromDisplay(harness, typed)) : typed) : selected;
   // Applies to this chat only, no further "apply to" step: a model choice is
-  // read as a per-conversation decision, unlike effort/permissions/failover,
+  // read as a per-conversation decision, unlike effort/permissions,
   // which are more often "how I always want this provider to behave" and
   // genuinely benefit from a scope choice.
   if (value) {

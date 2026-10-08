@@ -123,9 +123,11 @@ type WaitingTurn = {
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
-  /** Ctrl+C, or Enter again on a waiting message, has asked the turn to stop. */
+  /** Ctrl+C, or Esc once the turn has an answer, has asked the turn to stop. */
   cancelled: boolean;
   cancel?: (restoreDraft: boolean) => void;
+  /** Put the oldest waiting user message into the chat (Enter again). */
+  sendWaiting?: () => void;
   /** Take a waiting message back out of the queue (Esc): `removed` only when
    * it is the user's again -- not already on its way into the turn. */
   takeBack?: (id: string) => Promise<TakeBackOutcome>;
@@ -315,13 +317,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Before approvals and before the draft: a turn running is when someone
     // wants to read what went past.
     if (!this.pendingApproval && this.handleScrollKey(key)) return;
-    // Escape backs out one level, as it does everywhere else, and never
-    // stops the turn. Scrolled back mid-turn it returns to the live edge; at
-    // the edge it takes the newest waiting message back to edit.
-    //
-    // It used to stop the turn. A message sent and then Esc'd to fix a typo
-    // stopped everything the turn was running -- its sub-agents with it --
-    // when all that was wanted was the words back. Ctrl+C stops.
+    // Escape backs out one level. Scrolled back mid-turn it returns to the
+    // live edge. At the edge a waiting message comes back to edit. With
+    // none, a prompt that has no answer yet comes back too, and a turn that
+    // has started answering stops. Ctrl+C stops either way.
     if (!this.pendingApproval && key === '\u001b' && this.scrolledBack) {
       this.scrollTranscript(-Number.MAX_SAFE_INTEGER);
       return;
@@ -385,7 +384,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     const action = waitingInputAction(key);
     if (action === 'take-back') {
-      this.takeBackWaiting();
+      if (this.takeBackWaiting()) return;
+      // A download, a shell, or a sign-in is not the conversation: Esc leaves
+      // it. A conversation turn with no answer yet comes back to edit; one
+      // that has started answering stops.
+      if (turn.cancelled || this.signingIn || (!turn.submit && !turn.early)) return;
+      const restoreDraft = !this.turnHasAnswer();
+      turn.cancelled = true;
+      turn.label = restoreDraft ? 'editing…' : 'stopping…';
+      this.updateWaiting();
+      if (turn.early) turn.early.interrupt = { restoreDraft };
+      turn.cancel?.(restoreDraft);
     } else if (action === 'stop') {
       if (turn.cancelled) return;
       turn.cancelled = true;
@@ -424,15 +433,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         return;
       }
       if (!turn.submit) return;
-      // Enter again, nothing typed, on a message already waiting: stop the
-      // turn -- its tool calls and sub-agents with it -- and what waits is
-      // sent as the next turn at once (the loop takes the queue's head).
-      const enter = waitingEnterAction(turn.draft, this.messageWaiting(), Boolean(turn.cancel) && !turn.cancelled);
-      if (enter === 'stop-and-send') {
-        turn.cancelled = true;
-        turn.label = 'stopping…';
-        this.updateWaiting();
-        turn.cancel!(false);
+      // Enter again, nothing typed, on a message already waiting: it goes
+      // into the chat at the next pause. The turn, and any sub-agent it
+      // started, keeps running.
+      const enter = waitingEnterAction(turn.draft, this.messageWaiting(), Boolean(turn.sendWaiting) && !turn.cancelled);
+      if (enter === 'send-waiting') {
+        turn.sendWaiting!();
         return;
       }
       if (enter !== 'deliver') return;
@@ -457,29 +463,43 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
+  /** User messages still waiting, oldest first. A command and a background
+   *  notice stay in the queue: Esc does not edit them, and Enter again does
+   *  not send them. One still being submitted (`sending`) is not waiting. */
+  private waitingUserMessages(): Array<{ id: string; text: string }> {
+    const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command' && item.kind !== 'notification');
+    return [
+      ...stored.map((item) => ({ id: item.id, text: item.text })),
+      ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !stored.some((entry) => entry.id === item.id))
+        .map((item) => ({ id: item.id!, text: item.text })),
+    ];
+  }
+
   /** A message typed during this turn is waiting with its row on screen --
    * queued for after it, or held for its next pause -- so Enter on nothing
-   * means "send it now". One still being submitted has not been answered yet:
-   * a quick double Enter must not stop the turn it was meant to reach. */
+   * puts it into the chat. One still being submitted has not been answered
+   * yet: a quick double Enter must not send it twice. */
   private messageWaiting(): boolean {
-    return Boolean(this.currentSession?.queuedTurns?.some((item) => item.kind !== 'command'))
-      || this.waitingSubmissions.some((item) => item.state === 'queued');
+    return this.waitingUserMessages().length > 0;
+  }
+
+  /** The turn has an answer: text, or a tool. A thought is not one. */
+  private turnHasAnswer(): boolean {
+    if (this.liveResponse.trim()) return true;
+    if (this.activeTools.size > 0) return true;
+    return this.activityEntries.some((entry) => entry.event && entry.event.kind !== 'thinking');
   }
 
   /** Esc mid-turn: the newest message still waiting -- queued, or held for
    * the turn's next pause -- comes back into the composer, ahead of anything
    * typed, and is gone from the queue. Nothing running is touched. One
-   * already on its way into the turn stays where it is. */
-  private takeBackWaiting(): void {
+   * already on its way into the turn stays where it is. True when there was
+   * a message to take, so Esc does not also stop the turn. */
+  private takeBackWaiting(): boolean {
     const turn = this.turn;
-    if (!turn?.takeBack) return;
-    const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command');
-    const last = [
-      ...stored.map((item) => ({ id: item.id, text: item.text })),
-      ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !stored.some((entry) => entry.id === item.id))
-        .map((item) => ({ id: item.id!, text: item.text })),
-    ].at(-1);
-    if (!last) return;
+    if (!turn?.takeBack) return false;
+    const last = this.waitingUserMessages().at(-1);
+    if (!last) return false;
     void turn.takeBack(last.id).then((outcome) => {
       if (outcome !== 'removed') return;
       this.waitingSubmissions = this.waitingSubmissions.filter((item) => item.id !== last.id);
@@ -490,6 +510,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         this.updateWaiting();
       } else this.queuedDraft = this.queuedDraft ? `${last.text}\n${this.queuedDraft}` : last.text;
     }, () => undefined);
+    return true;
   }
 
   /** A message typed during the turn, sent: steered into it or queued
@@ -1119,6 +1140,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     onCommand?: (text: string) => Promise<LiveTurnInputResult>,
     onLeave?: () => void,
     onTakeBack?: (id: string) => Promise<TakeBackOutcome>,
+    onSendWaiting?: () => void,
   ): void {
     lifecycle('window.turn.start', { label: message.slice(0, 80), steerable: Boolean(onSubmit) });
     // stopWaiting is also how a finished turn drops its prompt. Calling it
@@ -1172,6 +1194,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
       ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
       ...(onTakeBack ? { takeBack: onTakeBack } : {}),
+      ...(onSendWaiting ? { sendWaiting: onSendWaiting } : {}),
     };
     this.turn = turn;
     this.waitingSubmissions = [];
@@ -1207,7 +1230,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const interrupt = early?.early?.interrupt;
     if (interrupt && onCancel) {
       turn.cancelled = true;
-      turn.label = 'stopping…';
+      turn.label = interrupt.restoreDraft ? 'editing…' : 'stopping…';
       onCancel(interrupt.restoreDraft);
       this.updateWaiting();
     }
@@ -1516,8 +1539,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * what actually arrives: the open call names the verb, the clock stops for
    * an approval. The spinner turns yellow once the turn has gone quiet.
    *
-   * No key hints: the one whose effect is not obvious (Enter again stops
-   * the turn and sends a waiting message) is on that message's own row.
+   * No key hints: the one whose effect is not obvious (Enter again puts a
+   * waiting message into the chat) is on that message's own row.
    * Stopping (Ctrl+C), sending and leaving for the board are the same keys
    * every time and are not spelled out on every frame. */
   private waitingLine(turn: WaitingTurn): string {
@@ -1688,25 +1711,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Steering was asked for and nothing running could take it: the row
     // says so, by identity, on whichever copy is drawn.
     const unsteeredIds = new Set(this.waitingSubmissions.flatMap((item) => (item.unsteered && item.id ? [item.id] : [])));
-    const queuedMessages: Array<{ role: 'user'; content: string; queueState: string; unsteered?: boolean }> = [
+    const queuedMessages: Array<{ role: 'user'; content: string; queueState: string; unsteered?: boolean; user: boolean }> = [
       // A queued COMMAND is not a message and gets no row: it runs when the
-      // turn ends and shows whatever it shows then.
+      // turn ends and shows whatever it shows then. A notice does get a row,
+      // and it is not the user's: Enter and Esc leave it.
       ...storedQueued.filter((item) => item.kind !== 'command')
         // Held by the running turn to steer in once no tool call is open
         // (acp-client.ts): it is on its way into this turn, not the next.
         .map((item) => ({
-          role: 'user' as const, content: item.text, ...(unsteeredIds.has(item.id) ? { unsteered: true } : {}),
+          role: 'user' as const, content: item.text, user: item.kind !== 'notification', ...(unsteeredIds.has(item.id) ? { unsteered: true } : {}),
           queueState: this.turn && item.heldForTurn && item.heldForTurn === pending?.startedAt ? 'pause' as const : 'queued' as const,
         })),
       ...this.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item)
         && !hasDurableSteer(item, pending?.steers ?? []))
-        .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state, ...(item.unsteered ? { unsteered: true } : {}) })),
+        .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state, user: true, ...(item.unsteered ? { unsteered: true } : {}) })),
     ];
-    // While a turn runs a waiting message can be sent at once -- Enter again,
-    // with nothing typed -- by stopping the turn, which the hint says: it ends
-    // sub-agents too. Not while something is typed: Enter then delivers that.
-    // Said once, on the newest waiting message (the one Esc takes back).
-    const sendNowHint = this.turn?.cancel && this.turn.submit && !this.turn.cancelled && !this.turn.draft.trim() ? ` · ${STEER_WORDS.stopAndSend} · ${keyHint('takeBack')}` : '';
+    // Enter again puts the oldest waiting user message into the chat. Esc
+    // takes the newest back. With one message they are the same row.
+    const waitingUser = (message: { user: boolean; queueState: string }): boolean => message.user && !['steered', 'sending', 'error'].includes(message.queueState);
+    const enterAt = this.turn?.sendWaiting && !this.turn.cancelled && !this.turn.draft.trim() ? queuedMessages.findIndex(waitingUser) : -1;
+    const escAt = this.turn?.takeBack ? queuedMessages.map(waitingUser).lastIndexOf(true) : -1;
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
@@ -2056,13 +2080,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       emit(['', `  ${chalk.dim(`─ ${this.pendingTurnSummary} ─`)}`, '']);
       this.pendingTurnSummary = undefined;
     }
-    const waitingAt = queuedMessages.map((message) => !['steered', 'sending', 'error'].includes(message.queueState)).lastIndexOf(true);
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user
       // message the moment it is sent, and would then be written a second time.
       // The keys before the note on why it queued: a narrow row drops parts
       // from the end, and what can be done is the part worth keeping.
-      const keys = queueIndex === waitingAt ? sendNowHint : '';
+      const keys = [
+        ...(queueIndex === enterAt ? [` · ${STEER_WORDS.stopAndSend}`] : []),
+        ...(queueIndex === escAt ? [` · ${keyHint('takeBack')}`] : []),
+      ].join('');
       const status = message.queueState === 'steered' ? STEER_WORDS.steered
         : message.queueState === 'sending' ? 'submitting…'
           : message.queueState === 'pause' ? `${STEER_WORDS.held}${keys}`
@@ -3004,7 +3030,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\u001b[C') {
           // Right Arrow is deliberately identical to Enter.
           if (completing && cursor >= value.length) return runCommand(completedCommandLine(value, commands, selected));
-          if (options.length && value.startsWith('/') && !value.includes(' ')) return runCommand(options[selected].value);
+          // When the palette is open (any options match), right arrow selects/runs the highlighted option
+          if (options.length && cursor >= value.length) return runCommand(options[selected].value);
           const paletteValue = composerRightArrowValue(value, options.length > 0, settings?.rightArrowPalette);
           if (paletteValue) {
             value = paletteValue;

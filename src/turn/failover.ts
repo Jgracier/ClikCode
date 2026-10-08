@@ -310,5 +310,7 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // legitimately be worded as a rejection too, and they ARE worth another
   // account.
   if (REQUEST_INVALID_TEXT.test(text)) return 'request-invalid';
+  // Model capacity is the model's, not the account's. Another account of this
+  // provider is refused the same way, so the turn stops on the vendor's sentence.
   return 'other';
 }

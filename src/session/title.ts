@@ -7,9 +7,11 @@
  *
  * A title is the model's job. Where the harness already writes one -- Claude
  * Code names its own threads and records the name in its transcript -- that
- * one is used. Where it does not, the first turn asks for one: twenty
- * characters, on its own line, stripped out of the answer before anyone sees
- * it. A model that ignores the one request leaves the chat unnamed.
+ * one is used. Where it does not, one turn asks for one, and only once the
+ * user's own words are specific enough to name the chat. A name, once set,
+ * is never asked for again. A model that ignores the one request leaves the
+ * chat unnamed. The answer is not rewritten except to drop the title marker
+ * that one request told the model to write.
  */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -27,26 +29,45 @@ export function sessionTitleSource(harness: AiLocalHarnessDefinition | undefined
   return harness?.titleSource ?? 'ask';
 }
 
-/** Only the first meaningful turn gets an embedded title request. The request
- * is spent whether or not the model returns a title; continued conversations
- * must never be prompted for a title again. */
+/** The one request a chat may spend. Spent whether or not a title comes back,
+ * so a chat is asked once and then never again. */
 export const TITLE_REQUEST_ATTEMPTS = 1;
 
-/** Whether this turn should carry an embedded title request. */
-export function shouldRequestTitle(session: Pick<HarnessSession, 'name' | 'titleAttempts'>): boolean {
-  return !session.name && (session.titleAttempts ?? 0) < TITLE_REQUEST_ATTEMPTS;
+/** Words that never tell you what a chat is about. */
+const TITLE_FILLER = new Set([
+  'a', 'an', 'the', 'to', 'of', 'and', 'or', 'for', 'in', 'on', 'at', 'it', 'is', 'be', 'do', 'me', 'my',
+  'this', 'that', 'please', 'just', 'can', 'you', 'we', 'ok', 'okay', 'yes', 'no', 'hi', 'hey', 'hello',
+  'thanks', 'thank', 'continue', 'go', 'now', 'again', 'up', 'so', 'if', 'but',
+]);
+
+/** True once the user has said enough to name the chat. Two concrete words
+ * across everything they have typed ("fix the parser", "login button").
+ * A greeting or "do it" is not enough, and the attempt is not spent waiting. */
+export function contextRichEnough(
+  session: { messages?: ReadonlyArray<{ role?: string; content?: string }> },
+  prompt: string,
+): boolean {
+  const said = [
+    ...(session.messages ?? []).filter((message) => message.role === 'user').map((message) => message.content ?? ''),
+    prompt,
+  ].join(' ');
+  const words = said.toLowerCase().replace(/[^a-z0-9]+/g, ' ').split(/\s+/).filter((word) => word.length > 2 && !TITLE_FILLER.has(word));
+  return words.length >= 2;
 }
 
-/** Spend the conversation's single title request on this turn, if eligible. */
+/** Whether this turn should carry the one title request. */
+export function shouldRequestTitle(
+  session: Pick<HarnessSession, 'name' | 'titleAttempts' | 'messages'>, prompt: string,
+): boolean {
+  return !session.name && (session.titleAttempts ?? 0) < TITLE_REQUEST_ATTEMPTS && contextRichEnough(session, prompt);
+}
+
+/** Spend the conversation's single title request on this turn, if eligible.
+ * No stream on any other turn: the reply is the model's, unmodified. */
 export function prepareSessionTitle(
-  session: Pick<HarnessSession, 'name' | 'titleAttempts'>, prompt: string,
-): { prompt: string; stream: StreamingTitle } {
-  // Every turn's reply goes through a title stream. Only the turn that asked
-  // keeps the title it finds; on every other turn the stream just strips one.
-  // A vendor harness keeps its whole history, so a model that opened its first
-  // reply with the tag tends to open later replies with it too -- unasked --
-  // and without this that tag went straight to the screen.
-  if (!shouldRequestTitle(session)) return { prompt, stream: new StreamingTitle({ naming: false }) };
+  session: Pick<HarnessSession, 'name' | 'titleAttempts' | 'messages'>, prompt: string,
+): { prompt: string; stream?: StreamingTitle } {
+  if (!shouldRequestTitle(session, prompt)) return { prompt };
   session.titleAttempts = (session.titleAttempts ?? 0) + 1;
   return { prompt: withTitleRequest(prompt), stream: new StreamingTitle() };
 }
@@ -78,24 +99,14 @@ export function promptAsksForTitle(prompt: string): boolean {
 export function titleStreamForAttempt(
   current: StreamingTitle | undefined,
   prompt: string,
-  session: Pick<HarnessSession, 'titleAttempts'>,
-): StreamingTitle {
+): StreamingTitle | undefined {
   if (current?.title) return current;
-  if (promptAsksForTitle(prompt)) {
-    if (current?.naming) {
-      current.restart();
-      return current;
-    }
-    return new StreamingTitle();
-  }
-  // The request was already sent on the original attempt. A retry that replaces
-  // it must not make the next user turn ask for a title again -- but the reply
-  // may still open with a tag, which is stripped, not kept.
-  if (current && !current.naming) {
+  if (!promptAsksForTitle(prompt)) return undefined;
+  if (current) {
     current.restart();
     return current;
   }
-  return new StreamingTitle({ naming: false });
+  return new StreamingTitle();
 }
 
 const OPEN = '<clikcode-title>';
@@ -130,39 +141,11 @@ export function normalizeSessionTitle(raw: string): string | undefined {
   return (space >= SESSION_TITLE_MAX / 2 ? cut.slice(0, space) : cut).trimEnd();
 }
 
-/** The title a reply opens with, and the reply without it. */
-/** A model that drops the tags but keeps the word: `Title: …` (or
- * `**Title:** …`) on the first line. Explicit enough to remove. */
-const PLAIN_TITLE = /^\s*(?:\*\*)?title:(?:\*\*)?[ \t]*([^\r\n]+?)(?:\*\*)?[ \t]*\r?\n(?:[ \t]*\r?\n)?/i;
-
-/** The longest first line read as a title a model wrote without its tags. */
-const BARE_TITLE_MAX = 40;
-
-/**
- * A model that drops the tags AND the word, and writes the title as the reply's own first line,
- * set off by a blank line: "9973 primality\n\nYes — 9973 is prime …" (deepseek-v4.1-flash on the
- * Gateway, 2026-10-06, headless — the line reached the answer). Read as a title ONLY on the turn
- * that asked for one (`bare`), and only when it cannot be the start of an answer: two to six
- * words, no closing punctuation, no Markdown, and an answer after it.
- */
-function bareTitle(answer: string): RegExpExecArray | null {
-  const match = /^[ \t]*([^\r\n]+?)[ \t]*\r?\n[ \t]*\r?\n/.exec(answer);
-  if (!match) return null;
-  const line = (match[1] ?? '').replace(/^\*\*(.+)\*\*$/, '$1').trim();
-  if (line.length < 3 || line.length > BARE_TITLE_MAX) return null;
-  if (/[.!?:;,…)\]]$/.test(line)) return null;
-  if (/^(?:[#>|`\-*+_~[(]|\d+[.)]\s)/.test(line)) return null;
-  const words = line.split(/\s+/).length;
-  if (words < 2 || words > 6) return null;
-  if (!answer.slice(match[0].length).trim()) return null;
-  match[1] = line;
-  return match;
-}
-
-export function extractSessionTitle(answer: string, options: { bare?: boolean } = {}): { title?: string; text: string } {
-  const match = new RegExp(`^\\s*${OPEN}([\\s\\S]*?)${CLOSE}[ \\t]*\\r?\\n?`).exec(answer)
-    ?? PLAIN_TITLE.exec(answer)
-    ?? (options.bare ? bareTitle(answer) : null);
+/** The title marker this one request puts at the front of a reply, and the
+ * reply without that marker. Anything else, including a short first line or
+ * a line that happens to say "Title:", is the answer. */
+export function extractSessionTitle(answer: string): { title?: string; text: string } {
+  const match = new RegExp(`^\\s*${OPEN}([\\s\\S]*?)${CLOSE}[ \\t]*\\r?\\n?`).exec(answer);
   if (!match) return { text: answer };
   const title = normalizeSessionTitle(match[1] ?? '');
   const text = answer.slice(match[0].length);
@@ -190,16 +173,11 @@ export class StreamingTitle {
   private buffer = '';
   private settled = false;
   private found?: string;
-  /** False on turns that did not ask for a title: the tag is still stripped
-   * from the reply, but what it said is not this chat's name. */
-  readonly naming: boolean;
+  /** This stream exists only on the turn that asked. */
+  readonly naming = true;
 
-  constructor(options: { naming?: boolean } = {}) {
-    this.naming = options.naming ?? true;
-  }
-
-  /** The title, once the stream has produced one (only on the turn that asked). */
-  get title(): string | undefined { return this.naming ? this.found : undefined; }
+  /** The title, once the stream has produced one. */
+  get title(): string | undefined { return this.found; }
 
   /** What the caller may show, or undefined while the head is still in doubt. */
   push(text: string, mode: 'append' | 'replace'): string | undefined {
@@ -210,9 +188,9 @@ export class StreamingTitle {
     // from the cleaned one that gets persisted; the transcript then treated
     // the saved copy as new text and emitted the whole reply a second time.
     // That is the duplicated response.
-    if (this.settled) return mode === 'replace' ? extractSessionTitle(text, { bare: this.naming }).text : text;
+    if (this.settled) return mode === 'replace' ? extractSessionTitle(text).text : text;
     this.buffer = mode === 'replace' ? text : this.buffer + text;
-    const extracted = extractSessionTitle(this.buffer, { bare: this.naming && !this.couldStillOpen() });
+    const extracted = extractSessionTitle(this.buffer);
     if (extracted.title !== undefined || !this.couldStillOpen()) {
       this.settled = true;
       this.found = extracted.title;
@@ -246,35 +224,17 @@ export class StreamingTitle {
   flush(): string | undefined {
     if (this.settled) return undefined;
     this.settled = true;
-    const extracted = extractSessionTitle(this.buffer, { bare: this.naming });
+    const extracted = extractSessionTitle(this.buffer);
     this.found = extracted.title;
     return extracted.text;
   }
 
+  /** Hold only while the bytes so far are the title marker. Any other opening
+   * is the answer and goes out immediately. */
   private couldStillOpen(): boolean {
     const head = this.buffer.replace(/^\s+/, '');
-    // `Title: …` is settled by its line ending; until then it may be one.
-    const plain = head.replace(/^\*\*/, '').toLowerCase();
-    if (plain.length < 'title:'.length ? 'title:'.startsWith(plain) : plain.startsWith('title:') && !/\r?\n/.test(head)) {
-      return this.buffer.length < DECIDE_AFTER + OPEN.length;
-    }
     if (head.length < OPEN.length && OPEN.startsWith(head)) return true;
-    if (head.startsWith(OPEN)) return this.buffer.length < DECIDE_AFTER + OPEN.length;
-    // On the turn that asked, a first line may be a title written bare (bareTitle): held until
-    // the line has ended and what follows it says whether it was set off by a blank line.
-    if (this.naming) {
-      const line = /^[^\r\n]*/.exec(head)![0];
-      if (line.length > BARE_TITLE_MAX + 4) return false;
-      // Settled early by what a bare title never has: closing punctuation, more than six words,
-      // or a Markdown opening (bareTitle's own rules).
-      if (/[.!?:;,…]\s*$/.test(line) || line.trim().split(/\s+/).length > 6) return false;
-      if (/^(?:[#>|`\-*+_~[(]|\d+[.)]\s)/.test(line.replace(/^\*\*/, ''))) return false;
-      const rest = head.slice(line.length);
-      if (!rest) return true;
-      // The line ended: held while only line breaks follow it (at most the blank line that sets a
-      // bare title off); the first text after them settles it.
-      return /^\r?\n(?:[ \t]*\r?\n)?[ \t]*$/.test(rest);
-    }
+    if (head.startsWith(OPEN) && !head.includes(CLOSE)) return this.buffer.length < DECIDE_AFTER + OPEN.length;
     return false;
   }
 }

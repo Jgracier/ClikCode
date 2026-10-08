@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, queuedRowLabel, stopAndSendReady, takenBackText, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { applyEvent, emptyModel, enterAgainReady, queuedRowLabel, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -7,7 +7,7 @@ import type { FileDiff, HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', route: 'local', accountId: null, provider: 'opencode', model: 'opencode/big-pickle', effort: 'medium',
-  permissionMode: 'ask', accountFailover: 'never', createdAt: '', updatedAt: '', status: 'active', nativeHarness: 'opencode',
+  permissionMode: 'ask', createdAt: '', updatedAt: '', status: 'active', nativeHarness: 'opencode',
   messages: [], ...patch,
 });
 const worker = (event: unknown): IdeEvent => ({ type: 'worker', sessionId: 's1', event } as IdeEvent);
@@ -79,19 +79,31 @@ describe('esc / edit: taking a waiting message back', () => {
   });
 });
 
-describe('enter again: stop & send', () => {
+describe('enter again: send into the chat', () => {
   const message = { id: 'a', text: 'first', command: false };
   const notice = { id: 'n', text: 'done', command: false, notification: true };
   const command = { id: 'c', text: '/model opus', command: true };
 
-  it('stops the turn when a message of the user\'s is waiting', () => {
-    expect(stopAndSendReady({ queued: [notice, message], running: true })).toBe(true);
+  it('is ready when a message of the user\'s is waiting', () => {
+    expect(enterAgainReady({ queued: [notice, message], running: true })).toBe(true);
   });
 
   it('never with nothing running, nothing waiting, or only a notice or a command waiting', () => {
-    expect(stopAndSendReady({ queued: [message], running: false })).toBe(false);
-    expect(stopAndSendReady({ queued: [], running: true })).toBe(false);
-    expect(stopAndSendReady({ queued: [notice, command], running: true })).toBe(false);
+    expect(enterAgainReady({ queued: [message], running: false })).toBe(false);
+    expect(enterAgainReady({ queued: [], running: true })).toBe(false);
+    expect(enterAgainReady({ queued: [notice, command], running: true })).toBe(false);
+  });
+});
+
+describe('esc: an answer is text or a tool', () => {
+  const live = { text: '', activities: [] as Activity[] } as LiveTurn;
+  it('is unanswered while only thinking', () => {
+    expect(turnHasAnswer({ live })).toBe(false);
+    expect(turnHasAnswer({ live: { ...live, activities: [{ key: 't', kind: 'thinking', label: 'thinking' }] } })).toBe(false);
+  });
+  it('has started once there is text or a tool', () => {
+    expect(turnHasAnswer({ live: { ...live, text: 'hello' } })).toBe(true);
+    expect(turnHasAnswer({ live: { ...live, activities: [{ key: 'c', kind: 'tool-start', label: 'read' }] } })).toBe(true);
   });
 });
 
@@ -99,8 +111,8 @@ describe('a queued row says where it waits and what Enter does', () => {
   it('names the hold, a steer the turn could not take, and enter again', () => {
     const submissions = [{ id: 'u', text: 'x', disposition: 'queued', unsteered: true }];
     expect(queuedRowLabel({ submissions: [] }, { id: 'a' }, false)).toBe('queued');
-    expect(queuedRowLabel({ submissions: [] }, { id: 'a', held: true }, true)).toBe('sending at the next pause · enter again stop & send');
-    expect(queuedRowLabel({ submissions }, { id: 'u' }, true)).toBe("queued · this turn can't take it · enter again stop & send");
+    expect(queuedRowLabel({ submissions: [] }, { id: 'a', held: true }, true)).toBe('sending at the next pause · enter again send into the chat');
+    expect(queuedRowLabel({ submissions }, { id: 'u' }, true)).toBe("queued · this turn can't take it · enter again send into the chat");
   });
 
   it('carries the worker\'s unsteered answer onto the typed message', () => {

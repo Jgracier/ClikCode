@@ -49,7 +49,7 @@ describe('Gateway agents in /model', () => {
     const now = new Date().toISOString();
     const session: HarnessSession = {
       id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: 'gpt', effort: 'platform-managed',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+createdAt: now, updatedAt: now, status: 'active',
     };
     state.sessions.push(session);
     await writeState(state);
@@ -68,7 +68,7 @@ describe('Gateway agents in /model', () => {
     const state = await readState();
     const now = new Date().toISOString();
     state.sessions.push({ id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: null,
-      effort: 'platform-managed', accountFailover: 'never', createdAt: now, updatedAt: now,
+      effort: 'platform-managed', createdAt: now, updatedAt: now,
       status: 'active', gatewayAgentThreadId: 'old-thread' });
     await writeState(state);
     await expect(aiSessionSet('gw', { agent: 'other-account-agent' })).rejects.toThrow(/not available to this Gateway account/);
@@ -86,7 +86,7 @@ describe('Gateway agents in /model', () => {
     const now = new Date().toISOString();
     state.sessions.push({
       id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+createdAt: now, updatedAt: now, status: 'active',
       messages: [{ role: 'user', content: 'hello' }],
     });
     await writeState(state);
