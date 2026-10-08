@@ -48,8 +48,8 @@ describe('the Gateway model menu', () => {
     const state = await readState();
     const list = await modelList({} as Conf, state, state.sessions[0], 'gateway');
     expect(list.agents).toEqual([
-      { id: 'silas', name: 'Silas', detail: 'Watches the platform', current: true },
-      { id: 'vera', name: 'Vera', current: false },
+      { id: 'silas', name: 'Silas', detail: 'Runs on ClikDeploy · Watches the platform', current: true },
+      { id: 'vera', name: 'Vera', detail: 'Runs on ClikDeploy', current: false },
     ]);
     expect(list.models.map((model) => model.id)).toEqual(['auto', 'model-a', 'model-b']);
     // The tier serving it, where the Gateway says (the super admin's list); a bare name where it does not.

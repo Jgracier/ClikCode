@@ -2,7 +2,7 @@
  * repeat, emitting the same normalized events as the vendor transports. */
 import os from 'node:os';
 import path from 'node:path';
-import { ConversationStore, memoryConversationStore } from './conversation.js';
+import { ConversationStore } from './conversation.js';
 import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, parsePermissionRules, suggestPermissionRule, visibleTools } from './permissions.js';
@@ -145,12 +145,12 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const cwd = path.resolve(input.cwd);
   const addDirs = (input.addDirs ?? []).map((dir) => path.resolve(cwd, dir));
   const homeDir = input.homeDir ?? os.homedir();
-  const scope: PathScope = { cwd, addDirs, stateDir: input.stateDir, homeDir };
+  const scope: PathScope = { cwd, addDirs, stateDir: input.stateDir, homeDir, sessionId: input.sessionId };
   const turnId = newTurnId();
   const session = sessionState(input.stateDir, input.sessionId);
   if (input.planMode !== undefined) session.plan = { active: input.planMode };
   const checkpoints = new FileCheckpointStore(input.stateDir);
-  const store = input.subagent ? memoryConversationStore(input.subagent.transcript) : new ConversationStore(input.stateDir, input.sessionId);
+  const store = new ConversationStore(input.stateDir, input.sessionId, input.subagent?.transcriptFile);
   // Decided from facts fixed for the session (the model's window and speed,
   // or a forced choice), so every turn sends the same prompt prefix.
   const profile = resolveContextProfile({

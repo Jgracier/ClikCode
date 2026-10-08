@@ -137,8 +137,20 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       const matching = list.filter((item) => !query || item.label.toLowerCase().includes(query) || item.id.toLowerCase().includes(query) || item.detail?.toLowerCase().includes(query));
       const agents = (models?.agents ?? []).filter((agent) => !query || agent.name.toLowerCase().includes(query) || agent.detail?.toLowerCase().includes(query));
       const result: ListRow[] = [];
+      if (agents.length && matching.length) result.push({ key: 'h:models', heading: true, render: () => <>Models<span class="count">{matching.length}</span></> });
+      result.push(...matching.map((item) => ({
+        key: `m:${item.id}`,
+        disabled: Boolean(item.unavailable),
+        onSelect: () => apply(drill, item.id),
+        render: () => (
+          <div class="row" title={item.unavailable}>
+            <span class="row-check">{item.current || (drill === current && item.id === props.model.model) ? <Icon name="check" /> : null}</span>
+            <span class="row-main"><span class="row-label">{rowLabel(item, drill, provider?.name)}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
+          </div>
+        ),
+      })));
       if (agents.length) {
-        result.push({ key: 'h:agents', heading: true, render: () => <>Agents<span class="count">{agents.length}</span></> });
+        result.push({ key: 'h:agents', heading: true, render: () => <>Platform agents (remote)<span class="count">{agents.length}</span></> });
         for (const agent of agents) {
           result.push({
             key: `a:${agent.id}`,
@@ -151,19 +163,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
             ),
           });
         }
-        if (matching.length) result.push({ key: 'h:models', heading: true, render: () => <>Models<span class="count">{matching.length}</span></> });
       }
-      result.push(...matching.map((item) => ({
-        key: `m:${item.id}`,
-        disabled: Boolean(item.unavailable),
-        onSelect: () => apply(drill, item.id),
-        render: () => (
-          <div class="row" title={item.unavailable}>
-            <span class="row-check">{item.current || (drill === current && item.id === props.model.model) ? <Icon name="check" /> : null}</span>
-            <span class="row-main"><span class="row-label">{rowLabel(item, drill, provider?.name)}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
-          </div>
-        ),
-      })));
       if (models?.custom && query && !list.some((item) => item.id.toLowerCase() === query)) {
         result.push({
           key: 'custom', onSelect: () => apply(drill, search.trim()),

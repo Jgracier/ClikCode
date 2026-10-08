@@ -32,14 +32,14 @@ afterEach(async () => {
 });
 
 describe('Gateway agents in /model', () => {
-  it('lists agents first, checks the selected agent, and leaves models below', () => {
+  it('lists local models first and distinguishes remote agents', () => {
     const list = { automatic: 'gpt', models: [{ id: 'gpt' }] };
     const agents = [{ id: 'silas', name: 'Silas' }, { id: 'cliknet', name: 'ClikNet' }];
     const rows = gatewayPickerRows(list, agents, 'gpt', 'silas');
-    expect(rows.map((row) => row.label)).toEqual(['No agent', '✓ Silas', 'ClikNet', 'Agent default', 'gpt']);
-    expect(rows.map((row) => row.group)).toEqual(['Agents', 'Agents', 'Agents', 'Models', 'Models']);
-    expect(rows[1]!.value).toEqual({ kind: 'agent', id: 'silas' });
-    expect(rows[4]!.value).toEqual({ kind: 'model', id: 'gpt' });
+    expect(rows.map((row) => row.label)).toEqual(['Agent default', 'gpt', 'No agent', '✓ Silas', 'ClikNet']);
+    expect(rows.map((row) => row.group)).toEqual(['Models', 'Models', 'Platform agents (remote)', 'Platform agents (remote)', 'Platform agents (remote)']);
+    expect(rows[3]!.value).toEqual({ kind: 'agent', id: 'silas' });
+    expect(rows[1]!.value).toEqual({ kind: 'model', id: 'gpt' });
   });
 
   it('persists the agent per Gateway session and sheds it on a local route', async () => {
