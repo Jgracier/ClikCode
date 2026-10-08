@@ -18,7 +18,7 @@
  * a provider that never sees it. */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
-import { markProviderBoundaries, type CanonicalRecord } from '../session/canonical.js';
+import { markProviderBoundaries, type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { modelProvider } from '../runtime/lazy-bridge.js';
 import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
@@ -77,20 +77,56 @@ export function nativeThreadBudget(contextWindow?: number): number {
   return contextWindow && contextWindow > 0 ? Math.floor(contextWindow * NATIVE_WINDOW_SHARE * BYTES_PER_TOKEN) : NATIVE_DEFAULT_BYTES;
 }
 
-/** The newest turns that fit `maxBytes` (the newest always), the first of
- * them saying what was left out and where to read it: ClikCode's record keeps
- * every turn, and its conversation tools read this conversation too. */
+/** What a writer serializes of a turn: the request and the ordered parts.
+ * `assistant` and `tools` repeat what the parts hold, so counting the whole
+ * object measured every turn about twice over. */
+function writtenBytes(turn: CanonicalTurn): number {
+  return Buffer.byteLength(turn.user, 'utf8') + Buffer.byteLength(JSON.stringify(turn.parts), 'utf8');
+}
+
+/** Calls named in an older turn's summary line, at most. */
+const BRIEF_CALLS = 12;
+
+/** An older turn as its words and one line saying what its calls did
+ * ("Did: $ npm test · Edit src/a.ts"), with no call records: the detail of
+ * old work is what a model needs least, and in a long chat it was nearly all
+ * the bytes -- 5 MB of tool output and arguments in one 256-turn
+ * conversation, against 0.8 MB of words. */
+function briefTurn(turn: CanonicalTurn): CanonicalTurn {
+  const labels = [...new Set(turn.tools.map((call) => call.label))];
+  const did = labels.length
+    ? `[Did: ${labels.slice(0, BRIEF_CALLS).join(' · ')}${labels.length > BRIEF_CALLS ? ` · and ${labels.length - BRIEF_CALLS} more` : ''}]`
+    : '';
+  const text = [turn.assistant, did].filter(Boolean).join('\n\n');
+  return { ...turn, parts: text ? [{ type: 'text', text }] : [], tools: [] };
+}
+
+/** The most of the conversation that fits `maxBytes`: first as many turns
+ * as fit with only their words and what their calls did (newest first, and
+ * the newest always), then, with what room is left, the newest of those get
+ * their tool output back. Turns are left out only when even their words do
+ * not fit, and the first kept turn then says what was left out and where to
+ * read it: ClikCode's record keeps every turn, and its conversation tools
+ * read this conversation too. */
 export function fitRecord(record: CanonicalRecord, maxBytes: number): { record: CanonicalRecord; omitted: number } {
+  const turns = record.turns;
+  const brief = turns.map(briefTurn);
   let used = 0;
-  let first = record.turns.length;
-  while (first > 0) {
-    const size = Buffer.byteLength(JSON.stringify(record.turns[first - 1]), 'utf8');
-    if (first < record.turns.length && used + size > maxBytes) break;
-    used += size;
+  let first = turns.length;
+  while (first > 0 && (first === turns.length || used + writtenBytes(brief[first - 1]!) <= maxBytes)) {
+    used += writtenBytes(brief[first - 1]!);
     first -= 1;
   }
-  if (first === 0) return { record, omitted: 0 };
-  const kept = record.turns.slice(first);
+  const kept = brief.slice(first);
+  for (let index = kept.length - 1; index >= 0; index -= 1) {
+    const full = turns[first + index]!;
+    const extra = writtenBytes(full) - writtenBytes(kept[index]!);
+    if (used + extra > maxBytes) break;
+    used += extra;
+    kept[index] = full;
+  }
+  if (first === 0 && kept.every((turn, index) => turn === turns[index])) return { record, omitted: 0 };
+  if (first === 0) return { record: { ...record, turns: kept }, omitted: 0 };
   const note = `[ClikCode: the ${first} earlier turn${first === 1 ? ' is' : 's are'} left out to fit this model. search_conversations with in: "${record.conversationId}" and read_conversation("${record.conversationId}") read them.]\n\n`;
   return { record: { ...record, turns: [{ ...kept[0]!, user: `${note}${kept[0]!.user}` }, ...kept.slice(1)] }, omitted: first };
 }
