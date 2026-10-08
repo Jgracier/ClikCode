@@ -43,7 +43,7 @@
 
 import { jsonPartText, sqliteOpenings } from './sqlite-openings.js';
 import { carrySqliteSession, progressQuery, type SqliteCarrySpec } from './sqlite-carry.js';
-import { absolutePath, shellQuote } from './thread-writer-files.js';
+import { absolutePath, shellQuote, testedVersion } from './thread-writer-files.js';
 import { randomBytes } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -352,10 +352,7 @@ function randomTail(options: OpenCodeExportOptions): string {
 export function openCodeFamilyThreadWriter(testedVersions: readonly string[]): NativeThreadWriter {
   return {
     testedVersions,
-    versionOk(context) {
-      const version = context.version?.trim().replace(/^v/, '');
-      return Boolean(version && testedVersions.includes(version));
-    },
+    versionOk: testedVersion(testedVersions),
     async write(record, context: NativeThreadWriteContext): Promise<NativeThreadWritten | undefined> {
       const model = context.model?.trim();
       // The resumed turn's model is the last user message's (OpenCode's

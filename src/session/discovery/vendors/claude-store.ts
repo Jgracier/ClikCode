@@ -16,7 +16,7 @@ import {
   type NativeThreadWriter, type NativeThreadWritten,
 } from '../stores.js';
 import { claudeProjectDirectoryNames } from './claude.js';
-import { testedBuild, versionNumber } from './claude-import.js';
+import { testedVersion, versionNumber } from './thread-writer-files.js';
 import { claudeProjectDirectoryName, claudeThreadJsonl } from './claude-thread.js';
 
 const CLAUDE_TESTED_VERSIONS = ['2.1.288'] as const;
@@ -53,7 +53,7 @@ async function writeClaudeThread(record: CanonicalRecord, context: NativeThreadW
 
 export const claudeThreadWriter: NativeThreadWriter = {
   testedVersions: CLAUDE_TESTED_VERSIONS,
-  versionOk: (context) => testedBuild(CLAUDE_TESTED_VERSIONS, context),
+  versionOk: (context) => testedVersion(CLAUDE_TESTED_VERSIONS)(context),
   write: writeClaudeThread,
 };
 

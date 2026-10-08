@@ -49,6 +49,7 @@ import { homedir } from 'node:os';
 import { isAbsolute, join, resolve } from 'node:path';
 import type { CanonicalRecord, CanonicalToolCall } from '../../canonical.js';
 import type { NativeSessionEnvironment, NativeSessionFile, NativeSessionStore, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
+import { testedVersion } from './thread-writer-files.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
 } from './thread-writer-files.js';
@@ -364,10 +365,7 @@ function profileRoot(environment: NativeSessionEnvironment): string | undefined 
 
 export const cursorThreadWriter: NativeThreadWriter = {
   testedVersions: CURSOR_WRITER_TESTED_VERSIONS,
-  versionOk(context) {
-    const version = context.version?.trim();
-    return Boolean(version && CURSOR_WRITER_TESTED_VERSIONS.includes(version));
-  },
+  versionOk: testedVersion(CURSOR_WRITER_TESTED_VERSIONS),
   async write(record, context): Promise<NativeThreadWritten | undefined> {
     const root = profileRoot(context.environment);
     if (!root || !record.turns.length) return undefined;

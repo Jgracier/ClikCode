@@ -8,7 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { AiLocalHarnessDefinition } from '../../../harness/definition.js';
 import { markProviderBoundaries, type CanonicalRecord, type CanonicalToolCall, type CanonicalTurn } from '../../canonical.js';
 import { claudeToolUses, claudeThreadJsonl, claudeThreadRecords } from './claude-thread.js';
-import { claudeImportWriter, importClaudeThread, testedBuild, versionNumber } from './claude-import.js';
+import { claudeImportWriter, importClaudeThread } from './claude-import.js';
+import { testedVersion, versionNumber } from './thread-writer-files.js';
 import { claudeSessionStore } from './claude-store.js';
 import { gooseSessionStore } from './goose-store.js';
 import { HERMES_IMPORT_SPEC, hermesSessionStore } from './hermes-store.js';
@@ -151,9 +152,13 @@ describe('writers', () => {
   it('reads x.y.z out of each vendor version line and accepts only tested builds', () => {
     expect(versionNumber('2.1.288 (Claude Code)')).toBe('2.1.288');
     expect(versionNumber('Hermes Agent v0.20.5 (2026.8.19) · upstream eb8d21f4')).toBe('0.20.5');
-    expect(testedBuild(['1.51.0'], { version: ' 1.51.0' })).toBe(true);
-    expect(testedBuild(['1.51.0'], { version: '1.52.0' })).toBe(false);
-    expect(testedBuild(['1.51.0'], { version: undefined })).toBe(false);
+    expect(testedVersion(['1.51.0'])({ version: ' 1.51.0' })).toBe(true);
+    // A patch build of a verified line is the same layout; a new minor is not.
+    expect(testedVersion(['2.1.288'])({ version: '2.1.289 (Claude Code)' })).toBe(true);
+    expect(testedVersion(['1.51.0'])({ version: '1.52.0' })).toBe(false);
+    expect(testedVersion(['codex-cli 0.155.1'])({ version: 'codex-cli 0.155.4' })).toBe(true);
+    expect(testedVersion(['1.51.0'])({ version: undefined })).toBe(false);
+    expect(testedVersion([])({ version: '1.0.0' })).toBe(false);
     expect(claudeSessionStore.writer!.testedVersions).toEqual(['2.1.288']);
     expect(gooseSessionStore.writer!.testedVersions).toEqual(['1.51.0']);
     expect(hermesSessionStore.writer!.testedVersions).toEqual(['0.20.5']);

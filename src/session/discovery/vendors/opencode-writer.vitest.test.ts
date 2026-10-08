@@ -185,7 +185,7 @@ describe('OpenCode-family writers', () => {
 
   it('accept only the verified builds', () => {
     expect(openCodeThreadWriter.versionOk(context())).toBe(true);
-    expect(openCodeThreadWriter.versionOk(context({ version: '1.18.33' }))).toBe(false);
+    expect(openCodeThreadWriter.versionOk(context({ version: '1.19.0' }))).toBe(false);
     expect(openCodeThreadWriter.versionOk(context({ version: undefined }))).toBe(false);
     expect(kiloThreadWriter.versionOk(context({ version: '7.7.6' }))).toBe(true);
     expect(kiloThreadWriter.versionOk(context({ version: '1.18.32' }))).toBe(false);

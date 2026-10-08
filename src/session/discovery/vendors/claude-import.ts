@@ -16,6 +16,7 @@ import { captureNativeHarnessOutput } from '../../../harness/transport/native/co
 import type { CanonicalRecord } from '../../canonical.js';
 import type { NativeThreadWriteContext, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
 import { claudeThreadJsonl } from './claude-thread.js';
+import { testedVersion } from './thread-writer-files.js';
 
 /** The Claude Code build the imported records claim to come from: the one
  * whose layout both importers were verified on. */
@@ -23,17 +24,6 @@ export const CLAUDE_THREAD_VERSION = '2.1.288';
 
 const IMPORT_TIMEOUT_MS = 60_000;
 
-/** `x.y.z` out of a `--version` line (`2.1.288 (Claude Code)`, `1.51.0`,
- * `Hermes Agent v0.20.5 (2026.8.19) · upstream ...`). */
-export function versionNumber(line: string | undefined): string | undefined {
-  return /(\d+\.\d+\.\d+)/.exec(line ?? '')?.[1];
-}
-
-/** True only for a build listed in `tested`; an unreadable version is false. */
-export function testedBuild(tested: readonly string[], context: Pick<NativeThreadWriteContext, 'version'>): boolean {
-  const version = versionNumber(context.version);
-  return Boolean(version && tested.includes(version));
-}
 
 export interface ClaudeImportSpec {
   testedVersions: readonly string[];
@@ -72,7 +62,7 @@ export async function importClaudeThread(
 export function claudeImportWriter(spec: ClaudeImportSpec): NativeThreadWriter {
   return {
     testedVersions: spec.testedVersions,
-    versionOk: (context) => testedBuild(spec.testedVersions, context),
+    versionOk: (context) => testedVersion(spec.testedVersions)(context),
     write: (record, context) => importClaudeThread(record, context, spec),
   };
 }
