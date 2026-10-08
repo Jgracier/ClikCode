@@ -17,6 +17,20 @@ describe('native harness turn results', () => {
     expect(result.isError).toBeUndefined();
   });
 
+  it('keeps an answer given after a failed step, and an error after the answer still fails', () => {
+    const antigravity = localHarnessForCommand('antigravity')!;
+    // A step marked {status:"ERROR"} with no reason, then the full answer, exit 0.
+    const recovered = [JSON.stringify({ status: 'ERROR' }), JSON.stringify({ status: 'SUCCESS', response: 'The full answer.' })].join('\n');
+    const result = nativeTurnResult(antigravity, recovered, { exitCode: 0 });
+    expect(result.text).toBe('The full answer.');
+    expect(result.isError).toBeUndefined();
+    // Failing last is failing, and the answer is never given as the reason.
+    const failed = [JSON.stringify({ status: 'SUCCESS', response: 'Partway.' }), JSON.stringify({ status: 'ERROR' })].join('\n');
+    const last = nativeTurnResult(antigravity, failed, { exitCode: 0 });
+    expect(last.isError).toBe(true);
+    expect(nativeTurnFailure(antigravity, last).failure.message).toBe('Antigravity CLI: reported the turn failed without saying why');
+  });
+
   it('still treats a bare vendor error with no assistant answer as a failure', () => {
     const result = nativeTurnResult(codex, JSON.stringify({ error: 'authentication required' }));
 

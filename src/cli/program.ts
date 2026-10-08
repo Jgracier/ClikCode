@@ -79,6 +79,16 @@ export function buildBaseProgram(): Command {
     handleCommandError(err);
     process.exit(process.exitCode || 1);
   });
+  // A terminal that closed under a window (EIO) or a reader that went away
+  // (EPIPE) leaves nobody to write to: the same end as a hangup, not a crash.
+  // The window's worker keeps any turn running. Logged as uncaught crashes
+  // before, 22 of them in three days.
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EIO' || error.code === 'EPIPE') process.exit(process.exitCode ?? 0);
+      throw error;
+    });
+  }
   process.on('uncaughtException', (err) => {
     restoreTerminal();
     logCrashToDisk('uncaughtException', err);

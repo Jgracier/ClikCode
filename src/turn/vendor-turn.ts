@@ -9,7 +9,7 @@ import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { createPendingWorkTracker } from './pending-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
-import { classifyAccountFailure } from './failover.js';
+import { classifyAccountFailure, isTransientStartFailure, TRANSIENT_START_RETRY_MS } from './failover.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { keepsNoHistory, startConversationThread } from './thread-start.js';
 import { targetContextWindow } from './transfer.js';
@@ -276,6 +276,7 @@ export async function sendVendorTurn(input: {
   let effortRetried = false;
   /** A fresh native thread gets one recovery attempt per account. */
   let nativeThreadRetried = false;
+  let transientRetried = false;
   const effortKey = (): string => `${harness.command} ${model ?? ''} ${session.effort}`;
   const turnEffort = (): string | undefined => session.effort && session.effortRefused !== effortKey() ? session.effort : undefined;
   /** Shared by every transport: usage seen on the wire for this attempt.
@@ -547,6 +548,14 @@ export async function sendVendorTurn(input: {
         prompter?.activity(chalk.yellow(`${harness.displayName} does not take effort ${session.effort} on this model; using its default`));
         session.effortRefused = effortKey();
         await checkpoint.persistNow();
+        continue;
+      }
+      // A start that failed for a moment (failover.ts isTransientStartFailure):
+      // nothing was sent, so once more in place.
+      if (!cliOutputStarted && !transientRetried && isTransientStartFailure(failure)) {
+        transientRetried = true;
+        prompter?.phase('retrying');
+        await new Promise((resolve) => setTimeout(resolve, TRANSIENT_START_RETRY_MS));
         continue;
       }
       // A turn contract an older vendor build rejects outright: retry once on
