@@ -1,5 +1,5 @@
 /** What a turn's outcome records on its account. */
-import { clearQuotaMark, markQuotaExhausted, vendorWindows, windowSpent } from '../harness/accounts/usage-reading.js';
+import { clearQuotaMark, markQuotaExhausted, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
 import { noteAllowedTurn, noteRefusal } from '../harness/accounts/learned-usage.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { quotaRetryHint, quotaRollingWindowMs } from './failover.js';
@@ -11,6 +11,9 @@ type Invocation = HarnessState['invocations'][number];
 
 /** A turn the vendor allowed, already in the invocation log. */
 export function recordSuccessfulAccountTurn(state: HarnessState, account: AiHarnessAccount, invocation: Invocation): void {
+  // The vendor served this turn: any window its reading calls spent is not.
+  const spent = vendorWindows(account).filter(windowSpent).map(windowKey);
+  if (spent.length) account.disprovenWindows = [...new Set([...account.disprovenWindows ?? [], ...spent])];
   clearQuotaMark(account);
   account.verification = undefined;
   noteAllowedTurn(state, account, invocation);
@@ -33,6 +36,8 @@ function noteFreePlan(account: AiHarnessAccount, failure: unknown): void {
  * is the reset and the whole window is only the fallback. With none of
  * those, the mark uses the default (see quotaMarkExpiresAt). */
 export function recordQuotaRefusal(state: HarnessState, account: AiHarnessAccount, failure: unknown, now = Date.now()): void {
+  // A refusal makes the vendor's readings credible again.
+  account.disprovenWindows = undefined;
   noteFreePlan(account, failure);
   const named = quotaRetryHint(failure, now);
   // A rolling window names its length. Passing that as a reset instant makes

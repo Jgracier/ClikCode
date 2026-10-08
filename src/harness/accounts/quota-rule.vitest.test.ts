@@ -123,3 +123,20 @@ describe('which accounts are re-read', () => {
     expect(accountsDueForUsageRecheck(state([expired, unreadable]), now, askable).map((item) => item.id)).toEqual(['e']);
   });
 });
+
+describe('a reading the vendor proved wrong', () => {
+  it('stops counting a spent window once a turn was served through it, until a refusal', async () => {
+    const { recordSuccessfulAccountTurn, recordQuotaRefusal } = await import('../../turn/account-outcome.js');
+    const weekly = { name: 'weekly', usedPct: 100, resetsAt: minutes(2_000) };
+    const served = account({ usage: reading(minutes(-1), [weekly]) });
+    const state = { accounts: [served], sessions: [], invocations: [] } as unknown as HarnessState;
+    expect(accountQuotaSpent(served, now)).toBe(true);
+    recordSuccessfulAccountTurn(state, served, { id: 'i', accountId: 'a', provider: 'anthropic', at: new Date(now).toISOString(), latencyMs: 1_000 } as never);
+    expect(accountQuotaSpent(served, now)).toBe(false);
+    // The next reading says the same thing; it is still not believed.
+    served.usage = reading(new Date(now + 60_000).toISOString(), [weekly]);
+    expect(accountQuotaSpent(served, now + 60_000)).toBe(false);
+    recordQuotaRefusal(state, served, new Error('usage limit reached'), now + 120_000);
+    expect(accountQuotaSpent(served, now + 120_000)).toBe(true);
+  });
+});

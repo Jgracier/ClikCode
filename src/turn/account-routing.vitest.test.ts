@@ -157,13 +157,13 @@ describe('stored-usage account switch', () => {
     expect(empty.quotaState).toBe('exhausted');
   });
 
-  it('does not start on an account whose saved window is already spent, and writes nothing to it', () => {
+  it('keeps its account when only a saved reading calls it spent, and writes nothing to it', () => {
+    // Readings lag: Claude's /usage said weekly 100% after the limit was reset.
     const spent = account('spent', {
       usage: { at: new Date().toISOString(), label: 'weekly 0% left', windows: [{ name: 'weekly', usedPct: 100, resetsAt: later }] } as AiHarnessAccount['usage'],
     });
     const next = account('next');
-    expect(initialAccountChoice(state([spent, next]), spent, () => true, new Map()))
-      .toEqual({ kind: 'switch', account: next });
+    expect(initialAccountChoice(state([spent, next]), spent, () => true, new Map())).toEqual({ kind: 'continue' });
     expect(spent.quotaState).toBeUndefined();
   });
 
