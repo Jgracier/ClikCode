@@ -116,3 +116,13 @@ describe('streaming markdown', () => {
     expect(rewritten.stable + rewritten.tail).toBe(renderMarkdown('entirely new'));
   });
 });
+
+describe('a phase reported before the vendor answers', () => {
+  it('ends at the first answer text or call, once', () => {
+    const apply = (events: unknown[]) => events.reduce<ChatModel>((model, event) => applyEvent(model, worker(event)), emptyModel());
+    const switching = { type: 'phase', message: 'out of usage, switching to b@example.com' };
+    expect(apply([{ type: 'waiting-start', message: 'thinking' }, switching]).live?.phase).toBe(switching.message);
+    expect(apply([{ type: 'waiting-start', message: 'thinking' }, switching, { type: 'delta', text: 'Hi', mode: 'append' }]).live?.phase).toBeUndefined();
+    expect(apply([{ type: 'waiting-start', message: 'thinking' }, switching, { type: 'activity', event: { kind: 'tool-start', id: 't', label: 'read a.ts' } }]).live?.phase).toBeUndefined();
+  });
+});

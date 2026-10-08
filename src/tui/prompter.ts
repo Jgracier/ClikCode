@@ -302,6 +302,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** "Tell it instead" is being typed; the draft the composer held before. */
   private tellingInstead?: { draft: string; cursor: number };
   private approvalRestoreLabel?: string;
+  /** The last label a phase report set ("switching to …", "retrying"): what
+   * the turn was doing before the vendor answered. The vendor's first output
+   * after it ends it; labels this window sets itself (stopping, waiting for
+   * approval) are not phases and stay. */
+  private reportedPhase?: string;
   private readonly onWaitingKey = (key: string): void => {
     const turn = this.turn;
     if (!turn) return;
@@ -885,7 +890,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text; once the answer is arriving it is stale.
-    if (text) { this.thought = undefined; if (this.turn) this.turn.activeAt = this.turn.writingAt = Date.now(); }
+    if (text) { this.thought = undefined; this.vendorAnswered(); if (this.turn) this.turn.activeAt = this.turn.writingAt = Date.now(); }
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -931,6 +936,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     // Anything the turn or one of its sub-agents does means it has not stalled.
     if (this.turn) this.turn.activeAt = Date.now();
+    this.vendorAnswered();
     if (event.parentId) {
       // A sub-agent's own calls stay inside the agent row, which keeps its
       // spinner. They are not separate messages, and they do not move the
@@ -1431,6 +1437,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return turnSummary({ ms, diffs: calls.flatMap((entry) => (entry.event?.diff?.length ? [entry.event.diff] : [])) });
   }
 
+  /** The vendor is producing output: a phase reported before it is over. */
+  private vendorAnswered(): void {
+    if (this.reportedPhase === undefined) return;
+    if (this.turn?.label === this.reportedPhase) this.turn.label = 'thinking';
+    this.reportedPhase = undefined;
+  }
+
   phase(message: string): void {
     const turn = this.turn;
     if (!turn || turn.cancelled || turn.label === message) return;
@@ -1438,6 +1451,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // for when it is answered instead of replacing that.
     if (this.pendingApproval) { this.approvalRestoreLabel = message; return; }
     turn.label = message;
+    this.reportedPhase = message;
     this.updateWaiting();
   }
 
