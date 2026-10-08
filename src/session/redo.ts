@@ -12,6 +12,8 @@ import { randomUUID } from 'node:crypto';
 import type { HarnessSession, HarnessState } from './model.js';
 import { conversationIdFor } from './conversation-rows.js';
 import { forgetNativeThread } from './native-thread.js';
+import { isClikCodeAgent } from './route.js';
+import { ConversationStore } from '../agent/conversation.js';
 import { readTurnChanges, withTurnChangesLock, writeTurnChanges } from './turn-changes.js';
 import { turnIsRunning, undoTurnsBack } from './undo-turn.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
@@ -61,6 +63,13 @@ export async function redoFrom(
   session.pendingTurn = undefined;
   delete session.resumeAt;
   forgetNativeThread(session);
+  // ClikCode's own agent remembers the turns that were cut away too: its
+  // memory starts over, and the next turn writes the shortened conversation
+  // into it (turn/agent-history.ts).
+  if (isClikCodeAgent(session)) {
+    await new ConversationStore(options.stateDir, session.id).archive();
+    delete session.agentThreadTurns;
+  }
   session.updatedAt = now;
   return {
     prompt,

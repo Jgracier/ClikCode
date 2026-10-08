@@ -61,6 +61,23 @@ export class ConversationStore {
     this.file = transcriptPath(stateDir, sessionId);
   }
 
+  /** Bytes on disk: 0 when there is no file yet. Cheap, unlike load(). */
+  async size(): Promise<number> {
+    try { return (await fs.stat(this.file)).size; } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
+      throw error;
+    }
+  }
+
+  /** Sets the history aside, kept beside it, so the next turn starts the
+   * agent's memory over (the conversation was cut back: /redo). */
+  async archive(): Promise<void> {
+    await this.queue.catch(() => undefined);
+    try { await fs.rename(this.file, `${this.file}.${Date.now()}.discarded`); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+
   private write(records: readonly TranscriptRecord[]): Promise<void> {
     const work = async (): Promise<void> => {
       if (!records.length) return;
