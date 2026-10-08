@@ -74,24 +74,48 @@ export function accountUsageFrom(entry: UsageCacheEntry): AccountUsageReading {
   };
 }
 
-/** How often one account's stream reading is written to the shared index.
- * Vendors repeat their quota on every message; this terminal sees each one at
- * once (nativeUsageCache), other terminals a minute later at most. */
+/** How often incremental usage updates are written to the shared index.
+ * Vendors repeat their quota on every message; throttling prevents disk churn.
+ * Quota status changes (spent ↔ available) are written immediately. */
 const PUBLISH_INTERVAL_MS = 60_000;
-interface PublishSlot { at: number; timer?: NodeJS.Timeout; latest?: UsageCacheEntry }
+interface PublishSlot { at: number; timer?: NodeJS.Timeout; latest?: UsageCacheEntry; lastSpent?: boolean }
 const published = new Map<string, PublishSlot>();
 
+/** Whether any window in this reading is spent (usedPct >= 100). */
+function anyWindowSpent(entry: UsageCacheEntry): boolean {
+  return (entry.windows ?? []).some((window) => window.usedPct >= 100 && !window.advisory);
+}
+
 /** Publish a reading onto the account so every terminal sees it, and into the
- * in-process cache so this terminal's next paint does not re-probe. Within
- * PUBLISH_INTERVAL_MS of the last write only the newest reading is kept, and
- * written when the interval ends. */
+ * in-process cache so this terminal's next paint does not re-probe.
+ * 
+ * Quota status changes (exhausted ↔ available) are published immediately for
+ * instant failover and account picker updates. Incremental changes (45% → 46%)
+ * are throttled to PUBLISH_INTERVAL_MS to prevent disk churn. */
 async function publishUsageReading(cacheKey: string, accountId: string | null | undefined, reading: UsageReading): Promise<void> {
   const entry: UsageCacheEntry = { at: Date.now(), ...(reading.label === undefined ? {} : { label: reading.label }), ...(reading.windows.length ? { windows: reading.windows } : {}) };
   nativeUsageCache.set(cacheKey, entry);
   if (!accountId) return;
+  
   const slot = published.get(accountId);
+  const nowSpent = anyWindowSpent(entry);
+  const statusChanged = slot?.lastSpent !== undefined && slot.lastSpent !== nowSpent;
+  
+  // Publish immediately when quota status flips (spent ↔ available).
+  if (statusChanged) {
+    if (slot?.timer) {
+      clearTimeout(slot.timer);
+      slot.timer = undefined;
+    }
+    slot.lastSpent = nowSpent;
+    await storeAccountUsage(accountId, entry);
+    return;
+  }
+  
+  // Throttle incremental updates.
   if (slot && entry.at - slot.at < PUBLISH_INTERVAL_MS) {
     slot.latest = entry;
+    slot.lastSpent = nowSpent;
     slot.timer ??= setTimeout(() => {
       slot.timer = undefined;
       const latest = slot.latest;
@@ -100,13 +124,19 @@ async function publishUsageReading(cacheKey: string, accountId: string | null | 
     }, slot.at + PUBLISH_INTERVAL_MS - entry.at).unref();
     return;
   }
+  
   await storeAccountUsage(accountId, entry);
 }
 
 async function storeAccountUsage(accountId: string, entry: UsageCacheEntry): Promise<void> {
   const slot = published.get(accountId);
-  if (slot) slot.at = Date.now();
-  else published.set(accountId, { at: Date.now() });
+  const nowSpent = anyWindowSpent(entry);
+  if (slot) {
+    slot.at = Date.now();
+    slot.lastSpent = nowSpent;
+  } else {
+    published.set(accountId, { at: Date.now(), lastSpent: nowSpent });
+  }
   // The index only: no transcript is needed to update an account.
   const state = await readState({ transcripts: [] });
   const account = state.accounts.find((item) => item.id === accountId);

@@ -30,7 +30,7 @@ import { consumeSessionTurn } from '../turn/checkpoint.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading } from '../harness/accounts/account-usage.js';
-import { usageResetLabel } from '../harness/accounts/usage-reading.js';
+import { usageResetLabel, watchAccountUsage } from '../harness/accounts/usage-reading.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { withSignIn } from '../commands/account.js';
@@ -96,6 +96,7 @@ export class IdeBridge {
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 
   private readonly timers: NodeJS.Timeout[] = [];
+  private usageWatcher: { stop: () => void } | undefined;
   private closed = false;
   /** Open conversations lists in the editor, and the watch behind them. */
   private listWatchers = 0;
@@ -119,6 +120,8 @@ export class IdeBridge {
     claim.unref();
     usage.unref();
     this.timers.push(claim, usage);
+    // Watch index.json for account changes to invalidate usage cache instantly.
+    this.usageWatcher = watchAccountUsage();
     this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
   }
 
@@ -219,6 +222,8 @@ export class IdeBridge {
     this.closed = true;
     this.listWatch?.stop();
     this.listWatch = undefined;
+    this.usageWatcher?.stop();
+    this.usageWatcher = undefined;
     for (const timer of this.timers) clearInterval(timer);
     this.prompter.cancelAll();
     this.searchKey?.('done');

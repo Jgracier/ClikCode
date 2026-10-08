@@ -31,7 +31,7 @@ import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
 import { warmNativeModelCatalog } from '../../harness/accounts/model-catalog.js';
-import { usageResetLabel } from '../../harness/accounts/usage-reading.js';
+import { usageResetLabel, watchAccountUsage } from '../../harness/accounts/usage-reading.js';
 import { closePersistentTransport, nativeAvailableCommands } from '../../turn/vendor-process.js';
 import { synchronizeNativeTranscript } from '../../turn/handoff.js';
 import { runSessionTurn } from '../../turn/session-turn.js';
@@ -248,6 +248,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     void claimConversation(id).catch(() => undefined);
   }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
   claimInterval.unref();
+  // Watch index.json for account changes to invalidate usage cache instantly.
+  const usageWatch = watchAccountUsage();
   // This process's own build, fingerprinted once at startup the same way a
   // session worker's is (registry.ts). The terminal cannot hot-swap the code
   // it has loaded. When a newer build is on disk, this process re-execs onto
@@ -262,6 +264,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   const releaseWindow = async (): Promise<void> => {
     if (usageInterval) clearInterval(usageInterval);
     clearInterval(claimInterval);
+    usageWatch.stop();
     await closeAllWorkerClients().catch(() => undefined);
     await closePersistentTransport().catch(() => undefined);
     // Nothing it showed keeps a local model up, even if this process lives
