@@ -73,7 +73,11 @@ export function turnFacts(pending: PendingTurnShape): TurnFacts {
 }
 
 /** The one state a row shows: needing the user outranks everything, then a
- * running turn, then a parked one, then how long ago. */
+ * running turn, then a parked one, then how long ago.
+ *
+ * The caller (conversationOption) only passes turn facts when activity is
+ * 'working' (verified by sessionActivity in conversationRows), so a turn
+ * here is always backed by a live worker. */
 export function conversationState(facts: ConversationStateFacts, now: number): ConversationState {
   if (facts.needsYou) return { kind: 'needs-you', text: 'needs you' };
   if (facts.turn) {

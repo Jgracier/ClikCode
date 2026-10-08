@@ -23,6 +23,13 @@ describe('a conversation row\'s one state', () => {
       .toEqual({ kind: 'stalled', text: 'stalled 4m' });
   });
 
+  it('shows idle when no turn facts are passed (conversationRows filtered them out)', () => {
+    // conversationRows only passes turn facts when activity === 'working', which
+    // requires a live worker. So if turn is undefined, show the updatedAt time.
+    expect(conversationState({ updatedAt: ago(4 * MINUTE) }, NOW))
+      .toEqual({ kind: 'idle', text: '4m ago' });
+  });
+
   it('needs you while an approval waits, over everything else', () => {
     expect(conversationState({
       updatedAt: ago(0), needsYou: true, turn: { startedAt: ago(20 * MINUTE), activeAt: ago(10 * MINUTE) }, resumeAt: ago(-MINUTE),
