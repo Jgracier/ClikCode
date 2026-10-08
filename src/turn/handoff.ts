@@ -1,8 +1,9 @@
 /** What a conversation carries to another provider, and vendor transcript
  * reconciliation. */
 import type { AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
-import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../session/model.js';
+import type { HarnessDefaultSettings, HarnessSession, HarnessState, TranscriptMessage } from '../session/model.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
+import { boundTurnActivities, readTurnActivities } from './turn-activities.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
@@ -120,8 +121,18 @@ export async function synchronizeNativeTranscript(state: HarnessState, session: 
     const promptIndex = appended.findIndex((message) =>
       message.role === 'user' && message.content.trim() === session.pendingTurn!.prompt.trim());
     if (promptIndex >= 0) {
-      const nativeHasAnswer = appended.slice(promptIndex + 1).some((message) => message.role === 'assistant');
-      if (!nativeHasAnswer) {
+      const answerIndex = appended.findIndex((message, index) => index > promptIndex && message.role === 'assistant');
+      if (answerIndex >= 0) {
+        // Native transcript readers import prose, not streamed tool frames.
+        // Keep the checkpoint's child work on the imported answer before
+        // retiring that checkpoint, including when the vendor quit on quota.
+        const answer = session.messages[previousLength + answerIndex] as TranscriptMessage;
+        const activities = readTurnActivities(session.pendingTurn.activities, session.pendingTurn.response?.length ?? 0);
+        if (activities.length) answer.activities = boundTurnActivities([
+          ...readTurnActivities(answer.activities, answer.content.length),
+          ...activities.map((activity) => ({ ...activity, responseOffset: Math.min(activity.responseOffset, answer.content.length) })),
+        ]);
+      } else {
         const checkpointAnswer = sessionTranscriptMessages({ ...session, messages: [] })
           .find((message) => message.role === 'assistant');
         if (checkpointAnswer) session.messages.push(checkpointAnswer);

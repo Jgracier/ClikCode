@@ -112,6 +112,25 @@ describe('canonicalRecord', () => {
     expect(last).toMatchObject({ user: 'split the file', attachments: ['/w/spec.md'], assistant: 'Moving the lexer out', interrupted: true, touchedFiles: ['src/lexer.ts'] });
   });
 
+  it('includes completed child work from an interrupted sub-agent turn', () => {
+    const { root } = chain();
+    const live = {
+      ...root,
+      pendingTurn: {
+        prompt: 'inspect', startedAt: now, updatedAt: now, outputStarted: true,
+        activities: [
+          { responseOffset: 0, event: { kind: 'tool-start', label: 'Agent(inspect)', id: 'agent' } },
+          { responseOffset: 0, event: { kind: 'tool-done', label: 'Read(src/a.ts)', id: 'read', parentId: 'agent', output: ['important finding'] } },
+        ],
+      },
+    } as HarnessSession;
+    const last = canonicalRecord(live).turns.at(-1)!;
+    expect(last.interrupted).toBe(true);
+    expect(last.tools).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'read', parentId: 'agent', status: 'done', output: ['important finding'] }),
+    ]));
+  });
+
   it('carries the stored plan and its open todos', () => {
     const { root } = chain();
     const record = canonicalRecord({ ...root, plan: { at: now, entries: [{ content: 'rename', status: 'completed' }, { content: 'docs', status: 'in_progress' }] } });

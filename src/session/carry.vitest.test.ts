@@ -43,6 +43,35 @@ describe('carrying a vendor session between account profiles', () => {
     await expect(readFile(join(from, 'projects', project, 'session-one.jsonl'), 'utf8')).resolves.toBe('{"type":"user"}\n');
   });
 
+  it('carries Claude subagent and tool-result files with the parent across account switches', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-claude-agents-'));
+    const a = join(root, 'a');
+    const b = join(root, 'b');
+    const project = WORKSPACE.replace(/[^a-zA-Z0-9]/g, '-');
+    const parent = (home: string): string => join(home, 'projects', project, 'session-one.jsonl');
+    const child = (home: string): string => join(home, 'projects', project, 'session-one', 'subagents', 'agent-one.jsonl');
+    const result = (home: string): string => join(home, 'projects', project, 'session-one', 'tool-results', 'call-one.txt');
+    await mkdir(join(a, 'projects', project, 'session-one', 'subagents'), { recursive: true });
+    await mkdir(join(a, 'projects', project, 'session-one', 'tool-results'), { recursive: true });
+    await writeFile(parent(a), '{"turn":1}\n');
+    await writeFile(child(a), 'agent step one\n');
+    await writeFile(result(a), 'tool output\n');
+    const carry = (from: string, to: string) => carryNativeSession({
+      harness: harnessFor('claude'), nativeId: 'session-one', workspace: WORKSPACE,
+      from: { CLAUDE_CONFIG_DIR: from }, to: { CLAUDE_CONFIG_DIR: to },
+    });
+
+    await expect(carry(a, b)).resolves.toBe('carried');
+    await expect(readFile(child(b), 'utf8')).resolves.toBe('agent step one\n');
+    await expect(readFile(result(b), 'utf8')).resolves.toBe('tool output\n');
+    await writeFile(parent(b), '{"turn":1}\n{"turn":2}\n');
+    await writeFile(child(b), 'agent step one\nagent step two\n');
+    await expect(carry(b, a)).resolves.toBe('carried');
+    await expect(readFile(parent(a), 'utf8')).resolves.toContain('{"turn":2}');
+    await expect(readFile(child(a), 'utf8')).resolves.toContain('agent step two');
+    await expect(readFile(result(a), 'utf8')).resolves.toBe('tool output\n');
+  });
+
   it("keeps Codex's dated rollout path", async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-carry-'));
     const from = join(root, 'account-a');

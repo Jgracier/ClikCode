@@ -4,7 +4,8 @@
  * message a finished turn becomes (`messages[i].activities`) hold the same
  * thing: one record per call, merged frame by frame by the rules every client
  * already draws by (activity-view.ts), with the offset into the text where it
- * began. A reopened chat draws them where they happened; the journal used to
+ * began. Child calls are kept too, with their parentId, while the UI draws
+ * only the parent row. A reopened chat draws rows where they happened; the journal used to
  * keep the last twenty one-line strings, so a reopened chat showed its prose
  * with a blank gap wherever a call had been.
  *
@@ -143,29 +144,30 @@ export function boundTurnActivities(activities: TurnActivity[], limit = MAX_TURN
 
 /** One more frame of the turn, into its calls: a later frame of a call
  * (same id, or the open row with its label) merges into it and keeps where
- * it began; a sub-agent's own calls only count toward its row; a thought is
+ * it began; a sub-agent's calls remain in the journal for recovery while
+ * counting toward its visible row; a thought is
  * never a row. Returns the same list when nothing changed. */
 export function recordTurnActivity(
   activities: readonly TurnActivity[], event: HarnessActivityEvent, responseOffset: number,
 ): TurnActivity[] {
   if (event.kind === 'thinking') return activities as TurnActivity[];
-  if (event.parentId) {
-    if (event.kind !== 'tool-start') return activities as TurnActivity[];
-    const index = activities.findIndex((activity) => activity.event.id === event.parentId);
-    if (index < 0) return activities as TurnActivity[];
-    const next = [...activities];
-    next[index] = { ...next[index]!, event: withChildTool(next[index]!.event, event) };
-    return next;
+  let current = activities as TurnActivity[];
+  if (event.parentId && event.kind === 'tool-start') {
+    const index = current.findIndex((activity) => activity.event.id === event.parentId && !activity.event.parentId);
+    if (index >= 0) {
+      current = [...current];
+      current[index] = { ...current[index]!, event: withChildTool(current[index]!.event, event) };
+    }
   }
   const bounded = boundEvent(event);
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const prior = activities[index]!;
-    if (!sameCall(prior.event, bounded)) continue;
-    const next = [...activities];
+  for (let index = current.length - 1; index >= 0; index -= 1) {
+    const prior = current[index]!;
+    if (prior.event.parentId !== bounded.parentId || !sameCall(prior.event, bounded)) continue;
+    const next = [...current];
     next[index] = { responseOffset: prior.responseOffset, event: boundEvent(mergeActivity(prior.event, bounded)) };
     return boundTurnActivities(next);
   }
-  return boundTurnActivities([...activities, { event: bounded, responseOffset: Math.max(0, responseOffset) }]);
+  return boundTurnActivities([...current, { event: bounded, responseOffset: Math.max(0, responseOffset) }]);
 }
 
 /** Calls as stored, whatever wrote them: a list of records now, one-line
@@ -210,7 +212,10 @@ export function readTurnActivities(value: unknown, legacyOffset = 0): TurnActivi
 /** The newest call still open, if the newest call is: what a window joining
  * the turn says it is running. */
 export function runningTurnActivity(activities: readonly TurnActivity[]): HarnessActivityEvent | undefined {
-  const last = activities.at(-1)?.event;
+  let last: HarnessActivityEvent | undefined;
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    if (!activities[index]!.event.parentId) { last = activities[index]!.event; break; }
+  }
   return last?.kind === 'tool-start' ? last : undefined;
 }
 

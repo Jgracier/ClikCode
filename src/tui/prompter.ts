@@ -1947,6 +1947,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (!saved.length) return [];
       let entries: ActivityEntry[] = [];
       for (const [position, activity] of saved.entries()) {
+        if (activity.event.parentId) continue;
         entries = upsertActivityEvent(entries, index, Math.min(activity.responseOffset, message.content.length), activity.event, position + 1, 0);
       }
       return groupedRows(entries, true, new ExploreGrouping());
