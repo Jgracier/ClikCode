@@ -1,5 +1,5 @@
 /** Select a usable account for a turn or a failover. */
-import { USAGE_RECHECK_MS, accountCanTakeTurn, accountQuotaSpent, usageAskedAt, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
+import { USAGE_RECHECK_MS, accountCanTakeTurn, quotaRefusalHolds, usageAskedAt, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -107,20 +107,20 @@ export function staleHeldFailoverAccount(
     .sort((left, right) => confirmedAt(left) - confirmedAt(right))[0];
 }
 
-/** The account a turn starts on. Stored usage only orders the accounts:
- * one it shows spent gives way to one that shows room. It never refuses the
- * turn -- with nothing better, the vendor is asked and its answer decides.
- * A stored hold can be stale in any direction (a reset rounded to the hour,
- * one that went unread, another device), and a refused attempt costs a few
- * seconds where a wrong local refusal cost every message until the record
- * caught up. */
+/** The account a turn starts on. A chat leaves its own account before a
+ * turn only when the vendor refused that account and nothing since says
+ * otherwise -- never on a usage reading alone: readings lag (Claude's /usage
+ * said "weekly 100%" after the user reset the limit, and the chat kept
+ * leaving an account that worked). If the reading was right, the cost is one
+ * refused attempt and the usual failover. With nothing better to move to,
+ * the turn goes to the vendor either way. */
 export function initialAccountChoice(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesBackend: (candidate: AiHarnessAccount) => boolean,
   attempted: Map<string, number>,
 ): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount } {
-  if (!accountQuotaSpent(current)) return { kind: 'continue' };
+  if (!quotaRefusalHolds(current)) return { kind: 'continue' };
   const fallback = nextUsableFailoverAccount(state, current, matchesBackend, new Map([...attempted, [current.id, Date.now()]]));
   if (!fallback) return { kind: 'continue' };
   attempted.set(current.id, Date.now());

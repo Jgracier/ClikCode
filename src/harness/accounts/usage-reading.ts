@@ -126,7 +126,14 @@ export const QUOTA_MARK_DEFAULT_MS = 5 * 60 * 60 * 1000;
  * did not fail. */
 export function vendorWindows(account: AiHarnessAccount): UsageWindow[] {
   const reading = account.usage as AccountUsageReading | undefined;
-  return reading && !reading.failed ? reading.windows ?? [] : [];
+  const windows = reading && !reading.failed ? reading.windows ?? [] : [];
+  const disproven = account.disprovenWindows;
+  return disproven?.length ? windows.filter((window) => !disproven.includes(windowKey(window))) : windows;
+}
+
+/** One window of one period: a new period has a new reset. */
+export function windowKey(window: Pick<UsageWindow, 'name' | 'resetsAt'>): string {
+  return `${window.name}@${window.resetsAt ?? ''}`;
 }
 
 /** When a refusal mark stops holding on its own, in epoch ms: the vendor's
@@ -152,13 +159,19 @@ export function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefine
  *    the account speaks to a refusal: an advisory one (Antigravity's pools,
  *    Cline's credits) does not say the account has room. */
 export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.now()): boolean {
-  const windows = vendorWindows(account);
-  if (windows.some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now))) return true;
+  return vendorWindows(account).some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now))
+    || quotaRefusalHolds(account, now);
+}
+
+/** The refusal half of accountQuotaSpent: the vendor refused this account
+ * and nothing since says otherwise. What moves a chat off its own account
+ * before a turn -- a reading alone does not (account-routing.ts). */
+export function quotaRefusalHolds(account: AiHarnessAccount, now: number = Date.now()): boolean {
   const expires = quotaMarkExpiresAt(account);
   if (expires === undefined || expires <= now) return false;
   const readAt = Date.parse(account.usage?.at ?? '');
   const markedAt = Date.parse(account.quotaExhaustedAt ?? '');
-  return !(windows.some((window) => !window.advisory) && readAt > markedAt);
+  return !(vendorWindows(account).some((window) => !window.advisory) && readAt > markedAt);
 }
 
 /** Can this account take a turn now? Signed in, not held by the vendor for

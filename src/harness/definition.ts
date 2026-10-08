@@ -36,6 +36,11 @@ export interface AiHarnessAccount {
    * hint when the refusal carried one, else a default window. See
    * quotaMarkExpiresAt in usage-reading.ts. */
   quotaRetryAt?: string;
+  /** Spent windows (`name@resetsAt`) the vendor served a turn through anyway:
+   * its reading for them is wrong -- Claude's /usage kept "weekly 100%" after
+   * the user reset the limit -- so they are not believed until a refusal or
+   * a reading of a different window. */
+  disprovenWindows?: string[];
   /** The vendor signed this account in but will not serve it until the user
    * verifies it (e.g. Google's "Verify your account"). A fact about the
    * account, cleared by a turn that succeeds or by the user saying it is done. */
