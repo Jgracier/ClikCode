@@ -1,5 +1,5 @@
 /** Select a usable account for a turn or a failover. */
-import { USAGE_RECHECK_MS, accountCanTakeTurn, quotaRefusalHolds, usageAskedAt, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
+import { USAGE_RECHECK_MS, accountCanTakeTurn, quotaRefusalHolds, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -85,7 +85,10 @@ export function nextUsableFailoverAccount(
 }
 
 /** After a refusal, with no account that shows room: one whose "spent" no
- * one has confirmed within USAGE_RECHECK_MS -- by a reading or a refusal --
+ * one has confirmed within USAGE_RECHECK_MS -- by a reading the vendor
+ * answered or a refusal; an ask that failed confirms nothing (Codex's free
+ * plan answers with no windows, and a carried 5-day-old figure kept looking
+ * fresh) --
  * gets a real attempt rather than being written off on an old record. The
  * vendor's answer decides; a refusal re-stamps the account, so repeated
  * sends try it at most once per interval. Signed out or held for
@@ -97,8 +100,10 @@ export function staleHeldFailoverAccount(
   attempted: ReadonlyMap<string, number>,
   now: number = Date.now(),
 ): AiHarnessAccount | undefined {
-  const confirmedAt = (account: AiHarnessAccount): number =>
-    Math.max(usageAskedAt(account), Date.parse(account.quotaExhaustedAt ?? '') || Number.NEGATIVE_INFINITY);
+  const confirmedAt = (account: AiHarnessAccount): number => Math.max(
+    account.usage && !account.usage.failed ? Date.parse(account.usage.at) || Number.NEGATIVE_INFINITY : Number.NEGATIVE_INFINITY,
+    Date.parse(account.quotaExhaustedAt ?? '') || Number.NEGATIVE_INFINITY,
+  );
   return state.accounts
     .filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
       && candidate.provider === current.provider && matchesTransport(candidate)
