@@ -3,8 +3,9 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const account = vi.hoisted(() => ({ key: 'cd_live_key' }));
 vi.mock('../agent/models/for-session.js', () => ({
-  gatewayConnection: () => ({ baseUrl: 'https://clikdeploy.com', apiKey: 'cd_live_key' }),
+  gatewayConnection: () => ({ baseUrl: 'https://clikdeploy.com', apiKey: account.key }),
 }));
 
 const { gatewayModelDetail, gatewayModels, gatewayPriceLabel, isAutomaticModelWord, resetGatewayModelCache } = await import('./models.js');
@@ -41,7 +42,7 @@ const reply = (body: unknown, status = 200) => new Response(JSON.stringify(body)
 
 // The list is saved to disk (savedGatewayModels): never into the real ~/.clikcode.
 const home = mkdtempSync(join(tmpdir(), 'cc-gw-models-'));
-beforeEach(() => { process.env.CLIKCODE_HOME = home; rmSync(join(home, 'cache'), { recursive: true, force: true }); resetGatewayModelCache(); vi.unstubAllGlobals(); });
+beforeEach(() => { process.env.CLIKCODE_HOME = home; rmSync(join(home, 'cache'), { recursive: true, force: true }); resetGatewayModelCache(); account.key = 'cd_live_key'; vi.unstubAllGlobals(); });
 afterAll(() => { delete process.env.CLIKCODE_HOME; rmSync(home, { recursive: true, force: true }); });
 
 describe('the Gateway\'s model list', () => {
@@ -80,6 +81,16 @@ describe('the Gateway\'s model list', () => {
     expect(await savedGatewayModels()).toBeUndefined();
     await gatewayModels({ fetchImpl: (async () => reply(WIRE)) as never });
     expect(await savedGatewayModels()).toEqual(LIST);
+  });
+
+  it('does not reuse another account\'s model list or prices', async () => {
+    const { savedGatewayModels } = await import('./models.js');
+    const fetchImpl = vi.fn(async () => reply(WIRE));
+    await gatewayModels({ fetchImpl: fetchImpl as never });
+    account.key = 'another-account-key';
+    expect(await savedGatewayModels()).toBeUndefined();
+    await gatewayModels({ fetchImpl: fetchImpl as never });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });
 
