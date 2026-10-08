@@ -323,6 +323,13 @@ export function acpModelChoice(models: Json | undefined, model: string): string 
   if (named.length === 1 && typeof (named[0] as Json).modelId === 'string') return (named[0] as Json).modelId;
   const suffixed = ids.filter((id) => id.endsWith(`:${model}`));
   if (suffixed.length === 1) return suffixed[0];
+  // An alias the vendor's CLI takes for one of the agent's full ids: Claude
+  // Code's `--model fable` is `claude-fable-5-1` over ACP. Only when exactly
+  // one id carries the alias as a whole word; "fable" was refused as not
+  // offered, and the turn fell back to the CLI for no reason.
+  const word = model.toLowerCase();
+  const aliased = /^[a-z][a-z0-9]*$/.test(word) ? ids.filter((id) => id.toLowerCase().split(/[^a-z0-9]+/).includes(word)) : [];
+  if (aliased.length === 1) return aliased[0];
   // An agent whose ids are `provider:model` parses any such id, including a
   // provider its list leaves out -- Hermes lists only providers configured in
   // its config, but also runs ones it found signed in elsewhere (Claude

@@ -1,4 +1,5 @@
 /** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import chalk from 'chalk';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
@@ -165,6 +166,7 @@ export async function runVendorSessionAttempt(input: {
           session.nativeTransport = pinned;
           await checkpoint.persistNow();
         }
+        lifecycle('vendor.acp-fallback', { harness: harness.command, reason: unsupported.message.slice(0, 300) });
         prompter?.phase('using structured CLI fallback');
         try { result = await runCli(); }
         catch (cliError) {

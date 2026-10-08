@@ -230,6 +230,11 @@ describe('shared ACP adapter contract', () => {
     expect(acpModelChoice({ availableModels: [{ modelId: 'gpt-5.5[reasoning=high]', name: 'gpt-5.5' }, { modelId: 'gpt-5.5[reasoning=low]', name: 'gpt-5.5' }] }, 'gpt-5.5')).toBeUndefined();
     expect(acpModelChoice(models, 'anthropic:claude-sonnet-5'), 'a provider:model id the list leaves out').toBe('anthropic:claude-sonnet-5');
     expect(acpModelChoice({ availableModels: [{ modelId: 'sonnet' }] }, 'x:y'), 'an agent that does not name providers').toBeUndefined();
+    // Claude Code's ACP list (claude-agent-acp 0.84.0), where its CLI says `fable`.
+    const claude = { configOptions: [{ id: 'model', options: ['default', 'opus', 'claude-fable-5-1', 'sonnet', 'haiku'].map((value) => ({ value })) }] };
+    expect(acpModelChoice(claude, 'fable'), 'the CLI alias of one advertised id').toBe('claude-fable-5-1');
+    expect(acpModelChoice(claude, 'opus')).toBe('opus');
+    expect(acpModelChoice({ availableModels: [{ modelId: 'claude-fable-5' }, { modelId: 'claude-fable-5-1' }] }, 'fable'), 'an alias two ids carry').toBeUndefined();
     expect(acpModelChoice(undefined, 'anything'), 'an agent with no model list').toBeUndefined();
   });
 
