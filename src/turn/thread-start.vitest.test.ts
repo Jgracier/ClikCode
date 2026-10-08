@@ -131,6 +131,18 @@ createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     expect(fitRecord(long, 1).record.turns).toHaveLength(1);
   });
 
+  it("drops older turns' tool output before dropping the turns themselves", () => {
+    const call = { name: 'Bash', label: '$ npm test', status: 'done' as const, files: [], output: ['x'.repeat(2_000)] };
+    const heavy = { ...long, turns: long.turns.map((turn) => ({ ...turn, parts: [...turn.parts, { type: 'tool' as const, call }], tools: [call] })) };
+    // Room for every turn's words (20 KB) and one turn's output, not twenty (40 KB).
+    const fitted = fitRecord(heavy, 26_000);
+    expect(fitted.omitted).toBe(0);
+    // The newest keeps its call and output; older ones say what ran, in words.
+    expect((fitted.record.turns[19]!.parts.at(-1) as { call: typeof call }).call.output).toHaveLength(1);
+    expect(fitted.record.turns[0]!.tools).toEqual([]);
+    expect(fitted.record.turns[0]!.parts.at(-1)).toMatchObject({ type: 'text', text: expect.stringContaining('[Did: $ npm test]') });
+  });
+
   it('writes the fitted record into the vendor thread', async () => {
     const written: number[] = [];
     const writer: NativeThreadWriter = { testedVersions: ['1.2.3'], versionOk: () => true, write: async (fitted) => { written.push(fitted.turns.length); return { nativeId: 'n' }; } };
