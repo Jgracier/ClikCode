@@ -11,7 +11,6 @@ import { localApiKey } from '../daemon/server.js';
 import { classifyAccountFailure } from './failover.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
-import { applyManualAccount } from './manual-account.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
@@ -62,13 +61,6 @@ export async function sendDirectApiTurn(input: {
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
   for (;;) {
-    // A manual pick lands on the next request. One already on the wire
-    // finishes; this loop is the boundary between requests.
-    account = await applyManualAccount({
-      sessionId: session.id, accounts: state.accounts, current: account,
-      canRun: (item) => matchesDirectTurnModel(item, model),
-      carry: async () => undefined,
-    });
     // Same rule as the vendor path. This path re-sends the whole prompt on a
     // switch, title request included, so the stream restarts rather than
     // being dropped -- which is a consequence of the rule, not a second rule.

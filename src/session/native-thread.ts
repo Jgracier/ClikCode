@@ -12,6 +12,7 @@ export function forgetNativeThread(session: HarnessSession): void {
   const thread = session.nativeSessionId && session.nativeHarness ? `${session.nativeHarness}:${session.nativeSessionId}` : undefined;
   if (thread && !session.ownedThreads?.includes(thread)) session.ownedThreads = [...session.ownedThreads ?? [], thread];
   session.nativeSessionId = undefined;
+  delete session.nativeThreadAccountId;
   delete session.nativeTransport;
   session.nativeStartedAt = undefined;
   delete session.nativeSessionPreallocated;

@@ -105,6 +105,13 @@ export interface HarnessSession {
    * and the vendor process has not yet confirmed it exists. While set, a retry
    * re-creates with the same id instead of resuming a session that never was. */
   nativeSessionPreallocated?: true;
+  /** The account whose profile holds `nativeSessionId`'s files. A vendor
+   * reads a thread only from the profile it was written in, so this -- not
+   * `accountId`, which the user changes at any moment, from any process --
+   * says where the thread is and whether it has to move before a turn runs
+   * (session/carry.ts reconcileNativeThread). Absent on a conversation from
+   * before it was kept; the first turn finds the thread and stamps it. */
+  nativeThreadAccountId?: string;
   nativeStartedAt?: string;
   /** Every vendor thread this conversation has used and let go of (a
    * switch, a new account, a thread the vendor lost), as `<harness>:<id>`.
