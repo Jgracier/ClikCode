@@ -22,9 +22,13 @@ import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 
-/** Under app.slice, beside the windows: a host can bound all agent work with
- * one drop-in for this slice (and keep the editor's share of app.slice). */
-export const AGENT_SLICE = 'app-clikcode.slice';
+/** Top level, BESIDE app.slice -- not inside it. A slice over its MemoryHigh
+ * throttles every allocation of every process under it: MEASURED 2026-10-08,
+ * with agents in app-clikcode.slice, app.slice sat at its 36G ceiling and VS
+ * Code (in app.slice) could not even open, stalled ~68% of the time. Apart,
+ * an agent ceiling throttles only agents. A host bounds them with one unit
+ * file for this slice. */
+export const AGENT_SLICE = 'clikcode.slice';
 const ADOPT_TIMEOUT_MS = 2_000;
 /** StartTransientUnit returns once the job is queued; the move lands just after. */
 const MOVED_WAIT_MS = 500;
