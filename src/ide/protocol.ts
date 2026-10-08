@@ -196,6 +196,8 @@ export interface IdeAccount {
   label: string;
   status: 'ready' | 'needs_login' | 'offline';
   problem?: 'verify' | 'reauth' | 'out-of-usage';
+  /** With 'out-of-usage': when it is back, where something says (accountBackAt). */
+  backAt?: string;
   current: boolean;
   /** `learned`: estimated from the account's own refusals, for a harness
    *  that reports no usage. */

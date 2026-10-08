@@ -15,7 +15,7 @@ import { harnessInstallRoute } from '../harness/transport/native/install-route.j
 import { authEvidencePresent, hasAuthEvidence, harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
 import { learnedReading } from '../harness/accounts/learned-usage.js';
-import { accountQuotaSpent, usageReadingIsCurrent, vendorWindows, type UsageWindow } from '../harness/accounts/usage-reading.js';
+import { accountBackAt, accountQuotaSpent, usageReadingIsCurrent, vendorWindows, type UsageWindow } from '../harness/accounts/usage-reading.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import {
   allLocalHarnesses, harnessCanRunTurns, harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand,
@@ -85,6 +85,7 @@ export function accountRow(
   const problem: IdeAccount['problem'] = account.verification ? 'verify'
     : account.status === 'needs_login' ? 'reauth'
       : accountQuotaSpent(account, now) ? 'out-of-usage' : undefined;
+  const backAt = problem === 'out-of-usage' ? accountBackAt(account, now) : undefined;
   const vendorSignIn = account.authKind === 'vendor-cli';
   const actions: IdeAccount['actions'] = [
     ...(harness?.loginArgv && vendorSignIn && account.status !== 'ready' ? ['reauthenticate' as const] : []),
@@ -95,6 +96,7 @@ export function accountRow(
     id: account.id, provider: account.provider, ...(harness ? { harness: harness.command } : {}),
     providerName: harness?.displayName ?? account.provider, label: account.label, status: account.status,
     ...(problem ? { problem } : {}), current: account.id === session?.accountId, actions,
+    ...(backAt ? { backAt } : {}),
   };
 }
 

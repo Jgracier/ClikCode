@@ -8,7 +8,7 @@ import type { IdeAccount, IdeAccounts, IdeChoice, IdeGateway, IdeModels, IdeProv
 import { post, request, uid } from './bus';
 import { modelLabel, titleCase } from './format';
 import { dollars } from '../../../../src/harness/protocol/format';
-import { accountUsageText } from '../../../../src/harness/accounts/usage-reading';
+import { accountUsageText, outOfUsageText } from '../../../../src/harness/accounts/usage-reading';
 import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
 
 /** Model lists, kept for the panel's life: a second look is instant. */
@@ -299,8 +299,8 @@ function EffortBar(props: { model: ChatModel; onError: (message: string) => void
   );
 }
 
-const ACCOUNT_PROBLEM: Record<NonNullable<IdeAccount['problem']>, string> = {
-  verify: 'needs verifying', reauth: 'signed out', 'out-of-usage': 'out of usage',
+const ACCOUNT_PROBLEM: Record<Exclude<IdeAccount['problem'], 'out-of-usage' | undefined>, string> = {
+  verify: 'needs verifying', reauth: 'signed out',
 };
 
 /** The Gateway's credit, as the account menu's row says it. */
@@ -346,7 +346,8 @@ export function AccountMenu(props: { model: ChatModel; onClose: () => void; onEr
     ),
   });
   const rows: ListRow[] = mine.map((account) => row(account.id, account.current ? 'check' : account.problem ? 'warning' : undefined, account.label,
-    account.problem ? ACCOUNT_PROBLEM[account.problem] : account.usage ? accountUsageText(account.usage) ?? '' : '',
+    account.problem === 'out-of-usage' ? outOfUsageText(account.backAt)
+      : account.problem ? ACCOUNT_PROBLEM[account.problem] : account.usage ? accountUsageText(account.usage) ?? '' : '',
     () => { if (!account.current) choose({ kind: 'account', accountId: account.id }).catch(fail); }));
   if (gateway) {
     const { label, detail } = creditText(gateway);
