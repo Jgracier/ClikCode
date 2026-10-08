@@ -116,6 +116,12 @@ export class LiveTurnInputBroker {
     return withdraw();
   }
 
+  /** The turn is already holding this message for its next pause. Enter
+   *  again must not submit it a second time. */
+  holding(id: string): boolean {
+    return this.holds.has(id);
+  }
+
   /** Release submissions if setup failed before a durable checkpoint could
    * bind. The UI restores their text instead of waiting forever. */
   close(): void {

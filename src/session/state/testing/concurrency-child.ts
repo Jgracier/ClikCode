@@ -44,7 +44,7 @@ async function main(): Promise<void> {
     const at = new Date().toISOString();
     state.sessions.push({
       id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-      accountFailover: 'never', createdAt: at, updatedAt: at, status: 'active',
+createdAt: at, updatedAt: at, status: 'active',
     } as HarnessSession);
     forceStoreSession(id);
     try { await writeState(state); } finally { unforceStoreSession(id); }

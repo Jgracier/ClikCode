@@ -16,7 +16,7 @@ import { allLocalHarnesses, harnessSupportsEffort, harnessSupportsPermissionMode
  * the target offers (effortChoicesFor), when known; unknown, the vendor's own
  * refusal decides (vendor-turn.ts isEffortRefusal). */
 export function carriedHandoffSettings(
-  source: Pick<HarnessSession, 'effort' | 'permissionMode' | 'accountFailover'> & Partial<Pick<HarnessSession, 'nativeHarness'>>,
+  source: Pick<HarnessSession, 'effort' | 'permissionMode'> & Partial<Pick<HarnessSession, 'nativeHarness'>>,
   target: AiLocalHarnessDefinition, defaults: HarnessDefaultSettings, efforts?: readonly string[],
 ): HarnessDefaultSettings {
   const effort = source.effort && harnessSupportsEffort(target) && (!efforts?.length || efforts.includes(source.effort))
@@ -25,7 +25,7 @@ export function carriedHandoffSettings(
   const permissionMode = source.permissionMode
     ? carriedPermissionMode(from, source.permissionMode, target, defaults.permissionMode)
     : defaults.permissionMode;
-  return { ...defaults, effort, permissionMode, accountFailover: source.accountFailover ?? defaults.accountFailover };
+  return { ...defaults, effort, permissionMode };
 }
 
 /** How much a mode lets the agent do without asking, by its normalized name. */

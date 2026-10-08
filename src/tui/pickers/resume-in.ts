@@ -22,7 +22,7 @@ import { nextQuotaReset, type ResumeAt } from '../../turn/usage-exhausted.js';
 import { quotaResetPhrase } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
 import { accountCanTakeTurn } from '../../harness/accounts/usage-reading.js';
-import { turnBackendForAccount } from '../../turn/account-routing.js';
+import { matchesVendorTurn } from '../../turn/account-routing.js';
 import type { HarnessSession } from '../../session/model.js';
 import { withFileLock } from '../../session/store/locks.js';
 import { safeRecordFileName, sessionsDirectory } from '../../session/store/paths.js';
@@ -35,7 +35,7 @@ export function accountHasUsage(account: AiHarnessAccount): boolean {
 /** Whether an account of the chat's own provider can take the turn. While
  * one can, the same-provider switch is the one to make, not another provider. */
 export function sessionProviderHasUsage(accounts: readonly AiHarnessAccount[], provider: string | null | undefined): boolean {
-  return accounts.some((account) => account.provider === provider && turnBackendForAccount(account) === 'vendor' && accountHasUsage(account));
+  return accounts.some((account) => account.provider === provider && matchesVendorTurn(account) && accountHasUsage(account));
 }
 
 export async function sameProviderCanTakeTurn(id: string): Promise<boolean> {
@@ -185,9 +185,7 @@ export async function carryOnAfterExhaustion(
   if (guard.autoResent !== key(prompt) && await sameProviderCanTakeTurn(id)) {
     const state = await readState({ transcripts: [id] });
     const session = state.sessions.find((item) => item.id === id);
-    // Failover off cannot leave the spent account, so a second submit only
-    // spends another process on the refusal that just came back.
-    if (session?.accountFailover === 'on-quota-exhausted') {
+    if (session) {
       const continuation = resumePromptForPendingTurn(session.pendingTurn, prompt, sent);
       guard.autoResent = key(continuation);
       return { retry: continuation };

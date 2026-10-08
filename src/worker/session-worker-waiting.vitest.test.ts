@@ -165,7 +165,7 @@ async function gatewaySession(permissionMode: HarnessSession['permissionMode'] =
   const now = new Date().toISOString();
   const session = {
     id: randomUUID(), conversationId: randomUUID(), route: 'gateway', accountId: null, provider: 'gateway', model: null,
-    effort: 'platform-managed', permissionMode, accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+    effort: 'platform-managed', permissionMode, createdAt: now, updatedAt: now, status: 'active',
     workspace, title: 'test conversation', nameSource: 'user', gatewayConfirmed: true,
   } as HarnessSession & { workspace: string };
   state.sessions.push(session);

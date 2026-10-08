@@ -10,6 +10,7 @@
  * notice, not a loop. A new message or a cancel clears it. */
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
+import { matchesVendorTurn } from '../turn/account-routing.js';
 import { resumeStep, type ResumeAt } from '../turn/usage-exhausted.js';
 
 export interface ResumeWaiterHost {
@@ -72,7 +73,7 @@ export function createResumeWaiter(host: ResumeWaiterHost): ResumeWaiter {
     if (!session || !parked) { setPending(false); return; }
     setPending(true);
     if (host.turnRunning()) return;
-    const step = resumeStep(parked, state.accounts, session.provider, now());
+    const step = resumeStep(parked, state.accounts, session.provider, now(), matchesVendorTurn);
     if (typeof step === 'object') {
       // Not unref'd: this timer is what the worker is staying up for.
       timer = setTimeout(() => { void serial(look); }, step.wait);

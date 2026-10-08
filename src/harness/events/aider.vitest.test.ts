@@ -41,8 +41,10 @@ describe('aider', () => {
 describe('session titles from models that drop the tags', () => {
   it('takes a first `Title:` line as the title', async () => {
     const { extractSessionTitle } = await import('../../session/title');
-    expect(extractSessionTitle('Title: Remembering LANTERN\n\nYou asked me to remember LANTERN.')).toEqual({ title: 'Remembering LANTERN', text: 'You asked me to remember LANTERN.' });
-    expect(extractSessionTitle('**Title:** Build fix\nDone.')).toEqual({ title: 'Build fix', text: 'Done.' });
+    expect(extractSessionTitle('Title: Remembering LANTERN\n\nYou asked me to remember LANTERN.')).toEqual({
+      text: 'Title: Remembering LANTERN\n\nYou asked me to remember LANTERN.',
+    });
+    expect(extractSessionTitle('**Title:** Build fix\nDone.')).toEqual({ text: '**Title:** Build fix\nDone.' });
     expect(extractSessionTitle('The title: of the book is Dune.').title).toBeUndefined();
   });
 });

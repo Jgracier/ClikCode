@@ -772,6 +772,9 @@ export class ClikCodeController implements vscode.Disposable {
       case 'cancel':
         this.cancel(message.restoreDraft);
         return;
+      case 'send-queued':
+        this.bridge?.send({ type: 'send-queued' });
+        return;
       case 'unqueue': {
         const text = message.edit ? this.model.queued.find((item) => item.id === message.id)?.text : undefined;
         if (text !== undefined) this.takingBack.set(message.id, text);

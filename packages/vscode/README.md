@@ -54,7 +54,7 @@ and `/archive`). Open one here, in a new tab, or continue it in the terminal.
 ![Conversations](https://raw.githubusercontent.com/Jgracier/ClikCode/main/packages/vscode/media/screenshots/history.png)
 
 **Everything else ClikCode has.** *Chat settings* opens ClikCode's own Settings screen in the panel —
-provider, account, model, effort, permissions, account failover, plan mode, the harness's own options,
+provider, account, model, effort, permissions, plan mode, the harness's own options,
 and its tools and MCP servers. Every slash command works from the message box.
 
 ## Keys

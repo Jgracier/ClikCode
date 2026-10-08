@@ -602,17 +602,24 @@ export function takenBackText(takingBack: Map<string, string>, event: Extract<Wo
 }
 
 /** Enter on an empty message box while a turn runs, with a message of the
- * user's already waiting (its row is in the queue): "enter again" -- stop the
- * turn, and what waits goes next, the queue's head first, as the bridge sends
- * it whenever a turn ends. A background task's notice is not the user's
- * message and never makes Enter stop anything. */
-export function stopAndSendReady(model: Pick<ChatModel, 'queued' | 'running'>): boolean {
+ * user's already waiting: "enter again" puts it into the chat. The turn
+ * keeps running. A background task's notice is not the user's message. */
+export function enterAgainReady(model: Pick<ChatModel, 'queued' | 'running'>): boolean {
   return model.running && model.queued.some((item) => !item.notification && !item.command);
+}
+
+/** The turn has an answer: assistant text, or a tool row. A thought is not
+ *  one. Esc stops a turn that has one, and brings an unanswered prompt back. */
+export function turnHasAnswer(model: Pick<ChatModel, 'live'>): boolean {
+  const live = model.live;
+  if (!live) return false;
+  if (live.text.trim()) return true;
+  return live.activities.some((item) => item.kind !== 'thinking');
 }
 
 /** A queued row's words: where it waits, why when steering was asked for
  * and the turn could not take it, and -- while Enter would do it -- that
- * Enter again stops the turn and sends it. */
+ * Enter again puts it into the chat. */
 export function queuedRowLabel(model: Pick<ChatModel, 'submissions'>, item: { id: string; held?: boolean }, enterAgain: boolean): string {
   const unsteered = model.submissions.some((entry) => entry.id === item.id && entry.unsteered);
   return [item.held ? STEER_WORDS.held : 'queued', ...(unsteered ? [STEER_WORDS.unsteered] : []), ...(enterAgain ? [STEER_WORDS.stopAndSend] : [])].join(' · ');

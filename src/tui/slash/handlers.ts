@@ -72,6 +72,7 @@ import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.j
 import { cliThreadTransport } from '../../harness/transport/select.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
 import { moveThreadToAccount } from '../../session/carry.js';
+import { clearManualAccountSwitch, noteManualAccountSwitch } from '../../turn/manual-account.js';
 import { undoTurnsBack } from '../../session/undo-turn.js';
 import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../session/turn-changes.js';
 import { stateDirectory } from '../../session/store/paths.js';
@@ -467,13 +468,13 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!setting) return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
     if (setting === 'global') {
       const [key, ...rest] = words;
-      if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|failover|send> <value>');
+      if (!key || !rest.length) throw new Error('usage: /settings global <effort|permissions|send> <value>');
       await aiSettingsSetGlobal(key, rest.join(' '), false);
       return emitHarnessOutput({ panel: 'settings-updated', text: `Global default updated: ${key} = ${rest.join(' ')}` });
     }
     if (setting === 'provider') {
       const [providerId, key, ...rest] = words;
-      if (!providerId || !key) throw new Error('usage: /settings provider <id> <model|effort|permissions|failover> <value>, or /settings provider <id> clear');
+      if (!providerId || !key) throw new Error('usage: /settings provider <id> <model|effort|permissions> <value>, or /settings provider <id> clear');
       if (key.toLowerCase() === 'clear') {
         await aiSettingsClearProvider(providerId, false);
         return emitHarnessOutput({ panel: 'settings-updated', text: `Provider defaults cleared for ${providerId}` });
@@ -506,12 +507,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
         const { [optionId]: _cleared, ...rest } = session.harnessOptions ?? {};
         session.harnessOptions = rest;
       } else setSessionHarnessOption(session, harness, optionId, optionValue.join(' '));
-    } else if (setting === 'failover' || setting === 'accountfailover' || setting === 'account-failover') {
-      // One vocabulary with `/settings global failover` (auto/never); the
-      // stored words are still accepted.
-      const on = ['auto', 'on', 'on-quota-exhausted'].includes(value);
-      if (!on && value !== 'never' && value !== 'off') throw new Error('failover must be auto or never');
-      session.accountFailover = on ? 'on-quota-exhausted' : 'never';
     } else if (setting === 'native-session') {
       if (!session.nativeHarness) throw new Error('select a native harness before attaching its session id');
       const selectedHarness = localHarnessForCommand(session.nativeHarness);
@@ -530,7 +525,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   accounts: async ({ id, state, session, words }) => {
     // `/account work` and `/accounts use work` are one command: a word that
     // is not an action is the account to use.
-    const ACTIONS = ['use', 'select', 'login', 'add', 'remove', 'rm', 'failover'];
+    const ACTIONS = ['use', 'select', 'login', 'add', 'remove', 'rm'];
     const action = words.length && !ACTIONS.includes(words[0]!.toLowerCase()) ? 'use' : words.shift()?.toLowerCase();
     if (action === 'use' || action === 'select') {
       const labelOrId = words.join(' ').trim();
@@ -560,14 +555,17 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       } else if (session.accountId !== account.id) {
         // A native thread lives in the profile of the account that wrote it,
         // so `--resume` under another account's profile finds nothing ("no
-        // rollout found for thread id ..."). The switch carries it there
-        // first, as an automatic failover does (vendor-turn.ts carryThread);
-        // only a thread that cannot be carried is forgotten, and the next
-        // turn then re-seeds a fresh one from ClikCode's own transcript.
+        // rollout found for thread id ..."). Between turns the switch carries
+        // it now. While a turn is in flight the live process still has the
+        // file, so the carry waits for the next call boundary (manual-account.ts).
         const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
         const previous = state.accounts.find((item) => item.id === session.accountId);
-        await moveThreadToAccount(session, harness, previous, account);
-      }
+        if (session.pendingTurn && previous) noteManualAccountSwitch(session.id, previous.id, account.id);
+        else {
+          clearManualAccountSwitch(session.id);
+          await moveThreadToAccount(session, harness, previous, account);
+        }
+      } else clearManualAccountSwitch(session.id);
       session.accountId = account.id;
       // Explicit selection is the user's retry signal for an account previously
       // marked exhausted: it is tried now rather than when the mark expires.
@@ -583,7 +581,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
           ?? await resolveLocalModelFor(account, state) ?? null;
         session.effort = defaults.effort;
         session.permissionMode = defaults.permissionMode;
-        session.accountFailover = defaults.accountFailover;
       }
       session.updatedAt = new Date().toISOString();
       await writeState(state);
@@ -608,15 +605,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (knownHarness?.surface === 'terminal') { await aiAccountLogin(knownHarness.command, words.join(' ') || undefined); return; }
       return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
-    if (action === 'failover') {
-      const setting = words.shift();
-      if (setting !== 'auto' && setting !== 'never') throw new Error('usage: /accounts failover auto|never');
-      session.accountFailover = setting === 'auto' ? 'on-quota-exhausted' : 'never';
-      session.updatedAt = new Date().toISOString();
-      await writeState(state);
-      return emitHarnessOutput({ panel: 'accounts', session, accountFailover: session.accountFailover });
-    }
-    return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>', 'failover auto|never'] });
+    return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>'] });
   },
   gateway: async ({ state, session }) => {
     if (sessionTranscriptMessages(session).length || session.nativeSessionId) {

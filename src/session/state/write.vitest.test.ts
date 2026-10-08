@@ -27,7 +27,7 @@ describe('writing state a caller keeps changing', () => {
     const now = new Date().toISOString();
     const session = {
       id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content: 'hello' }],
+createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content: 'hello' }],
     } as HarnessSession;
     state.sessions.push(session);
     await writeState(state);
@@ -60,7 +60,7 @@ describe('a streaming turn\'s checkpoint', () => {
     const now = new Date().toISOString();
     const session = {
       id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+createdAt: now, updatedAt: now, status: 'active',
       messages: Array.from({ length: history }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `message ${index}` })),
       pendingTurn: { prompt: 'go', response: '', startedAt: now, updatedAt: now },
     } as HarnessSession;
@@ -107,7 +107,7 @@ describe('a list that does not open every transcript', () => {
     const now = new Date().toISOString();
     const make = (id: string, content: string): HarnessSession => ({
       id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content }],
+createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content }],
     } as HarnessSession);
     state.sessions.push(make('a', 'hello from a'), make('b', 'hello from b'));
     await writeState(state);
@@ -136,7 +136,7 @@ describe('a list that does not open every transcript', () => {
     const now = new Date().toISOString();
     const make = (id: string, content: string): HarnessSession => ({
       id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content }],
+createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content }],
     } as HarnessSession);
     state.sessions.push(make('mine', 'first'), make('other', 'hello from other'));
     await writeState(state);
@@ -167,7 +167,7 @@ describe('a list that does not open every transcript', () => {
     const now = new Date().toISOString();
     const session = {
       id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+createdAt: now, updatedAt: now, status: 'active',
       messages: [{ role: 'user', content: 'hello' }],
       pendingTurn: { prompt: 'go', response: 'partial', startedAt: now, updatedAt: now, outputStarted: true },
     } as HarnessSession;
@@ -199,7 +199,7 @@ describe('a chat nothing has happened in', () => {
     const now = new Date().toISOString();
     const draft = {
       id: 'draft', route: 'local', accountId: null, provider: null, model: null, effort: 'medium',
-      permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+      permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
     } as HarnessSession;
     state.sessions.push(draft);
     await writeState(state);
@@ -229,7 +229,7 @@ describe('a draft another process stored meanwhile', () => {
     const now = new Date().toISOString();
     const draft = {
       id: 'd', route: 'local', accountId: null, provider: 'anthropic', nativeHarness: 'claude', model: 'opus', effort: 'medium',
-      permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [],
+      permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active', messages: [],
     } as HarnessSession;
     const opening = await readState();
     opening.sessions.push(draft);

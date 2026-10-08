@@ -2,7 +2,9 @@
 import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { modelClientForSession } from '../agent/models/for-session.js';
-import { isGatewayService } from '../session/route.js';
+import { isClikCodeAgent, isGatewayService } from '../session/route.js';
+import { readState } from '../session/state/read.js';
+import { discardInterruptedTurn } from './turn-journal.js';
 import { agentTurnUsage, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { extractSessionTitle, stripRepeatedTitles, prepareSessionTitle } from '../session/title.js';
@@ -19,7 +21,7 @@ import { runGatewayAgentTurn } from './gateway-agent-turn.js';
  * ClikCode Local. */
 export async function runAgentTurn(input: {
   config: Conf; state: HarnessState; session: HarnessSession; prompt: string; signal?: AbortSignal; run: TurnRunOptions;
-}): Promise<void> {
+}): Promise<'continue' | 'resend' | void> {
   const { config, state, session, prompt, signal, run } = input;
   if (session.route === 'gateway' && session.gatewayAgentId) return runGatewayAgentTurn(input);
   const prompter = run.prompter;
@@ -32,9 +34,9 @@ export async function runAgentTurn(input: {
   const prepared = await prepareAttachments(session.attachments ?? []);
   // Images are not refused: the agent loop runs on this machine and reads the
   // attached files with its own tools (run-turn.ts names them).
-  // The first turns of a conversation carry the title request here too: the
-  // agent answers as a model, and writes no title of its own anywhere
-  // ClikCode can read.
+  // One turn asks for a title, once the user has said enough to name the
+  // chat. The agent writes no title of its own anywhere ClikCode can read.
+  // Every other turn sends the prompt unchanged and does not filter the reply.
   const agentTitle = prepareSessionTitle(session, `${text}${prepared.textContext}`);
   const titleStream = agentTitle.stream;
   const turnText = agentTitle.prompt;
@@ -48,6 +50,21 @@ export async function runAgentTurn(input: {
   let modelClient;
   try { modelClient = await modelClientForSession(session, config, localHooks); }
   finally { localHooks?.done(); }
+  /** The account and model as the user has them now, before each model
+   * step. Leaving this agent route hands the conversation to that account
+   * without ending it. */
+  const modelClientForStep = async () => {
+    const stored = (await readState({ transcripts: [] })).sessions.find((item) => item.id === session.id);
+    if (!stored || isClikCodeAgent(stored)) {
+      if (stored && stored.model !== session.model) {
+        session.model = stored.model;
+        modelClient = await modelClientForSession(session, config);
+        return modelClient;
+      }
+      return undefined;
+    }
+    return 'switch' as const;
+  };
   const startedAt = Date.now();
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
   /** Text the title filter held back and now owes: to the saved turn and to
@@ -64,7 +81,7 @@ export async function runAgentTurn(input: {
   // turn with its own reason (for-session.ts gatewayErrorMessage).
   try {
     const harnessTurn = await runGatewayHarnessSessionTurn({
-      session, prompt: turnText, modelClient,
+      session, prompt: turnText, modelClient, modelClientForStep,
       // ClikDeploy's own account tools come with the Gateway.
       mcpServers: routeMcpServers(session, config),
       ...(prompter ? { prompter } : {}),
@@ -102,6 +119,18 @@ export async function runAgentTurn(input: {
         await checkpoint.steer(submission);
       } : undefined),
     });
+    if (harnessTurn.stopReason === 'account-switch') {
+      releaseHeld();
+      const progressed = Boolean(harnessTurn.text.trim() || harnessTurn.steps > 0);
+      if (!progressed) {
+        await discardInterruptedTurn(session.id, text);
+        return 'resend';
+      }
+      const extracted = titleStream ? extractSessionTitle(harnessTurn.text) : { text: harnessTurn.text };
+      const named = titleStream ? stripRepeatedTitles(extracted.text) : extracted.text;
+      await completeTurnCheckpoint(session, checkpoint, named, { title: titleStream?.title ?? extracted.title, asked: false });
+      return 'continue';
+    }
     if (harnessTurn.isError) throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
     // A reply shorter than the title filter's decision window is still held
     // back when the stream ends; it is owed to the screen.
@@ -118,10 +147,12 @@ export async function runAgentTurn(input: {
       // attribute time and quality to it (agent/context-profile.ts).
       contextProfile: harnessTurn.contextProfile,
     });
-    // The turn that asked for a name reads a bare first-line title as one, as its stream did.
-    const extracted = extractSessionTitle(harnessTurn.text, { bare: titleStream?.naming === true });
-    const named = { ...extracted, text: stripRepeatedTitles(extracted.text) };
-    const completedText = await completeTurnCheckpoint(session, checkpoint, named.text, { title: titleStream?.title ?? named.title });
+    // The marker is taken off only the turn that asked for it. A repeated
+    // marker inside that same multi-step reply is the same request, not a
+    // second naming.
+    const extracted = titleStream ? extractSessionTitle(harnessTurn.text) : { text: harnessTurn.text };
+    const named = titleStream ? stripRepeatedTitles(extracted.text) : extracted.text;
+    const completedText = await completeTurnCheckpoint(session, checkpoint, named, { title: titleStream?.title ?? extracted.title, asked: false });
     showStopReason(prompter, usage.stopReason);
     if (!prompter) {
       emitHarnessOutput({

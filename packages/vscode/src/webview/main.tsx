@@ -4,7 +4,7 @@
 import { COPIED_MS, NOTICE_MS } from '../../../../src/harness/protocol/timings';
 import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, turnHasAnswer, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
 import type { IdeConversation, IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
@@ -222,6 +222,9 @@ function App(): JSX.Element {
   /** The newest message of the user's still waiting -- what Esc takes back. */
   const waitingRef = useRef<{ id: string }>();
   waitingRef.current = model?.queued.filter((item) => !item.notification && !item.command).at(-1);
+  /** Text or a tool row. A thought is not an answer, so Esc brings the prompt back. */
+  const answeredRef = useRef(false);
+  answeredRef.current = Boolean(model && turnHasAnswer(model));
 
   const answer = (id: string, result: IdeUiResult): void => {
     setQuestions((items) => items.filter((item) => item.id !== id));
@@ -289,16 +292,16 @@ function App(): JSX.Element {
         post({ type: 'openFile', path: target.dataset.file!, ...(target.dataset.line ? { line: Number(target.dataset.line) } : {}) });
         return;
       }
-      // Esc never stops the turn (the stop button does): as in the terminal
-      // it takes the newest waiting message back into the composer to edit,
-      // as its Edit button would -- unless a menu, a sheet or the composer
-      // already took it (they preventDefault). With an approval pending it
-      // denies that call instead: the turn goes on without it.
+      // Esc, unless a menu, a sheet or the suggestions already took it.
+      // An approval is denied and the turn goes on. A waiting message comes
+      // back to edit and the turn goes on. With neither, a prompt that has
+      // no answer yet comes back, and a turn that has started answering stops.
       if (event.key === 'Escape' && !event.defaultPrevented && runningRef.current) {
         const pending = approvalRef.current;
         const waiting = waitingRef.current;
         if (pending) { event.preventDefault(); post({ type: 'approve', id: pending, approved: false }); }
         else if (waiting) { event.preventDefault(); post({ type: 'unqueue', id: waiting.id, edit: true }); }
+        else { event.preventDefault(); post({ type: 'cancel', restoreDraft: !answeredRef.current }); }
       }
     };
     document.addEventListener('click', onClick);

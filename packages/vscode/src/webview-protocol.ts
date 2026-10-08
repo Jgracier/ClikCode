@@ -80,6 +80,8 @@ export type FromWebview =
   | { type: 'ready' }
   | { type: 'send'; text: string; id: string }
   | { type: 'cancel'; restoreDraft: boolean }
+  /** Enter again: the oldest queued user message goes into the running turn. */
+  | { type: 'send-queued' }
   /** Take a queued message back before its turn. `edit`: and put its text
    * back in the composer -- once the worker says it was still the user's to
    * take (a message already steered in stays sent, as in the terminal). */

@@ -50,7 +50,7 @@ describe('a turn run with no worker and no edits', () => {
     const state = await readState();
     state.sessions.push({
       id: 's1', conversationId: 's1', route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: 'test-model', effort: 'auto',
-      permissionMode: 'auto', accountFailover: 'never', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      permissionMode: 'auto', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
       status: 'active', workspace, title: 'named',
     } as HarnessSession);
     await writeState(state);

@@ -101,8 +101,7 @@ function seedDemoHome(home: string, workspace: string): void {
     ...extra,
   });
   const chat = (id: string, name: string, harness: string, provider: string, model: string, msAgo: number, messages: Array<[string, string]>) => ({
-    id, conversationId: id, route: 'local', accountId: null, provider, model, effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted',
-    createdAt: iso(msAgo + 600_000), updatedAt: iso(msAgo), status: 'closed', nativeHarness: harness, name, workspace,
+    id, conversationId: id, route: 'local', accountId: null, provider, model, effort: 'medium', permissionMode: 'ask', createdAt: iso(msAgo + 600_000), updatedAt: iso(msAgo), status: 'closed', nativeHarness: harness, name, workspace,
     messages: messages.map(([role, content]) => ({ role, content })),
   });
   const state = {
@@ -132,7 +131,7 @@ function seedDemoHome(home: string, workspace: string): void {
   writeFileSync(join(home, 'index.json'), `${JSON.stringify({
     version: 2, installationId: 'demo', devicePublicKey: { kty: 'OKP' },
     accounts: state.accounts, sessions: rows, invocations: [], invocationRollups: {},
-    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+    globalSettings: { effort: 'medium', permissionMode: 'ask' }, providerSettings: {},
   })}\n`, { mode: 0o600 });
   writeFileSync(join(home, 'secrets.json'), `${JSON.stringify({ localApiToken: 'demo', devicePrivateKeyPem: 'demo' })}\n`, { mode: 0o600 });
 }

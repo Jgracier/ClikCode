@@ -456,8 +456,11 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
           if (!ran.has(id)) input.onActivity?.({ kind: 'tool-error', label, id, output: [why] });
         }
       };
+      const stepped = await abortable(Promise.resolve(input.modelClientForStep?.()), signal);
+      if (stepped === 'switch') return result({ stopReason: 'account-switch' });
+      const modelClient = stepped ?? input.modelClient;
       try {
-        step = await abortable(input.modelClient.step({
+        step = await abortable(modelClient.step({
           system, items, signal,
           tools: profile.shapeSpecs(toolSpecs(visibleTools(advertised(items), session.plan.active))),
           ...(finalOnly ? { toolChoice: 'none' as const } : {}),

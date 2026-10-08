@@ -14,7 +14,7 @@ describe('a selected platform agent before agent execution is wired', () => {
     const now = new Date().toISOString();
     const session: HarnessSession = {
       id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: 'gpt', gatewayAgentId: 'silas', effort: 'platform-managed',
-      accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+createdAt: now, updatedAt: now, status: 'active',
     };
     const client = await modelClientForSession(session, {} as never);
     const fetchImpl = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(

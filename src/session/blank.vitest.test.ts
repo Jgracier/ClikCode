@@ -7,7 +7,7 @@ import { conversationRows } from './conversation-rows.js';
 const now = new Date().toISOString();
 const chat = (extra: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 'blank', conversationId: 'blank', route: 'local', accountId: null, provider: 'anthropic', model: 'sonnet',
-  effort: 'medium', permissionMode: 'ask', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active',
+  effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
   nativeHarness: 'claude', ...extra,
 } as HarnessSession);
 

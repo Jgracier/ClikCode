@@ -22,7 +22,7 @@ describe('a streaming turn and the shared index', () => {
       const now = new Date(Date.now() - 60_000).toISOString();
       const session = {
         id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-        accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content: 'earlier' }],
+createdAt: now, updatedAt: now, status: 'active', messages: [{ role: 'user', content: 'earlier' }],
       } as HarnessSession;
       state.sessions.push(session);
       await writeState(state);

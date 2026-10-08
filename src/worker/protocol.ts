@@ -32,6 +32,9 @@ export type ClientCommand =
    * `submission` event that says what actually happened to it. */
   | { type: 'steer'; text: string; id?: string }
   | { type: 'cancel'; restoreDraft: boolean }
+  /** Enter again: the oldest queued user message goes into the running
+   *  turn at its next pause. The turn is not cancelled. */
+  | { type: 'send-queued' }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
   /** The vendor sign-in a `sign-in-request` asked for has finished, on the
    * client's own terminal; `error` when it failed. */

@@ -361,17 +361,11 @@ export function AccountMenu(props: { model: ChatModel; onClose: () => void; onEr
   }
   if (addable) rows.push(row('add', 'add', 'Add account', '', () => { choose({ kind: 'add-account', provider: addable.provider }).catch(fail); }));
   rows.push(row('all', 'organization', 'All accounts & usage', '', () => post({ type: 'send', text: '/account', id: uid() })));
-  const failover = data && props.model.chatSettings?.failover !== undefined ? data.failover : undefined;
   return (
     <Popover label="Accounts" onClose={props.onClose} class="menu" id="account-menu">
       <div class="menu-title">{onGateway ? 'ClikDeploy Gateway' : data?.chat?.name ?? 'Accounts'}</div>
       {!data ? <div class="picker-loading"><Icon name="loading" spin /> Loading accounts…</div>
         : <KeyList rows={rows} label="Accounts" onEscape={props.onClose} />}
-      {failover ? (
-        <label class="menu-switch"><span><Icon name="arrow-swap" /> Switch accounts automatically <span class="muted">When this account hits a usage limit, go on with the next one with room</span></span>
-          <Switch checked={failover === 'auto'} label="Switch accounts automatically"
-            onChange={(on) => choose({ kind: 'failover', value: on ? 'auto' : 'never' }).then(load, fail)} /></label>
-      ) : null}
     </Popover>
   );
 }

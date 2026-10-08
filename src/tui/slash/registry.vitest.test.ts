@@ -11,8 +11,7 @@ const harness = (overrides: Partial<AiLocalHarnessDefinition> = {}): AiLocalHarn
   modelArgvPrefix: ['--model'], ...overrides,
 });
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
-  id: 's1', route: 'local', accountId: null, provider: 'vendor', model: null, effort: 'medium', accountFailover: 'never',
-  createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active', nativeHarness: 'vendor', ...overrides,
+  id: 's1', route: 'local', accountId: null, provider: 'vendor', model: null, effort: 'medium', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active', nativeHarness: 'vendor', ...overrides,
 });
 
 describe('slash registry', () => {

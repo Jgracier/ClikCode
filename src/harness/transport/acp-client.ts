@@ -850,7 +850,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (toolSettled(update)) {
       this.pendingTools.delete(id);
       target?.watchdog?.toolFinished(id);
-      if (target && target === this.turn && this.pendingTools.size === 0) this.steerPause(this.turn);
+      if (target && target === this.turn && this.pendingTools.size === 0) {
+        this.steerPause(this.turn);
+        this.turn?.input.onBetweenCalls?.();
+      }
     } else if (update.sessionUpdate === 'tool_call' ? toolRunning(update) : update.status === 'in_progress' || update.status === 'pending') {
       if (!this.pendingTools.has(id)) this.pendingTools.set(id, String(update.title ?? 'tool'));
       target?.watchdog?.toolStarted(id);
@@ -1024,7 +1027,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Refused, it never runs; an agent that reports it failed settles it too.
     if (opened && !accepted && turn) {
       this.pendingTools.delete(callId!);
-      if (this.pendingTools.size === 0) this.steerPause(turn);
+      if (this.pendingTools.size === 0) {
+        this.steerPause(turn);
+        turn.input.onBetweenCalls?.();
+      }
     }
     // ACP requires `cancelled` for requests outstanding when a turn is cancelled.
     if (turn?.done) return cancelled;

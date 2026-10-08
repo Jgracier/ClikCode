@@ -11,7 +11,7 @@ function chat(id: string, name: string, content: string): HarnessSession {
   const at = new Date().toISOString();
   return {
     id, route: 'local', accountId: null, provider: 'openai', model: 'gpt-5', effort: 'medium', permissionMode: 'ask',
-    accountFailover: 'never', createdAt: at, updatedAt: at, status: 'active', nativeHarness: 'codex', name,
+createdAt: at, updatedAt: at, status: 'active', nativeHarness: 'codex', name,
     messages: [{ role: 'user', content }, { role: 'assistant', content: 'noted' }],
   } as HarnessSession;
 }

@@ -72,14 +72,15 @@ export const RESUME_GRACE_MS = 60 * 60_000;
 
 /** What a parked turn does now: sleep, send it, or stop waiting. Sent once
  * the reset has passed AND an account of the chat's own provider can take the
- * turn -- the same rule failover asks (accountCanTakeTurn). */
+ * turn on the same transport failover would use. */
 export function resumeStep(
   resumeAt: ResumeAt, accounts: readonly AiHarnessAccount[], provider: string | null | undefined, now: number = Date.now(),
+  matchesTransport: (account: AiHarnessAccount) => boolean = () => true,
 ): { wait: number } | 'send' | 'give-up' {
   const at = Date.parse(resumeAt.at);
   if (!Number.isFinite(at)) return 'give-up';
   if (now < at) return { wait: Math.min(at - now, RESUME_MAX_SLEEP_MS) };
-  if (accounts.some((account) => account.provider === provider && accountCanTakeTurn(account, now))) return 'send';
+  if (accounts.some((account) => account.provider === provider && matchesTransport(account) && accountCanTakeTurn(account, now))) return 'send';
   return now - at >= RESUME_GRACE_MS ? 'give-up' : { wait: RESUME_RECHECK_MS };
 }
 

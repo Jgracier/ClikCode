@@ -307,6 +307,32 @@ describe('runGatewayHarnessTurn', () => {
     expect(h.client.requests).toHaveLength(0);
   });
 
+  it('asks for a client before each step and uses the one it is given', async () => {
+    const next = new ScriptedModelClient([{ text: 'next account' }]);
+    let calls = 0;
+    const h = harness(
+      [{ toolCalls: [{ name: 'list_dir', args: {} }] }],
+      { modelClientForStep: async () => (++calls === 1 ? undefined : next) },
+    );
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(h.client.requests).toHaveLength(1);
+    expect(next.requests).toHaveLength(1);
+    expect(result.text).toBe('next account');
+    expect(result.stopReason).toBe('completed');
+  });
+
+  it('stops before the next step when the step says the account left this route', async () => {
+    let calls = 0;
+    const h = harness(
+      [{ toolCalls: [{ name: 'list_dir', args: {} }] }, { text: 'never' }],
+      { modelClientForStep: async () => (++calls === 1 ? undefined : 'switch') },
+    );
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result.stopReason).toBe('account-switch');
+    expect(result.steps).toBe(1);
+    expect(h.client.requests).toHaveLength(1);
+  });
+
   it('injects steering text as a user item before the next model step', async () => {
     let steer: ((text: string) => Promise<void>) | undefined;
     const h = harness([

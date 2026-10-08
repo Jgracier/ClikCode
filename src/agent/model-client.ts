@@ -137,6 +137,10 @@ export interface GatewayHarnessTurnInput {
   currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
   planMode?: boolean;
   modelClient: ModelClient;
+  /** Before each model step. A returned client is the one that step calls.
+   * `'switch'` ends the loop: the user moved the conversation onto an
+   * account this agent does not run, and the caller continues it there. */
+  modelClientForStep?: () => Promise<ModelClient | 'switch' | undefined>;
   signal?: AbortSignal;
   /** e.g. ~/.clikcode — always injected, never derived from the real home. */
   stateDir: string;
@@ -197,7 +201,7 @@ export interface GatewayHarnessTurnResult {
   usage: TokenUsage;
   steps: number;
   /** Why the loop ended. */
-  stopReason: 'completed' | 'max-steps' | 'no-progress' | 'model-error';
+  stopReason: 'completed' | 'max-steps' | 'no-progress' | 'model-error' | 'account-switch';
   /** The context profile the turn ran under, so usage can be attributed to it. */
   contextProfile?: ContextProfileName;
 }

@@ -1,9 +1,9 @@
-/** Default effort, approval mode and failover policy, and how a session's own
+/** Default effort and approval mode, and how a session's own
  * values are normalized against them. */
 
 import type { HarnessDefaultSettings, HarnessSession, HarnessState } from '../model.js';
 
-export const HARNESS_DEFAULT_SETTINGS: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' };
+export const HARNESS_DEFAULT_SETTINGS: HarnessDefaultSettings = { effort: 'medium', permissionMode: 'ask' };
 
 export function normalizedPermissionMode(value: unknown): HarnessDefaultSettings['permissionMode'] {
   if (value === 'auto' || value === 'bypass' || value === 'ask') return value;
@@ -37,6 +37,5 @@ export function resolveDefaultSettings(state: HarnessState, provider?: string | 
   return {
     effort: overrides?.effort ?? state.globalSettings.effort,
     permissionMode: overrides?.permissionMode ?? state.globalSettings.permissionMode,
-    accountFailover: overrides?.accountFailover ?? state.globalSettings.accountFailover,
   };
 }

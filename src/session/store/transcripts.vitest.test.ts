@@ -19,7 +19,7 @@ afterEach(async () => {
 const now = new Date().toISOString();
 const chat = (id: string, messages: HarnessSession['messages'], extra: Partial<HarnessSession> = {}): HarnessSession => ({
   id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-  accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', messages, ...extra,
+createdAt: now, updatedAt: now, status: 'active', messages, ...extra,
 } as HarnessSession);
 const said = (count: number, prefix = 'm') => Array.from({ length: count }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `${prefix}${index}` }));
 const raw = async (id: string) => JSON.parse(await readFile(join(root, 'sessions', `${id}.json`), 'utf8'));

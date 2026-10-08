@@ -6,6 +6,7 @@
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
+import { isManualAccountSwitch } from '../../turn/manual-account.js';
 import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, VendorBackgroundTurnHandler } from './background-turn.js';
@@ -149,12 +150,12 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     // From here on the user's turn receives what the vendor says.
     this.finishBackground('superseded');
     this.turn = turn;
-    const onAbort = (): void => this.cancelTurn(turn);
+    const onAbort = (): void => this.cancelTurn(turn, signal?.reason);
     signal?.addEventListener('abort', onAbort, { once: true });
     let succeeded = false;
     try {
       if (this.settling) await this.settling;
-      if (signal?.aborted) throw turnCancelledError();
+      if (signal?.aborted) throw isManualAccountSwitch(signal.reason) ? signal.reason as Error : turnCancelledError();
       const running = flow();
       running.catch(() => undefined);
       const result = await Promise.race([running, failure]);
@@ -162,7 +163,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       return result;
     } catch (error) {
       const failureError = error instanceof Error ? error : new Error(String(error));
-      if (!isTurnCancelled(failureError)) hooks.failed(failureError);
+      // A manual account switch stops the prompt so the same turn can
+      // continue on the new account. The child stays until that turn closes
+      // it, so the vendor can finish writing the thread first.
+      if (!isTurnCancelled(failureError) && !isManualAccountSwitch(failureError)) hooks.failed(failureError);
       throw failureError;
     } finally {
       turn.done = true;
@@ -174,13 +178,14 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     }
   }
 
-  protected cancelTurn(turn: T): void {
+  protected cancelTurn(turn: T, reason?: unknown): void {
     if (turn.done) return;
     turn.done = true;
     const live = this.live;
+    const error = isManualAccountSwitch(reason) ? reason as Error : turnCancelledError();
     // Mid-setup there is nothing to cancel politely.
-    if (live && !this.interrupt(turn, live)) this.dropLive(turnCancelledError());
-    turn.fail(turnCancelledError());
+    if (live && !this.interrupt(turn, live)) this.dropLive(error);
+    turn.fail(error);
   }
 
   /** Wait up to CANCEL_SETTLE_MS for `wait` to report the cancelled turn

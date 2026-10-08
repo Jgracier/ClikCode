@@ -10,12 +10,12 @@ import type { HarnessSession, HarnessState } from '../../session/model';
 
 const chat = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'local', accountId: null, provider: 'anthropic', model: null, effort: 'medium',
-  permissionMode: 'ask', accountFailover: 'never', messages: [{ role: 'user', content: 'hi' }],
+  permissionMode: 'ask', messages: [{ role: 'user', content: 'hi' }],
   createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z', status: 'active', ...overrides,
 });
 const stateWith = (...sessions: HarnessSession[]): HarnessState => ({
   sessions, accounts: [], invocations: [], providerSettings: {},
-  globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' },
+  globalSettings: { effort: 'medium', permissionMode: 'ask' },
 } as unknown as HarnessState);
 
 /** A screen that records what it was asked to show, and can pick nothing. */

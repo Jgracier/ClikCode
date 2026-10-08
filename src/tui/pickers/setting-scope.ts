@@ -1,7 +1,7 @@
 /** Applying a setting chosen from a picker: to this chat, straight away.
  *
  * It used to ask a second question first -- "This chat only / Global default /
- * <provider> default" -- after every effort, permissions and failover choice.
+ * <provider> default" -- after an effort or permissions choice.
  * The answer is "this chat" nearly every time, and the other two already have
  * a direct route that says what it means: `/settings global <key> <value>`
  * and `/settings provider <id> <key> <value>`. So the picker does the obvious
@@ -15,9 +15,9 @@
 import { aiSessionCommand } from '../slash/handlers.js';
 
 export async function applyToChat(
-  id: string, key: 'effort' | 'permissions' | 'failover', value: string,
+  id: string, key: 'effort' | 'permissions', value: string,
 ): Promise<void> {
-  await aiSessionCommand(id, key === 'failover' ? `/accounts failover ${value}` : `/${key} ${value}`);
+  await aiSessionCommand(id, `/${key} ${value}`);
 }
 
 /** How a setting's value reads in every list: `xhigh` as `Xhigh`, the same in

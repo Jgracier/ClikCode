@@ -47,9 +47,9 @@ describe('Enter while a turn runs', () => {
     expect(waitingEnterAction('  also do this ', true, true)).toBe('deliver');
   });
 
-  it('is "enter again": nothing typed with a message waiting stops the turn and sends it', () => {
-    expect(waitingEnterAction('', true, true)).toBe('stop-and-send');
-    expect(waitingEnterAction('   ', true, true)).toBe('stop-and-send');
+  it('is "enter again": nothing typed with a message waiting puts it into the chat', () => {
+    expect(waitingEnterAction('', true, true)).toBe('send-waiting');
+    expect(waitingEnterAction('   ', true, true)).toBe('send-waiting');
   });
 
   it('does nothing on an empty composer with nothing waiting, or a turn already stopping', () => {

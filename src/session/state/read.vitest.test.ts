@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from './read.js';
@@ -17,7 +17,7 @@ async function storedIndex(root: string, index: { accounts?: unknown[]; sessions
   await writeFile(join(root, 'index.json'), `${JSON.stringify({
     version: 2, installationId: 'install', devicePublicKey: { kty: 'OKP' },
     accounts: [], sessions: [], invocations: [], invocationRollups: {},
-    globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' }, providerSettings: {},
+    globalSettings: { effort: 'medium', permissionMode: 'ask' }, providerSettings: {},
     ...index,
   }, null, 2)}\n`);
 }
@@ -29,8 +29,8 @@ describe('harness state normalization', () => {
     const now = new Date().toISOString();
     await storedIndex(root, {
       sessions: [
-        { id: 'gateway', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
-        { id: 'local', route: 'local', accountId: null, provider: null, model: null, effort: 'medium', permissionMode: 'workspace-write', accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active' },
+        { id: 'gateway', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass', createdAt: now, updatedAt: now, status: 'active' },
+        { id: 'local', route: 'local', accountId: null, provider: null, model: null, effort: 'medium', permissionMode: 'workspace-write', createdAt: now, updatedAt: now, status: 'active' },
       ],
     });
     try {
@@ -49,8 +49,7 @@ describe('harness state normalization', () => {
     process.env.CLIKCODE_HOME = root;
     const now = new Date().toISOString();
     const session = (id: string, fields: object) => ({
-      id, route: 'local', accountId: null, provider: 'x', model: null, effort: 'medium', permissionMode: 'ask', accountFailover: 'never',
-      createdAt: now, updatedAt: now, status: 'active', ...fields,
+      id, route: 'local', accountId: null, provider: 'x', model: null, effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active', ...fields,
     });
     await storedIndex(root, {
       sessions: [
@@ -66,6 +65,37 @@ describe('harness state normalization', () => {
       const expected = { 'old-gemini': 'structured-cli', 'acp-gemini': 'acp', minted: undefined, fresh: undefined, droid: undefined };
       expect(await transports()).toEqual(expected);
       expect(await transports()).toEqual(expected);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('drops a saved account failover and a per-session context profile so the next write removes them', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
+    process.env.CLIKCODE_HOME = root;
+    const now = new Date().toISOString();
+    await storedIndex(root, {
+      sessions: [{
+        id: 'old', route: 'local', accountId: null, provider: 'openai', model: null, effort: 'medium', permissionMode: 'ask',
+        accountFailover: 'never', contextProfile: 'full', createdAt: now, updatedAt: now, status: 'active',
+      }],
+      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'never' },
+      providerSettings: { openai: { effort: 'high', accountFailover: 'on-quota-exhausted' } },
+    } as { sessions: unknown[] });
+    try {
+      const state = await readState();
+      const session = state.sessions.find((item) => item.id === 'old') as Record<string, unknown>;
+      expect(session.accountFailover).toBeUndefined();
+      expect(session.contextProfile).toBeUndefined();
+      expect(session.permissionMode).toBe('ask');
+      expect((state.globalSettings as Record<string, unknown>).accountFailover).toBeUndefined();
+      expect((state.providerSettings.openai as Record<string, unknown>).accountFailover).toBeUndefined();
+      expect(state.providerSettings.openai?.effort).toBe('high');
+      const saved = JSON.parse(await readFile(join(root, 'index.json'), 'utf8')) as { sessions: Array<Record<string, unknown>>; globalSettings: Record<string, unknown>; providerSettings: Record<string, Record<string, unknown>> };
+      expect(saved.sessions[0]?.accountFailover).toBeUndefined();
+      expect(saved.sessions[0]?.contextProfile).toBeUndefined();
+      expect(saved.globalSettings.accountFailover).toBeUndefined();
+      expect(saved.providerSettings.openai?.accountFailover).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

@@ -78,15 +78,26 @@ function legacyThreadTransport(session: HarnessSession): Pick<HarnessSession, 'n
     && CLI_BEFORE_ACP.has(session.nativeHarness ?? '') ? { nativeTransport: 'structured-cli' } : {};
 }
 
+/** Older indexes stored `accountFailover` and a per-session `contextProfile`.
+ * Neither is read. Dropping them makes the next write remove them. */
+function omitRetiredSessionFields(session: HarnessSession): HarnessSession {
+  const next = { ...session } as HarnessSession & { accountFailover?: unknown; contextProfile?: unknown };
+  delete next.accountFailover;
+  delete next.contextProfile;
+  return next;
+}
+
+function omitAccountFailover<T extends object>(value: T | undefined): T {
+  const next = { ...(value ?? {}) } as T & { accountFailover?: unknown };
+  delete next.accountFailover;
+  return next;
+}
+
 function normalizedState(raw: HarnessState): HarnessState {
-  // Older previews did not include a failover preference. Migrate those
-  // sessions to the safe default so a local account does not remain stuck
-  // after its known quota window is exhausted.
   const sessions: HarnessSession[] = raw.sessions.map((session) => {
     const next: HarnessSession = {
-      ...session,
+      ...omitRetiredSessionFields(session),
       ...normalizedConversation(session),
-      accountFailover: (session.accountFailover === 'never' ? 'never' : 'on-quota-exhausted') as HarnessSession['accountFailover'],
       ...normalizedStatus(session),
       ...normalizedSessionPermission(session),
       ...legacyThreadTransport(session),
@@ -109,10 +120,10 @@ function normalizedState(raw: HarnessState): HarnessState {
   });
   const normalized = {
     ...raw, accounts, sessions, invocations: Array.isArray(raw.invocations) ? raw.invocations : [],
-    globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...raw.globalSettings, permissionMode: normalizedPermissionMode(raw.globalSettings?.permissionMode) },
+    globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...omitAccountFailover(raw.globalSettings), permissionMode: normalizedPermissionMode(raw.globalSettings?.permissionMode) },
     providerSettings: Object.fromEntries(Object.entries(raw.providerSettings && typeof raw.providerSettings === 'object' ? raw.providerSettings : {}).map(([provider, settings]) => [
       provider,
-      { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
+      { ...omitAccountFailover(settings), ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
     ])),
   } as HarnessState;
   return attachHidden(normalized, { localApiToken: raw.localApiToken, devicePrivateKeyPem: raw.devicePrivateKeyPem },

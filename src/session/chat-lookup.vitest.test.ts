@@ -4,7 +4,7 @@ import { chatNamed, latestChat } from './options';
 
 const chat = (id: string, fields: Partial<HarnessSession> = {}): HarnessSession => ({
   id, conversationId: id, route: 'local', accountId: null, provider: 'anthropic', model: null, effort: '', permissionMode: 'ask',
-  accountFailover: 'on-quota-exhausted', createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', status: 'active',
+createdAt: '2026-09-01T00:00:00Z', updatedAt: '2026-09-01T00:00:00Z', status: 'active',
   messages: [{ role: 'user', content: 'hi' }], ...fields,
 } as HarnessSession);
 

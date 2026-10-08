@@ -11,7 +11,7 @@ const now = '2026-10-04T00:00:00.000Z';
 function session(fields: Partial<HarnessSession>): HarnessSession {
   return {
     id: randomUUID(), route: 'local', accountId: null, provider: 'anthropic', model: 'opus', effort: 'high',
-    accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', workspace: '/w', ...fields,
+createdAt: now, updatedAt: now, status: 'active', workspace: '/w', ...fields,
   };
 }
 

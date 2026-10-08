@@ -47,14 +47,14 @@ function account(extra: Partial<AiHarnessAccount> = {}): AiHarnessAccount {
 function session(extra: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id: 's1', route: 'local', accountId: 'a1', provider: 'openai', nativeHarness: 'codex', model: null,
-    effort: 'medium', accountFailover: 'on-quota-exhausted', createdAt: '', updatedAt: '', status: 'active', ...extra,
+    effort: 'medium', createdAt: '', updatedAt: '', status: 'active', ...extra,
   };
 }
 
 function state(accounts: AiHarnessAccount[] = []): HarnessState {
   return {
     version: 1, installationId: 't', localApiToken: 't', devicePrivateKeyPem: '', devicePublicKey: {},
-    accounts, sessions: [], invocations: [], globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted' },
+    accounts, sessions: [], invocations: [], globalSettings: { effort: 'medium', permissionMode: 'ask' },
     providerSettings: {},
   };
 }

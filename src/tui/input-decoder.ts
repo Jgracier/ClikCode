@@ -10,9 +10,10 @@ import { nextCharacterIndex } from './render/width.js';
 import { logCursorEvent } from './cursor-log.js';
 import { LEGACY_MOUSE_PREFIX, setTerminalRawMode } from './modes.js';
 
-/** A key's meaning while a turn runs. Esc never stops anything: it backs
- * out of something of the user's own -- reading back, or a message still
- * waiting, which it takes back to edit. Ctrl+C is the one key that stops. */
+/** A key's meaning while a turn runs. Esc takes a waiting message back, and
+ * with none it is handled by the turn itself: an unanswered prompt returns
+ * to the composer, and a turn that has started answering stops. Ctrl+C
+ * stops. */
 type WaitingInputAction = 'take-back' | 'stop';
 
 const ESCAPE_SEQUENCE_TIMEOUT_MS = 120;
@@ -32,10 +33,10 @@ export function waitingInputAction(key: string): WaitingInputAction | undefined 
 /** Enter while a turn runs. Something typed is delivered -- into the turn or
  * after it, by the send mode. Nothing typed, with a message already waiting
  * (its row is on screen, so this is the SECOND Enter, never a doubled first),
- * stops the turn and sends what waits as the next turn now. */
-export function waitingEnterAction(draft: string, waiting: boolean, canStop: boolean): 'deliver' | 'stop-and-send' | undefined {
+ * puts that message into the chat. The turn is not stopped. */
+export function waitingEnterAction(draft: string, waiting: boolean, canSend: boolean): 'deliver' | 'send-waiting' | undefined {
   if (draft.trim()) return 'deliver';
-  return waiting && canStop ? 'stop-and-send' : undefined;
+  return waiting && canSend ? 'send-waiting' : undefined;
 }
 
 /** `CSI I` / `CSI O`: the window gained or lost focus. Never a keystroke. */

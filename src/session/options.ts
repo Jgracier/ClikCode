@@ -221,12 +221,6 @@ export function setSessionHarnessOption(
   }
 }
 
-export function normalizeFailoverWord(value: string): 'never' | 'on-quota-exhausted' {
-  if (value === 'auto') return 'on-quota-exhausted';
-  if (value === 'never') return 'never';
-  throw new Error('failover must be auto or never');
-}
-
 /** 'auto' and 'default' mean "no explicit override" rather than being stored
  * as literal model ids -- no vendor CLI has a model named either word. Every
  * entry point that can set a model (slash commands, `/settings`, and the
@@ -265,8 +259,6 @@ export function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { m
     if (!VALID_PERMISSION_MODES.includes(value as AiHarnessPermissionMode)) throw new Error('permissions must be ask, bypass, or auto');
     if (harness && !harnessSupportsPermissionMode(harness, value as AiHarnessPermissionMode)) throw new Error(`${harness.displayName} does not map ClikCode's permission modes to a real flag; setting one here would silently do nothing.`);
     target.permissionMode = value as AiHarnessPermissionMode;
-  } else if (normalizedKey === 'failover') {
-    target.accountFailover = normalizeFailoverWord(value);
   } else if (normalizedKey === 'send' && !('model' in target) && !harness) {
     // Global only: how a message typed mid-turn is delivered is the user's
     // habit, not a provider's.
@@ -274,7 +266,7 @@ export function applyDefaultSetting(target: Partial<HarnessDefaultSettings & { m
   } else if (normalizedKey === 'model' && 'model' in target) {
     target.model = normalizeModelWord(value) ?? undefined;
   } else {
-    throw new Error(`unknown setting "${key}"; choose ${'model' in target ? 'model, ' : ''}effort, permissions, ${'model' in target ? '' : 'send, '}or failover`);
+    throw new Error(`unknown setting "${key}"; choose ${'model' in target ? 'model, effort, or permissions' : 'effort, permissions, or send'}`);
   }
 }
 

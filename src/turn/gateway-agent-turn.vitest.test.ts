@@ -45,7 +45,7 @@ async function setup() {
   const now = new Date().toISOString();
   const session = {
     id: 'gw', route: 'gateway' as const, accountId: null, provider: 'gateway', model: 'model-x',
-    effort: 'platform-managed', accountFailover: 'never' as const, createdAt: now, updatedAt: now,
+    effort: 'platform-managed', createdAt: now, updatedAt: now,
     status: 'active' as const, gatewayAgentId: 'agent-1', permissionMode: 'bypass' as const,
   };
   state.sessions.push(session);

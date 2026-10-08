@@ -252,6 +252,13 @@ export class BroadcastObserver implements TurnObserver {
     return this.outputStarted;
   }
 
+  /** The turn has an answer the user can see: assistant text, or a tool
+   *  row. A thought, and a notice, are not an answer. Esc uses this to
+   *  decide whether the prompt comes back or the turn stops. */
+  get turnHasAnswer(): boolean {
+    return Boolean(this.liveText.trim()) || this.liveActivities.length > 0;
+  }
+
   get liveResponseText(): string {
     return this.liveText;
   }

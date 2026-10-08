@@ -47,8 +47,7 @@ afterEach(() => {
 });
 
 const session = (id: string, extra: Record<string, unknown> = {}) => ({
-  id, route: 'local', accountId: null, provider: 'openai', model: null, effort: 'medium', accountFailover: 'on-quota-exhausted',
-  createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', status: 'closed', nativeHarness: 'codex', ...extra,
+  id, route: 'local', accountId: null, provider: 'openai', model: null, effort: 'medium', createdAt: '2026-09-01T00:00:00.000Z', updatedAt: '2026-09-01T00:00:00.000Z', status: 'closed', nativeHarness: 'codex', ...extra,
 });
 
 async function home(seed: { sessions?: unknown[]; accounts?: unknown[] }): Promise<void> {
@@ -161,7 +160,6 @@ describe('the account list', () => {
     expect(work).toMatchObject({ current: true, providerName: 'Codex', usage: { label: '5h 40% left', windows: [{ name: '5h', usedPct: 60 }] } });
     expect(list.accounts.find((account) => account.id === 'home')).toMatchObject({ problem: 'reauth', current: false });
     expect(list.accounts.find((account) => account.id === 'home')!.actions).toContain('reauthenticate');
-    expect(list.failover).toBe('auto');
     expect(list.addable.some((item) => item.provider === 'codex')).toBe(true);
   });
 

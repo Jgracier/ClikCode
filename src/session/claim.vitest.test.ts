@@ -8,8 +8,7 @@ const at = (offsetMs: number): string => new Date(NOW + offsetMs).toISOString();
 
 const session = (id: string, overrides: Partial<HarnessSession> = {}): HarnessSession => ({
   id, conversationId: id, route: 'local', accountId: null, provider: 'anthropic',
-  model: null, effort: 'medium', permissionMode: 'ask', accountFailover: 'on-quota-exhausted',
-  createdAt: at(-60_000), updatedAt: at(-60_000), status: 'active',
+  model: null, effort: 'medium', permissionMode: 'ask', createdAt: at(-60_000), updatedAt: at(-60_000), status: 'active',
   ...overrides,
 });
 

@@ -12,7 +12,7 @@ const harness = { command: 'fake', provider: 'fake', displayName: 'Fake' } as Ai
 const now = '2026-10-04T00:00:00.000Z';
 const record = canonicalRecord({
   id: 's1', route: 'local', accountId: null, provider: 'anthropic', model: 'opus', nativeHarness: 'claude', effort: 'high',
-  accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
+createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
   messages: [{ role: 'user', content: 'rename the parser' }, { role: 'assistant', content: 'Renamed it.' }],
 } as HarnessSession);
 
@@ -107,7 +107,7 @@ describe('startConversationThread', () => {
 describe('a native thread sized to the model', () => {
   const long = canonicalRecord({
     id: 's2', route: 'local', accountId: null, provider: 'anthropic', model: 'opus', nativeHarness: 'claude', effort: 'high',
-    accountFailover: 'never', createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
+createdAt: now, updatedAt: now, status: 'active', workspace: '/w',
     messages: Array.from({ length: 20 }, (_, index) => [
       { role: 'user' as const, content: `request ${index}` }, { role: 'assistant' as const, content: 'x'.repeat(1000) },
     ]).flat(),

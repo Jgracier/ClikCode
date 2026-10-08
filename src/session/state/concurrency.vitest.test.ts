@@ -16,7 +16,7 @@ const message = (content: string, role: 'user' | 'assistant' = 'user') => ({ rol
 function chat(id: string, messages: Array<{ role: 'user' | 'assistant'; content: string }>, extra: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-    accountFailover: 'never', createdAt: now(), updatedAt: now(), status: 'active', messages, ...extra,
+createdAt: now(), updatedAt: now(), status: 'active', messages, ...extra,
   } as HarnessSession;
 }
 

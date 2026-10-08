@@ -87,6 +87,9 @@ export interface HarnessTurnObserver {
    * queues the message as the fallback, and settles its promise later.
    * `withdraw` answers false once the message is already on its way. */
   onSteerReady?: (handler?: (text: string, hold?: (withdraw: () => boolean) => Promise<void>) => Promise<void>) => void;
+  /** A vendor tool call just settled and no other call is open. The next
+   * model call has not started. A manual account change applies here. */
+  onBetweenCalls?: () => void;
   /** Slash commands the agent offers for this session. */
   onAvailableCommands?: (commands: readonly HarnessAvailableCommand[]) => void;
   /** The session/new or session/load answer, with the models the agent

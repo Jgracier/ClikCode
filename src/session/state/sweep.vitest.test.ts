@@ -21,7 +21,7 @@ afterEach(async () => {
 const DAY = 86_400_000;
 const chat = (id: string, extra: Partial<HarnessSession> = {}): HarnessSession => ({
   id, route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
-  accountFailover: 'never', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: 'active',
+createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), status: 'active',
   messages: [{ role: 'user', content: `hello ${id}` }], ...extra,
 } as HarnessSession);
 

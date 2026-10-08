@@ -17,9 +17,9 @@
 import { keyHint } from '../../harness/protocol/wording.js';
 
 /** What a message typed during a turn is called on screen, by where it is.
- *  Enter delivers it without stopping anything; Enter again, with nothing
- *  typed, stops the turn -- its tool calls and sub-agents with it -- and
- *  sends what waits, which its hint says. */
+ *  Enter delivers it. Enter again, with nothing typed, puts a waiting
+ *  message into the chat at the next pause. The turn and its sub-agents
+ *  keep running, which its hint says. */
 export const STEER_WORDS = {
   /** Held by the turn until no tool call is open (acp-client.ts). */
   held: 'sending at the next pause',

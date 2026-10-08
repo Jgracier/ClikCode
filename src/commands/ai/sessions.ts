@@ -32,7 +32,7 @@ import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../ses
 import { forgetNativeThread } from '../../session/native-thread.js';
 import { forceStoreSession } from '../../session/ephemeral.js';
 
-const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, effort, failover, and native sessions cannot be set per session (a model can, from ClikCode Local\'s catalog).';
+const CLIKCODE_LOCAL_FIXED_FIELDS = 'ClikCode Local runs ClikCode\'s own agent on a model this machine serves; account, provider, effort, and native sessions cannot be set per session (a model can, from ClikCode Local\'s catalog).';
 
 /** A model a user names on `sessions create`/`sessions set` must be one the
  * harness actually publishes -- the same catalog its own picker draws from
@@ -111,7 +111,6 @@ export function applyGatewaySessionPolicy(session: HarnessSession): void {
   if (!keepModel) delete session.gatewayAgentName;
   // A level chosen on the Gateway stays; one from a vendor harness means nothing here.
   if (!keepModel || !gatewayEffort(session)) session.effort = GATEWAY_DEFAULT_EFFORT;
-  session.accountFailover = 'never';
   session.gatewayConfirmed = true;
   // The approval setting stays: the Gateway route's agent runs here and honours it.
   shedVendorHarness(session);
@@ -143,7 +142,6 @@ export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
   session.provider = 'clikcode-local';
   session.model = session.model && catalogModel(session.model) ? session.model : null;
   session.effort = 'auto';
-  session.accountFailover = 'never';
   // gatewayConfirmed marks an explicit Gateway choice; this is not one.
   delete session.gatewayConfirmed;
   delete session.gatewayAgentId;
@@ -167,7 +165,6 @@ export function applyFreshLocalSessionPolicy(state: HarnessState, session: Harne
   session.model = null;
   session.effort = defaults.effort;
   session.permissionMode = defaults.permissionMode;
-  session.accountFailover = defaults.accountFailover;
   delete session.gatewayConfirmed;
   delete session.gatewayAgentId;
   delete session.gatewayAgentThreadId;
@@ -197,21 +194,20 @@ function findAccount(
   return (provider ? sameLabel.find((item) => item.provider === provider) : undefined) ?? sameLabel[0];
 }
 
-export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; agent?: string; effort?: string; accountFailover?: 'never' | 'on-quota-exhausted' }): Promise<void> {
+export async function aiSessionCreate(options: { route: AiHarnessRoute; account?: string; provider?: string; model?: string; agent?: string; effort?: string }): Promise<void> {
   if (!isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
   if (options.agent && options.route !== 'gateway') throw new Error('A Gateway agent requires --route gateway.');
   const gatewayAgentId = options.agent ? await gatewayAgentChoice(options.agent) : undefined;
-  if (options.route === 'gateway' && (options.account || options.provider || options.accountFailover)) {
-    throw new Error('ClikDeploy Gateway account, provider, and failover are selected by platform routing and cannot be overridden per session.');
+  if (options.route === 'gateway' && (options.account || options.provider)) {
+    throw new Error('ClikDeploy Gateway account and provider are selected by platform routing and cannot be overridden per session.');
   }
   if (options.route === 'gateway' && options.effort && !(GATEWAY_EFFORTS as readonly string[]).includes(options.effort)) {
     throw new Error(`ClikDeploy Gateway effort must be one of ${GATEWAY_EFFORTS.join(', ')}`);
   }
-  if (options.route === 'clikcode-local' && (options.account || options.provider || options.effort || options.accountFailover)) {
+  if (options.route === 'clikcode-local' && (options.account || options.provider || options.effort)) {
     throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
   }
   const localModel = options.route === 'clikcode-local' && options.model ? resolveLocalModelId(options.model) : undefined;
-  if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   // `--provider claude` means Claude Code, the same name /claude and
   // `accounts login claude` take; the provider id (`anthropic`) still works.
   const named = options.provider ? localHarnessForCommand(options.provider) : undefined;
@@ -254,7 +250,6 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     // Every route: on the agent routes the agent is ClikCode's own, running
     // here, and it honours the same approval setting.
     permissionMode: defaults.permissionMode,
-    accountFailover: options.route === 'gateway' ? 'never' : options.accountFailover ?? defaults.accountFailover,
     ...(options.route === 'gateway' ? { gatewayConfirmed: true as const } : {}),
     ...(gatewayAgentId ? { gatewayAgentId } : {}),
     createdAt: now, updatedAt: now, status: 'active',
@@ -303,8 +298,7 @@ function firstEverSession(state: HarnessState, workspace: string, now: string): 
   const id = randomUUID();
   return {
     id, conversationId: id, route: 'local', accountId: null, provider: null, model: null,
-    effort: defaults.effort, permissionMode: defaults.permissionMode,
-    accountFailover: defaults.accountFailover, workspace,
+    effort: defaults.effort, permissionMode: defaults.permissionMode, workspace,
     createdAt: now, updatedAt: now, status: 'active',
   };
 }
@@ -394,9 +388,8 @@ export const aiSessionClose = (id: string): Promise<void> => endSession(id, 'clo
 /** Save-and-leave lifecycle used by /exit. */
 export const aiSessionLeave = (id: string): Promise<void> => endSession(id, 'leave');
 
-export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; agent?: string; effort?: string; permissions?: AiHarnessPermissionMode; accountFailover?: 'never' | 'on-quota-exhausted'; nativeSession?: string }): Promise<void> {
+export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; agent?: string; effort?: string; permissions?: AiHarnessPermissionMode; nativeSession?: string }): Promise<void> {
   if (options.route !== undefined && !isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
-  if (options.accountFailover !== undefined && options.accountFailover !== 'never' && options.accountFailover !== 'on-quota-exhausted') throw new Error('account failover must be never or on-quota-exhausted');
   if (options.permissions !== undefined && !VALID_PERMISSION_MODES.includes(options.permissions)) throw new Error('permissions must be ask, bypass, or auto');
   const state = await readState({ transcripts: [id] });
   const index = state.sessions.findIndex((item) => item.id === id);
@@ -405,8 +398,8 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   const effectiveRoute = options.route ?? current.route;
   if (options.agent !== undefined && effectiveRoute !== 'gateway') throw new Error('A Gateway agent requires the Gateway route.');
   const gatewayAgentId = options.agent !== undefined ? await gatewayAgentChoice(options.agent) : undefined;
-  if (effectiveRoute === 'gateway' && (options.account || options.provider || options.accountFailover || options.nativeSession)) {
-    throw new Error('ClikDeploy Gateway account, provider, failover, and native sessions are selected by platform routing and cannot be overridden per session.');
+  if (effectiveRoute === 'gateway' && (options.account || options.provider || options.nativeSession)) {
+    throw new Error('ClikDeploy Gateway account, provider, and native sessions are selected by platform routing and cannot be overridden per session.');
   }
   if (effectiveRoute === 'gateway' && options.effort && options.effort !== 'default' && !(GATEWAY_EFFORTS as readonly string[]).includes(options.effort)) {
     throw new Error(`ClikDeploy Gateway effort must be one of default, ${GATEWAY_EFFORTS.join(', ')}`);
@@ -415,7 +408,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   const gatewayModel = effectiveRoute === 'gateway' && options.model !== undefined
     ? await chooseGatewayModel(options.model)
     : undefined;
-  if (effectiveRoute === 'clikcode-local' && (options.account || options.provider || options.effort || options.accountFailover || options.nativeSession)) {
+  if (effectiveRoute === 'clikcode-local' && (options.account || options.provider || options.effort || options.nativeSession)) {
     throw new Error(CLIKCODE_LOCAL_FIXED_FIELDS);
   }
   const account = options.account === undefined
@@ -473,7 +466,6 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.model !== undefined ? { model } : {}),
     ...(options.effort ? { effort: effectiveRoute === 'gateway' && options.effort === 'default' ? GATEWAY_DEFAULT_EFFORT : options.effort } : {}),
     ...(options.permissions ? { permissionMode: options.permissions } : {}),
-    ...(options.accountFailover ? { accountFailover: options.accountFailover } : {}),
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };

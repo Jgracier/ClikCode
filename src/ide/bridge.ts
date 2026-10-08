@@ -145,6 +145,9 @@ export class IdeBridge {
       case 'cancel':
         this.worker?.client.send({ type: 'cancel', restoreDraft: request.restoreDraft });
         return;
+      case 'send-queued':
+        this.worker?.client.send({ type: 'send-queued' });
+        return;
       case 'unqueue':
         if (this.sessionId) void this.workerFor(this.sessionId).then((client) => client.send({ type: 'unqueue', id: request.id }), (error: unknown) => this.report(error));
         return;
@@ -765,7 +768,6 @@ export class IdeBridge {
         }
         case 'effort': await setting(`/effort ${choice.value}`); done(); return;
         case 'permissions': await setting(`/permissions ${choice.value}`); done(); return;
-        case 'failover': await setting(`/accounts failover ${choice.value}`); done(); return;
         case 'account': await setting(`/settings account ${choice.accountId}`); done(); return;
         case 'fast': await setting(`/fast ${choice.on ? 'on' : 'off'}`); done(); return;
         case 'swarm': {

@@ -36,6 +36,9 @@ export interface TurnObserver {
     onLeave?: () => void,
     /** Take a waiting message back out of the queue to edit (Esc). */
     onTakeBack?: (id: string) => Promise<TakeBackOutcome>,
+    /** Put the oldest waiting user message into the chat (Enter again).
+     *  The turn is not stopped. */
+    onSendWaiting?: () => void,
   ): void;
   stopWaiting(refresh?: boolean): void;
   /** Runs a vendor sign-in somewhere with a terminal. A worker has none, so

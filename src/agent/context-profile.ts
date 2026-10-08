@@ -201,8 +201,9 @@ export function selectContextProfile(hints: ContextHints): ContextProfileName {
   return hints.hosted ? 'full' : 'lean';
 }
 
-/** The environment override, then the session's setting, then the
- * automatic choice. An unrecognized override is ignored rather than fatal. */
+/** The environment override, then a profile the caller already chose
+ * (a parent turn passes its own), then the automatic choice. An
+ * unrecognized override is ignored rather than fatal. */
 export function resolveContextProfile(input: { hints: ContextHints; session?: string; env?: NodeJS.ProcessEnv }): ContextProfile {
   const forced = parseContextProfile((input.env ?? process.env)[CONTEXT_PROFILE_ENV]) ?? parseContextProfile(input.session);
   return PROFILES[forced ?? selectContextProfile(input.hints)];
