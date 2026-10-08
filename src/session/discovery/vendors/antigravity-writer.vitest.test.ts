@@ -160,7 +160,7 @@ describe('antigravity thread writer', () => {
       db.close();
     }
 
-    expect(await writer.versionOk({ ...ctx, version: '1.2.17' })).toBe(false);
+    expect(await writer.versionOk({ ...ctx, version: '1.3.0' })).toBe(false);
     expect(await writer.versionOk({ ...ctx, version: undefined })).toBe(false);
   });
 });

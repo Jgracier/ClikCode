@@ -44,7 +44,7 @@ import type { CanonicalRecord, CanonicalToolCall, CanonicalTurn } from '../../ca
 import { atomicWriteFile } from '../../store/files.js';
 import type { NativeThreadWriteContext, NativeThreadWriter, NativeThreadWritten } from '../stores.js';
 import { reconcileCodexThreadRow } from './codex-store.js';
-import { absolutePath, shellQuote } from './thread-writer-files.js';
+import { absolutePath, shellQuote, testedVersion } from './thread-writer-files.js';
 
 /** Builds whose rollout layout this writer was checked against, live. */
 export const CODEX_WRITER_TESTED_VERSIONS = ['codex-cli 0.155.1'] as const;
@@ -293,10 +293,7 @@ function profileCodexHome(environment: NativeThreadWriteContext['environment']):
 
 export const codexThreadWriter: NativeThreadWriter = {
   testedVersions: CODEX_WRITER_TESTED_VERSIONS,
-  versionOk(context) {
-    const version = context.version?.trim();
-    return Boolean(version && (CODEX_WRITER_TESTED_VERSIONS as readonly string[]).includes(version));
-  },
+  versionOk: testedVersion(CODEX_WRITER_TESTED_VERSIONS),
   async write(record, context): Promise<NativeThreadWritten | undefined> {
     const codexHome = profileCodexHome(context.environment);
     if (!codexHome || !record.turns.length) return undefined;

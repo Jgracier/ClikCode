@@ -235,7 +235,7 @@ describe('copilot thread writer', () => {
       .toBe(join(home, 'session-state', written!.nativeId));
     expect(await readFile(join(home, 'session-state', written!.nativeId, 'workspace.yaml'), 'utf8'))
       .toContain(`id: ${written!.nativeId}\ncwd: "${WORKSPACE}"\n`);
-    expect(await writer.versionOk(context('copilot', {}, 'GitHub Copilot CLI 1.0.92.'))).toBe(false);
+    expect(await writer.versionOk(context('copilot', {}, 'GitHub Copilot CLI 1.1.0.'))).toBe(false);
   });
 });
 

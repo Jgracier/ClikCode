@@ -148,7 +148,7 @@ describe('grok thread writer', () => {
     const again = await writer.write(fixtureRecord(), context('grok', { HOME: home, GROK_HOME: grokHome }, '1.0.46'));
     expect(await readdir(join(grokHome, 'sessions', '%2Fhome%2Fuser%2Fprojects%2Fapp'))).toEqual([again!.nativeId]);
 
-    expect(await writer.versionOk(context('grok', {}, 'grok 1.0.47 (abc) [stable]'))).toBe(false);
+    expect(await writer.versionOk(context('grok', {}, 'grok 1.1.0 (abc) [stable]'))).toBe(false);
     expect(await writer.versionOk(context('grok', {}, undefined))).toBe(false);
   });
 });
@@ -186,7 +186,7 @@ describe('cline thread writer', () => {
     const again = await writer.write(fixtureRecord(), context('cline', { HOME: home, CLINE_DATA_DIR: data }, '3.0.68'));
     expect(await readdir(join(data, 'sessions'))).toEqual([again!.nativeId]);
 
-    expect(await writer.versionOk(context('cline', {}, '3.0.69'))).toBe(false);
+    expect(await writer.versionOk(context('cline', {}, '3.1.0'))).toBe(false);
   });
 });
 
@@ -221,7 +221,7 @@ describe('kimi thread writer', () => {
     const directory = join(home, '.kimi-code', 'sessions', kimiWorkDirKey(WORKSPACE), written!.nativeId);
     expect((await readdir(directory)).sort()).toEqual(['agents', 'state.json']);
     expect(await readdir(join(directory, 'agents', 'main'))).toEqual(['wire.jsonl']);
-    expect(await writer.versionOk(context('kimi', {}, '2.0.3'))).toBe(false);
+    expect(await writer.versionOk(context('kimi', {}, '2.1.0'))).toBe(false);
   });
 });
 
@@ -306,7 +306,7 @@ describe('mcode thread writer', () => {
     expect(text).toContain('PELICAN-73');
     expect(db.prepare('SELECT source, message_count FROM local_runtime_pi_history_file_migrations').get()).toEqual({ source: 'empty', message_count: 0 });
     db.close();
-    expect(await writer.versionOk(context('mcode', {}, '0.5.11'))).toBe(false);
+    expect(await writer.versionOk(context('mcode', {}, '0.6.0'))).toBe(false);
   });
 });
 
@@ -341,7 +341,7 @@ describe('openclaw thread writer', () => {
     expect(await readdir(join(agent, 'sessions'))).toEqual([]);
 
     expect(await writer.write(fixtureRecord(), { ...ctx, environment: { HOME: home, OPENCLAW_PROFILE: 'work' } })).toBeUndefined();
-    expect(await writer.versionOk(context('openclaw', {}, 'OpenClaw 2026.9.7 (abc)'))).toBe(false);
+    expect(await writer.versionOk(context('openclaw', {}, 'OpenClaw 2026.10.0 (abc)'))).toBe(false);
   });
 });
 
@@ -504,7 +504,7 @@ describe('hermes thread writer', () => {
         'user', 'assistant', 'tool:read_file', 'tool:write_file', 'assistant']);
       expect(db.prepare(`SELECT content FROM messages WHERE session_id = 'mine'`).all().map((row: { content: string }) => row.content)).toEqual(['keep me']);
     } finally { db.close(); }
-    expect(await writer.versionOk(context('hermes', {}, 'Hermes Agent v0.20.6'))).toBe(false);
+    expect(await writer.versionOk(context('hermes', {}, 'Hermes Agent v0.21.0'))).toBe(false);
   });
 
   it.skipIf(!sqlite)('declines a database without the columns it was verified on', async () => {

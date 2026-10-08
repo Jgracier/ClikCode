@@ -18,12 +18,23 @@ export function versionNumber(version: string | undefined): string | undefined {
   return /(\d+\.\d+\.\d+)/.exec(version ?? '')?.[1];
 }
 
-/** True only for an installed build in `tested`; an unreadable version is
- * not a tested one. */
-export function testedVersion(tested: readonly string[]): (context: NativeThreadWriteContext) => boolean {
+/** `2.1` out of `2.1.289`: the release line a build belongs to. */
+function releaseLine(version: string): string {
+  return version.split('.').slice(0, 2).map(Number).join('.');
+}
+
+/** True for an installed build on the release line of one in `tested`; an
+ * unreadable version is not a tested one. Vendors ship patch builds almost
+ * daily and none has changed how it stores a thread, so pinning the exact
+ * build turned native threads off within a day of each verification (Claude
+ * Code 2.1.289, agy 1.2.17) and every handoff fell back to the retelling. A
+ * thread a newer build cannot resume is still caught: the vendor refuses it
+ * and the turn retells (native-thread-invalid). */
+export function testedVersion(tested: readonly string[]): (context: Pick<NativeThreadWriteContext, 'version'>) => boolean {
+  const lines = new Set(tested.map((build) => versionNumber(build)).filter((build): build is string => Boolean(build)).map(releaseLine));
   return (context) => {
     const installed = versionNumber(context.version);
-    return Boolean(installed && tested.includes(installed));
+    return Boolean(installed && lines.has(releaseLine(installed)));
   };
 }
 

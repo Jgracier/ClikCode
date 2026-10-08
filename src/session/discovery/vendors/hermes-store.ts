@@ -51,7 +51,8 @@ import {
   type NativeSessionCarry, type NativeSessionEnvironment, type NativeSessionStore,
   type NativeThreadWriteContext, type NativeThreadWriter, type NativeThreadWritten,
 } from '../stores.js';
-import { importClaudeThread, testedBuild, type ClaudeImportSpec } from './claude-import.js';
+import { importClaudeThread, type ClaudeImportSpec } from './claude-import.js';
+import { testedVersion } from './thread-writer-files.js';
 import {
   absolutePath, assistantSteps, callCommand, callPath, callResultText, inputString, isWriteCall, requestText,
 } from './thread-writer-files.js';
@@ -368,7 +369,7 @@ async function writeHermesThread(record: CanonicalRecord, context: NativeThreadW
  *  `writer` below. */
 export const hermesThreadWriter: NativeThreadWriter = {
   testedVersions: HERMES_IMPORT_SPEC.testedVersions,
-  versionOk: (context) => testedBuild(HERMES_IMPORT_SPEC.testedVersions, context),
+  versionOk: (context) => testedVersion(HERMES_IMPORT_SPEC.testedVersions)(context),
   write: writeHermesThread,
 };
 
