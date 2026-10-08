@@ -71,8 +71,6 @@ import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
 import { cliThreadTransport } from '../../harness/transport/select.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
-import { moveThreadToAccount } from '../../session/carry.js';
-import { clearManualAccountSwitch, noteManualAccountSwitch } from '../../turn/manual-account.js';
 import { undoTurnsBack } from '../../session/undo-turn.js';
 import { redoFrom } from '../../session/redo.js';
 import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../session/turn-changes.js';
@@ -553,20 +551,14 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       if (accountHarness && harnessCanRunTurns(accountHarness) && session.nativeHarness !== accountHarness.command) {
         session.nativeHarness = accountHarness.command;
         forgetNativeThread(session);
-      } else if (session.accountId !== account.id) {
-        // A native thread lives in the profile of the account that wrote it,
-        // so `--resume` under another account's profile finds nothing ("no
-        // rollout found for thread id ..."). Between turns the switch carries
-        // it now. While a turn is in flight the live process still has the
-        // file, so the carry waits for the next call boundary (manual-account.ts).
-        const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
-        const previous = state.accounts.find((item) => item.id === session.accountId);
-        if (session.pendingTurn && previous) noteManualAccountSwitch(session.id, previous.id, account.id);
-        else {
-          clearManualAccountSwitch(session.id);
-          await moveThreadToAccount(session, harness, previous, account);
-        }
-      } else clearManualAccountSwitch(session.id);
+      }
+      // A native thread lives in the profile of the account that wrote it
+      // (`nativeThreadAccountId`), so `--resume` under another account's
+      // profile finds nothing. This only records the pick: this process is not
+      // the one running the turn, and a thread moved here while that turn has
+      // it open would race its file. The conversation's next model call --
+      // mid-turn at the next call boundary, or the next turn -- moves it
+      // (turn/vendor-turn.ts settleThread).
       session.accountId = account.id;
       // Explicit selection is the user's retry signal for an account previously
       // marked exhausted: it is tried now rather than when the mark expires.

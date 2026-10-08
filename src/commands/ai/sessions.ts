@@ -484,9 +484,9 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   if (effectiveRoute === 'gateway' || effectiveRoute === 'clikcode-local') applyClikCodeAgentSessionPolicy(next, effectiveRoute);
   else if (account) {
     if (turnBackendForAccount(account) === 'vendor' && selectedHarness && harnessCanRunTurns(selectedHarness)) {
-      if (next.nativeHarness !== selectedHarness.command || current.accountId !== account.id) {
-        forgetNativeThread(next);
-      }
+      // Another account of the same harness keeps the thread: it moves to
+      // that account's profile before the next turn (session/carry.ts).
+      if (next.nativeHarness !== selectedHarness.command) forgetNativeThread(next);
       next.nativeHarness = selectedHarness.command;
     } else {
       delete next.nativeHarness;

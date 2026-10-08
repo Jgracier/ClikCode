@@ -102,8 +102,70 @@ export async function moveThreadToAccount(
     harness, nativeId: session.nativeSessionPreallocated ? undefined : session.nativeSessionId, workspace: session.workspace,
     from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
   }).catch(() => undefined) : undefined;
-  if (!carried) forgetNativeThread(session);
+  if (carried) session.nativeThreadAccountId = to.id;
+  else forgetNativeThread(session);
   return carried;
+}
+
+/** Whether a thread has to be carried before it can be resumed: the
+ * conversation has a confirmed vendor thread. An id ClikCode minted that the
+ * vendor never confirmed is no thread at all. */
+const hasVendorThread = (session: HarnessSession): boolean =>
+  Boolean(session.nativeSessionId) && !session.nativeSessionPreallocated;
+
+/** The one guarantee that makes "it should not matter which account": before
+ * a turn runs under `to`, the conversation's vendor thread is in `to`'s
+ * profile. Whoever changed `accountId` -- the account picker, a command, a
+ * failover, an older build, another process -- the next turn comes here, so
+ * there is no switch that can leave the two apart and no deferred note to be
+ * lost between processes.
+ *
+ * Carrying is safe to repeat: a copy the destination already has, or a newer
+ * one, is left alone (carry-artifact.ts, sqlite-carry.ts), so an account that
+ * holds an older copy is brought up to date and never the other way round.
+ *
+ * The holder is `nativeThreadAccountId`. A conversation from before it was
+ * kept has none; its thread is looked for in the other accounts of the
+ * provider, once, and the answer is kept.
+ *
+ * 'present' -- already readable under `to`; 'carried' -- moved there;
+ * 'forgotten' -- no account has it (the vendor deleted it, or this vendor's
+ * layout is not known), so the next turn takes the conversation up afresh
+ * from ClikCode's record; 'none' -- nothing to reconcile. */
+export async function reconcileNativeThread(
+  session: HarnessSession, harness: AiLocalHarnessDefinition | undefined,
+  accounts: readonly AiHarnessAccount[], to: AiHarnessAccount,
+): Promise<'present' | 'carried' | 'forgotten' | 'none'> {
+  if (!harness || !hasVendorThread(session)) return 'none';
+  if (session.nativeThreadAccountId === to.id) return 'present';
+  const holder = session.nativeThreadAccountId ? accounts.find((item) => item.id === session.nativeThreadAccountId) : undefined;
+  const sources = holder ? [holder] : accounts.filter((item) => item.id !== to.id && item.provider === to.provider && item.authKind === 'vendor-cli');
+  for (const from of sources) {
+    const carried = await carryNativeSession({
+      harness, nativeId: session.nativeSessionId, workspace: session.workspace,
+      from: turnEnvironment(harness, from), to: turnEnvironment(harness, to),
+    }).catch(() => undefined);
+    if (carried) {
+      session.nativeThreadAccountId = to.id;
+      return carried;
+    }
+  }
+  // Nothing carried. A holder that was named and could not give it up is the
+  // end of this thread. With no holder on record, `to` may simply have it
+  // already -- the conversation never left it -- and where the vendor's layout
+  // can say so, it does.
+  if (!holder) {
+    const here = await locateNativeSessionFile(harness, session.nativeSessionId!, session.workspace ?? '', turnEnvironment(harness, to)).catch(() => undefined);
+    // A vendor that keeps conversations as database rows cannot be asked
+    // whether `to` has it: assume so, as every turn before this did, and keep
+    // the answer so the other accounts are not searched on every turn.
+    if (here || !nativeSessionStore(harness)?.locate) {
+      session.nativeThreadAccountId = to.id;
+      return 'present';
+    }
+  }
+  forgetNativeThread(session);
+  return 'forgotten';
 }
 
 export async function carryNativeSession(input: CarryNativeSessionInput): Promise<CarryOutcome> {

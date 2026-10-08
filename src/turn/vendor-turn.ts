@@ -20,8 +20,9 @@ import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { moveThreadToAccount } from '../session/carry.js';
-import { applyManualAccount, isManualAccountSwitch, linkAbortSignals, manualAccountSwitchError, manualSwitchPending } from './manual-account.js';
+import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
+import { loadIndex } from '../session/state/index-file.js';
+import { isManualAccountSwitch, linkAbortSignals, manualAccountSwitchError, pickedAccount } from './manual-account.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -94,6 +95,9 @@ export async function sendVendorTurn(input: {
   const { state, session, text, prepared, startedAt, signal, run } = input;
   let { account, model, turnText } = input;
   const prompter = run.prompter;
+  /** The record's account when this turn last acknowledged it
+   * (manual-account.ts pickedAccount). */
+  let seenAccountId = account.id;
   const harness = session.nativeHarness
     ? localHarnessForCommand(session.nativeHarness)
     : localHarnessForProvider(account.provider);
@@ -189,6 +193,7 @@ export async function sendVendorTurn(input: {
     });
     if (start.kind === 'native') {
       session.nativeSessionId = start.written.nativeId;
+      session.nativeThreadAccountId = account.id;
       delete session.nativeSessionPreallocated;
       if (start.written.transport) session.nativeTransport = start.written.transport;
       else delete session.nativeTransport;
@@ -216,6 +221,26 @@ export async function sendVendorTurn(input: {
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
     beforeSwitch: () => closePersistentTransport(session.id),
   });
+  const canRunVendor = (item: AiHarnessAccount): boolean => item.provider === harness.provider && turnBackendForAccount(item) === 'vendor';
+  let lookingForPick = false;
+  /** The account the user picked since this turn last looked. The pick is on
+   * the session record, written by the process that handled the command; this
+   * turn runs in another. */
+  const userPick = async (): Promise<AiHarnessAccount | undefined> => {
+    const recorded = (await loadIndex())?.sessions.find((item) => item.id === session.id)?.accountId;
+    // The record has caught up with this turn's own account (a failover's
+    // write landed): that is the new baseline.
+    if (recorded === account.id) seenAccountId = recorded;
+    return pickedAccount({ recorded, seen: seenAccountId, current: account, accounts: state.accounts, canRun: canRunVendor });
+  };
+  /** The thread under the account this turn runs on (session/carry.ts). */
+  const settleThread = async (): Promise<void> => {
+    const held = session.nativeThreadAccountId;
+    // A vendor process from the account being left may still have it open.
+    if (held && held !== account.id) await closePersistentTransport(session.id);
+    const outcome = await reconcileNativeThread(session, harness, state.accounts, account);
+    if (outcome === 'carried' || outcome === 'forgotten' || session.nativeThreadAccountId !== held) await checkpoint.persistNow();
+  };
   let stopSwarmWatch = (): void => undefined;
   try {
   // The thread goes with the conversation, as on a switch mid-turn; only
@@ -223,6 +248,10 @@ export async function sendVendorTurn(input: {
   if (await accounts.start(async (to) => { await moveThreadToAccount(session, harness, account, to); })) {
     await checkpoint.persistNow();
   }
+  // Whoever chose this account and whenever, the thread has to be in its
+  // profile before anything resumes it. One that cannot be carried is
+  // forgotten here, so the line below takes the conversation up afresh.
+  await settleThread();
   // A fresh native thread (no nativeSessionId yet) with prior ClikCode
   // messages already on the session means this conversation is continuing
   // under a different native identity than whatever produced those messages
@@ -331,6 +360,7 @@ export async function sendVendorTurn(input: {
   const onSessionId = async (nativeSessionId: string): Promise<void> => {
     if (session.nativeSessionId === nativeSessionId && !session.nativeSessionPreallocated) return;
     session.nativeSessionId = nativeSessionId;
+    session.nativeThreadAccountId = account.id;
     keepTransport(activeTransport);
     delete session.nativeSessionPreallocated;
     await checkpoint.persistNow();
@@ -367,9 +397,11 @@ export async function sendVendorTurn(input: {
     // A tool call just settled and nothing else is open: the next model call
     // has not started. A manual account change takes effect here.
     onBetweenCalls: () => {
-      const move = manualSwitchPending(session.id);
-      const to = move && state.accounts.find((item) => item.id === move.toId);
-      if (to && to.id !== account.id && to.provider === harness.provider && turnBackendForAccount(to) === 'vendor') switchNow.run();
+      if (lookingForPick) return;
+      lookingForPick = true;
+      userPick().then((to) => { if (to) switchNow.run(); })
+        .catch(() => undefined) // fail-open-ok: a pick not seen now is seen at the next boundary
+        .finally(() => { lookingForPick = false; });
     },
   } satisfies HarnessTurnObserver;
   /** Aborts the vendor prompt so the loop can continue it on the account
@@ -381,19 +413,10 @@ export async function sendVendorTurn(input: {
   // that produced no output sends this again; rebuilding the transcript
   // would repeat the whole conversation on top of a thread that already has it.
   const askedText = turnText;
-  const canRunVendor = (item: AiHarnessAccount): boolean => item.provider === harness.provider && turnBackendForAccount(item) === 'vendor';
   for (;;) {
     const switchController = new AbortController();
     switchNow.run = () => { if (!switchController.signal.aborted) switchController.abort(manualAccountSwitchError()); };
     const attemptSignal = linkAbortSignals(signal, switchController.signal);
-    // A pick made before this attempt, or left over from the previous one.
-    account = await applyManualAccount({
-      sessionId: session.id, accounts: state.accounts, current: account, canRun: canRunVendor,
-      carry: async (from, to) => {
-        await closePersistentTransport(session.id);
-        if (from.id !== to.id) await moveThreadToAccount(session, harness, from, to);
-      },
-    });
     // Before this attempt spawns the vendor. A server, skill, or same-format
     // hook that is already in the harness is left as it is. A new MCP server
     // is invisible to a process that is already running, so that process is
@@ -464,15 +487,13 @@ export async function sendVendorTurn(input: {
       // The user picked another account of this provider between calls.
       // The prompt stopped at that boundary; this same turn continues there.
       if (isManualAccountSwitch(error)) {
-        const before = account.id;
-        account = await applyManualAccount({
-          sessionId: session.id, accounts: state.accounts, current: account, canRun: canRunVendor,
-          carry: async (from, to) => {
-            await closePersistentTransport(session.id);
-            if (from.id !== to.id) await moveThreadToAccount(session, harness, from, to);
-          },
-        });
-        if (account.id === before) throw error;
+        const picked = await userPick();
+        if (!picked) throw error;
+        await closePersistentTransport(session.id);
+        account = picked;
+        seenAccountId = picked.id;
+        session.accountId = picked.id;
+        await settleThread();
         const wrote = Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
         const nextRequest = wrote ? INTERRUPTED_TURN_REQUEST : askedText;
         if (!session.nativeSessionId) turnText = await retell(nextRequest, wrote && session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear');
@@ -507,7 +528,7 @@ export async function sendVendorTurn(input: {
       }
       result = { ...result, isError: true, errorMessage: replyError.notice, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     }
-    if (!session.nativeSessionId && result.nativeSessionId) session.nativeSessionId = result.nativeSessionId;
+    if (!session.nativeSessionId && result.nativeSessionId) { session.nativeSessionId = result.nativeSessionId; session.nativeThreadAccountId = account.id; }
     if (!result.isError && !session.nativeSessionPreallocated) await adoptListedNativeId(harness, session, environment);
     if (session.nativeSessionId) keepTransport(transport);
     // A route that keeps no history: forget the session, so the next turn

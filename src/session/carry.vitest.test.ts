@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/prom
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { carryNativeSession, moveThreadToAccount } from './carry';
+import { carryNativeSession, moveThreadToAccount, reconcileNativeThread } from './carry';
 import { resetNativeSessionDiscoveryCache } from './discovery/cache';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition';
 import type { HarnessSession } from './model';
@@ -346,5 +346,82 @@ describe('moving a conversation to another account', () => {
     await expect(moveThreadToAccount(minted, claude, account('a'), account('b'))).resolves.toBeUndefined();
     expect(minted.nativeSessionId).toBeUndefined();
     expect(minted.nativeSessionPreallocated).toBeUndefined();
+  });
+});
+
+describe('making the thread readable under the account a turn runs on', () => {
+  const claude = localHarnessForCommand('claude')!;
+  const profile = (root: string, id: string): string => join(root, id);
+  const account = (root: string, id: string): AiHarnessAccount => ({
+    id, provider: 'anthropic', label: id, authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: `native:${id}`,
+    nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path: profile(root, id) },
+  } as AiHarnessAccount);
+  const project = WORKSPACE.replace(/[^a-zA-Z0-9]/g, '-');
+  const file = (root: string, id: string): string => join(profile(root, id), 'projects', project, 'thread-1.jsonl');
+  const session = (extra: Partial<HarnessSession> = {}): HarnessSession =>
+    ({ id: 's', nativeHarness: 'claude', nativeSessionId: 'thread-1', workspace: WORKSPACE, ...extra }) as HarnessSession;
+  async function accounts(holds: string[]): Promise<{ root: string; list: AiHarnessAccount[] }> {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-reconcile-'));
+    for (const id of holds) {
+      await mkdir(join(profile(root, id), 'projects', project), { recursive: true });
+      await writeFile(file(root, id), `{"held":"${id}"}\n`);
+    }
+    return { root, list: ['a', 'b', 'c'].map((id) => account(root, id)) };
+  }
+
+  it('carries from the account on record', async () => {
+    const { root, list } = await accounts(['a']);
+    const chat = session({ nativeThreadAccountId: 'a' });
+    await expect(reconcileNativeThread(chat, claude, list, list[1]!)).resolves.toBe('carried');
+    expect(chat.nativeThreadAccountId).toBe('b');
+    await expect(readFile(file(root, 'b'), 'utf8')).resolves.toBe('{"held":"a"}\n');
+  });
+
+  it('does nothing, and reads nothing, when the account on record is the one running', async () => {
+    const { root, list } = await accounts([]);
+    const chat = session({ nativeThreadAccountId: 'b' });
+    await expect(reconcileNativeThread(chat, claude, list, list[1]!)).resolves.toBe('present');
+    await expect(readFile(file(root, 'b'), 'utf8')).rejects.toThrow();
+  });
+
+  it('finds the thread among the other accounts when a conversation has no holder on record', async () => {
+    // A conversation from before the holder was kept, switched by a path that
+    // never moved the thread: it is in a, the conversation is on c.
+    const { root, list } = await accounts(['a']);
+    const chat = session();
+    await expect(reconcileNativeThread(chat, claude, list, list[2]!)).resolves.toBe('carried');
+    expect(chat.nativeThreadAccountId).toBe('c');
+    await expect(readFile(file(root, 'c'), 'utf8')).resolves.toBe('{"held":"a"}\n');
+  });
+
+  it('keeps the thread where the running account already has it, with no holder on record', async () => {
+    const { list } = await accounts(['b']);
+    const chat = session();
+    await expect(reconcileNativeThread(chat, claude, list, list[1]!)).resolves.toBe('present');
+    expect(chat.nativeThreadAccountId).toBe('b');
+    expect(chat.nativeSessionId).toBe('thread-1');
+  });
+
+  it('brings an older copy up to date from the account that kept talking to it', async () => {
+    const { root, list } = await accounts(['a', 'b']);
+    await writeFile(file(root, 'b'), '{"held":"b"}\n{"more":true}\n');
+    const chat = session({ nativeThreadAccountId: 'b' });
+    await expect(reconcileNativeThread(chat, claude, list, list[0]!)).resolves.toBe('carried');
+    await expect(readFile(file(root, 'a'), 'utf8')).resolves.toBe('{"held":"b"}\n{"more":true}\n');
+  });
+
+  it('forgets the thread only when no account has it', async () => {
+    const { list } = await accounts([]);
+    const chat = session({ nativeThreadAccountId: 'a' });
+    await expect(reconcileNativeThread(chat, claude, list, list[1]!)).resolves.toBe('forgotten');
+    expect(chat.nativeSessionId).toBeUndefined();
+    expect(chat.nativeThreadAccountId).toBeUndefined();
+  });
+
+  it('has nothing to reconcile for an id ClikCode minted that the vendor never confirmed', async () => {
+    const { list } = await accounts(['a']);
+    const chat = session({ nativeSessionPreallocated: true });
+    await expect(reconcileNativeThread(chat, claude, list, list[1]!)).resolves.toBe('none');
+    expect(chat.nativeSessionId).toBe('thread-1');
   });
 });
