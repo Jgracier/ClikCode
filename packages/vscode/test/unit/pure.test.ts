@@ -296,7 +296,7 @@ describe('output formatting', () => {
   it('turns command results into panels, notices, or nothing', () => {
     expect(formatOutput({ panel: 'settings', session: {} })).toEqual({ kind: 'none' });
     expect(formatOutput({ panel: 'error', message: 'bad' })).toEqual({ kind: 'notice', text: 'bad', level: 'error' });
-    expect(formatOutput({ panel: 'error', message: 'All accounts exhausted' })).toMatchObject({ level: 'warning' });
+    expect(formatOutput({ panel: 'error', message: 'All accounts exhausted' })).toMatchObject({ level: 'info' });
     expect(formatOutput({ panel: 'help', helpText: '\u001b[1m/help\u001b[0m' })).toEqual({ kind: 'panel', title: 'Commands', body: '/help' });
     expect(formatOutput({ panel: 'models', models: [{ model: 'a', provider: 'x' }, { model: 'b' }], selected: 'a' }))
       .toEqual({ kind: 'panel', title: 'Models', body: '● a  (x)\n  b' });

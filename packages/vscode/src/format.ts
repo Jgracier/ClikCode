@@ -42,9 +42,10 @@ export function formatOutput(payload: Record<string, unknown>): Shown {
   if (payload.status === 'ready') return { kind: 'none' };
   if (panel === 'error' && typeof payload.message === 'string') {
     const message = stripAnsi(payload.message);
-    // Running out of every account is an outcome, not a fault.
+    // Running out of every account is an outcome, not a fault: show it as
+    // plain informational chat text, not a warning or error banner.
     const outcome = /^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/.test(message.trim());
-    return { kind: 'notice', text: message, level: outcome ? 'warning' : 'error' };
+    return { kind: 'notice', text: message, level: outcome ? 'info' : 'error' };
   }
   if (panel === 'notice' && typeof payload.message === 'string') return { kind: 'notice', text: stripAnsi(payload.message), level: 'warning' };
   if (panel === 'settings' || panel === 'provider-selected' || panel === 'history' || panel === 'redraw') return { kind: 'none' };

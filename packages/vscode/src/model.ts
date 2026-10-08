@@ -305,7 +305,7 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     const saved = readTurnActivities(message.activities, message.content.length);
     if (!saved.length) return;
     // Folded by the same upsert live frames go through.
-    const activities = saved.reduce<LiveTurn>(
+    const activities = saved.filter((item) => !item.event.parentId).reduce<LiveTurn>(
       (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
     ).activities.map(({ startedAt: _startedAt, ...activity }) => activity);
     const prior = byUser.get(index - 1);
@@ -522,8 +522,13 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // The terminal colours its notes: yellow for an account switch or a
       // limit, red for a failure. The colour is the level.
       return withNote(model, { kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message) });
-    case 'turn-error':
-      return withNote(model, { kind: 'notice', level: 'error', text: failureLine(stripAnsi(event.message)) });
+    case 'turn-error': {
+      const msg = failureLine(stripAnsi(event.message));
+      // Exhaustion is an outcome, not a fault — show it as informational chat
+      // text rather than a red error banner so it reads as part of the flow.
+      const exhausted = /^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/i.test(msg.trim());
+      return withNote(model, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
+    }
     case 'submission':
       return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item)) };
     case 'shutdown':
