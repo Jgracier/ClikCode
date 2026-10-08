@@ -29,9 +29,8 @@ import { expandHomePath } from '../session/attachments.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { nativeUsageReading } from '../harness/accounts/account-usage.js';
+import { nativeUsageReading, recheckRecoveredAccounts } from '../harness/accounts/account-usage.js';
 import { usageResetLabel } from '../harness/accounts/usage-reading.js';
-import { watchAccountUsage } from '../harness/accounts/usage-watcher.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { withSignIn } from '../commands/account.js';
@@ -74,7 +73,7 @@ import {
  * reaches the editor as a worker event), so the bridge does not say it twice. */
 class TurnFailed extends Error {}
 
-const USAGE_REFRESH_MS = 30_000;
+const USAGE_REFRESH_MS = 15_000;
 
 export class IdeBridge {
   readonly prompter: IdePrompter;
@@ -97,7 +96,6 @@ export class IdeBridge {
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
 
   private readonly timers: NodeJS.Timeout[] = [];
-  private usageWatcher: { stop: () => void } | undefined;
   private closed = false;
   /** Open conversations lists in the editor, and the watch behind them. */
   private listWatchers = 0;
@@ -121,8 +119,6 @@ export class IdeBridge {
     claim.unref();
     usage.unref();
     this.timers.push(claim, usage);
-    // Watch index.json for account changes to invalidate usage cache instantly.
-    this.usageWatcher = watchAccountUsage();
     this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
   }
 
@@ -223,8 +219,6 @@ export class IdeBridge {
     this.closed = true;
     this.listWatch?.stop();
     this.listWatch = undefined;
-    this.usageWatcher?.stop();
-    this.usageWatcher = undefined;
     for (const timer of this.timers) clearInterval(timer);
     this.prompter.cancelAll();
     this.searchKey?.('done');
@@ -325,6 +319,9 @@ export class IdeBridge {
     const state = await readState({ transcripts: [] });
     const session = state.sessions.find((item) => item.id === this.sessionId);
     if (!session) return;
+    // The other accounts too, as the terminal does: one whose quota may have
+    // come back is re-read, so failover and the picker see it.
+    void recheckRecoveredAccounts(state).catch(() => undefined);
     const reading = await nativeUsageReading(session, state);
     // A turn parked for the reset says so instead of when it comes back.
     const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);

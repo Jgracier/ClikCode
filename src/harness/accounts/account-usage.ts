@@ -7,7 +7,7 @@ import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES } from './usage-probes.js';
-import { AccountUsageReading, UsageCacheEntry, UsageReading, accountQuotaSpent, nativeUsageCache, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
+import { AccountUsageReading, UsageCacheEntry, UsageReading, accountQuotaSpent, nativeUsageCache, quotaHeldOnlyByGuess, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 import { learnedReading, learnsUsage, preferLearnedReading } from './learned-usage.js';
 
@@ -217,7 +217,7 @@ export function accountsDueForUsageRecheck(
     if (account.authKind !== 'vendor-cli' || account.status !== 'ready' || !canBeAsked(account)) return false;
     const windowDue = vendorWindows(account)
       .some((window) => windowSpent(window) && !(window.resetsAt !== undefined && Date.parse(window.resetsAt) > now));
-    return windowDue || (account.quotaState === 'exhausted' && !accountQuotaSpent(account, now));
+    return windowDue || quotaHeldOnlyByGuess(account, now) || (account.quotaState === 'exhausted' && !accountQuotaSpent(account, now));
   });
 }
 

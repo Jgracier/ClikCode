@@ -1,10 +1,11 @@
 /** Select a usable account for a turn or a failover. */
-import { accountCanTakeTurn, accountQuotaSpent, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
+import { accountCanTakeTurn, accountQuotaSpent, quotaHeldOnlyByGuess, usageReadingIsCurrent, vendorWindows, windowSpent } from '../harness/accounts/usage-reading.js';
 import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { usageExhaustedMessage } from './usage-exhausted.js';
+import { nextQuotaReset, usageExhaustedMessage } from './usage-exhausted.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import chalk from 'chalk';
 import { accountSwitchNotice, accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
 import { recordQuotaRefusal } from './account-outcome.js';
@@ -96,6 +97,9 @@ export function initialAccountChoice(
   attempted.set(current.id, Date.now());
   const fallback = nextUsableFailoverAccount(state, current, matchesBackend, attempted);
   if (fallback) return { kind: 'switch', account: fallback };
+  // Only the vendor says an account is out. Held on a guess with nothing
+  // else to run on, the turn goes to the vendor rather than being refused here.
+  if (quotaHeldOnlyByGuess(current)) { attempted.delete(current.id); return { kind: 'continue' }; }
   return { kind: 'exhausted', error: new Error(usageExhaustedMessage()) };
 }
 
@@ -285,7 +289,17 @@ export function turnAccounts(input: {
     async start(carry?: (to: AiHarnessAccount) => Promise<void>): Promise<boolean> {
       await adoptStoredEligibility(state);
       const initial = initialAccountChoice(state, input.current(), matchesBackend, tally.attempted);
-      if (initial.kind === 'exhausted') { await writeState(state); throw initial.error; }
+      if (initial.kind === 'exhausted') {
+        // Refused before any vendor was asked: say which account and why, so
+        // the log alone shows what held it.
+        const held = input.current();
+        lifecycle('worker.turn.refused-locally', {
+          account: held.id.slice(0, 8), heldUntil: nextQuotaReset([held])?.toISOString() ?? null,
+          vendorWindowSpent: vendorWindows(held).some(windowSpent), markedAt: held.quotaExhaustedAt ?? null,
+        });
+        await writeState(state);
+        throw initial.error;
+      }
       if (initial.kind !== 'switch') return false;
       await carry?.(initial.account);
       await switchTo(initial.account, 'quota-exhausted');

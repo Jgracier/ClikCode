@@ -161,6 +161,17 @@ export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.
   return !(windows.some((window) => !window.advisory) && readAt > markedAt);
 }
 
+/** Whether the only thing holding this account is ClikCode's own guess: a
+ * refusal that named no reset (held QUOTA_MARK_DEFAULT_MS), and no spent
+ * window the vendor reported. A guess orders failover; it never stops a turn
+ * the vendor has not refused -- Claude's "resets 11am (America/Denver)" once
+ * went unread and the guess refused every message for an hour after the
+ * account was back. */
+export function quotaHeldOnlyByGuess(account: AiHarnessAccount, now: number = Date.now()): boolean {
+  if (account.quotaRetryAt || !accountQuotaSpent(account, now)) return false;
+  return !vendorWindows(account).some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now));
+}
+
 /** Can this account take a turn now? Signed in, not held by the vendor for
  * verification, and not out of quota by the rule above. Every "has usage"
  * decision -- failover, Resume in, the preferred account, the pickers, the
@@ -235,22 +246,32 @@ function zoneOffsetMs(at: number, timeZone: string): number {
 
 const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'];
 
-/** "Oct 1, 1:50pm" in "America/Denver" as an instant: the next such moment
- * from `now`, since the text gives no year. */
-function claudeResetTime(text: string, timeZone: string, now: number): string | undefined {
-  const match = /^([a-z]{3})[a-z]* (\d{1,2}), (\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i.exec(text.trim());
-  const month = match ? MONTHS.indexOf(match[1]!.toLowerCase()) : -1;
-  if (!match || month < 0) return undefined;
+/** A vendor's reset in its named zone -- "Oct 1, 1:50pm" or just "11am" in
+ * "America/Denver" -- as an instant. Claude words both its `/usage` lines and
+ * its refusals this way. With no date it is the next time that zone's clock
+ * reads it; with no year, the nearest such date. */
+export function zonedResetTime(text: string, timeZone: string, now: number = Date.now()): string | undefined {
+  const match = /^(?:([a-z]{3})[a-z]*\.? (\d{1,2}),?\s+(?:at\s+)?)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i.exec(text.trim());
+  const month = match?.[1] ? MONTHS.indexOf(match[1].toLowerCase()) : undefined;
+  if (!match || month === -1) return undefined;
   const hour = (Number(match[3]) % 12) + (match[5]!.toLowerCase() === 'pm' ? 12 : 0);
+  const minute = Number(match[4] ?? 0);
   try {
-    const instant = (year: number): number => {
-      const wall = Date.UTC(year, month, Number(match[2]), hour, Number(match[4] ?? 0));
+    const instant = (year: number, monthIndex: number, day: number): number => {
+      const wall = Date.UTC(year, monthIndex, day, hour, minute);
       const first = wall - zoneOffsetMs(wall, timeZone);
       return wall - zoneOffsetMs(first, timeZone);
     };
-    const year = new Date(now).getUTCFullYear();
-    let at = instant(year);
-    if (at < now - 86_400_000) at = instant(year + 1);
+    const today = new Date(now + zoneOffsetMs(now, timeZone));
+    const year = today.getUTCFullYear();
+    let at: number;
+    if (month === undefined) {
+      at = instant(year, today.getUTCMonth(), today.getUTCDate());
+      if (at <= now) at = instant(year, today.getUTCMonth(), today.getUTCDate() + 1);
+    } else {
+      at = instant(year, month, Number(match[2]));
+      if (at < now - 86_400_000) at = instant(year + 1, month, Number(match[2]));
+    }
     return Number.isFinite(at) ? new Date(at).toISOString() : undefined;
   } catch { return undefined; } // fail-open-ok: an unknown zone leaves the window without a reset, not wrong
 }
@@ -263,7 +284,7 @@ export function claudeUsageCommandReading(text: string, now: number = Date.now()
   const line = (label: string, name: string): UsageWindow | undefined => {
     const found = new RegExp(`${label}:\\s*(\\d+(?:\\.\\d+)?)% used(?:\\s*·\\s*resets ([^(\\n]+?)\\s*\\(([^)\\n]+)\\))?`, 'i').exec(text);
     if (!found) return undefined;
-    return usageWindow(name, Number(found[1]), found[2] && found[3] ? claudeResetTime(found[2], found[3], now) : undefined);
+    return usageWindow(name, Number(found[1]), found[2] && found[3] ? zonedResetTime(found[2], found[3], now) : undefined);
   };
   return usageReading([line('Current session', '5h'), line('Current week \\(all models\\)', 'weekly')]);
 }

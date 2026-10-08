@@ -267,6 +267,14 @@ describe('when a quota refusal says it ends', () => {
     expect(quotaRetryHint(new Error("Rate limited: API error (status 429 Too Many Requests): subscription:free-usage-exhausted: You've used all the included free usage for model grok-4.7 for now. Usage resets over a rolling 24-hour window — tokens (actual/limit): 603117/500000"), now)).toBe(at(24 * 3_600_000));
     expect(quotaRetryHint(new Error('quota exceeded, retry after 3600 seconds'), now)).toBe(at(3_600_000));
   });
+  it("reads Claude's reset in the zone it names, not this machine's", () => {
+    // 2026-10-08, refused at 13:49Z; Denver is UTC-6 in October.
+    const refusedAt = Date.parse('2026-10-08T13:49:12.798Z');
+    expect(quotaRetryHint(new Error("Internal error: You've hit your session limit · resets 11am (America/Denver)"), refusedAt)).toBe('2026-10-08T17:00:00.000Z');
+    expect(quotaRetryHint(new Error("Internal error: You've hit your weekly limit · resets Oct 10, 1pm (America/Denver)"), refusedAt)).toBe('2026-10-10T19:00:00.000Z');
+    // Past that hour today in Denver: tomorrow's.
+    expect(quotaRetryHint(new Error("You've hit your session limit · resets 7:30am (America/Denver)"), refusedAt)).toBe('2026-10-09T13:30:00.000Z');
+  });
   it("reads Codex's wall-clock time as its next occurrence, here", () => {
     // Captured from a real refusal (2026-10-05).
     const codex = (time: string) => new Error(`You’ve hit your usage limit. Upgrade to Pro (https://chatgpt.com/explore/pro), visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at ${time}.`);

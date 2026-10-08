@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { nativeAccountEnvironment, nativeProfileEnvironment } from './profile-environment';
+import { stateDirectory } from '../../session/store/paths';
 
 describe('native profile environments', () => {
   it('isolates HOME-based profiles through USERPROFILE on native Windows', () => {
@@ -9,6 +10,8 @@ describe('native profile environments', () => {
       XDG_DATA_HOME: 'C:\\profiles\\one/.local/share', XDG_STATE_HOME: 'C:\\profiles\\one/.local/state',
       USERPROFILE: 'C:\\profiles\\one', APPDATA: 'C:\\profiles\\one/AppData/Roaming',
       LOCALAPPDATA: 'C:\\profiles\\one/AppData/Local', TOKEN: 'x',
+      // A `clikcode` the harness runs still finds this install.
+      CLIKCODE_HOME: stateDirectory(),
     });
     expect(nativeProfileEnvironment(profile, 'darwin')).toMatchObject({ HOME: 'C:\\profiles\\one', XDG_CONFIG_HOME: 'C:\\profiles\\one/.config', TOKEN: 'x' });
   });

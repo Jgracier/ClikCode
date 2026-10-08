@@ -77,6 +77,17 @@ describe('stored-usage account switch', () => {
     expect([...attempted.keys()]).toEqual(['current']);
   });
 
+  it('sends to the vendor when the only hold is a guess and nothing else can run', () => {
+    // A refusal that named no reset: ClikCode guessed how long it holds.
+    const guessed = account('guessed', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString() });
+    const attempted = new Map<string, number>();
+    expect(initialAccountChoice(state([guessed]), guessed, () => true, attempted)).toEqual({ kind: 'continue' });
+    expect(attempted.size).toBe(0);
+    // The vendor's own reset still refuses here.
+    const stated = account('stated', { quotaState: 'exhausted', quotaExhaustedAt: new Date().toISOString(), quotaRetryAt: later });
+    expect(initialAccountChoice(state([stated]), stated, () => true, new Map()).kind).toBe('exhausted');
+  });
+
   it('keeps direct API failover on an account that serves the selected model', () => {
     const direct = account('direct', { authKind: 'api-key', credentialRef: 'env:ANTHROPIC_API_KEY', models: ['claude-sonnet'] });
     expect(matchesDirectTurnModel(direct, 'claude-sonnet')).toBe(true);
