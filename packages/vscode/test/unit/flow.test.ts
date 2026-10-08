@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyEvent, emptyModel, enterAgainReady, queuedRowLabel, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
-import { foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
+import { foldedGroupCount, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
 import type { FileDiff, HarnessSession, IdeEvent } from '../../src/protocol';
@@ -171,4 +171,15 @@ describe('the working line', () => {
     expect(workingStatus(live(), false, 600_000)).toMatchObject({ tone: 'thinking', toneClass: 'tone-cyan' });
   });
 
+});
+
+describe('a running turn folds only settled steps', () => {
+  it('never folds a row still running under "earlier steps"', () => {
+    const group = (kind: 'tool-start' | 'tool-done') => ({ rows: [{ kind }] });
+    const lanes = ['tool-start', 'tool-start', 'tool-start', 'tool-start', 'tool-start', 'tool-done', 'tool-done', 'tool-done'] as const;
+    expect(foldedGroupCount(lanes.map(group), 6), 'five agents running, three calls after').toBe(0);
+    const settledFirst = ['tool-done', 'tool-done', 'tool-done', 'tool-start', 'tool-done', 'tool-done', 'tool-done', 'tool-done'] as const;
+    expect(foldedGroupCount(settledFirst.map(group), 6)).toBe(2);
+    expect(foldedGroupCount(Array.from({ length: 9 }, () => group('tool-done')), 6)).toBe(3);
+  });
 });
