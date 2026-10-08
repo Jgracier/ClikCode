@@ -197,6 +197,13 @@ export async function antigravityUsageReading(environment: Environment): Promise
     const assist = await ask('loadCodeAssist', { metadata: { ideType: 'ANTIGRAVITY', pluginType: 'GEMINI' } });
     const tier = assist?.currentTier?.id;
     const project = assist?.cloudaicompanionProject;
+    // No tier: Google holds the account -- until it is verified, where the
+    // answer links it (VALIDATION_REQUIRED), or for good (RESTRICTED_AGE).
+    const holds = Array.isArray(assist?.ineligibleTiers) ? assist.ineligibleTiers as Json[] : [];
+    if (typeof tier !== 'string' && holds.length) {
+      const link = holds.find((entry) => typeof entry?.validationUrl === 'string')?.validationUrl as string | undefined;
+      return { windows: [], account: link ? { verify: link } : {} };
+    }
     if (typeof project !== 'string') return undefined;
     const reading = antigravityQuotaReading((await ask('fetchAvailableModels', { project }))?.models);
     return reading && typeof tier === 'string' ? { ...reading, plan: { name: tier } } : reading;
@@ -252,7 +259,12 @@ export async function kimiUsageReading(environment: Environment): Promise<UsageR
     const response = await fetch(`${endpoint.url}/api/v1/oauth/usage`, {
       headers: { Authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
     });
-    return response.ok ? kimiQuotaReading(await response.json()) : undefined;
+    if (!response.ok) return undefined;
+    const body = await response.json() as Json;
+    // "Stored token for … was rejected; re-login required."
+    const said = body?.data?.kind === 'error' && typeof body.data.message === 'string' ? body.data.message : '';
+    if (/re-?login required|rejected/i.test(said)) return { windows: [], account: 'signed-out' };
+    return kimiQuotaReading(body);
   } catch {
     return undefined; // fail-open-ok: no figure beats a wrong one
   } finally {

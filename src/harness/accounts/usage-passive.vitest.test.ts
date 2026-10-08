@@ -130,4 +130,16 @@ describe('usage on a passive paint', () => {
     expect((await nativeUsageReading(session, state))?.label).toBe('weekly 100% left');
     expect(grok).not.toHaveBeenCalled();
   });
+
+  it("takes the vendor's word on the account: signed out, or held for verification", async () => {
+    const session = { id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession;
+    const out = stateWith();
+    grok.mockResolvedValueOnce({ windows: [], account: 'signed-out' } as never);
+    await nativeUsageReading(session, out, { network: true });
+    expect(out.accounts[0]!.status).toBe('needs_login');
+    const held = stateWith();
+    grok.mockResolvedValueOnce({ windows: [], account: { verify: 'https://accounts.google.com/verify' } } as never);
+    await nativeUsageReading(session, held, { network: true });
+    expect(held.accounts[0]!.verification?.url).toBe('https://accounts.google.com/verify');
+  });
 });
