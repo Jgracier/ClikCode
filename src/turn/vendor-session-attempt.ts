@@ -149,8 +149,10 @@ export async function runVendorSessionAttempt(input: {
         const unsupported = error as Error & { acpUnsupportedImages?: boolean; acpUnsupportedModel?: boolean; acpUnsupportedEffort?: boolean };
         if (!(unsupported.acpUnsupportedImages || unsupported.acpUnsupportedModel || unsupported.acpUnsupportedEffort) || !harness.turn) throw error;
         // A model the plan's own list leaves out is the plan's refusal; the
-        // CLI would only be refused it too (Kiro).
-        if (unsupported.acpUnsupportedModel && harness.freePlan?.listed) throw error;
+        // CLI would only be refused it too (Kiro). It is this account's, so
+        // failover moves the turn to one whose plan has it (Grok 4.7 is not
+        // on Grok's free plan) instead of ending it.
+        if (unsupported.acpUnsupportedModel && harness.freePlan?.listed) throw Object.assign(unsupported, { errorKind: 'model_not_on_plan' });
         // An ACP session id is not guaranteed to identify the same vendor
         // thread in the one-shot CLI. Only a new chat can safely switch
         // transports for this turn -- unless the two share one store.

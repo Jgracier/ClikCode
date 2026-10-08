@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerification, verificationNotice, accountSwitchNotice, classifyAccountFailure, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerification, verificationNotice, accountSwitchNotice, classifyAccountFailure, isTransientStartFailure, quotaRetryHint } from './failover';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -108,6 +108,13 @@ describe('a rejected request is not an account failure', () => {
       new Error('Here is how "invalid model selection" errors work: the CLI conflicts with --effort when...'),
       { isResultError: false },
     )).toBe('other');
+  });
+});
+
+describe("a refusal that is the account's plan moves the turn on", () => {
+  it('reads a model the plan does not list, and Copilot refusing a feature, as ineligible', () => {
+    expect(classifyAccountFailure(Object.assign(new Error('grok ACP does not list model grok-4.7'), { errorKind: 'model_not_on_plan' }))).toBe('account-ineligible');
+    expect(classifyAccountFailure(new Error('403 "unauthorized: not authorized to use this Copilot feature\\n"'), { isResultError: true })).toBe('account-ineligible');
   });
 });
 
@@ -320,5 +327,14 @@ describe('a limit named is not a limit reached', () => {
 
   it('reads a 429 written into the vendor text as it reads a 401 or 402 there', () => {
     expect(classifyAccountFailure(new Error('API error (status 429): slow down'), { isResultError: true })).toBe('temporarily-throttled');
+  });
+});
+
+describe('a start that failed for a moment', () => {
+  it('is the busy binary or the shared sign-in being refreshed, nothing else', () => {
+    expect(isTransientStartFailure(Object.assign(new Error('spawn ETXTBSY'), { code: 'ETXTBSY' }))).toBe(true);
+    expect(isTransientStartFailure(new Error('Internal error: Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.'))).toBe(true);
+    expect(isTransientStartFailure(new Error('Selected model is at capacity. Please try a different model.'))).toBe(false);
+    expect(isTransientStartFailure(new Error('spawn ENOENT'))).toBe(false);
   });
 });

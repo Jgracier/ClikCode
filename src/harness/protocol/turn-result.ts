@@ -122,6 +122,12 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
   // error:"API error...", response:""}) surfaced only as a generic
   // "returned no assistant text", discarding the real reason entirely.
   let errorMessage: string | undefined;
+  /** Which top-level record is being read, and the last that declared the
+   * turn failed or carried assistant text: an error the model then answered
+   * past is a step that failed, not the turn. */
+  let current = 0;
+  let errorRecord = -1;
+  let answerRecord = -1;
   const visit = (value: unknown, parentType?: string, othersText = false): void => {
     if (Array.isArray(value)) return value.forEach((item) => visit(item, parentType, othersText));
     if (!value || typeof value !== 'object') return;
@@ -143,6 +149,7 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
     const terminalEnvelope = !toolScoped && (!type || /(?:^|[._-])(?:assistant|agent|message|result|response|turn|session|final)(?:$|[._-])/i.test(type));
     if (terminalEnvelope && (record.is_error === true || record.error === true || (typeof record.status === 'string' && /^(error|failed)$/i.test(record.status)))) {
       isError = true;
+      errorRecord = current;
       if (typeof record.subtype === 'string' && /^error/i.test(record.subtype)) errorKind = record.subtype;
       // A failed Claude-shaped result says why in its own `result`.
       const declared = [...fields].map((key) => record[key]).find((child): child is string => typeof child === 'string' && Boolean(child.trim()));
@@ -176,11 +183,21 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
         // JSON event streams often contain tool input and user echoes. Only
         // accept generic text/content from assistant/result-shaped events.
         if (notTheAssistant) continue;
-        if (!['text', 'content'].includes(key) || !type || /assistant|agent|message|result|complete|text|say/i.test(type)) messages.push(child.trim());
+        if (!['text', 'content'].includes(key) || !type || /assistant|agent|message|result|complete|text|say/i.test(type)) {
+          messages.push(child.trim());
+          answerRecord = current;
+        }
       } else visit(child, type, notTheAssistant);
     }
   };
-  values.forEach((value) => visit(value));
+  values.forEach((value, index) => { current = index; visit(value); });
+  // Antigravity marks a failed step {status:"ERROR"} mid-stream and then
+  // answers in full, exiting 0: the answer was recorded as the turn's error.
+  // Failure is what the stream ends on, not anything it passed through.
+  if (isError && answerRecord > errorRecord && !exitedBadly) {
+    isError = false;
+    errorMessage = undefined;
+  }
   const gooseStreamText = harness.parser === 'goose'
     ? values.flatMap((record) => {
       const message = asRecord(record.message);
@@ -263,7 +280,9 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
  * account spent. */
 export function nativeTurnFailure(harness: Pick<AiLocalHarnessDefinition, 'displayName'>, result: NativeTurnResult): { failure: Error; isResultError: boolean } {
   return {
-    failure: Object.assign(new Error(`${harness.displayName}: ${result.errorMessage ?? result.text}`), { statusCode: result.statusCode }),
+    // Never the answer itself as the reason: a turn the vendor failed without
+    // saying why showed the model's whole reply as an error.
+    failure: Object.assign(new Error(`${harness.displayName}: ${result.errorMessage ?? 'reported the turn failed without saying why'}`), { statusCode: result.statusCode }),
     isResultError: result.errorMessage !== undefined,
   };
 }

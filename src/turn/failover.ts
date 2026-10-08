@@ -80,7 +80,7 @@ const THROTTLE_TEXT = /(?:rate[ _-]?limit|\bRATE_LIMITED\b|too many requests|tem
  *  the user was told "account failed" -- true but useless, since it names
  *  neither the problem nor the fix. Signing in again cannot help, which is
  *  why this is distinct from authentication-required. */
-const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|(?:no|not have a) valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available)/i;
+const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|verify your account|account (?:is )?not verified|(?:no|not have a) valid license|requires? a (?:paid|pro|business|enterprise) (?:plan|subscription)|subscription does not have access|client is no longer supported for .*individual|no active .{0,40}subscription|not granted you access|no profiles available|not authorized to use this copilot feature)/i;
 /** A vendor refusing the ARGV, not the credentials. Confirmed verbatim against
  * agy 1.2.7 on a real authenticated Antigravity account, which is where this
  * came from: ClikCode sent `--effort` alongside `--model`, and Antigravity
@@ -97,6 +97,7 @@ const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|ver
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
+  if (errorKind === 'model_not_on_plan') return 'account-ineligible';
   if (/auth|unauthori[sz]ed|invalid_?api_?key|invalid_?(?:token|credentials|grant)|token_?expired|login/i.test(errorKind)) return 'authentication-required';
   if (/quota|billing|credit|payment|usage_?limit|limit_?(?:reached|exceeded)$/i.test(errorKind) && !/rate/i.test(errorKind)) return 'quota-exhausted';
   if (/rate_?limit|too_?many_?requests|throttl/i.test(errorKind)) return 'temporarily-throttled';
@@ -217,6 +218,22 @@ function clockTimeHint(text: string, now: number): string | undefined {
   } else if (at.getTime() <= now) at.setDate(at.getDate() + 1);
   return at.getTime() > now ? at.toISOString() : undefined;
 }
+
+/** A start that failed for a moment and says so: the vendor's binary was
+ * being rewritten by its own updater as ClikCode launched it, or Claude Code
+ * found another of its processes refreshing the shared sign-in ("usually
+ * transient; retry in a minute"). Nothing was sent, so one retry in place is
+ * the request, not a guess; another account would meet the same binary. */
+const TRANSIENT_START_TEXT = /\bspawn (?:ETXTBSY|EAGAIN|EBUSY)\b|another [\w ]{0,40}process is refreshing/i;
+export function isTransientStartFailure(error: unknown): boolean {
+  const carried = (error ?? {}) as { stderrTail?: unknown; code?: unknown };
+  if (carried.code === 'ETXTBSY' || carried.code === 'EAGAIN' || carried.code === 'EBUSY') return true;
+  const text = [error instanceof Error ? error.message : String(error ?? ''), typeof carried.stderrTail === 'string' ? carried.stderrTail : ''].join('\n');
+  return TRANSIENT_START_TEXT.test(text);
+}
+
+/** How long a transient start is given before the one retry. */
+export const TRANSIENT_START_RETRY_MS = 2_000;
 
 export function verificationNotice(verification: { url?: string }): string {
   if (!verification.url) return 'Account needs verification with its provider';
