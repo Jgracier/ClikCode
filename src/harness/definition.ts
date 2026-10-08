@@ -51,6 +51,10 @@ export interface AiHarnessAccount {
    * terminals -- which is what rate-limited the account out of reading its
    * own usage. */
   usage?: { at: string; label?: string; failed?: boolean };
+  /** When any ClikCode process last asked the harness for this account's
+   * usage, answered or not (USAGE_RECHECK_MS). On the record, so every open
+   * chat and window share one clock instead of each asking on its own. */
+  usageCheckedAt?: string;
   /** The vendor's own name for this account's plan ("Free", "KIRO FREE",
    * "free_limited_copilot", "plus"), as its usage reading last said, and the
    * models that plan runs when the vendor names them (Cursor: Auto only).

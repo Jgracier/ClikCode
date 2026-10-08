@@ -6,14 +6,10 @@ import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { NATIVE_USAGE_FAILURE_TTL_MS, NATIVE_USAGE_PROBES } from './usage-probes.js';
-import { AccountUsageReading, UsageCacheEntry, UsageReading, accountQuotaSpent, nativeUsageCache, quotaHeldOnlyByGuess, settleQuotaMark, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
+import { NATIVE_USAGE_PROBES } from './usage-probes.js';
+import { AccountUsageReading, USAGE_RECHECK_MS, UsageCacheEntry, UsageReading, nativeUsageCache, settleQuotaMark, usageAskedAt, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
 import { learnedReading, learnsUsage, preferLearnedReading } from './learned-usage.js';
-
-/** How long a windowless balance reading is reused before its harness is
- * asked again (a turn on the account asks sooner). */
-export const BALANCE_READING_TTL_MS = 5 * 60_000;
 
 /** Probes in flight, by usage cache key. Opening a conversation asks for its
  * usage from more than one place at once (the status line and the account
@@ -59,50 +55,27 @@ export async function nativeUsageReading(
   // Whichever is newer: another terminal may have published since this
   // process last cached.
   const entry = cached && sharedEntry ? (sharedEntry.at > cached.at ? sharedEntry : cached) : cached ?? sharedEntry;
-  // Usage is not cached. These numbers move while nobody is looking -- a turn
-  // runs on the same account somewhere else, a window rolls over -- so there
-  // is no time-based memo here deciding that a figure is still good enough.
+  // What the harness last said is reused only while it is both still true
+  // and recent: never past a reset it named, never past a turn that started
+  // on the account since (in any terminal), and never longer than
+  // USAGE_RECHECK_MS after anyone last asked. One clock for figures,
+  // balances and failed probes alike, kept on the account record, so a
+  // change made anywhere -- a reset, another device's turn -- shows within
+  // a minute and the asking does not multiply by open chats. An explicit
+  // ask (`/usage`, the account picker) always goes to the harness.
   //
-  // What IS reused is the harness's own last report, and only for exactly as
-  // long as that report says it is true: a reading carries the resetsAt of
-  // every window it describes, and is dropped the moment the soonest one
-  // passes. That is the value's own stated validity, not an interval this
-  // code invented. A reading with no window cannot make that claim, so it is
-  // never reused at all -- which is what let "usage rate limited", a label
-  // with nothing in it to expire, sit in the status line for the life of the
-  // process.
-  //
-  // An explicit ask (`/usage`, the account picker) always goes to the
-  // harness, because the point of asking is to find out now.
-  // A failed probe is held off briefly -- see NATIVE_USAGE_FAILURE_TTL_MS.
-  // That is not a cached figure; there is no figure.
-  if (entry?.failed && Number.isFinite(entry.at) && Date.now() - entry.at < NATIVE_USAGE_FAILURE_TTL_MS && !options.network) {
-    // The probe errored. A vendor figure the error carried forward answers.
-    return shownReading(entry.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
-  }
-  // A turn STARTED on the account since the reading makes it old news.
-  // Started, not ended: a reading a turn published about itself (Codex's
-  // rate-limit notification, Claude Code's rate_limit_event) is taken after
-  // its start and stays current. This used to exempt harnesses that report on
-  // their stream, but Claude Code over ACP passes its rate limits on only
-  // when a turn has already reported token usage -- a one-call turn never
-  // does -- so its figure froze until the window reset. Its probe is free now,
-  // so it is simply asked again.
+  // A reading a turn published about itself (Codex's rate-limit
+  // notification, Claude Code's rate_limit_event) is taken after that turn
+  // started, so the turn does not make it old.
   const turnSinceReading = entry !== undefined && account !== undefined
     && state.invocations.some((invocation) => invocation.accountId === account.id
       && Date.parse(invocation.at) - invocation.latencyMs > entry.at);
-  // A credit balance (Auggie, Amp, Kilo) has no window to say how long it
-  // holds, and its source is a server no file shows -- so a short TTL, and
-  // only that. Without it the status line's 15s tick re-ran the vendor's
-  // balance command in every open terminal.
-  const heldBalance = entry !== undefined && !(entry.windows?.length) && entry.label !== undefined
-    && Number.isFinite(entry.at) && Date.now() - entry.at < BALANCE_READING_TTL_MS;
-  const reusable = entry && !entry.failed && ((entry.windows?.length ?? 0) > 0 ? usageReadingIsCurrent(entry) : heldBalance) && !turnSinceReading
-    ? entry
-    : undefined;
+  const askedAt = Math.max(entry?.at ?? Number.NEGATIVE_INFINITY, account ? usageAskedAt(account) : Number.NEGATIVE_INFINITY);
+  const reusable = entry && Date.now() - askedAt < USAGE_RECHECK_MS && !turnSinceReading
+    && (entry.failed || usageReadingIsCurrent(entry)) ? entry : undefined;
   if (reusable && !options.network) {
     nativeUsageCache.set(cacheKey, reusable);
-    return shownReading({ windows: reusable.windows ?? [], ...(reusable.label === undefined ? {} : { label: reusable.label }) });
+    return shownReading(reusable.label === undefined ? undefined : { windows: reusable.windows ?? [], label: reusable.label });
   }
   // A probe spawns the vendor CLI, and a CLI run while signed out can start a
   // login or onboarding (Kiro's session list did). Only an account that is
@@ -110,6 +83,7 @@ export async function nativeUsageReading(
   if (!account || account.status !== 'ready') {
     return shownReading(entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
   }
+  account.usageCheckedAt = new Date().toISOString();
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const reading: UsageReading | undefined = probe ? await probeOnce(cacheKey, () => probe(environment)) : undefined;
   // Carry the last known figure through a failure rather than blanking it --
@@ -180,8 +154,8 @@ export async function accountUsageReading(
 
 /** What the harness last reported for this account, if it is still true.
  * The picker reads the in-process cache and the account record shared by
- * other ClikCode processes. Windows expire at their reset; balances have a
- * short TTL because the vendor gives no reset time. */
+ * other ClikCode processes. Windows expire at their reset; a balance names
+ * no reset, so it stands only as long as any reading does (USAGE_RECHECK_MS). */
 export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
   if (learnsUsage(account)) return learnedReading(state, account)?.label;
   if (account.authKind !== 'vendor-cli') return undefined;
@@ -195,7 +169,7 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
     : reported;
   if (!latest || latest.failed || latest.label === undefined) return undefined;
   if (latest.windows?.length) return usageReadingIsCurrent(latest) ? latest.label : undefined;
-  return Date.now() - latest.at < BALANCE_READING_TTL_MS ? latest.label : undefined;
+  return Date.now() - latest.at < USAGE_RECHECK_MS ? latest.label : undefined;
 }
 
 function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
@@ -204,41 +178,25 @@ function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
   return Boolean(command && NATIVE_USAGE_PROBES[command]);
 }
 
-/** Accounts that were out of quota and may not be any more, on a harness
- * that can be asked: a spent window whose reset has passed -- or that never
- * said when it resets, which nothing else would ever re-read -- or a refusal
- * that has stopped holding while the record still says exhausted. Only the
- * chat's own account used to be re-read, so the rest kept "out of usage"
- * until someone opened the picker. */
+/** Accounts held out of turns that may have room again, on a harness that
+ * can be asked: a refusal on record (dated by the vendor or not) or a spent
+ * window, not asked about by anyone for USAGE_RECHECK_MS. A stated reset is
+ * not waited for -- vendors round them ("resets 11am" came back at 10:50) --
+ * and a reading that shows room clears the hold the moment it lands. */
 export function accountsDueForUsageRecheck(
   state: HarnessState, now: number = Date.now(), canBeAsked: (account: AiHarnessAccount) => boolean = accountUsageCanBeAsked,
 ): AiHarnessAccount[] {
-  return state.accounts.filter((account) => {
-    if (account.authKind !== 'vendor-cli' || account.status !== 'ready' || !canBeAsked(account)) return false;
-    const windowDue = vendorWindows(account)
-      .some((window) => windowSpent(window) && !(window.resetsAt !== undefined && Date.parse(window.resetsAt) > now));
-    return windowDue || quotaHeldOnlyByGuess(account, now) || (account.quotaState === 'exhausted' && !accountQuotaSpent(account, now));
-  });
+  return state.accounts.filter((account) => account.authKind === 'vendor-cli' && account.status === 'ready' && canBeAsked(account)
+    && (account.quotaState === 'exhausted' || vendorWindows(account).some(windowSpent))
+    && now - usageAskedAt(account) >= USAGE_RECHECK_MS);
 }
 
-/** When each account was last re-checked by this process: a probe that keeps
- * failing is asked at most this often, whatever the poll rate. Fifteen
- * minutes, not one: for some vendors (Claude) reading usage IS a model turn,
- * and a re-check that keeps failing once a minute would spend the very quota
- * it is waiting for. A reset that has passed is still noticed within a
- * quarter hour, and a turn on the account clears the mark at once anyway. */
-const recheckedAt = new Map<string, number>();
-const RECHECK_MIN_INTERVAL_MS = 15 * 60_000;
-
-/** Re-read every account that is due (see above). Each probe publishes its
- * reading to the shared record and clears a refusal it overtakes, so every
- * terminal's /accounts, status line and failover see the quota the moment it
- * is back. */
+/** Re-read every account that is due (see above). Each probe stamps the
+ * shared clock, publishes its reading and clears a refusal it overtakes, so
+ * every terminal's /accounts, status line and failover see the quota the
+ * moment it is back. */
 export async function recheckRecoveredAccounts(state: HarnessState, now: number = Date.now()): Promise<void> {
-  const due = accountsDueForUsageRecheck(state, now)
-    .filter((account) => now - (recheckedAt.get(account.id) ?? 0) >= RECHECK_MIN_INTERVAL_MS);
-  for (const account of due) {
-    recheckedAt.set(account.id, now);
+  for (const account of accountsDueForUsageRecheck(state, now)) {
     await accountUsageReading(account, state, { network: true }).catch(() => undefined);
   }
 }
