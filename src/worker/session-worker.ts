@@ -34,6 +34,7 @@ import { closePersistentTransport, hasPersistentTransport, persistentWorkRunning
 import { discardInterruptedTurn, markFailedTurn, preserveInterruptedTurn } from '../turn/turn-journal.js';
 import { BroadcastObserver, sendEvent } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
+import { moveToOwnScope } from './own-scope.js';
 import { FrameDecoder, type ClientCommand } from './protocol.js';
 import { disposeSessionState, formatShellNotifications, runningShellCount, sessionState, takeShellNotifications, type ShellNotification } from '../agent/session-state.js';
 import { stopBackgroundShell } from '../agent/tools/bash.js';
@@ -105,6 +106,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // here exits, and the spawning window finds the first by its record.
   const hold = await ownConversation(sessionId);
   if (!hold) return;
+  // Before any vendor process exists, so all of the agent's work is born
+  // outside the window that spawned this worker (own-scope.ts).
+  await moveToOwnScope(sessionId);
   const socketPath = socketPathFor(sessionId);
   // A worker from a build before the hold existed takes none, and still
   // answers: it keeps the conversation. Anything else at the path is left
