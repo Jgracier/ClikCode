@@ -182,6 +182,14 @@ export interface ChatModel {
 /** What a conversation open in another chat (a tab, or the side bar) asks
  * of the user there: an approval waiting, or a turn that finished while
  * nobody looked. The conversations list marks it, as that tab's title does. */
+
+/** A live turn without the phase a report set before the vendor answered. */
+function withoutPhase<T extends { phase?: string }>(live: T): T {
+  if (live.phase === undefined) return live;
+  const { phase: _phase, ...rest } = live;
+  return rest as T;
+}
+
 export function conversationAttention(id: string, open: ReadonlyArray<{ sessionId?: string; approvals: number; unread: boolean }>): 'waiting' | 'unread' | undefined {
   const showing = open.filter((chat) => chat.sessionId === id);
   if (showing.some((chat) => chat.approvals > 0)) return 'waiting';
@@ -474,7 +482,8 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const live = model.live ?? freshLive('thinking');
       const text = event.mode === 'replace' ? event.text : live.text + event.text;
       // The thought led to this text; once the answer arrives it is settled.
-      const after = event.text ? settled(live) : live;
+      // The vendor is answering: a phase reported before it ("switching to …") is over.
+      const after = event.text ? withoutPhase(settled(live)) : live;
       const placed = event.mode === 'replace' ? {
         activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
         reasoning: rebaseOffsets(after.reasoning, live.text, text),
@@ -483,7 +492,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
-      return { ...model, live: { ...applyActivity(live, event.event), activeAt: Date.now() } };
+      return { ...model, live: { ...applyActivity(withoutPhase(live), event.event), activeAt: Date.now() } };
     }
     case 'phase':
       return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
