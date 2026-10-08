@@ -106,26 +106,24 @@ export function gatewayModelClient(input: {
   });
 }
 
-/** How long a turn waits on the Gateway's model list for a window. The list
- * is cached for a minute and usually already fetched by the model picker;
- * a slow answer must not hold up the turn, and without it the Gateway
- * client still says it is hosted (context-profile.ts). */
-const MODEL_LIST_WAIT_MS = 2_000;
-
 /** What the Gateway lists for the model this session will run (its pick, or
  * the Gateway's automatic one): its window, the most it writes in one answer,
  * and whether it takes images. */
 async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ contextWindow?: number; maxOutput?: number; vision?: boolean }> {
-  let timer: NodeJS.Timeout | undefined;
   try {
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
-    const { gatewayModels } = await import('../../gateway/models.js');
-    const list = await Promise.race([
-      gatewayModels({ config }),
-      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), MODEL_LIST_WAIT_MS); timer.unref(); }),
-    ]);
+    const { savedGatewayModels, gatewayModels } = await import('../../gateway/models.js');
+    // Model facts tune the local loop; the Gateway resolves the actual model.
+    // A turn must not wait for a catalogue request before its first model step.
+    let list = await savedGatewayModels({ config });
     const id = session.model ?? list?.automatic;
-    const model = list?.models.find((entry) => entry.id === id);
+    let model = list?.models.find((entry) => entry.id === id);
+    // An image requires a vision-capable model. Only this case needs a fresh
+    // catalogue when the current account has no facts for the selected model.
+    if (!model && session.attachments?.some((file) => /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|avif)$/i.test(file))) {
+      list = await gatewayModels({ config });
+      model = list.models.find((entry) => entry.id === (session.model ?? list?.automatic));
+    }
     return {
       ...(model?.contextWindow ? { contextWindow: model.contextWindow } : {}),
       ...(model?.maxOutput ? { maxOutput: model.maxOutput } : {}),
@@ -135,7 +133,7 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
     // fail-open-ok: the window only tunes the context profile, and without a
     // known vision model images stay described in text; the turn runs either way
     return {};
-  } finally { clearTimeout(timer); }
+  }
 }
 
 /** The model client for a session that runs ClikCode's own agent. Async

@@ -6,6 +6,7 @@
  * a different one. No choice (`null`) sends `auto`: the Gateway picks. */
 
 import Conf from 'conf';
+import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { stateDirectory } from '../session/store/paths.js';
@@ -76,7 +77,13 @@ export function gatewayPriceLabel(price: GatewayModelPrice): string {
 }
 
 const TTL_MS = 60_000;
-let cached: { baseUrl: string; at: number; list: GatewayModelList } | undefined;
+let cached: { baseUrl: string; auth: string; at: number; list: GatewayModelList } | undefined;
+
+/** The model list includes account-specific access and prices. Keep a digest,
+ * never the credential itself, beside its cache entry. */
+function authDigest(apiKey: string): string {
+  return createHash('sha256').update(apiKey).digest('hex');
+}
 
 /** The last list this machine received, kept on disk so /model opens at once
  * and refreshes in place instead of waiting on the Gateway. */
@@ -86,20 +93,20 @@ function diskCachePath(): string {
 
 /** The last list received from `baseUrl`, however old, or undefined. */
 export async function savedGatewayModels(options: { config?: Conf } = {}): Promise<GatewayModelList | undefined> {
-  const { baseUrl } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
+  const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
   try {
-    const saved = JSON.parse(await readFile(diskCachePath(), 'utf8')) as { baseUrl?: string; list?: GatewayModelList };
-    return saved.baseUrl === baseUrl && Array.isArray(saved.list?.models) ? saved.list : undefined;
+    const saved = JSON.parse(await readFile(diskCachePath(), 'utf8')) as { baseUrl?: string; auth?: string; list?: GatewayModelList };
+    return saved.baseUrl === baseUrl && saved.auth === authDigest(apiKey) && Array.isArray(saved.list?.models) ? saved.list : undefined;
   } catch {
     // fail-open-ok: no saved list (first use, or unreadable) means the picker waits for the Gateway, as before.
     return undefined;
   }
 }
 
-async function saveGatewayModels(baseUrl: string, list: GatewayModelList): Promise<void> {
+async function saveGatewayModels(baseUrl: string, auth: string, list: GatewayModelList): Promise<void> {
   const file = diskCachePath();
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ baseUrl, at: Date.now(), list }), { mode: 0o600 });
+  await writeFile(file, JSON.stringify({ baseUrl, auth, at: Date.now(), list }), { mode: 0o600 });
 }
 
 /** Words that mean "let the Gateway choose" rather than a model id. */
@@ -111,7 +118,8 @@ export async function gatewayModels(
   options: { config?: Conf; fetchImpl?: typeof fetch; fresh?: boolean } = {},
 ): Promise<GatewayModelList> {
   const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
-  if (!options.fresh && cached && cached.baseUrl === baseUrl && Date.now() - cached.at < TTL_MS) return cached.list;
+  const auth = authDigest(apiKey);
+  if (!options.fresh && cached && cached.baseUrl === baseUrl && cached.auth === auth && Date.now() - cached.at < TTL_MS) return cached.list;
   const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/v1/models`, {
     headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
   });
@@ -124,9 +132,9 @@ export async function gatewayModels(
     throw Object.assign(new Error(`ClikDeploy Gateway models: ${reason}`), { statusCode: response.status });
   }
   const list = fromOpenAIModelList(body.data);
-  cached = { baseUrl, at: Date.now(), list };
+  cached = { baseUrl, auth, at: Date.now(), list };
   // fail-open-ok: a list that cannot be saved still answers this request; only the next instant open is lost.
-  await saveGatewayModels(baseUrl, list).catch(() => undefined);
+  await saveGatewayModels(baseUrl, auth, list).catch(() => undefined);
   return list;
 }
 
