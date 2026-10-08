@@ -492,9 +492,6 @@ export function Composer(props: {
               `${model.agentId ? `Agent: ${agentName(model.agentId) ?? 'selected'} · ` : ''}Model and effort: ${modelWithEffort(modelName, effort?.current)}`, 'model-button')
             : effort ? footerButton('effort', <><Icon name="lightbulb" /><span class="chip-text">{effort.current && effort.current !== 'default' ? effortLabel(effort.current) : 'Effort'}</span></>, `Reasoning effort: ${effortLabel(effort.current)}`, 'effort-button') : null}
           <span class="spacer" />
-          {model.accountUsage ? (
-            <span class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="This account's usage">{model.accountUsage}</span>
-          ) : null}
           <button type="button" class="icon-button" aria-label="Mention a file" title="Mention a file (@)" disabled={!connected}
             onClick={() => { const spacer = text && !/\s$/.test(text) ? ' ' : ''; update(`${text}${spacer}@`); }}><Icon name="mention" /></button>
           <button type="button" class="icon-button" aria-label="Commands" title="Commands (/)" disabled={!connected} onClick={() => update('/')}><span class="slash-glyph" aria-hidden="true">/</span></button>
@@ -522,13 +519,6 @@ export function Composer(props: {
           </button>
         ) : null}
         {/* Permissions belong to how this chat runs, beside whose account it runs on. */}
-        {model.chatSettings?.swarm ? (
-          <button type="button" id="swarm-button" class={`status-account${model.chatSettings.swarm.enabled ? ' open' : ''}`} aria-pressed={model.chatSettings.swarm.enabled}
-            title={model.chatSettings.swarm.enabled ? 'Swarm is on. Turn it off and this chat does its own work.' : 'Swarm is off. Turn it on and this chat can hand work to other accounts that have usage left.'}
-            disabled={!connected} onClick={() => choose({ kind: 'swarm', enabled: !model.chatSettings?.swarm?.enabled }).catch((failure: Error) => props.onError(failure.message))}>
-            <Icon name="hubot" /><span class="status-label">{model.chatSettings.swarm.enabled ? 'Turn swarm off' : 'Turn swarm on'}</span>
-          </button>
-        ) : null}
         {model.chatSettings?.permissions ? (
           <button type="button" id="mode-button" class={`status-account${menu === 'mode' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'mode'}
             title={`Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`} disabled={!connected} onClick={() => setMenu(menu === 'mode' ? undefined : 'mode')}>
@@ -538,8 +528,11 @@ export function Composer(props: {
         ) : null}
         <span class="spacer" />
         {busy && !installing && !model.signIn ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
-        {/* One figure under the box: the context ring, the turn's tokens on
-            hover; the tokens themselves only where no ring is reported. */}
+        {/* Usage always visible beside context: remaining allowance, or reset time when spent. */}
+        {model.accountUsage ? (
+          <span class={`status-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="This account's usage">{model.accountUsage}</span>
+        ) : null}
+        {/* Context ring: fills as context window is used; figures on hover, breakdown on click. */}
         {model.context ? <ContextMeter context={model.context} tokens={tokens} />
           : tokens ? <span class="muted turn-tokens" title="Tokens used by the last turn">{tokens}</span> : null}
       </div>
