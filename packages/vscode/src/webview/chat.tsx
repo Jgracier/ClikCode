@@ -27,7 +27,7 @@ import { post } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
-import { foldedSummary, workingStatus } from './flow';
+import { foldedGroupCount, foldedSummary, workingStatus } from './flow';
 import { splitEditorContext } from '../editor-context';
 
 /** Finished messages, rendered once each and kept across a redraw of the
@@ -536,7 +536,7 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
 function ActivityRun({ activities, workspace }: { activities: Activity[]; workspace?: string }): JSX.Element {
   const [showAll, setShowAll] = useState(false);
   const groups = exploreRuns(activities);
-  const hiddenGroups = showAll ? 0 : Math.max(0, groups.length - VISIBLE_ACTIVITIES);
+  const hiddenGroups = showAll ? 0 : foldedGroupCount(groups, VISIBLE_ACTIVITIES);
   const hidden = groups.slice(0, hiddenGroups).reduce((sum, group) => sum + group.rows.length, 0);
   return (
     <div class="activities">

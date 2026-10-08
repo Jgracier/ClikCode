@@ -36,6 +36,17 @@ export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: 
   return { ...status, label: `${titleCase(status.label.replace(/(…|\.\.\.)$/, '').trim() || 'working')}…`, toneClass };
 }
 
+/** How many of a running turn's earliest groups fold under "N earlier
+ * steps": all but the newest `visible`, and never one still running. Five
+ * agents started in parallel and two calls after them hid the first agents
+ * -- and their spinners -- while they ran, where the terminal keeps every
+ * running row in view. */
+export function foldedGroupCount(groups: ReadonlyArray<{ rows: ReadonlyArray<Pick<Activity, 'kind'>> }>, visible: number): number {
+  const firstRunning = groups.findIndex((group) => group.rows.some((row) => row.kind === 'tool-start'));
+  const excess = Math.max(0, groups.length - visible);
+  return firstRunning < 0 ? excess : Math.min(excess, firstRunning);
+}
+
 /** What a run of calls did, in the terminal's folded words per kind; one
  * call alone is its own label, in its tense. */
 export function runSummary(activities: readonly Activity[]): string {
