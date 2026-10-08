@@ -1,5 +1,5 @@
 /** Select a usable account for a turn or a failover. */
-import { accountCanTakeTurn, accountQuotaSpent, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
+import { USAGE_RECHECK_MS, accountCanTakeTurn, accountQuotaSpent, usageAskedAt, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -82,6 +82,29 @@ export function nextUsableFailoverAccount(
     .filter((candidate) => candidate.id !== current.id && (!attempted.has(candidate.id) || resetPassedSince(candidate, attempted.get(candidate.id)!, now))
       && candidate.provider === current.provider && matchesTransport(candidate) && accountCanTakeTurn(candidate, now))
     .sort((left, right) => room(right) - room(left))[0];
+}
+
+/** After a refusal, with no account that shows room: one whose "spent" no
+ * one has confirmed within USAGE_RECHECK_MS -- by a reading or a refusal --
+ * gets a real attempt rather than being written off on an old record. The
+ * vendor's answer decides; a refusal re-stamps the account, so repeated
+ * sends try it at most once per interval. Signed out or held for
+ * verification is not a usage question and is not tried. */
+export function staleHeldFailoverAccount(
+  state: HarnessState,
+  current: AiHarnessAccount,
+  matchesTransport: (candidate: AiHarnessAccount) => boolean,
+  attempted: ReadonlyMap<string, number>,
+  now: number = Date.now(),
+): AiHarnessAccount | undefined {
+  const confirmedAt = (account: AiHarnessAccount): number =>
+    Math.max(usageAskedAt(account), Date.parse(account.quotaExhaustedAt ?? '') || Number.NEGATIVE_INFINITY);
+  return state.accounts
+    .filter((candidate) => candidate.id !== current.id && !attempted.has(candidate.id)
+      && candidate.provider === current.provider && matchesTransport(candidate)
+      && candidate.status === 'ready' && !candidate.verification && now - confirmedAt(candidate) >= USAGE_RECHECK_MS)
+    // The longest unconfirmed first: the likeliest to have come back.
+    .sort((left, right) => confirmedAt(left) - confirmedAt(right))[0];
 }
 
 /** The account a turn starts on. Stored usage only orders the accounts:
@@ -218,7 +241,8 @@ export async function accountAfterFailure(input: {
   // not holding. Re-read them after the refusal is saved, so an account that
   // has usage now is the one the turn moves to.
   await adoptStoredEligibility(state, account.id);
-  const fallback = nextUsableFailoverAccount(state, account, input.matchesBackend, tally.attempted);
+  const fallback = nextUsableFailoverAccount(state, account, input.matchesBackend, tally.attempted)
+    ?? staleHeldFailoverAccount(state, account, input.matchesBackend, tally.attempted);
   if (fallback) return fallback;
   throw terminalFailoverError({
     state, current: account, matchesBackend: input.matchesBackend,
