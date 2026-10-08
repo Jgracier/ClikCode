@@ -28,7 +28,7 @@ import { watchConversationList } from '../../session/list-watch.js';
 import { conversationRows, type ConversationRow } from '../../session/conversation-rows.js';
 import { SECTION_TITLES } from '../../session/conversation-state.js';
 import { relativeTime } from '../../harness/protocol/format.js';
-import { conversationLabel, subagentOptions } from './conversation-activity.js';
+import { conversationLabel } from './conversation-activity.js';
 import { conversationOption, isBlankConversation } from '../../session/options.js';
 import { conversationIdFor } from '../../session/conversation-rows.js';
 import { aiSessionCommand } from '../slash/handlers.js';
@@ -307,9 +307,11 @@ export async function interactiveSessionPicker(
     // ClikCode's own conversations, in conversationRows' sections and order:
     // Working, Recent, Older; one that needs the user first in each.
     const options: PickerOption<string>[] = rows.map((row) => {
+      // Right on a row goes into the conversation, running agents or not:
+      // they are shown there, live. An inner "Agents" list of static rows,
+      // each only opening that same conversation, stood between the user and
+      // the chat they came back to.
       const option = conversationOption(row, undefined, now);
-      const agents = row.pending?.subagents;
-      if (agents?.length) option.inner = { title: 'Agents', options: subagentOptions(row.pending!, option.value, now) };
       option.group = SECTION_TITLES[row.section];
       return option;
     });
