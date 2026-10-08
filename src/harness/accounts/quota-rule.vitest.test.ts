@@ -102,22 +102,19 @@ describe('which accounts are re-read', () => {
   // Claude has a usage probe; the others here have none.
   const askable = (item: AiHarnessAccount): boolean => item.provider === 'anthropic';
 
-  it('re-reads a spent account once its reading has passed a reset, and not before', () => {
-    const recovered = account({ id: 'r', quotaState: 'exhausted', quotaExhaustedAt: minutes(-780), usage: reading(minutes(-752), [{ name: '5h', usedPct: 100, resetsAt: minutes(-624) }]) });
-    const waiting = account({ id: 'w', quotaState: 'exhausted', quotaExhaustedAt: minutes(-10), usage: reading(minutes(-5), [{ name: '5h', usedPct: 100, resetsAt: minutes(200) }]) });
+  it('re-reads any held account nobody has asked about for a minute, dated reset or not', () => {
+    // Vendors round their resets ("resets 11am" came back at 10:50), so a
+    // dated hold is re-read too rather than waited out.
+    const dated = account({ id: 'd', quotaState: 'exhausted', quotaExhaustedAt: minutes(-10), quotaRetryAt: minutes(60), usage: reading(minutes(-5), [{ name: '5h', usedPct: 100, resetsAt: minutes(200) }]) });
+    const guessed = account({ id: 'g', quotaState: 'exhausted', quotaExhaustedAt: minutes(-30) });
+    const justAsked = account({ id: 'j', quotaState: 'exhausted', quotaExhaustedAt: minutes(-30), usageCheckedAt: new Date(now - 20_000).toISOString() });
     const healthy = account({ id: 'h', usage: reading(minutes(-5), [{ name: '5h', usedPct: 30, resetsAt: minutes(-1) }]) });
-    expect(accountsDueForUsageRecheck(state([recovered, waiting, healthy]), now, askable).map((item) => item.id)).toEqual(['r']);
+    expect(accountsDueForUsageRecheck(state([dated, guessed, justAsked, healthy]), now, askable).map((item) => item.id)).toEqual(['d', 'g']);
   });
 
   it('re-reads a spent window that never said when it resets, which nothing else would', () => {
     const undated = account({ id: 'u', usage: reading(minutes(-60), [{ name: '5h', usedPct: 100 }]) });
     expect(accountsDueForUsageRecheck(state([undated]), now, askable).map((item) => item.id)).toEqual(['u']);
-  });
-
-  it('re-reads a refusal held only on a guess, but not one the vendor dated', () => {
-    const guessed = account({ id: 'g', quotaState: 'exhausted', quotaExhaustedAt: minutes(-30) });
-    const dated = account({ id: 'd', quotaState: 'exhausted', quotaExhaustedAt: minutes(-30), quotaRetryAt: minutes(60) });
-    expect(accountsDueForUsageRecheck(state([guessed, dated]), now, askable).map((item) => item.id)).toEqual(['g']);
   });
 
   it('re-reads an expired refusal with no reading since, but not a vendor it cannot ask', () => {

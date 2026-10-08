@@ -1,17 +1,15 @@
 /** Select a usable account for a turn or a failover. */
-import { accountCanTakeTurn, accountQuotaSpent, quotaHeldOnlyByGuess, usageReadingIsCurrent, vendorWindows, windowSpent } from '../harness/accounts/usage-reading.js';
+import { accountCanTakeTurn, accountQuotaSpent, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
 import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { nextQuotaReset, usageExhaustedMessage } from './usage-exhausted.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { usageExhaustedMessage } from './usage-exhausted.js';
 import chalk from 'chalk';
 import { accountSwitchNotice, accountVerification, verificationNotice, type AccountFailureKind } from './failover.js';
 import { recordQuotaRefusal } from './account-outcome.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { readState } from '../session/state/read.js';
-import { writeState } from '../session/state/write.js';
 import type { TurnObserver } from './observer.js';
 
 /** Credentials do not select a transport by themselves: tool-style providers
@@ -86,21 +84,24 @@ export function nextUsableFailoverAccount(
     .sort((left, right) => room(right) - room(left))[0];
 }
 
-/** Decide the first account from stored usage before starting a provider. */
+/** The account a turn starts on. Stored usage only orders the accounts:
+ * one it shows spent gives way to one that shows room. It never refuses the
+ * turn -- with nothing better, the vendor is asked and its answer decides.
+ * A stored hold can be stale in any direction (a reset rounded to the hour,
+ * one that went unread, another device), and a refused attempt costs a few
+ * seconds where a wrong local refusal cost every message until the record
+ * caught up. */
 export function initialAccountChoice(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesBackend: (candidate: AiHarnessAccount) => boolean,
   attempted: Map<string, number>,
-): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount } | { kind: 'exhausted'; error: Error } {
+): { kind: 'continue' } | { kind: 'switch'; account: AiHarnessAccount } {
   if (!accountQuotaSpent(current)) return { kind: 'continue' };
+  const fallback = nextUsableFailoverAccount(state, current, matchesBackend, new Map([...attempted, [current.id, Date.now()]]));
+  if (!fallback) return { kind: 'continue' };
   attempted.set(current.id, Date.now());
-  const fallback = nextUsableFailoverAccount(state, current, matchesBackend, attempted);
-  if (fallback) return { kind: 'switch', account: fallback };
-  // Only the vendor says an account is out. Held on a guess with nothing
-  // else to run on, the turn goes to the vendor rather than being refused here.
-  if (quotaHeldOnlyByGuess(current)) { attempted.delete(current.id); return { kind: 'continue' }; }
-  return { kind: 'exhausted', error: new Error(usageExhaustedMessage()) };
+  return { kind: 'switch', account: fallback };
 }
 
 /** Report exhaustion only when no account on this backend can still run. */
@@ -289,17 +290,6 @@ export function turnAccounts(input: {
     async start(carry?: (to: AiHarnessAccount) => Promise<void>): Promise<boolean> {
       await adoptStoredEligibility(state);
       const initial = initialAccountChoice(state, input.current(), matchesBackend, tally.attempted);
-      if (initial.kind === 'exhausted') {
-        // Refused before any vendor was asked: say which account and why, so
-        // the log alone shows what held it.
-        const held = input.current();
-        lifecycle('worker.turn.refused-locally', {
-          account: held.id.slice(0, 8), heldUntil: nextQuotaReset([held])?.toISOString() ?? null,
-          vendorWindowSpent: vendorWindows(held).some(windowSpent), markedAt: held.quotaExhaustedAt ?? null,
-        });
-        await writeState(state);
-        throw initial.error;
-      }
       if (initial.kind !== 'switch') return false;
       await carry?.(initial.account);
       await switchTo(initial.account, 'quota-exhausted');

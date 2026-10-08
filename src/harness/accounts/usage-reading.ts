@@ -161,17 +161,6 @@ export function accountQuotaSpent(account: AiHarnessAccount, now: number = Date.
   return !(windows.some((window) => !window.advisory) && readAt > markedAt);
 }
 
-/** Whether the only thing holding this account is ClikCode's own guess: a
- * refusal that named no reset (held QUOTA_MARK_DEFAULT_MS), and no spent
- * window the vendor reported. A guess orders failover; it never stops a turn
- * the vendor has not refused -- Claude's "resets 11am (America/Denver)" once
- * went unread and the guess refused every message for an hour after the
- * account was back. */
-export function quotaHeldOnlyByGuess(account: AiHarnessAccount, now: number = Date.now()): boolean {
-  if (account.quotaRetryAt || !accountQuotaSpent(account, now)) return false;
-  return !vendorWindows(account).some((window) => windowSpent(window) && (window.resetsAt === undefined || Date.parse(window.resetsAt) > now));
-}
-
 /** Can this account take a turn now? Signed in, not held by the vendor for
  * verification, and not out of quota by the rule above. Every "has usage"
  * decision -- failover, Resume in, the preferred account, the pickers, the
@@ -202,13 +191,19 @@ export function settleQuotaMark(account: AiHarnessAccount, now: number = Date.no
   return true;
 }
 
-/** Two readings a minute, per ACCOUNT rather than per chat. The rate that
- * matters is accounts-in-use divided by this window: the reading now lives on
- * the account record, so any number of open chats on one login still costs one
- * request per window. It was per process before, which multiplied by every
- * open terminal and is what rate-limited the account out of reading its own
- * usage. The poll interval below divides this, so a tick actually probes
- * instead of landing inside the previous window. */
+/** How long any answer about an account's usage -- a figure, a balance, or
+ * a probe that failed -- stands before its harness is asked again. Every
+ * probe is free (none runs a model), so this is set by how soon a change made
+ * elsewhere -- a reset, a turn on another device -- should show, not by cost.
+ * Shared through `usageCheckedAt`, so any number of open chats and windows
+ * ask once per account per interval. */
+export const USAGE_RECHECK_MS = 60_000;
+
+/** When this account's usage was last asked for, by any process. */
+export function usageAskedAt(account: AiHarnessAccount): number {
+  return Math.max(Number.NEGATIVE_INFINITY, ...[account.usage?.at, account.usageCheckedAt]
+    .map((at) => Date.parse(at ?? '')).filter(Number.isFinite));
+}
 
 /** Vendors describe a quota window by its length, not by a name. 300 minutes
  * and 10080 minutes are the two everyone actually uses, and naming them the

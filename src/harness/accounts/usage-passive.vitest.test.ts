@@ -107,15 +107,27 @@ describe('usage on a passive paint', () => {
     }
   });
 
-  it('reuses a windowless balance for a few minutes instead of asking on every tick', async () => {
-    const session = { id: 's', nativeHarness: 'amp', accountId: 'a' } as HarnessSession;
-    expect((await nativeUsageReading(session, stateWith()))?.label).toBe('$9.05 credits left');
-    expect((await nativeUsageReading(session, stateWith()))?.label).toBe('$9.05 credits left');
-    expect(amp).toHaveBeenCalledTimes(1);
-    vi.setSystemTime(Date.now() + 6 * 60_000);
-    try {
-      await nativeUsageReading(session, stateWith());
-      expect(amp).toHaveBeenCalledTimes(2);
-    } finally { vi.useRealTimers(); }
+  it('asks again once a minute has passed, figure or balance, even while its window still holds', async () => {
+    for (const [harness, probe] of [['grok', grok], ['amp', amp]] as const) {
+      const session = { id: 's', nativeHarness: harness, accountId: 'a' } as HarnessSession;
+      const state = stateWith();
+      await nativeUsageReading(session, state);
+      await nativeUsageReading(session, state);
+      expect(probe).toHaveBeenCalledTimes(1);
+      vi.setSystemTime(Date.now() + 61_000);
+      try {
+        await nativeUsageReading(session, state);
+        expect(probe).toHaveBeenCalledTimes(2);
+      } finally { vi.useRealTimers(); }
+    }
+  });
+
+  it('does not ask when another window asked within the minute', async () => {
+    const session = { id: 's', nativeHarness: 'grok', accountId: 'a' } as HarnessSession;
+    const state = stateWith();
+    state.accounts[0]!.usage = { at: new Date(Date.now() - 5 * 60_000).toISOString(), label: 'weekly 100% left', windows: [{ name: 'weekly', usedPct: 0, resetsAt: '2999-01-01T00:00:00.000Z' }] } as never;
+    state.accounts[0]!.usageCheckedAt = new Date(Date.now() - 10_000).toISOString();
+    expect((await nativeUsageReading(session, state))?.label).toBe('weekly 100% left');
+    expect(grok).not.toHaveBeenCalled();
   });
 });

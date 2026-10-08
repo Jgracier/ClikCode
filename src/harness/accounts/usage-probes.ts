@@ -32,12 +32,6 @@ function harnessBinary(command: string, fallback: string = command): string {
   }
 }
 
-/** A probe that failed produced no value, so there is nothing here to go
- * stale -- this is a backoff on a failing call, not a cached reading. Without
- * it an offline or broken probe is re-run on every repaint, and for a harness
- * whose probe is a real turn that is expensive as well as useless. */
-export const NATIVE_USAGE_FAILURE_TTL_MS = 60_000;
-
 /** Usage is a percentage of a quota window, or it is nothing.
  *
  * OpenCode's probe used to return a token count and a dollar figure here
