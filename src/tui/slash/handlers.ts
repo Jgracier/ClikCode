@@ -74,6 +74,7 @@ import { forgetNativeThread } from '../../session/native-thread.js';
 import { moveThreadToAccount } from '../../session/carry.js';
 import { clearManualAccountSwitch, noteManualAccountSwitch } from '../../turn/manual-account.js';
 import { undoTurnsBack } from '../../session/undo-turn.js';
+import { redoFrom } from '../../session/redo.js';
 import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../session/turn-changes.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
@@ -665,6 +666,14 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const record = turnChangesAgo(records, n);
     if (!record) throw new Error(records.length ? `usage: /changes [N]  -- N from 1 (the last turn) to ${records.length}` : 'No turns recorded yet in this conversation.');
     return emitHarnessOutput({ panel: 'changes', text: turnChangesDiff(record, n, session.workspace), diff: record.changes });
+  },
+  redo: async ({ state, session, words }) => {
+    const n = forkPoint(words[0]);
+    if (n === undefined) throw new Error('usage: /redo @N [keep]  -- N as /fork numbers your prompts; keep leaves files as they are');
+    const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'This provider';
+    const redone = await redoFrom(state, session, n, { keepFiles: words[1] === 'keep', stateDir: stateDirectory(), who });
+    await writeState(state);
+    return emitHarnessOutput({ panel: 'redo', text: redone.text, prompt: redone.prompt });
   },
   undo: async ({ session, words }) => {
     const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'This provider';

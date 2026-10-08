@@ -540,6 +540,8 @@ export class IdeBridge {
       }
       if (outcome.id && outcome.id !== this.sessionId) await this.switchTo(outcome.id);
       else await this.emitSession();
+      // /redo: the conversation went back; its prompt goes to the message box.
+      if (outcome.draft !== undefined) this.channel.send({ type: 'restore-draft', text: outcome.draft });
       if (outcome.prompt) {
         this.sentPrompt = outcome.prompt;
         await this.runTurn(this.requireSession(), outcome.prompt, { echo: outcome.echo !== false });

@@ -23,11 +23,12 @@ import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
 import { turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff } from '../protocol';
-import { post } from './bus';
+import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
 import { foldedGroupCount, foldedSummary, workingStatus } from './flow';
+import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
 /** Finished messages, rendered once each and kept across a redraw of the
@@ -86,11 +87,20 @@ const ClikCodeNotice = ({ text }: { text: string }): JSX.Element => (
   </div>
 );
 
-const UserMessage = memo(({ text: content }: { text: string }): JSX.Element => {
+/** A sent prompt. Settled ones (`prompt`: its number, as /redo counts them)
+ * show two actions on hover: copy it, or redo from it -- the conversation
+ * goes back to before it and it returns to the message box (/redo). */
+const UserMessage = memo(({ text: content, prompt }: { text: string; prompt?: number }): JSX.Element => {
   if (isClikCodeNotice(content)) return <ClikCodeNotice text={content} />;
   const { text, file, problems, selections } = splitEditorContext(content);
   return (
     <div class="message user" role="article" aria-label="You">
+      {prompt !== undefined ? (
+        <div class="message-actions">
+          <button type="button" class="icon-button" title="Copy" aria-label="Copy prompt" onClick={() => { void navigator.clipboard?.writeText(text); }}><Icon name="copy" /></button>
+          <button type="button" class="icon-button" title="Redo from here" aria-label="Redo from this prompt" onClick={() => post({ type: 'send', text: `/redo @${prompt}`, id: uid() })}><Icon name="discard" /></button>
+        </div>
+      ) : null}
       <div class="bubble">
         {text}
         {selections.length ? (
@@ -564,6 +574,9 @@ const WINDOW = 120;
  * their objects while a turn streams, so a delta does not redraw it. */
 const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'> & { reveal?: number }): JSX.Element => {
   const byUser = useMemo(() => new Map(traces.map((trace) => [trace.userIndex, trace])), [traces]);
+  // Each prompt's number as /redo counts them (ClikCode's own continuation
+  // prompts are not the user's and get none).
+  const promptNumbers = useMemo(() => new Map(userMessageIndexes(messages).map((at, position) => [at, position + 1])), [messages]);
   const [shown, setShown] = useState(WINDOW);
   useEffect(() => { setShown(WINDOW); }, [sessionId]);
   // A message /search went to is drawn, however far back it is.
@@ -587,7 +600,7 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     // `display: contents`: an anchor /search finds the message by, with no box of its own.
     parts.push(
       <div key={`m${index}`} class="message-anchor" data-message={index}>
-        {message.role === 'user' ? <UserMessage text={message.content} />
+        {message.role === 'user' ? <UserMessage text={message.content} {...(promptNumbers.has(index) ? { prompt: promptNumbers.get(index)! } : {})} />
           : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} />
             : <AssistantMessage cacheKey={`${sessionId}#${index}`} text={message.content} />}
       </div>,

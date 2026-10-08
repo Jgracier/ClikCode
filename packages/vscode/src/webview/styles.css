@@ -116,7 +116,12 @@ body.vscode-high-contrast .badge.ok, body.vscode-high-contrast .badge.warn { bac
 
 /* ---- transcript ---- */
 .transcript { display: flex; flex-direction: column; gap: 14px; }
-.message.user { display: flex; justify-content: flex-end; }
+.message.user { display: flex; justify-content: flex-end; align-items: flex-start; gap: 4px; }
+/* Copy and redo beside a sent prompt: out of the way until it is hovered or
+   one of them has focus. */
+.message.user .message-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 120ms; }
+.message.user:hover .message-actions, .message.user .message-actions:focus-within { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .message.user .message-actions { transition: none; } }
 .message.user .bubble {
   white-space: pre-wrap; word-break: break-word; max-width: 88%; padding: 8px 12px; border-radius: 12px 12px 4px 12px;
   background: var(--vscode-input-background); border: 1px solid var(--vscode-input-border, var(--border));
