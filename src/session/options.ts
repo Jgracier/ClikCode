@@ -133,9 +133,11 @@ export function conversationOption(
   const latest = row.latest;
   const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
   const preview = conversationPreview(latest);
+  // conversationRows already determined activity via sessionActivity - only pass
+  // turn facts when the row is actually working (has a live worker behind it).
   const state = conversationState({
     updatedAt: latest.updatedAt,
-    ...(row.pending ? { turn: turnFacts(row.pending) } : {}),
+    ...(row.activity === 'working' && row.pending ? { turn: turnFacts(row.pending) } : {}),
     ...(row.needsYou ? { needsYou: true } : {}),
     ...(latest.resumeAt ? { resumeAt: latest.resumeAt.at } : {}),
   }, now);
