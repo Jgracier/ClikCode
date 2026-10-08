@@ -1,6 +1,6 @@
 /** `task`: hands one self-contained research question to a sub-agent and
- * returns only its answer, so the parent's context pays for the conclusion
- * instead of every file the sub-agent read on the way.
+ * returns its answer and the path to its durable trace, so the parent's
+ * context pays for the conclusion unless it needs the details.
  *
  * Read-only on purpose, and there is no write-capable variant:
  * - Its class is `read`, which is what lets several task calls in one step
@@ -26,7 +26,7 @@ export const taskTool = defineTool<TaskArgs>({
   description: [
     'Start a read-only sub-agent for one research question: finding where something is implemented, tracing a flow across files, summarizing a directory or a web page.',
     'It sees none of this conversation, so the prompt must be self-contained: say what to find, where to look, and what the answer should contain.',
-    'It can read, list, glob, grep and fetch, but cannot edit files or run commands. Only its final answer comes back.',
+    'It can read, list, glob, grep and fetch, but cannot edit files or run commands. Its answer includes a path to its tool trace.',
     'Several task calls in one step run in parallel; use that for independent questions.',
   ].join(' '),
   parameters: {

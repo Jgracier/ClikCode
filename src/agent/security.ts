@@ -10,6 +10,7 @@ export interface PathScope {
   addDirs: readonly string[];
   stateDir: string;
   homeDir: string;
+  sessionId?: string;
 }
 
 export interface ResolvedPath {
@@ -128,7 +129,7 @@ export function readDenyReason(resolved: ResolvedPath, scope: PathScope): string
       if (isInside(candidate, path.join(home, dir))) return `reading ~/${dir} is never allowed`;
     }
     const state = realpathNearest(path.resolve(scope.stateDir));
-    if (isInside(candidate, state) && !isToolOutputSpill(candidate, state)) return 'the ClikCode state directory is private to ClikCode';
+    if (isInside(candidate, state) && !isSessionToolOutput(candidate, scope)) return 'the ClikCode state directory is private to ClikCode';
   }
   return undefined;
 }
@@ -140,9 +141,10 @@ export function toolOutputDir(stateDir: string, sessionId: string): string {
   return path.join(stateDir, 'sessions', sessionId, 'tool-output');
 }
 
-function isToolOutputSpill(candidate: string, realStateDir: string): boolean {
-  const parts = path.relative(realStateDir, candidate).split(path.sep);
-  return parts.length === 4 && parts[0] === 'sessions' && parts[2] === 'tool-output';
+export function isSessionToolOutput(candidate: string, scope: PathScope): boolean {
+  if (!scope.sessionId) return false;
+  const parts = path.relative(realpathNearest(path.resolve(scope.stateDir)), candidate).split(path.sep);
+  return parts.length === 4 && parts[0] === 'sessions' && parts[1] === scope.sessionId && parts[2] === 'tool-output';
 }
 
 // ── environment scrubbing ────────────────────────────────────────────────────

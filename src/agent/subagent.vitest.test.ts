@@ -68,8 +68,18 @@ function toolResults(request: ModelStepRequest): string[] {
   return request.items.flatMap((item) => item.type === 'tool_result' ? [item.output] : []);
 }
 
+function withoutTrace(output: string): string {
+  return output.replace(/\n\n\[Sub-agent tool trace: [^\]]+\]$/, '');
+}
+
+function traceFile(output: string): string {
+  const match = /\[Sub-agent tool trace: ([^\]]+)\]$/.exec(output);
+  if (!match) throw new Error('Missing sub-agent trace');
+  return match[1];
+}
+
 describe('task sub-agents', () => {
-  it('runs a read-only sub-agent in its own conversation and returns only its answer', async () => {
+  it('runs a read-only sub-agent in its own durable conversation', async () => {
     const client = new RoutedModelClient({
       [PARENT_PROMPT]: { script: [
         { toolCalls: [{ id: 't1', name: 'task', args: { prompt: 'What does a.txt say?', description: 'Read a.txt' } }] },
@@ -85,7 +95,12 @@ describe('task sub-agents', () => {
 
     expect(result).toMatchObject({ text: 'It says 42.', stopReason: 'completed' });
     // The answer, without the narration that preceded the read.
-    expect(toolResults(client.requests(PARENT_PROMPT)[1])).toEqual(['a.txt:1 says the answer is 42.']);
+    const [taskOutput] = toolResults(client.requests(PARENT_PROMPT)[1]);
+    expect(withoutTrace(taskOutput)).toBe('a.txt:1 says the answer is 42.');
+    const records = (await fs.readFile(traceFile(taskOutput), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(records.map((record) => record.item?.type)).toContain('tool_call');
+    expect(records.map((record) => record.item?.type)).toContain('tool_result');
+    expect(records.some((record) => record.item?.output?.includes('the answer is 42'))).toBe(true);
 
     const child = client.requests('What does a.txt say?');
     expect(child[0].tools.map((tool) => tool.name).sort()).toEqual(['glob', 'grep', 'list_dir', 'read_file', 'web_fetch', 'web_search']);
@@ -101,7 +116,7 @@ describe('task sub-agents', () => {
     const nested = events.filter((event) => event.parentId === 't1');
     expect(nested.map((event) => [event.kind, event.id])).toEqual([['tool-start', 't1/c1'], ['tool-done', 't1/c1']]);
 
-    // Only the parent's conversation is on disk.
+    // The child trace belongs to the parent's session, not a loose session.
     expect(await fs.readdir(path.join(stateDir, 'sessions'))).toEqual([input.sessionId]);
   });
 
@@ -128,7 +143,7 @@ describe('task sub-agents', () => {
     });
     await runGatewayHarnessTurn(turn(client).input);
     expect(peak).toBe(3);
-    expect(toolResults(client.requests(PARENT_PROMPT)[1])).toEqual(['answer one', 'answer two', 'answer three']);
+    expect(toolResults(client.requests(PARENT_PROMPT)[1]).map(withoutTrace)).toEqual(['answer one', 'answer two', 'answer three']);
   });
 
   it('cannot start a sub-agent of its own', async () => {
@@ -141,7 +156,7 @@ describe('task sub-agents', () => {
     expect(child[0].tools.map((tool) => tool.name)).not.toContain('task');
     expect(toolResults(child[1])[0]).toMatch(/Unknown tool "task"/);
     expect(client.clients.has('deeper still') && client.requests('deeper still').length).toBeFalsy();
-    expect(toolResults(client.requests(PARENT_PROMPT)[1])).toEqual(['I did it myself.']);
+    expect(toolResults(client.requests(PARENT_PROMPT)[1]).map(withoutTrace)).toEqual(['I did it myself.']);
   });
 
   it('stops with the parent when the turn is aborted mid-task', async () => {
@@ -153,8 +168,14 @@ describe('task sub-agents', () => {
         { before: () => controller.abort(), text: 'never seen' },
       ] },
     });
-    await expect(runGatewayHarnessTurn(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    const { input } = turn(client, { signal: controller.signal });
+    await expect(runGatewayHarnessTurn(input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
     expect(client.requests('long job')).toHaveLength(2);
+    const files = await fs.readdir(path.join(stateDir, 'sessions', input.sessionId, 'tool-output'));
+    expect(files).toHaveLength(1);
+    const trace = await fs.readFile(path.join(stateDir, 'sessions', input.sessionId, 'tool-output', files[0]), 'utf8');
+    expect(trace).toContain('"name":"list_dir"');
+    expect(trace).toContain('"type":"tool_result"');
   });
 
   it("adds the sub-agent's usage to the parent's, as it is spent", async () => {
@@ -201,6 +222,6 @@ describe('task sub-agents', () => {
     await runGatewayHarnessTurn(turn(client, { permissionMode: 'ask', onApproval: async (title) => { asked.push(title); return false; } }).input);
     expect(asked).toHaveLength(1);
     expect(toolResults(client.requests('peek')[1])[0]).toMatch(/declined/);
-    expect(toolResults(client.requests(PARENT_PROMPT)[1])).toEqual(['was refused']);
+    expect(toolResults(client.requests(PARENT_PROMPT)[1]).map(withoutTrace)).toEqual(['was refused']);
   });
 });

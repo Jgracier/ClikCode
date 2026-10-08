@@ -6,7 +6,7 @@ import path from 'node:path';
 import { matchGlob } from './glob-match.js';
 import { classifyCommand } from './command-classifier.js';
 import {
-  readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath,
+  isSessionToolOutput, readDenyReason, resolvePath, writeDenyReason, type PathScope, type ResolvedPath,
 } from './security.js';
 import type { ToolContext, ToolDefinition } from './tool-contract.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
@@ -155,13 +155,14 @@ function decide(request: PermissionRequest): PermissionDecision {
   if (allowedByRules(request, resolved)) return { decision: 'allow', reason: 'matches a saved allow rule' };
 
   const allConfined = resolved.every((entry) => entry.confined);
+  const allSessionOutput = resolved.length > 0 && resolved.every((entry) => isSessionToolOutput(entry.real, scope));
   switch (tool.class) {
     case 'read':
     case 'meta':
       // readOnlyHint is the server's claim about itself. It may run the call
       // beside other reads, but in ask mode it does not skip the question.
       if (tool.mcp && mode === 'ask') return { decision: 'ask', reason: `MCP tool from "${tool.mcp.server}"` };
-      return allConfined ? { decision: 'allow', reason: `${tool.class} tool` } : { decision: 'ask', reason: 'path is outside the workspace' };
+      return allConfined || allSessionOutput ? { decision: 'allow', reason: `${tool.class} tool` } : { decision: 'ask', reason: 'path is outside the workspace' };
     case 'write':
       if (mode === 'auto' && allConfined) return { decision: 'allow', reason: 'write confined to the workspace' };
       return { decision: 'ask', reason: allConfined ? 'file changes need approval' : 'path is outside the workspace' };

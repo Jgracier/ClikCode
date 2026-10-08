@@ -182,20 +182,13 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   }
 }
 
-/** A Gateway conversation's picker: account-private agents first, then the
- * Gateway's model list. A selected agent runs on the platform agent lane. */
+/** A Gateway conversation's picker. Models run ClikCode locally; selected
+ * platform agents run on ClikDeploy with their own tools. */
 type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string };
 
-/** Agent rows precede model rows. Choosing a model closes the picker. */
+/** Choosing a model closes the picker. */
 export function gatewayPickerRows(list: GatewayModelList, agents: readonly GatewayAgent[], current: string | null, currentAgent?: string): PickerOption<GatewayChoice>[] {
   return [
-    ...(agents.length || currentAgent ? [{ label: currentAgent ? 'No agent' : '✓ No agent', detail: '· use ClikCode with the Gateway model', value: { kind: 'agent' as const }, group: 'Agents' }] : []),
-    ...agents.map((agent) => ({
-      label: `${agent.id === currentAgent ? '✓ ' : ''}${agent.name}`,
-      detail: agent.description ? `· ${agent.description}` : undefined,
-      value: { kind: 'agent' as const, id: agent.id },
-      group: 'Agents',
-    })),
     { label: currentAgent ? 'Agent default' : 'Automatic', detail: currentAgent
       ? `· use this agent's configured pin or router${current ? '' : ' · current'}`
       : `· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}${current ? '' : ' · current'}`,
@@ -209,6 +202,13 @@ export function gatewayPickerRows(list: GatewayModelList, agents: readonly Gatew
         group: 'Models',
       };
     }),
+    ...(agents.length || currentAgent ? [{ label: currentAgent ? 'No agent' : '✓ No agent', detail: '· use ClikCode with the Gateway model', value: { kind: 'agent' as const }, group: 'Platform agents (remote)' }] : []),
+    ...agents.map((agent) => ({
+      label: `${agent.id === currentAgent ? '✓ ' : ''}${agent.name}`,
+      detail: `· runs on ClikDeploy${agent.description ? ` · ${agent.description}` : ''}`,
+      value: { kind: 'agent' as const, id: agent.id },
+      group: 'Platform agents (remote)',
+    })),
   ];
 }
 

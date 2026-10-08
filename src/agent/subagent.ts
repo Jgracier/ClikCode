@@ -1,14 +1,15 @@
 /** Runs the `task` tool's sub-agent: a nested turn of the same loop, with the
  * same model client, a short system prompt, read-only tools and a step cap.
  *
- * Its conversation is kept in memory and discarded. The parent's transcript
- * already records the prompt (the task call) and the answer (its result),
- * which is everything the parent's model will ever see; the steps in between
- * were shown live through activity events. */
+ * Its conversation is stored under the parent's session, so tool work survives
+ * interruption and the parent can read the trace when needed. */
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
+import path from 'node:path';
 import type { ConversationItem, GatewayHarnessTurnInput, GatewayHarnessTurnResult, TokenUsage } from './model-client.js';
+import { ConversationStore } from './conversation.js';
 import { disposeSessionState } from './session-state.js';
+import { toolOutputDir } from './security.js';
 import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
 
 /** By name, not by class: `read` also covers bash_output and task itself,
@@ -99,7 +100,8 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
     // Unique per run: session state (read tracking) is keyed by it, and two
     // parallel sub-agents must not share it.
     const sessionId = `${parent.sessionId}.task.${randomUUID()}`;
-    const transcript: ConversationItem[] = [];
+    const transcriptFile = path.join(toolOutputDir(parent.stateDir, parent.sessionId), `${randomUUID()}.jsonl`);
+    const store = new ConversationStore(parent.stateDir, sessionId, transcriptFile);
     let reported: TokenUsage = {};
     try {
       const result = await options.runTurn({
@@ -110,7 +112,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         modelClient: parent.modelClient,
         stateDir: parent.stateDir,
         tools, maxSteps,
-        subagent: { system: subagentSystemPrompt(parent), transcript },
+        subagent: { system: subagentSystemPrompt(parent), transcriptFile },
         ...(parent.addDirs ? { addDirs: parent.addDirs } : {}),
         ...(parent.homeDir ? { homeDir: parent.homeDir } : {}),
         ...(parent.contextWindow ? { contextWindow: parent.contextWindow } : {}),
@@ -129,7 +131,8 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
           options.onUsage(delta);
         },
       });
-      return answerFrom(result, transcript, maxSteps);
+      const answer = answerFrom(result, await store.load(), maxSteps);
+      return { ...answer, output: `${answer.output}\n\n[Sub-agent tool trace: ${transcriptFile}]` };
     } finally {
       disposeSessionState(parent.stateDir, sessionId);
     }

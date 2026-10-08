@@ -181,9 +181,9 @@ export interface GatewayHarnessTurnInput {
   /** Network seams for web_fetch; tests inject fakes. */
   net?: NetworkSeams;
   /** Set when this turn is a `task` sub-agent's: `system` replaces the built-in
-   * prompt, the conversation goes to `transcript` instead of disk, and the
-   * turn cannot start sub-agents of its own. */
-  subagent?: { system: string; transcript: ConversationItem[] };
+   * prompt, the conversation goes to `transcriptFile`, and the turn cannot
+   * start sub-agents of its own. */
+  subagent?: { system: string; transcriptFile: string };
   /** When the conversation has a swarm, a `task` call asks this before the
    * same-model sub-agent. Null keeps that sub-agent. */
   swarmDelegate?: (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string }) => Promise<ToolRunResult | null>;

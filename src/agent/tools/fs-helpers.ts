@@ -12,7 +12,7 @@ import type { ToolContext } from '../tool-contract.js';
 export class ToolInputError extends Error {}
 
 export function scopeOf(ctx: ToolContext): PathScope {
-  return { cwd: ctx.cwd, addDirs: ctx.addDirs, stateDir: ctx.stateDir, homeDir: ctx.homeDir };
+  return { cwd: ctx.cwd, addDirs: ctx.addDirs, stateDir: ctx.stateDir, homeDir: ctx.homeDir, sessionId: ctx.sessionId };
 }
 
 export function resolveForRead(input: string, ctx: ToolContext): ResolvedPath {

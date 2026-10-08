@@ -16,7 +16,7 @@ let scope: PathScope;
 
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gh-sec-')));
-  scope = { cwd: path.join(root, 'work'), addDirs: [path.join(root, 'extra')], stateDir: path.join(root, 'home', '.clikcode-state'), homeDir: path.join(root, 'home') };
+  scope = { cwd: path.join(root, 'work'), addDirs: [path.join(root, 'extra')], stateDir: path.join(root, 'home', '.clikcode-state'), homeDir: path.join(root, 'home'), sessionId: 's1' };
   await Promise.all([scope.cwd, scope.addDirs[0], scope.stateDir, path.join(root, 'outside'), path.join(scope.homeDir, '.ssh')].map((dir) => fs.mkdir(dir, { recursive: true })));
 });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
@@ -99,6 +99,7 @@ describe('deny lists', () => {
     expect(read('~/.ssh/id_ed25519')).toMatch(/\.ssh/);
     expect(read(path.join(scope.stateDir, 'credentials.json'))).toMatch(/private/);
     expect(read(path.join(toolOutputDir(scope.stateDir, 's1'), 'call.log'))).toBeUndefined();
+    expect(read(path.join(toolOutputDir(scope.stateDir, 's2'), 'call.log'))).toMatch(/private/);
     expect(read('src/a.ts')).toBeUndefined();
   });
 });

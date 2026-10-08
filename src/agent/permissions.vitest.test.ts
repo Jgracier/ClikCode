@@ -21,7 +21,7 @@ const tool = (name: string): ToolDefinition => tools.find((entry) => entry.name 
 
 beforeEach(async () => {
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'gh-perm-')));
-  scope = { cwd: path.join(root, 'work'), addDirs: [path.join(root, 'extra')], stateDir: path.join(root, 'state'), homeDir: path.join(root, 'home') };
+  scope = { cwd: path.join(root, 'work'), addDirs: [path.join(root, 'extra')], stateDir: path.join(root, 'state'), homeDir: path.join(root, 'home'), sessionId: 's1' };
   await Promise.all([scope.cwd, scope.addDirs[0], scope.stateDir, scope.homeDir].map((dir) => fs.mkdir(dir, { recursive: true })));
 });
 afterEach(async () => { await fs.rm(root, { recursive: true, force: true }); });
@@ -31,6 +31,11 @@ function decide(name: string, args: Record<string, unknown>, mode: AiHarnessPerm
 }
 
 describe('permission matrix', () => {
+  it('reads this session\'s tool output without approval and blocks another session\'s output', () => {
+    expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's1', 'tool-output', 'trace.jsonl') }, 'ask')).toBe('allow');
+    expect(decide('read_file', { path: path.join(scope.stateDir, 'sessions', 's2', 'tool-output', 'trace.jsonl') }, 'bypass')).toBe('deny');
+  });
+
   const cases: [string, Record<string, unknown>, Record<AiHarnessPermissionMode, string>][] = [
     ['read_file', { path: 'a.ts' }, { ask: 'allow', auto: 'allow', bypass: 'allow' }],
     ['grep', { pattern: 'x' }, { ask: 'allow', auto: 'allow', bypass: 'allow' }],
