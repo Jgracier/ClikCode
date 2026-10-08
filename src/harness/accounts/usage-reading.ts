@@ -106,6 +106,25 @@ export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now
   return `Resets ${quotaResetPhrase(new Date(next.resetsAt), now)}`;
 }
 
+/** When an account out of usage can take a turn again: the latest reset of
+ * the windows it has spent (5h and weekly both spent is back at the weekly
+ * one), or the reset a refusal named -- the vendor's, or learned -- never the
+ * default hold ClikCode guessed. Undefined when nothing says. */
+export function accountBackAt(account: AiHarnessAccount, now: number = Date.now()): string | undefined {
+  const resets = vendorWindows(account)
+    .filter((window) => windowSpent(window) && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
+    .map((window) => Date.parse(window.resetsAt!));
+  const retry = Date.parse(account.quotaRetryAt ?? '');
+  if (quotaRefusalHolds(account, now) && Number.isFinite(retry) && retry > now) resets.push(retry);
+  return resets.length ? new Date(Math.max(...resets)).toISOString() : undefined;
+}
+
+/** An account out of usage, as every list says it: when it is back
+ * ("Resets 5:45PM", "Resets 1:00PM Saturday Oct 10"), else that it is out. */
+export function outOfUsageText(backAt: string | undefined, now: number = Date.now()): string {
+  return backAt ? `Resets ${quotaResetPhrase(new Date(backAt), now)}` : 'out of usage';
+}
+
 export function usageReading(windows: Array<UsageWindow | undefined>): UsageReading | undefined {
   const known = windows.filter((window): window is UsageWindow => Boolean(window));
   return known.length ? { windows: known, label: usageReadingLabel(known) } : undefined;

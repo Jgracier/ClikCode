@@ -1,5 +1,6 @@
 /** Adding, choosing and managing the accounts a harness signs in with. */
 
+import { outOfUsageText } from '../../harness/accounts/usage-reading.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -27,7 +28,7 @@ export type ProviderAccountChoice =
   | { kind: 'add-account'; harness: string };
 
 const ACCOUNT_ACTION_LABELS = { reauthenticate: 'Reauthenticate', verified: 'I’ve verified it', disconnect: 'Disconnect', remove: 'Remove' } as const;
-const ACCOUNT_PROBLEM_WORDS = { verify: 'verify', reauth: 'reauth', 'out-of-usage': 'out of usage' } as const;
+const ACCOUNT_PROBLEM_WORDS = { verify: 'verify', reauth: 'reauth' } as const;
 
 /** One provider's accounts (picker-rows.ts accountRow) as the terminal shows
  * them, then "+ Add account…" where one can be added. Usage is loaded only
@@ -49,7 +50,8 @@ export function accountPickerOptions(
         // One state per row: a problem outranks usage, so the eye lands on
         // the single thing that matters. Provider/auth kind is not shown.
         detail: [
-          row.problem ? chalk.yellow(ACCOUNT_PROBLEM_WORDS[row.problem]) : usage ?? (usagePending ? '…' : ''),
+          row.problem === 'out-of-usage' ? chalk.yellow(outOfUsageText(row.backAt))
+            : row.problem ? chalk.yellow(ACCOUNT_PROBLEM_WORDS[row.problem]) : usage ?? (usagePending ? '…' : ''),
           row.current ? '· current' : '',
         ].filter(Boolean).join(' '),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },

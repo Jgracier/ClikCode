@@ -6,7 +6,7 @@ import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { compactCount, dollars } from '../../harness/protocol/format.js';
 import { invocationRollups } from '../../session/state/invocations.js';
-import { accountQuotaSpent, accountUsageText, usageResetLabel } from '../../harness/accounts/usage-reading.js';
+import { accountBackAt, accountQuotaSpent, accountUsageText, outOfUsageText, usageResetLabel } from '../../harness/accounts/usage-reading.js';
 import { accountUsage } from '../../session/picker-rows.js';
 
 type Invocation = HarnessState['invocations'][number];
@@ -48,7 +48,7 @@ function allowance(account: AiHarnessAccount, state: HarnessState, now: number):
     return { label, ...(reset ? { reset } : {}) };
   }
   if (account.status === 'needs_login') return { label: 'needs reauthentication' };
-  if (accountQuotaSpent(account, now)) return { label: 'out of usage' };
+  if (accountQuotaSpent(account, now)) return { label: outOfUsageText(accountBackAt(account, now), now) };
   return { label: 'not reported yet' };
 }
 

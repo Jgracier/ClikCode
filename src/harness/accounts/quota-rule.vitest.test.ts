@@ -146,3 +146,17 @@ describe('a reading the vendor proved wrong', () => {
     expect(accountQuotaSpent(served, now + 120_000)).toBe(true);
   });
 });
+
+describe('when an account out of usage is back', () => {
+  it('is the latest spent window, or a reset a refusal named -- never the guessed hold', async () => {
+    const { accountBackAt, outOfUsageText } = await import('./usage-reading.js');
+    const both = account({ usage: reading(minutes(-1), [{ name: '5h', usedPct: 100, resetsAt: minutes(60) }, { name: 'weekly', usedPct: 100, resetsAt: minutes(3_000) }]) });
+    expect(accountBackAt(both, now)).toBe(minutes(3_000));
+    const named = account({ quotaState: 'exhausted', quotaExhaustedAt: minutes(-5), quotaRetryAt: minutes(45) });
+    expect(accountBackAt(named, now)).toBe(minutes(45));
+    const guessed = account({ quotaState: 'exhausted', quotaExhaustedAt: minutes(-5) });
+    expect(accountBackAt(guessed, now)).toBeUndefined();
+    expect(outOfUsageText(undefined, now)).toBe('out of usage');
+    expect(outOfUsageText(minutes(45), now)).toMatch(/^Resets \d{1,2}:\d{2}[AP]M/);
+  });
+});
