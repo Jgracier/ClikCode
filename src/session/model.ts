@@ -112,6 +112,13 @@ export interface HarnessSession {
    * (session/carry.ts reconcileNativeThread). Absent on a conversation from
    * before it was kept; the first turn finds the thread and stamps it. */
   nativeThreadAccountId?: string;
+  /** How many of the conversation's turns ClikCode's own agent has in its
+   * memory (`sessions/<id>/harness.jsonl`). The agent only remembers what
+   * it ran itself, so turns that ran elsewhere -- before the conversation
+   * moved onto the Gateway or ClikCode Local, or while it was on another
+   * provider -- are written into that memory before its next model call
+   * (turn/agent-history.ts). */
+  agentThreadTurns?: number;
   nativeStartedAt?: string;
   /** Every vendor thread this conversation has used and let go of (a
    * switch, a new account, a thread the vendor lost), as `<harness>:<id>`.

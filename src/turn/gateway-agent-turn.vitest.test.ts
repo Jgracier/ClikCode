@@ -103,6 +103,26 @@ describe('selected Gateway agent turn, streamed', () => {
     expect(JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string)).toMatchObject({ threadId: 'thread-1' });
   });
 
+  it('tells a new thread what the conversation did before it, and an existing one nothing', async () => {
+    const { state, session } = await setup();
+    const claude = { harness: 'claude', route: 'local' as const, provider: 'anthropic', model: 'opus' };
+    Object.assign(session, { messages: [
+      { role: 'user', content: 'Fix the parser', origin: claude },
+      { role: 'assistant', content: 'Fixed it in src/parser.ts.', origin: claude },
+    ] });
+    const reply = () => new Response(sse([START, { type: 'text', text: 'ok' }, { type: 'done', text: 'ok', usage: { promptTokens: 1, outputTokens: 1, cachedInputTokens: 0 }, served: null }]), { headers: { 'content-type': 'text/event-stream' } });
+    const fetcher = vi.fn(async () => reply());
+    globalThis.fetch = fetcher as typeof fetch;
+    await runGatewayAgentTurn({ config: {} as never, state, session, prompt: 'What were we doing?', run: {} });
+    const sent = JSON.parse((fetcher.mock.calls[0] as unknown as [string, RequestInit])[1].body as string) as { message: string };
+    expect(sent.message).toContain('Fix the parser');
+    expect(sent.message).toContain('Fixed it in src/parser.ts.');
+    expect(sent.message).toContain('What were we doing?');
+    // The thread the agent now holds carries the conversation: the next message is the prompt alone.
+    await runGatewayAgentTurn({ config: {} as never, state, session, prompt: 'and now?', run: {} });
+    expect(JSON.parse((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body as string)).toMatchObject({ message: 'and now?', threadId: 'thread-1' });
+  });
+
   it('says a held write the moment it is held', async () => {
     const { state, session } = await setup();
     globalThis.fetch = vi.fn(async () => new Response(sse([

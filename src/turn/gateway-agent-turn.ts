@@ -13,6 +13,8 @@ import { gatewayConnection } from '../agent/models/for-session.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
+import { canonicalRecord } from '../session/canonical.js';
+import { transferBudget, transferPrompt } from './transfer.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
@@ -125,6 +127,19 @@ export async function runGatewayAgentTurn(input: {
   const startedAt = Date.now();
   const checkpoint = await startTurnCheckpoint(state, session, prompt, run);
   const sink = turnSink(checkpoint, prompter);
+  /** A new thread -- the first message to this agent, or to another one --
+   * knows nothing of the conversation so far. It is told it, the way a
+   * provider taking a conversation over is (transfer.ts); a thread the agent
+   * already holds carries it itself. */
+  const messageFor = async (): Promise<string> => {
+    if (session.gatewayAgentThreadId) return prompt;
+    const record = canonicalRecord({ ...session, pendingTurn: undefined });
+    if (!record.turns.length) return prompt;
+    const { localHarnessForCommand } = await import('../runtime/lazy-bridge.js');
+    return transferPrompt(record, prompt, {
+      maxBytes: transferBudget({}), interrupted: false, displayName: (command) => localHarnessForCommand(command)?.displayName,
+    });
+  };
   let handle = 'agent';
   /** Each call's row, by id: its finish updates the row its start drew. */
   const rows = new Map<string, HarnessActivityEvent>();
@@ -139,7 +154,7 @@ export async function runGatewayAgentTurn(input: {
       headers: {
         authorization: `Bearer ${apiKey}`, accept: 'text/event-stream', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT,
       },
-      body: JSON.stringify({ message: prompt, threadId: session.gatewayAgentThreadId ?? null, stream: true, ...agentTurnSettings(session) }),
+      body: JSON.stringify({ message: await messageFor(), threadId: session.gatewayAgentThreadId ?? null, stream: true, ...agentTurnSettings(session) }),
     });
     if (!response.body || !(response.headers.get('content-type') ?? '').includes('text/event-stream')) {
       const body = await response.json().catch(() => ({})) as { error?: unknown };

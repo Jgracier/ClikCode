@@ -16,6 +16,11 @@ import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { recordInvocation, showStopReason } from './turn-output.js';
 import { runGatewayAgentTurn } from './gateway-agent-turn.js';
+import { seedAgentConversation } from './agent-history.js';
+import { ConversationStore } from '../agent/conversation.js';
+import { stateDirectory } from '../session/store/paths.js';
+import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 
 /** A turn on a route that runs ClikCode's own agent: the Gateway, or
  * ClikCode Local. */
@@ -76,10 +81,26 @@ export async function runAgentTurn(input: {
     prompter?.response(held, 'append');
   };
   let turnUsage: TurnUsage | undefined;
+  // The agent remembers what it ran itself. Turns that ran elsewhere -- the
+  // conversation moved here from another harness, or was away on one since --
+  // go into its memory first (agent-history.ts), so the model the Gateway
+  // serves starts from the conversation, not from this prompt alone.
+  const memory = new ConversationStore(stateDirectory(), session.id);
+  let held = { total: 0, seeded: 0 };
+  let memoryBytes = 0;
+  let seededOk = false;
   // The coding agent runs here, on this machine; the model server supplies
   // the model step and nothing else. A server that cannot serve one fails the
   // turn with its own reason (for-session.ts gatewayErrorMessage).
   try {
+    held = await seedAgentConversation({
+      session, stateDir: stateDirectory(), ...(modelClient.contextHints?.contextWindow ? { contextWindow: modelClient.contextHints.contextWindow } : {}),
+      displayName: (command) => localHarnessForCommand(command)?.displayName,
+    });
+    if (held.seeded) lifecycle('thread.take-up', { harness: attributedTo, how: 'agent-memory', turns: held.total, seeded: held.seeded });
+    session.agentThreadTurns = held.total;
+    memoryBytes = await memory.size();
+    seededOk = true;
     const harnessTurn = await runGatewayHarnessSessionTurn({
       session, prompt: turnText, modelClient, modelClientForStep,
       // ClikDeploy's own account tools come with the Gateway.
@@ -164,6 +185,10 @@ export async function runAgentTurn(input: {
       });
     }
   } finally {
+    // The turn is in the agent's memory once it wrote to it -- also when the
+    // turn then failed or was stopped, which leaves its prompt there.
+    if (seededOk && await memory.size().catch(() => 0) > memoryBytes) session.agentThreadTurns = held.total + 1;
+    checkpoint.touch();
     await checkpoint.flush();
   }
 }
