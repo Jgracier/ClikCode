@@ -98,3 +98,12 @@ describe('a vendor row\'s paths', () => {
     expect(withWorkspacePaths({ kind: 'tool-start' as const, label: 'Read /home/me/application/x' }, '/home/me/app').label).toBe('Read /home/me/application/x');
   });
 });
+
+describe('a running sub-agent row', () => {
+  const strip = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
+  it('says "agent" once, not before a title that already starts with it', async () => {
+    const { runningChatLine } = await import('./waiting.js');
+    expect(strip(runningChatLine('Agent worker 0', 0, 'agent')).trim().slice(2).trim()).toBe('Agent worker 0');
+    expect(strip(runningChatLine('Explore the parser', 0, 'agent')).trim().slice(2).trim()).toBe('agent Explore the parser');
+  });
+});
