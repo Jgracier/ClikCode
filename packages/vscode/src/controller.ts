@@ -12,7 +12,7 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, conversationAttention, emptyModel, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, conversationAttention, emptyModel, stoppingTurn, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -659,6 +659,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   cancel(restoreDraft = true): void {
     this.bridge?.send({ type: 'cancel', restoreDraft });
+    this.setModel(stoppingTurn(this.model));
   }
 
   approve(id: string, approved: boolean | 'always'): void {
