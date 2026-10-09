@@ -59,4 +59,9 @@ describe('a turn\'s reads and searches, merged while they happen', () => {
     expect(ended.running).toBe(false);
     expect(ended.summary).toBe('Read 3 files, searched 1 pattern');
   });
+
+  it('says a member its turn was stopped under stopped, not failed', () => {
+    const stopped = mergedExploreLines([read('a').event, { ...read('b', 'tool-error').event, stopped: true }], true);
+    expect(stopped.calls.map(strip)).toEqual(['Read a.ts', 'Read b.ts stopped']);
+  });
 });
