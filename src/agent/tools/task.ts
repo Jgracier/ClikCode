@@ -2,17 +2,8 @@
  * returns its answer and the path to its durable trace, so the parent's
  * context pays for the conclusion unless it needs the details.
  *
- * Read-only on purpose, and there is no write-capable variant:
- * - Its class is `read`, which is what lets several task calls in one step
- *   run in parallel. A writer would have to be sequential and would need a
- *   second tool.
- * - File checkpoints (undo) are keyed by turn; a sub-agent runs its own turn,
- *   so its edits would fall outside the parent turn's undo.
- * - The read-before-edit guard is per session; a sub-agent's reads would not
- *   vouch for the parent's edits, nor the reverse.
- * - An approval prompt raised from a context the user never sees asks them to
- *   approve a change without the reasoning behind it.
- * Edits stay with the parent, which can act on the sub-agent's findings. */
+ * Read-only calls can run in parallel. Coding subagents use the separate
+ * `agent` tool, which runs serially and shares the parent's undo checkpoint. */
 import { defineTool } from '../tool-contract.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 

@@ -1,6 +1,7 @@
 import type { ToolSpec } from '../model-client.js';
 import type { ToolDefinition } from '../tool-contract.js';
 import { askUserTool } from './ask-user.js';
+import { agentTool } from './agent.js';
 import { bashOutputTool, bashTool, killBashTool } from './bash.js';
 import { conversationTools } from './conversations.js';
 import { editFileTool } from './edit-file.js';
@@ -25,7 +26,7 @@ export function defaultTools(): ToolDefinition[] {
     writeFileTool, editFileTool, multiEditTool, notebookEditTool,
     bashTool, bashOutputTool, killBashTool, waitTool,
     webFetchTool, webSearchTool, todoWriteTool, exitPlanModeTool, skillTool,
-    taskTool, askUserTool, ...conversationTools,
+    taskTool, agentTool, askUserTool, ...conversationTools,
   ];
 }
 

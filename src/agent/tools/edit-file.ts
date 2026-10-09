@@ -49,7 +49,7 @@ export async function prepareEdits(filePath: string, edits: readonly EditOperati
 }
 
 export async function commitEdit(prepared: PreparedEdit, ctx: ToolContext): Promise<void> {
-  await ctx.checkpoints.snapshot(ctx.sessionId, ctx.turnId, prepared.real);
+  await ctx.checkpoints.snapshot(ctx.checkpoint?.sessionId ?? ctx.sessionId, ctx.checkpoint?.turnId ?? ctx.turnId, prepared.real);
   await writeTextAtomic(prepared.real, prepared.after, prepared.mode);
   await rememberWritten(prepared.real, ctx);
 }
@@ -79,4 +79,3 @@ export const editFileTool = defineTool<EditFileArgs>({
     return { output: `Edited ${prepared.shown}.`, diff: eventDiff(prepared.before, prepared.after, { path: prepared.shown, numbered: true }) };
   },
 });
-

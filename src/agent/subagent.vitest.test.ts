@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
+import { FileCheckpointStore } from './file-checkpoints.js';
 import { runGatewayHarnessTurn } from './run-turn.js';
 import { SUBAGENT_MAX_STEPS } from './subagent.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
@@ -79,6 +80,78 @@ function traceFile(output: string): string {
 }
 
 describe('task sub-agents', () => {
+  it('runs a coding agent through local tools, one approval, and the parent undo checkpoint', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ id: 'work-1', name: 'agent', args: { prompt: 'Change the answer in a.txt to 43', description: 'Update answer' } }] },
+        { text: 'The answer is now 43.' },
+      ] },
+      'Change the answer in a.txt to 43': { script: [
+        { toolCalls: [{ id: 'read-1', name: 'read_file', args: { path: 'a.txt' } }] },
+        { toolCalls: [{ id: 'edit-1', name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '43' } }] },
+        { text: 'Updated a.txt and checked its content.' },
+      ] },
+    });
+    const approvals: Array<{ title: string; preview?: unknown }> = [];
+    const { input, events } = turn(client, { permissionMode: 'ask', onApproval: async (title, _detail, _rule, preview) => {
+      approvals.push({ title, preview });
+      return true;
+    } });
+    const result = await runGatewayHarnessTurn(input);
+    expect(result.stopReason).toBe('completed');
+    expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 43\n');
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0].title).toMatch(/edit/i);
+    expect(approvals[0].preview).toBeDefined();
+    expect(events.find((event) => event.id === 'work-1')).toMatchObject({ agent: true });
+    expect(events.filter((event) => event.parentId === 'work-1').map((event) => event.id)).toContain('work-1/edit-1');
+    const child = client.requests('Change the answer in a.txt to 43')[0];
+    expect(child.tools.map((tool) => tool.name)).toContain('bash');
+    expect(child.tools.map((tool) => tool.name)).not.toContain('agent');
+    expect(toolResults(client.requests(PARENT_PROMPT)[1])[0]).toContain('Updated a.txt');
+    const checkpoints = new FileCheckpointStore(stateDir);
+    expect((await checkpoints.listTurns(input.sessionId)).map((entry) => entry.files)).toEqual([[path.join(cwd, 'a.txt')]]);
+    const undo = await checkpoints.undoTurn(input.sessionId, { roots: [cwd] });
+    expect(undo.failed).toEqual([]);
+    expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
+  });
+
+  it('keeps an interrupted coding agent\'s edit and undo checkpoint', async () => {
+    const controller = new AbortController();
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ id: 'work-abort', name: 'agent', args: { prompt: 'Edit then stop' } }] }] },
+      'Edit then stop': { script: [
+        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '43' } }] },
+        { before: () => controller.abort(), text: 'not completed' },
+      ] },
+    });
+    const { input } = turn(client, { signal: controller.signal });
+    await expect(runGatewayHarnessTurn(input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 43\n');
+    const checkpoints = new FileCheckpointStore(stateDir);
+    expect(await checkpoints.listTurns(input.sessionId)).toHaveLength(1);
+    expect((await checkpoints.undoTurn(input.sessionId, { roots: [cwd] })).failed).toEqual([]);
+    expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
+  });
+
+  it('keeps a coding agent\'s background shell available to the parent', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ name: 'agent', args: { prompt: 'Start a background process' } }] },
+        { toolCalls: [{ name: 'kill_bash', args: { id: 'bash_1' } }] },
+        { text: 'Stopped the process.' },
+      ] },
+      'Start a background process': { script: [
+        { toolCalls: [{ name: 'bash', args: { command: 'node -e "setTimeout(function(){},3000)"', run_in_background: true } }] },
+        { text: 'Started bash_1.' },
+      ] },
+    });
+    const result = await runGatewayHarnessTurn(turn(client).input);
+    expect(result.stopReason).toBe('completed');
+    expect(toolResults(client.requests(PARENT_PROMPT)[2])).toContain('Stopped bash_1.');
+  });
+
   it('runs a read-only sub-agent in its own durable conversation', async () => {
     const client = new RoutedModelClient({
       [PARENT_PROMPT]: { script: [

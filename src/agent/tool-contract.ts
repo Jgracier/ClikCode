@@ -10,6 +10,8 @@ export interface ToolContext {
   addDirs: readonly string[];
   sessionId: string;
   turnId: string;
+  /** A coding child writes into its parent's undo checkpoint. */
+  checkpoint?: { sessionId: string; turnId: string };
   stateDir: string;
   homeDir: string;
   signal?: AbortSignal;
@@ -26,7 +28,7 @@ export interface ToolContext {
   onPlan?(entries: PlanEntry[]): void;
   net?: NetworkSeams;
   /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
-  runSubagent?(request: { prompt: string; description?: string; model?: string }): Promise<ToolRunResult>;
+  runSubagent?(request: { prompt: string; description?: string; model?: string; kind?: 'research' | 'work' }): Promise<ToolRunResult>;
 }
 
 export interface ToolRunResult {

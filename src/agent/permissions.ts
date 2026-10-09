@@ -148,6 +148,10 @@ function decide(request: PermissionRequest): PermissionDecision {
     return { decision: 'deny', reason: `plan mode is active: ${tool.name} is unavailable until the user approves a plan via ${EXIT_PLAN_MODE_TOOL}` };
   }
 
+  // Starting a coding child changes nothing itself. Its individual tools
+  // use this same permission mode and approver, including their diff previews.
+  if (tool.name === 'agent') return { decision: 'allow', reason: 'the delegated tools are approved individually' };
+
   // 3. Bypass.
   if (mode === 'bypass') return { decision: 'allow', reason: 'bypass mode' };
 

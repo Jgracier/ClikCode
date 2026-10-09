@@ -64,7 +64,7 @@ export const writeFileTool = defineTool<WriteFileArgs>({
     if (existing && !ctx.session.readFiles.has(resolved.real)) {
       return { output: `${args.path} already exists but has not been read in this session. Read it first so you do not overwrite content you have not seen.`, isError: true };
     }
-    await ctx.checkpoints.snapshot(ctx.sessionId, ctx.turnId, resolved.real);
+    await ctx.checkpoints.snapshot(ctx.checkpoint?.sessionId ?? ctx.sessionId, ctx.checkpoint?.turnId ?? ctx.turnId, resolved.real);
     await writeTextAtomic(resolved.real, args.content, existing?.mode);
     await rememberWritten(resolved.real, ctx);
     const shown = displayPath(resolved.absolute, ctx);

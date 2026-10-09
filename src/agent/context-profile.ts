@@ -118,7 +118,8 @@ export const LEAN_BELOW_PROMPT_PER_SECOND = 150;
  * What a call must look like still comes from the schema; what is dropped is
  * advice on when and how to use the tool well. */
 const TERSE_DESCRIPTIONS: Readonly<Record<string, string>> = {
-  task: 'Start a read-only research sub-agent. It sees none of this conversation: give it a self-contained prompt. Only its final answer comes back.',
+  task: 'Start a read-only research sub-agent. It sees none of this conversation: give it a self-contained prompt. Its answer includes a trace path.',
+  agent: 'Delegate a self-contained coding task to an agent with local tools and this conversation\'s permissions.',
   web_fetch: 'Fetch a public http(s) URL and return its content as text.',
   web_search: 'Search the web; returns titles, URLs and snippets.',
   search_conversations: 'Search the user\'s other ClikCode conversations; returns matching chats with snippets and anchors.',

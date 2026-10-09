@@ -41,6 +41,7 @@ const CONTINUE_AFTER_LENGTH = '[harness] Your last reply reached the output limi
 /** A tool's class, for one the shared classifier cannot name (an MCP
  * server's, a skill). */
 const CLASS_CATEGORY: Partial<Record<ToolDefinition['class'], ToolCategory>> = { exec: 'run', read: 'read', write: 'edit', network: 'fetch' };
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'bash_output', 'kill_bash', 'wait']);
 
 /** The gateway loop's row category: the tool's own name through the classifier
  * every harness's rows go through (so grep reads as a search here too), else
@@ -48,7 +49,7 @@ const CLASS_CATEGORY: Partial<Record<ToolDefinition['class'], ToolCategory>> = {
 function categoryForTool(tool: ToolDefinition | undefined, args?: Record<string, unknown>): { category?: ToolCategory; agent?: boolean } {
   // The turn is waiting on a sub-agent, which the UI shows as an agent row.
   if (!tool) return {};
-  if (tool.name === TASK_TOOL_NAME) return { agent: true };
+  if (tool.name === TASK_TOOL_NAME || tool.name === 'agent') return { agent: true };
   const named = categoryOf(tool.name, args, GATEWAY_HARNESS_COMMAND);
   if (named.category) return named;
   const category = CLASS_CATEGORY[tool.class];
@@ -269,7 +270,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const innerSubagent = input.subagent ? undefined : createSubagentRunner({
     // A sub-agent runs under its parent's profile, whatever decided it.
     parent: { ...input, contextProfile: profile.name, permissionRules: turnRules }, tools, runTurn: runGatewayHarnessTurn,
-    ...(onApproval ? { approve: (title: string, detail?: string, rule?: string) => queueApproval(() => onApproval(title, detail, rule)) } : {}),
+    checkpoint: { sessionId: input.sessionId, turnId }, workSystem: baseSystem,
+    ...(onApproval ? { approve: (title: string, detail?: string, rule?: string, preview?: import('../tui/render/approval-block.js').ApprovalPreview) => queueApproval(() => onApproval(title, detail, rule, preview)) } : {}),
     // A sub-agent's spend is this turn's spend: it lands in the same ledger
     // and is reported as it happens, not when the task returns.
     onUsage: (delta) => {
@@ -280,18 +282,27 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // Swarm, when the conversation has one, runs the task on another provider
   // and returns a card. Null means this host's own sub-agent still does it.
   const runSubagent = innerSubagent && input.swarmDelegate
-    ? async (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string }): Promise<ToolRunResult> => {
-      const delegated = await input.swarmDelegate?.(request);
+    ? async (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string; kind?: 'research' | 'work' }): Promise<ToolRunResult> => {
+      const delegated = request.kind === 'work' ? null : await input.swarmDelegate?.(request);
       if (delegated) return delegated;
       return innerSubagent(request);
     }
     : innerSubagent;
 
-  const toolContext = (callId: string, emitOutput: (chunk: string) => void): ToolContext => ({
-    cwd, addDirs, sessionId: input.sessionId, turnId, stateDir: input.stateDir, homeDir, signal, checkpoints, session, callId, emitOutput,
+  const toolContext = (callId: string, toolName: string, emitOutput: (chunk: string) => void): ToolContext => ({
+    cwd, addDirs,
+    // A coding child shares its parent's background shell lifecycle. A shell
+    // it starts can keep running after the child finishes; the parent hears
+    // its exit and can read or stop it on the next step or turn.
+    sessionId: input.subagent?.checkpoint && SHELL_TOOLS.has(toolName) ? input.subagent.checkpoint.sessionId : input.sessionId,
+    turnId: input.subagent?.checkpoint && SHELL_TOOLS.has(toolName) ? input.subagent.checkpoint.turnId : turnId,
+    stateDir: input.stateDir, homeDir, signal, checkpoints,
+    session: input.subagent?.checkpoint && SHELL_TOOLS.has(toolName) ? sessionState(input.stateDir, input.subagent.checkpoint.sessionId) : session,
+    callId, emitOutput,
+    ...(input.subagent?.checkpoint ? { checkpoint: input.subagent.checkpoint } : {}),
     outputCap: toolOutputCap(contextWindow, profile.toolOutputBytes),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
-    ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string; model?: string }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
+    ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string; model?: string; kind?: 'research' | 'work' }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
 
   const executeCall = async (call: ModelToolCall): Promise<ToolRunResult> => {
@@ -328,7 +339,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
 
     let streamed = '';
     let lastEmit = 0;
-    const ctx = toolContext(call.id, (chunk) => {
+    const ctx = toolContext(call.id, tool.name, (chunk) => {
       streamed = `${streamed}${chunk}`.slice(-8000);
       const now = Date.now();
       if (now - lastEmit < STREAM_EVENT_INTERVAL_MS) return;
