@@ -131,15 +131,28 @@ describe('enter again: send into the chat', () => {
   const message = { id: 'a', text: 'first', command: false };
   const notice = { id: 'n', text: 'done', command: false, notification: true };
   const command = { id: 'c', text: '/model opus', command: true };
+  const ready = (queued: ChatModel['queued'], patch: Partial<Pick<ChatModel, 'running' | 'submissions' | 'live'>> = {}): boolean =>
+    enterAgainReady({ queued, running: true, submissions: [], ...patch });
 
   it('is ready when a message of the user\'s is waiting', () => {
-    expect(enterAgainReady({ queued: [notice, message], running: true })).toBe(true);
+    expect(ready([notice, message])).toBe(true);
   });
 
   it('never with nothing running, nothing waiting, or only a notice or a command waiting', () => {
-    expect(enterAgainReady({ queued: [message], running: false })).toBe(false);
-    expect(enterAgainReady({ queued: [], running: true })).toBe(false);
-    expect(enterAgainReady({ queued: [notice, command], running: true })).toBe(false);
+    expect(ready([message], { running: false })).toBe(false);
+    expect(ready([])).toBe(false);
+    expect(ready([notice, command])).toBe(false);
+  });
+
+  // The terminal's rule (enterAgainSends): no hint and no button for what
+  // will not happen.
+  it('never for a message the turn already holds for its next pause, or in a turn that could not take one', () => {
+    expect(ready([{ ...message, held: true }])).toBe(false);
+    expect(ready([message], { submissions: [{ id: 'a', text: 'first', disposition: 'queued', unsteered: true }] })).toBe(false);
+  });
+
+  it('never once Stop was asked for', () => {
+    expect(ready([message], { live: { stopping: true } as LiveTurn })).toBe(false);
   });
 });
 
