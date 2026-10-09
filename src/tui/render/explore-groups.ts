@@ -94,6 +94,8 @@ export function mergedExploreLines(events: readonly HarnessActivityEvent[], ende
   const running = settled.some((event) => event.kind === 'tool-start');
   const calls = settled.slice(-EXPLORE_SHOWN_CALLS).map((event) => {
     const result = activityResult(event);
+    // Stopped with its turn is not a failure (HarnessActivityEvent.stopped).
+    if (event.stopped) return `${chalk.dim(event.label)} ${chalk.yellow('stopped')}`;
     const label = event.kind === 'tool-error' ? `${event.label} failed` : tensedLabel(event.label, event.kind === 'tool-start');
     return event.kind === 'tool-error' ? chalk.red(label) : chalk.dim(`${label}${result ? ` · ${result}` : ''}`);
   });
