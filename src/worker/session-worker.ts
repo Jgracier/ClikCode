@@ -17,7 +17,7 @@ import { createResumeWaiter } from './resume-wait.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { createServer, type Socket } from 'node:net';
-import { hasHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
+import { hasHeldVendorProcess, stopHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
 import { existsSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
@@ -729,12 +729,30 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       return;
     }
     if (command.type === 'cancel') {
-      // Nothing running is not an error -- a cancel racing the turn's own
-      // natural completion is ordinary, not a client mistake to report.
-      // With none, it cancels a turn parked for the reset, if there is one.
-      if (!activeController) { await resumeWaiter.cancel('Stopped waiting for the reset'); return; }
-      activeRestoreDraft = command.restoreDraft;
-      activeController.abort();
+      if (activeController) {
+        lifecycle('worker.cancel', { stopped: 'turn' });
+        activeRestoreDraft = command.restoreDraft;
+        activeController.abort();
+        return;
+      }
+      // No turn: what the window shows running is the vendor's background
+      // work (its tasks, sub-agents, or a follow-up between turns), and Stop
+      // stops that too. It used to be dropped here, so the work -- and the
+      // window following it -- ran on until it ended by itself.
+      if (hasHeldVendorProcess(sessionId)) {
+        lifecycle('worker.cancel', { stopped: 'held vendor' });
+        await stopHeldVendorProcess(sessionId);
+        return;
+      }
+      if (vendorBackground.busy || await persistentWorkRunning(sessionId)) {
+        lifecycle('worker.cancel', { stopped: 'vendor background work' });
+        await closePersistentTransport(sessionId);
+        return;
+      }
+      // Else a turn parked for the reset, if there is one. Nothing running
+      // is not an error: a cancel racing a turn's own end is ordinary.
+      lifecycle('worker.cancel', { stopped: resumeWaiter.pending ? 'reset wait' : 'nothing' });
+      await resumeWaiter.cancel('Stopped waiting for the reset');
       return;
     }
     if (command.type === 'steer') {
