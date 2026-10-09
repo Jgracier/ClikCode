@@ -545,20 +545,24 @@ SCENARIOS = {
         'watch': ['start the long job', 'The long job is finished.'],
         'never': ['stopping', 'enter again stop & send'],
     },
-    # Enter mid-turn queues the message; Enter again, nothing typed, stops the
-    # turn and sends it as the next one at once -- one row the whole way.
+    # A message queued for after the turn (`/send queue`) into an agent that
+    # takes steering: Enter again, nothing typed, puts it into the chat now.
+    # The turn is not stopped and no second turn starts -- one row the whole
+    # way.
     'send-queued-now': {
-        'env': {'FAKE_DELAY_MS': '300'},
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '300'},
         'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']},
                   {'blocks': ['The queued one answered now.']}],
         'steps': [
+            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('type', 'then do this'), ('wait_for', 'enter again stop & send', 10), ('keys', '\r'),
-            ('wait_for', 'The queued one answered now.', 40), ('settle', 3),
+            ('type', 'then do this'), ('wait_for', 'enter again send into the chat', 10), ('keys', '\r'),
+            ('wait_for', 'Steered in: then do this.', 40), ('settle', 3),
         ],
-        'watch': ['start the long job', 'then do this', 'The queued one answered now.'],
-        'never': ['The long job is finished.'],
-        'final_once': ['then do this'],
+        'watch': ['start the long job', 'Steered in: then do this.'],
+        'ever': ['sent into the turn'],
+        'never': ['The queued one answered now.', 'stopping', 'Stopped'],
+        'final_once': ['Steered in: then do this.'],
     },
     # Enter mid-turn into an agent that takes steering (Claude Code over
     # ACP): the message waits while a call runs -- a steer would interrupt it
@@ -600,19 +604,31 @@ SCENARIOS = {
         'snap_contains': {'taken-back': ['running sleep']},
         'never': ['Steered in: also run the linter.', 'Queued turn answered.', 'stopping', 'Stopped'],
     },
-    # Ctrl+C is the one key that stops a turn.
+    # Ctrl+C stops a turn, at any point.
     'ctrl-c-stops-turn': {
         'env': {'FAKE_DELAY_MS': '300'},
         'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('keys', '\x1b'), ('settle', 1.5), ('snap', 'after-esc'),
-            ('keys', '\x03'), ('wait_for', 'Stopped', 15), ('settle', 2),
+            ('keys', '\x03'), ('wait_for', 'Stopped after', 15), ('settle', 2),
         ],
-        # Still running: the waiting line is up, writing, its clock going.
-        'snap_contains': {'after-esc': ['writing · ']},
-        'watch': ['start the long job'],
-        'never': ['The long job is finished.'],
+        'watch': ['start the long job', 'Step one of'],
+        'never': ['The long job is finished.', 'Worked for'],
+    },
+    # Esc, nothing waiting, stops a turn that has started answering -- which
+    # the waiting line says while it runs, as Claude Code's "esc to
+    # interrupt" does. What it wrote stays.
+    'esc-stops-answered-turn': {
+        'env': {'FAKE_DELAY_MS': '300'},
+        'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']}],
+        'steps': [
+            ('type', 'start the long job'), ('wait_for', 'Step one of', 30), ('settle', 0.5), ('snap', 'running'),
+            ('keys', '\x1b'), ('wait_for', 'Stopped after', 15), ('settle', 2),
+        ],
+        'snap_contains': {'running': ['writing · ', ' · esc stop']},
+        'watch': ['start the long job', 'Step one of'],
+        'never': ['The long job is finished.', 'Worked for'],
+        'final_contains': ['Stopped after'],
     },
     # A turn stopped under a running call reads as stopped, not finished:
     # the call's row says stopped, the turn ends on "Stopped after", and the

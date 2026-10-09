@@ -636,7 +636,7 @@ export function turnHasAnswer(model: Pick<ChatModel, 'live'>): boolean {
  * Enter again puts it into the chat. */
 export function queuedRowLabel(model: Pick<ChatModel, 'submissions'>, item: { id: string; held?: boolean }, enterAgain: boolean): string {
   const unsteered = model.submissions.some((entry) => entry.id === item.id && entry.unsteered);
-  return [item.held ? STEER_WORDS.held : 'queued', ...(unsteered ? [STEER_WORDS.unsteered] : []), ...(enterAgain ? [STEER_WORDS.stopAndSend] : [])].join(' · ');
+  return [item.held ? STEER_WORDS.held : 'queued', ...(unsteered ? [STEER_WORDS.unsteered] : []), ...(enterAgain ? [STEER_WORDS.sendNow] : [])].join(' · ');
 }
 
 export function answeredApproval(model: ChatModel, id: string): ChatModel {
