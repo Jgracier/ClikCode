@@ -51,7 +51,7 @@ import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
-import { hasDurableSteer, STEER_WORDS, steerTranscriptRows } from './render/steer-rows.js';
+import { enterAgainSends, hasDurableSteer, STEER_WORDS, steerTranscriptRows, type WaitingMessage } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/search-focus.js';
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
@@ -441,7 +441,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // Enter again, nothing typed, on a message already waiting: it goes
       // into the chat at the next pause. The turn, and any sub-agent it
       // started, keeps running.
-      const enter = waitingEnterAction(turn.draft, this.messageWaiting(), Boolean(turn.sendWaiting) && !turn.cancelled);
+      const enter = waitingEnterAction(turn.draft, this.enterAgainReady(), Boolean(turn.sendWaiting) && !turn.cancelled);
       if (enter === 'send-waiting') {
         turn.sendWaiting!();
         return;
@@ -471,21 +471,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** User messages still waiting, oldest first. A command and a background
    *  notice stay in the queue: Esc does not edit them, and Enter again does
    *  not send them. One still being submitted (`sending`) is not waiting. */
-  private waitingUserMessages(): Array<{ id: string; text: string }> {
+  private waitingUserMessages(): Array<{ id: string; text: string } & WaitingMessage> {
     const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command' && item.kind !== 'notification');
+    const startedAt = this.currentSession?.pendingTurn?.startedAt;
+    const unsteered = (id: string): WaitingMessage => (this.waitingSubmissions.some((item) => item.id === id && item.unsteered) ? { unsteered: true } : {});
     return [
-      ...stored.map((item) => ({ id: item.id, text: item.text })),
+      ...stored.map((item) => ({ id: item.id, text: item.text, ...(item.heldForTurn && item.heldForTurn === startedAt ? { held: true } : {}), ...unsteered(item.id) })),
       ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !stored.some((entry) => entry.id === item.id))
-        .map((item) => ({ id: item.id!, text: item.text })),
+        .map((item) => ({ id: item.id!, text: item.text, ...unsteered(item.id!) })),
     ];
   }
 
-  /** A message typed during this turn is waiting with its row on screen --
-   * queued for after it, or held for its next pause -- so Enter on nothing
-   * puts it into the chat. One still being submitted has not been answered
-   * yet: a quick double Enter must not send it twice. */
-  private messageWaiting(): boolean {
-    return this.waitingUserMessages().length > 0;
+  /** A message typed during this turn is waiting with its row on screen,
+   * and Enter on nothing would put it into the chat (enterAgainSends). One
+   * still being submitted has not been answered yet: a quick double Enter
+   * must not send it twice. */
+  private enterAgainReady(): boolean {
+    return enterAgainSends(this.waitingUserMessages());
   }
 
   /** The turn has an answer: text, or a tool. A thought is not one. */
@@ -1760,10 +1762,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         && !hasDurableSteer(item, pending?.steers ?? []))
         .map((item) => ({ role: 'user' as const, content: item.text, queueState: item.state, user: true, ...(item.unsteered ? { unsteered: true } : {}) })),
     ];
-    // Enter again puts the oldest waiting user message into the chat. Esc
-    // takes the newest back. With one message they are the same row.
+    // Enter again puts the oldest waiting user message into the chat, when
+    // it would (enterAgainSends -- the key asks the same). Esc takes the
+    // newest back. With one message they are the same row.
     const waitingUser = (message: { user: boolean; queueState: string }): boolean => message.user && !['steered', 'sending', 'error'].includes(message.queueState);
-    const enterAt = this.turn?.sendWaiting && !this.turn.cancelled && !this.turn.draft.trim() ? queuedMessages.findIndex(waitingUser) : -1;
+    const enterAt = this.turn?.sendWaiting && !this.turn.cancelled && !this.turn.draft.trim()
+      && enterAgainSends(queuedMessages.filter(waitingUser).map((message) => ({ held: message.queueState === 'pause', ...(message.unsteered ? { unsteered: true } : {}) })))
+      ? queuedMessages.findIndex(waitingUser) : -1;
     const escAt = this.turn?.takeBack ? queuedMessages.map(waitingUser).lastIndexOf(true) : -1;
     // The final status row is written without a trailing newline, so using
     // the complete terminal height is safe and important: leaving one row
@@ -2119,16 +2124,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // Provisional, and so never retired: a queued turn becomes a real user
       // message the moment it is sent, and would then be written a second time.
       // The keys before the note on why it queued: a narrow row drops parts
-      // from the end, and what can be done is the part worth keeping.
-      const keys = [
-        ...(queueIndex === enterAt ? [` · ${STEER_WORDS.stopAndSend}`] : []),
-        ...(queueIndex === escAt ? [` · ${keyHint('takeBack')}`] : []),
-      ].join('');
-      const status = message.queueState === 'steered' ? STEER_WORDS.steered
-        : message.queueState === 'sending' ? 'submitting…'
-          : message.queueState === 'pause' ? `${STEER_WORDS.held}${keys}`
-            : message.queueState === 'error' ? 'not sent · restored for editing'
-              : `queued for next turn${keys}${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}`;
+      // from the end, and what can be done is the part worth keeping. Esc
+      // goes first when both do not fit: it is the shorter, and always works.
+      const enterKey = queueIndex === enterAt ? [STEER_WORDS.stopAndSend] : [];
+      const escKey = queueIndex === escAt ? [keyHint('takeBack')] : [];
+      const statusWith = (keys: readonly string[]): string => {
+        const said = keys.map((key) => ` · ${key}`).join('');
+        return message.queueState === 'steered' ? STEER_WORDS.steered
+          : message.queueState === 'sending' ? 'submitting…'
+            : message.queueState === 'pause' ? `${STEER_WORDS.held}${said}`
+              : message.queueState === 'error' ? 'not sent · restored for editing'
+                : `queued for next turn${said}${message.unsteered ? ` · ${STEER_WORDS.unsteered}` : ''}`;
+      };
+      const hintRoom = Math.max(1, inner - 4);
+      const roomy = statusWith([...enterKey, ...escKey]);
+      const status = terminalCellWidth(roomy) <= hintRoom ? roomy : statusWith([...escKey, ...enterKey]);
       // One row, the same separator the transcript gives every other message:
       // a message submitted mid-turn is still a message the user wrote.
       // The speaker changes once, where the queue begins: two rows there, the
@@ -2136,7 +2146,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // they are a list of things the same person wrote, not a new speaker
       // each time.
       liveConversation.push(...(queueIndex === 0 ? ['', ''] : ['']),
-        ...userRows(message.content), `  ${chalk.dim(`↳ ${fitHint(status, Math.max(1, inner - 4))}`)}`);
+        ...userRows(message.content), `  ${chalk.dim(`↳ ${fitHint(status, hintRoom)}`)}`);
     }
     const conversationLines = liveConversationLines(liveConversation, true);
     const meta = this.statusText(inner);

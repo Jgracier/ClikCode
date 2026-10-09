@@ -29,6 +29,22 @@ export const STEER_WORDS = {
   stopAndSend: keyHint('sendNow'),
 } as const;
 
+/** A message of the user's waiting while a turn runs, as Enter again sees
+ *  it: `held` -- the turn is holding it for its next pause already;
+ *  `unsteered` -- the turn said it could not take one. */
+export type WaitingMessage = { held?: boolean; unsteered?: boolean };
+
+/** Whether Enter again -- nothing typed -- puts the oldest waiting message
+ *  (`waiting[0]`, the one the worker takes) into the chat. Not when the turn
+ *  already holds it for its next pause: the worker only answers "queued".
+ *  Not when this turn could not take a message: sending it again only queues
+ *  it again. The hint, the key and VS Code's button all ask this, so none of
+ *  them offers what will not happen. */
+export function enterAgainSends(waiting: readonly WaitingMessage[]): boolean {
+  const oldest = waiting[0];
+  return Boolean(oldest) && !oldest!.held && !waiting.some((message) => message.unsteered);
+}
+
 /** Anything the live composer is tracking. Only 'steered' entries are ever
  *  drawn here; the rest are still in flight or failed. */
 export type LiveSubmission = {

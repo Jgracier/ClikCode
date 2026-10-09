@@ -6,7 +6,7 @@
  * cannot take it back.
  */
 import { describe, expect, it } from 'vitest';
-import { hasDurableSteer, steerTranscriptRows, type LiveSubmission } from './steer-rows';
+import { enterAgainSends, hasDurableSteer, steerTranscriptRows, type LiveSubmission } from './steer-rows';
 
 const render = (text: string) => [`row:${text}`];
 const live = (text: string, sequence: number, state: LiveSubmission['state'] = 'steered'): LiveSubmission =>
@@ -81,5 +81,21 @@ describe('which steers reach the transcript', () => {
   it('hides the live copy once its durable one, with the same id, has landed', () => {
     const result = rows({ durable: [{ text: 'check tests', responseOffset: 1, id: 'a' }], live: [{ ...live('check tests', 5), id: 'a' }] });
     expect(result).toHaveLength(1);
+  });
+});
+
+describe('Enter again on a waiting message', () => {
+  it('sends the oldest when it is only queued', () => {
+    expect(enterAgainSends([{}, { held: true }])).toBe(true);
+  });
+  it('offers nothing when the turn already holds it for its next pause: the worker only answers "queued"', () => {
+    expect(enterAgainSends([{ held: true }, {}])).toBe(false);
+  });
+  it('offers nothing when this turn could not take a message: it would only queue again', () => {
+    expect(enterAgainSends([{ unsteered: true }])).toBe(false);
+    expect(enterAgainSends([{}, { unsteered: true }])).toBe(false);
+  });
+  it('offers nothing with nothing waiting', () => {
+    expect(enterAgainSends([])).toBe(false);
   });
 });
