@@ -77,3 +77,11 @@ describe('where a call\'s output sits', () => {
     expect(drawn.map(indent)).toEqual([2, 4, 4]);
   });
 });
+
+describe('a thought once it is over', () => {
+  it('stays as how long it went on, at least a second', async () => {
+    const { thoughtRow } = await import('./tool-rows.js');
+    expect(plain([thoughtRow(3400)])).toEqual(['✻ Thought for 3s']);
+    expect(plain([thoughtRow(120)])).toEqual(['✻ Thought for 1s']);
+  });
+});

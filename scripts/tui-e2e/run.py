@@ -480,9 +480,12 @@ SCENARIOS = {
         'turns': [{'thought': {'text': '**Inspecting the parser** I should look at the tokens first.', 'ms': 2500},
                    'blocks': ['The parser is fine.']}],
         'steps': [('type', 'check the parser'), ('wait_for', 'The parser is fine.', 30), ('settle', 2)],
-        'watch': ['check the parser', 'The parser is fine.'], 'ever': ['Inspecting the parser · '],
+        'watch': ['check the parser', 'The parser is fine.'], 'ever': ['Inspecting the parser · ', '✻ I should look at the tokens first.'],
         # The reasoning row under it does not repeat the heading or its **.
         'never': ['**Inspecting', '✻ Inspecting'],
+        # Once the answer begins the thought stays, settled, where it was had:
+        # it never just vanishes.
+        'final_contains': ['✻ Thought for '],
     },
     # Reads and searches in a row are one row while they happen, growing in
     # place and settling once -- never a row per call and then a merged copy

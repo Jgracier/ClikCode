@@ -64,7 +64,7 @@ import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
-import { callRow, underCallRow } from './render/tool-rows.js';
+import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
@@ -278,6 +278,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private transientNotice?: string;
   private transientNoticeTimer?: NodeJS.Timeout;
   private thought?: Thought;
+  /** When the thought on screen began, and how much of the answer had
+   * streamed: it settles there as "Thought for 3s" (settleThought). */
+  private thoughtStart?: { at: number; offset: number };
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
   private streamingBlocks = createStreamingBlockParser();
@@ -893,8 +896,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // about to retry on another account. Appends with no content remain a
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
-    // The thought led to this text; once the answer is arriving it is stale.
-    if (text) { this.thought = undefined; this.vendorAnswered(); if (this.turn) this.turn.activeAt = this.turn.writingAt = Date.now(); }
+    // The thought led to this text: it settles where it was had.
+    if (text) { this.settleThought(); this.vendorAnswered(); if (this.turn) this.turn.activeAt = this.turn.writingAt = Date.now(); }
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -962,14 +965,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     if (event.kind === 'thinking') {
-      // Reasoning is one live row, never the transcript: the current item's
-      // text as it accumulates (see appendThought). A bare "thinking" label
-      // says nothing the spinner does not.
-      this.thought = appendThought(this.thought, sanitizeTerminalText(event.label, { singleLine: true }), event.id);
+      // Reasoning is one live row while it is had: the current item's text
+      // as it accumulates (see appendThought). A bare "thinking" label says
+      // nothing the spinner does not. A new item settles the one before.
+      const next = appendThought(this.thought, sanitizeTerminalText(event.label, { singleLine: true }), event.id);
+      if (next !== this.thought) {
+        if (this.thought && this.thought.id !== next?.id) this.settleThought();
+        if (!this.thought) this.thoughtStart = { at: Date.now(), offset: this.liveResponse.length };
+        this.thought = next;
+      }
       this.schedulePaint();
       return;
     }
-    if (event.kind === 'tool-start') this.thought = undefined;
+    if (event.kind === 'tool-start') this.settleThought();
     const anchor = this.turn ? this.activityAnchor : this.restingAnchor();
     const responseOffset = this.turn ? live?.responseOffset ?? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
@@ -978,6 +986,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const lifecycle = activityLifecyclePhase(this.activeTools, event);
     this.activeTools = lifecycle.activeTools;
     this.schedulePaint();
+  }
+
+  /** The thought on screen is over -- the answer or a call began, a new one
+   * took over, or the turn ended. It stays in the transcript where it was
+   * had, as "Thought for 3s" (Claude Code's words, and VS Code's): taking
+   * the row away broke the rule that nothing shown ever disappears. */
+  private settleThought(): void {
+    const thought = this.thought;
+    const start = this.thoughtStart;
+    this.thought = undefined;
+    this.thoughtStart = undefined;
+    if (!thought || !start || !this.turn) return;
+    this.activityEntries = [...this.activityEntries, {
+      anchor: this.activityAnchor, responseOffset: Math.min(start.offset, this.liveResponse.length), sequence: ++this.timelineSequence,
+      event: { kind: 'thinking', label: thought.text },
+      lines: [thoughtRow(Date.now() - start.at)],
+    }];
   }
 
   /** A scrollable viewer in the live region. It used to keep only the last six
@@ -1210,6 +1235,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.waitingSubmissions = [];
     this.waitingFrame = 0;
     this.thought = undefined;
+    this.thoughtStart = undefined;
     this.panelState = undefined;
     // Whatever the previous turn retired belongs to the terminal now. This one
     // starts owing everything it produces, and nothing from before it.
@@ -1334,6 +1360,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Settled while the turn is still the current one: a "tell it instead"
     // draft goes back into its composer, handed off below.
     this.settleApprovals();
+    // A thought still being had when the turn ended stays, settled. Not
+    // when stepping out: the turn, and the thought, carry on.
+    if (!this.steppedOut) this.settleThought();
     // Stopped: what was still running did not finish. Its row says so, as
     // the worker's saved copy of the turn does (turn-journal.ts).
     if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));
@@ -1347,6 +1376,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.turn = undefined;
     this.thought = undefined;
+    this.thoughtStart = undefined;
     // Anything typed during the turn and not submitted is still the user's
     // text. It lives in the turn's draft while the turn runs, and the composer
     // that opens afterwards reads queuedDraft -- so without this handoff a
@@ -1451,7 +1481,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * under END_SUMMARY_MS. A stopped turn always ends on it. */
   private endOfTurnSummary(turn: WaitingTurn): string | undefined {
     const ms = turnElapsedMs(turn.clock, Date.now());
-    const calls = this.activityEntries.filter((entry) => entry.event && this.ofThisTurn(entry));
+    const calls = this.activityEntries.filter((entry) => entry.event && entry.event.kind !== 'thinking' && this.ofThisTurn(entry));
     const stopped = turn.cancelled || calls.some((entry) => entry.event?.stopped);
     if (!stopped && !endsWithSummary(ms, calls.length)) return undefined;
     return turnSummary({ ms, stopped, diffs: calls.flatMap((entry) => (entry.event?.diff?.length ? [entry.event.diff] : [])) });
