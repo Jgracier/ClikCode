@@ -1,5 +1,4 @@
-/** Runs the `task` tool's sub-agent: a nested turn of the same loop, with the
- * same model client, a short system prompt, read-only tools and a step cap.
+/** Runs a nested turn of the same loop and model client.
  *
  * Its conversation is stored under the parent's session, so tool work survives
  * interruption and the parent can read the trace when needed. */
@@ -15,8 +14,10 @@ import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
 /** By name, not by class: `read` also covers bash_output and task itself,
  * and an MCP tool's class says nothing about what the server does. */
 const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(['read_file', 'list_dir', 'glob', 'grep', 'web_fetch', 'web_search']);
+const WORK_BLOCKED_TOOL_NAMES: ReadonlySet<string> = new Set(['task', 'agent', 'ask_user', 'exit_plan_mode']);
 
 export const SUBAGENT_MAX_STEPS = 20;
+const WORK_SUBAGENT_MAX_STEPS = 60;
 
 const USAGE_FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd'] as const;
 
@@ -26,6 +27,7 @@ export interface SubagentRequest {
   /** The parent's task call, which the sub-agent's activity nests under. */
   callId: string;
   signal?: AbortSignal;
+  kind?: 'research' | 'work';
 }
 
 type Approver = NonNullable<GatewayHarnessTurnInput['onApproval']>;
@@ -42,6 +44,9 @@ interface SubagentRunnerOptions {
   /** Usage the sub-agent spent since the last call; the parent adds it to its ledger. */
   onUsage(delta: TokenUsage): void;
   maxSteps?: number;
+  /** The parent turn owns the file checkpoint and project instructions. */
+  checkpoint: { sessionId: string; turnId: string };
+  workSystem: string;
 }
 
 /** Kept short: local models have small contexts, and a sub-agent's whole
@@ -76,6 +81,7 @@ function usageDelta(current: TokenUsage, previous: TokenUsage): TokenUsage {
 /** What the parent's model gets back: the answer, not the working. */
 function answerFrom(result: GatewayHarnessTurnResult, transcript: readonly ConversationItem[], maxSteps: number): ToolRunResult {
   if (result.stopReason === 'model-error') return { output: `The sub-agent failed: ${result.text}`, isError: true };
+  if (result.stopReason === 'account-switch') return { output: 'The sub-agent stopped at an account or provider switch. Its completed work is in the trace.', isError: true };
   if (result.stopReason === 'max-steps') {
     // The loop's own closing note ("send another message") is addressed to a
     // user; it is the last item, and the parent gets its own note instead.
@@ -93,10 +99,13 @@ function answerFrom(result: GatewayHarnessTurnResult, transcript: readonly Conve
 
 export function createSubagentRunner(options: SubagentRunnerOptions): (request: SubagentRequest) => Promise<ToolRunResult> {
   const { parent } = options;
-  const tools = options.tools.filter((tool) => SUBAGENT_TOOL_NAMES.has(tool.name));
   const maxSteps = options.maxSteps ?? SUBAGENT_MAX_STEPS;
 
   return async (request) => {
+    const work = request.kind === 'work';
+    const tools = options.tools.filter((tool) => work
+      ? !WORK_BLOCKED_TOOL_NAMES.has(tool.name)
+      : SUBAGENT_TOOL_NAMES.has(tool.name));
     // Unique per run: session state (read tracking) is keyed by it, and two
     // parallel sub-agents must not share it.
     const sessionId = `${parent.sessionId}.task.${randomUUID()}`;
@@ -110,9 +119,14 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         ...(parent.currentPermissionMode ? { currentPermissionMode: parent.currentPermissionMode } : {}),
         ...(parent.permissionRules ? { permissionRules: parent.permissionRules } : {}),
         modelClient: parent.modelClient,
+        ...(parent.modelClientForStep ? { modelClientForStep: parent.modelClientForStep } : {}),
         stateDir: parent.stateDir,
-        tools, maxSteps,
-        subagent: { system: subagentSystemPrompt(parent), transcriptFile },
+        tools, maxSteps: work ? WORK_SUBAGENT_MAX_STEPS : maxSteps,
+        subagent: {
+          system: work ? `${options.workSystem}\n\n# Delegated task\nComplete the task you were given and report the changes and verification to the parent agent. Your tool calls are visible in the chat. You cannot start another agent or ask the user a question.` : subagentSystemPrompt(parent),
+          transcriptFile,
+          ...(work ? { checkpoint: options.checkpoint } : {}),
+        },
         ...(parent.addDirs ? { addDirs: parent.addDirs } : {}),
         ...(parent.homeDir ? { homeDir: parent.homeDir } : {}),
         ...(parent.contextWindow ? { contextWindow: parent.contextWindow } : {}),
@@ -131,7 +145,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
           options.onUsage(delta);
         },
       });
-      const answer = answerFrom(result, await store.load(), maxSteps);
+      const answer = answerFrom(result, await store.load(), work ? WORK_SUBAGENT_MAX_STEPS : maxSteps);
       return { ...answer, output: `${answer.output}\n\n[Sub-agent tool trace: ${transcriptFile}]` };
     } finally {
       disposeSessionState(parent.stateDir, sessionId);

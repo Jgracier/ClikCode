@@ -145,7 +145,7 @@ export const notebookEditTool = defineTool<NotebookEditArgs>({
     const edited = editNotebook(notebook, args);
     if ('error' in edited) return { output: edited.error, isError: true };
     const mode = (await fs.stat(resolved.real)).mode & 0o7777;
-    await ctx.checkpoints.snapshot(ctx.sessionId, ctx.turnId, resolved.real);
+    await ctx.checkpoints.snapshot(ctx.checkpoint?.sessionId ?? ctx.sessionId, ctx.checkpoint?.turnId ?? ctx.turnId, resolved.real);
     // Jupyter writes one-space indentation and a trailing newline.
     await writeTextAtomic(resolved.real, `${JSON.stringify(edited.notebook, null, 1)}\n`, mode);
     await rememberWritten(resolved.real, ctx);
