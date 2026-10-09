@@ -53,6 +53,12 @@ export function sameCall(prior: HarnessActivityEvent, next: HarnessActivityEvent
   return prior.kind === 'tool-start' && prior.label === next.label;
 }
 
+/** A call the turn was stopped under, if it was still open: closed, not
+ * failed (HarnessActivityEvent.stopped). A finished call is left as it is. */
+export function stoppedCall<T extends Pick<HarnessActivityEvent, 'kind' | 'stopped'>>(event: T): T {
+  return event.kind === 'tool-start' ? { ...event, kind: 'tool-error', stopped: true } : event;
+}
+
 /** A later frame of a call, merged into what the row already knew. */
 export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivityEvent): HarnessActivityEvent {
   return {
@@ -397,9 +403,9 @@ export function nextTurnTickMs(clock: TurnClock, now: number, animating: boolean
 
 /** What follows a finished call: a non-zero exit and a run of a second or
  * more -- the exceptions, since every call exits 0 in under a second. */
-export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'exitCode' | 'durationMs' | 'childTools' | 'childTokens'>): { parts: string[]; failed: boolean } | undefined {
+export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'stopped' | 'exitCode' | 'durationMs' | 'childTools' | 'childTokens'>): { parts: string[]; failed: boolean } | undefined {
   if (event.kind !== 'tool-done' && event.kind !== 'tool-error') return undefined;
-  const failed = event.kind === 'tool-error' || (event.exitCode !== undefined && event.exitCode !== 0);
+  const failed = (event.kind === 'tool-error' && !event.stopped) || (event.exitCode !== undefined && event.exitCode !== 0);
   const parts = [
     ...(event.childTools ? [toolUses(event.childTools)] : []),
     // A sub-agent's spend, as Claude Code shows it: "30k tokens".

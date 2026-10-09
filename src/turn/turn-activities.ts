@@ -19,7 +19,7 @@ import { asFileDiffs } from '../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import {
   ACTIVITY_PREVIEW_LINES, COMMAND_HEAD_LINES, COMMAND_TAIL_LINES, DIFF_PREVIEW_FILES, DIFF_PREVIEW_LINES,
-  mergeActivity, sameCall, withChildTool,
+  mergeActivity, sameCall, stoppedCall, withChildTool,
 } from '../harness/protocol/activity-view.js';
 import type { TranscriptMessage, TurnActivity } from '../session/model.js';
 
@@ -233,13 +233,20 @@ export function activitiesBetween(
     .map((activity) => ({ ...activity, responseOffset: Math.min(length, Math.max(0, activity.responseOffset - start)) }));
 }
 
+/** The turn was stopped: every call still open is closed as stopped
+ * (stoppedCall), its sub-agents' with it. The same list when none was. */
+export function stopOpenActivities(activities: readonly TurnActivity[]): TurnActivity[] {
+  if (!activities.some((activity) => activity.event.kind === 'tool-start')) return activities as TurnActivity[];
+  return activities.map((activity) => (activity.event.kind === 'tool-start' ? { ...activity, event: stoppedCall(activity.event) } : activity));
+}
+
 /** Bytes of a text summary of calls. */
 const SUMMARY_MAX_CHARS = 1500;
 
 /** What a text-only reader is told of a turn that wrote no text: the calls
  * it made, newest kept. */
 export function activityTextSummary(activities: readonly TurnActivity[]): string {
-  const rows = activities.map(({ event }) => `${event.label}${event.kind === 'tool-error' ? ' (failed)' : event.kind === 'tool-start' ? ' (not finished)' : ''}`);
+  const rows = activities.map(({ event }) => `${event.label}${event.stopped ? ' (stopped)' : event.kind === 'tool-error' ? ' (failed)' : event.kind === 'tool-start' ? ' (not finished)' : ''}`);
   const kept: string[] = [];
   let room = SUMMARY_MAX_CHARS;
   for (let index = rows.length - 1; index >= 0; index -= 1) {

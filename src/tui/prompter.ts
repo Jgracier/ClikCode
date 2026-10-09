@@ -31,7 +31,7 @@ import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
-import { ActivityEntry, collapseToolRuns, rebaseActivityOffsets, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
+import { ActivityEntry, collapseToolRuns, rebaseActivityOffsets, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
@@ -65,7 +65,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTer
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
-import { appendThought, liveWaitKind, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
+import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { keyHint, keyHintFor } from '../harness/protocol/wording.js';
 import { userError } from '../harness/protocol/errors.js';
@@ -858,6 +858,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // holds.
     if (this.turn && !this.journal.running && this.currentSession?.id === session.id && !session.pendingTurn
       && (session.messages?.length ?? 0) > this.activityAnchor) {
+      this.settleSavedStops(session);
       this.stopWaiting(false, 'saved');
     }
     if (!this.turn) this.waitingSubmissions = [];
@@ -1330,6 +1331,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Settled while the turn is still the current one: a "tell it instead"
     // draft goes back into its composer, handed off below.
     this.settleApprovals();
+    // Stopped: what was still running did not finish. Its row says so, as
+    // the worker's saved copy of the turn does (turn-journal.ts).
+    if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));
     // A turn that did real work ends on a line saying how long it took and
     // what it changed (Codex). Only a real turn -- one that took messages,
     // not a wait on a download or a shell command -- and only its end:
@@ -1424,14 +1428,30 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     output.write(notifySequence(message));
   }
 
+  /** This turn's own calls: the anchor is reused when a turn left no
+   * message, so the sequence decides. */
+  private ofThisTurn(entry: ActivityEntry): boolean {
+    return entry.anchor >= this.activityAnchor && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor;
+  }
+
+  /** The saved turn is the durable copy: a call it records as stopped is
+   * stopped here too, whichever window stopped the turn. */
+  private settleSavedStops(session: HarnessSession): void {
+    const stopped = (session.messages ?? []).slice(this.activityAnchor).flatMap((message) => (message.role === 'assistant'
+      ? readTurnActivities(message.activities, message.content.length).flatMap((activity) => (activity.event.stopped && !activity.event.parentId ? [activity.event] : []))
+      : []));
+    if (!stopped.length) return;
+    this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry) && stopped.some((event) => sameCall(entry.event!, event)));
+  }
+
   /** The end-of-turn line, or nothing for a turn that ran no tools and took
-   * under END_SUMMARY_MS. */
+   * under END_SUMMARY_MS. A stopped turn always ends on it. */
   private endOfTurnSummary(turn: WaitingTurn): string | undefined {
     const ms = turnElapsedMs(turn.clock, Date.now());
-    const calls = this.activityEntries.filter((entry) => entry.event && entry.anchor >= this.activityAnchor
-      && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor);
-    if (!endsWithSummary(ms, calls.length)) return undefined;
-    return turnSummary({ ms, diffs: calls.flatMap((entry) => (entry.event?.diff?.length ? [entry.event.diff] : [])) });
+    const calls = this.activityEntries.filter((entry) => entry.event && this.ofThisTurn(entry));
+    const stopped = turn.cancelled || calls.some((entry) => entry.event?.stopped);
+    if (!stopped && !endsWithSummary(ms, calls.length)) return undefined;
+    return turnSummary({ ms, stopped, diffs: calls.flatMap((entry) => (entry.event?.diff?.length ? [entry.event.diff] : [])) });
   }
 
   /** The vendor is producing output: a phase reported before it is over. */

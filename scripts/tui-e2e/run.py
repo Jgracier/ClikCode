@@ -606,6 +606,23 @@ SCENARIOS = {
         'watch': ['start the long job'],
         'never': ['The long job is finished.'],
     },
+    # A turn stopped under a running call reads as stopped, not finished:
+    # the call's row says stopped, the turn ends on "Stopped after", and the
+    # saved turn -- reopened by a fresh process -- says the same.
+    'stopped-turn-reads-stopped': {
+        'cols': 70, 'env': {'FAKE_DELAY_MS': '60'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 20000, 'blocks': ['The build passed.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30), ('settle', 1),
+            ('keys', '\x03'), ('wait_for', 'Stopped after', 15), ('settle', 2), ('snap', 'stopped'),
+            ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\r'), ('settle', 2.5),
+        ],
+        'watch': [],
+        'snap_contains': {'stopped': ['■ $ sleep 30 stopped', 'Stopped after']},
+        'final_contains': ['Starting the long build.', '■ $ sleep 30 stopped'],
+        'final_once': ['$ sleep 30'],
+        'never': ['Worked for', 'The build passed.'],
+    },
     # `/send queue`: the same steering-capable agent, and the message waits
     # for the turn to end instead -- never steered in, never stopping it.
     'send-queue-mode': {

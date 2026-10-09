@@ -6,7 +6,7 @@ import chalk from 'chalk';
 import { sanitizeTerminalText } from './text.js';
 import { visibleSlice } from './width.js';
 import { renderActivityLine } from '../../harness/protocol/activity-line.js';
-import { mergeActivity, sameCall } from '../../harness/protocol/activity-view.js';
+import { mergeActivity, sameCall, stoppedCall } from '../../harness/protocol/activity-view.js';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
 
@@ -69,6 +69,20 @@ export function upsertActivityEvent(
   // full-screen reset. No entry is ever collapsed into a count either: a row
   // whose text can still change could never enter scrollback at all.
   return next;
+}
+
+/** Calls closed as stopped (stoppedCall) where `stops` says their turn was
+ * stopped under them: the entries that are still open, re-rendered. The
+ * same list when none was. */
+export function stopEntries(entries: readonly ActivityEntry[], stops: (entry: ActivityEntry) => boolean): ActivityEntry[] {
+  let changed = false;
+  const next = entries.map((entry) => {
+    if (entry.event?.kind !== 'tool-start' || !stops(entry)) return entry;
+    changed = true;
+    const event = stoppedCall(entry.event);
+    return { ...entry, event, lines: renderActivityLine(event).map((line) => line.trim()) };
+  });
+  return changed ? next : entries as ActivityEntry[];
 }
 
 /** A replacement stream is usually a cumulative snapshot. Offsets within its
