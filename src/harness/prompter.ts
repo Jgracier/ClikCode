@@ -65,6 +65,10 @@ export interface HarnessActivityEvent {
   durationMs?: number;
   /** A finished command's exit code, where the vendor reports one. */
   exitCode?: number;
+  /** A call still open when the user stopped its turn: closed as a
+   * `tool-error` (it did not finish), but it did not fail either, and says
+   * so. Kept in the saved turn, so a reopened chat shows it stopped too. */
+  stopped?: boolean;
   /** Set when this row is another provider working inside the host's turn.
    * The host chat paints that provider's name; the model is not given the
    * provider's transcript. */

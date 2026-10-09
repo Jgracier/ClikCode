@@ -6,7 +6,7 @@ import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
 import type { HarnessSession, MessageOrigin } from '../session/model.js';
 import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
-import { activitiesBetween, readTurnActivities, recordTurnActivity, runningTurnActivity } from './turn-activities.js';
+import { activitiesBetween, readTurnActivities, recordTurnActivity, runningTurnActivity, stopOpenActivities } from './turn-activities.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
 
@@ -343,6 +343,14 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   session.messages = sessionTranscriptMessages(session);
   delete session.pendingTurn;
   session.updatedAt = now;
+}
+
+/** The turn was stopped: a call still open did not finish, and the saved
+ * turn says so. Settled as finished, a stopped turn read as a completed one. */
+export function stopPendingCalls(session: HarnessSession): void {
+  const pending = session.pendingTurn;
+  const activities = readTurnActivities(pending?.activities, pending?.response?.length ?? 0);
+  if (pending && activities.length) pending.activities = stopOpenActivities(activities);
 }
 
 export function discardPendingTurn(session: HarnessSession, prompt?: string): boolean {

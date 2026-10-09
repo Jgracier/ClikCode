@@ -6,7 +6,7 @@ import type { LiveTurnSubmission } from './live-input.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { readState } from '../session/state/read.js';
 import { writeState, writeTranscriptCheckpoint } from '../session/state/write.js';
-import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, updatePendingResponse } from './checkpoint.js';
+import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, stopPendingCalls, updatePendingResponse } from './checkpoint.js';
 
 /** Name a chat, once, from a title the model produced.
  *
@@ -41,6 +41,7 @@ export async function preserveInterruptedTurn(id: string, prompt: string, partia
   const session = state.sessions.find((item) => item.id === id);
   if (!session) return;
   if (session.pendingTurn?.prompt === prompt) {
+    stopPendingCalls(session);
     if (partialResponse) updatePendingResponse(session, partialResponse, 'replace', new Date().toISOString());
     finishPendingTurn(session, partialResponse || undefined, new Date().toISOString());
   } else session.messages = interruptedTurnMessages(session.messages ?? [], prompt, partialResponse, outputStarted);

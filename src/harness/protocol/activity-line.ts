@@ -10,6 +10,9 @@ import { activityResult, tensedLabel } from './turn-flow.js';
 import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
+/** A call its turn was stopped under (HarnessActivityEvent.stopped). */
+export const STOPPED_GLYPH = '■';
+
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
   // The tool's own label, with nothing prepended to it. A status word in front
@@ -32,7 +35,11 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
   // once done -- and then what it found (`42 lines`), before the outcome.
   // A failure keeps the call's own name: "Edited a.ts failed" says two things.
   const result = activityResult(event);
-  const summary = `  ${event.kind === 'tool-error'
+  // Stopped with its turn: not the kind's glyph, which a finished call wears,
+  // nor a failure's red. The call's own name, as it was asked for.
+  const summary = `  ${event.stopped
+    ? `${chalk.yellow(STOPPED_GLYPH)} ${chalk.dim(event.label)} ${chalk.yellow('stopped')}`
+    : event.kind === 'tool-error'
     ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
     : `${mark}${chalk.dim(`${tensedLabel(event.label, event.kind === 'tool-start')}${result ? ` · ${result}` : ''}`)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
   if (!event.diff?.length) {

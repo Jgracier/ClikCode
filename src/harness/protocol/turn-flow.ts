@@ -154,7 +154,7 @@ export function endsWithSummary(ms: number, calls: number): boolean {
 
 /** The line a turn ends on, as Codex's "Worked for 1m 2s" and Cursor's
  * "3 files edited": how long, and what it changed. */
-export function turnSummary(state: { ms: number; diffs?: ReadonlyArray<readonly FileDiff[]> }): string {
+export function turnSummary(state: { ms: number; diffs?: ReadonlyArray<readonly FileDiff[]>; stopped?: boolean }): string {
   const files = new Map<string, { additions: number; removals: number }>();
   for (const diff of state.diffs ?? []) {
     for (const file of diff) {
@@ -166,5 +166,7 @@ export function turnSummary(state: { ms: number; diffs?: ReadonlyArray<readonly 
   const additions = [...files.values()].reduce((sum, file) => sum + file.additions, 0);
   const removals = [...files.values()].reduce((sum, file) => sum + file.removals, 0);
   const changed = files.size ? ` · ${plural(files.size, 'file')} changed${additions ? ` +${additions}` : ''}${removals ? ` −${removals}` : ''}` : '';
-  return `Worked for ${formatElapsed(Math.max(1000, state.ms))}${changed}`;
+  // A stopped turn says so where it ends: "Stopped" is otherwise only a
+  // passing notice, and "Worked for" read as a turn that finished.
+  return `${state.stopped ? 'Stopped after' : 'Worked for'} ${formatElapsed(Math.max(1000, state.ms))}${changed}`;
 }
