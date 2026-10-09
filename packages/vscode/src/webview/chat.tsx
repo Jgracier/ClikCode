@@ -21,7 +21,7 @@ import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
-import { turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type ThoughtEntry, type TurnTrace } from '../model';
+import { liveElapsedMs, turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff } from '../protocol';
 import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
@@ -536,13 +536,16 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
   return (
     <div class="working-wrap">
       <div class={`working status-${status.tone}`} role="status">
-        <Spinner tone={!asking && live && turnStalled(now - live.activeAt) ? 'tone-yellow' : status.toneClass} still={asking} />
+        {/* Waiting on the user is not working: a still dot, as the terminal
+            shows it, and no clock -- it is stopped. */}
+        {asking ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
+          : <Spinner tone={live && turnStalled(now - live.activeAt) ? 'tone-yellow' : status.toneClass} />}
         <span class={`working-label ${status.toneClass}`} style={shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
-        <span class="muted">{live ? formatElapsed(now - live.startedAt) : ''}{elsewhere ? ' · running in another window' : ''}</span>
+        <span class="muted">{live && !asking ? formatElapsed(liveElapsedMs(live, now)) : ''}{elsewhere ? `${live && !asking ? ' · ' : ''}running in another window` : ''}</span>
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, enterAgainReady, queuedRowLabel, stoppingTurn, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { answeredApproval, applyEvent, emptyModel, enterAgainReady, liveElapsedMs, queuedRowLabel, stoppingTurn, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedGroupCount, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -83,6 +83,30 @@ describe('stop: a turn asked to stop says so until it ends', () => {
     expect(stoppingTurn(emptyModel())).toEqual(emptyModel());
     const ended = run([worker({ type: 'waiting-stop' }), { type: 'turn-start', sessionId: 's1', prompt: 'again' }, worker({ type: 'waiting-start', message: 'thinking' })], stoppingTurn(begin()));
     expect(ended.live!.stopping).toBeUndefined();
+  });
+});
+
+describe('an approval stops the turn\'s clock, as in the terminal', () => {
+  it('leaves the time waiting on the user out, and runs again once answered', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const started = applyEvent(begin(), activity({ kind: 'tool-done', id: 'x', label: '$ ls', category: 'run' }));
+    vi.setSystemTime(4_000);
+    const asking = applyEvent(started, worker({ type: 'approval-request', id: 'p', title: 'Run make' }));
+    vi.setSystemTime(64_000);
+    expect(liveElapsedMs(asking.live!, Date.now())).toBe(3_000);
+    const answered = answeredApproval(asking, 'p');
+    vi.setSystemTime(66_000);
+    expect(liveElapsedMs(answered.live!, Date.now())).toBe(5_000);
+    // And the turn's summary counts the same.
+    const ended = applyEvent(answered, worker({ type: 'waiting-stop' }));
+    const trace = ended.traces.at(-1)!;
+    expect(trace.endedAt - trace.startedAt).toBe(5_000);
+  });
+
+  it('says it is waiting for you while one is up', () => {
+    const asking = applyEvent(begin(), worker({ type: 'approval-request', id: 'p', title: 'Run make' }));
+    expect(workingStatus(asking.live, true, Date.now())).toMatchObject({ label: 'Waiting for you…', tone: 'asking' });
   });
 });
 
