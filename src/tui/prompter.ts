@@ -1915,9 +1915,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // The call, and under it what it printed (tool-rows.ts): running and
     // settled at the same indent.
     const underCall = (line: string): string => underCallRow(line, conversationInner);
+    // One blank row above a call, none below it: what follows -- the next
+    // call, the next paragraph -- opens with its own, so the gap under a
+    // call's output is one row, as the gap above it is. Activity between
+    // messages (standaloneActivity) closes its own.
     const activityRows = (lines: readonly string[], category?: ToolCategory): string[] => (lines.length
       ? ['', ...lines.map((line, index) => (index > 0 ? underCall(line)
-        : callRow(line, conversationInner, category ? TOOL_CATEGORY_STYLE[category].paint : undefined))), '']
+        : callRow(line, conversationInner, category ? TOOL_CATEGORY_STYLE[category].paint : undefined)))]
       : []);
     const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
     /** A user-side message: what the user wrote, or a notice ClikCode sent
@@ -1940,7 +1944,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (entry.anchor !== anchor || entry.responseOffset !== undefined) continue;
         const id = entry.sequence;
         if (!this.emitted.claimActivity(id)) continue;
-        rows.push(...activityRows(entry.lines, entry.event?.category));
+        rows.push(...activityRows(entry.lines, entry.event?.category), '');
       }
       return rows;
     };
@@ -1974,7 +1978,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES).map(underCall) : [];
       return {
         id, done: false, responseOffset: entry.responseOffset,
-        lines: ['', `  ${row}`, ...(step ? [step] : []), ...live, ''],
+        lines: ['', `  ${row}`, ...(step ? [step] : []), ...live],
       };
     };
     /** A run of reads and searches as one row (explore-groups.ts): the
@@ -1986,10 +1990,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const under = calls.map(underCall);
       if (running && !group.done) {
         const row = runningChatLine(summary, this.reducedMotion ? 0 : this.waitingFrame, 'tool', first.event?.category).trim();
-        return { id: group.key, done: false, responseOffset: first.responseOffset, lines: ['', `  ${row}`, ...under, ''] };
+        return { id: group.key, done: false, responseOffset: first.responseOffset, lines: ['', `  ${row}`, ...under] };
       }
       const { line, category } = mergedExploreSummaryLine(group.members.map((member) => member.event), summary);
-      return { id: group.key, done: group.done, responseOffset: first.responseOffset, lines: [...activityRows([line], category).slice(0, -1), ...under, ''] };
+      return { id: group.key, done: group.done, responseOffset: first.responseOffset, lines: [...activityRows([line], category), ...under] };
     };
     /** The turn's rows, looking-around runs merged. A lone call is its own
      * row as always, except that a finished read or search waits in the live

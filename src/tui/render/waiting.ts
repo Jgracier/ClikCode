@@ -32,7 +32,8 @@ export function runningChatLine(
         : undefined;
   const glyph = waitingSpinnerGlyph(frame);
   const spinner = colour ? chalk[colour](glyph) : chalk.dim(glyph);
-  const verb = kind === 'agent' ? 'agent ' : '';
+  // A title that already says it is one ("Agent worker 0") is not told again.
+  const verb = kind === 'agent' && !/^agent\b/i.test(label) ? 'agent ' : '';
   return `  ${spinner}  ${verb}${label}`;
 }
 

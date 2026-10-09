@@ -113,6 +113,8 @@ SCENARIOS = {
         'watch': ['The build passed.', 'Second answer arrives here.'],
         # The board, on the running chat: its one state, and the footer's keys for it.
         'snap_contains': {'board1': ['Working', 'working', '2 agents', 'Recent', 'enter open · → agents · tab options · del delete · ← close']},
+        # A running sub-agent's title already says it is one.
+        'ever': ['Agent worker 0'], 'never': ['agent Agent'],
         'no_clear_after_type': True,
     },
     'single-block': {
@@ -693,7 +695,11 @@ SCENARIOS = {
         ],
         'watch': [],
         'snap_contains': {'board-and-back': ['Running the parts first.', 'part0 ok', 'part3 ok', 'abc123 fix', 'Then the commit was checked.']},
-        'final_contains': ['Running the parts first.', 'part0 ok', 'part1 ok', 'part2 ok', 'part3 ok', 'abc123 fix', 'Then the commit was checked.'],
+        'final_contains': ['Running the parts first.', 'part0 ok', 'part1 ok', 'part2 ok', 'part3 ok', 'abc123 fix', 'Then the commit was checked.',
+                           # One blank row under a call's output, as above
+                           # it: before the next call, and before the prose.
+                           '    part0 ok'.ljust(70) + '\n' + ' ' * 70 + '\n  ▸ $ npx vitest run part1',
+                           '    abc123 fix'.ljust(70) + '\n' + ' ' * 70 + '\n  Then the commit was checked.'],
         'final_once': ['part0 ok', 'part3 ok', 'abc123 fix'],
         'never': ['Interrupted turn activity'],
     },
