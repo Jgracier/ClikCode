@@ -32,6 +32,8 @@ type Json = Record<string, unknown>;
 export const HELD_VENDOR_CEILING_MS = 60 * 60 * 1000;
 /** How long a new turn waits for a held process to exit before stopping it. */
 const RELEASE_WAIT_MS = 5 * 60 * 1000;
+/** How long a process the user stopped gets to exit on its own. */
+const STOP_WAIT_MS = 2_000;
 
 export interface HeldVendorOptions {
   sessionId: string;
@@ -53,8 +55,9 @@ export interface HeldVendor {
   line(text: string, record: Json | undefined): void;
   /** Claude went between turns (BackgroundWait onQuiet). */
   quiet(): void;
-  /** End it: close stdin and wait for the exit (bounded; then stopped). */
-  close(): Promise<void>;
+  /** End it: close stdin and wait for the exit (bounded; then stopped).
+   * `stop`: the user stopped it -- a moment to exit, then it is ended. */
+  close(stop?: boolean): Promise<void>;
 }
 
 const held = new Map<string, HeldVendor>();
@@ -103,7 +106,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
       if (record) options.background.note(record);
     },
     quiet() { end('completed'); },
-    async close() {
+    async close(stop = false) {
       closing = true;
       forget(options.sessionId, vendor);
       end('superseded');
@@ -112,7 +115,7 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
       let timer: NodeJS.Timeout | undefined;
       const stopped = await Promise.race([
         exit.then(() => false),
-        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), RELEASE_WAIT_MS); timer.unref(); }),
+        new Promise<boolean>((resolve) => { timer = setTimeout(() => resolve(true), stop ? STOP_WAIT_MS : RELEASE_WAIT_MS); timer.unref(); }),
       ]);
       if (timer) clearTimeout(timer);
       if (stopped) {
@@ -147,6 +150,15 @@ export async function releaseHeldVendorProcess(sessionId: string): Promise<boole
   const vendor = held.get(sessionId);
   if (!vendor) return false;
   await vendor.close();
+  return true;
+}
+
+/** The user stopped this session's background work: end the held process
+ * now, its tasks with it. */
+export async function stopHeldVendorProcess(sessionId: string): Promise<boolean> {
+  const vendor = held.get(sessionId);
+  if (!vendor) return false;
+  await vendor.close(true);
   return true;
 }
 

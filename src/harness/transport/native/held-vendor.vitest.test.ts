@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createBackgroundWait, streamJsonUserMessage } from './background-wait.js';
-import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
+import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, stopHeldVendorProcess, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
 import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease } from './turn.js';
 import { reportStructuredLine } from '../../events/structured.js';
 import { createStreamState } from '../../events/adapters.js';
@@ -25,7 +25,7 @@ const claude = { command: 'claude', parser: 'claude-stream-json' } as unknown as
 
 /** Stand-in claude: the head up to the first result at once, the rest after
  * `delayMs` (never, when null) unless stdin closed first; exits when stdin ends. */
-const vendor = (delayMs: number | null): string[] => {
+const vendor = (delayMs: number | null, ignoresEnd = false): string[] => {
   const head = records.slice(0, firstResult).map((record) => JSON.stringify(record));
   const tail = records.slice(firstResult).map((record) => JSON.stringify(record));
   return ['-e', `
@@ -35,14 +35,14 @@ const vendor = (delayMs: number | null): string[] => {
       if (delay !== null) setTimeout(() => { if (closed) return; delivered = true; tail.forEach((l) => console.log(l)); }, delay); });
     // As claude does when its input ends: running tasks are killed, and said so.
     let delivered = false;
-    process.stdin.on('end', () => { closed = true;
+    process.stdin.on('end', () => { closed = true; if (${JSON.stringify(ignoresEnd)}) { setInterval(() => {}, 1000); return; }
       if (!delivered) console.log(JSON.stringify({ type: 'system', subtype: 'task_notification', task_id: ${JSON.stringify(taskId)}, status: 'killed' }));
       setTimeout(() => process.exit(0), 20); });
     process.stdin.resume();`];
 };
 
 /** The turn loop's side, as the vendor turn wires it. */
-async function runTurn(sessionId: string, delayMs: number | null) {
+async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = false) {
   const input = createTurnInput();
   const idle = createTurnIdleController();
   const release = createTurnRelease();
@@ -52,7 +52,7 @@ async function runTurn(sessionId: string, delayMs: number | null) {
   const streams = new WeakMap<object, ReturnType<typeof createStreamState>>();
   const started = Date.now();
   const output = await captureNativeHarnessTurn(
-    { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs), {}, {
+    { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs, ignoresEnd), {}, {
       stdinText: streamJsonUserMessage('go'), input, idleController: idle, idleTimeoutMs: 10_000, release,
       onStdoutLine: (line) => {
         const record = JSON.parse(line) as Json;
@@ -125,5 +125,17 @@ describe('a Claude turn that leaves background tasks running', () => {
     await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5_000 });
     await waiting;
     expect(hasHeldVendorProcess('held-d')).toBe(false);
+  });
+
+  // Ctrl+C while the window followed its background work used to be dropped:
+  // the work, and the window's spinner, ran on until they ended by themselves.
+  it('stops at once when the user stops it, even a vendor that ignores its input ending', async () => {
+    await runTurn('held-e', null, true);
+    expect(hasHeldVendorProcess('held-e')).toBe(true);
+    const started = Date.now();
+    expect(await stopHeldVendorProcess('held-e')).toBe(true);
+    expect(Date.now() - started).toBeLessThan(4_000);
+    expect(hasHeldVendorProcess('held-e')).toBe(false);
+    expect(await stopHeldVendorProcess('held-e')).toBe(false);
   });
 });
