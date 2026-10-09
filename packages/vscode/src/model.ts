@@ -118,6 +118,10 @@ export interface LiveTurn {
    * approval was answered: quiet past turn-pace's threshold and the working
    * line's spinner turns yellow, as the terminal's does. */
   activeAt: number;
+  /** Stop was asked for (the button, Esc, the command): the working line
+   * says so and Stop cannot be asked again, until the turn ends -- the
+   * terminal's "stopping…". */
+  stopping?: boolean;
 }
 
 export interface ChatModel {
@@ -637,6 +641,12 @@ export function turnHasAnswer(model: Pick<ChatModel, 'live'>): boolean {
 export function queuedRowLabel(model: Pick<ChatModel, 'submissions'>, item: { id: string; held?: boolean }, enterAgain: boolean): string {
   const unsteered = model.submissions.some((entry) => entry.id === item.id && entry.unsteered);
   return [item.held ? STEER_WORDS.held : 'queued', ...(unsteered ? [STEER_WORDS.unsteered] : []), ...(enterAgain ? [STEER_WORDS.sendNow] : [])].join(' · ');
+}
+
+/** Stop was asked for: the turn shows it is stopping until it ends. */
+export function stoppingTurn(model: ChatModel): ChatModel {
+  if (!model.running || model.live?.stopping) return model;
+  return { ...model, live: { ...(model.live ?? freshLive('thinking')), stopping: true } };
 }
 
 export function answeredApproval(model: ChatModel, id: string): ChatModel {

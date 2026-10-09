@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, enterAgainReady, queuedRowLabel, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { applyEvent, emptyModel, enterAgainReady, queuedRowLabel, stoppingTurn, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedGroupCount, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -64,6 +64,25 @@ describe("a turn's changes, together", () => {
   it('is not whole when the file changed since, or is gone', () => {
     expect(unwindChanges('top\nedited by hand', [edit('a.ts', 'x', 'y')]).whole).toBe(false);
     expect(unwindChanges(undefined, [edit('a.ts', 'x', 'y')]).whole).toBe(false);
+  });
+});
+
+describe('stop: a turn asked to stop says so until it ends', () => {
+  it('says "Stopping" over the open call, and only once', () => {
+    const running = applyEvent(begin(), activity({ kind: 'tool-start', id: 't', label: '$ sleep 30', category: 'run' }));
+    expect(workingStatus(running.live, false, Date.now()).label).toBe('Running sleep…');
+    const stopping = stoppingTurn(running);
+    expect(stopping.live!.stopping).toBe(true);
+    expect(workingStatus(stopping.live, false, Date.now()).label).toBe('Stopping…');
+    expect(stoppingTurn(stopping)).toBe(stopping);
+    // A snapshot or a delta while it stops keeps it stopping.
+    expect(applyEvent(stopping, worker({ type: 'delta', text: 'more', mode: 'append' })).live!.stopping).toBe(true);
+  });
+
+  it('is not a state of a turn that is not running, nor of the next turn', () => {
+    expect(stoppingTurn(emptyModel())).toEqual(emptyModel());
+    const ended = run([worker({ type: 'waiting-stop' }), { type: 'turn-start', sessionId: 's1', prompt: 'again' }, worker({ type: 'waiting-start', message: 'thinking' })], stoppingTurn(begin()));
+    expect(ended.live!.stopping).toBeUndefined();
   });
 });
 

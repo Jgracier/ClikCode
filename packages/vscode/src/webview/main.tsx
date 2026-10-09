@@ -217,6 +217,8 @@ function App(): JSX.Element {
   const stick = useRef(true);
   const runningRef = useRef(false);
   runningRef.current = Boolean(model?.running);
+  const stoppingRef = useRef(false);
+  stoppingRef.current = Boolean(model?.live?.stopping);
   const approvalRef = useRef<string>();
   approvalRef.current = model?.approvals[0]?.id;
   /** The newest message of the user's still waiting -- what Esc takes back. */
@@ -301,7 +303,7 @@ function App(): JSX.Element {
         const waiting = waitingRef.current;
         if (pending) { event.preventDefault(); post({ type: 'approve', id: pending, approved: false }); }
         else if (waiting) { event.preventDefault(); post({ type: 'unqueue', id: waiting.id, edit: true }); }
-        else { event.preventDefault(); post({ type: 'cancel', restoreDraft: !answeredRef.current }); }
+        else { event.preventDefault(); if (!stoppingRef.current) post({ type: 'cancel', restoreDraft: !answeredRef.current }); }
       }
     };
     document.addEventListener('click', onClick);

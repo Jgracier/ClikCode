@@ -22,10 +22,12 @@ export interface WorkingStatus {
  * call's verb, else the reasoning's heading, else "writing" while answer
  * text arrives, else "thinking". */
 export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: number): WorkingStatus {
+  // Stopping, it says so, whatever call is still open (the terminal's rule).
+  const stopping = Boolean(live?.stopping);
   const status = turnStatus({
-    phase: live ? live.phase ?? live.waitingLabel : 'starting',
-    ...(live?.toolPhase ? { toolPhase: live.toolPhase } : {}),
-    ...(live?.thought ? { thought: live.thought.text } : {}),
+    phase: stopping ? 'stopping' : live ? live.phase ?? live.waitingLabel : 'starting',
+    ...(live?.toolPhase && !stopping ? { toolPhase: live.toolPhase } : {}),
+    ...(live?.thought && !stopping ? { thought: live.thought.text } : {}),
     asking,
     writing: live?.writingAt !== undefined && now - live.writingAt < WRITING_MS,
   });
