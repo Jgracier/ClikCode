@@ -468,8 +468,11 @@ SCENARIOS = {
         'env': {'FAKE_DELAY_MS': '60'},
         'turns': [{'streamed_tool': {'lines': [f'test file {n} passed' for n in range(1, 9)], 'ms': 700}, 'blocks': ['All the tests pass.']}],
         'steps': [('type', 'run the tests'), ('wait_for', 'All the tests pass.', 40), ('settle', 2)],
-        'watch': [], 'ever': ['test file 3 passed'],
-        'final_contains': ['test file 1 passed', 'test file 8 passed', '3 lines hidden'],
+        # Four columns in, under the call, while it runs and once it settles:
+        # finishing never moves the output sideways.
+        'watch': [], 'ever': ['\n    test file 3 passed'],
+        'final_contains': ['\n    test file 1 passed', '\n    test file 8 passed', '3 lines hidden'],
+        'never': ['\n      test file', '\n  test file'],
     },
     # Reasoning that names itself: its heading is what the status line says
     # while the model thinks.

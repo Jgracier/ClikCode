@@ -63,3 +63,17 @@ describe('a turn saved or sent by an older build', () => {
     expect(plain(entries[0]!.lines)).toEqual(['◆ Edited a.ts +1 -1', '- old line', '+ new line']);
   });
 });
+
+describe('where a call\'s output sits', () => {
+  const indent = (row: string): number => row.replace(/\u001b\[[0-9;]*m/g, '').search(/\S/);
+  it('at the same column running and settled, under the call', async () => {
+    const { callRow, underCallRow } = await import('./tool-rows.js');
+    const running = { kind: 'tool-start' as const, label: '$ npm test', category: 'run' as const, output: ['ok 1', 'ok 2'] };
+    const live = outputPreviewRows({ ...running, outputTail: true }, 3).map((line) => underCallRow(line, 70));
+    // Settled rows are kept trimmed (activity-log.ts) and drawn the same way.
+    const settled = upsertActivityEvent([], 0, 0, { ...running, kind: 'tool-done' }, 1)[0]!.lines;
+    const drawn = [callRow(settled[0]!, 70), ...settled.slice(1).map((line) => underCallRow(line, 70))];
+    expect(live.map(indent)).toEqual([4, 4]);
+    expect(drawn.map(indent)).toEqual([2, 4, 4]);
+  });
+});
