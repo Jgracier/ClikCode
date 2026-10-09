@@ -12,7 +12,7 @@
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { enterAgainSends, STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
-import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, stoppedCall, withChildTool, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
+import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, resumeTurnClock, sameCall, stoppedCall, turnElapsedMs, withChildTool, type OpenTool, type Thought, type TurnClock } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
@@ -120,6 +120,10 @@ export interface LiveTurn {
    * approval was answered: quiet past turn-pace's threshold and the working
    * line's spinner turns yellow, as the terminal's does. */
   activeAt: number;
+  /** Time spent waiting on an approval, which the clock leaves out as the
+   * terminal's does, and since when one is up (the clock stops). */
+  pausedMs?: number;
+  pausedAt?: number;
   /** Stop was asked for (the button, Esc, the command): the working line
    * says so and Stop cannot be asked again, until the turn ends -- the
    * terminal's "stopping…". */
@@ -531,6 +535,8 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       if (model.approvals.some((item) => item.id === event.id)) return model;
       return {
         ...model,
+        // The clock stops while the turn waits on the user, not the agent.
+        ...(model.live && model.live.pausedAt === undefined ? { live: { ...model.live, pausedAt: Date.now() } } : {}),
         approvals: [...model.approvals, {
           id: event.id, title: stripAnsi(event.title),
           ...(event.detail ? { detail: stripAnsi(event.detail) } : {}),
@@ -579,7 +585,8 @@ function endTurn(model: ChatModel): ChatModel {
       // Completed steers are materialized as user messages in session.messages.
       // Keeping the live badges in the finished trace displayed each prompt twice.
       text: model.live?.text ?? '',
-      startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
+      // Less the time approvals waited, as the terminal's summary counts.
+      startedAt: model.live ? Date.now() - liveElapsedMs(model.live, Date.now()) : Date.now(), endedAt: Date.now(),
       ...(saved ? { activities: saved.activities, text: saved.text, saved: true } : {}),
       ...(asked || (saved ?? { activities }).activities.some((activity) => activity.stopped) ? { stopped: true } : {}),
     }].slice(-MAX_TRACES)
@@ -676,8 +683,27 @@ export function stoppingTurn(model: ChatModel): ChatModel {
 }
 
 export function answeredApproval(model: ChatModel, id: string): ChatModel {
-  // Time spent on the user's answer is not the turn going quiet.
-  return { ...model, approvals: model.approvals.filter((item) => item.id !== id), ...(model.live ? { live: { ...model.live, activeAt: Date.now() } } : {}) };
+  const approvals = model.approvals.filter((item) => item.id !== id);
+  // Time spent on the user's answer is not the turn going quiet, and not
+  // the turn's time: the clock runs again once none is waiting.
+  const live = model.live && { ...model.live, activeAt: Date.now(), ...(approvals.length ? {} : resumed(model.live)) };
+  return { ...model, approvals, ...(live ? { live } : {}) };
+}
+
+/** The clock running again after an approval: the pause added up. */
+function resumed(live: LiveTurn): Pick<LiveTurn, 'pausedMs' | 'pausedAt'> {
+  if (live.pausedAt === undefined) return {};
+  return { pausedMs: resumeTurnClock(liveClock(live), Date.now()).pausedMs, pausedAt: undefined };
+}
+
+function liveClock(live: LiveTurn): TurnClock {
+  return { startedAt: live.startedAt, pausedMs: live.pausedMs ?? 0, ...(live.pausedAt === undefined ? {} : { pausedAt: live.pausedAt }) };
+}
+
+/** How long the running turn has taken, less approvals (turnElapsedMs, the
+ * terminal's clock). */
+export function liveElapsedMs(live: LiveTurn, now: number): number {
+  return turnElapsedMs(liveClock(live), now);
 }
 
 export function typedDuringTurn(model: ChatModel, id: string, text: string): ChatModel {
