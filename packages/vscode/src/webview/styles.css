@@ -170,6 +170,7 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .activity-status .codicon { font-size: 14px; }
 .activity.running .activity-line { color: var(--vscode-foreground); }
 .activity.error .activity-status { color: var(--err); }
+.activity.stopped .activity-status, .activity-outcome.stopped { color: var(--warn); }
 .activity-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .composer-box.dropping { border-color: var(--focus); border-style: dashed; }
 .drop-hint {

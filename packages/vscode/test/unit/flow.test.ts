@@ -86,6 +86,35 @@ describe('stop: a turn asked to stop says so until it ends', () => {
   });
 });
 
+describe('a finished turn has no call still running', () => {
+  const opened = (): ChatModel => run([
+    activity({ kind: 'tool-start', id: 'r', label: 'Read a.ts', category: 'read' }),
+    activity({ kind: 'tool-start', id: 's', label: '$ sleep 30', category: 'run' }),
+    activity({ kind: 'tool-done', id: 'r', label: 'Read a.ts' }),
+  ], begin());
+
+  it('marks a call open when the turn was stopped as stopped, and the turn as stopped', () => {
+    const ended = applyEvent(stoppingTurn(opened()), worker({ type: 'waiting-stop' }));
+    const trace = ended.traces.at(-1)!;
+    expect(trace.activities.map((item) => [item.key, item.kind, item.stopped ?? false])).toEqual([['r', 'tool-done', false], ['s', 'tool-error', true]]);
+    expect(trace.stopped).toBe(true);
+  });
+
+  it('settles one a finished turn never closed as done, not running for ever', () => {
+    const trace = applyEvent(opened(), worker({ type: 'waiting-stop' })).traces.at(-1)!;
+    expect(trace.activities.map((item) => item.kind)).toEqual(['tool-done', 'tool-done']);
+    expect(trace.stopped).toBeUndefined();
+  });
+
+  it('reopens a saved stopped turn stopped, and an old one never running', () => {
+    const saved = (event: { kind: 'tool-start' | 'tool-error'; label: string; id?: string; stopped?: boolean }) => session({ messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: '', activities: [{ responseOffset: 0, event }] }] });
+    const stopped = applyEvent(emptyModel(), { type: 'session', session: saved({ kind: 'tool-error', stopped: true, id: 's', label: '$ sleep 30' }) }).traces[0]!;
+    expect(stopped).toMatchObject({ stopped: true, activities: [{ kind: 'tool-error', stopped: true }] });
+    const old = applyEvent(emptyModel(), { type: 'session', session: saved({ kind: 'tool-start', id: 's', label: '$ sleep 30' }) }).traces[0]!;
+    expect(old.activities[0]!.kind).toBe('tool-done');
+  });
+});
+
 describe('esc / edit: taking a waiting message back', () => {
   it('puts its text back only when the worker says it left the queue', () => {
     const taking = new Map([['a', 'first'], ['b', 'second']]);
