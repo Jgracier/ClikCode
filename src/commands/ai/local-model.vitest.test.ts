@@ -41,6 +41,7 @@ const { resolveLocalModelId, localModelLabel } = await import('../../local-model
 const { resolveSlashCommand, routeSlashInput, slashRouteAppliesDuringTurn } = await import('../../tui/slash/registry');
 const { readState } = await import('../../session/state/read');
 const { startOrResumeChat } = await import('./harness');
+const { loadIndex } = await import('../../session/state/index-file');
 const { writeState } = await import('../../session/state/write');
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -226,6 +227,13 @@ describe('the model on a session', () => {
 });
 
 describe('clikcode send --harness clikcode-local', () => {
+  it.each(['clikcode-local', 'gateway'] as const)('stores a new %s chat before a worker is asked for it', async (harness) => {
+    const id = await startOrResumeChat({ harness });
+    // The index on disk, which is all a worker reads: readState also returns
+    // drafts held in this process's memory.
+    expect((await loadIndex())?.sessions.some((item) => item.id === id)).toBe(true);
+  });
+
   it('starts a ClikCode Local chat with the model and approval mode asked for', async () => {
     const id = await startOrResumeChat({ harness: 'clikcode-local', model: 'Qwen3.5 4B', permissions: 'auto' });
     expect((await readState()).sessions.find((item) => item.id === id)).toMatchObject({

@@ -326,6 +326,10 @@ async function startOrResumeAgentChat(options: { route: 'clikcode-local' | 'gate
     session = launchSession(state, process.cwd());
     applyClikCodeAgentSessionPolicy(session, options.route);
     state.sessions.push(session);
+    // On disk before the worker is asked for it, as a vendor chat's is: a
+    // draft held only in this process's memory is a chat the worker cannot
+    // find. It exited "not found" and the turn ran in this process instead.
+    forceStoreSession(session.id);
   }
   if (!session) throw new Error(`AI session "${options.chat}" was not found`);
   if (options.model) {
