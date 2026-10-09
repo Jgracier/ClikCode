@@ -64,6 +64,7 @@ import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
+import { callRow, underCallRow } from './render/tool-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
@@ -1870,11 +1871,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // real work read as a column of dots. The label already says `Bash(...)`
     // and carries the colour itself; the spinner in the waiting band is
     // where the category still shows while a call runs.
+    // The call, and under it what it printed (tool-rows.ts): running and
+    // settled at the same indent.
+    const underCall = (line: string): string => underCallRow(line, conversationInner);
     const activityRows = (lines: readonly string[], category?: ToolCategory): string[] => (lines.length
-      ? ['', ...lines.map((line, index) => {
-        const text = visibleSlice(line, Math.max(1, conversationInner - 2));
-        return `  ${index === 0 && category ? TOOL_CATEGORY_STYLE[category].paint(text) : text}`;
-      }), '']
+      ? ['', ...lines.map((line, index) => (index > 0 ? underCall(line)
+        : callRow(line, conversationInner, category ? TOOL_CATEGORY_STYLE[category].paint : undefined))), '']
       : []);
     const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
     /** A user-side message: what the user wrote, or a notice ClikCode sent
@@ -1928,8 +1930,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         : undefined;
       // What it has printed so far, newest last, under the spinner -- a long
       // build or test run is visibly working instead of a bare timer.
-      const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES)
-        .map((line) => `  ${visibleSlice(line, Math.max(1, conversationInner - 2))}`) : [];
+      const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES).map(underCall) : [];
       return {
         id, done: false, responseOffset: entry.responseOffset,
         lines: ['', `  ${row}`, ...(step ? [step] : []), ...live, ''],
@@ -1941,7 +1942,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const groupRow = (group: TurnGroup<ActivityEntry & GroupRow>, ended: boolean): SettlingTool => {
       const first = group.members[0]!;
       const { summary, calls, running } = mergedExploreLines(group.members.map((member) => member.event), ended);
-      const under = calls.map((call) => `    ${visibleSlice(call, Math.max(1, conversationInner - 4))}`);
+      const under = calls.map(underCall);
       if (running && !group.done) {
         const row = runningChatLine(summary, this.reducedMotion ? 0 : this.waitingFrame, 'tool', first.event?.category).trim();
         return { id: group.key, done: false, responseOffset: first.responseOffset, lines: ['', `  ${row}`, ...under, ''] };
