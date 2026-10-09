@@ -38,6 +38,46 @@ export function agentTurnSettings(session: Pick<HarnessSession, 'model' | 'effor
   };
 }
 
+/**
+ * The conversation so far, retold for an agent that has not seen it (transfer.ts) -- the same
+ * telling a provider taking a conversation over gets. Empty when there is nothing before.
+ */
+export async function agentRetelling(session: HarnessSession, prompt?: string): Promise<string> {
+  const record = canonicalRecord({ ...session, pendingTurn: undefined });
+  if (!record.turns.length) return prompt ?? '';
+  const { localHarnessForCommand } = await import('../runtime/lazy-bridge.js');
+  return transferPrompt(record, prompt ?? '', {
+    maxBytes: transferBudget({}), interrupted: false, displayName: (command) => localHarnessForCommand(command)?.displayName,
+  });
+}
+
+/**
+ * START THE AGENT'S THREAD AT THE SWITCH. The conversation so far is recorded as the new thread's
+ * first message (ClikDeploy POST /v1/agents/{id}/threads), and ClikDeploy warms the agent's prompt
+ * cache over it in the background, so the person's first message to the agent goes alone and is
+ * answered from a cached prefix. Undefined when there is nothing to hand over or the server cannot
+ * take it (an older ClikDeploy): the first turn then retells it, as it always has.
+ */
+export async function seedAgentThread(config: Conf, session: HarnessSession, agentId: string): Promise<string | undefined> {
+  const context = (await agentRetelling(session)).trim();
+  if (!context) return undefined;
+  try {
+    const { baseUrl, apiKey } = gatewayConnection(config);
+    const response = await fetch(`${baseUrl}/v1/agents/${encodeURIComponent(agentId)}/threads`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'content-type': 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
+      body: JSON.stringify({ context, ...agentTurnSettings(session) }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) return undefined;
+    const body = await response.json().catch(() => ({})) as { threadId?: unknown };
+    return typeof body.threadId === 'string' ? body.threadId : undefined;
+  } catch {
+    // fail-open-ok: the first turn retells the conversation instead.
+    return undefined;
+  }
+}
+
 /** One event of the server's agent turn (ClikDeploy agent-chat-turn.ts AgentChatEvent). */
 export type AgentStreamEvent =
   | { type: 'start'; threadId: string; messageId: string; agent: { id: string; handle: string; name: string } }
@@ -132,15 +172,7 @@ export async function runGatewayAgentTurn(input: {
    * knows nothing of the conversation so far. It is told it, the way a
    * provider taking a conversation over is (transfer.ts); a thread the agent
    * already holds carries it itself. */
-  const messageFor = async (): Promise<string> => {
-    if (session.gatewayAgentThreadId) return prompt;
-    const record = canonicalRecord({ ...session, pendingTurn: undefined });
-    if (!record.turns.length) return prompt;
-    const { localHarnessForCommand } = await import('../runtime/lazy-bridge.js');
-    return transferPrompt(record, prompt, {
-      maxBytes: transferBudget({}), interrupted: false, displayName: (command) => localHarnessForCommand(command)?.displayName,
-    });
-  };
+  const messageFor = async (): Promise<string> => (session.gatewayAgentThreadId ? prompt : agentRetelling(session, prompt));
   let handle = 'agent';
   /** Each call's row, by id: its finish updates the row its start drew. */
   const rows = new Map<string, HarnessActivityEvent>();
