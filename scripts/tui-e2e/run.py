@@ -569,7 +569,9 @@ SCENARIOS = {
         ],
         'watch': ['start the build', 'Steered in: also run the linter.'],
         'ever': ['sending at the next pause', 'sent into the turn'],
-        'never': ['Request interrupted', 'Queued turn answered.', 'stopping'],
+        # Held for the pause already: Enter again would do nothing, so it is
+        # not offered.
+        'never': ['Request interrupted', 'Queued turn answered.', 'stopping', 'enter again'],
         'final_once': ['Steered in: also run the linter.'],
     },
     # Esc on a waiting message takes it back into the composer to edit, and
@@ -626,7 +628,7 @@ SCENARIOS = {
     # `/send queue`: the same steering-capable agent, and the message waits
     # for the turn to end instead -- never steered in, never stopping it.
     'send-queue-mode': {
-        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'cols': 70, 'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
         'turns': [{'intro': 'Starting the long build.', 'hold_ms': 4000, 'blocks': ['The build passed.']},
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
@@ -636,7 +638,8 @@ SCENARIOS = {
             ('wait_for', 'The build passed.', 40), ('wait_for', 'Queued turn answered.', 40), ('settle', 3),
         ],
         'watch': ['start the build', 'also run the linter', 'Queued turn answered.'],
-        'ever': ['queued for next turn'],
+        # 70 columns hold one of the two keys: Esc's, which always works.
+        'ever': ['queued for next turn · esc edit'],
         'never': ['Steered in: also run the linter.', 'sending at the next pause', 'sent into the turn', 'stopping'],
     },
     # The terminal around the UI: focus reports asked for and the shell's
