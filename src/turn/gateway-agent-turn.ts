@@ -18,6 +18,7 @@ import { transferBudget, transferPrompt } from './transfer.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
+import { gatewayErrorMessage } from '../gateway/error-message.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { toolLabel } from '../harness/protocol/tools.js';
@@ -158,7 +159,7 @@ export async function runGatewayAgentTurn(input: {
     });
     if (!response.body || !(response.headers.get('content-type') ?? '').includes('text/event-stream')) {
       const body = await response.json().catch(() => ({})) as { error?: unknown };
-      throw new Error(typeof body.error === 'string' ? body.error : `Gateway agent request failed (${response.status})`);
+      throw new Error(gatewayErrorMessage(body) ?? `Gateway agent request failed (${response.status})`);
     }
     let finished = false;
     const events = readAgentStream(response.body, AGENT_STREAM_IDLE_MS, signal);

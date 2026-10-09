@@ -7,6 +7,7 @@ import type Conf from 'conf';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { emitResult } from '../cli/structured-output.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
+import { gatewayErrorMessage } from '../gateway/error-message.js';
 
 export const AGENT_EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
 export const PERMISSION_MODES = ['ask', 'auto', 'bypass'] as const;
@@ -38,7 +39,7 @@ async function request(config: Conf, path: string, method: Method, body?: unknow
   const result = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (!response.ok) {
     throw new GatewayAgentError(
-      typeof result.error === 'string' ? result.error : `Gateway agent request failed (${response.status})`,
+      gatewayErrorMessage(result) ?? `Gateway agent request failed (${response.status})`,
       response.status, typeof result.code === 'string' ? result.code : undefined,
       Array.isArray(result.needs) ? result.needs.filter((need): need is string => typeof need === 'string') : [],
     );
