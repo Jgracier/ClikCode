@@ -26,7 +26,7 @@ export const STEER_WORDS = {
   steered: 'sent into the turn',
   /** `/send steer`, but nothing running could take a steer: it queued. */
   unsteered: "this turn can't take it",
-  stopAndSend: keyHint('sendNow'),
+  sendNow: keyHint('sendNow'),
 } as const;
 
 /** A message of the user's waiting while a turn runs, as Enter again sees

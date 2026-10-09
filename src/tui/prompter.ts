@@ -1606,11 +1606,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * what actually arrives: the open call names the verb, the clock stops for
    * an approval. The spinner turns yellow once the turn has gone quiet.
    *
-   * No key hints: the one whose effect is not obvious (Enter again puts a
-   * waiting message into the chat) is on that message's own row.
-   * Stopping (Ctrl+C), sending and leaving for the board are the same keys
-   * every time and are not spelled out on every frame. */
-  private waitingLine(turn: WaitingTurn): string {
+   * One key hint, where it fits in `width`: `esc stop` while Esc is what
+   * stops the turn (Claude Code's and Codex's "esc to interrupt"). Enter
+   * again's is on the waiting message's own row, and Esc's there too while
+   * a message waits -- Esc takes that back rather than stopping anything. */
+  private waitingLine(turn: WaitingTurn, width: number): string {
     const now = Date.now();
     const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
     // What it says and how it looks, by the shared rules (turn-flow.ts):
@@ -1639,7 +1639,18 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
       stalled: !asking && !turn.cancelled && turnStalled(now - turn.activeAt),
     });
-    return `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
+    const line = `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
+    const hint = ` · ${keyHint('escStop')}`;
+    return this.escStops() && terminalCellWidth(line) + terminalCellWidth(hint) <= width ? `${line}${chalk.dim(hint)}` : line;
+  }
+
+  /** Esc would stop the running turn (see onWaitingKey): a conversation's
+   * turn, not already stopping, with no approval or sign-in up, nothing
+   * waiting for Esc to take back, and the view at the live edge. */
+  private escStops(): boolean {
+    const turn = this.turn;
+    return Boolean(turn && (turn.submit || turn.early) && !turn.cancelled && !this.pendingApproval && !this.signingIn
+      && !this.scrolledBack && !(turn.takeBack && this.waitingUserMessages().length));
   }
 
   private updateWaiting(): void {
@@ -2157,7 +2168,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // The keys before the note on why it queued: a narrow row drops parts
       // from the end, and what can be done is the part worth keeping. Esc
       // goes first when both do not fit: it is the shorter, and always works.
-      const enterKey = queueIndex === enterAt ? [STEER_WORDS.stopAndSend] : [];
+      const enterKey = queueIndex === enterAt ? [STEER_WORDS.sendNow] : [];
       const escKey = queueIndex === escAt ? [keyHint('takeBack')] : [];
       const statusWith = (keys: readonly string[]): string => {
         const said = keys.map((key) => ` · ${key}`).join('');
@@ -2195,7 +2206,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : []));
     if (waitingRows && this.turn) {
-      footer.push('', `  ${visibleSlice(this.waitingLine(this.turn), Math.max(1, inner))}`);
+      footer.push('', `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}`);
     }
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. A spent window replaces the percentage with the reset

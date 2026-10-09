@@ -10,6 +10,10 @@ export const ACTIONS = {
    *  command. Esc does too, once the turn has an answer. Before that, Esc
    *  puts the prompt back in the composer. */
   stop: { verb: 'stop', key: 'Ctrl+C' },
+  /** Esc, when it is what stops the turn (nothing waiting to take back, not
+   *  reading back): the waiting line says so, as Claude Code's and Codex's
+   *  "esc to interrupt" do. Before an answer the prompt comes back too. */
+  escStop: { verb: 'stop', key: 'Esc' },
   /** Mid-turn, a message waiting: take the newest back into the composer to
    *  edit. Nothing running is touched. */
   takeBack: { verb: 'edit', key: 'Esc' },

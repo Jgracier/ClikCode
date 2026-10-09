@@ -8,6 +8,8 @@ describe('one verb per action', () => {
     expect(keyHint('stop')).toBe('ctrl+c stop');
     expect(keyHint('sendNow')).toBe('enter again send into the chat');
     expect(keyHint('takeBack')).toBe('esc edit');
+    // The waiting line's hint while Esc is what stops the turn.
+    expect(keyHint('escStop')).toBe('esc stop');
     expect(buttonTitle('sendNow')).toBe('Send into the chat (Enter again)');
   });
 
