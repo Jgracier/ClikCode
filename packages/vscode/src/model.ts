@@ -10,7 +10,7 @@
  * own snapshot carries it.
  */
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
-import { STEER_WORDS } from '../../../src/tui/render/steer-rows';
+import { enterAgainSends, STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
 import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, stoppedCall, withChildTool, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
@@ -640,9 +640,16 @@ export function takenBackText(takingBack: Map<string, string>, event: Extract<Wo
 
 /** Enter on an empty message box while a turn runs, with a message of the
  * user's already waiting: "enter again" puts it into the chat. The turn
- * keeps running. A background task's notice is not the user's message. */
-export function enterAgainReady(model: Pick<ChatModel, 'queued' | 'running'>): boolean {
-  return model.running && model.queued.some((item) => !item.notification && !item.command);
+ * keeps running. A background task's notice is not the user's message.
+ * Only when it would (enterAgainSends, the terminal's rule too): not a
+ * message the turn already holds for its next pause, nor in a turn that
+ * could not take one, nor once Stop was asked for. */
+export function enterAgainReady(model: Pick<ChatModel, 'queued' | 'running' | 'submissions' | 'live'>): boolean {
+  if (!model.running || model.live?.stopping) return false;
+  return enterAgainSends(model.queued.filter((item) => !item.notification && !item.command).map((item) => ({
+    ...(item.held ? { held: true } : {}),
+    ...(model.submissions.some((entry) => entry.id === item.id && entry.unsteered) ? { unsteered: true } : {}),
+  })));
 }
 
 /** The turn has an answer: assistant text, or a tool row. A thought is not
