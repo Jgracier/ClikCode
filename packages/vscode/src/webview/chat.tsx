@@ -235,7 +235,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const id = rowId(activity);
   const [open, setOpenState] = useState(openRows.has(id));
   const setOpen = (value: boolean): void => { if (value) openRows.add(id); else openRows.delete(id); setOpenState(value); };
-  const status = activity.kind === 'tool-start' ? 'running' : activity.kind === 'tool-error' ? 'error' : 'done';
+  const status = activity.kind === 'tool-start' ? 'running' : activity.stopped ? 'stopped' : activity.kind === 'tool-error' ? 'error' : 'done';
   // What the terminal shows under a settled call: an edit's change, a
   // command's or search's last lines, a fetch's first -- a read's row says
   // all of it. The rest is one click away.
@@ -262,9 +262,10 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
             agent also keeps its own spinner here: that animation belongs on
             its chat row, not only on the thinking line. */}
         <span class={`activity-status ${activity.swarm ? 'tone-cyan' : toneOf(activity)}`} aria-label={status}>
-          {status === 'error' ? <Icon name="error" /> : agentRunning ? <Spinner tone="tone-cyan" /> : <Icon name={activityIcon(activity)} />}
+          {status === 'error' ? <Icon name="error" /> : status === 'stopped' ? <Icon name="debug-stop" /> : agentRunning ? <Spinner tone="tone-cyan" /> : <Icon name={activityIcon(activity)} />}
         </span>
-        <ActivityLabel label={tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning} />
+        <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning} />
+        {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {result ? <span class="activity-outcome activity-result">{result}</span> : null}
@@ -298,7 +299,8 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
  * commands" -- as Codex folds its work; open, the rows themselves. */
 function FoldedRun({ activities, workspace, userIndex }: { activities: Activity[]; workspace?: string; userIndex?: number }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const failed = activities.filter((activity) => activity.kind === 'tool-error').length;
+  const failed = activities.filter((activity) => activity.kind === 'tool-error' && !activity.stopped).length;
+  const stopped = activities.filter((activity) => activity.stopped).length;
   const totals = diffTotals(activities.flatMap((activity) => activity.diff ?? []));
   return (
     <div class="trace">
@@ -306,6 +308,7 @@ function FoldedRun({ activities, workspace, userIndex }: { activities: Activity[
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
         <span>{foldedSummary(activities)}</span>
         {failed ? <span class="muted"> · {failed} failed</span> : null}
+        {stopped ? <span class="muted"> · {stopped} stopped</span> : null}
         {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
       </button>
       {open ? <div class="activities"><RunGroups groups={exploreRuns(activities)} workspace={workspace} userIndex={userIndex} /></div> : null}
@@ -348,7 +351,8 @@ function ExploredRow({ activities, workspace, userIndex }: { activities: Activit
             return (
               <div key={activity.key} class="explored-call">
                 <span class={`activity-status ${toneOf(activity)}`}><Icon name={activityIcon(activity)} /></span>
-                <ActivityLabel label={tensedLabel(activity.label, activity.kind === 'tool-start')} workspace={workspace} />
+                <ActivityLabel label={activity.stopped ? activity.label : tensedLabel(activity.label, activity.kind === 'tool-start')} workspace={workspace} />
+                {activity.stopped ? <span class="activity-outcome stopped">stopped</span> : null}
                 {result ? <span class="activity-outcome activity-result">{result}</span> : null}
               </div>
             );
@@ -424,13 +428,17 @@ function TurnFlow(props: {
  * Cursor's files edited), and, when it changed files, all of them to review
  * at once or undo together. */
 function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element | null {
-  if (!endsWithSummary(trace.endedAt - trace.startedAt, trace.activities.length)) return null;
+  // A stopped turn always says so where it ends; "Stopped" is otherwise
+  // only a passing notice.
+  if (!trace.stopped && !endsWithSummary(trace.endedAt - trace.startedAt, trace.activities.length)) return null;
   const diffs = trace.activities.flatMap((activity) => (activity.kind === 'tool-done' && activity.diff?.length ? [activity.diff] : []));
   const changed = diffs.some((diff) => diff.some((file) => file.path));
   const act = (action: 'view' | 'revert') => (): void => post({ type: 'turnChanges', action, userIndex: trace.userIndex });
   return (
     <div class="turn-summary">
-      <span class="muted">{turnSummary({ ms: trace.endedAt - trace.startedAt, diffs })}</span>
+      {/* A reopened turn's trace has no clock of its own: a stopped one
+          says only that, never a made-up "after 1s". */}
+      <span class="muted">{trace.stopped && !trace.endedAt ? 'Stopped' : turnSummary({ ms: trace.endedAt - trace.startedAt, diffs, ...(trace.stopped ? { stopped: true } : {}) })}</span>
       {changed ? (
         <>
           <button type="button" class="link small" data-turn-changes="view" title="Open every change this turn made in the diff editor" onClick={act('view')}><Icon name="diff-multiple" />Review changes</button>

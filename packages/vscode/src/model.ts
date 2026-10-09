@@ -12,7 +12,7 @@
 import { composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
-import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, withChildTool, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
+import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, sameCall, stoppedCall, withChildTool, type OpenTool, type Thought } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
@@ -25,7 +25,7 @@ import { failureLine } from '../../../src/harness/protocol/stderr-line';
  * event fields (cleaned of escapes), merged frame by frame with the CLI's
  * rules (activity-view.ts). */
 export interface Activity extends Pick<HarnessActivityEvent,
-  'id' | 'kind' | 'label' | 'category' | 'agent' | 'swarm' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode' | 'childTools' | 'childTokens' | 'outputHead'> {
+  'id' | 'kind' | 'label' | 'category' | 'agent' | 'swarm' | 'output' | 'outputOmitted' | 'outputTail' | 'durationMs' | 'exitCode' | 'childTools' | 'childTokens' | 'outputHead' | 'stopped'> {
   /** The call's id, or its position for a harness that sends none. */
   key: string;
   /** Each file the call changed, as hunks (see src/agent/line-diff.ts). */
@@ -82,6 +82,8 @@ export interface TurnTrace {
   endedAt: number;
   /** The calls and text are the saved turn's, not this window's. */
   saved?: boolean;
+  /** The turn was stopped: it ends on "Stopped after", not "Worked for". */
+  stopped?: boolean;
 }
 
 /** One settled thought: what it said, where in the answer it came, and for
@@ -296,6 +298,20 @@ function sameMessages(previous: ChatModel['messages'], next: ChatModel['messages
     && previous.every((message, index) => message.role === next[index]!.role && message.content === next[index]!.content);
 }
 
+/** A finished turn's calls: none is running any more. One still open when
+ * the turn was stopped is stopped (stoppedCall, as the terminal and the
+ * saved turn have it); one a finished turn never reported finishing settles
+ * as done, as the terminal draws it. Kept open, it span and its clock
+ * counted on every reopen. */
+function settledCalls(activities: Activity[], stopped: boolean): Activity[] {
+  if (!activities.some((activity) => activity.kind === 'tool-start')) return activities;
+  return activities.map((activity) => {
+    if (activity.kind !== 'tool-start') return activity;
+    const { child: _child, ...rest } = activity;
+    return stopped ? stoppedCall(rest) : { ...rest, kind: 'tool-done' as const };
+  });
+}
+
 /** The calls each saved turn kept, as the traces the transcript draws them
  * from. The saved copy wins over this window's own record of the same turn
  * -- its calls and the text they are placed in -- while the reasoning and
@@ -309,11 +325,12 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     const saved = readTurnActivities(message.activities, message.content.length);
     if (!saved.length) return;
     // Folded by the same upsert live frames go through.
-    const activities = saved.filter((item) => !item.event.parentId).reduce<LiveTurn>(
+    const activities = settledCalls(saved.filter((item) => !item.event.parentId).reduce<LiveTurn>(
       (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
-    ).activities.map(({ startedAt: _startedAt, ...activity }) => activity);
+    ).activities.map(({ startedAt: _startedAt, ...activity }) => activity), false);
     const prior = byUser.get(index - 1);
-    const next: TurnTrace = { startedAt: 0, endedAt: 0, ...prior, userIndex: index - 1, activities, text: message.content, saved: true };
+    const stopped = activities.some((activity) => activity.stopped);
+    const next: TurnTrace = { startedAt: 0, endedAt: 0, ...prior, userIndex: index - 1, activities, text: message.content, saved: true, ...(stopped ? { stopped } : {}) };
     if (prior && JSON.stringify(prior) === JSON.stringify(next)) return;
     byUser.set(index - 1, next);
     changed = true;
@@ -549,7 +566,8 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
 
 /** The turn is over: its tool rows are kept beside the answer. */
 function endTurn(model: ChatModel): ChatModel {
-  const activities = model.live?.activities ?? [];
+  const asked = Boolean(model.live?.stopping);
+  const activities = settledCalls(model.live?.activities ?? [], asked);
   const reasoning = turnReasoning(model.live);
   const plan = model.plan.length ? model.plan : undefined;
   // The saved turn's calls, when its snapshot came first, win over the ones
@@ -563,6 +581,7 @@ function endTurn(model: ChatModel): ChatModel {
       text: model.live?.text ?? '',
       startedAt: model.live?.startedAt ?? Date.now(), endedAt: Date.now(),
       ...(saved ? { activities: saved.activities, text: saved.text, saved: true } : {}),
+      ...(asked || (saved ?? { activities }).activities.some((activity) => activity.stopped) ? { stopped: true } : {}),
     }].slice(-MAX_TRACES)
     : model.traces;
   return { ...model, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined, traces };
