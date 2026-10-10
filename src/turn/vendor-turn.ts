@@ -54,7 +54,7 @@ import { provisionChosenHarness } from '../harness/provision.js';
 import { builtClikcodeLauncher, conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
-import { recordInvocation, showStopReason, turnSink } from './turn-output.js';
+import { recordInvocation, recordUnfinishedInvocation, showStopReason, turnSink } from './turn-output.js';
 import { swarmIsOn } from '../swarm/policy.js';
 import { swarmProvisionEntry, swarmRidesTurn } from '../swarm/publish.js';
 import { openSwarmTurn } from '../swarm/store.js';
@@ -327,6 +327,14 @@ export async function sendVendorTurn(input: {
     session.lastUsage = { ...shown, at: new Date().toISOString() };
     prompter?.setTurnUsage(shown);
   };
+  /** An attempt that ends without completing -- stopped, failed, or moved to
+   * another account -- still spent what it reported, on the account it ran on.
+   * Taken once: the attempt's usage is cleared as it is recorded. */
+  const recordUnfinishedAttempt = (ended: 'stopped' | 'error'): void => {
+    const usage = turnUsage;
+    turnUsage = undefined;
+    if (recordUnfinishedInvocation(state, { sessionId: session.id, accountId: account.id, provider: harness.provider, model, startedAt, usage }, ended)) checkpoint.touch();
+  };
   const pendingWork = createPendingWorkTracker(harness.command);
   /** The response-delta rule, in one place. Every transport owes the same
    * three steps -- through the title filter, then to the checkpoint and to
@@ -497,6 +505,7 @@ export async function sendVendorTurn(input: {
       // The user picked another account of this provider between calls.
       // The prompt stopped at that boundary; this same turn continues there.
       if (isManualAccountSwitch(error)) {
+        recordUnfinishedAttempt('stopped');
         const picked = await userPick();
         if (!picked) throw error;
         await closePersistentTransport(session.id);
@@ -513,8 +522,8 @@ export async function sendVendorTurn(input: {
         }
         continue;
       }
-      if (isTurnCancelled(error)) throw error;
-      if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') throw error;
+      if (isTurnCancelled(error)) { recordUnfinishedAttempt('stopped'); throw error; }
+      if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') { recordUnfinishedAttempt('error'); throw error; }
       caughtTurnFailure = error instanceof Error ? error : new Error(String(error));
     }
     result = caughtTurnFailure
@@ -565,6 +574,8 @@ export async function sendVendorTurn(input: {
         ...(result.rateLimitStatus ? { rateLimitStatus: result.rateLimitStatus } : {}),
         ...(declared ? { isResultError: declared.isResultError } : {}),
       });
+      // Every path from here retries or ends the turn: this attempt is over.
+      recordUnfinishedAttempt('error');
       lifecycle('worker.turn.attempt-failed', {
         kind: failureKind, transport, account: account.id.slice(0, 8),
         message: (failure instanceof Error ? failure.message : String(failure)).slice(0, 8000),

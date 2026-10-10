@@ -20,6 +20,8 @@ type Invocation = HarnessState['invocations'][number];
 export function recordInvocation(state: HarnessState, turn: {
   sessionId: string; accountId: string; provider: string; model?: string | null;
   startedAt: number; usage?: TurnUsage; contextProfile?: string;
+  /** Set only for a turn that did not complete: what it spent is still spent. */
+  stopReason?: 'stopped' | 'error';
 }): Invocation {
   const { usage } = turn;
   const invocation: Invocation = {
@@ -33,9 +35,25 @@ export function recordInvocation(state: HarnessState, turn: {
     ...(usage?.costUsd !== undefined ? { costUsd: usage.costUsd } : {}),
     ...(usage?.credits !== undefined ? { credits: usage.credits } : {}),
     ...(turn.contextProfile ? { contextProfile: turn.contextProfile } : {}),
+    ...(turn.stopReason ? { stopReason: turn.stopReason } : {}),
   };
   state.invocations.push(invocation);
   return invocation;
+}
+
+/** A turn (or one attempt of it) that ended before completing -- stopped, failed, or handed to
+ * another account -- still spent what its model steps reported. Recorded with why it ended, and
+ * only when something was spent; the caller records each attempt's usage at most once. */
+export function recordUnfinishedInvocation(
+  state: HarnessState,
+  turn: Omit<Parameters<typeof recordInvocation>[1], 'stopReason'>,
+  ended: 'stopped' | 'error',
+): Invocation | undefined {
+  const usage = turn.usage;
+  const spent = usage && (['input', 'output', 'cacheRead', 'cacheWrite', 'reasoning', 'totalTokens', 'costUsd', 'credits'] as const)
+    .some((key) => (usage[key] ?? 0) > 0);
+  if (!spent) return undefined;
+  return recordInvocation(state, { ...turn, usage: { ...usage, stopReason: ended === 'stopped' ? 'stopped' : 'failed' }, stopReason: ended });
 }
 
 /** An answer the vendor cut short says so, beside the answer. */
