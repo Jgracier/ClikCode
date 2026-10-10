@@ -65,6 +65,23 @@ export function onTick(kind: 'spin' | 'second', listener: () => void): () => voi
   };
 }
 
+/** Calls `done` once the view has been in sight for `ms` (to the second):
+ * time while it is hidden does not count, so something meant to be read
+ * (an error toast) is not gone before anyone could see it. Returns the
+ * cancel. */
+export function afterVisibleFor(ms: number, done: () => void): () => void {
+  const from = second.count;
+  let over = false;
+  const stop = onTick('second', () => {
+    // The catch-up call on showing again does not step the count.
+    if (over || (second.count - from) * 1000 < ms) return;
+    over = true;
+    stop();
+    done();
+  });
+  return () => { over = true; stop(); };
+}
+
 function useTicker(kind: 'spin' | 'second', active: boolean): void {
   const [, rerender] = useState(0);
   useEffect(() => (active ? onTick(kind, () => rerender((value) => value + 1)) : undefined), [active]);
