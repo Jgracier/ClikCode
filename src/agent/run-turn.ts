@@ -583,7 +583,12 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         }
         const classified = classifyModelError(error);
         const message = error instanceof Error ? error.message : String(error);
-        return result({ text: message, isError: true, errorKind: classified.kind, stopReason: 'model-error', ...(classified.retryAfter !== undefined ? { retryAfter: classified.retryAfter } : {}) });
+        const statusCode = (error as { statusCode?: unknown } | undefined)?.statusCode;
+        return result({
+          text: message, isError: true, errorKind: classified.kind, stopReason: 'model-error',
+          ...(classified.retryAfter !== undefined ? { retryAfter: classified.retryAfter } : {}),
+          ...(typeof statusCode === 'number' ? { statusCode } : {}),
+        });
       }
       steps++;
       stepRetries = 0;

@@ -70,6 +70,13 @@ export class ConversationStore {
     }
   }
 
+  /** Cuts the history back to `bytes` (a size() taken earlier): what a turn
+   * that never got an answer wrote, taken back before it is sent again. */
+  async truncate(bytes: number): Promise<void> {
+    await this.queue.catch(() => undefined);
+    if (await this.size() > bytes) await fs.truncate(this.file, bytes);
+  }
+
   /** Sets the history aside, kept beside it, so the next turn starts the
    * agent's memory over (the conversation was cut back: /redo). */
   async archive(): Promise<void> {

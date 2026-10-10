@@ -212,6 +212,8 @@ export interface GatewayHarnessTurnResult {
   errorKind?: HarnessErrorKind;
   /** Server-advised wait before retrying a quota failure, in seconds. */
   retryAfter?: number;
+  /** The model server's HTTP status for a failed step, where it answered with one. */
+  statusCode?: number;
   usage: TokenUsage;
   steps: number;
   /** Why the loop ended. */
