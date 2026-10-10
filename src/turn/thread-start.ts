@@ -172,8 +172,7 @@ function withSummaryNote(record: CanonicalRecord, summary: NonNullable<Canonical
   const [first, ...rest] = record.turns;
   if (!first) return record;
   const note = summaryNote(summary);
-  const { summary: _written, ...without } = record;
-  return { ...without, turns: [{ ...first, providerNote: first.providerNote ? `${note}\n\n${first.providerNote}` : note }, ...rest] };
+  return { ...record, summary: undefined, turns: [{ ...first, providerNote: first.providerNote ? `${note}\n\n${first.providerNote}` : note }, ...rest] };
 }
 
 export async function startConversationThread(input: ThreadStartInput): Promise<ThreadStart> {
