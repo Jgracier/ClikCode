@@ -540,7 +540,7 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
             shows it, and no clock -- it is stopped. */}
         {asking ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
           : <Spinner tone={live && turnStalled(now - live.activeAt) ? 'tone-yellow' : status.toneClass} />}
-        <span class={`working-label ${status.toneClass}`} style={shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
+        <span class={workingLabelClass(status.toneClass, asking)} style={asking ? undefined : shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
@@ -550,6 +550,12 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
   );
+}
+
+/** The working line's label: in its tone, and shimmering only while the
+ * turn works. Waiting on the user it holds still, as the terminal's does. */
+export function workingLabelClass(toneClass: string, asking: boolean): string {
+  return `working-label ${toneClass}${asking ? '' : ' shimmer'}`;
 }
 
 /** A run of calls between two paragraphs, reads and searches merged as they
