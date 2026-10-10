@@ -1116,6 +1116,15 @@ SCENARIOS = {
                   ('type', '/send'), ('wait_for', 'Messages typed mid-turn', 10), ('settle', 1), ('snap', 'send'), ('keys', '\x1b'), ('settle', 1)],
         'watch': [], 'snap_contains': {'permissions': ['· current', 'esc close'], 'send': ['· current', 'esc close']},
     },
+    # /usage with a vendor that reports no token counts: no bare zeros
+    # ("0", "0 in · 0 out", "This chat · 1 turn · 0").
+    'usage-no-bare-zeros': {
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
+                  ('type', '/usage'), ('wait_for', 'This chat', 10), ('settle', 1), ('snap', 'usage')],
+        'watch': [], 'snap_contains': {'usage': ['This chat · 1 turn']},
+        'snap_lacks': {'usage': ['0 in', '0 out', '1 turn · 0', '\n  0 \n', '  0   ']},
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

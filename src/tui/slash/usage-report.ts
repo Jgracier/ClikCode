@@ -56,19 +56,29 @@ function accountLines(account: AiHarnessAccount, state: HarnessState, session: H
   const totals = sumInvocations(state.invocations.filter((item) => item.accountId === account.id));
   const quota = allowance(account, state, now);
   const name = account.id === session.accountId ? `${account.label} · current` : account.label;
-  const figures = [compactCount(totals.totalTokens)];
+  const figures = [tokenFigure(totals.totalTokens)];
   if (totals.costKnown) figures.push(dollars(totals.costUsd));
+  const shown = figures.filter(Boolean);
   return [
     `  ${name}`,
     ...(quota.label === 'not reported yet' ? [] : [`  ${quota.label}`]),
     ...(quota.reset ? [`  ${quota.reset}`] : []),
-    `  ${figures.join(' · ')}`,
+    ...(shown.length ? [`  ${shown.join(' · ')}`] : []),
   ];
 }
 
+/** `12k tokens`, or nothing: a vendor that reports no token counts leaves
+ * the figure out, never a bare `0` that reads as nothing used. */
+function tokenFigure(tokens: number): string {
+  return tokens ? `${compactCount(tokens)} tokens` : '';
+}
+
 function splitLines(totals: UsageReportTotals): string[] {
-  const flow = [`${compactCount(totals.inputTokens)} in`, `${compactCount(totals.outputTokens)} out`];
-  const lines = [`  ${flow.join(' · ')}`];
+  const flow = [
+    ...(totals.inputTokens ? [`${compactCount(totals.inputTokens)} in`] : []),
+    ...(totals.outputTokens ? [`${compactCount(totals.outputTokens)} out`] : []),
+  ];
+  const lines = flow.length ? [`  ${flow.join(' · ')}`] : [];
   if (totals.cacheReadTokens > 0) lines.push(`  ${compactCount(totals.cacheReadTokens)} cached`);
   return lines;
 }
@@ -96,7 +106,7 @@ export function usageReport(
   const providerInvocations = state.invocations.filter((item) => accountIds.has(item.accountId) || ids.has(item.provider));
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
-  const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, compactCount(conversation.totalTokens)];
+  const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, ...(conversation.totalTokens ? [tokenFigure(conversation.totalTokens)] : [])];
   if (conversation.costKnown) chatBits.push(dollars(conversation.costUsd));
   const lines = [
     providerName,
@@ -109,7 +119,8 @@ export function usageReport(
     '',
     `  This chat · ${chatBits.join(' · ')}`,
   ];
-  return { text: lines.join('\n'), totals };
+  // No blank row twice: a block that had nothing to say left its spacer.
+  return { text: lines.filter((line, index) => line || lines[index - 1]).join('\n'), totals };
 }
 
 const DAY_MS = 24 * 60 * 60_000;
