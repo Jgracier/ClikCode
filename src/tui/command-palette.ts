@@ -136,7 +136,14 @@ export function commandPaletteMatches(
     if (!groupOrder.has(group)) groupOrder.set(group, groupOrder.size);
     return [{ entry: group === entry.group ? entry : { ...entry, group }, rank, index, group: groupOrder.get(group)! }];
   });
-  return ranked.sort((left, right) => left.group - right.group || left.rank - right.rank || left.index - right.index)
+  // Typed something: the best match comes first. A group stays together,
+  // placed by its best match -- sorted by group first, `/co` highlighted
+  // /account (a match inside it) above /compact and /copy (prefixes).
+  const best = new Map<number, number>();
+  for (const item of ranked) best.set(item.group, Math.min(best.get(item.group) ?? Infinity, item.rank));
+  const placed = (group: number): number => (query ? best.get(group)! : 0);
+  return ranked.sort((left, right) => placed(left.group) - placed(right.group) || left.group - right.group
+    || left.rank - right.rank || left.index - right.index)
     .map((item) => item.entry);
 }
 

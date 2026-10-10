@@ -1050,6 +1050,13 @@ SCENARIOS = {
         'snap_contains': {'waiting': ['waiting for reset ·']},
         'final_contains': ['Stopped waiting for the reset'],
     },
+    # Typing in the palette highlights the best match: `/c` and `/co` used
+    # to highlight /account (its group came first) over /compact and /copy.
+    'palette-best-match-first': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/c'), ('settle', 1), ('snap', 'c'), ('keys', 'o'), ('settle', 1), ('snap', 'co')],
+        'watch': [], 'snap_contains': {'c': ['❯ /c'], 'co': ['❯ /co']}, 'snap_lacks': {'c': ['❯ /account'], 'co': ['❯ /account']},
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],
