@@ -73,8 +73,9 @@ export interface SlashHost {
    * none emits instead. */
   panel(kind: string, title: string, body: string, plain: string): void;
   withBusy<T>(label: string, work: () => Promise<T>): Promise<T>;
-  /** A one-line question ("Conversation name"). */
-  ask(label: string): Promise<string>;
+  /** A one-line question ("Conversation name"). Undefined: Esc cancelled
+   * it, and the command does nothing. */
+  ask(label: string): Promise<string | undefined>;
   redraw(id: string): Promise<void>;
   /** A synthetic turn (/compact), with this client's waiting UI. */
   runTurn(targetId: string, prompt: string): Promise<void>;
@@ -272,7 +273,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       host.panel('search', title, rest.join('\n'), listed);
     },
     rename: async () => {
-      const name = args || (await host.ask('Conversation name')).trim();
+      const name = args || (await host.ask('Conversation name'))?.trim();
       if (name) await aiSessionCommand(id, `/rename ${name}`);
     },
     // `/fork` with nothing after it, where a picker can be shown: which of
@@ -325,7 +326,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       return { exit: true };
     },
     mention: async () => {
-      const path = args || (await host.ask('File to attach')).trim();
+      const path = args || (await host.ask('File to attach'))?.trim();
       return path ? viaHeadless(`/mention ${path}`) : {};
     },
     review: async () => ({ prompt: reviewPrompt(args), echo: false }),
@@ -340,8 +341,14 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       return typeof compacted === 'string' ? { id: compacted } : {};
     },
     export: async () => {
-      const path = await exportTranscript(session, args, async (existing) =>
-        ['y', 'yes'].includes((await host.ask(`${compactPath(existing)} exists. Overwrite? [y/N]`)).trim().toLowerCase()));
+      // Esc on the overwrite question cancels the export, quietly.
+      let cancelled = false;
+      const path = await exportTranscript(session, args, async (existing) => {
+        const answer = await host.ask(`${compactPath(existing)} exists. Overwrite? [y/N]`);
+        cancelled = answer === undefined;
+        return ['y', 'yes'].includes(answer?.trim().toLowerCase() ?? '');
+      }).catch((error: unknown) => { if (cancelled) return undefined; throw error; });
+      if (path === undefined) return {};
       host.exported?.(path);
       return { notice: `Transcript written to ${compactPath(path)}` };
     },

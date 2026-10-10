@@ -667,7 +667,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             else emitHarnessOutput({ panel: kind, text: plain });
           },
           withBusy: withWaiting,
-          ask: (label) => rl.question(`${label} › `),
+          ask: (label) => rl.question(`${label} › `, undefined, { cancellable: true }).catch((error: unknown) => {
+            if ((error as { code?: string }).code === 'ERR_PROMPT_CANCELLED') return undefined;
+            throw error;
+          }),
           redraw: showSession,
           runTurn: (targetId, promptText) => runInteractiveTurn(targetId, promptText, { echo: false }),
           openConversationPicker,

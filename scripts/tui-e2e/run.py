@@ -1070,6 +1070,15 @@ SCENARIOS = {
         'watch': [], 'final_contains': ['Default saved · Effort for every harness: high'],
         'snap_contains': {'after': ['❯ Effort', '● High']}, 'never': ['for every harness: medium'],
     },
+    # Esc on a one-line question ("Conversation name ›", "File to attach ›")
+    # cancels it: the next thing typed is a message again, not its answer.
+    'esc-cancels-one-line-question': {
+        'turns': [{'blocks': ['Answered after the questions were cancelled.']}],
+        'steps': [('type', '/rename'), ('wait_for', 'Conversation name', 10), ('settle', 0.5), ('keys', '\x1b'), ('settle', 1),
+                  ('type', '/mention'), ('wait_for', 'File to attach', 10), ('settle', 0.5), ('keys', '\x1b'), ('settle', 1),
+                  ('type', 'hello again'), ('wait_for', 'Answered after the questions were cancelled.', 30), ('settle', 2)],
+        'watch': [], 'final_contains': ['› hello again'], 'never': ['ENOENT', 'Error:'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

@@ -170,7 +170,16 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     // reopened picker reads the new provider's models.
     return interactiveModelPicker(rl, id);
   }
-  const typed = selected === '__custom__' ? (await rl.question(discoveredModels.length ? 'Model ID › ' : `${harness?.displayName ?? 'This provider'} lists no models — model ID › `)).trim() : undefined;
+  let typed: string | undefined;
+  if (selected === '__custom__') {
+    // Esc leaves the model as it was.
+    try {
+      typed = (await rl.question(discoveredModels.length ? 'Model ID › ' : `${harness?.displayName ?? 'This provider'} lists no models — model ID › `, undefined, { cancellable: true })).trim();
+    } catch (error) {
+      if ((error as { code?: string }).code === 'ERR_PROMPT_CANCELLED') return;
+      throw error;
+    }
+  }
   const value = typed !== undefined ? (harness && typed ? modelIdFromLabel(harness, catalog.models, modelIdFromDisplay(harness, typed)) : typed) : selected;
   // Applies to this chat only, no further "apply to" step: a model choice is
   // read as a per-conversation decision, unlike effort/permissions,
