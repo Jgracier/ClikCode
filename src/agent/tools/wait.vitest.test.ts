@@ -41,6 +41,38 @@ describe.skipIf(process.platform === 'win32')('the wait tool', () => {
     expect((await waitTool.run({ seconds: 60 }, ctx)).output).toMatch(new RegExp(`^${quick} exited`));
   });
 
+  it('wakes when a background shell prints matching output, and hands back the line', async () => {
+    // A server that warms up, says where it listens, and keeps running.
+    const id = await background('echo warming; sleep 0.3; echo "listening on http://127.0.0.1:4321"; sleep 30');
+    const begun = Date.now();
+    const result = await waitTool.run({ shell_ids: [id], output: 'listening on', seconds: 60 }, ctx);
+    expect(result.output).toMatch(new RegExp(`^${id} printed: listening on http://127\\.0\\.0\\.1:4321 \\(after \\d+s\\)$`));
+    expect(Date.now() - begun).toBeLessThan(5_000);
+    // Waiting reads nothing: the output is still there for bash_output.
+    expect(ctx.session.shells.get(id)!.unread).toContain('warming');
+    await killBashTool.run({ id }, ctx);
+  });
+
+  it('wakes at once when the output was printed before the wait began', async () => {
+    const id = await background('echo READY; sleep 30');
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect((await waitTool.run({ shell_ids: [id], output: '^READY$', seconds: 60 }, ctx)).output).toBe(`${id} printed: READY`);
+    await killBashTool.run({ id }, ctx);
+  });
+
+  it('with output but no shell named, watches every running shell; an exit still wakes it', async () => {
+    const id = await background('sleep 0.2; exit 3');
+    expect((await waitTool.run({ output: 'never printed', seconds: 60 }, ctx)).output).toMatch(new RegExp(`^${id} exited \\(code 3\\)`));
+  });
+
+  it('refuses an invalid pattern, or a pattern with no shell to watch', async () => {
+    const id = await background('sleep 30');
+    expect((await waitTool.run({ shell_ids: [id], output: '(' }, ctx)).isError).toBe(true);
+    await killBashTool.run({ id }, ctx);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect((await waitTool.run({ output: 'x', seconds: 1 }, ctx)).isError).toBe(true);
+  });
+
   it('wakes when a file appears', async () => {
     const target = join(dir, 'ready.flag');
     setTimeout(() => { void writeFile(target, 'ok'); }, 200);
