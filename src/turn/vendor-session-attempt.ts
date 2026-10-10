@@ -116,6 +116,16 @@ export async function runVendorSessionAttempt(input: {
         ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
         cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
         acp: harness.acp,
+        // Plan mode as an ACP session mode (catalog acp.planModeId); the
+        // agent leaving it -- its plan approved -- turns the chat's off.
+        ...(session.planMode && harness.acp?.planModeId ? {
+          planMode: true,
+          onPlanModeExit: () => {
+            delete session.planMode;
+            checkpoint.touch();
+            prompter?.render(session);
+          },
+        } : {}),
         modelProviderSeparator: harness.modelProviderSeparator,
         plansListModels: Boolean(harness.freePlan?.listed),
         // Claude Code's quota, carried by the turn itself: published like a
@@ -159,6 +169,9 @@ export async function runVendorSessionAttempt(input: {
         // transports for this turn -- unless the two share one store.
         const shared = Boolean(harness.acp?.sharedSessions);
         if (session.nativeSessionId && !shared) throw error;
+        // Plan mode is a mode of the ACP session: the CLI would run the turn
+        // with every tool, which is what the user turned plan mode on against.
+        if (session.planMode && harness.acp?.planModeId) throw error;
         // A thread the CLI starts belongs to the CLI from now on -- unless
         // both share one store, when this turn alone takes the CLI.
         const pinned = cliThreadTransport(harness);

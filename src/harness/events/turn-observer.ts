@@ -63,6 +63,9 @@ export interface HarnessTurnObserver {
   onNotice?: (message: string) => void;
   /** The agent's plan, republished whole each time it changes. */
   onPlan?: (entries: readonly HarnessPlanEntry[], explanation?: string) => void;
+  /** The agent left its read-only plan mode during the turn: the user approved
+   * its plan (ClikCode's exit_plan_mode, an ACP agent's own mode change). */
+  onPlanModeExit?: (plan?: string) => void;
   /** The turn's usage so far. Each transport normalises what its harness
    * publishes before calling this; a later call's fields replace earlier ones
    * (the readings are cumulative within one attempt). */

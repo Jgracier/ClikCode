@@ -35,7 +35,7 @@ import { interactivePermissionPicker } from './permissions.js';
 import { interactiveSessionPicker } from './session.js';
 import { applyToChat, settingLabel } from './setting-scope.js';
 import { aiSessionCommand } from '../slash/handlers.js';
-import { setAgentPlanMode } from '../../agent/plan-mode-setting.js';
+import { planModeOnChat, setAgentPlanMode } from '../../agent/plan-mode-setting.js';
 import { harnessManagers, interactiveToolsPicker } from './tools.js';
 
 /** A setting with at most this many values is chosen in its row; one with
@@ -125,8 +125,9 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
           apply: (value: string) => aiSessionCommand(id, `/settings option ${harness.planMode!.option} ${value === 'on' ? String(harness.planMode!.value === true ? 'on' : harness.planMode!.value) : 'default'}`).then(() => undefined),
         },
       }] : []),
-      // ClikCode's own agent keeps its plan mode on the chat (agent/plan-mode-setting.ts).
-      ...(isClikCodeAgent(session) ? [{
+      // Plan mode kept on the chat: ClikCode's own agent, or a vendor whose
+      // plan mode is an ACP session mode (agent/plan-mode-setting.ts).
+      ...(planModeOnChat(session, harness) ? [{
         label: 'Plan mode', detail: 'read-only: plan, change nothing', value: 'plan',
         inline: {
           choices: [{ label: 'Off', value: 'off' }, { label: 'On', value: 'on' }],
