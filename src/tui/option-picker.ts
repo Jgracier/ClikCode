@@ -9,12 +9,21 @@ import { takeTerminalKeys } from './input-decoder.js';
 import { keyHintFor } from '../harness/protocol/wording.js';
 import { pickerConfirmsSelection, pickerDeletesSelection } from './command-palette.js';
 
+/** How a list is drawn under the composer. `capacity` is its rows, or how
+ * to work them out again on every paint -- the board fills the screen, and a
+ * resize repaints it at the new height without asking the board. */
+export interface PaletteLayout {
+  capacity?: number | (() => number);
+  hint?: string;
+  hideCursor?: boolean;
+  headings?: boolean;
+}
+
 /** What the picker needs from the frame that owns the screen. */
 export interface OptionPickerHost {
   paint(
     composer: string, options: readonly PickerOption<string>[], selected: number,
-    prompt: string, cursor: number,
-    palette?: { capacity?: number; hint?: string; hideCursor?: boolean; headings?: boolean },
+    prompt: string, cursor: number, palette?: PaletteLayout,
   ): void;
   clearFrame(): void;
   setSelecting(selecting: boolean): void;

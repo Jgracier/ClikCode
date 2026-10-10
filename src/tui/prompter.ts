@@ -47,7 +47,7 @@ import { ApprovalPreview, ApprovalRequest, approvalBlockRows } from './render/ap
 import { APPROVAL_GUARD_MS, approvalKeyAction } from './render/approval-keys.js';
 import { frameRowBudget } from './render/frame-budget.js';
 import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
-import { runOptionPicker, type OptionPickerHost } from './option-picker.js';
+import { runOptionPicker, type OptionPickerHost, type PaletteLayout } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
@@ -101,7 +101,7 @@ const LIVE_OUTPUT_LINES = 3;
  * (a picker's list or the slash palette) under it. */
 type ComposerFrame = {
   text: string; options: readonly PickerOption<string>[]; selected: number; prompt: string; cursor: number;
-  palette?: { capacity?: number; hint?: string; hideCursor?: boolean };
+  palette?: PaletteLayout;
 };
 const EMPTY_COMPOSER: ComposerFrame = { text: '', options: [], selected: 0, prompt: '› ', cursor: 0 };
 
@@ -1728,14 +1728,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.paint(text, listed, selected, prompt, cursor, options.keepPalette ? palette : undefined);
   }
 
-  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: { capacity?: number; hint?: string; hideCursor?: boolean; headings?: boolean }): void {
+  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: PaletteLayout): void {
     const session = this.currentSession;
     if (!session || this.suspended) return;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
     this.responsePaintTimer = undefined;
     this.composer = {
       text: composer, options, selected, prompt, cursor,
-      ...(palette ? { palette: { capacity: palette.capacity, hint: palette.hint, hideCursor: palette.hideCursor } } : {}),
+      // Kept whole: a repaint (a resize) draws the list as it was asked for,
+      // its section headings included.
+      ...(palette ? { palette } : {}),
     };
     // The last column is never printed in. DEC autowrap is off (every frame
     // that draws re-sends `\u001b[?7l`), which makes filling it safe on a
@@ -1825,7 +1827,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the complete terminal height is safe and important: leaving one row
     // unpainted allowed an obsolete status line to remain visibly duplicated.
     const targetHeight = this.viewportRows();
-    const requestedPaletteCapacity = palette?.capacity ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
+    const requestedPaletteCapacity = (typeof palette?.capacity === 'function' ? palette.capacity() : palette?.capacity)
+      ?? (options.length ? Math.min(options.length, 8) + 2 : 0);
     // Keep generation at the response's live edge, directly above the
     // composer. It is a fixed status band, not transcript content, so a long
     // streamed answer cannot scroll it away. Optional bands share only the
