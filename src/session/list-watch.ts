@@ -30,7 +30,8 @@ export interface ListWatchOptions {
   debounceMs?: number;
   minIntervalMs?: number;
   fallbackMs?: number;
-  /** For tests: the directories to watch, first one the parent of the rest. */
+  /** The directories to watch, first one the parent of the rest: a caller
+   * that needs only some (a prompt watching the worker registry), or a test. */
   directories?: readonly string[];
 }
 

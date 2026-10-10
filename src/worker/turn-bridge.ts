@@ -16,6 +16,9 @@ import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
 import { WorkerClient } from './client.js';
+import { workersDirectory } from './registry.js';
+import { watchConversationList } from '../session/list-watch.js';
+import { stateDirectory } from '../session/store/paths.js';
 import { isTranscriptActivity, type LiveActivity, type WorkerEvent } from './protocol.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import { withSignIn } from '../commands/account.js';
@@ -114,8 +117,13 @@ function track(sessionId: string, client: WorkerClient): void {
       pendingTakeBacks.get(event.id)?.(event.outcome);
     }
   });
-  // A worker that exits (idle, retired) is attached afresh next time.
-  client.on('close', () => { if (clients.get(sessionId) === client) clients.delete(sessionId); });
+  // A worker that exits (idle, retired) is attached afresh next time. A
+  // window at its prompt asks again now, so it watches for the next worker
+  // (askUntilWorker) instead of a connection that is gone.
+  client.on('close', () => {
+    if (clients.get(sessionId) === client) clients.delete(sessionId);
+    tracker.wake?.('queue');
+  });
 }
 
 async function connect(sessionId: string, spawn: boolean): Promise<WorkerClient | undefined> {
@@ -199,7 +207,7 @@ export type IdleWake = { line: string } | { woke: 'turn'; prompt?: string } | { 
 export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSignal) => Promise<string>, queueMark?: number): Promise<IdleWake> {
   const client = await connect(sessionId, false).catch(() => undefined);
   const tracker = client ? trackers.get(client) : undefined;
-  if (!tracker) return { line: await ask() };
+  if (!tracker) return askUntilWorker(sessionId, ask);
   if (tracker.running) return { woke: 'turn', ...(tracker.prompt !== undefined ? { prompt: tracker.prompt } : {}) };
   // The queue changed after the caller read it: read it again first. A mark
   // taken with no connection says nothing of what happened before this one
@@ -216,6 +224,31 @@ export async function questionOrWorker(sessionId: string, ask: (signal?: AbortSi
     return reason === 'turn' ? { woke: 'turn', ...(tracker.prompt !== undefined ? { prompt: tracker.prompt } : {}) } : { woke: 'queue' };
   } finally {
     tracker.wake = undefined;
+  }
+}
+
+/** The prompt, while the conversation has no worker. Another window's
+ * message starts one, and its turn must show here as well: the worker
+ * registry is watched, and once this conversation's worker can be attached
+ * the prompt ends (its draft kept) for the loop to ask again, attached --
+ * following the turn from there. Without this, a window with no worker never
+ * saw a turn another window started, nor any after a rebuild retired its
+ * worker. */
+async function askUntilWorker(sessionId: string, ask: (signal?: AbortSignal) => Promise<string>): Promise<IdleWake> {
+  const controller = new AbortController();
+  const watch = watchConversationList(() => {
+    if (controller.signal.aborted) return;
+    void connect(sessionId, false).catch(() => undefined).then((client) => {
+      if (client && !controller.signal.aborted) controller.abort();
+    });
+  }, { directories: [stateDirectory(), workersDirectory()] });
+  try {
+    return { line: await ask(controller.signal) };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ERR_PROMPT_INTERRUPTED' || !controller.signal.aborted) throw error;
+    return { woke: 'queue' };
+  } finally {
+    watch.stop();
   }
 }
 
