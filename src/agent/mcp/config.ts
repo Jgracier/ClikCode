@@ -32,6 +32,11 @@ export type McpServerSpec = (
    * behind the loader -- a built-in server's everyday set (the rest are found
    * with its search). Absent: every tool follows the deferral rule. */
   core?: readonly string[];
+  /** How long a turn waits for this server before going on without its
+   * tools; a start still under way carries on and serves a later turn. Set
+   * on a built-in server a coding turn does not need (the Gateway's
+   * ClikDeploy server): absent, a turn waits the full connect timeout. */
+  turnWaitMs?: number;
 };
 
 /** ClikCode's own key in an entry; no vendor reads it, and provisioning never

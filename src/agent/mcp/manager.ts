@@ -66,6 +66,14 @@ interface ServerState {
   starting?: AbortController;
 }
 
+/** The start, or the server's own turn wait if that runs out first. */
+function withinWait(ready: Promise<void>, waitMs: number | undefined): Promise<void> {
+  if (waitMs === undefined) return ready;
+  let timer: NodeJS.Timeout | undefined;
+  const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, waitMs); });
+  return Promise.race([ready, waited]).finally(() => clearTimeout(timer));
+}
+
 function firstLine(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.split('\n').map((line) => line.trim()).filter(Boolean).slice(0, 3).join(' | ').slice(0, 300);
@@ -102,7 +110,7 @@ export class McpManager {
     const { servers, problem } = await this.loadServers();
     const notes: string[] = problem ? [problem] : [];
     await this.reconcile(servers);
-    await Promise.all([...this.servers.values()].map((state) => this.ensureReady(state)));
+    await Promise.all([...this.servers.values()].map((state) => withinWait(this.ensureReady(state), state.spec.turnWaitMs)));
     const tools: ToolDefinition[] = [];
     const resources: McpResourceSource[] = [];
     const taken = new Set<string>();

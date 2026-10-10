@@ -28,6 +28,9 @@ export const CLIKDEPLOY_CORE_TOOLS: readonly string[] = [
   'deploy_app', 'restart_app', 'search_tools', 'call_tool',
 ];
 
+/** How long a Gateway turn waits for ClikDeploy's MCP server. */
+export const CLIKDEPLOY_MCP_TURN_WAIT_MS = 3000;
+
 export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: string }): McpServerSpec {
   return {
     name: CLIKDEPLOY_MCP_SERVER,
@@ -35,6 +38,11 @@ export function clikDeployMcpServer(connection: { baseUrl: string; apiKey: strin
     url: `${connection.baseUrl.replace(/\/+$/, '')}/mcp?toolmode=search`,
     headers: { authorization: `Bearer ${connection.apiKey}` },
     core: CLIKDEPLOY_CORE_TOOLS,
+    // Its tools/list took the whole 30 s connect timeout in a harness
+    // benchmark run (bench/harness), and every Gateway turn waited for it
+    // before its first model step, coding turn or not. It answers in ~0.3 s
+    // when healthy; a slower start joins a later turn instead.
+    turnWaitMs: CLIKDEPLOY_MCP_TURN_WAIT_MS,
   };
 }
 

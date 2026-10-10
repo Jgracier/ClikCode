@@ -3,7 +3,7 @@
 // methods a tool-calling client uses, and a few tools that misbehave on
 // purpose. Behaviour switches come from the environment so one script
 // serves every case.
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { createInterface } from 'node:readline';
 
 if (process.env.FAKE_MCP_PID_FILE) writeFileSync(process.env.FAKE_MCP_PID_FILE, String(process.pid));
@@ -43,7 +43,25 @@ let cancelled = [];
 
 // FAKE_MCP_SILENT: alive, reading, never answering -- a server still starting
 // (an `npx -y` download) or one that cannot reach what it needs.
+// FAKE_MCP_SILENT_UNTIL=<file>: holds every message until that file exists,
+// then answers them in order -- a start that is slow this time, not dead.
+const held = [];
+let holding;
 createInterface({ input: process.stdin }).on('line', (line) => {
+  const until = process.env.FAKE_MCP_SILENT_UNTIL;
+  if (until && !existsSync(until)) {
+    held.push(line);
+    holding ??= setInterval(() => {
+      if (!existsSync(until)) return;
+      clearInterval(holding);
+      for (const waiting of held.splice(0)) handle(waiting);
+    }, 20);
+    return;
+  }
+  handle(line);
+});
+
+function handle(line) {
   if (process.env.FAKE_MCP_SILENT) return;
   if (!line.trim()) return;
   const message = JSON.parse(line);
@@ -88,4 +106,4 @@ createInterface({ input: process.stdin }).on('line', (line) => {
     return send({ id, error: { code: -32602, message: `unknown tool ${name}` } });
   }
   send({ id, error: { code: -32601, message: `unknown method ${method}` } });
-});
+}
