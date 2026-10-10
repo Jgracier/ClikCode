@@ -9,8 +9,10 @@ import { canonicalRecord } from './canonical';
 import {
   copilotThreadCompaction, grokThreadCompaction, kiroThreadCompaction,
   agentMemoryCompaction, alignPrompts, claudeSummaryText, claudeThreadCompaction, conversationSummary,
-  placeCompaction, summarizedRecord, turnsHash, validSummary,
+  placeCompaction, summarizedRecord, turnsHash, validSummary, shownSummary, listedSummary, summaryHeadline,
 } from './conversation-summary';
+import { exportTranscript } from '../tui/slash/export-transcript';
+import { conversationOption } from './options';
 import { claudeThreadRecords } from './discovery/vendors/claude-thread';
 import { ConversationStore } from '../agent/conversation';
 import { seedAgentConversation } from '../turn/agent-history';
@@ -175,5 +177,40 @@ describe('handing a summarized conversation to the next provider', () => {
     // Kept on the conversation for the next hand-over, without reading the thread again.
     expect(moved.summary?.source).toBe('claude');
     expect(await conversationSummary({ ...moved, previousNativeThread: undefined }, canonicalRecord(moved), { stateDir: tmp() })).toEqual(moved.summary);
+  });
+});
+
+describe('showing the carried summary', () => {
+  const summarized = (messages: TranscriptMessage[], through: number, text = 'Built the parser.') => {
+    const record = canonicalRecord(session(messages));
+    return session(messages, { summary: { text, through, hash: turnsHash(record.turns, through), source: 'claude', at: '2026-01-01T00:00:00.000Z' } });
+  };
+
+  it('says how many turns it covers, and is not shown once the turns it covers changed', () => {
+    expect(summaryHeadline({ through: 1 })).toBe('first 1 turn summarized');
+    expect(summaryHeadline({ through: 6 })).toBe('first 6 turns summarized');
+    const kept = summarized(turns(4), 3);
+    expect(shownSummary(kept)?.through).toBe(3);
+    // A redo that rewrote turn 2: the summary no longer stands for them.
+    const edited = { ...kept, messages: [...exchange('request number 1', 'answer 1'), ...exchange('something else', 'answer 2'), ...turns(4).slice(4)] };
+    expect(shownSummary(edited)).toBeUndefined();
+    expect(shownSummary(session(turns(2)))).toBeUndefined();
+  });
+
+  it('opens the exported transcript, and hints on a list row while the conversation still reaches it', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cc-sum-'));
+    try {
+      const chat = { ...summarized(turns(4), 3), workspace: dir };
+      const file = await exportTranscript(chat, 'out.md', async () => true);
+      const markdown = (await import('node:fs')).readFileSync(file, 'utf8');
+      expect(markdown).toContain('## Summary (first 3 turns summarized)\n\nBuilt the parser.');
+      expect(markdown.indexOf('## Summary')).toBeLessThan(markdown.indexOf('request number 1'));
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+    // A row from the index has no transcript to hash: the message count stands in.
+    const row = { ...summarized(turns(4), 3), messages: undefined, listMessageCount: 8 } as HarnessSession;
+    expect(listedSummary(row)?.through).toBe(3);
+    expect(listedSummary({ ...row, listMessageCount: 2 })).toBeUndefined();
+    const option = conversationOption({ latest: row, chats: [row], section: 'recent' } as never);
+    expect(option.detail).toContain('first 3 turns summarized');
   });
 });

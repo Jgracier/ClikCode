@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import type { CanonicalRecord, CanonicalTurn } from './canonical.js';
+import { canonicalRecord, type CanonicalRecord, type CanonicalTurn } from './canonical.js';
 import type { HarnessSession } from './model.js';
 
 export interface ConversationSummary {
@@ -297,4 +297,25 @@ export function summarizedRecord(record: CanonicalRecord, summary: ConversationS
  * no compaction of its own to write it into. */
 export function summaryNote(summary: NonNullable<CanonicalRecord['summary']>): string {
   return `[ClikCode: the conversation's first ${summary.through} turn${summary.through === 1 ? ' is' : 's are'} summarized below.]\n\n<summary>\n${summary.text}\n</summary>`;
+}
+
+/** "first 12 turns summarized": what a list row or a heading says. */
+export function summaryHeadline(summary: Pick<ConversationSummary, 'through'>): string {
+  return `first ${summary.through} turn${summary.through === 1 ? '' : 's'} summarized`;
+}
+
+/** The summary still standing for `session`'s opening turns, for /history
+ * and /export: the transcript must be loaded, and one a redo or an edit has
+ * since retired (its hash) is not shown. */
+export function shownSummary(session: HarnessSession): ConversationSummary | undefined {
+  return session.summary ? validSummary(session.summary, canonicalRecord(session)) : undefined;
+}
+
+/** For a row drawn from the index, with no transcript to check the hash
+ * against: shown while the conversation still has at least that many
+ * messages, so a conversation cut back below it says nothing. */
+export function listedSummary(session: Pick<HarnessSession, 'summary' | 'listMessageCount'>): ConversationSummary | undefined {
+  const summary = session.summary;
+  if (!summary?.text.trim() || summary.through < 1) return undefined;
+  return session.listMessageCount === undefined || summary.through <= session.listMessageCount ? summary : undefined;
 }
