@@ -142,7 +142,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         tools, maxSteps: work ? WORK_SUBAGENT_MAX_STEPS : maxSteps,
         subagent: {
           system: work ? `${options.workSystem}\n\n# Delegated task\nComplete the task you were given and report the changes and verification to the parent agent. Your tool calls are visible in the chat. You cannot start another agent or ask the user a question.${worktree ? worktreeNote(worktree, parent.cwd) : ''}` : subagentSystemPrompt(parent),
-          transcriptFile,
+          transcriptFile, parentSessionId: parent.sessionId, kind: work ? 'work' : 'research',
           // Isolated work has its branch as its record: undoing the parent's
           // turn must not reach into another checkout.
           ...(work && !worktree ? { checkpoint: options.checkpoint } : {}),

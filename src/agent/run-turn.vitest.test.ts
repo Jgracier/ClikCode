@@ -472,6 +472,20 @@ describe('runGatewayHarnessTurn', () => {
     expect(nudge?.type === 'text' && nudge.text).toBe('[Stop hook] run the tests first');
   });
 
+  it('tells a Notification hook when it asks for approval and when it ends on a question', async () => {
+    const notes: Array<{ message: string; notificationType: string; sessionId: string }> = [];
+    const notification = async (info: { message: string; notificationType: string; sessionId: string }) => { notes.push(info); };
+    const approving = harness([{ toolCalls: [{ name: 'write_file', args: { path: 'n.txt', content: 'x' } }] }, { text: 'ok' }], {
+      permissionMode: 'ask', onApproval: async () => true, hooks: { notification },
+    });
+    await runGatewayHarnessTurn(approving.input);
+    expect(notes).toEqual([{ sessionId: approving.input.sessionId, cwd, message: 'ClikCode needs your permission to use Write', notificationType: 'permission_prompt' }]);
+    notes.length = 0;
+    const asking = harness([{ toolCalls: [{ name: 'ask_user', args: { question: 'Which database?' } }] }], { hooks: { notification } });
+    await runGatewayHarnessTurn(asking.input);
+    expect(notes).toMatchObject([{ notificationType: 'idle_prompt', message: expect.stringContaining('Which database?') }]);
+  });
+
   it('plan mode hides write/exec tools and unlocks them once the plan is approved', async () => {
     const exits: string[] = [];
     const h = harness([
@@ -597,10 +611,14 @@ describe('runGatewayHarnessTurn', () => {
         // Either the summarization step or, if eliding sufficed, the next real step.
         return request.tools.length === 0 ? { text: 'SUMMARY: read big.txt four times' } : { text: 'finished' };
       },
-    ], { onPhase: (phase) => phases.push(phase) }, { text: 'finished' });
+    ], {
+      onPhase: (phase) => phases.push(phase),
+      hooks: { preCompact: async ({ trigger }) => { phases.push(`PreCompact ${trigger}`); } },
+    }, { text: 'finished' });
     const result = await runGatewayHarnessTurn(h.input);
     expect(result.stopReason).toBe('completed');
     expect(phases).toContain('compacting context');
+    expect(phases[phases.indexOf('compacting context') + 1]).toBe('PreCompact auto');
     const compactedRequest = h.client.requests.find((request, index) => index > 0 && request.items.some((item) => item.type === 'summary' || (item.type === 'tool_result' && /elided to save context/.test(item.output))));
     expect(compactedRequest).toBeDefined();
     // The transcript on disk keeps every original item.
