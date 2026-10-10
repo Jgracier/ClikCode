@@ -10,3 +10,12 @@ const STALLED_AFTER_MS = 3 * 60_000;
 export function turnStalled(quietMs: number): boolean {
   return quietMs >= STALLED_AFTER_MS;
 }
+
+/** Whether the waiting band's spinner shows a stall: only a conversation's
+ * turn, quiet that long, and not while it waits on the user (an approval, a
+ * sign-in) or is already stopping. A download, an install or a shell command
+ * says how it is going by its own label, and turned yellow three minutes
+ * into a download that was still moving. */
+export function waitStalled(wait: { conversationTurn: boolean; onUser: boolean; cancelled: boolean; quietMs: number }): boolean {
+  return wait.conversationTurn && !wait.onUser && !wait.cancelled && turnStalled(wait.quietMs);
+}

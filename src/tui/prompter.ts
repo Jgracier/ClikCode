@@ -40,7 +40,7 @@ import { logProcessWarnings } from './warnings.js';
 import { reasoningBody, tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
-import { turnStalled } from '../harness/protocol/turn-pace.js';
+import { waitStalled } from '../harness/protocol/turn-pace.js';
 import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
@@ -1063,6 +1063,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   updateWaitingLabel(message: string): void {
     if (!this.turn) return;
     this.turn.label = message;
+    // Progress is activity: a download moving is not a wait gone quiet.
+    this.turn.activeAt = Date.now();
     this.updateWaiting();
   }
 
@@ -1681,7 +1683,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       glyph, label: status.label, tone: status.tone,
       ...(status.tone === 'tool' && tool?.category ? { category: tool.category } : {}),
       frame: this.waitingFrame, shimmer: !this.reducedMotion && this.waitingTickFast && status.tone !== 'asking',
-      stalled: !asking && !turn.cancelled && turnStalled(now - turn.activeAt),
+      stalled: waitStalled({ conversationTurn: Boolean(turn.submit || turn.early), onUser: asking, cancelled: turn.cancelled, quietMs: now - turn.activeAt }),
     });
     const line = `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
     // A sign-in's wait: Esc cancels it.
