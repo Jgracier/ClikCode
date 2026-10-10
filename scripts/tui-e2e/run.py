@@ -1243,6 +1243,17 @@ SCENARIOS = {
                   ('keys', '\x1b'), ('settle', 2), ('snap', 'after')],
         'watch': [], 'snap_contains': {'after': ['\n  › please check the commit', 'All accounts exhausted · back ']},
     },
+    # A new message sent while a turn waits for the reset: the line saying
+    # the wait stopped comes before that message and its answer (it was
+    # drawn under the answer).
+    'new-message-stops-reset-wait-line-first': {
+        'turns': [{'refuse': 'The monthly usage limit has been reached. Try again in 2 hours.', 'blocks': ['unused']},
+                  {'blocks': ['Second answer arrives here.']}],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'Wait for reset (', 30), ('settle', 1),
+                  ('keys', '\r'), ('wait_for', 'waiting for reset ·', 15), ('settle', 1),
+                  ('type', 'something else'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 3)],
+        'watch': [], 'final_in_order': ['please check the commit', 'Stopped waiting for the reset', 'something else', 'Second answer arrives here.'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],
@@ -1656,6 +1667,12 @@ def run(name, spec, entry, keep):
         if found != text: problems.append(f'{name} holds {found!r}, expected {text!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
+    # Top to bottom on the final screen, in this order.
+    at_final = 0
+    for phrase in spec.get('final_in_order', []):
+        found = final.find(phrase, at_final)
+        if found < 0: problems.append(f'not on the final screen after what came before it: {phrase!r}')
+        else: at_final = found + len(phrase)
     for phrase, count in spec.get('final_count', {}).items():
         if final.count(phrase) != count: problems.append(f'on screen {final.count(phrase)}x at the end, expected {count}x: {phrase!r}')
     for phrase in spec.get('final_once', []):

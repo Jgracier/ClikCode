@@ -556,6 +556,11 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // appear and then vanish. See tui/render/pending-prompt.ts. Held from
         // here, so a sign-in before the turn does not hide it either.
         terminal?.submitted(turn.echo && promptText !== INTERRUPTED_TURN_REQUEST ? promptText : undefined);
+        // A typed message replaces a turn parked for the quota reset (the
+        // worker drops it): said here, under the message, before its answer.
+        if (terminal && turn.echo && !turn.queuedTurnId && lastSeen.id === targetId && lastSeen.resumeAt) {
+          terminal.activity(chalk.dim('Stopped waiting for the reset · a new message was sent'));
+        }
         // Using a provider no account is signed in to is when its sign-in
         // opens -- here, before the turn, so it shows on its own and its
         // outcome stays in the transcript. Nothing signed in at launch.
