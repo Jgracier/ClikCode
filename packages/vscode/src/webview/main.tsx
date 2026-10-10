@@ -6,14 +6,15 @@ import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { chatModelLabel, currentProvider, turnHasAnswer, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
-import type { IdeConversation, IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
+import type { IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
 import { ApprovalCard, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
-import { relativeTime, tildePath } from './format';
+import { tildePath } from './format';
 import { choose } from './picker';
-import { HistoryMenu } from './screens';
+import { ConversationMark, HistoryMenu, rowState, useConversations } from './screens';
+import { useNow } from './clock';
 import { markMention, SearchBar } from './search';
 import { Sheet, type OpenQuestion } from './sheet';
 import { focusHere, Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
@@ -50,10 +51,12 @@ const SUGGESTIONS: Array<{ icon: string; title: string; prompt: string }> = [
 ];
 
 function Welcome({ model, onPrompt, onMenu }: { model: ChatModel; onPrompt: (text: string) => void; onMenu: (menu: WebviewMenu) => void }): JSX.Element {
-  const [recent, setRecent] = useState<IdeConversation[]>();
-  useEffect(() => {
-    request<IdeConversation[]>({ method: 'query', query: 'conversations' }).then((rows) => setRecent(rows.filter((row) => !row.current).slice(0, 3)), () => undefined);
-  }, [model.sessionId]);
+  // The history menu's list and rules: kept current as turns start and end,
+  // so a dot stops pulsing when its chat finishes, and marked by each row's
+  // one state (working, stalled, needs you).
+  const { rows } = useConversations(undefined, model.sessionId);
+  const recent = rows?.filter((row) => !row.current).slice(0, 3);
+  const now = useNow(Boolean(recent?.some((row) => row.activity === 'working')));
   const provider = currentProvider(model);
   const needsSignIn = provider && provider.kind === 'harness' && !provider.signedIn && provider.installed;
   const needsGateway = provider && provider.kind === 'gateway' && !provider.signedIn;
@@ -88,13 +91,16 @@ function Welcome({ model, onPrompt, onMenu }: { model: ChatModel; onPrompt: (tex
       {recent?.length ? (
         <div class="recent">
           <div class="group-head">Recent<button type="button" class="link small" onClick={() => onMenu('history')}>View all</button></div>
-          {recent.map((row) => (
-            <button key={row.id} type="button" class="recent-row" onClick={() => { void request({ method: 'open', mode: 'resume', sessionId: row.id }); }}>
-              <span class={`conversation-dot ${row.activity ?? ''}`} aria-hidden="true" />
-              <span class="recent-title">{row.title}</span>
-              <span class="muted">{relativeTime(row.updatedAt)}</span>
-            </button>
-          ))}
+          {recent.map((row) => {
+            const state = rowState(row, now);
+            return (
+              <button key={row.id} type="button" class="recent-row" data-key={row.id} onClick={() => { void request({ method: 'open', mode: 'resume', sessionId: row.id }); }}>
+                <ConversationMark row={row} state={state} />
+                <span class="recent-title">{row.title}</span>
+                <span class="muted">{state.text}</span>
+              </button>
+            );
+          })}
         </div>
       ) : null}
       <p class="welcome-tip muted"><kbd>@</kbd> files · <kbd>/</kbd> commands</p>

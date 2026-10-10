@@ -76,8 +76,8 @@ export function useSpinFrame(active = true): number {
   return spin.count;
 }
 
-/** The time, refreshed once a second while mounted. */
-export function useNow(): number {
-  useTicker('second', true);
+/** The time, refreshed once a second while mounted and `active`. */
+export function useNow(active = true): number {
+  useTicker('second', active);
   return Date.now();
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import type { ChatModel } from '../model';
 import type { ListedConversation } from '../webview-protocol';
 import { listen, request } from './bus';
+import { useNow } from './clock';
 import { conversationState, SECTION_TITLES, type ConversationSection } from '../../../../src/session/conversation-state';
 import { choose } from './picker';
 import { Icon, IconButton, KeyList, Popover, type ListRow } from './ui';
@@ -37,25 +38,32 @@ export function rowState(row: ListedConversation, now = Date.now()): ReturnType<
   }, now);
 }
 
-/** The conversations, as a list dropped from the header's history button:
- * search, then Working, Recent and Older, as the terminal's board lists them.
- * Each row is its title, its one state and, dim under it, the last thing
- * asked -- the terminal's three parts. Rename, open in a tab and
- * delete are on each row; the rest (fork, archive) are slash commands. */
-export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
-  const [rows, setRows] = useState<ListedConversation[]>();
-  const [search, setSearch] = useState('');
-  const [renaming, setRenaming] = useState<string>();
-  const [confirming, setConfirming] = useState<string>();
-  const input = useRef<HTMLInputElement>(null);
-  const load = (): void => {
-    request<ListedConversation[]>({ method: 'query', query: 'conversations' }).then(setRows, (failure: Error) => props.onError(failure.message));
+/** Lists on this page that want to hear of changes: the bridge's watch is
+ * on while any is. The welcome's Recent and the history menu share it --
+ * one of them closing must not switch it off under the other. */
+let watching = 0;
+
+export function holdConversationWatch(): () => void {
+  if (watching++ === 0) void request({ method: 'watchConversations', on: true }).catch(() => undefined);
+  let held = true;
+  return () => {
+    if (!held) return;
+    held = false;
+    if (--watching === 0) void request({ method: 'watchConversations', on: false }).catch(() => undefined);
   };
-  useEffect(() => { load(); input.current?.focus(); }, []);
-  // ClikCode watches its state and says when a turn starts or ends, so a
-  // pulse stops when its chat finishes. A slow poll covers a ClikCode that
-  // does not say (older, or no watch possible): only while a chat is
-  // generating and nothing has been heard for a while.
+}
+
+/** The conversation list, kept current: loaded (again whenever `key`
+ * changes), reloaded when ClikCode says a turn started or ended, so a
+ * pulse stops when its chat finishes. A slow poll covers a ClikCode that
+ * does not say (older, or no watch possible): only while a chat is
+ * generating and nothing has been heard for a while. */
+export function useConversations(onError?: (message: string) => void, key?: unknown): { rows: ListedConversation[] | undefined; load: () => void } {
+  const [rows, setRows] = useState<ListedConversation[]>();
+  const load = (): void => {
+    request<ListedConversation[]>({ method: 'query', query: 'conversations' }).then(setRows, (failure: Error) => onError?.(failure.message));
+  };
+  useEffect(load, [key]);
   const heardAt = useRef(0);
   useEffect(() => {
     const stop = listen((message) => {
@@ -63,17 +71,48 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
       heardAt.current = Date.now();
       load();
     });
-    void request({ method: 'watchConversations', on: true }).catch(() => undefined);
-    return () => {
-      stop();
-      void request({ method: 'watchConversations', on: false }).catch(() => undefined);
-    };
+    const release = holdConversationWatch();
+    return () => { stop(); release(); };
   }, []);
   useEffect(() => {
     if (!rows?.some((row) => row.activity === 'working')) return;
     const timer = setInterval(() => { if (Date.now() - heardAt.current >= FALLBACK_POLL_MS) load(); }, FALLBACK_POLL_MS);
     return () => clearInterval(timer);
   }, [rows]);
+  return { rows, load };
+}
+
+/** What a row is marked with, by its one state: waiting on you, working
+ * (stalled), the chat on screen, finished unseen, or nothing. */
+export function conversationMark(row: ListedConversation, state: ReturnType<typeof rowState>): 'needs-you' | 'working' | 'stalled' | 'current' | 'unread' | 'none' {
+  if (state.kind === 'needs-you') return 'needs-you';
+  if (row.activity === 'working') return state.kind === 'stalled' ? 'stalled' : 'working';
+  if (row.current) return 'current';
+  return row.attention === 'unread' ? 'unread' : 'none';
+}
+
+/** The row's mark, drawn: the history menu's and the welcome's Recent alike. */
+export function ConversationMark({ row, state }: { row: ListedConversation; state: ReturnType<typeof rowState> }): JSX.Element {
+  const mark = conversationMark(row, state);
+  if (mark === 'needs-you') return <Icon name="bell-dot" label="waiting for your answer" />;
+  if (mark === 'working' || mark === 'stalled') return <span class={`conversation-dot working${mark === 'stalled' ? ' stalled' : ''}`} aria-label={state.text} />;
+  if (mark === 'current') return <Icon name="check" label="this chat" />;
+  if (mark === 'unread') return <span class="conversation-dot unread" aria-label="finished" />;
+  return <span class="conversation-dot" aria-hidden="true" />;
+}
+
+/** The conversations, as a list dropped from the header's history button:
+ * search, then Working, Recent and Older, as the terminal's board lists them.
+ * Each row is its title, its one state and, dim under it, the last thing
+ * asked -- the terminal's three parts. Rename, open in a tab and
+ * delete are on each row; the rest (fork, archive) are slash commands. */
+export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onError: (message: string) => void }): JSX.Element {
+  const { rows, load } = useConversations(props.onError);
+  const [search, setSearch] = useState('');
+  const [renaming, setRenaming] = useState<string>();
+  const [confirming, setConfirming] = useState<string>();
+  const input = useRef<HTMLInputElement>(null);
+  useEffect(() => { input.current?.focus(); }, []);
 
   const open = (row: ListedConversation): void => {
     props.onClose();
@@ -104,10 +143,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
           onSelect: () => (renaming === row.id ? undefined : open(row)),
           render: () => (
             <div class={`conversation${row.current ? ' current' : ''}`} title={row.preview}>
-              {state.kind === 'needs-you' ? <Icon name="bell-dot" label="waiting for your answer" />
-                : row.activity === 'working' ? <span class={`conversation-dot working${state.kind === 'stalled' ? ' stalled' : ''}`} aria-label={state.text} />
-                  : row.current ? <Icon name="check" label="this chat" />
-                    : row.attention === 'unread' ? <span class="conversation-dot unread" aria-label="finished" /> : <span class="conversation-dot" aria-hidden="true" />}
+              <ConversationMark row={row} state={state} />
               <div class="conversation-main">
                 {renaming === row.id ? (
                   <form data-row-action onSubmit={(event) => {
