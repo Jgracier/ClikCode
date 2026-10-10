@@ -36,7 +36,7 @@ const EDITING_FILES = `# Editing files
 - read_file a file before you edit it. Edits to unread or since-changed files are rejected.
 - Never write secrets into files, and never edit .git internals.`;
 const SHELL = `# Shell
-- bash is for running programs (builds, tests, git, package managers), not for reading or editing files.
+- bash is for running programs (builds, tests, git, package managers), not for reading or searching files or for targeted edits. A mechanical change across many files (a rename, a bulk replace) may be one command: what it changes in the repository is shown and undoable.
 - Some actions need the user's approval. If a call is denied, do not retry it or work around it; adapt or explain what you need.`;
 const SAFETY = `# Safety
 - Stay inside the working directory unless the user points you elsewhere.

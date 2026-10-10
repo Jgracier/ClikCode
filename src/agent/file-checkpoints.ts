@@ -1,6 +1,9 @@
 /** Pre-image snapshots of every file a turn is about to write, so a turn can
- * be undone. Only harness write tools are tracked: whatever a bash command
- * changed is invisible here, and the undo result says so. */
+ * be undone. The write tools snapshot before they write; a bash command's
+ * changes to files in its git repository are recorded after it ran, from
+ * what the repository and a snapshot taken before it say they were
+ * (agent/shell-changes.ts). Anything else a command changed is invisible
+ * here, and the undo result says so. */
 import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -34,6 +37,9 @@ interface CheckpointTurnSummary {
   bytes: number;
 }
 
+/** What a file held before the turn changed it. */
+export type PriorImage = { existed: false } | { existed: true; content: Buffer; mode: number };
+
 export interface UndoResult {
   turnIds: string[];
   restored: string[];
@@ -50,7 +56,7 @@ interface UndoOptions {
   force?: boolean;
 }
 
-const BASH_UNDO_CAVEAT = 'Only changes made through the file tools were reverted. Anything a shell command changed (generated files, installs, git operations) was NOT tracked and is unchanged.';
+const BASH_UNDO_CAVEAT = 'Reverted: changes made through the file tools, and files a shell command changed in the workspace\'s git repository. Anything else a shell command changed (ignored or generated files, installs, git operations such as commit or checkout) was NOT tracked and is unchanged.';
 
 class OutsideRootsError extends Error {
   constructor() { super('outside the allowed roots (the conversation\'s workspace); not touched'); }
@@ -122,30 +128,54 @@ export class FileCheckpointStore {
   snapshot(sessionId: string, turnId: string, absolutePath: string): Promise<void> {
     return this.serial(async () => {
       const target = path.resolve(absolutePath);
-      const dir = this.turnDir(sessionId, turnId);
-      await fs.mkdir(path.join(dir, 'blobs'), { recursive: true, mode: 0o700 });
-      const manifest = await this.readManifest(sessionId, turnId)
-        ?? { sessionId, turnId, createdAt: new Date().toISOString(), entries: [] };
+      const manifest = await this.openManifest(sessionId, turnId);
       if (manifest.entries.some((entry) => entry.path === target)) return;
-      let entry: CheckpointEntry = { path: target, existed: false };
+      let prior: PriorImage = { existed: false };
       try {
         const stat = await fs.stat(target);
-        if (stat.isFile()) {
-          const content = await fs.readFile(target);
-          const hash = createHash('sha256').update(content).digest('hex');
-          const blob = path.join(dir, 'blobs', hash);
-          // Named by its content: one already there (an earlier path of this
-          // turn with the same bytes) is this blob. Written whole or not at
-          // all, before the manifest that points at it.
-          if ((await fs.stat(blob).catch(() => undefined))?.size !== content.length) await atomicWriteFile(blob, content);
-          entry = { path: target, existed: true, mode: stat.mode & 0o7777, hash, size: content.length };
-        }
+        if (stat.isFile()) prior = { existed: true, content: await fs.readFile(target), mode: stat.mode };
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
       }
-      manifest.entries.push(entry);
-      await writeManifest(dir, manifest);
+      manifest.entries.push(await this.entryFor(sessionId, turnId, target, prior));
+      await writeManifest(this.turnDir(sessionId, turnId), manifest);
     });
+  }
+
+  /** Record pre-images the caller already holds, for files that have since
+   * changed (what a shell command changed, as it was before the command).
+   * The same first-wins rule as snapshot: a path this turn already holds
+   * keeps its earlier pre-image. */
+  record(sessionId: string, turnId: string, images: ReadonlyArray<{ path: string; prior: PriorImage }>): Promise<void> {
+    if (!images.length) return Promise.resolve();
+    return this.serial(async () => {
+      const manifest = await this.openManifest(sessionId, turnId);
+      const held = new Set(manifest.entries.map((entry) => entry.path));
+      for (const image of images) {
+        const target = path.resolve(image.path);
+        if (held.has(target)) continue;
+        held.add(target);
+        manifest.entries.push(await this.entryFor(sessionId, turnId, target, image.prior));
+      }
+      await writeManifest(this.turnDir(sessionId, turnId), manifest);
+    });
+  }
+
+  private async openManifest(sessionId: string, turnId: string): Promise<CheckpointManifest> {
+    await fs.mkdir(path.join(this.turnDir(sessionId, turnId), 'blobs'), { recursive: true, mode: 0o700 });
+    return await this.readManifest(sessionId, turnId)
+      ?? { sessionId, turnId, createdAt: new Date().toISOString(), entries: [] };
+  }
+
+  private async entryFor(sessionId: string, turnId: string, target: string, prior: PriorImage): Promise<CheckpointEntry> {
+    if (!prior.existed) return { path: target, existed: false };
+    const hash = createHash('sha256').update(prior.content).digest('hex');
+    const blob = path.join(this.turnDir(sessionId, turnId), 'blobs', hash);
+    // Named by its content: one already there (an earlier path of this turn
+    // with the same bytes) is this blob. Written whole or not at all, before
+    // the manifest that points at it.
+    if ((await fs.stat(blob).catch(() => undefined))?.size !== prior.content.length) await atomicWriteFile(blob, prior.content);
+    return { path: target, existed: true, mode: prior.mode & 0o7777, hash, size: prior.content.length };
   }
 
   /** Record how the turn left every file it snapshotted. Called once the

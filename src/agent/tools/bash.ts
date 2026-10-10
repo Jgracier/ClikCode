@@ -12,6 +12,7 @@ import { defineTool, type ToolContext, type ToolRunResult } from '../tool-contra
 import { scopeOf } from './fs-helpers.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 import { sandboxCommand, sandboxDenialHint, sandboxMissingNotice } from '../sandbox.js';
+import { describeShellChanges, shellChangesSince, snapshotBeforeShell, type ShellChanges, type ShellSnapshot } from '../shell-changes.js';
 
 interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string; sandbox?: boolean }
 
@@ -158,7 +159,7 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
 export const bashTool = defineTool<BashArgs>({
   name: 'bash',
   class: 'exec',
-  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs (the command as it is, with no trailing &: a backgrounded command leaves the shell to exit at once, and its output and exit are lost): you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Foreground commands get no input: never start editors there. A command that prompts or a REPL runs with run_in_background, and bash_input types into it. Commands run sandboxed by default: they read everything and keep the network, but write only the workspace, the temp dir and tool caches; set sandbox: false only when a command genuinely must write elsewhere (a global install, ~/.config, another repo), and it then runs under the usual permission mode.',
+  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs (the command as it is, with no trailing &: a backgrounded command leaves the shell to exit at once, and its output and exit are lost): you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. Do not use it to read or search files — use read_file, grep and glob; edit_file and multi_edit are for targeted edits, but a mechanical change across many files (a rename, a bulk replace) may be one command such as sed, and the files a foreground command changes in the git repository are shown and undoable like any edit. Foreground commands get no input: never start editors there. A command that prompts or a REPL runs with run_in_background, and bash_input types into it. Commands run sandboxed by default: they read everything and keep the network, but write only the workspace, the temp dir and tool caches; set sandbox: false only when a command genuinely must write elsewhere (a global install, ~/.config, another repo), and it then runs under the usual permission mode.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['command'],
     properties: {
@@ -181,11 +182,32 @@ export const bashTool = defineTool<BashArgs>({
     const timeoutMs = Math.min(Math.max(args.timeout_ms ?? BASH_DEFAULT_TIMEOUT_MS, 1), BASH_MAX_TIMEOUT_MS);
     const callName = (ctx.callId ?? `call-${Date.now()}`).replace(/[^A-Za-z0-9._-]/g, '_');
     const invocation = sandboxedInvocation(args, ctx);
-    const result = await runForeground(invocation, timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}.log`), ctx);
+    const before = await snapshotBeforeShell(ctx.cwd).catch(() => undefined);
+    let result: ToolRunResult & { timedOut?: boolean };
+    try {
+      result = await runForeground(invocation, timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}.log`), ctx);
+    } catch (error) {
+      // Stopped mid-command: what it changed so far is still this turn's.
+      if (before) await recordShellChanges(before, ctx).catch(() => undefined);
+      throw error;
+    }
+    const changes = before ? await recordShellChanges(before, ctx).catch(() => undefined) : undefined;
     const hint = invocation.sandboxed && result.isError && !result.timedOut ? sandboxDenialHint(result.output, invocation.writable) : undefined;
-    return withNote(withNote(result, invocation.notice), hint, 'after');
+    const shown = withNote(withNote(withNote(result, invocation.notice), hint, 'after'), changes && describeShellChanges(changes), 'after');
+    return changes?.diff.length ? { ...shown, diff: changes.diff } : shown;
   },
 });
+
+/** Put what a foreground command changed in the repository into the turn's
+ * undo checkpoint (the parent's, for a coding child), as the write tools
+ * do. A background shell is not tracked: it outlives the call and often the
+ * turn, so whatever changed by its exit -- the model's own edits and the
+ * user's in between -- could not be told apart from what it did. */
+async function recordShellChanges(before: ShellSnapshot, ctx: ToolContext): Promise<ShellChanges | undefined> {
+  const changes = await shellChangesSince(before, ctx.cwd);
+  if (changes?.images.length) await ctx.checkpoints.record(ctx.checkpoint?.sessionId ?? ctx.sessionId, ctx.checkpoint?.turnId ?? ctx.turnId, changes.images);
+  return changes;
+}
 
 function withNote({ timedOut: _timedOut, ...result }: ToolRunResult & { timedOut?: boolean }, note: string | undefined, where: 'before' | 'after' = 'before'): ToolRunResult {
   if (!note) return result;
