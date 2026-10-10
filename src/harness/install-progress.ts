@@ -11,8 +11,10 @@
  * when it finishes. A failure is the exception -- then the tail is printed,
  * because an install that did not work is exactly when the log matters.
  */
-const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const FRAME_MS = 80;
+
+import { waitingSpinnerGlyph } from './protocol/activity-view.js';
+import { SPIN_MS } from './protocol/timings.js';
+import { reducedMotion } from '../tui/capabilities.js';
 /** Enough of npm's log to explain a failure, not enough to be another dump. */
 const FAILURE_TAIL_LINES = 12;
 
@@ -26,23 +28,28 @@ export function installFailureTail(output: string, limit = FAILURE_TAIL_LINES): 
 interface Spinner { stop: (finalLine?: string) => void }
 
 /** One self-clearing line. Silent where stdout is not a terminal, so piped
- * and CI output stays clean rather than filling with frames. */
-export function startSpinner(label: string, write: (text: string) => void = (text) => process.stdout.write(text), isTty = process.stdout.isTTY): Spinner {
+ * and CI output stays clean rather than filling with frames. The waiting
+ * band's spinner -- its glyphs, its SPIN_MS step -- and, under reduced
+ * motion, held on one frame. */
+export function startSpinner(
+  label: string, write: (text: string) => void = (text) => process.stdout.write(text), isTty = process.stdout.isTTY,
+  still = reducedMotion(),
+): Spinner {
   if (!isTty) {
     write(`${label}\n`);
     return { stop: (finalLine) => { if (finalLine) write(`${finalLine}\n`); } };
   }
   let frame = 0;
   const paint = (): void => {
-    write(`\r\u001b[2K\u001b[2m${FRAMES[frame % FRAMES.length]}\u001b[0m ${label}`);
+    write(`\r\u001b[2K\u001b[2m${waitingSpinnerGlyph(frame)}\u001b[0m  ${label}`);
     frame += 1;
   };
   paint();
-  const timer = setInterval(paint, FRAME_MS);
-  timer.unref?.();
+  const timer = still ? undefined : setInterval(paint, SPIN_MS);
+  timer?.unref?.();
   return {
     stop: (finalLine) => {
-      clearInterval(timer);
+      if (timer) clearInterval(timer);
       write(`\r\u001b[2K${finalLine ? `${finalLine}\n` : ''}`);
     },
   };
