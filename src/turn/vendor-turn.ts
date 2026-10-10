@@ -33,7 +33,8 @@ import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider 
 import { writeState } from '../session/state/write.js';
 import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
-import { closePersistentTransport, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
+import { closePersistentTransport, persistentWorkRunning, waitForPersistentWork, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
+import { hasHeldVendorProcess, releaseHeldVendorProcess, waitForHeldVendorSubagents } from '../harness/transport/native/held-vendor.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
 import { turnEnvironment } from './turn-environment.js';
 import type { TurnRunOptions } from './session-turn.js';
@@ -247,9 +248,26 @@ export async function sendVendorTurn(input: {
   };
   let stopSwarmWatch = (): void => undefined;
   try {
+  if (hasHeldVendorProcess(session.id)) {
+    prompter?.phase('waiting for running work');
+    await waitForHeldVendorSubagents(session.id, signal);
+    // The old CLI has now finished its Agent calls and their follow-up.
+    // Closing it flushes its thread before a new account reads the copy.
+    await releaseHeldVendorProcess(session.id);
+  }
+  // A previous reply may have left Agent calls running. Even a manual account
+  // choice for this next prompt cannot close or copy their still-changing
+  // thread; let them finish in the original process first.
+  if (await persistentWorkRunning(session.id)) {
+    prompter?.phase('waiting for running work');
+    await waitForPersistentWork(session.id, signal);
+  }
   // The thread goes with the conversation, as on a switch mid-turn; only
   // one that cannot be carried starts afresh.
-  if (await accounts.start(async (to) => { await moveThreadToAccount(session, harness, account, to); })) {
+  if (await accounts.start(async (to) => {
+    await closePersistentTransport(session.id);
+    await moveThreadToAccount(session, harness, account, to);
+  })) {
     await checkpoint.persistNow();
   }
   // Whoever chose this account and whenever, the thread has to be in its
@@ -511,6 +529,15 @@ export async function sendVendorTurn(input: {
       }
       result = { ...result, isError: true, errorMessage: replyError.notice, ...(replyError.statusCode !== undefined ? { statusCode: replyError.statusCode } : {}) };
     }
+    if (result.isError && await persistentWorkRunning(session.id)) {
+      prompter?.phase('waiting for running work');
+      await waitForPersistentWork(session.id, signal);
+    }
+    if (result.isError && hasHeldVendorProcess(session.id)) {
+      prompter?.phase('waiting for running work');
+      await waitForHeldVendorSubagents(session.id, signal);
+      await releaseHeldVendorProcess(session.id);
+    }
     if (!session.nativeSessionId && result.nativeSessionId) { session.nativeSessionId = result.nativeSessionId; session.nativeThreadAccountId = account.id; }
     if (!result.isError && !session.nativeSessionPreallocated) await adoptListedNativeId(harness, session, environment);
     if (session.nativeSessionId) keepTransport(transport);
@@ -607,6 +634,9 @@ export async function sendVendorTurn(input: {
         continue;
       }
       const fallback = await accounts.after(failure, failureKind, signal);
+      // Closing after the last tool settled lets the vendor flush its own
+      // transcript before the receiving account copies it.
+      await closePersistentTransport(session.id);
       const carriedThread = await moveThreadToAccount(session, harness, account, fallback);
       await accounts.switchTo(fallback, failureKind);
       nativeThreadRetried = false;

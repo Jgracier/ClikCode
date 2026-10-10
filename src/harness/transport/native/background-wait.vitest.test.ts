@@ -80,15 +80,18 @@ describe('background wait on a held-open Claude stdin', () => {
     expect(replay(records).settledAt).toBe(records.length - 1);
   });
 
-  it('stops waiting at a failed result', () => {
+  it('keeps a subagent running after its parent result fails', () => {
     const records: Json[] = [
       { type: 'system', subtype: 'init' },
-      { type: 'system', subtype: 'task_started', task_id: 'b1', is_backgrounded: true },
+      { type: 'system', subtype: 'task_started', task_id: 'b1', task_type: 'local_agent', is_backgrounded: true },
       { type: 'result', subtype: 'error_during_execution', is_error: true },
+      { type: 'system', subtype: 'task_notification', task_id: 'b1', status: 'completed' },
+      { type: 'system', subtype: 'init' },
+      { type: 'result', subtype: 'success', is_error: false },
     ];
     const outcome = replay(records);
-    expect(outcome.settledAt).toBe(2);
-    expect(outcome.finished).toEqual(['b1:abandoned']);
+    expect(outcome.settledAt).toBe(5);
+    expect(outcome.finished).toEqual(['b1:completed']);
   });
 
   it('gives up on a task that left the list with no notification, after the ceiling', () => {

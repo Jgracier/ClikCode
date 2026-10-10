@@ -18,7 +18,7 @@ import { reportStructuredLine } from '../harness/events/structured.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
-import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
+import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, waitForHeldVendorSubagents, type HeldVendor } from '../harness/transport/native/held-vendor.js';
 import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -53,11 +53,12 @@ export async function runVendorCliAttempt(input: {
   const { harness, session, turnText, model, environment, images, signal, run, checkpoint, effort, sharedObserver, onOutputStart, onStreamError } = input;
   const prompter = run.prompter;
   let turnOutput: Awaited<ReturnType<typeof captureNativeHarnessTurn>> = { stdout: '', stderr: '', exitCode: 0 };
-  // A previous turn's vendor may still be running for its background
-  // work (held-vendor.ts). This turn takes over: stdin closes, anything
-  // it was saying finishes into its own transcript, and it exits.
+  // A previous turn's vendor may still be running background work. Let its
+  // Agent calls and follow-up finish before closing stdin; Claude kills
+  // running Agent calls when that input closes.
   if (hasHeldVendorProcess(session.id)) {
-    prompter?.phase('closing background work');
+    prompter?.phase('waiting for running work');
+    await waitForHeldVendorSubagents(session.id, signal);
     await releaseHeldVendorProcess(session.id);
   }
   const cliHarness: AiLocalHarnessDefinition = harness.fallbackTurn && await usesFallbackTurn(harness)
@@ -121,7 +122,7 @@ export async function runVendorCliAttempt(input: {
   // A message typed while this turn runs goes straight to the vendor.
   const vendorBackground = new Set<string>();
   const heldInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
-  // A successful answer with background tasks still running ends this
+  // An answer with background tasks still running ends this
   // turn at once; the process is kept, and what it says when a task
   // finishes becomes a background turn (held-vendor.ts). With nobody to
   // show that (no session worker: `clikcode send`), the turn stays open
@@ -210,7 +211,7 @@ export async function runVendorCliAttempt(input: {
       if (outcome.error) onStreamError(outcome.error);
       if (outcome.result) idle.noteResult(outcome.result);
       // Answered, and only background tasks left: the turn is over.
-      if (outcome.result === 'success' && release && background && backgroundHandler
+      if (outcome.result && release && background && backgroundHandler
         && background.pending > 0 && background.quiet && !background.settled) {
         run.liveInput?.setSteerHandler(undefined);
         held = holdVendorProcess({

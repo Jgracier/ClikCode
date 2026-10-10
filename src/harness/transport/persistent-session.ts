@@ -78,6 +78,8 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected abstract clearPending(): void;
   /** Vendor work the protocol itself says is still running (Codex items). */
   protected abstract pendingCount(): number;
+  /** A live subagent is allowed to finish even if it is silent for an hour. */
+  protected hasActiveSubagents(): boolean { return false; }
 
   /** The transport is about to send the turn's prompt (awaited first): what
    * runs in the child's group from here on, and is still running when the
@@ -267,6 +269,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const run = create();
     const watchdog = this.watchdog(() => {
       if (this.background !== run) return;
+      // A silent Agent call is still work owned by this process. The user
+      // can stop it explicitly; a clock must not force an account handoff
+      // that kills it.
+      if (this.hasActiveSubagents()) return;
       // The ceiling ends the background turn, not the child: whatever is
       // still running can report into the next turn.
       this.clearPending();

@@ -13,10 +13,9 @@
  * (harness/transport/background-turn.ts) -- the same surface Codex and ACP
  * use for work they do between turns. The process is let go when:
  *  - its tasks are done and Claude has said what it had to (settled),
- *  - the user sends the next turn (`releaseHeldVendorProcess`): stdin closes,
- *    a follow-up already under way finishes into Claude's own transcript --
- *    which the next turn resumes -- and Claude stops its remaining tasks on
- *    exit, as it always does when its input ends,
+ *  - the next turn waits for its subagents and their follow-up, then closes
+ *    stdin (`releaseHeldVendorProcess`); an independent background shell may
+ *    still be stopped on exit,
  *  - the ceiling passes, or the idle watchdog stops a silent process.
  *
  * One per ClikCode session. */
@@ -25,6 +24,7 @@ import { BackgroundTurnChannel, type BackgroundTurnEnd, type VendorBackgroundTur
 import type { HarnessTurnObserver } from '../../events/turn-observer.js';
 import type { BackgroundWait } from './background-wait.js';
 import type { ReleasedTurnExit } from './turn.js';
+import { turnCancelledError } from '../../../agent/cancellation.js';
 
 type Json = Record<string, unknown>;
 
@@ -55,6 +55,8 @@ export interface HeldVendor {
   line(text: string, record: Json | undefined): void;
   /** Claude went between turns (BackgroundWait onQuiet). */
   quiet(): void;
+  /** Whether a subagent or its follow-up is still running. */
+  readonly agentWork: boolean;
   /** End it: close stdin and wait for the exit (bounded; then stopped).
    * `stop`: the user stopped it -- a moment to exit, then it is ended. */
   close(stop?: boolean): Promise<void>;
@@ -91,9 +93,21 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     channel?.finish(ended);
     channel = undefined;
   };
-  const ceiling = setTimeout(() => { closing = true; end('completed'); options.endInput(); }, options.ceilingMs ?? HELD_VENDOR_CEILING_MS);
-  ceiling.unref();
+  let ceiling: NodeJS.Timeout | undefined;
+  const armCeiling = (): void => {
+    ceiling = setTimeout(() => {
+      // A long-running shell can be released at the ceiling; an Agent call
+      // is finite work that must remain in its original Claude process.
+      if (options.background.agentWork) { armCeiling(); return; }
+      closing = true;
+      end('completed');
+      options.endInput();
+    }, options.ceilingMs ?? HELD_VENDOR_CEILING_MS);
+    ceiling.unref();
+  };
+  armCeiling();
   const vendor: HeldVendor = {
+    get agentWork() { return options.background.agentWork; },
     line(text, record) {
       if (!channel && !closing && record && opensBackgroundTurn(record) && !options.background.settled) {
         channel = new BackgroundTurnChannel('structured-cli', 'background-work');
@@ -177,4 +191,14 @@ export function whenHeldVendorGone(sessionId: string): Promise<void> {
     waiting.push(resolve);
     gone.set(sessionId, waiting);
   });
+}
+
+/** Before the next prompt or account copy, let a held Claude subagent finish
+ * in the process that owns it. A background shell may be released normally. */
+export async function waitForHeldVendorSubagents(sessionId: string, signal?: AbortSignal): Promise<void> {
+  while (held.get(sessionId)?.agentWork) {
+    if (signal?.aborted) throw turnCancelledError();
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+  }
+  if (signal?.aborted) throw turnCancelledError();
 }

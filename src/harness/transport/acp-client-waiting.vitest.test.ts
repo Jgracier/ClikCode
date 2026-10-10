@@ -7,7 +7,7 @@ import type { VendorBackgroundTurn } from './background-turn.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { TurnUsage } from '../protocol/turn-usage.js';
 
-type Step = { after?: number; update?: Record<string, unknown>; answer?: true | Record<string, unknown>; permission?: true };
+type Step = { after?: number; update?: Record<string, unknown>; answer?: true | Record<string, unknown>; error?: { code: number; message: string }; permission?: true };
 
 /** `prompts[n]` is what the agent does for the nth session/prompt. */
 function agent(prompts: Step[][]): string {
@@ -21,6 +21,7 @@ function agent(prompts: Step[][]): string {
         if (step.update) send({ method: 'session/update', params: { sessionId: 's1', update: step.update } });
         if (step.permission) send({ id: 500 + n, method: 'session/request_permission', params: { sessionId: 's1', toolCall: { toolCallId: 't', title: 'Run make', kind: 'execute' }, options: [{ optionId: 'y', kind: 'allow_once' }, { optionId: 'n', kind: 'reject_once' }] } });
         if (step.answer) send({ id, result: step.answer === true ? { stopReason: 'end_turn' } : step.answer });
+        if (step.error) send({ id, error: step.error });
       }
     };
     process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
@@ -76,6 +77,29 @@ describe('the idle watchdog on an ACP prompt', () => {
 });
 
 describe('updates an ACP agent sends between prompts', () => {
+  it('lets an Agent tool finish after its parent request runs out of usage', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ idleMs: 200, toolIdleMs: 200, backgroundTurns: (turn) => turns.push(turn) });
+    try {
+      const failure = await session.runTurn(input([[
+        { update: { ...tool('agent-1', 'pending'), rawInput: { subagent_type: 'Explore' } } },
+        { error: { code: 429, message: 'usage limit reached' } },
+        { after: 600, update: tool('agent-1', 'completed') },
+      ]])).catch((error: Error) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(turns).toHaveLength(1);
+      expect(turns[0]!.reason).toBe('background-work');
+      expect(await session.backgroundWorkRunning()).toBe(true);
+      const events: HarnessActivityEvent[] = [];
+      turns[0]!.attach({ onActivity: (event) => events.push(event) });
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(await session.backgroundWorkRunning()).toBe(true);
+      expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
+      expect(events.map((event) => event.kind)).toEqual(['tool-done']);
+      expect(await session.backgroundWorkRunning()).toBe(false);
+    } finally { await session.close(); }
+  });
+
   it('open a background turn that ends on the agent\'s end-of-turn bookkeeping', async () => {
     const turns: VendorBackgroundTurn[] = [];
     const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
