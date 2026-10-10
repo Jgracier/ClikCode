@@ -1057,6 +1057,19 @@ SCENARIOS = {
         'steps': [('keys', '/c'), ('settle', 1), ('snap', 'c'), ('keys', 'o'), ('settle', 1), ('snap', 'co')],
         'watch': [], 'snap_contains': {'c': ['❯ /c'], 'co': ['❯ /co']}, 'snap_lacks': {'c': ['❯ /account'], 'co': ['❯ /account']},
     },
+    # Effort moved to High in its row, then Tab → "Make default for every
+    # harness": the value saved is the one shown (it saved the value Settings
+    # opened with), and Settings stays open on the row (it closed).
+    'settings-default-saves-shown-value': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
+                  *[step for _ in range(4) for step in (('keys', '\x1b[B'), ('settle', 0.3))],
+                  ('keys', '4'), ('settle', 0.5), ('keys', '\t'), ('wait_for', 'Make default for every harness', 10), ('settle', 0.5),
+                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'Default saved', 10), ('settle', 1.5), ('snap', 'after'),
+                  ('keys', '\x1b'), ('settle', 1)],
+        'watch': [], 'final_contains': ['Default saved · Effort for every harness: high'],
+        'snap_contains': {'after': ['❯ Effort', '● High']}, 'never': ['for every harness: medium'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

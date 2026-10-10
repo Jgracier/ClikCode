@@ -43,8 +43,10 @@ const INLINE_MAX_CHOICES = 4;
 
 type DefaultKey = 'model' | 'effort' | 'permissions';
 
-/** Tab on a row: keep this value for new chats. */
-function defaultActions(harness: AiLocalHarnessDefinition | undefined, key: DefaultKey): PickerOption<string>['actions'] {
+/** Tab on a row: keep this value for new chats. A row with no value (no
+ * model chosen) has none to keep, so nothing is offered. */
+function defaultActions(harness: AiLocalHarnessDefinition | undefined, key: DefaultKey, hasValue = true): PickerOption<string>['actions'] {
+  if (!hasValue) return [];
   return [
     ...(harness ? [{ label: `Make default for ${harness.displayName}`, value: `provider:${key}` }] : []),
     ...(key === 'model' ? [] : [{ label: 'Make default for every harness', value: `global:${key}` }]),
@@ -68,9 +70,9 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
     );
     const optionCount = harness ? vendorFacingOptions(localHarnessCapabilityManifest(harness).options, harness).length : 0;
     const setOptions = Object.keys(session.harnessOptions ?? {}).length;
-    const values: Record<DefaultKey, string | undefined> = {
-      model: session.model ?? undefined, effort: session.effort || undefined, permissions: session.permissionMode ?? 'ask',
-    };
+    const values = (of: typeof session): Record<DefaultKey, string | undefined> => ({
+      model: of.model ?? undefined, effort: of.effort || undefined, permissions: of.permissionMode ?? 'ask',
+    });
 
     const rows: PickerOption<string>[] = [
       { label: 'Resume', detail: 'choose a conversation', value: 'resume' },
@@ -90,7 +92,7 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       ] : []),
       ...(harness && harnessSupportsModelSelection(harness) ? [{
         label: 'Model', detail: session.model ? nativeModelLabel(harness.command, session.model) ?? session.model : 'harness default', value: 'model',
-        actions: defaultActions(harness, 'model'),
+        actions: defaultActions(harness, 'model', Boolean(session.model)),
       }] : []),
       // Unset until the engine picks on the first turn; the picker says which
       // it would choose.
@@ -126,19 +128,28 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       ...(harness ? [{ label: 'Tools & integrations', detail: harnessManagers(harness).map(([, manager]) => manager.label).join(', ') || 'MCP servers', value: 'tools' }] : []),
     ];
 
-    const selected = await chooseOption(rl, 'Settings', rows, async (_row, action) => {
+    // A row's action leaves Settings open, on that row.
+    let actedOn: string | undefined;
+    const selected = await chooseOption(rl, 'Settings', rows, async (row, action) => {
+      actedOn = row;
       if (action === 'clear-provider' && harness) {
         await aiSettingsClearProvider(harness.command, false);
-        rl.panel?.('Defaults cleared', `${harness.displayName} now uses every-harness defaults.`);
+        rl.activity?.(`${harness.displayName} now uses every-harness defaults`);
         return;
       }
       const [scope, key] = action.split(':') as ['provider' | 'global', DefaultKey];
-      const value = values[key];
+      // As it is now: an inline row's value may have changed since the list
+      // opened (it is applied before its actions run).
+      const now = (await readState({ transcripts: [] })).sessions.find((item) => item.id === id);
+      const value = now ? values(now)[key] : undefined;
       if (!value) return;
       if (scope === 'global') await aiSettingsSetGlobal(key, value, false);
       else if (harness) await aiSettingsSetProvider(harness.command, key, value, false);
-      rl.panel?.('Default saved', `${settingLabel(key)} ${scope === 'global' ? 'for every harness' : `for ${harness?.displayName}`}: ${value}`);
+      // A line in the conversation: Settings stays open over it, and a
+      // panel drawn under the list was gone with the next paint.
+      rl.activity?.(`Default saved · ${settingLabel(key)} ${scope === 'global' ? 'for every harness' : `for ${harness?.displayName}`}: ${value}`);
     }, returnTo === undefined ? undefined : { startAt: returnTo });
+    if (selected === undefined && actedOn !== undefined && lastPickerExit === 'choose') { returnTo = actedOn; continue; }
     if (selected === undefined) return id;
     returnTo = selected;
     if (selected === 'resume') {

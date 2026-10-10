@@ -196,6 +196,9 @@ export function runOptionPicker<T>(
     // Tab opens optional non-destructive management actions. Right Arrow is
     // deliberately identical to Enter for every picker.
     const openActions = (option: PickerOption<T>): Promise<void> => openAside(async () => {
+      // The value shown on an inline row is the one its actions act on
+      // ("Make default"): applied first, or they read the value it had.
+      await commit(option);
       let escaped = false;
       const actionValue = await host.select(
         option.label,
