@@ -49,6 +49,10 @@ export function chatSuite(): void {
       await waitFor(api, `#history-list [data-key="${id}"]`, 'the chat named elsewhere, without reopening the list', 5_000, (found) => /Named in another window/.test(found.text));
       await click(api, '#history-button');
       await waitFor(api, '#composer-input', 'the chat screen again');
+      // The welcome's Recent hears of it too, with the menu closed: it used
+      // to load once and keep what it had.
+      clikcode('sessions', 'command', id, '/rename', 'Renamed in another window');
+      await waitFor(api, `.recent-row[data-key="${id}"]`, 'the renamed chat in the welcome\'s Recent', 5_000, (found) => /Renamed in another window/.test(found.text));
     });
 
     it('walks /search mention by mention, as the terminal does', async () => {
