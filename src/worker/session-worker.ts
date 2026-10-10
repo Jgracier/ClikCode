@@ -582,7 +582,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // save (which rewrites the transcript) is done.
       await vendorBackground.saveSuperseded();
       const ended = await currentSessionAndAccount();
-      observer.endTurn(ended.session, ended.account);
+      observer.endTurn(ended.session, ended.account, turnOutcome === 'cancelled');
       turnRunning = false;
       lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
       vendorUsed();

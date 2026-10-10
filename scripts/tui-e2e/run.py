@@ -203,6 +203,22 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'one': ['› take this back', 'draft restored'], 'two': ['Stopped']},
         'snap_lacks': {'two': ['› take this back', 'draft restored']},
     },
+    # A turn one window started is stopped from another (Esc there stops the
+    # shared turn). Both end it as stopped -- the window that started it used
+    # to say "Worked for", as if it had finished.
+    'stopped-from-other-window': {
+        'env': {'FAKE_DELAY_MS': '400'},
+        'turns': [{'blocks': ['First chat answered.']},
+                  {'blocks': ['Checking the workspace first.', 'The final commit is live and many more words follow here slowly until the end.']}],
+        'steps': [
+            ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            ('open2', 6, ['--continue']), ('wait_for2', 'First chat answered.', 10), ('settle', 1),
+            ('type', 'check the commit'), ('wait_for', 'The final', 30), ('wait_for2', 'The final', 20), ('settle', 1),
+            ('keys2', '\x1b'), ('wait_for2', 'Stopped after', 10), ('settle', 3),
+        ],
+        'watch': [], 'final_once': ['Stopped after'], 'final2_once': ['Stopped after'],
+        'never': ['Worked for'], 'never2': ['Worked for'],
+    },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 4)],

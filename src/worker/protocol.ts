@@ -90,7 +90,8 @@ export type WorkerEvent =
   | { type: 'retire-declined'; reason: string }
   /** `live` is present exactly while a turn runs: a snapshot without it says
    * nothing is running, including the one that closes a turn. */
-  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: LiveTurn }
+  /** `stopped`: the snapshot that closes a stopped turn (see waiting-stop). */
+  | { type: 'snapshot'; session: HarnessSession; account?: string; live?: LiveTurn; stopped?: true }
   | { type: 'delta'; text: string; mode: 'append' | 'replace' }
   | { type: 'activity'; event: HarnessActivityEvent }
   /** A line of the turn's own transcript that is not a tool call: an account
@@ -106,7 +107,9 @@ export type WorkerEvent =
    * for a finished background shell -- follows it from here to waiting-stop
    * and shows the prompt as the pending message. */
   | { type: 'waiting-start'; message: string; prompt?: string }
-  | { type: 'waiting-stop' }
+  /** The turn is over. `stopped`: it was stopped (Esc or Ctrl+C in any
+   * window), so every window ends it as stopped, not finished. */
+  | { type: 'waiting-stop'; stopped?: true }
   /** A turn needs the vendor signed in. The worker has no terminal to run a
    * sign-in on, so the client runs it on its own and answers with
    * `sign-in-response`; the worker then retries the turn. */

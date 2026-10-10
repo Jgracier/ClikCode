@@ -232,21 +232,29 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   stopWaiting(): void {
+    this.endWaiting(false);
+  }
+
+  /** `stopped`: the turn was stopped, not finished -- whichever window
+   * stopped it, every one ends it that way. */
+  private endWaiting(stopped: boolean): void {
     this.waitingLabel = '';
     this.livePrompt = undefined;
     this.liveActivities = [];
     this.livePlan = [];
     this.dropPending();
-    this.broadcast({ type: 'waiting-stop' });
+    this.broadcast({ type: 'waiting-stop', ...(stopped ? { stopped: true as const } : {}) });
   }
 
   /** The turn is over: the conversation as it now stands, then waiting-stop.
    * The snapshot goes first because a window stops listening at waiting-stop;
    * it carries no `live`, because nothing is running any more -- a journal it
    * still holds is an interrupted turn, and a window draws it as one. */
-  endTurn(session?: HarnessSession, account?: string): void {
-    if (session) this.broadcast({ type: 'snapshot', session, ...(account ? { account } : {}) });
-    this.stopWaiting();
+  endTurn(session?: HarnessSession, account?: string, stopped = false): void {
+    // The snapshot ends the turn on a window's screen when it holds the
+    // turn's record, before waiting-stop arrives: both say it was stopped.
+    if (session) this.broadcast({ type: 'snapshot', session, ...(account ? { account } : {}), ...(stopped ? { stopped: true as const } : {}) });
+    this.endWaiting(stopped);
   }
 
   get turnOutputStarted(): boolean {

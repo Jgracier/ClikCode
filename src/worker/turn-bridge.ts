@@ -341,6 +341,7 @@ async function driveWorkerTurn(
         switch (event.type) {
           case 'snapshot':
             account = event.account;
+            if (event.stopped) rl.turnStopped();
             // `live` says the worker still runs this turn, so its journal is
             // the live view's and is never drawn as ended; a snapshot without
             // it (the one that closes a turn) holds an interrupted one.
@@ -402,6 +403,8 @@ async function driveWorkerTurn(
             pendingError = new Error(event.message);
             return;
           case 'waiting-stop':
+            // Stopped from another window too: ended here as stopped.
+            if (event.stopped) rl.turnStopped();
             finish('waiting-stop', () => (pendingError ? rejectTurn(pendingError) : resolveTurn()));
             return;
           case 'attach-rejected':
