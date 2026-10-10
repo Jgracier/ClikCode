@@ -10,6 +10,7 @@ import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../daemon/server.js';
 import { classifyAccountFailure } from './failover.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
 import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
@@ -70,7 +71,12 @@ export async function sendDirectApiTurn(input: {
       break;
     } catch (error) {
       const failureKind = classifyAccountFailure(error);
-      await accounts.switchTo(await accounts.after(error, failureKind, signal), failureKind);
+      const switchAt = Date.now();
+      const to = await accounts.after(error, failureKind, signal);
+      const chooseMs = Date.now() - switchAt;
+      const leftId = account.id;
+      await accounts.switchTo(to, failureKind);
+      lifecycle('worker.switch', { harness: 'direct', from: leftId.slice(0, 8), to: to.id.slice(0, 8), why: failureKind, chooseMs, recordMs: Date.now() - switchAt - chooseMs });
     }
   }
   const invocation = recordInvocation(state, {

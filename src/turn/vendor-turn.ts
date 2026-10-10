@@ -633,12 +633,24 @@ export async function sendVendorTurn(input: {
         turnText = await retell(session.pendingTurn?.outputStarted || cliOutputStarted ? INTERRUPTED_TURN_REQUEST : askedText, 'clear');
         continue;
       }
+      // Where a switch spends its time, one line per switch: the choice of
+      // account, the old process closing, the thread copy, the record.
+      const switchAt = Date.now();
+      const leftId = account.id;
       const fallback = await accounts.after(failure, failureKind, signal);
+      const chosenMs = Date.now() - switchAt;
       // Closing after the last tool settled lets the vendor flush its own
       // transcript before the receiving account copies it.
       await closePersistentTransport(session.id);
+      const closedMs = Date.now() - switchAt - chosenMs;
       const carriedThread = await moveThreadToAccount(session, harness, account, fallback);
+      const carriedMs = Date.now() - switchAt - chosenMs - closedMs;
       await accounts.switchTo(fallback, failureKind);
+      lifecycle('worker.switch', {
+        harness: harness.command, from: leftId.slice(0, 8), to: fallback.id.slice(0, 8), why: failureKind,
+        chooseMs: chosenMs, closeMs: closedMs, carryMs: carriedMs, recordMs: Date.now() - switchAt - chosenMs - closedMs - carriedMs,
+        carried: carriedThread ?? 'none',
+      });
       nativeThreadRetried = false;
       // The answer on screen stays when this attempt already wrote one: the
       // next account carries on from it, so clearing it made the first half
