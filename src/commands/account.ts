@@ -506,10 +506,6 @@ export async function aiAccountAdd(options: { provider: string; label?: string; 
 }
 
 interface AccountRemoveOptions {
-  /** Delete the account's profile directory (its vendor credentials). Defaults
-   * to true, and only ever applies to a directory ClikCode created under its
-   * own profiles root -- anything else is left exactly where it is. */
-  purgeProfile?: boolean;
   /** Run the vendor's own logout first, where the catalog declares one.
    * Defaults to true for an isolated profile (the token is about to be deleted
    * anyway; revoking it is the clean end) and false otherwise: an account on
@@ -542,6 +538,8 @@ export async function aiAccountRemove(labelOrId: string, options: AccountRemoveO
   // The registry first, the directory second: a crash in between leaves an
   // orphan directory, never an account pointing at nothing.
   await writeState(state);
-  const purged = options.purgeProfile === false ? undefined : await purgeAccountProfile(removed, state.accounts).catch(() => undefined);
+  // Its profile directory (its vendor credentials) goes too, only ever one
+  // ClikCode created under its own profiles root.
+  const purged = await purgeAccountProfile(removed, state.accounts).catch(() => undefined);
   emitHarnessOutput({ panel: 'account-removed', account: removed.label, loggedOut, ...(purged ? { profileRemoved: purged } : {}) });
 }

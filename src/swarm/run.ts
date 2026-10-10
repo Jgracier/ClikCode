@@ -71,12 +71,6 @@ export async function swarmModelList(host: HarnessSession, state: HarnessState, 
   return swarmChoiceNote(swarmOffers(clerkAccounts(state, host), cache));
 }
 
-/** Every model, for a host that passed model "list". */
-export async function swarmModelCatalog(host: HarnessSession, state: HarnessState, scores?: ScoreCache): Promise<string> {
-  const cache = scores ?? await loadScoreCache();
-  return formatSwarmOffers(swarmOffers(clerkAccounts(state, host), cache));
-}
-
 /** The account with the most usage left that is not already working. When
  * every eligible account is busy, the one with the most left is used again. */
 export function pickClerkAccount(

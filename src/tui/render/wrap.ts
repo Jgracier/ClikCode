@@ -19,9 +19,9 @@ export function wrapCodeLine(value: string, width: number): string[] {
 }
 
 /** `text` cut into rows of `width` cells while what is left is wider than
- * that: the rows, and the part that fits. Each row is sliceToWidth's -- never
- * an SGR sequence or a grapheme cluster split, a cluster wider than the row
- * still taken whole -- but measured in one pass. Re-measuring and re-slicing
+ * that: the rows, and the part that fits. A row never splits an SGR sequence
+ * or a grapheme cluster, and a cluster wider than the row is still taken
+ * whole (or the remainder would never shrink) -- measured in one pass. Re-measuring and re-slicing
  * the remainder for every row was quadratic in a long line. */
 function breakToWidth(text: string, width: number): { heads: string[]; rest: string } {
   const tokens = displayTokens(text);

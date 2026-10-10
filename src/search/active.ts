@@ -42,7 +42,6 @@ export interface ActiveOptions {
   excludeConversationId?: string;
   excludeSessionId?: string;
   now?: number;
-  recentWithinMs?: number;
   limit?: number;
 }
 
@@ -69,7 +68,6 @@ function latest(updatedAt: string, updatedAtMs: number, turnAt: string | undefin
 export async function activeConversations(options: ActiveOptions = {}): Promise<ActiveConversation[]> {
   const now = options.now ?? Date.now();
   const host = hostname();
-  const recentWithin = options.recentWithinMs ?? RECENT_WITHIN_MS;
   const [groups, claims, records] = await Promise.all([
     conversationGroups(), readSessionClaims().catch(() => new Map()), listWorkerRecords().catch(() => []),
   ]);
@@ -105,7 +103,7 @@ export async function activeConversations(options: ActiveOptions = {}): Promise<
       if (doing === 'working') { chosen = session; state = 'working'; break; }
       if (doing && !state) { chosen = session; state = 'open'; }
     }
-    if (!state && now - group.updatedAtMs <= recentWithin) { chosen = group.newest; state = 'recent'; }
+    if (!state && now - group.updatedAtMs <= RECENT_WITHIN_MS) { chosen = group.newest; state = 'recent'; }
     if (!chosen || !state) continue;
     const turn = state === 'working' ? pending.get(chosen.id) : undefined;
     const approval = approvals.get(chosen.id);
