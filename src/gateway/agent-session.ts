@@ -25,10 +25,10 @@ export interface GatewayAgentSession {
   mcp?: { path: string; apiKey: string; expiresAt: string; core?: readonly string[] };
 }
 
-/** The agent for this turn; undefined when the server has no such endpoint (an older ClikDeploy). */
-export async function gatewayAgentSession(config: Conf, session: HarnessSession, signal?: AbortSignal): Promise<GatewayAgentSession | undefined> {
+/** The agent for this turn. Every ClikDeploy the Gateway runs on serves this route (prod answered
+ * POST /v1/agents/{id}/session on 2026-10-10); a server without it cannot run the agent here. */
+export async function gatewayAgentSession(config: Conf, session: HarnessSession & { gatewayAgentId: string }, signal?: AbortSignal): Promise<GatewayAgentSession> {
   const agentId = session.gatewayAgentId;
-  if (!agentId) return undefined;
   const { baseUrl, apiKey } = gatewayConnection(config);
   const response = await fetch(`${baseUrl}/v1/agents/${encodeURIComponent(agentId)}/session`, {
     method: 'POST',
@@ -44,7 +44,7 @@ export async function gatewayAgentSession(config: Conf, session: HarnessSession,
     const body = await response.json().catch(() => ({}));
     // An unknown agent is a real refusal; a missing route is an older server.
     if (gatewayErrorMessage(body) === 'Agent not found') throw new Error(`@${session.gatewayAgentName ?? 'agent'} is not available to this Gateway account.`);
-    return undefined;
+    throw new Error('This Gateway server cannot run agents: it has no /v1/agents/{id}/session route.');
   }
   const body = await response.json().catch(() => ({})) as GatewayAgentSession & { error?: unknown };
   if (!response.ok) throw new Error(gatewayErrorMessage(body) ?? `The Gateway agent could not be started (${response.status}).`);
