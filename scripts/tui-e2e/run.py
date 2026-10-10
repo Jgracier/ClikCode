@@ -1341,6 +1341,17 @@ SCENARIOS = {
                   ('type', '!echo shell-out-$((40+2))'), ('wait_for', 'shell-out-42', 10), ('settle', 2)],
         'watch': ['shell-out-42'], 'final_contains': ['!echo shell-out-$((40+2))', 'exit 0'], 'never': ['rides into the next request'],
     },
+    # `!` on an empty composer opens `! ` (typing starts after the space);
+    # Backspace with nothing after takes both, and the line is a message again.
+    'shell-bang-space': {
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [('keys', '!'), ('settle', 0.4), ('keys', 'x'), ('settle', 0.6), ('snap', 'opened'),
+                  ('keys', '\x7f'), ('settle', 0.4), ('keys', '\x7f'), ('settle', 0.6), ('snap', 'cleared'),
+                  ('keys', '!'), ('settle', 0.4), ('type', 'echo bang-$((40+2))'), ('wait_for', 'bang-42', 10), ('settle', 1),
+                  ('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 1)],
+        'watch': ['bang-42'], 'snap_contains': {'opened': ['› ! x']}, 'snap_lacks': {'cleared': ['› !']},
+        'final_contains': ['!echo bang-$((40+2))', 'exit 0', 'Hello there, all good.'],
+    },
     # No alternate screen: the first message still signs in, on the plain
     # terminal (login.ts plainSignInScreen), then answers.
     'classic-fallback': {

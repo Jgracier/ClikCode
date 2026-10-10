@@ -675,7 +675,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           const controller = new AbortController();
           // The command line is drawn at once, as a sent message is; the band
           // only if it runs long enough to need one.
-          terminal?.submitted(line.trim());
+          // As it is saved (shellMessageContent), so reopening draws the same row.
+          terminal?.submitted(`!${command}`);
           terminal?.render(lastSeen, undefined, undefined, { running: false });
           let result: ShellNote;
           try {
