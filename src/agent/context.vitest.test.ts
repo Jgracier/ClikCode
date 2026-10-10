@@ -73,3 +73,16 @@ describe('window-sized limits', () => {
     expect(toolOutputCap(4_096)).toBe(8 * 1024);
   });
 });
+
+describe('a conversation run as a Gateway agent', () => {
+  it('carries the agent\'s instructions after ClikCode\'s own, and none without one', async () => {
+    const input = { cwd: '/repo', userConfigDir: '/nonexistent-config', git: fakeGit({ branch: 'main', status: '' }) };
+    const plain = await buildSystemPrompt(input);
+    const asAgent = await buildSystemPrompt({ ...input, agentInstructions: 'You are @silas.\n\nWatch the platform.' });
+    expect(plain).not.toContain('# Agent');
+    expect(asAgent).toContain('# Agent');
+    expect(asAgent).toContain('Watch the platform.');
+    // ClikCode's own instructions come first: the agent adds to the harness, it does not replace it.
+    expect(asAgent.indexOf(staticInstructions(true).slice(0, 40))).toBeLessThan(asAgent.indexOf('# Agent'));
+  });
+});

@@ -90,6 +90,11 @@ interface SystemPromptInput {
   toolUsageGuidance?: boolean;
   /** Injected for tests; defaults to a real `git` spawn with a 2s timeout. */
   git?: GitRunner;
+  /**
+   * The Gateway agent this conversation runs as (its identity, charter and run facts, from ClikDeploy):
+   * who the agent is and what it is for, on top of ClikCode's own instructions. Constant per session.
+   */
+  agentInstructions?: string;
 }
 
 type GitRunner = (args: readonly string[], cwd: string) => Promise<string | undefined>;
@@ -156,6 +161,9 @@ export async function buildSystemPrompt(input: SystemPromptInput): Promise<strin
   const memory = await loadMemoryChain({ cwd: input.cwd, userConfigDir: input.userConfigDir, repoRoot });
 
   const sections: string[] = [staticInstructions(input.toolUsageGuidance ?? true)];
+  if (input.agentInstructions?.trim()) {
+    sections.push(['# Agent', 'You are working as this ClikDeploy agent. Its own tools come from its MCP server beside your local tools.', input.agentInstructions.trim()].join('\n\n'));
+  }
   if (memory.length) {
     sections.push([
       '# Project instructions',

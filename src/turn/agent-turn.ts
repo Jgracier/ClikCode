@@ -1,4 +1,5 @@
 /** ClikCode's own agent turn, using Gateway or a local model for inference. */
+import { agentMcpServer, gatewayAgentSession, type GatewayAgentSession } from '../gateway/agent-session.js';
 import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { modelClientForSession } from '../agent/models/for-session.js';
@@ -28,7 +29,14 @@ export async function runAgentTurn(input: {
   config: Conf; state: HarnessState; session: HarnessSession; prompt: string; signal?: AbortSignal; run: TurnRunOptions;
 }): Promise<'continue' | 'resend' | void> {
   const { config, state, session, prompt, signal, run } = input;
-  if (session.route === 'gateway' && session.gatewayAgentId) return runGatewayAgentTurn(input);
+  // A Gateway agent runs HERE, as ClikCode's own agent: the Gateway is the intelligence, the agent adds
+  // its instructions and its platform tools, ClikCode is the harness (gateway/agent-session.ts). Only a
+  // server too old to hand an agent over still runs it remotely.
+  let agent: GatewayAgentSession | undefined;
+  if (session.route === 'gateway' && session.gatewayAgentId) {
+    agent = await gatewayAgentSession(config, session, signal);
+    if (!agent) return runGatewayAgentTurn(input);
+  }
   const prompter = run.prompter;
   const gatewayService = isGatewayService(session);
   // Attribution for the invocation log and the output payload: the route's
@@ -53,7 +61,9 @@ export async function runAgentTurn(input: {
   // it up, so this is a silent join.
   const localHooks = session.route === 'clikcode-local' ? localModelTurnHooks(session.id) : undefined;
   let modelClient;
-  try { modelClient = await modelClientForSession(session, config, localHooks); }
+  // The agent's own model, unless the conversation chose one.
+  const modelSession = agent?.model && !session.model ? { ...session, model: agent.model } : session;
+  try { modelClient = await modelClientForSession(modelSession, config, localHooks); }
   finally { localHooks?.done(); }
   /** The account and model as the user has them now, before each model
    * step. Leaving this agent route hands the conversation to that account
@@ -70,6 +80,7 @@ export async function runAgentTurn(input: {
     }
     return 'switch' as const;
   };
+  const agentServer = agent ? agentMcpServer(config, agent) : undefined;
   const startedAt = Date.now();
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
   /** Text the title filter held back and now owes: to the saved turn and to
@@ -104,7 +115,8 @@ export async function runAgentTurn(input: {
     const harnessTurn = await runGatewayHarnessSessionTurn({
       session, prompt: turnText, modelClient, modelClientForStep,
       // ClikDeploy's own account tools come with the Gateway.
-      mcpServers: routeMcpServers(session, config),
+      mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],
+      ...(agent?.system ? { agentInstructions: agent.system } : {}),
       ...(prompter ? { prompter } : {}),
       ...(titleStream ? { responseFilter: (delta: string, mode: 'append' | 'replace') => titleStream.push(delta, mode) } : {}),
       // Each model step may open with the title again (the request rides in

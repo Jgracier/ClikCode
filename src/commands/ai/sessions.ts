@@ -1,7 +1,6 @@
 /** `clikcode session`: creating, listing, showing, closing and leaving a
  * session, and the policy each kind of session starts with. */
 
-import Conf from 'conf';
 import { turboFitSessionClosed } from './turbofit.js';
 import { releaseHeldLocalModel } from './local-model.js';
 import { catalogModel, resolveLocalModelId } from '../../local-models/catalog.js';
@@ -71,25 +70,12 @@ export async function chooseGatewayModel(value: string): Promise<string | null> 
 
 /** Store the selected platform agent on this Gateway conversation. */
 export async function selectGatewayAgent(id: string, agentId: string | undefined, agentName?: string): Promise<void> {
-  const read = await readState({ transcripts: [id] });
-  const before = read.sessions.find((item) => item.id === id);
-  if (!before || before.route !== 'gateway') throw new Error('Select a Gateway session before choosing an agent.');
-  const changed = agentId !== before.gatewayAgentId;
-  // A new agent is handed the conversation now, not on the first message: ClikDeploy records it and
-  // warms the agent's cache while the person types (gateway-agent-turn.ts seedAgentThread).
-  let threadId: string | undefined;
-  if (changed && agentId) {
-    const { seedAgentThread } = await import('../../turn/gateway-agent-turn.js');
-    threadId = await seedAgentThread(new Conf({ projectName: 'clikcode', configFileMode: 0o600 }), before, agentId);
-  }
-  // Read again: the hand-over took a network round trip, and another window may have written meanwhile.
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || session.route !== 'gateway') throw new Error('Select a Gateway session before choosing an agent.');
-  if (changed) {
+  if (agentId !== session.gatewayAgentId) {
     delete session.gatewayAgentThreadId;
     delete session.gatewayAgentName;
-    if (threadId) session.gatewayAgentThreadId = threadId;
   }
   if (agentId) session.gatewayAgentId = agentId;
   else delete session.gatewayAgentId;

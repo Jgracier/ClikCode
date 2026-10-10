@@ -40,6 +40,8 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   responseFilter?: (text: string, mode: 'append' | 'replace') => string | undefined;
   /** Servers the route brings beside the user's own (the Gateway's ClikDeploy server). */
   mcpServers?: readonly McpServerSpec[];
+  /** The Gateway agent's instructions, when the conversation runs as one. */
+  agentInstructions?: string;
   signal?: AbortSignal;
   images?: readonly string[];
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
@@ -103,6 +105,7 @@ export async function runGatewayHarnessSessionTurn(
   return runGatewayHarnessTurn({
     sessionId: session.id,
     cwd: workspace,
+    ...(input.agentInstructions ? { agentInstructions: input.agentInstructions } : {}),
     prompt: input.prompt,
     ...(hooks ? { hooks } : {}),
     permissionMode,

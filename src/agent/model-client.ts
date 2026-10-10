@@ -127,6 +127,8 @@ interface HarnessHooks {
 export interface GatewayHarnessTurnInput {
   sessionId: string;
   cwd: string;
+  /** The Gateway agent's instructions (context.ts agentInstructions), when the conversation runs as one. */
+  agentInstructions?: string;
   addDirs?: readonly string[];
   prompt: string;
   images?: readonly string[];
