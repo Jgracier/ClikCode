@@ -8,6 +8,8 @@ import { STATE_BASELINE, type BaselinedState } from './merge.js';
 import { resetSessionStoreCache } from '../store/records.js';
 import type { HarnessSession } from '../model.js';
 import { listStoredSessionIds } from '../store/records.js';
+import { stat } from 'node:fs/promises';
+import { DurableTurnCheckpoint } from '../../turn/turn-journal.js';
 
 const previousHome = process.env.CLIKCODE_HOME;
 let root: string | undefined;
@@ -254,5 +256,39 @@ describe('a draft another process stored meanwhile', () => {
     const stored = (await readState()).sessions.find((item) => item.id === 'd')!;
     expect({ harness: stored.nativeHarness, model: stored.model, native: stored.nativeSessionId }).toEqual({ harness: 'opencode', model: 'opencode/big-pickle', native: 'ses_1' });
     expect(stored.messages).toEqual([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'PONG' }]);
+  });
+});
+
+describe('a streaming turn on a chat read from disk', () => {
+  it('writes only its journal while the answer grows, never the transcript again', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-write-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    state.sessions.push({
+      id: 's', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'platform-managed', permissionMode: 'bypass',
+      createdAt: now, updatedAt: now, status: 'active',
+      messages: Array.from({ length: 50 }, (_, index) => ({ role: index % 2 ? 'assistant' as const : 'user' as const, content: `message ${index}` })),
+    } as HarnessSession);
+    await writeState(state);
+    // A worker's copy: read from disk, as it starts the turn.
+    resetSessionStoreCache();
+    const worker = await readState({ transcripts: ['s'] });
+    const session = worker.sessions.find((item) => item.id === 's')!;
+    const checkpoint = await DurableTurnCheckpoint.start(worker, session, 'go');
+    const transcript = join(root, 'sessions', 's.json');
+    const started = (await stat(transcript)).mtimeMs;
+    for (let step = 0; step < 3; step++) {
+      checkpoint.response(`part ${step} `);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect((await stat(transcript)).mtimeMs, `checkpoint ${step}`).toBe(started);
+    }
+    resetSessionStoreCache();
+    const stored = (await readState({ transcripts: ['s'] })).sessions.find((item) => item.id === 's')!;
+    expect(stored.pendingTurn?.response).toBe('part 0 part 1 part 2 ');
+    await checkpoint.complete('');
+    resetSessionStoreCache();
+    const finished = (await readState({ transcripts: ['s'] })).sessions.find((item) => item.id === 's')!;
+    expect(finished.messages?.at(-1)?.content.trim()).toBe('part 0 part 1 part 2');
   });
 });
