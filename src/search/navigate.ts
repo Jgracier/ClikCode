@@ -84,3 +84,16 @@ export function searchResultsText(result: SearchResult, now = Date.now(), limit 
   if (result.hits.length > limit) lines.push(`  … ${result.hits.length - limit} more`);
   return lines.join('\n');
 }
+
+/** The results as one record: the list for a person (`text`) and each hit
+ * for a program -- `/search` headless and `clikcode search` alike. */
+export function searchResultsPayload(result: SearchResult): Record<string, unknown> {
+  return {
+    panel: 'search', query: result.query.text, text: searchResultsText(result),
+    results: result.hits.map((hit) => ({
+      conversationId: hit.conversationId, sessionId: hit.sessionId, title: hit.title, provider: hit.provider, model: hit.model,
+      updatedAt: hit.updatedAt, mentions: hit.mentions.length, exact: hit.exactCount,
+      first: hit.mentions[0] ? { sessionId: hit.mentions[0].sessionId, messageIndex: hit.mentions[0].messageIndex } : undefined,
+    })),
+  };
+}

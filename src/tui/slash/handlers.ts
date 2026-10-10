@@ -9,7 +9,7 @@
 
 import { stripVTControlCharacters } from 'node:util';
 import { searchConversations } from '../../search/engine.js';
-import { searchResultsText } from '../../search/navigate.js';
+import { searchResultsPayload } from '../../search/navigate.js';
 import { runsOn } from '../../search/format.js';
 import { hindsightPanelText } from './hindsight-panel.js';
 import { changesPath, fileTurnRows, fileTurnsText, isChangesPath } from './file-changes.js';
@@ -233,14 +233,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!args.trim()) throw new Error('usage: /search <words>');
     const result = await searchConversations(args);
     if (!result) throw new Error('usage: /search <words>');
-    return emitHarnessOutput({
-      panel: 'search', query: result.query.text, text: searchResultsText(result),
-      results: result.hits.map((hit) => ({
-        conversationId: hit.conversationId, sessionId: hit.sessionId, title: hit.title, provider: hit.provider, model: hit.model,
-        updatedAt: hit.updatedAt, mentions: hit.mentions.length, exact: hit.exactCount,
-        first: hit.mentions[0] ? { sessionId: hit.mentions[0].sessionId, messageIndex: hit.mentions[0].messageIndex } : undefined,
-      })),
-    });
+    return emitHarnessOutput(searchResultsPayload(result));
   },
   history: async ({ session }) => {
     return emitHarnessOutput({ panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)) });
