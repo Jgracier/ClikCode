@@ -1,0 +1,7 @@
+{
+  "name": "fixture-market",
+  "owner": { "name": "ClikCode tests" },
+  "plugins": [
+    { "name": "demo", "description": "Fixture plugin with every part", "source": "./plugins/demo" }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "mcpServers": {
+    "echo": { "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/server.mjs", "${CLIKCODE_PLUGIN_TEST_FLAG:-plain}"] },
+    "remote": { "type": "http", "url": "https://mcp.example.invalid/mcp" }
+  }
+}
