@@ -17,6 +17,7 @@ import {
   installMcpOnHarness, isRemoteTarget, mcpHeadersReachHarness, removeMcpConfigEntry, removeMcpFromHarness, type McpServerEntry,
 } from './mcp-registry.js';
 import { mcpServerNeedsSignIn, type McpSignInAnswer } from './mcp-sign-in.js';
+import { hasMcpOAuth } from '../agent/mcp/oauth.js';
 import { npxRoots, withoutNpx, type NpxRoots } from './npx-bin.js';
 import { loadMcpServers, MCP_SERVERS_KEY, mcpConfigFilePath, type McpServerSpec } from '../agent/mcp/config.js';
 import { importedFromCommand, vendorMcpServerNames, vendorMcpServerUrls } from '../agent/mcp/import.js';
@@ -171,9 +172,16 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   const launcher = input.launcher;
   const headersReach = mcpHeadersReachHarness(input.harness);
   const signIn = input.signIn ?? ((entry: McpServerEntry, reach: boolean) => mcpServerNeedsSignIn(entry, { stateDir, headersReach: reach }));
+  // A server ClikCode signs in to itself (its OAuth client configured, or a
+  // token or a refusal stored for it -- agent/mcp/oauth.ts) needs a sign-in
+  // by definition, whatever an unauthenticated probe would say; its tokens
+  // are ClikCode's and never reach a vendor.
+  const ownOAuth = new Set((await Promise.all(loaded.servers.map(async (spec) => (
+    spec.transport !== 'stdio' && (spec.oauth || await hasMcpOAuth(stateDir, spec.name, spec.url)) ? spec.name : undefined
+  )))).filter((name): name is string => !!name));
   // Remote servers are asked at once, not one after another.
   const answers = new Map(await Promise.all(entries.filter((entry) => isRemoteTarget(entry.target))
-    .map(async (entry) => [entry.name, await signIn(entry, headersReach)] as const)));
+    .map(async (entry) => [entry.name, ownOAuth.has(entry.name) ? 'sign-in' as const : await signIn(entry, headersReach)] as const)));
   // Grok quits outright when an HTTP server it was given does not answer
   // ("worker quit with fatal: Transport channel closed", 2026-10-06: a local
   // dev server that was down), where every other vendor goes on without it.

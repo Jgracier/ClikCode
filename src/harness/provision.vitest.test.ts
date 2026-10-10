@@ -209,6 +209,25 @@ describe('a remote MCP server that needs a browser sign-in', () => {
     expect(result.mcpNeedsSignIn).toEqual(['robinhood-trading', 'offline']);
   });
 
+  it('never copies a server ClikCode signs in to itself, whatever the probe says', async () => {
+    const { home, state, workspace } = await layout();
+    await clikcodeList(state, {
+      configured: { url: OPEN, oauth: { clientId: 'mine' } },
+      tokened: { url: 'https://tokened.example.test/mcp' },
+      open: { url: 'https://other-open.example.test/mcp' },
+    });
+    await mkdir(join(state, 'mcp-oauth'), { recursive: true });
+    await writeFile(join(state, 'mcp-oauth', 'tokened.json'), JSON.stringify({ server: 'https://tokened.example.test/mcp', tokens: { accessToken: 'secret' } }));
+    const installed: Array<Record<string, unknown>> = [];
+    const result = await provisionChosenHarness({
+      harness: cursor, account: account(home), workspace, stateDir: state, home, signIn: async () => 'open',
+      install: async (_harness, entry) => { installed.push({ ...entry }); return { harness: 'cursor', ok: true }; },
+    });
+    expect(installed.map((entry) => entry.name)).toEqual(['open']);
+    expect(JSON.stringify(installed)).not.toMatch(/secret|oauth|clientId/);
+    expect(result.mcpNeedsSignIn).toEqual(['configured', 'tokened']);
+  });
+
   it('copies one whose entry carries its own credential, where the vendor keeps headers', async () => {
     const { home, state, workspace } = await layout();
     await clikcodeList(state, { keyed: { url: ROBINHOOD, headers: { Authorization: 'Bearer t' } } });
