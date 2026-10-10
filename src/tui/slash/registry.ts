@@ -194,7 +194,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       : { available: false, reason: 'Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.' }),
   }),
   entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
-  entry('sandbox', 'Settings', "run the agent's shell commands so they write only the workspace, temp and caches", { argHint: '[on|off]', availability: agentOnly }),
+  entry('sandbox', 'Settings', "whether the agent's shell commands write only the workspace, temp and caches (on by default)", { argHint: '[on|off]', availability: agentOnly }),
   entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),

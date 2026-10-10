@@ -46,7 +46,7 @@ import { routeSlashInput, slashControls, slashHelpText, unknownSlashMessage, typ
 import { modelChoicesFor } from './model-choices.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { swarmIsOn } from '../../swarm/policy.js';
-import { parseSandboxMode, sandboxModeText } from '../../agent/sandbox.js';
+import { parseSandboxMode, sandboxModeText, sessionSandboxMode } from '../../agent/sandbox.js';
 
 import { impliedHarnessCommand } from './infer-provider.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -206,11 +206,13 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   sandbox: async ({ state, session, words }) => {
     if (!isClikCodeAgent(session)) throw new Error("The sandbox applies to ClikCode's own agent; a vendor harness sandboxes its own commands.");
     if (!words[0]) {
-      return emitHarnessOutput({ panel: 'sandbox', sandbox: session.sandbox ?? 'off', text: sandboxModeText(session.sandbox ?? 'off'), controls: ['sandbox on', 'sandbox off'] });
+      const current = sessionSandboxMode(session.sandbox);
+      return emitHarnessOutput({ panel: 'sandbox', sandbox: current, text: sandboxModeText(current), controls: ['sandbox on', 'sandbox off'] });
     }
     const mode = words.length === 1 ? parseSandboxMode(words[0]) : undefined;
     if (!mode) throw new Error('usage: /sandbox [on|off]');
-    if (mode === 'workspace') session.sandbox = 'workspace';
+    // On is the default, so it is stored as no value; off is the explicit choice.
+    if (mode === 'off') session.sandbox = 'off';
     else delete session.sandbox;
     return saveSettings(state, session);
   },

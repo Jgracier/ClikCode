@@ -18,6 +18,7 @@ import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitResult } from '../cli/structured-output.js';
 import { gatewayEffort } from '../gateway/options.js';
 import { isClikCodeAgent } from '../session/route.js';
+import { sessionSandboxMode } from '../agent/sandbox.js';
 
 export function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
@@ -54,7 +55,7 @@ export function renderSessionCard(session: HarnessSession, account?: string): st
     ...(session.route === 'gateway' ? [line('speed', session.speed === 'fast' ? 'fast (fastest provider)' : 'default (cheapest provider)')] : []),
     // The Gateway route's agent runs on this machine and honours the approval setting.
     line('permissions', session.permissionMode ?? 'ask'),
-    ...(isClikCodeAgent(session) ? [line('sandbox', session.sandbox === 'workspace' ? 'on (writes the workspace, temp and caches)' : 'off')] : []),
+    ...(isClikCodeAgent(session) ? [line('sandbox', sessionSandboxMode(session.sandbox) === 'workspace' ? 'on (writes the workspace, temp and caches)' : 'off')] : []),
     line('session', session.id.slice(0, 8)),
   ].join('\n');
 }

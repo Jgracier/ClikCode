@@ -13,7 +13,7 @@ import { scopeOf } from './fs-helpers.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 import { sandboxCommand, sandboxDenialHint, sandboxMissingNotice } from '../sandbox.js';
 
-interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string }
+interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string; sandbox?: boolean }
 
 const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 const BASH_MAX_TIMEOUT_MS = 600_000;
@@ -27,11 +27,13 @@ function shellInvocation(command: string): { file: string; args: string[] } {
   return { file: existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', args: ['-c', command] };
 }
 
-/** The shell invocation, inside the session's sandbox when it has one on.
- * `notice` is the once-a-session line saying no sandbox is installed. */
-function sandboxedInvocation(command: string, ctx: ToolContext): { file: string; args: string[]; sandboxed: boolean; writable: string[]; notice?: string } {
-  const shell = shellInvocation(command);
-  if (ctx.sandbox !== 'workspace') return { ...shell, sandboxed: false, writable: [] };
+/** The shell invocation, inside the session's sandbox when it has one on
+ * and the model did not ask to run this command without it (`sandbox:
+ * false`, which the permission layer has already let through). `notice` is
+ * the once-a-session line saying no sandbox is installed. */
+function sandboxedInvocation(args: BashArgs, ctx: ToolContext): { file: string; args: string[]; sandboxed: boolean; writable: string[]; notice?: string } {
+  const shell = shellInvocation(args.command);
+  if (ctx.sandbox !== 'workspace' || args.sandbox === false) return { ...shell, sandboxed: false, writable: [] };
   const wrapped = sandboxCommand(ctx.sandbox, shell, { cwd: ctx.cwd, addDirs: ctx.addDirs, homeDir: ctx.homeDir });
   let notice: string | undefined;
   if (!wrapped.sandboxed && wrapped.missing && !ctx.session.sandboxNoticeShown) {
@@ -119,7 +121,7 @@ export function stopBackgroundShell(shell: BackgroundShell, reason: string): voi
 
 function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
   const detached = process.platform !== 'win32';
-  const { file, args: argv, notice } = sandboxedInvocation(args.command, ctx);
+  const { file, args: argv, notice } = sandboxedInvocation(args, ctx);
   // stdin is a pipe so bash_input can answer a prompt or drive a REPL. A
   // foreground command keeps 'ignore': nothing could ever type into it.
   const child = spawnPortable(file, argv, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true });
@@ -156,7 +158,7 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
 export const bashTool = defineTool<BashArgs>({
   name: 'bash',
   class: 'exec',
-  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs: you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Foreground commands get no input: never start editors there. A command that prompts or a REPL runs with run_in_background, and bash_input types into it.',
+  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs: you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Foreground commands get no input: never start editors there. A command that prompts or a REPL runs with run_in_background, and bash_input types into it. Commands run sandboxed by default: they read everything and keep the network, but write only the workspace, the temp dir and tool caches; set sandbox: false only when a command genuinely must write elsewhere (a global install, ~/.config, another repo), and it then runs under the usual permission mode.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['command'],
     properties: {
@@ -164,6 +166,7 @@ export const bashTool = defineTool<BashArgs>({
       description: { type: 'string', description: 'A few words saying what the command does.' },
       timeout_ms: { type: 'integer', minimum: 1000, maximum: BASH_MAX_TIMEOUT_MS },
       run_in_background: { type: 'boolean' },
+      sandbox: { type: 'boolean', description: 'false runs this one command outside the workspace sandbox. Omit it otherwise.' },
     },
   },
   label: (args) => formatToolRow('bash', args.command, 'run'),
@@ -177,13 +180,9 @@ export const bashTool = defineTool<BashArgs>({
 
     const timeoutMs = Math.min(Math.max(args.timeout_ms ?? BASH_DEFAULT_TIMEOUT_MS, 1), BASH_MAX_TIMEOUT_MS);
     const callName = (ctx.callId ?? `call-${Date.now()}`).replace(/[^A-Za-z0-9._-]/g, '_');
-    const invocation = sandboxedInvocation(args.command, ctx);
+    const invocation = sandboxedInvocation(args, ctx);
     const result = await runForeground(invocation, timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}.log`), ctx);
     const hint = invocation.sandboxed && result.isError && !result.timedOut ? sandboxDenialHint(result.output, invocation.writable) : undefined;
-    if (hint && await ctx.approveUnsandboxed?.(args.command)) {
-      const rerun = await runForeground(shellInvocation(args.command), timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}-unsandboxed.log`), ctx);
-      return withNote(rerun, '[sandbox: refused inside the sandbox; run again outside it with the user\'s approval]');
-    }
     return withNote(withNote(result, invocation.notice), hint, 'after');
   },
 });

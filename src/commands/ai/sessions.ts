@@ -470,11 +470,11 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.model !== undefined ? { model } : {}),
     ...(options.effort ? { effort: effectiveRoute === 'gateway' && options.effort === 'default' ? GATEWAY_DEFAULT_EFFORT : options.effort } : {}),
     ...(options.permissions ? { permissionMode: options.permissions } : {}),
-    ...(sandbox === 'workspace' ? { sandbox } : {}),
+    ...(sandbox === 'off' ? { sandbox } : {}),
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };
-  if (sandbox === 'off') delete next.sandbox;
+  if (sandbox === 'workspace') delete next.sandbox;
   if (effectiveRoute !== 'gateway') {
     delete next.gatewayAgentId;
     delete next.gatewayAgentThreadId;
