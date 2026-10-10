@@ -20,7 +20,7 @@ import { selectGatewayAgent } from '../../commands/ai/sessions.js';
 import { withSignIn } from '../../commands/account.js';
 import { chooseOption } from './choose.js';
 import { localModelChoices, type LocalModelChoice } from '../../local-models/index.js';
-import { SLOW_WAIT_MS } from '../../harness/protocol/timings.js';
+import { withSlowWait } from '../slow-wait.js';
 
 /** Prefix of a row for a model this machine cannot run: listed, so the
  * catalog is honest about what exists and why it is out of reach, but
@@ -49,9 +49,7 @@ export function localModelSelection(choices: readonly LocalModelChoice[], select
 
 async function localModelPicker(rl: HarnessPrompter, id: string, current: string | null | undefined): Promise<void> {
   const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-  waiting?.startWaiting('checking which models fit this machine…');
-  let choices: LocalModelChoice[];
-  try { choices = await localModelChoices(); } finally { waiting?.stopWaiting(); }
+  const choices = await withSlowWait(waiting, 'checking which models fit this machine…', () => localModelChoices());
   if (!choices.length) {
     rl.panel?.('ClikCode Local', 'No supported GGUF model fits the memory currently available. Close other programs or free memory, then open /model again.');
     return;
@@ -113,10 +111,7 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
     // Only a wait worth seeing gets a spinner. A warm cache answers in
     // milliseconds, and starting and stopping one flashed a spinner and an
     // empty composer between Settings and the list.
-    let spinning = false;
-    const spinner = setTimeout(() => { spinning = true; waiting?.startWaiting(`finding ${harness.displayName} models…`); }, SLOW_WAIT_MS);
-    try { catalog = await nativeModelCatalogForPicker(harness, account); }
-    finally { clearTimeout(spinner); if (spinning) waiting?.stopWaiting(); }
+    catalog = await withSlowWait(waiting, `finding ${harness.displayName} models…`, () => nativeModelCatalogForPicker(harness, account));
   }
   const effective = session.model ?? catalog.configured;
   const free = freePlanModels(harness, account, catalog);
@@ -238,8 +233,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   });
   if (!list) {
     const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
-    waiting?.startWaiting('finding ClikDeploy Gateway models…');
-    try { await fresh; } finally { waiting?.stopWaiting(); }
+    await withSlowWait(waiting, 'finding ClikDeploy Gateway models…', () => fresh);
   }
   const options = (): PickerOption<GatewayChoice>[] => gatewayPickerRows(list!, agents, current, currentAgent);
   for (;;) {
