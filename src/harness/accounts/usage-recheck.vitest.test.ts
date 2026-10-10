@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AiHarnessAccount } from '../definition.js';
@@ -54,5 +55,24 @@ describe('re-reading held accounts', () => {
     // Nothing is due again until the clock says so.
     await recheckRecoveredAccounts(await readState({ transcripts: [] }), options);
     expect(asked).toEqual(['a', 'b']);
+  });
+
+  it('leaves the pass to another process that is running one', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-recheck-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    state.accounts.push(held('a'));
+    await writeState(state);
+    const lease = join(root, 'cache', 'usage-recheck.lease');
+    await mkdir(join(root, 'cache'), { recursive: true });
+    await writeFile(lease, JSON.stringify({ pid: process.ppid, host: hostname(), nonce: 'other', at: new Date().toISOString() }));
+    const asked: string[] = [];
+    const options = { ask: async (account: AiHarnessAccount) => { asked.push(account.id); }, canBeAsked: () => true };
+    await recheckRecoveredAccounts(await readState({ transcripts: [] }), options);
+    expect(asked).toEqual([]);
+    // Its owner gone: the lease is taken over.
+    await writeFile(lease, JSON.stringify({ pid: 2 ** 22 + 7, host: hostname(), nonce: 'gone', at: new Date().toISOString() }));
+    await recheckRecoveredAccounts(await readState({ transcripts: [] }), options);
+    expect(asked).toEqual(['a']);
   });
 });
