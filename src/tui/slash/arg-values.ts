@@ -44,7 +44,8 @@ function loadVendorValues(session: HarnessSession, harness: AiLocalHarnessDefini
     });
   }).catch(() => undefined);
   void effortChoicesFor(harness, account, session.model).then((choices) => {
-    slot.efforts = choices.values.map((value) => ({ value }));
+    // Default too, as the picker offers it: no level sent, the harness decides.
+    slot.efforts = choices.values.length ? [{ value: 'default', detail: `· ${harness.displayName} decides` }, ...choices.values.map((value) => ({ value }))] : [];
   }).catch(() => undefined);
   return slot;
 }
