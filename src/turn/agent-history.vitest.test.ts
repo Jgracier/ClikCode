@@ -14,7 +14,7 @@ import { readState } from '../session/state/read';
 import { writeState } from '../session/state/write';
 import { redoFrom } from '../session/redo';
 import { ConversationStore } from '../agent/conversation';
-import { agentItemsFromTurn, seedAgentConversation } from './agent-history';
+import { agentItemsFromTurn, agentSeedBudget, AGENT_SEED_CEILING_TOKENS, seedAgentConversation } from './agent-history';
 import { canonicalRecord } from '../session/canonical';
 import type { HarnessSession, TranscriptMessage } from '../session/model';
 
@@ -191,6 +191,40 @@ describe('what the agent\'s memory is told', () => {
     // A stale count over an empty memory: the memory is what is empty.
     const empty = session([...turn('One', 'A.', claude)], { id: 's2', agentThreadTurns: 5 });
     expect(await seedAgentConversation({ session: empty, stateDir })).toEqual({ total: 1, seeded: 1 });
+  });
+
+  describe('how much of a long conversation a switch hands the agent', () => {
+    const seededBytes = async (contextWindow: number | undefined): Promise<{ bytes: number; text: string }> => {
+      // ~1.5 MB of conversation: far past any budget below.
+      const long = Array.from({ length: 1_500 }, (_, index) => turn(`Request ${index}`, `Answer ${index} ${'y'.repeat(900)}`, claude)).flat();
+      await seedAgentConversation({ session: session(long), stateDir, ...(contextWindow ? { contextWindow } : {}) });
+      const items = await new ConversationStore(stateDir, 's1').load();
+      const text = items.map((item) => (item.type === 'text' ? item.text : '')).join('\n');
+      return { bytes: Buffer.byteLength(text, 'utf8'), text };
+    };
+    const ceilingBytes = AGENT_SEED_CEILING_TOKENS * 4;
+
+    it('stops at the ceiling on a very large window, keeps the newest turns and says what it left out', async () => {
+      const { bytes, text } = await seededBytes(1_000_000);
+      expect(bytes).toBeLessThanOrEqual(ceilingBytes + 2_000);
+      expect(bytes).toBeGreaterThan(ceilingBytes * 0.5);
+      expect(text).toContain('Request 1499');
+      expect(text).not.toContain('Request 0\n');
+      expect(text).toMatch(/earlier turns? (is|are) left out/);
+    });
+
+    it('is still half the window where that is less than the ceiling', async () => {
+      const window = 100_000;
+      expect(agentSeedBudget(window)).toBe(window * 0.5 * 4);
+      const { bytes } = await seededBytes(window);
+      expect(bytes).toBeLessThanOrEqual(window * 0.5 * 4 + 2_000);
+      expect(bytes).toBeGreaterThan(window * 0.5 * 4 * 0.5);
+    });
+
+    it('takes the ceiling when the window is not known to be smaller than it', () => {
+      expect(agentSeedBudget(undefined)).toBeLessThanOrEqual(ceilingBytes);
+      expect(agentSeedBudget(10_000_000)).toBe(ceilingBytes);
+    });
   });
 
   it('keeps the newest turns when the model\'s window is small, and says what it left out', async () => {
