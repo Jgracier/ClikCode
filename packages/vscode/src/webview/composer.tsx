@@ -10,14 +10,15 @@ import { chatModelLabel, currentProvider, enterAgainReady, providerDisplayName, 
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
-import { compactCount } from '../../../../src/harness/protocol/format';
+import { compactCount, formatElapsed } from '../../../../src/harness/protocol/format';
 import { buttonTitle } from '../../../../src/harness/protocol/wording';
 import type { Mention } from '../webview-protocol';
 import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { formatTurnUsage, titleCase } from './format';
 import { AccountMenu, agentName, choose, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
-import { focusHere, Icon, KeyList, type ListRow } from './ui';
+import { focusHere, Icon, KeyList, Spinner, useSlowWait, type ListRow } from './ui';
+import { useNow } from './clock';
 
 type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefined;
 
@@ -528,7 +529,7 @@ export function Composer(props: {
           </button>
         ) : null}
         <span class="spacer" />
-        {busy && !installing && !model.signIn ? <span class="muted busy"><Icon name="loading" spin /> {busy}</span> : null}
+        <BusyLine label={busy && !installing && !model.signIn ? busy : undefined} />
         {/* Usage always visible beside context: remaining allowance, or reset time when spent. */}
         {model.accountUsage ? (
           <span class={`status-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="This account's usage">{model.accountUsage}</span>
@@ -539,6 +540,22 @@ export function Composer(props: {
       </div>
     </div>
   );
+}
+
+/** What ClikCode is doing between turns ("preparing…", a local model's
+ * download at 42%), as the terminal's band shows it: the page's spinner
+ * and clock, and only once it is slow (useSlowWait) -- "preparing…" came
+ * and went before every turn. */
+export function BusyLine({ label }: { label: string | undefined }): JSX.Element | null {
+  const shown = useSlowWait(label !== undefined);
+  const last = useRef<{ label: string; since: number }>();
+  if (label !== undefined && !last.current) last.current = { label, since: Date.now() };
+  if (label !== undefined && last.current) last.current.label = label;
+  if (label === undefined && !shown) last.current = undefined;
+  const now = useNow(shown);
+  if (!shown || !last.current) return null;
+  const elapsed = now - last.current.since;
+  return <span class="muted busy" role="status"><Spinner />{last.current.label}{elapsed >= 1000 ? ` · ${formatElapsed(elapsed)}` : ''}</span>;
 }
 
 /** How full the conversation's context window is, as a ring that fills; the
