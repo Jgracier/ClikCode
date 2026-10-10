@@ -300,7 +300,7 @@ function EffortBar(props: { model: ChatModel; onError: (message: string) => void
 }
 
 const ACCOUNT_PROBLEM: Record<Exclude<IdeAccount['problem'], 'out-of-usage' | undefined>, string> = {
-  verify: 'needs verifying', reauth: 'signed out',
+  verify: 'needs verifying', 'sign-in': 'not signed in', reauth: 'signed out',
 };
 
 /** The Gateway's credit, as the account menu's row says it. */

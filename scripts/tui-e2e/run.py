@@ -1174,6 +1174,15 @@ SCENARIOS = {
         # Twice: the first message's sign-in, and this one's.
         'final_count': {'signed in to Grok Build': 2},
     },
+    # A provider never signed in is "not signed in" in /account, with signing
+    # in as what Enter does -- not "reauth" with "del remove" from launch.
+    'never-signed-in-account-row': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2), ('snap', 'list'),
+                  ('keys', '\r'), ('wait_for', 'signed in to', 20), ('settle', 1)],
+        'watch': [], 'snap_contains': {'list': ['not signed in']}, 'snap_lacks': {'list': ['reauth', 'del remove']},
+        'never': ['reauth'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

@@ -101,6 +101,10 @@ describe('account rows', () => {
     expect(accountRow(account({ ...spent, status: 'needs_login' }), codex, session(), NOW)).toMatchObject({ problem: 'reauth', actions: ['reauthenticate', 'remove'] });
     expect(accountRow(account(spent), codex, undefined, NOW)).toMatchObject({ problem: 'out-of-usage', actions: ['disconnect'], current: false });
   });
+
+  it('calls an account never signed in "sign-in", with signing in its only action', () => {
+    expect(accountRow(account({ status: 'needs_login', neverSignedIn: true }), codex, session(), NOW)).toMatchObject({ problem: 'sign-in', actions: ['reauthenticate'] });
+  });
 });
 
 describe('usage', () => {

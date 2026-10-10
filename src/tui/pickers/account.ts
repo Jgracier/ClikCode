@@ -27,7 +27,7 @@ export type ProviderAccountChoice =
   | { kind: 'add-account'; harness: string };
 
 const ACCOUNT_ACTION_LABELS = { reauthenticate: 'Reauthenticate', verified: 'I’ve verified it', disconnect: 'Disconnect', remove: 'Remove' } as const;
-const ACCOUNT_PROBLEM_WORDS = { verify: 'verify', reauth: 'reauth' } as const;
+const ACCOUNT_PROBLEM_WORDS = { verify: 'verify', 'sign-in': 'not signed in', reauth: 'reauth' } as const;
 
 /** One provider's accounts (picker-rows.ts accountRow) as the terminal shows
  * them, then "+ Add account…" where one can be added. Usage is loaded only
@@ -43,7 +43,10 @@ export function accountPickerOptions(
   return [
     ...mine.map(({ account, usage, usagePending }) => {
       const row = accountRow(account, harness, session);
-      const deleteWith = row.actions.at(-1)!;
+      const last = row.actions.at(-1);
+      const deleteWith = last === 'disconnect' || last === 'remove' ? last : undefined;
+      // Never signed in: its one action is to sign in, said so.
+      const actionLabel = (value: typeof row.actions[number]): string => (value === 'reauthenticate' && row.problem === 'sign-in' ? 'Sign in' : ACCOUNT_ACTION_LABELS[value]);
       return {
         label: row.label,
         // One state per row: a problem outranks usage, so the eye lands on
@@ -54,10 +57,10 @@ export function accountPickerOptions(
           row.current ? '· current' : '',
         ].filter(Boolean).join(' '),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
-        actions: row.actions.slice(0, -1).map((value) => ({ label: ACCOUNT_ACTION_LABELS[value], value })),
+        actions: row.actions.filter((value) => value !== deleteWith).map((value) => ({ label: actionLabel(value), value })),
         // Signing out is undone by signing in (/login, or Tab on the row):
         // it runs at once, as /logout does. Removing an account is not, and asks.
-        deleteAction: { label: ACCOUNT_ACTION_LABELS[deleteWith], value: deleteWith, ...(deleteWith === 'disconnect' ? { undoable: true } : {}) },
+        ...(deleteWith ? { deleteAction: { label: ACCOUNT_ACTION_LABELS[deleteWith], value: deleteWith, ...(deleteWith === 'disconnect' ? { undoable: true } : {}) } } : {}),
       };
     }),
     // The only way to connect a second login from inside /account.
@@ -140,7 +143,10 @@ export async function interactiveAccountPicker(
     // An account the vendor is holding for verification is still selected:
     // the page opens (and is named) so it can be finished, and the next turn
     // that succeeds clears the flag by itself -- no "I've verified it" step.
-    const pending = providerAccounts.find((account) => account.id === selected.accountId)?.verification;
+    // Never signed in: choosing it is signing in to it, now.
+    const picked = providerAccounts.find((account) => account.id === selected.accountId);
+    if (picked && accountRow(picked, harness, session).problem === 'sign-in') await manageAccountAction(rl, picked.id, 'reauthenticate');
+    const pending = picked?.verification;
     if (pending) {
       if (pending.url && hasLocalDisplay()) openLoginUrl(pending.url);
       rl.panel?.('Verify this account', verificationNotice(pending));

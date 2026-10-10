@@ -195,7 +195,9 @@ export interface IdeAccount {
   providerName: string;
   label: string;
   status: 'ready' | 'needs_login' | 'offline';
-  problem?: 'verify' | 'reauth' | 'out-of-usage';
+  /** `sign-in`: never signed in (the provider's first account, made when
+   *  it was chosen); `reauth`: signed out since. */
+  problem?: 'verify' | 'sign-in' | 'reauth' | 'out-of-usage';
   /** With 'out-of-usage': when it is back, where something says (accountBackAt). */
   backAt?: string;
   current: boolean;
