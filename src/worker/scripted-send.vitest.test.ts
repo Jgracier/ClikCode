@@ -166,6 +166,8 @@ describe('a scripted send', () => {
   it('with no worker, starts one and runs through it, so what the turn leaves running has an owner', async () => {
     const session = await gatewaySession();
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const warned: string[] = [];
+    vi.spyOn(process.stderr, 'write').mockImplementation((chunk) => { warned.push(String(chunk)); return true; });
     const scripted = sendScriptedTurn(config(), session.id, 'nobody else is here');
     const asked = await request(1);
     const worker = await readWorkerRecord(session.id);
@@ -174,6 +176,10 @@ describe('a scripted send', () => {
     asked.answer('done here');
     await scripted;
     expect((await stored(session.id)).messages?.map((message) => message.content)).toEqual(['nobody else is here', 'done here']);
+    // This Gateway serves no /mcp: the turn's note saying so reaches a JSON
+    // caller on stderr. Live 2026-10-09 it reached nobody, and an agent whose
+    // tool server refused every request looked like one that had no tools.
+    expect(warned.join('')).toMatch(/MCP server "clikdeploy" is unavailable/);
     try { process.kill(worker!.pid, 'SIGTERM'); } catch { /* already gone */ }
   }, 60_000);
 });
