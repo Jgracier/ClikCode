@@ -202,6 +202,16 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     chat.post({ type: 'mention', mention });
     chat.post({ type: 'focus' });
   };
+  /** The file's turns in every conversation (the CLI's `/changes <path>`):
+   * the chat lists them, and the one chosen opens at that turn. */
+  const openConversationThatEdited = async (target: unknown): Promise<void> => {
+    const uri = target instanceof vscode.Uri ? target : vscode.window.activeTextEditor?.document.uri;
+    if (!uri || uri.scheme !== 'file') {
+      void vscode.window.showInformationMessage('Open a file on disk to find the conversation that edited it.');
+      return;
+    }
+    await slash(`/changes ${uri.fsPath}`)();
+  };
   /** Accept or reject the proposed change shown in the active diff editor. */
   const decideDiff = (approved: boolean | 'always') => async (target?: unknown): Promise<void> => {
     const uri = target instanceof vscode.Uri ? target : vscode.window.activeTextEditor?.document.uri;
@@ -268,6 +278,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     vscode.commands.registerCommand('clikcode.openWalkthrough', () => vscode.commands.executeCommand('workbench.action.openWalkthrough', `${context.extension.id}#clikcode.start`, false)),
     vscode.commands.registerCommand('clikcode.addToChat', addToChat),
     vscode.commands.registerCommand('clikcode.insertAtMention', () => addToChat(undefined)),
+    vscode.commands.registerCommand('clikcode.openConversationThatEdited', openConversationThatEdited),
     vscode.commands.registerCommand('clikcode.acceptProposedDiff', decideDiff(true)),
     vscode.commands.registerCommand('clikcode.rejectProposedDiff', decideDiff(false)),
     vscode.commands.registerCommand('clikcode.alwaysAllowProposedDiff', decideDiff('always')),

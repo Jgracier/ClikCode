@@ -58,6 +58,7 @@ import { compactConversation } from './compact.js';
 import { searchConversations } from '../../search/engine.js';
 import { searchResultsText } from '../../search/navigate.js';
 import { exportTranscript } from './export-transcript.js';
+import { changesPath, fileTurnRows, isChangesPath, noFileTurns } from './file-changes.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
 import { nativeManagerListing } from './native-manager.js';
 import type { InteractiveSlashHandlerKey, InteractiveSlashOutcome } from './interactive-keys.js';
@@ -90,6 +91,10 @@ export interface SlashHost {
   /** /search <words> where the conversation can be walked mention by
    * mention. Absent: the results are listed in a panel. */
   browseSearch?(query: string): Promise<InteractiveSlashOutcome>;
+  /** /changes <path>: open the chosen turn's conversation at its prompt,
+   * the others a key away (search-browse.ts walkTurns). Absent: the chosen
+   * conversation opens at its end. */
+  walkTurns?(turns: readonly { sessionId: string; turnsAgo: number }[], start: number): Promise<InteractiveSlashOutcome>;
   /** `/memory edit`. */
   editFile(path: string, cwd: string): Promise<void>;
   /** A vendor's own manager (an argv it runs interactively), given a
@@ -205,7 +210,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
   if (intercepted) return intercepted;
   // Availability is decided BEFORE any picker opens, so `/model` on a
   // harness without a model selector says so instead of offering a list.
-  const availability = route.entry.availability(session, harness);
+  const availability = route.entry.availability(session, harness, route.args);
   // The one refusal worth turning into a question: the command needs a
   // provider and none is chosen. The command is queued on the chat the
   // picker produced (choosing a provider can branch it) rather than run on
@@ -330,6 +335,18 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       const outcome = await viaHeadless(options.length > 1 ? `/fork @${at}` : text);
       // Said here too: the panel is drawn on the conversation being left.
       return at === undefined ? outcome : { ...outcome, notice: `Forked after message ${at} · files on disk are not rewound: /changes lists each turn's edits, /redo puts them back` };
+    },
+    // `/changes <path>`: the turns, in any conversation, that edited it --
+    // newest first; the chosen one opens at its prompt. `/changes [N]` and a
+    // client that cannot pick get the headless panel.
+    changes: async () => {
+      if (!isChangesPath(args) || !host.canPick) return viaHeadless(text);
+      const file = changesPath(args, workspace);
+      const rows = await host.withBusy('looking through conversations…', () => fileTurnRows(state, file));
+      if (!rows.length) return { notice: noFileTurns(file) };
+      const at = await chooseOption(rl, `Turns that edited ${compactPath(file)}`, rows.map((row, index) => ({ label: row.label, detail: row.detail, value: index })));
+      if (at === undefined) return {};
+      return host.walkTurns ? host.walkTurns(rows, at) : { id: rows[at]!.sessionId };
     },
     // `/redo`: which prompt to go back to (newest first, arrows and Enter),
     // then whether its edits and later ones are put back; the prompt lands in

@@ -206,6 +206,11 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "clikcode.openConversationThatEdited",
+        "title": "Open the Conversation That Edited This File",
+        "category": "ClikCode"
+      },
+      {
         "command": "clikcode.insertAtMention",
         "title": "Insert @-Mention of Selection",
         "category": "ClikCode"
@@ -319,6 +324,11 @@
           "group": "clikcode@2"
         },
         {
+          "command": "clikcode.openConversationThatEdited",
+          "when": "resourceScheme == file",
+          "group": "clikcode@3"
+        },
+        {
           "command": "clikcode.acceptProposedDiff",
           "when": "resourceScheme == clikcode-diff",
           "group": "clikcode@1"
@@ -346,6 +356,11 @@
           "command": "clikcode.addToChat",
           "when": "resourceScheme == file && !explorerResourceIsFolder",
           "group": "clikcode@1"
+        },
+        {
+          "command": "clikcode.openConversationThatEdited",
+          "when": "resourceScheme == file && !explorerResourceIsFolder",
+          "group": "clikcode@2"
         }
       ],
       "commandPalette": [

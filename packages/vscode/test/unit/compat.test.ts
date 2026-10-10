@@ -64,3 +64,13 @@ describe('ClikCode compatibility', () => {
     expect(tooOldToStartMessage()).toContain(INSTALL_COMMAND);
   });
 });
+
+describe('Open the conversation that edited this file', () => {
+  it('is a command on the editor and explorer context menus, for files on disk', () => {
+    const id = 'clikcode.openConversationThatEdited';
+    expect(pkg.contributes.commands.some((command: { command: string }) => command.command === id)).toBe(true);
+    const menus = pkg.contributes.menus as Record<string, Array<{ command: string; when?: string }>>;
+    expect(menus['editor/context']!.find((item) => item.command === id)?.when).toBe('resourceScheme == file');
+    expect(menus['explorer/context']!.find((item) => item.command === id)?.when).toContain('!explorerResourceIsFolder');
+  });
+});

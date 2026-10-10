@@ -175,3 +175,67 @@ export function turnChangesDiff(record: TurnChangeRecord, n: number, workspace?:
   });
   return [head, ...files].join('\n\n');
 }
+
+// ---------------------------------------------------------------------------
+// /changes <path>: which conversations' turns edited one file, across every
+// conversation's log, newest first.
+// ---------------------------------------------------------------------------
+
+export interface FileTurn {
+  sessionId: string;
+  /** The turn as that conversation's /changes numbers it: 1 is its last. */
+  turnsAgo: number;
+  record: TurnChangeRecord;
+  additions: number;
+  removals: number;
+}
+
+/** Every recorded turn, in any conversation, whose edits name `file` (a
+ * relative path in a record is that conversation's workspace's), newest first. */
+export async function turnsThatEdited(
+  stateDir: string, sessions: readonly { id: string; workspace?: string }[], file: string,
+): Promise<FileTurn[]> {
+  const target = path.resolve(file);
+  const logged = new Set(await fs.readdir(path.join(stateDir, 'turn-changes')).catch(() => [] as string[]));
+  const found: FileTurn[] = [];
+  for (const session of sessions) {
+    if (!logged.has(`${safeRecordFileName(session.id)}.json`)) continue;
+    const records = await readTurnChanges(stateDir, session.id);
+    records.forEach((record, index) => {
+      const edits = record.changes.filter((change) => change.path && path.resolve(session.workspace ?? '', change.path) === target);
+      if (!edits.length) return;
+      found.push({
+        sessionId: session.id, turnsAgo: records.length - index, record,
+        additions: edits.reduce((sum, change) => sum + change.additions, 0),
+        removals: edits.reduce((sum, change) => sum + change.removals, 0),
+      });
+    });
+  }
+  return found.sort((left, right) => right.record.at.localeCompare(left.record.at));
+}
+
+/** Where the prompt of the turn `n` ago is in `messages`: records and user
+ * messages matched newest first, so a prompt sent twice finds its own copy.
+ * Undefined when it is not there (a prompt ClikCode expanded, a span
+ * compacted since). */
+export function turnMessageIndex(
+  messages: readonly { role: string; content: string }[], records: readonly TurnChangeRecord[], n: number,
+): number | undefined {
+  let cursor = messages.length - 1;
+  for (let ago = 1; ago <= n && ago <= records.length; ago += 1) {
+    const prompt = records[records.length - ago]!.prompt?.trim();
+    let found: number | undefined;
+    for (let at = cursor; prompt && at >= 0; at -= 1) {
+      if (messages[at]!.role === 'user' && messages[at]!.content.trim() === prompt) { found = at; break; }
+    }
+    if (ago === n) return found;
+    if (found !== undefined) cursor = found - 1;
+  }
+  return undefined;
+}
+
+/** One row per turn, for a picker or a panel: when, which conversation,
+ * what was asked, and the lines that turn changed in the file. */
+export function fileTurnRow(turn: FileTurn, title: string, when: string): { label: string; detail: string } {
+  return { label: `${when} · ${title}`, detail: `turn ${turn.turnsAgo} · "${promptLine(turn.record, 50)}" · +${turn.additions} -${turn.removals}` };
+}

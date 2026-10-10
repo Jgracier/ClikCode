@@ -7,6 +7,8 @@ import { searchConversations } from '../../search/engine.js';
 import { MentionBrowser, mentionOccurrence } from '../../search/navigate.js';
 import type { MentionFocus } from '../render/search-focus.js';
 import type { InteractiveSlashOutcome } from './interactive-keys.js';
+import { stateDirectory } from '../../session/store/paths.js';
+import { readTurnChanges, turnMessageIndex } from '../../session/turn-changes.js';
 
 /** What browsing needs of the screen (TerminalHarnessPrompter). */
 export interface MentionScreen {
@@ -45,6 +47,34 @@ export async function browseSearch(
     if (key === 'next') browser.next();
     else if (key === 'previous') browser.previous();
     else browser.nextChat();
+  }
+  screen.endMention();
+  return shown ? { id: shown } : {};
+}
+
+/** /changes <path>, once a turn is chosen: its conversation opens at that
+ * turn's prompt; Up/Down move to the next and previous turn of the list
+ * (newest first), Esc stays where it is. */
+export async function walkTurns(
+  screen: MentionScreen, turns: readonly { sessionId: string; turnsAgo: number }[], start: number,
+): Promise<InteractiveSlashOutcome> {
+  let at = Math.max(0, Math.min(turns.length - 1, start));
+  let shown: string | undefined;
+  for (;;) {
+    const turn = turns[at]!;
+    const session = (await readState({ transcripts: [turn.sessionId] })).sessions.find((item) => item.id === turn.sessionId);
+    if (session) {
+      shown = session.id;
+      const messages = session.messages ?? [];
+      const records = await readTurnChanges(stateDirectory(), session.id);
+      screen.showMention(session, {
+        messageIndex: turnMessageIndex(messages, records, turn.turnsAgo) ?? Math.max(0, messages.length - 1),
+        occurrence: 0, words: [], status: `turn ${at + 1} of ${turns.length} · ↑↓ next/previous · esc done`,
+      });
+    }
+    const key = await screen.mentionKey();
+    if (key === 'done') break;
+    at = key === 'previous' ? Math.max(0, at - 1) : Math.min(turns.length - 1, at + 1);
   }
   screen.endMention();
   return shown ? { id: shown } : {};
