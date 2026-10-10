@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
-import { usageDays, usageReport, usageReportAll } from './usage-report.js';
+import { conversationCost, usageDays, usageReport, usageReportAll } from './usage-report.js';
 import { STATE_ROLLUPS } from '../../session/state/invocations.js';
 
 const NOW = Date.parse('2026-09-21T12:00:00');
@@ -121,5 +121,16 @@ describe('/usage all', () => {
     };
     const days = usageDays(folded, NOW);
     expect(days[1]).toMatchObject({ day: '2026-09-20', turns: 3, tokens: 33, unknownCostTurns: 3 });
+  });
+});
+
+describe("a conversation's cost (the editor's running figure)", () => {
+  const call = (id: string, sessionId: string, costUsd?: number): HarnessState['invocations'][number] => (
+    { id, accountId: 'a', provider: 'anthropic', sessionId, at: new Date(NOW).toISOString(), latencyMs: 1, ...(costUsd !== undefined ? { costUsd } : {}) });
+
+  it("adds this chat's reported dollars, and is unknown -- not $0 -- when none was reported", () => {
+    expect(conversationCost(state([], [call('1', 'chat', 0.5), call('2', 'chat'), call('3', 'chat', 0.73), call('4', 'other', 9)]), 'chat')).toBeCloseTo(1.23);
+    expect(conversationCost(state([], [call('1', 'chat'), call('2', 'other', 9)]), 'chat')).toBeUndefined();
+    expect(conversationCost(state([]), 'chat')).toBeUndefined();
   });
 });

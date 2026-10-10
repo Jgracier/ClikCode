@@ -43,6 +43,7 @@ import { selectGatewayAgent } from '../commands/ai/sessions.js';
 import { dispatchLine, type SlashHost } from '../tui/slash/dispatch.js';
 import { slashControls, slashHelpText, slashPalette, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
 import { lastAnswer } from '../tui/slash/handlers.js';
+import { conversationCost } from '../tui/slash/usage-report.js';
 import { browseSearch, walkTurns, type MentionScreen } from '../tui/slash/search-browse.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
@@ -339,7 +340,8 @@ export class IdeBridge {
     const reading = await nativeUsageReading(session, state);
     // A turn parked for the reset says so instead of when it comes back.
     const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);
-    this.channel.send({ type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(reset ? { reset } : {}) });
+    const chatCost = conversationCost(state, session.id);
+    this.channel.send({ type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(reset ? { reset } : {}), ...(chatCost !== undefined ? { chatCost } : {}) });
   }
 
   /** The conversation's route is ready before the first message: MCP servers
@@ -420,6 +422,8 @@ export class IdeBridge {
         this.workerTurnRunning = false;
         const waiter = this.turnWaiter;
         this.turnWaiter = undefined;
+        // The turn's cost is on the conversation's figure now.
+        if (this.shown) void this.refreshUsage().catch(() => undefined);
         if (waiter) (waiter.error ? waiter.reject(waiter.error) : waiter.resolve());
         // A turn this editor only followed (a terminal's, or one the worker
         // started) ended: what was queued behind it is this client's to send.

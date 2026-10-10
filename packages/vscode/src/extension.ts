@@ -46,6 +46,7 @@ export function statusText(model: ChatModel): { text: string; tooltip: string } 
     `Provider: ${name ?? '—'}`, `Model: ${chatModelLabel(model, name) ?? 'default'}`,
     ...(model.account ? [`Account: ${model.account}`] : []), ...(model.effort ? [`Effort: ${model.effort}`] : []),
     ...(model.permissions ? [`Permissions: ${model.permissions}`] : []), ...(usage ? [`Usage: ${usage}`] : []),
+    ...(model.chatCost ? [`Cost: ${model.chatCost}`] : []),
   ].join('\n');
   const icon = waiting ? '$(bell-dot)' : model.running ? '$(sync~spin)' : '$(comment-discussion)';
   return { text: `${icon} ClikCode`, tooltip };

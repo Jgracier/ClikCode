@@ -350,6 +350,9 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 }
 .status-usage.spent { color: var(--vscode-errorForeground, var(--err)); }
 @container (max-width: 380px) { .status-usage { display: none; } }
+/* "$1.23 this chat": the conversation's cost so far, only where one was reported. */
+.status-cost { flex: 0 0 auto; white-space: nowrap; height: 24px; line-height: 24px; padding: 0 6px; font-size: 0.88em; }
+@container (max-width: 320px) { .status-cost { display: none; } }
 .chip-button {
   flex: none; display: inline-flex; align-items: center; gap: 4px; max-width: 100%; min-width: 0; height: 24px; padding: 0 8px; border-radius: var(--radius-small);
   border: 1px solid transparent; background: transparent; color: var(--muted); font-size: 0.93em;

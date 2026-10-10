@@ -534,6 +534,7 @@ export function Composer(props: {
         {model.accountUsage ? (
           <span class={`status-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="This account's usage">{model.accountUsage}</span>
         ) : null}
+        {model.chatCost ? <span class="muted status-cost" title="What this chat has cost so far">{model.chatCost}</span> : null}
         {/* Context ring: fills as context window is used; figures on hover, breakdown on click. */}
         {model.context ? <ContextMeter context={model.context} tokens={tokens} />
           : tokens ? <span class="muted turn-tokens" title="Tokens used by the last turn">{tokens}</span> : null}
