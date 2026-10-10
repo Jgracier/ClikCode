@@ -10,7 +10,8 @@
  *
  * Here the turns the agent has not seen are written into that memory as the
  * turns they were -- the request, then the answer with its calls as lines --
- * bounded to what the model's window can carry, with the same note at each
+ * bounded to what the model's window can carry and to a fixed ceiling
+ * (AGENT_SEED_CEILING_TOKENS), with the same note at each
  * change of provider that a written vendor thread gets. */
 import { ConversationStore } from '../agent/conversation.js';
 import type { ConversationItem } from '../agent/model-client.js';
@@ -18,6 +19,23 @@ import { canonicalRecord, markProviderBoundaries, withProviderNote, type Canonic
 import type { HarnessSession } from '../session/model.js';
 import { conversationSummary, validSummary, type SummarySources } from '../session/conversation-summary.js';
 import { fitRecord, nativeThreadBudget } from './thread-start.js';
+import { BYTES_PER_TOKEN } from './transfer.js';
+
+/** The most a switch hands the agent, whatever the model's window: enough to
+ * carry on, not everything that fits. The conversation itself stays on this
+ * machine, whole and searchable (search_conversations, read_conversation,
+ * hindsight); the prompt holds the working set. Without this a 1M-window model
+ * was seeded ~500k tokens and resent them every step: MEASURED 2026-10-10 on
+ * the Gateway, a $2.58 first step with 24 s to the first token, then ~$0.11 a
+ * step from the provider's cache -- and the first step after every idle gap
+ * (caches expire) paid the whole $2.58 again. */
+export const AGENT_SEED_CEILING_TOKENS = 120_000;
+
+/** Bytes of history the agent is seeded with: half the model's window as for
+ * any written thread (thread-start.ts), and never more than the ceiling. */
+export function agentSeedBudget(contextWindow?: number): number {
+  return Math.min(nativeThreadBudget(contextWindow), AGENT_SEED_CEILING_TOKENS * BYTES_PER_TOKEN);
+}
 
 /** One turn as the two messages the agent's memory holds. */
 export function agentItemsFromTurn(turn: CanonicalTurn): ConversationItem[] {
@@ -77,13 +95,13 @@ export async function seedAgentConversation(input: {
     : undefined;
   if (summary && summary.through > through) {
     const kept = { ...record, turns: record.turns.slice(summary.through) };
-    const room = nativeThreadBudget(input.contextWindow) - Buffer.byteLength(summary.text, 'utf8');
+    const room = agentSeedBudget(input.contextWindow) - Buffer.byteLength(summary.text, 'utf8');
     const fitted = fitRecord(markProviderBoundaries(kept, receiving, input.displayName), room);
     await store.appendCompaction(summary.text, fitted.record.turns.flatMap(agentItemsFromTurn));
     return { total, seeded: total - through, summarized: summary.through, summaryFrom: summary.source };
   }
   const missing = { ...record, turns: record.turns.slice(through) };
-  const fitted = fitRecord(markProviderBoundaries(missing, receiving, input.displayName), nativeThreadBudget(input.contextWindow));
+  const fitted = fitRecord(markProviderBoundaries(missing, receiving, input.displayName), agentSeedBudget(input.contextWindow));
   await store.append(...fitted.record.turns.flatMap(agentItemsFromTurn));
   return { total, seeded: missing.turns.length };
 }
