@@ -156,8 +156,10 @@ export interface PickerOption<T> {
   alternates?: readonly { label: string; value: T }[];
   /** Non-destructive maintenance actions such as reauthentication. */
   actions?: readonly { label: string; value: string }[];
-  /** Destructive row action. The terminal picker always confirms it first. */
-  deleteAction?: { label: string; value: string };
+  /** Destructive row action. The terminal picker confirms it first, unless
+   * `undoable`: one that can be taken back in a step (a sign-out, undone by
+   * signing in) runs at once, as /logout does -- fewest steps. */
+  deleteAction?: { label: string; value: string; undoable?: boolean };
   /** Slash-palette rows: argument hint shown after the label, and the section
    * the row belongs to. Optional; a prompter that ignores them still works. */
   argHint?: string;

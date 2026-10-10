@@ -218,8 +218,8 @@ export function runOptionPicker<T>(
       await runAction(option.value, actionValue);
       return true;
     });
-    const confirmDelete = (option: PickerOption<T>, action: { label: string; value: string }): Promise<void> => openAside(async () => {
-      if (!await confirmRowDelete(host, option, action)) return false;
+    const confirmDelete = (option: PickerOption<T>, action: { label: string; value: string; undoable?: boolean }): Promise<void> => openAside(async () => {
+      if (!action.undoable && !await confirmRowDelete(host, option, action)) return false;
       await runAction(option.value, action.value);
       return true;
     });

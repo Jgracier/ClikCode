@@ -28,5 +28,8 @@ export async function interactiveSwarmPicker(rl: HarnessPrompter, id: string): P
     { label: 'Off', detail: current === 'off' ? '· current' : undefined, value: 'off' },
     { label: 'On', detail: current === 'on' ? '· current' : undefined, value: 'on' },
   ]);
-  if (selected && selected !== current) await aiSessionCommand(id, `/swarm ${selected}`);
+  if (selected && selected !== current) {
+    await aiSessionCommand(id, `/swarm ${selected}`);
+    rl.notice?.(`Swarm ${selected}`);
+  }
 }

@@ -40,7 +40,8 @@ import { interactiveSettingsPicker } from '../pickers/settings.js';
 import { interactiveSwarmPicker } from '../pickers/swarm.js';
 import { doctorSummary } from '../doctor-summary.js';
 import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
-import { aiSessionCommand, slashRouteTurn } from './handlers.js';
+import { aiSessionCommand, lastAnswer, slashRouteTurn } from './handlers.js';
+import { copyToClipboard } from '../../session/attachments.js';
 import { routeSlashInput, type SlashHandlerKey, type SlashRoute } from './registry.js';
 import { sessionHarness, slashRouteContextFor } from './context.js';
 import { enqueueCommandLine } from './queue.js';
@@ -239,7 +240,13 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       rl.notice?.(`Messages typed mid-turn: ${chosen}`);
       return {};
     },
-    swarm: async () => (args ? viaHeadless(text) : interactiveSwarmPicker(rl, id)),
+    swarm: async () => (args ? setWithValue(`Swarm ${args.trim().toLowerCase() === 'off' ? 'off' : 'on'}`) : interactiveSwarmPicker(rl, id)),
+    // Said in the TUI too, where the `copied` panel is a confirmation it
+    // drops: over SSH (OSC 52) nothing else shows it happened.
+    copy: async () => {
+      await copyToClipboard(lastAnswer(session));
+      return { notice: 'Copied' };
+    },
     options: async () => interactiveHarnessOptionPicker(rl, id),
     capabilities: async () => {
       const [title = 'Capabilities', ...rest] = capabilitiesText(session).split('\n');
