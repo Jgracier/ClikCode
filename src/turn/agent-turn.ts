@@ -1,4 +1,5 @@
 /** ClikCode's own agent turn, using Gateway or a local model for inference. */
+import { summarySources } from './summary-sources.js';
 import { agentMcpServer, gatewayAgentSession, type GatewayAgentSession } from '../gateway/agent-session.js';
 import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
@@ -97,7 +98,7 @@ export async function runAgentTurn(input: {
   // go into its memory first (agent-history.ts), so the model the Gateway
   // serves starts from the conversation, not from this prompt alone.
   const memory = new ConversationStore(stateDirectory(), session.id);
-  let held = { total: 0, seeded: 0 };
+  let held: Awaited<ReturnType<typeof seedAgentConversation>> = { total: 0, seeded: 0 };
   let memoryBytes = 0;
   let seededOk = false;
   // The coding agent runs here, on this machine; the model server supplies
@@ -106,9 +107,10 @@ export async function runAgentTurn(input: {
   try {
     held = await seedAgentConversation({
       session, stateDir: stateDirectory(), ...(modelClient.contextHints?.contextWindow ? { contextWindow: modelClient.contextHints.contextWindow } : {}),
+      summaries: summarySources(state.accounts),
       displayName: (command) => localHarnessForCommand(command)?.displayName,
     });
-    if (held.seeded) lifecycle('thread.take-up', { harness: attributedTo, how: 'agent-memory', turns: held.total, seeded: held.seeded });
+    if (held.seeded) lifecycle('thread.take-up', { harness: attributedTo, how: 'agent-memory', turns: held.total, seeded: held.seeded, ...(held.summarized ? { summarized: held.summarized, summaryFrom: held.summaryFrom } : {}) });
     session.agentThreadTurns = held.total;
     memoryBytes = await memory.size();
     seededOk = true;

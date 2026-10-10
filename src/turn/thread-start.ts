@@ -19,6 +19,7 @@
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import { markProviderBoundaries, type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
+import { summarizedRecord, summaryNote, type ConversationSummary } from '../session/conversation-summary.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { modelProvider } from '../runtime/lazy-bridge.js';
 import { BYTES_PER_TOKEN, transferBudget, transferPrompt } from './transfer.js';
@@ -57,6 +58,9 @@ export interface ThreadStartInput {
   argvLimit?: number;
   /** The writer for this harness, if any (registry: nativeSessionStore). */
   writer?: NativeThreadWriter;
+  /** The conversation's summary (conversation-summary.ts): it stands for the
+   * turns it covers, written the way the receiving harness keeps its own. */
+  summary?: ConversationSummary;
   /** The installed vendor build (first line of `--version`). */
   version?: () => Promise<string | undefined>;
   displayName?: (harness: string) => string | undefined;
@@ -148,9 +152,11 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
       return undefined;
     }
     // Which provider ran which turns, said once per switch (the transfer
-    // says it in its own preamble).
-    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow));
-    const result = await writer.write(markProviderBoundaries(fitted.record, input.harness.command, input.displayName), context);
+    // says it in its own preamble). A summary takes its room first.
+    const summary = input.record.summary;
+    const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow) - (summary ? Buffer.byteLength(summary.text, 'utf8') : 0));
+    const marked = markProviderBoundaries(fitted.record, input.harness.command, input.displayName);
+    const result = await writer.write(summary && !writer.writesSummary ? withSummaryNote(marked, summary) : marked, context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
     return result?.nativeId ? { written: result, omitted: fitted.omitted } : undefined;
   } catch (error) {
@@ -160,7 +166,18 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
   }
 }
 
+/** The summary opening the first kept request, for a writer whose vendor has
+ * no compaction of its own to hold it. */
+function withSummaryNote(record: CanonicalRecord, summary: NonNullable<CanonicalRecord['summary']>): CanonicalRecord {
+  const [first, ...rest] = record.turns;
+  if (!first) return record;
+  const note = summaryNote(summary);
+  const { summary: _written, ...without } = record;
+  return { ...without, turns: [{ ...first, providerNote: first.providerNote ? `${note}\n\n${first.providerNote}` : note }, ...rest] };
+}
+
 export async function startConversationThread(input: ThreadStartInput): Promise<ThreadStart> {
+  input = { ...input, record: summarizedRecord(input.record, input.summary) };
   const native = await written(input);
   if (native) return { kind: 'native', ...native, prompt: input.request };
   const budget = transferBudget({

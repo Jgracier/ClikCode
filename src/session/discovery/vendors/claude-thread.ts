@@ -295,6 +295,9 @@ function userText(turn: CanonicalTurn): string {
   return withProviderNote(turn, turn.attachments.length ? `${turn.user}\n\nAttached files: ${turn.attachments.join(', ')}` : turn.user);
 }
 
+/** How Claude Code opens the summary it writes when it compacts. */
+export const CLAUDE_SUMMARY_PREAMBLE = 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\n';
+
 type Block =
   | { type: 'text'; text: string }
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown> };
@@ -352,7 +355,10 @@ export function claudeThreadRecords(record: CanonicalRecord, options: ClaudeThre
     if (!last && previous && 'user' in previous) entries.push({ blocks: [{ type: 'text', text: '(No answer was recorded.)' }], model: turnModel });
   });
 
-  const count = entries.reduce((sum, entry) => sum + ('blocks' in entry ? entry.blocks.length : 1), 0);
+  // A summary is written as Claude Code writes its own compaction: a boundary
+  // that starts a new chain, then the summary as a user message it flags.
+  const summarized = record.summary ? 2 : 0;
+  const count = summarized + entries.reduce((sum, entry) => sum + ('blocks' in entry ? entry.blocks.length : 1), 0);
   const end = (options.now ?? new Date()).getTime();
   const records: Record<string, unknown>[] = [];
   let parent: string | null = null;
@@ -365,6 +371,16 @@ export function claudeThreadRecords(record: CanonicalRecord, options: ClaudeThre
     });
     parent = id;
   };
+  if (record.summary) {
+    const boundary = uuid();
+    records.push({
+      parentUuid: null, isSidechain: false, type: 'system', subtype: 'compact_boundary', content: 'Conversation compacted', level: 'info',
+      compactMetadata: { trigger: 'auto' }, uuid: boundary, timestamp: new Date(end - (count - 1)).toISOString(),
+      userType: 'external', cwd: options.cwd, sessionId: options.sessionId, version: options.version,
+    });
+    parent = boundary;
+    push('user', { role: 'user', content: `${CLAUDE_SUMMARY_PREAMBLE}${record.summary.text}` }, { isCompactSummary: true, isVisibleInTranscriptOnly: true });
+  }
   for (const entry of entries) {
     if ('user' in entry) {
       push('user', { role: 'user', content: entry.user });

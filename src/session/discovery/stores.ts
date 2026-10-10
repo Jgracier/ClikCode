@@ -167,6 +167,9 @@ export interface NativeThreadWriter {
   testedVersions: readonly string[];
   versionOk(context: NativeThreadWriteContext): boolean | Promise<boolean>;
   write(record: CanonicalRecord, context: NativeThreadWriteContext): Promise<NativeThreadWritten | undefined>;
+  /** The writer puts `record.summary` into the thread as the vendor's own
+   * compaction. Otherwise it opens the first request (summaryNote). */
+  writesSummary?: true;
 }
 
 export function nativeDataRoot(
