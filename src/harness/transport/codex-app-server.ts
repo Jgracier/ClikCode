@@ -29,6 +29,10 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   images?: readonly string[];
   environment?: Readonly<Record<string, string>>;
   signal?: AbortSignal;
+  /** Open the thread (start the server, resume or start it) and stop
+   *  before the turn: the next turn on this session starts at turn/start
+   *  (a failover's standby account). */
+  prepareOnly?: boolean;
   /** Per-harness Codex config overrides (`config` of thread/start|resume),
    * e.g. `{ 'tools.web_search': true, profile: 'work' }`. */
   configOverrides?: Record<string, unknown>;
@@ -440,6 +444,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const threadId = live.threadId!;
     turn.threadId = threadId;
     this.threadId = threadId;
+    if (input.prepareOnly) return { text: '', nativeSessionId: threadId };
     await input.onSessionId?.(threadId);
     stillRunning();
     await this.promptSent();

@@ -57,6 +57,34 @@ const command = (id: string, done: boolean, turnId = '{{turn}}') => ({
   params: { threadId: 'T', turnId, item: { type: 'commandExecution', id, command: 'sleep 30; echo BG', status: done ? 'completed' : 'inProgress', ...(done ? { aggregatedOutput: 'BG\n', exitCode: 0 } : {}) } },
 });
 
+describe('a Codex failover standby', () => {
+  it('resumes the thread up to the turn, and the next turn on it starts at turn/start', async () => {
+    const methods: string[] = [];
+    const codex = createCodexSession({
+      spawn: (_binary, _argv, spawnOptions) => {
+        const child = spawn(process.execPath, ['-e', fakeServer([[
+          { send: agentMessage('T', '{{turn}}', 'WARM') }, { send: turnCompleted('T', '{{turn}}') },
+        ]])], spawnOptions);
+        let buf = '';
+        child.stdin!.write = ((original) => function (this: unknown, chunk: unknown, ...rest: unknown[]) {
+          buf += String(chunk);
+          let i; while ((i = buf.indexOf('\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1); if (m.method) methods.push(m.method); }
+          return (original as (...args: unknown[]) => boolean).call(this, chunk, ...rest);
+        })(child.stdin!.write) as typeof child.stdin.write;
+        return child;
+      },
+    });
+    try {
+      expect(await codex.runTurn(input([], { nativeSessionId: 'T', prompt: '', prepareOnly: true }))).toEqual({ text: '', nativeSessionId: 'T' });
+      const result = await codex.runTurn(input([], { nativeSessionId: 'T' }));
+      expect(result.text).toBe('WARM');
+      expect(methods.filter((method) => method !== 'initialized')).toEqual(['initialize', 'thread/resume', 'turn/start']);
+    } finally {
+      await codex.close();
+    }
+  });
+});
+
 describe('a Codex turn waits for its own thread', () => {
   it('is not ended by a sub-agent finishing first, and shows the sub-agent as one row', async () => {
     const codex = session([[
