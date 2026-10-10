@@ -437,8 +437,12 @@ export async function interactiveSessionPicker(
     listWatch.stop();
   }
   // Delete and archive always return to the list. If the open chat was the
-  // one removed, the list's "current" is the fresh draft made above.
-  if (returnToList) return interactiveSessionPicker(rl, replacement ?? currentId, boardCommands, hooks);
+  // one removed, the list's "current" is the fresh draft made above -- and
+  // closing the list lands there: the chat it was opened from is gone.
+  if (returnToList) {
+    const next = await interactiveSessionPicker(rl, replacement ?? currentId, boardCommands, hooks);
+    return next ?? (replacement ? { id: replacement } : undefined);
+  }
   if (replacement) return { id: replacement };
   // Any other action closes the list on purpose (the picker rebuilds from
   // state rather than show a stale row), so it opens again on what changed.

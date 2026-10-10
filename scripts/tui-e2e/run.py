@@ -123,6 +123,38 @@ SCENARIOS = {
         'ever': ['Agent worker 0'], 'never': ['agent Agent'],
         'no_clear_after_type': True,
     },
+    # Deleting the chat that is open, on the board, then closing the board:
+    # the window carries on in the fresh chat that took its place. It used to
+    # exit ClikCode, leaving the deleted chat's text on the shell's screen.
+    'delete-open-chat-then-esc': {
+        'turns': [{'blocks': ['DOOMED answer lives here.']}, {'blocks': ['Fresh chat answered.']}],
+        'steps': [
+            ('type', 'doomed question'), ('wait_for', 'DOOMED answer lives here.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[3~'), ('wait_for', 'Cancel', 10),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('settle', 3), ('keys', '\x1b'), ('settle', 2), ('mark',),
+            ('type', 'still here'), ('wait_for', 'Fresh chat answered.', 30), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['still here', 'Fresh chat answered.'],
+        'never_after_mark': ['DOOMED answer lives here.'],
+    },
+    # Another window deletes the chat this one has open. The next message
+    # here is not lost and does not end ClikCode ("AI session ... was not
+    # found"): a fresh chat opens, says why, and the message waits in its
+    # composer.
+    'chat-deleted-in-other-window': {
+        'turns': [{'blocks': ['DOOMED answer lives here.']}, {'blocks': ['Fresh chat answered.']}],
+        'steps': [
+            ('type', 'doomed question'), ('wait_for', 'DOOMED answer lives here.', 30), ('settle', 2),
+            ('open2', 6, ['--continue']), ('wait_for2', 'DOOMED answer lives here.', 10),
+            ('keys2', '\x1b[D'), ('settle', 2), ('keys2', '\x1b[3~'), ('wait_for2', 'Cancel', 10),
+            ('keys2', '\x1b[B'), ('keys2', '\r'), ('settle', 3),
+            ('mark',), ('type', 'are you there'), ('wait_for', 'was deleted', 15), ('settle', 2), ('snap', 'kept'),
+            ('keys', '\r'), ('wait_for', 'Fresh chat answered.', 30), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['are you there', 'Fresh chat answered.'],
+        'snap_contains': {'kept': ['› are you there']},
+        'never_after_mark': ['not found'],
+    },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 4)],

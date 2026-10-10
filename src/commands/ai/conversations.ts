@@ -81,11 +81,12 @@ export async function newConversation(
   currentId: string,
   /** Keep the model the current chat runs, rather than the provider's
    * default: the conversation board starts in exactly what it shows. */
-  options: { sameModel?: boolean } = {},
+  options: { sameModel?: boolean; lastSeen?: HarnessSession } = {},
 ): Promise<string> {
-  // The new chat copies the current one's settings, never its history.
+  // The new chat copies the current one's settings, never its history --
+  // from the copy last seen when the chat itself is gone (deleted elsewhere).
   const state = await readState({ transcripts: [] });
-  const current = state.sessions.find((item) => item.id === currentId);
+  const current = state.sessions.find((item) => item.id === currentId) ?? options.lastSeen;
   if (!current) throw new Error(`AI session "${currentId}" was not found`);
   const created = newConversationSession(state, current);
   if (options.sameModel && current.model) created.model = current.model;
