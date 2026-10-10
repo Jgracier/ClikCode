@@ -110,6 +110,11 @@ describe('secrets and caps', () => {
     expect(scrubbed).toEqual({ PATH: '/bin', HOME: '/h', KEYBOARD: 'us' });
   });
 
+  it("keeps git's config-by-environment whole, so git still runs", () => {
+    const env = { GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.bareRepository', GIT_CONFIG_VALUE_0: 'explicit', AWS_ACCESS_KEY_ID: 'id', AWS_SECRET_ACCESS_KEY: 's' };
+    expect(scrubEnvironment(env)).toEqual({ GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'safe.bareRepository', GIT_CONFIG_VALUE_0: 'explicit', AWS_ACCESS_KEY_ID: 'id' });
+  });
+
   it('masks secret values and assignments but leaves ordinary text alone', () => {
     const pem = '-----BEGIN OPENSSH PRIVATE KEY-----\nabc\ndef\n-----END OPENSSH PRIVATE KEY-----';
     const out = redactSecrets([
