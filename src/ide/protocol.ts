@@ -82,6 +82,11 @@ export type IdeRequest =
   /** A key while /search walks mentions (`search` events): ↓ next, ↑
    * previous, Tab the next conversation, Esc done. */
   | { type: 'search-key'; key: 'next' | 'previous' | 'chat' | 'done' }
+  /** Whether the chat is on screen in the editor. Only a shown chat polls
+   * its usage: one editor window runs a bridge per chat, and every one of
+   * them re-reading every account was most of what ClikCode wrote while
+   * idle. Shown until said otherwise; an older bridge ignores it. */
+  | { type: 'visible'; visible: boolean }
   | { type: 'close' };
 
 /** What an editor handles beyond the base protocol, named with `open`; the

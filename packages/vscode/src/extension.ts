@@ -115,7 +115,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     resolveWebviewView(view) {
       sidebarView = view;
       const { surface, dispose } = surfaceFor(sidebar, view.webview, 'sidebar', () => view.visible);
-      const shown = view.onDidChangeVisibility(() => surface.post({ type: 'visible', visible: view.visible }));
+      const shown = view.onDidChangeVisibility(() => { surface.post({ type: 'visible', visible: view.visible }); sidebar.visibilityChanged(); });
       view.onDidDispose(() => { if (sidebarView === view) sidebarView = undefined; shown.dispose(); dispose(); });
     },
   };
@@ -135,7 +135,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       panel.title = `${flag}${model.title ? truncate(model.title, 32) : 'ClikCode'}`;
     };
     const retitle = controller.onDidChange(title);
-    panel.onDidChangeViewState(() => { title(); paint(); surface.post({ type: 'visible', visible: panel.visible }); });
+    panel.onDidChangeViewState(() => { title(); paint(); surface.post({ type: 'visible', visible: panel.visible }); controller.visibilityChanged(); });
     panel.onDidDispose(() => {
       tabs.delete(panel);
       retitle.dispose();

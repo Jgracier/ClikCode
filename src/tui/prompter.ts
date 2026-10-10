@@ -3268,6 +3268,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     };
   }
 
+  /** The terminal said it lost focus and has not said it got it back. One
+   * that never reports focus is always looked at. */
+  lookedAway(): boolean {
+    return this.focus.focused === false;
+  }
+
   /** Nothing is using this terminal: no turn, no picker, no palette, and no
    * typed or queued draft. A newer build may replace the process here. */
   idleForBuildReplace(): boolean {

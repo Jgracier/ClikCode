@@ -106,6 +106,8 @@ export class IdeBridge {
   quietOutput = 0;
   /** What the editor said it handles, with its last `open`. */
   private features: ReadonlySet<IdeFeature> = new Set();
+  /** The editor shows this chat (its `visible`): only then is usage polled. */
+  private shown = true;
   /** /search waiting on the editor's next key. */
   private searchKey: ((key: Extract<IdeRequest, { type: 'search-key' }>['key']) => void) | undefined;
 
@@ -115,7 +117,7 @@ export class IdeBridge {
 
   start(): void {
     const claim = setInterval(() => { if (this.sessionId) void claimConversation(this.sessionId).catch(() => undefined); }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
-    const usage = setInterval(() => { void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
+    const usage = setInterval(() => { if (this.shown) void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
     claim.unref();
     usage.unref();
     this.timers.push(claim, usage);
@@ -184,6 +186,12 @@ export class IdeBridge {
         const answer = this.searchKey;
         this.searchKey = undefined;
         answer?.(request.key);
+        return;
+      }
+      case 'visible': {
+        const appeared = request.visible && !this.shown;
+        this.shown = request.visible;
+        if (appeared) void this.refreshUsage().catch(() => undefined);
         return;
       }
       case 'close':
