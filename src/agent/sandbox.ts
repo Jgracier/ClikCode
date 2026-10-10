@@ -4,6 +4,7 @@
  * workspace, the temp dir and the caches builds and installs use. Off by
  * default; a missing sandbox binary runs the command unsandboxed with one
  * notice a session, never a failure. The argv builders are pure. */
+import { spawnSync } from 'node:child_process';
 import { accessSync, constants, realpathSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -30,7 +31,7 @@ export function sandboxModeText(mode: SandboxMode): string {
  * build writes. Read-only caches would fail most real work. */
 const HOME_CACHE_DIRS = [
   '.cache', '.npm', '.pnpm-store', '.local/share/pnpm', '.local/state', '.yarn', '.bun', '.deno',
-  '.cargo', '.rustup', 'go', '.gradle', '.m2', '.nuget', '.dotnet', '.composer', '.gem', '.bundle',
+  '.cargo', '.rustup', 'go', '.gradle', '.m2', '.nuget', '.dotnet', '.composer', '.gem', '.bundle', 'Library/Caches',
 ];
 /** Variables that move those caches somewhere else. */
 const CACHE_ENV_VARS = [
@@ -122,7 +123,7 @@ export function wrapForSandbox(request: WrapRequest): SandboxWrap {
 }
 
 export function sandboxMissingNotice(missing: string): string {
-  return `[sandbox: ${missing} is not installed, so commands in this session run unsandboxed]`;
+  return `[sandbox: ${missing} is not installed or cannot run here, so commands in this session run unsandboxed]`;
 }
 
 const DENIAL = /Read-only file system|EROFS|Operation not permitted|EPERM/;
@@ -153,6 +154,17 @@ function onPath(binary: string): boolean {
   return candidates.some((candidate) => { try { accessSync(candidate, constants.X_OK); return true; } catch { return false; } });
 }
 
+/** bwrap can be installed and still unable to run: no user namespaces in a
+ * container, or a distro policy against them. Tried once a process, so such
+ * a machine gets the notice instead of every command failing. */
+let bwrapRuns: boolean | undefined;
+function sandboxAvailable(binary: string): boolean {
+  if (!onPath(binary)) return false;
+  if (binary !== 'bwrap') return true;
+  bwrapRuns ??= spawnSync('bwrap', ['--ro-bind', '/', '/', '--dev', '/dev', '--proc', '/proc', '--', '/bin/true'], { stdio: 'ignore', timeout: 5000 }).status === 0;
+  return bwrapRuns;
+}
+
 function realOrSame(dir: string): string {
   try { return realpathSync.native(dir); } catch { return dir; }
 }
@@ -160,5 +172,5 @@ function realOrSame(dir: string): string {
 /** wrapForSandbox with this machine's facts filled in. */
 export function sandboxCommand(mode: SandboxMode, command: Invocation, scope: { cwd: string; addDirs: readonly string[]; homeDir: string }): SandboxWrap & { writable: string[] } {
   const writable = sandboxWritableDirs({ ...scope, tmpDir: os.tmpdir(), env: process.env }).map(realOrSame);
-  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: [...new Set(writable)], cwd: scope.cwd, available: onPath }), writable };
+  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: [...new Set(writable)], cwd: scope.cwd, available: sandboxAvailable }), writable };
 }
