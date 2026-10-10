@@ -50,6 +50,8 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
    * modelClientForSession (agent/models/for-session.ts) chose for the route. */
   modelClient: ModelClient;
   modelClientForStep?: () => Promise<ModelClient | 'switch' | undefined>;
+  /** The user approved the plan (exit_plan_mode): plan mode is over. */
+  onPlanModeExit?: (plan: string) => void;
 }
 
 /** The agent loop's usage in the shape every harness reports. Cost arrives
@@ -117,6 +119,9 @@ export async function runGatewayHarnessSessionTurn(
     prompt: input.prompt,
     ...(hooks ? { hooks } : {}),
     permissionMode,
+    // Plan mode (Settings): research only until the user approves a plan.
+    planMode: session.planMode === true,
+    ...(input.onPlanModeExit ? { onPlanModeExit: input.onPlanModeExit } : {}),
     // /permissions writes the index from the user's terminal while this turn
     // runs in the worker: read the mode back before each tool call so a switch
     // (ask -> bypass) applies to the rest of this turn.

@@ -22,6 +22,7 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
+import { setAgentPlanMode } from '../agent/plan-mode-setting.js';
 import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
 import { afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
 import { expandHomePath } from '../session/attachments.js';
@@ -795,6 +796,7 @@ export class IdeBridge {
         }
         case 'plan': {
           const { session } = await this.current();
+          if (isClikCodeAgent(session)) { await setAgentPlanMode(session.id, choice.on); await this.emitSession(); done(); return; }
           const harness = sessionHarnessDefinition(session);
           if (!harness?.planMode) throw new Error('This provider has no plan mode.');
           const on = harness.planMode.value === true ? 'on' : String(harness.planMode.value);

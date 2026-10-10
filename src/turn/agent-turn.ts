@@ -160,6 +160,12 @@ export async function runAgentTurn(input: {
         // The model that answered, where a vendor's own report of its model
         // goes (vendor-cli-attempt.ts): the status line and the editor name it,
         // and for Automatic it is the only place that says which model it was.
+        // The plan was approved: the chat leaves plan mode, saved with the turn.
+        onPlanModeExit: () => {
+          delete session.planMode;
+          checkpoint.touch();
+          prompter?.render(session);
+        },
         onServedModel: (served) => {
           session.reported = { ...session.reported, at: new Date().toISOString(), model: served };
           checkpoint.touch();
