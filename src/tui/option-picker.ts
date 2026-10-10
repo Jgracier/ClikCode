@@ -18,6 +18,9 @@ export interface OptionPickerHost {
   ): void;
   clearFrame(): void;
   setSelecting(selecting: boolean): void;
+  /** Ctrl+L: the next paint redraws the whole screen, whatever the terminal
+   * lost (a mobile resize, a remote redraw). */
+  repair?(): void;
   /** For the sub-pickers an option's actions can open. */
   select<T>(
     title: string, options: readonly PickerOption<T>[],
@@ -234,6 +237,7 @@ export function runOptionPicker<T>(
     };
     const commitAll = async (): Promise<void> => { for (const option of applied.keys()) await commit(option); };
     const handleKey = (key: string): void => {
+      if (key === '\u000c') { host.repair?.(); draw(); return; }
       const visible = visibleOptions();
       const current = visible[selected];
       if (current?.inline) {

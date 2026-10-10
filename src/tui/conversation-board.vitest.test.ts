@@ -53,6 +53,13 @@ describe('the conversation board', () => {
     expect(press(state, '\r')).toEqual({ kind: 'finish', result: { open: 'old' } });
   });
 
+  it('redraws the whole screen on Ctrl+L, keeping the draft and selection', () => {
+    const state = fresh();
+    press(state, 'f', 'i', 'x');
+    expect(press(state, '\u000c')).toEqual({ kind: 'repair' });
+    expect(state).toEqual({ draft: 'fix', selected: -1 });
+  });
+
   it('takes typing away from a selected row into a new draft', () => {
     const state = fresh();
     press(state, DOWN, 'h');
