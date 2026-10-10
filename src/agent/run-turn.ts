@@ -41,7 +41,7 @@ const CONTINUE_AFTER_LENGTH = '[harness] Your last reply reached the output limi
 /** A tool's class, for one the shared classifier cannot name (an MCP
  * server's, a skill). */
 const CLASS_CATEGORY: Partial<Record<ToolDefinition['class'], ToolCategory>> = { exec: 'run', read: 'read', write: 'edit', network: 'fetch' };
-const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'bash_output', 'kill_bash', 'wait']);
+const SHELL_TOOLS: ReadonlySet<string> = new Set(['bash', 'bash_output', 'bash_input', 'kill_bash', 'wait']);
 
 /** The gateway loop's row category: the tool's own name through the classifier
  * every harness's rows go through (so grep reads as a search here too), else

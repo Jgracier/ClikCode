@@ -207,7 +207,7 @@ export const HARNESS_TOOL_MAPPINGS: Readonly<Record<string, HarnessToolMapping>>
     // web_fetch all match the verb table. These two are the background-shell
     // pair it cannot reach; todo_write and exit_plan_mode stay unclassified
     // because neither is work on the user's code.
-    names: { bash_output: 'run', kill_bash: 'run' },
+    names: { bash_output: 'run', bash_input: 'run', kill_bash: 'run' },
     note: "ClikCode's own loop: the tool name is ours, so the verb table settles all but the background-shell pair.",
   },
 };
