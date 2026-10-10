@@ -1193,6 +1193,13 @@ SCENARIOS = {
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2), ('snap', 'list')],
         'watch': [], 'snap_contains': {'list': ['Grok Build 2']}, 'never': ['Grok Build 1'],
     },
+    # /diff outside a git repository says so plainly ("Error: error: unknown
+    # option `cached'" before).
+    'diff-outside-git': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '/diff'), ('wait_for', 'Not a git repository', 10), ('settle', 1)],
+        'watch': [], 'never': ['Error:', 'unknown option'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

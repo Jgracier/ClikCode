@@ -29,8 +29,11 @@ function captureProcess(command: string, args: readonly string[], cwd?: string, 
 
 /** Everything that differs from the last commit: staged and unstaged changes
  * against HEAD, plus files git does not track yet (which `git diff` never shows). */
-export async function workspaceDiff(workspace: string): Promise<string> {
+/** Undefined outside a git work tree: there is nothing to diff against,
+ * which is said plainly, not as git's "unknown option `cached'". */
+export async function workspaceDiff(workspace: string): Promise<string | undefined> {
   const git = (args: readonly string[]): Promise<string> => captureProcess('git', args, workspace);
+  if (!await git(['rev-parse', '--is-inside-work-tree']).then((out) => out.trim() === 'true', () => false)) return undefined;
   const hasHead = await git(['rev-parse', '--verify', '--quiet', 'HEAD']).then(() => true, () => false);
   // A repository with no commit yet has no HEAD: everything staged is the change.
   const base = hasHead ? ['diff', '--no-ext-diff', 'HEAD'] : ['diff', '--no-ext-diff', '--cached'];

@@ -277,7 +277,8 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     return emitHarnessOutput({ panel: 'attachments', attachments: session.attachments ?? [], changed: true });
   },
   diff: async ({ session }) => {
-    return emitHarnessOutput({ panel: 'diff', diff: await workspaceDiff(session.workspace ?? process.cwd()) });
+    const diff = await workspaceDiff(session.workspace ?? process.cwd());
+    return emitHarnessOutput(diff === undefined ? { panel: 'diff', text: 'Not a git repository' } : { panel: 'diff', diff });
   },
   review: async ({ id, session, head, words }) => {
     // Gateway refusal lives in the registry's availability(), shared by both dispatchers.
