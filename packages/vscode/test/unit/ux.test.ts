@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { applyEvent, conversationAttention, emptyModel, type ChatModel } from '../../src/model';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { applyEvent, conversationAttention, emptyModel, liveElapsedMs, type ChatModel } from '../../src/model';
+import { waitingOnUser } from '../../src/webview/chat';
 import { supportsSecondarySidebar } from '../../src/compat';
 import { mentionScore } from '../../src/text';
 import { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from '../../src/webview/composer';
@@ -273,5 +274,30 @@ describe('an account\'s usage in the account menu', () => {
     expect(accountUsageText({ windows: [{ name: '5h', usedPct: 60 }, { name: 'weekly', usedPct: 10 }] })).toBe('5h 40% left · Weekly 90% left');
     expect(accountUsageText({ windows: [{ name: '5h', usedPct: 30 }], learned: true })).toBe('5h 70% left · estimated');
     expect(accountUsageText({ label: '$3 left', windows: [] })).toBe('$3 left');
+  });
+});
+
+describe('a sign-in during a turn', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('holds the working line still and stops its clock until it is over', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000_000);
+    let model = run([
+      { type: 'session', session: session() },
+      { type: 'turn-start', sessionId: 's1', prompt: 'x' },
+      worker({ type: 'waiting-start', message: 'thinking' }),
+    ]);
+    vi.setSystemTime(1_005_000);
+    model = applyEvent(model, { type: 'sign-in-link', id: 'g', name: 'Grok Build', url: 'https://example.test' });
+    expect(waitingOnUser(model)).toBe(true);
+    const held = liveElapsedMs(model.live!, Date.now());
+    vi.setSystemTime(1_065_000);
+    expect(liveElapsedMs(model.live!, Date.now())).toBe(held);
+    model = applyEvent(model, { type: 'sign-in-link', id: 'g', name: 'Grok Build', done: true });
+    expect(waitingOnUser(model)).toBe(false);
+    expect(model.live!.activeAt).toBe(1_065_000);
+    vi.setSystemTime(1_066_000);
+    expect(liveElapsedMs(model.live!, Date.now())).toBe(held + 1_000);
   });
 });

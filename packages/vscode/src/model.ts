@@ -611,7 +611,14 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
     case 'busy':
       return { ...model, busy: event.label };
     case 'sign-in-link':
-      if (event.done) return model.signIn?.id === event.id ? { ...model, signIn: undefined } : model;
+      // The turn waits on the user in their browser: its clock stops, as for
+      // an approval, and the time is not the turn going quiet.
+      if (event.done) {
+        if (model.signIn?.id !== event.id) return model;
+        const live = model.live && !model.approvals.length ? { ...model.live, activeAt: Date.now(), ...resumed(model.live) } : model.live;
+        return { ...model, signIn: undefined, ...(live ? { live } : {}) };
+      }
+      if (model.live && model.live.pausedAt === undefined) model = { ...model, live: { ...model.live, pausedAt: Date.now() } };
       return { ...model, signIn: { id: event.id, name: event.name, ...(event.url ? { url: event.url } : {}), ...(event.code ? { code: event.code } : {}), ...(event.ask ? { ask: event.ask } : {}) } };
     case 'notice':
       return withNote(model, { kind: 'notice', level: event.level, text: stripAnsi(event.message) });
@@ -686,7 +693,7 @@ export function answeredApproval(model: ChatModel, id: string): ChatModel {
   const approvals = model.approvals.filter((item) => item.id !== id);
   // Time spent on the user's answer is not the turn going quiet, and not
   // the turn's time: the clock runs again once none is waiting.
-  const live = model.live && { ...model.live, activeAt: Date.now(), ...(approvals.length ? {} : resumed(model.live)) };
+  const live = model.live && { ...model.live, activeAt: Date.now(), ...(approvals.length || model.signIn ? {} : resumed(model.live)) };
   return { ...model, approvals, ...(live ? { live } : {}) };
 }
 

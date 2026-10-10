@@ -592,7 +592,6 @@ function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): J
         {signIn.url ? <button type="button" class="secondary" data-open onClick={() => post({ type: 'signInOpen', url: signIn.url! })}>Open the page again</button> : null}
         <button type="button" class="secondary" data-cancel onClick={() => post({ type: 'signInCancel', id: signIn.id })}>Cancel</button>
       </div>
-      <div class="progress indeterminate"><div /></div>
     </div>
   );
 }
