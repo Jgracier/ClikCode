@@ -40,6 +40,7 @@ import { disposeSessionState, formatShellNotifications, runningShellCount, sessi
 import { stopBackgroundShell } from '../agent/tools/bash.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { prepareMcp, releaseMcp } from '../agent/mcp/manager.js';
+import { shutdownLanguageServers } from '../agent/lsp/servers.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { gatewayModels } from '../gateway/models.js';
 import { routeMcpServers } from '../gateway/mcp.js';
@@ -864,6 +865,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // Codex app-server and ACP children are spawned detached too, and were
     // orphaned the same way.
     await closePersistentTransport().catch(() => undefined);
+    // The lsp tool's language servers live as long as this worker.
+    await shutdownLanguageServers().catch(() => undefined);
     for (const connection of connections.keys()) {
       sendEvent(connection, { type: 'shutdown', reason });
       connection.end();

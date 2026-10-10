@@ -3,6 +3,7 @@ import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, resolveForWrite, ToolInputError } from './fs-helpers.js';
 import { readExisting, rememberWritten, writeTextAtomic } from './write-file.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
+import { errorsAfterEdit } from './lsp.js';
 
 export interface EditOperation { old_string: string; new_string: string; replace_all?: boolean }
 interface EditFileArgs extends EditOperation { path: string }
@@ -76,6 +77,6 @@ export const editFileTool = defineTool<EditFileArgs>({
   async run(args, ctx) {
     const prepared = await prepareEdits(args.path, [args], ctx);
     await commitEdit(prepared, ctx);
-    return { output: `Edited ${prepared.shown}.`, diff: eventDiff(prepared.before, prepared.after, { path: prepared.shown, numbered: true }) };
+    return { output: `Edited ${prepared.shown}.${await errorsAfterEdit(prepared.real, ctx)}`, diff: eventDiff(prepared.before, prepared.after, { path: prepared.shown, numbered: true }) };
   },
 });

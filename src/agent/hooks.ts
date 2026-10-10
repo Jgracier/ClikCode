@@ -59,7 +59,7 @@ export type HookConfig = Partial<Record<HookEvent, HookGroup[]>>;
 const CLAUDE_TOOL_NAMES: Record<string, string> = {
   bash: 'Bash', bash_output: 'BashOutput', kill_bash: 'KillShell',
   read_file: 'Read', write_file: 'Write', edit_file: 'Edit', multi_edit: 'MultiEdit',
-  list_dir: 'LS', glob: 'Glob', grep: 'Grep',
+  list_dir: 'LS', glob: 'Glob', grep: 'Grep', lsp: 'LSP',
   web_fetch: 'WebFetch', web_search: 'WebSearch',
   todo_write: 'TodoWrite', task: 'Task', skill: 'Skill', exit_plan_mode: 'ExitPlanMode',
   ask_user: 'AskUserQuestion', notebook_edit: 'NotebookEdit',
