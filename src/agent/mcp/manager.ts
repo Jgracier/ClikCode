@@ -285,6 +285,14 @@ let imports: Promise<string | undefined> | undefined;
  * every turn, so a route change adds or stops them like an edited file. */
 let builtinServers: readonly McpServerSpec[] = [];
 
+/** The servers the user can sign in to: mcp.json's and the enabled
+ * plugins'. What `clikcode mcp login` and /mcp look among. */
+export async function userMcpServers(stateDir: string): Promise<{ servers: McpServerSpec[]; problem?: string }> {
+  const loaded = await loadMcpServers(stateDir);
+  const names = new Set(loaded.servers.map((server) => server.name));
+  return { ...loaded, servers: [...loaded.servers, ...enabledPluginMcpServers({ stateDir }).filter((server) => !names.has(server.name))] };
+}
+
 /** The user's servers and the route's built-ins; a server the user configured
  * under the same name wins. */
 async function loadAllServers(stateDir: string): Promise<{ servers: McpServerSpec[]; problem?: string }> {
