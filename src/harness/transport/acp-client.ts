@@ -585,6 +585,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     let loaded: Json | undefined;
     const wanted = input.nativeSessionId ?? this.sessionId;
+    // The session this process has open is closed before another is opened on it. An agent keeps
+    // every session it was given until told otherwise -- claude-agent-acp runs a whole Claude CLI
+    // (and its MCP servers) per session: MEASURED 2026-10-10, one worker held five of them, each
+    // with a full set of MCP servers, after its conversation's thread moved between accounts.
+    if (live.sessionId && live.sessionId !== wanted && capabilities.sessionCapabilities?.close) {
+      const previous = live.sessionId;
+      live.sessionId = undefined;
+      // fail-open-ok: the agent ending it already, or not knowing it, leaves nothing to close.
+      await call('session/close', { sessionId: previous }).catch(() => undefined);
+    }
     if (wanted) {
       if (live.sessionId !== wanted) {
         // session/load streams the whole history before it answers, so its
