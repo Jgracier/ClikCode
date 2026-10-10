@@ -32,6 +32,11 @@ export type TranscriptMessage = {
    * session's own harness says only who answers NEXT; an unstamped message
    * is that harness's. */
   origin?: MessageOrigin;
+  /** On the answer a turn ended on: how long the turn took, and whether it
+   * was stopped. The turn's closing line ("Worked for 12s", "Stopped after
+   * 3s") is drawn from this, so it is there however the conversation is
+   * opened again -- not only in the window that watched the turn end. */
+  turnEnd?: { ms: number; stopped?: true };
 };
 
 /** The harness (or, for ClikCode's own agent, the route) and model that

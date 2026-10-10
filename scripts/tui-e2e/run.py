@@ -183,7 +183,9 @@ SCENARIOS = {
             ('type', 'carry on'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2),
         ],
         'watch': [],
-        'snap_contains': {'stopped': ["The conversation's worker stopped; send again to continue.", 'Stopped after']},
+        # Its call settled as stopped. No closing line: the worker that would
+        # have saved the turn's end is gone, and that line is the saved one.
+        'snap_contains': {'stopped': ["The conversation's worker stopped; send again to continue.", 'sleep 30 stopped']},
         'snap_once': {'stopped': ['start the build', 'Starting the long build.']},
         'snap_lacks': {'stopped': ['▸', 'Worked for']},
         'final_once': ['Second answer arrives here.'], 'never': ['closed unexpectedly'],
@@ -218,6 +220,22 @@ SCENARIOS = {
         ],
         'watch': [], 'final_once': ['Stopped after'], 'final2_once': ['Stopped after'],
         'never': ['Worked for'], 'never2': ['Worked for'],
+    },
+    # "Worked for" is the saved turn's, not only the window's that watched it
+    # end: it is there after going to another chat and back, and after the
+    # window is closed and opened again. It used to be drawn live only.
+    'worked-for-survives-board-and-restart': {
+        'turns': [TWO_BLOCKS, {'blocks': ['Other chat answered.']}],
+        'steps': [
+            ('type', 'please check the commit'), ('wait_for', 'Worked for', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('type', 'another chat'), ('wait_for', 'Other chat answered.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'The final commit is live.', 10), ('settle', 2), ('snap', 'back'),
+            ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+            ('wait_for', 'The final commit is live.', 10), ('settle', 2),
+        ],
+        'watch': [], 'snap_once': {'back': ['Worked for']}, 'final_once': ['Worked for'],
+        'final_contains': ['please check the commit'],
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
