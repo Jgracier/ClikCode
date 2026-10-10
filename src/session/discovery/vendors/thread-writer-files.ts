@@ -30,11 +30,14 @@ function releaseLine(version: string): string {
  * Code 2.1.289, agy 1.2.17) and every handoff fell back to the retelling. A
  * thread a newer build cannot resume is still caught: the vendor refuses it
  * and the turn retells (native-thread-invalid). */
-export function testedVersion(tested: readonly string[]): (context: Pick<NativeThreadWriteContext, 'version'>) => boolean {
-  const lines = new Set(tested.map((build) => versionNumber(build)).filter((build): build is string => Boolean(build)).map(releaseLine));
+export function testedVersion(tested: readonly string[], options: { exact?: boolean } = {}): (context: Pick<NativeThreadWriteContext, 'version'>) => boolean {
+  const builds = tested.map((build) => versionNumber(build)).filter((build): build is string => Boolean(build));
+  // `exact`: a vendor whose patch releases have broken a written thread is
+  // trusted only on the builds it was proven on.
+  const lines = new Set(options.exact ? builds : builds.map(releaseLine));
   return (context) => {
     const installed = versionNumber(context.version);
-    return Boolean(installed && lines.has(releaseLine(installed)));
+    return Boolean(installed && lines.has(options.exact ? installed : releaseLine(installed)));
   };
 }
 

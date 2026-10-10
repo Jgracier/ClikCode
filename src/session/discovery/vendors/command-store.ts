@@ -158,7 +158,9 @@ export function commandThreadLines(record: CanonicalRecord, options: CommandThre
  *  went to the model, and the turn was appended to the same file. */
 export const commandThreadWriter: NativeThreadWriter = {
   testedVersions: ['1.74.1'],
-  versionOk: testedVersion(['1.74.1']),
+  // Exact: on 1.74.3 a thread written for 1.74.1 is "No session found to
+  // resume" (verify-thread-writer, 2026-10-10), so the conversation is retold.
+  versionOk: testedVersion(['1.74.1'], { exact: true }),
   async write(record, context) {
     if (!record.turns.length) return undefined;
     const sessionId = randomUUID();

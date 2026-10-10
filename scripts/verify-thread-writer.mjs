@@ -39,11 +39,28 @@ if (!command || command.startsWith('-')) {
 }
 
 if (!process.env.VERIFY_THREAD_WRITER_INSIDE) {
+  // The sign-in a real turn would use: a ready ClikCode account of this
+  // harness's provider, not the vendor's default home (often expired).
+  // --account <id prefix> picks one; --account none keeps the default home.
+  const profile = option('--account') === 'none' ? undefined : accountProfile(command, option('--account'));
+  if (profile) console.log(`signing in as ClikCode account ${profile.id.slice(0, 8)} (${profile.label ?? profile.provider})`);
   const result = spawnSync(process.execPath, [
     join(root, 'scripts', 'vendor-sandbox.mjs'), '--auth', command, ...links.flatMap((path) => ['--link', path]),
     '--', process.execPath, fileURLToPath(import.meta.url), ...argv,
-  ], { stdio: 'inherit', env: { ...process.env, VERIFY_THREAD_WRITER_INSIDE: '1' } });
+  ], { stdio: 'inherit', env: { ...process.env, VERIFY_THREAD_WRITER_INSIDE: '1', ...(profile ? { VERIFY_AUTH_PROFILE: profile.path, VERIFY_AUTH_ENV: profile.env } : {}) } });
   process.exit(result.status ?? 1);
+}
+
+function accountProfile(harnessCommand, prefix) {
+  const statePath = join(process.env.CLIKCODE_HOME ?? join(process.env.HOME, '.clikcode'), 'index.json');
+  if (!existsSync(statePath)) return undefined;
+  const providerOf = JSON.parse(readFileSync(statePath, 'utf8')).sessions?.find?.((session) => session.nativeHarness === harnessCommand)?.provider;
+  const accounts = (JSON.parse(readFileSync(statePath, 'utf8')).accounts ?? [])
+    .filter((account) => account.nativeProfile?.path && account.authKind === 'vendor-cli' && account.status === 'ready')
+    .filter((account) => (prefix ? account.id.startsWith(prefix) : account.nativeProfile.path.includes(`/profiles/${harnessCommand}/`) || account.provider === providerOf));
+  const ranked = accounts.sort((a, b) => Number(a.quotaState === 'exhausted') - Number(b.quotaState === 'exhausted'));
+  const chosen = ranked[0];
+  return chosen ? { id: chosen.id, label: chosen.label, provider: chosen.provider, path: chosen.nativeProfile.path, env: chosen.nativeProfile.env } : undefined;
 }
 
 // ------------------------------------------------- inside the sandbox ----
@@ -80,8 +97,16 @@ const expand = (path, base, env) => path
   // part of a symlink's own path.
   .replace(/\/+$/, '');
 const authFrom = option('--auth-from');
-for (const [index, path] of [...(harness.authFiles ?? []).map((file) => file.path), ...links.map((path) => (path.startsWith('~') ? path : `~/${path}`))].entries()) {
-  const from = index === 0 && authFrom ? authFrom : expand(path, home, {});
+// A ClikCode account's profile: its own HOME, or its own profile variable.
+const accountPath = process.env.VERIFY_AUTH_PROFILE;
+const accountEnv = process.env.VERIFY_AUTH_ENV;
+const declared = (harness.authFiles ?? []).map((file) => file.path);
+for (const [index, path] of [...declared, ...links.map((path) => (path.startsWith('~') ? path : `~/${path}`))].entries()) {
+  // A declared sign-in file, or a --link one when the account's profile is its HOME.
+  const fromAccount = accountPath && (index < declared.length || accountEnv === 'HOME')
+    ? expand(path, accountEnv === 'HOME' ? accountPath : home, accountEnv && accountEnv !== 'HOME' ? { [accountEnv]: accountPath } : {})
+    : undefined;
+  const from = index === 0 && authFrom ? authFrom : fromAccount && existsSync(fromAccount) ? fromAccount : expand(path, home, {});
   const to = expand(path, profile, environment);
   if (!existsSync(from) || existsSync(to)) continue;
   mkdirSync(dirname(to), { recursive: true });
@@ -93,6 +118,8 @@ const workspace = join(home, 'work');
 mkdirSync(join(workspace, 'src'), { recursive: true });
 writeFileSync(join(workspace, 'notes.txt'), 'launch window: Thursday\n');
 writeFileSync(join(workspace, 'src', 'app.ts'), 'const x = 1;\n');
+// A project, as ClikCode's turns run in: Codex will not run outside a trusted one.
+spawnSync('git', ['init', '-q'], { cwd: workspace });
 const codeword = `PELICAN-${randomBytes(2).toString('hex').toUpperCase()}`;
 const origin = { sessionId: 's-1', harness: 'claude', route: 'native', provider: 'anthropic', model: 'claude-sonnet-4-6' };
 const shell = {
