@@ -313,3 +313,12 @@ describe('running cost per chat', () => {
     expect(applyEvent(costed, { type: 'usage', label: '5h 40% left' }).chatCost).toBeUndefined();
   });
 });
+
+describe('usage and its reset in the composer corner', () => {
+  it('keeps when the closest window resets beside the figure, and only the reset once spent', () => {
+    const open = applyEvent(emptyModel(), { type: 'usage', label: '5h 40% left · Weekly 90% left', next: '5h resets 5:34PM', detail: '5h 40% left · resets 5:34PM\nWeekly 90% left' });
+    expect([open.accountUsage, open.accountUsageNext, open.accountUsageDetail]).toEqual(['5h 40% left · Weekly 90% left', '5h resets 5:34PM', '5h 40% left · resets 5:34PM\nWeekly 90% left']);
+    const spent = applyEvent(open, { type: 'usage', label: '5h 0% left', reset: 'Resets 5:34PM', next: '5h resets 5:34PM' });
+    expect([spent.accountUsage, spent.accountUsageNext]).toEqual(['Resets 5:34PM', undefined]);
+  });
+});

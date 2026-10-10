@@ -106,6 +106,28 @@ export function usageResetLabel(windows: readonly UsageWindow[] | undefined, now
   return `Resets ${quotaResetPhrase(new Date(next.resetsAt), now)}`;
 }
 
+/** When the window closest to running out comes back ("5h resets 5:34PM",
+ * the date too once it is not today): the composer says it beside the
+ * figure, so the reset is known before the window is spent. Advisory windows
+ * stop nothing, so they are not the one to watch. */
+export function usageNextReset(windows: readonly UsageWindow[] | undefined, now: number = Date.now()): string | undefined {
+  const next = (windows ?? [])
+    .filter((window) => !window.advisory && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
+    .sort((a, b) => b.usedPct - a.usedPct)[0];
+  return next ? `${usageWindowTitle(next.name)} resets ${quotaResetPhrase(new Date(next.resetsAt!), now)}` : undefined;
+}
+
+/** Every window with what is left and when it resets, one per line: the
+ * figure's tooltip. */
+export function usageWindowsDetail(windows: readonly UsageWindow[] | undefined, now: number = Date.now()): string | undefined {
+  const lines = (windows ?? []).map((window) => {
+    const left = `${usageWindowTitle(window.name)} ${Math.max(0, Math.min(100, Math.round(100 - window.usedPct)))}% left`;
+    const at = window.resetsAt ? Date.parse(window.resetsAt) : Number.NaN;
+    return Number.isFinite(at) && at > now ? `${left} · resets ${quotaResetPhrase(new Date(at), now)}` : left;
+  });
+  return lines.length ? lines.join('\n') : undefined;
+}
+
 /** When an account out of usage can take a turn again: the latest reset of
  * the windows it has spent (5h and weekly both spent is back at the weekly
  * one), or the reset a refusal named -- the vendor's, or learned -- never the

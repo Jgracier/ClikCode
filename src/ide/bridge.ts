@@ -30,7 +30,7 @@ import { consumeSessionTurn } from '../turn/checkpoint.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../harness/accounts/account-usage.js';
-import { usageResetLabel } from '../harness/accounts/usage-reading.js';
+import { usageNextReset, usageResetLabel, usageWindowsDetail } from '../harness/accounts/usage-reading.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { signInCancelledLine, withSignIn } from '../commands/account.js';
@@ -341,7 +341,12 @@ export class IdeBridge {
     // A turn parked for the reset says so instead of when it comes back.
     const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);
     const chatCost = conversationCost(state, session.id);
-    this.channel.send({ type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(reset ? { reset } : {}), ...(chatCost !== undefined ? { chatCost } : {}) });
+    const next = usageNextReset(reading?.windows);
+    const detail = usageWindowsDetail(reading?.windows);
+    this.channel.send({
+      type: 'usage', ...(reading?.label ? { label: reading.label } : {}), ...(reset ? { reset } : {}),
+      ...(next ? { next } : {}), ...(detail ? { detail } : {}), ...(chatCost !== undefined ? { chatCost } : {}),
+    });
   }
 
   /** The conversation's route is ready before the first message: MCP servers
