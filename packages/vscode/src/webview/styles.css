@@ -67,7 +67,7 @@ button.primary kbd, button.secondary kbd { border-color: currentColor; opacity: 
 /* The chat's name, plain: the conversations list is the history button's. */
 .title-text { min-width: 0; max-width: 70%; padding: 3px 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat { flex: 1; display: flex; flex-direction: column; min-height: 0; }
-.log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 14px var(--gap) 8px; scroll-behavior: auto; min-width: 0; }
+.log { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 14px var(--gap) 4px; scroll-behavior: auto; min-width: 0; }
 .starting { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; height: 100%; color: var(--muted); }
 .starting.inline { flex-direction: row; height: auto; padding: 40px 0; }
 .logo { color: var(--vscode-foreground); }
@@ -307,7 +307,7 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .approval-note-input:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
 
 /* ---- composer ---- */
-.composer-wrap { padding: 6px var(--gap) 8px; flex: none; display: flex; flex-direction: column; gap: 6px; container: composer-wrap / inline-size; }
+.composer-wrap { padding: 2px var(--gap) 8px; flex: none; display: flex; flex-direction: column; gap: 4px; container: composer-wrap / inline-size; }
 .composer-box {
   position: relative; border: 1px solid var(--vscode-input-border, var(--border)); border-radius: 10px; background: var(--input);
   display: flex; flex-direction: column; transition: border-color 0.12s;
@@ -342,12 +342,14 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
   .composer-footer #provider-button, .composer-footer #model-button { padding: 0 6px; min-width: 56px; }
 }
 .slash-glyph { font-family: var(--mono); font-weight: 600; font-size: 13px; }
-/* Usage as the terminal words it ("5h 96% left · Weekly 18% left") and when
-   the closest window resets, right-aligned directly above the composer as
-   the terminal puts it on the rule above its own. Red once spent. Narrow,
-   the reset goes before the figure does. */
+/* The rule above the composer: a hairline from the left edge, where the
+   working spinner sits, across to the usage ("5h 96% left · Weekly 18% left"
+   and when the closest window resets), as the terminal's rule above its own
+   composer. Red once spent. Narrow, the reset goes before the figure does. */
+.composer-rule { display: flex; align-items: center; gap: 8px; min-height: 14px; margin-bottom: -1px; }
+.rule-line { flex: 1 1 auto; min-width: 24px; height: 1px; background: color-mix(in srgb, var(--vscode-foreground) 14%, transparent); }
 .composer-usage {
-  align-self: flex-end; max-width: 100%; margin-bottom: -2px; padding: 0 6px; color: var(--muted); font-size: 0.85em;
+  flex: 0 1 auto; min-width: 0; color: var(--muted); font-size: 0.85em; line-height: 14px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
 }
 .composer-usage.spent { color: var(--vscode-errorForeground, var(--err)); }

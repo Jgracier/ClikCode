@@ -428,6 +428,19 @@ export function Composer(props: {
 
   return (
     <div class="composer-wrap">
+      {/* A thin rule between the conversation and the composer, from where
+          the working spinner sits to the account's usage and its reset at the
+          right, as the terminal draws the rule above its own composer. */}
+      <div class="composer-rule">
+        <span class="rule-line" aria-hidden="true" />
+        {model.accountUsage ? (
+          <span class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} id="composer-usage"
+            title={model.accountUsageDetail ? `This account's usage\n${model.accountUsageDetail}` : "This account's usage"}>
+            <span class="usage-figure">{model.accountUsage}</span>
+            {model.accountUsageNext ? <span class="usage-reset"> · {model.accountUsageNext}</span> : null}
+          </span>
+        ) : null}
+      </div>
       {model.signIn ? <SignInCard signIn={model.signIn} /> : null}
       {installing ? (
         <div class="install-card" role="status">
@@ -451,15 +464,6 @@ export function Composer(props: {
                 onClick={() => post({ type: 'unqueue', id: item.id })}><Icon name="close" /></button>
             </div>
           ))}
-        </div>
-      ) : null}
-    {/* The account's usage and when it resets, right-aligned directly above
-        the composer, where the terminal puts it on the rule above its own. */}
-      {model.accountUsage ? (
-        <div class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} id="composer-usage"
-          title={model.accountUsageDetail ? `This account's usage\n${model.accountUsageDetail}` : "This account's usage"}>
-          <span class="usage-figure">{model.accountUsage}</span>
-          {model.accountUsageNext ? <span class="usage-reset"> · {model.accountUsageNext}</span> : null}
         </div>
       ) : null}
       <div class={`composer-box${dropping ? ' dropping' : ''}`} data-running={model.running ? 'true' : undefined}
