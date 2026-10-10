@@ -385,8 +385,6 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private workFinished(key: string, target: Stream | undefined): boolean {
     target?.watchdog?.toolFinished(key);
     const removed = this.pendingWork.delete(key);
-    // The last open call settled: the next model call has not started.
-    if (removed && this.pendingWork.size === 0 && target && target === this.turn) this.turn?.input.onBetweenCalls?.();
     return removed;
   }
 

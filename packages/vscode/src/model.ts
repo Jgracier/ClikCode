@@ -299,8 +299,25 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
       ...(item.heldForTurn && item.heldForTurn === pending?.startedAt ? { held: true } : {}),
     })),
     // The worker's journal of the running turn has the prompt from here on.
-    pendingPrompt: pending?.prompt ?? (model.running ? model.pendingPrompt : undefined),
+    // A send is drawn before the bridge prepares a worker. A snapshot taken
+    // during that preparation has no pendingTurn yet; keep the local prompt
+    // until the worker acknowledges it or the send is rejected.
+    pendingPrompt: pending?.prompt ?? (model.running || model.ownTurn ? model.pendingPrompt : undefined),
   };
+}
+
+/** Show a submitted prompt while the bridge prepares the turn. The worker's
+ * turn-start and snapshot replace this temporary copy once they arrive. */
+export function submittingPrompt(model: ChatModel, prompt: string): ChatModel {
+  return { ...model, ownTurn: true, pendingPrompt: prompt };
+}
+
+/** Preparation can fail before a worker turn exists. Give the composer its
+ * text back without leaving a phantom running turn on screen. */
+export function rejectedPrompt(model: ChatModel): ChatModel {
+  return model.ownTurn && !model.running && model.pendingPrompt
+    ? { ...model, ownTurn: undefined, pendingPrompt: undefined }
+    : model;
 }
 
 /** Every snapshot carries the whole transcript as a new array; the one the

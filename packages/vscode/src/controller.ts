@@ -12,7 +12,7 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, conversationAttention, emptyModel, stoppingTurn, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, conversationAttention, emptyModel, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -473,6 +473,7 @@ export class ClikCodeController implements vscode.Disposable {
         void vscode.window.showTextDocument(vscode.Uri.file(event.path), { preview: false });
         return;
       case 'restore-draft':
+        this.setModel(rejectedPrompt(this.model));
         this.post({ type: 'setDraft', text: event.text });
         return;
       case 'usage':
@@ -670,9 +671,22 @@ export class ClikCodeController implements vscode.Disposable {
   // ---- what the user does --------------------------------------------------------
 
   async send(text: string, id = `${Date.now()}`): Promise<void> {
-    await this.ensureStarted();
+    // The worker may need to prepare a chat and spawn a vendor. Show the
+    // user's message before any of that I/O, just as the terminal does.
+    const prompt = text.trim();
+    const ordinary = Boolean(prompt && !/^[!/]/.test(prompt));
+    if (ordinary && !this.model.running) this.setModel(submittingPrompt(this.model, prompt));
+    try { await this.ensureStarted(); }
+    catch (error) {
+      this.setModel(rejectedPrompt(this.model));
+      if (ordinary) this.post({ type: 'setDraft', text });
+      this.note(errorText(error), 'error');
+      return;
+    }
     const bridge = this.bridge;
     if (!bridge?.running || !this.model.sessionId) {
+      this.setModel(rejectedPrompt(this.model));
+      if (ordinary) this.post({ type: 'setDraft', text });
       this.note('ClikCode is not connected.', 'error');
       return;
     }

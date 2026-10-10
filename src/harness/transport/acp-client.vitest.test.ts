@@ -129,7 +129,7 @@ describe('shared ACP adapter contract', () => {
       acp: { inheritCliOptions: false }, onPhase: (phase) => phases.push(phase),
     });
     expect(result.text).toBe('ready');
-    expect(phases).toContain('waiting for claude to start');
+    expect(phases).toContain('connecting to claude');
   });
 
   it('normalizes agent prose and tool lifecycle events', () => {
