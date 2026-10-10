@@ -8,6 +8,7 @@
  *   2. <dir>/.claude/skills     same walk
  *   3. <stateDir>/skills
  *   4. ~/.claude/skills
+ *   5. each enabled plugin's skills (plugins.ts)
  * A project skill encodes facts about this repository that a personal skill
  * cannot know, so project beats user -- the same "more specific wins" rule
  * as the AGENTS.md chain. Within one scope ClikCode's own directory beats
@@ -16,6 +17,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import { enabledPluginSkillDirs } from './plugins.js';
 
 export const SKILL_FILE = 'SKILL.md';
 export const SKILL_TOOL = 'skill';
@@ -30,7 +32,7 @@ const FRONTMATTER_READ_BYTES = 16 * 1024;
 const MAX_NAME_CHARS = 64;
 const CACHE_ENTRIES = 16;
 
-export type SkillSource = 'project' | 'project-claude' | 'user' | 'user-claude';
+export type SkillSource = 'project' | 'project-claude' | 'user' | 'user-claude' | 'plugin';
 
 export interface Skill {
   name: string;
@@ -39,6 +41,8 @@ export interface Skill {
   dir: string;
   file: string;
   source: SkillSource;
+  /** A plugin's skill: its root, for `${CLAUDE_PLUGIN_ROOT}` in the body. */
+  pluginRoot?: string;
 }
 
 export interface SkippedSkill { file: string; reason: string }
@@ -130,7 +134,7 @@ async function findRepoRoot(cwd: string): Promise<string | undefined> {
   }
 }
 
-async function scanLocation(dir: string, source: SkillSource, skipped: SkippedSkill[]): Promise<Skill[]> {
+async function scanLocation(dir: string, source: SkillSource, skipped: SkippedSkill[], pluginRoot?: string): Promise<Skill[]> {
   let entries;
   try { entries = await fs.readdir(dir, { withFileTypes: true }); } catch {
     // fail-open-ok: a missing skills directory is the common case, not an error
@@ -153,7 +157,7 @@ async function scanLocation(dir: string, source: SkillSource, skipped: SkippedSk
     if ('error' in parsed) { skipped.push({ file, reason: parsed.error }); return undefined; }
     const checked = validate(parsed.fields, dirName);
     if ('reason' in checked) { skipped.push({ file, reason: checked.reason }); return undefined; }
-    return { ...checked, dir: skillDir, file, source };
+    return { ...checked, dir: skillDir, file, source, ...(pluginRoot ? { pluginRoot } : {}) };
   }));
   return found.filter((skill): skill is Skill => !!skill);
 }
@@ -166,15 +170,16 @@ async function scanAll(roots: SkillRoots): Promise<SkillCatalog> {
     projectDirs.push(dir);
     if (!repoRoot || dir === repoRoot || path.dirname(dir) === dir) break;
   }
-  const locations: { dir: string; source: SkillSource }[] = [
+  const locations: { dir: string; source: SkillSource; pluginRoot?: string }[] = [
     ...projectDirs.map((dir) => ({ dir: path.join(dir, '.clikcode', 'skills'), source: 'project' as const })),
     ...projectDirs.map((dir) => ({ dir: path.join(dir, '.claude', 'skills'), source: 'project-claude' as const })),
     { dir: path.join(roots.stateDir, 'skills'), source: 'user' },
     { dir: path.join(roots.homeDir, '.claude', 'skills'), source: 'user-claude' },
+    ...enabledPluginSkillDirs({ stateDir: roots.stateDir, home: roots.homeDir }).map((item) => ({ dir: item.dir, source: 'plugin' as const, pluginRoot: item.root })),
   ];
   const skipped: SkippedSkill[] = [];
   // Scanned in parallel, merged in precedence order.
-  const scanned = await Promise.all(locations.map((location) => scanLocation(location.dir, location.source, skipped)));
+  const scanned = await Promise.all(locations.map((location) => scanLocation(location.dir, location.source, skipped, location.pluginRoot)));
   const seenDirs = new Set<string>();
   const byName = new Map<string, Skill>();
   const shadowed: Skill[] = [];

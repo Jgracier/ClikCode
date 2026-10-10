@@ -21,6 +21,7 @@ import type { ToolDefinition } from '../tool-contract.js';
 import { McpClient, type McpCallResult, type McpToolInfo } from './client.js';
 import { loadMcpServers, type McpServerSpec } from './config.js';
 import { importNotice, importVendorMcpServers } from './import.js';
+import { enabledPluginMcpServers } from '../plugins.js';
 import { mcpResourceTools, type McpResourceSource } from './resources.js';
 import { mcpToolDefinition, mcpToolName } from './tools.js';
 
@@ -241,7 +242,13 @@ let builtinServers: readonly McpServerSpec[] = [];
 async function loadAllServers(stateDir: string): Promise<{ servers: McpServerSpec[]; problem?: string }> {
   const loaded = await loadMcpServers(stateDir);
   const names = new Set(loaded.servers.map((server) => server.name));
-  return { ...loaded, servers: [...loaded.servers, ...builtinServers.filter((server) => !names.has(server.name))] };
+  const builtins = builtinServers.filter((server) => !names.has(server.name));
+  builtins.forEach((server) => names.add(server.name));
+  // The enabled plugins' servers (plugins.ts), named plugin:<plugin>:<server>
+  // as Claude Code names them. Only this agent's: a vendor with plugins of
+  // its own loads them itself, so they are not fanned out by provisioning.
+  const plugins = enabledPluginMcpServers({ stateDir }).filter((server) => !names.has(server.name));
+  return { ...loaded, servers: [...loaded.servers, ...builtins, ...plugins] };
 }
 
 /** The process-wide manager for one state directory: what a turn builder

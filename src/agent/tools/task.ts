@@ -7,8 +7,9 @@
  * unless it is isolated in its own git worktree. */
 import { defineTool } from '../tool-contract.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
+import { resolveAgentType } from '../plugins.js';
 
-interface TaskArgs { prompt: string; description?: string; model?: string }
+interface TaskArgs { prompt: string; description?: string; model?: string; subagent_type?: string }
 
 export const TASK_TOOL_NAME = 'task';
 
@@ -26,6 +27,7 @@ export const taskTool = defineTool<TaskArgs>({
     properties: {
       prompt: { type: 'string', description: 'The complete task for the sub-agent.' },
       description: { type: 'string', description: 'A 3-6 word label shown to the user, e.g. "Find the retry logic".' },
+      subagent_type: { type: 'string', description: 'An agent type listed under Agent types in the system prompt, when one fits. Omit for the general research sub-agent.' },
       model: { type: 'string', description: 'One model id from the swarm list, copied exactly, when this conversation has a swarm. Do not invent a model. Match the index to the task and prefer the cheaper price when a lower index is enough.' },
     },
   },
@@ -33,8 +35,10 @@ export const taskTool = defineTool<TaskArgs>({
   async run(args, ctx) {
     // Absent inside a sub-agent: one level of delegation, never a tree.
     if (!ctx.runSubagent) return { output: 'A sub-agent cannot start sub-agents. Do this research yourself with the tools you have.', isError: true };
+    const type = resolveAgentType({ stateDir: ctx.stateDir, home: ctx.homeDir }, args.subagent_type);
+    if ('error' in type) return { output: type.error, isError: true };
     return ctx.runSubagent({
-      prompt: args.prompt,
+      prompt: args.prompt, ...type,
       ...(args.description?.trim() ? { description: args.description.trim() } : {}),
       ...(args.model?.trim() ? { model: args.model.trim() } : {}),
     });

@@ -244,6 +244,9 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     const projectDir = projectParts ? join(workspace, ...projectParts) : userDir;
     const grokSeesClaudeSkills = input.harness.command === 'grok' && await grokImports(home, 'skills');
     for (const skill of catalog.skills) {
+      // A plugin's skill belongs to the plugin, which ClikCode's own agent
+      // loads; a vendor with plugins of its own installs them there.
+      if (skill.source === 'plugin') continue;
       // Those two sources are the directories Grok scans on its own.
       if (grokSeesClaudeSkills && (skill.source === 'user-claude' || skill.source === 'project-claude')) continue;
       const directory = skill.source === 'project' || skill.source === 'project-claude' ? projectDir : userDir;

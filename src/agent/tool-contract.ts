@@ -44,6 +44,9 @@ export interface SubagentCall {
   description?: string;
   model?: string;
   kind?: 'research' | 'work';
+  /** A plugin's agent type (`subagent_type`): its prompt joins the
+   * sub-agent's, and its tool list narrows the kind's tools. */
+  agentType?: { name: string; prompt: string; tools?: readonly string[] };
   /** A coding sub-agent in its own git worktree, on its own branch. */
   isolation?: 'worktree';
   /** Started in the background: outlives the call, not the turn. */

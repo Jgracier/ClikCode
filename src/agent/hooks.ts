@@ -47,9 +47,11 @@ import { killProcessTreePortable } from '../harness/transport/spawn.js';
 import type { HookInfo, ModelToolCall } from './model-client.js';
 import { scrubEnvironment } from './security.js';
 import { isWorkspaceTrusted, trustWorkspace } from './workspace-trust.js';
+import { enabledPluginHooks } from './plugins.js';
 import type { ToolRunResult } from './tool-contract.js';
 
-interface HookCommand { type?: string; command?: string; timeout?: number }
+/** `env`: what a plugin's hooks are given (CLAUDE_PLUGIN_ROOT, CLAUDE_PLUGIN_DATA); see plugins.ts. */
+interface HookCommand { type?: string; command?: string; timeout?: number; env?: Record<string, string> }
 interface HookGroup { matcher?: string; hooks?: HookCommand[] }
 type HookEvent = 'PreToolUse' | 'PostToolUse' | 'UserPromptSubmit' | 'SessionStart' | 'Stop' | 'SubagentStop' | 'PreCompact' | 'Notification';
 const HOOK_EVENTS: readonly HookEvent[] = ['PreToolUse', 'PostToolUse', 'UserPromptSubmit', 'SessionStart', 'Stop', 'SubagentStop', 'PreCompact', 'Notification'];
@@ -175,7 +177,13 @@ export async function hooksForWorkspace(options: {
     }
     if (!trusted) options.notice(`Not running ${commands.length} hook${commands.length === 1 ? '' : 's'} from this workspace's .claude settings: the workspace is not trusted${options.ask ? '' : ', and no one is here to approve it. Trust it from an interactive session'}.`);
   }
-  return readClaudeHooks(options.cwd, home, { includeProject: trusted });
+  const config = await readClaudeHooks(options.cwd, home, { includeProject: trusted });
+  // The enabled plugins' hooks run after the settings files', as in Claude
+  // Code. The user installed and enabled each plugin, so no trust question.
+  for (const [event, groups] of Object.entries(enabledPluginHooks({ stateDir: options.stateDir, home }))) {
+    if (HOOK_EVENTS.includes(event as HookEvent) && groups?.length) config[event as HookEvent] = [...(config[event as HookEvent] ?? []), ...groups];
+  }
+  return config;
 }
 
 interface HookRun { code: number | null; stdout: string; stderr: string }
@@ -185,11 +193,11 @@ const HOOK_KILL_GRACE_MS = 2000;
 /** Runs one hook in its own process group, with the same scrubbed
  * environment the bash tool gives a command, so a timeout or a cancelled turn
  * stops everything it started -- not just the shell. */
-function runHookCommand(command: string, payload: unknown, cwd: string, timeoutSeconds: number, signal?: AbortSignal): Promise<HookRun> {
+function runHookCommand(command: string, payload: unknown, cwd: string, timeoutSeconds: number, signal?: AbortSignal, env: Record<string, string> = {}): Promise<HookRun> {
   return new Promise((resolve) => {
     if (signal?.aborted) { resolve({ code: null, stdout: '', stderr: 'turn cancelled before the hook ran' }); return; }
     const detached = process.platform !== 'win32';
-    const child = spawn('sh', ['-c', command], { cwd, env: { ...scrubEnvironment(process.env), CLAUDE_PROJECT_DIR: cwd }, stdio: ['pipe', 'pipe', 'pipe'], detached });
+    const child = spawn('sh', ['-c', command], { cwd, env: { ...scrubEnvironment(process.env), ...env, CLAUDE_PROJECT_DIR: cwd }, stdio: ['pipe', 'pipe', 'pipe'], detached });
     let stdout = '';
     let stderr = '';
     const signalGroup = (name: NodeJS.Signals): void => {
@@ -276,7 +284,7 @@ export function toolHooksFrom(config: HookConfig, onError?: (message: string) =>
       .filter((hook) => (hook.type ?? 'command') === 'command' && typeof hook.command === 'string' && hook.command.trim());
   const run = async (event: HookEvent, hooks: HookCommand[], payload: Record<string, unknown>, cwd: string, signal?: AbortSignal) => {
     for (const hook of hooks) {
-      const result = await runHookCommand(hook.command!, payload, cwd, Math.max(1, hook.timeout ?? 60), signal);
+      const result = await runHookCommand(hook.command!, payload, cwd, Math.max(1, hook.timeout ?? 60), signal, hook.env);
       const reason = blockReason(result, event);
       if (reason) return reason;
       if (result.code !== 0) onError?.(`${event} hook \`${hook.command}\` failed (exit ${result.code ?? 'none'}): ${result.stderr.trim().slice(0, 300)}`);

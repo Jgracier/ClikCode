@@ -6,8 +6,9 @@
 import { defineTool } from '../tool-contract.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 import { canCreateAgentWorktree } from '../worktree.js';
+import { resolveAgentType } from '../plugins.js';
 
-interface AgentArgs { prompt: string; description?: string; isolation?: 'worktree'; background?: boolean }
+interface AgentArgs { prompt: string; description?: string; isolation?: 'worktree'; background?: boolean; subagent_type?: string }
 
 export const agentTool = defineTool<AgentArgs>({
   name: 'agent',
@@ -24,6 +25,7 @@ export const agentTool = defineTool<AgentArgs>({
     properties: {
       prompt: { type: 'string', description: 'Complete coding task for the subagent.' },
       description: { type: 'string', description: 'Short label shown to the user.' },
+      subagent_type: { type: 'string', description: 'An agent type listed under Agent types in the system prompt, when one fits. Omit for the general coding subagent.' },
       isolation: { type: 'string', enum: ['worktree'], description: 'Run in its own git worktree and branch, so it can run in parallel with other agents.' },
       background: { type: 'boolean', description: 'Return an id at once and run in the background, in its own worktree.' },
     },
@@ -33,8 +35,10 @@ export const agentTool = defineTool<AgentArgs>({
   async run(args, ctx) {
     if (!ctx.runSubagent) return { output: 'A subagent cannot start another subagent.', isError: true };
     const description = args.description?.trim();
+    const type = resolveAgentType({ stateDir: ctx.stateDir, home: ctx.homeDir }, args.subagent_type);
+    if ('error' in type) return { output: type.error, isError: true };
     const request = {
-      prompt: args.prompt, kind: 'work' as const,
+      prompt: args.prompt, kind: 'work' as const, ...type,
       ...(description ? { description } : {}),
       ...(args.isolation === 'worktree' || args.background ? { isolation: 'worktree' as const } : {}),
     };

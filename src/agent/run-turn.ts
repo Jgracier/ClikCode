@@ -11,6 +11,7 @@ import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { formatShellNotifications, sessionState, takeShellNotifications } from './session-state.js';
 import { discoverSkills, SKILL_TOOL, skillsPromptSection } from './skills.js';
+import { agentTypesPromptSection, enabledPluginAgents } from './plugins.js';
 import { defaultTools, mergeTools, toolSpecs } from './tools/registry.js';
 import { exposeTools } from './mcp/deferred.js';
 import { gateNotebookTool, workspaceHasNotebooks } from './tools/notebook-gate.js';
@@ -178,7 +179,11 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       : (tools.some((tool) => tool.name === SKILL_TOOL) ? discoverSkills({ cwd, stateDir: input.stateDir, homeDir, turnId }) : Promise.resolve({ skills: [] }))
         .then((catalog) => buildSystemPrompt({
           cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir,
-          skillsSection: skillsPromptSection(catalog.skills, profile), toolUsageGuidance: profile.toolUsageGuidance,
+          skillsSection: [
+            skillsPromptSection(catalog.skills, profile),
+            // Plugin agent types, when a tool can start one.
+            tools.some((tool) => tool.name === TASK_TOOL_NAME || tool.name === 'agent') ? agentTypesPromptSection(enabledPluginAgents({ stateDir: input.stateDir, home: homeDir }), profile.skillDescriptionChars) : '',
+          ].filter(Boolean).join('\n\n'), toolUsageGuidance: profile.toolUsageGuidance,
           ...(input.agentInstructions ? { agentInstructions: input.agentInstructions } : {}),
         })),
     workspaceHasNotebooks([cwd, ...addDirs]),
@@ -298,7 +303,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // and returns a card. Null means this host's own sub-agent still does it.
   const runSubagent = innerSubagent && input.swarmDelegate
     ? async (request: SubagentCall & { callId: string; signal?: AbortSignal }): Promise<ToolRunResult> => {
-      const delegated = request.kind === 'work' ? null : await input.swarmDelegate?.(request);
+      // A plugin agent's prompt and tools are this host's to apply.
+      const delegated = request.kind === 'work' || request.agentType ? null : await input.swarmDelegate?.(request);
       if (delegated) return delegated;
       return innerSubagent(request);
     }
@@ -645,7 +651,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         const stopHook = sub
           ? input.hooks?.subagentStop && (() => input.hooks!.subagentStop!({
             ...turnHookInfo, sessionId: sub.parentSessionId ?? input.sessionId, stopHookActive: stopContinues > 0,
-            agentId: input.sessionId, agentType: sub.kind ?? 'research', agentTranscriptPath: sub.transcriptFile,
+            agentId: input.sessionId, agentType: sub.agentType ?? sub.kind ?? 'research', agentTranscriptPath: sub.transcriptFile,
           }))
           : input.hooks?.stop && (() => input.hooks!.stop!({ ...turnHookInfo, stopHookActive: stopContinues > 0 }));
         if (stopHook && stopContinues < MAX_STOP_HOOK_CONTINUES) {

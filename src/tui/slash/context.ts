@@ -10,6 +10,8 @@ import { allLocalHarnesses, harnessCanRunTurns } from '../../runtime/lazy-bridge
 import { compareProviders } from '../../session/options.js';
 import { type SlashExtras, type SlashRouteContext } from './registry.js';
 import { discoverCustomCommands, type CustomCommand } from '../../session/custom-commands.js';
+import { enabledPluginCommandDirs } from '../../agent/plugins.js';
+import { stateDirectory } from '../../session/store/paths.js';
 
 /** Shared slash-command grammar for a future TTY client and the headless CLI. */
 export function sessionHarness(session: HarnessSession | undefined): AiLocalHarnessDefinition | undefined {
@@ -27,7 +29,9 @@ export function customCommandsFor(session: HarnessSession, harness: AiLocalHarne
   // ClikCode's own agent (Gateway, Local) reads Claude Code's CLAUDE.md and
   // .claude/skills, so it reads Claude's command directories too, expanded here.
   const source = isClikCodeAgent(session) ? localHarnessForCommand('claude') : harness;
-  return discoverCustomCommands(source, { workspace: session.workspace ?? process.cwd(), ...CUSTOM_COMMAND_ROOTS });
+  // Plugins load into ClikCode's own agent only; a vendor runs its own.
+  const plugins = isClikCodeAgent(session) ? enabledPluginCommandDirs({ stateDir: stateDirectory(), ...(CUSTOM_COMMAND_ROOTS.home ? { home: CUSTOM_COMMAND_ROOTS.home } : {}) }) : [];
+  return discoverCustomCommands(source, { workspace: session.workspace ?? process.cwd(), ...CUSTOM_COMMAND_ROOTS, ...(plugins.length ? { plugins } : {}) });
 }
 
 /** Test seam: redirect `~` and ClikCode's own command directories. */

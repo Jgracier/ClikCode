@@ -11,6 +11,7 @@ import { disposeSessionState } from './session-state.js';
 import { toolOutputDir } from './security.js';
 import type { SubagentCall, ToolDefinition, ToolRunResult } from './tool-contract.js';
 import { createAgentWorktree, finishAgentWorktree, type AgentWorktree } from './worktree.js';
+import { claudeToolName } from './hooks.js';
 
 /** By name, not by class: `read` also covers bash_output and task itself,
  * and an MCP tool's class says nothing about what the server does. */
@@ -110,9 +111,12 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
 
   return async (request) => {
     const work = request.kind === 'work';
-    const tools = options.tools.filter((tool) => work
+    const allowed = request.agentType?.tools ? new Set(request.agentType.tools) : undefined;
+    const tools = options.tools.filter((tool) => (work
       ? !WORK_BLOCKED_TOOL_NAMES.has(tool.name)
-      : SUBAGENT_TOOL_NAMES.has(tool.name));
+      : SUBAGENT_TOOL_NAMES.has(tool.name))
+      // A plugin agent's `tools` are Claude Code's names; ours match either way.
+      && (!allowed || allowed.has(tool.name) || allowed.has(claudeToolName(tool.name))));
     // Unique per run: session state (read tracking) is keyed by it, and two
     // parallel sub-agents must not share it.
     const sessionId = `${parent.sessionId}.task.${randomUUID()}`;
@@ -142,8 +146,9 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         stateDir: parent.stateDir,
         tools, maxSteps: work ? WORK_SUBAGENT_MAX_STEPS : maxSteps,
         subagent: {
-          system: work ? `${options.workSystem}\n\n# Delegated task\nComplete the task you were given and report the changes and verification to the parent agent. Your tool calls are visible in the chat. You cannot start another agent or ask the user a question.${worktree ? worktreeNote(worktree, parent.cwd) : ''}` : subagentSystemPrompt(parent),
+          system: `${work ? `${options.workSystem}\n\n# Delegated task\nComplete the task you were given and report the changes and verification to the parent agent. Your tool calls are visible in the chat. You cannot start another agent or ask the user a question.${worktree ? worktreeNote(worktree, parent.cwd) : ''}` : subagentSystemPrompt(parent)}${request.agentType ? `\n\n# Agent: ${request.agentType.name}\n${request.agentType.prompt}` : ''}`,
           transcriptFile, parentSessionId: parent.sessionId, kind: work ? 'work' : 'research',
+          ...(request.agentType ? { agentType: request.agentType.name } : {}),
           // Isolated work has its branch as its record: undoing the parent's
           // turn must not reach into another checkout.
           ...(work && !worktree ? { checkpoint: options.checkpoint } : {}),
