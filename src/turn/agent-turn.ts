@@ -18,6 +18,10 @@ import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { recordInvocation, recordUnfinishedInvocation, showStopReason } from './turn-output.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
+import chalk from 'chalk';
+import { agentTurnFailureKind } from './failover.js';
+import { usageExhaustedMessage } from './usage-exhausted.js';
+import { signInGatewayForTurn } from '../gateway/sign-in-for-turn.js';
 import { seedAgentConversation } from './agent-history.js';
 import { ConversationStore } from '../agent/conversation.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -122,46 +126,61 @@ export async function runAgentTurn(input: {
     session.agentThreadTurns = held.total;
     memoryBytes = await memory.size();
     seededOk = true;
-    const harnessTurn = await runGatewayHarnessSessionTurn({
-      session, prompt: turnText, modelClient, modelClientForStep,
-      // ClikDeploy's own account tools come with the Gateway.
-      mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],
-      ...(agent?.system ? { agentInstructions: agent.system } : {}),
-      ...(prompter ? { prompter } : {}),
-      ...(titleStream ? { responseFilter: (delta: string, mode: 'append' | 'replace') => titleStream.push(delta, mode) } : {}),
-      // Each model step may open with the title again (the request rides in
-      // the conversation every step re-sends): the filter watches every step's
-      // start, and hands on whatever the previous step still held.
-      ...(titleStream ? {
-        onStepStart: () => {
-          releaseHeld();
-          titleStream.nextStep();
+    // The Gateway refused this machine's sign-in before anything ran: sign in
+    // (sign-in-for-turn.ts) and ask again, once, as a vendor turn does.
+    let signInTried = false;
+    let harnessTurn: Awaited<ReturnType<typeof runGatewayHarnessSessionTurn>>;
+    for (;;) {
+      harnessTurn = await runGatewayHarnessSessionTurn({
+        session, prompt: turnText, modelClient, modelClientForStep,
+        // ClikDeploy's own account tools come with the Gateway.
+        mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],
+        ...(agent?.system ? { agentInstructions: agent.system } : {}),
+        ...(prompter ? { prompter } : {}),
+        ...(titleStream ? { responseFilter: (delta: string, mode: 'append' | 'replace') => titleStream.push(delta, mode) } : {}),
+        // Each model step may open with the title again (the request rides in
+        // the conversation every step re-sends): the filter watches every step's
+        // start, and hands on whatever the previous step still held.
+        ...(titleStream ? {
+          onStepStart: () => {
+            releaseHeld();
+            titleStream.nextStep();
+          },
+        } : {}),
+        ...(signal ? { signal } : {}),
+        ...(prepared.images.length ? { images: prepared.images } : {}),
+        // What streams is saved as it streams, as on every other route: a
+        // worker that dies mid-turn leaves the answer so far, not nothing.
+        onResponseDelta: (delta, mode) => checkpoint.response(delta, mode ?? 'append'),
+        onActivity: (event) => checkpoint.activity(event),
+        onUsage: (usage) => {
+          turnUsage = { ...turnUsage, ...usage };
+          session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
         },
-      } : {}),
-      ...(signal ? { signal } : {}),
-      ...(prepared.images.length ? { images: prepared.images } : {}),
-      // What streams is saved as it streams, as on every other route: a
-      // worker that dies mid-turn leaves the answer so far, not nothing.
-      onResponseDelta: (delta, mode) => checkpoint.response(delta, mode ?? 'append'),
-      onActivity: (event) => checkpoint.activity(event),
-      onUsage: (usage) => {
-        turnUsage = { ...turnUsage, ...usage };
-        session.lastUsage = { ...turnUsage, at: new Date().toISOString() };
-      },
-      // The model that answered, where a vendor's own report of its model
-      // goes (vendor-cli-attempt.ts): the status line and the editor name it,
-      // and for Automatic it is the only place that says which model it was.
-      onServedModel: (served) => {
-        session.reported = { ...session.reported, at: new Date().toISOString(), model: served };
-        checkpoint.touch();
-        prompter?.render(session);
-      },
-      // The loop takes steering before each model step (run-turn.ts).
-      onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
-        await handler(steerText);
-        await checkpoint.steer(submission);
-      } : undefined),
-    });
+        // The model that answered, where a vendor's own report of its model
+        // goes (vendor-cli-attempt.ts): the status line and the editor name it,
+        // and for Automatic it is the only place that says which model it was.
+        onServedModel: (served) => {
+          session.reported = { ...session.reported, at: new Date().toISOString(), model: served };
+          checkpoint.touch();
+          prompter?.render(session);
+        },
+        // The loop takes steering before each model step (run-turn.ts).
+        onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
+          await handler(steerText);
+          await checkpoint.steer(submission);
+        } : undefined),
+      });
+      const nothingRan = harnessTurn.steps === 0 && !session.pendingTurn?.response?.trim();
+      if (!harnessTurn.isError || !gatewayService || signInTried || !nothingRan
+        || agentTurnFailureKind(harnessTurn) !== 'authentication-required') break;
+      signInTried = true;
+      if (!await signInGatewayForTurn(config, prompter, signal)) break;
+      // What the refused attempt wrote to the agent's memory (the request) is
+      // taken back: the retry writes it again.
+      await memory.truncate(memoryBytes);
+      modelClient = await modelClientForSession(modelSession, config);
+    }
     if (harnessTurn.stopReason === 'account-switch') {
       recordUnfinished('stopped');
       releaseHeld();
@@ -175,7 +194,17 @@ export async function runAgentTurn(input: {
       await completeTurnCheckpoint(session, checkpoint, named, { title: titleStream?.title ?? extracted.title, asked: false });
       return 'continue';
     }
-    if (harnessTurn.isError) throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
+    if (harnessTurn.isError) {
+      // Out of Gateway usage is the outcome every provider's running out is
+      // (account-routing.ts terminalFailoverError): "All accounts exhausted",
+      // which offers Resume in on another provider. The Gateway's own words
+      // (what it ran out of, where to add credit) stay on the turn.
+      if (gatewayService && agentTurnFailureKind(harnessTurn) === 'quota-exhausted') {
+        prompter?.activity(chalk.yellow(harnessTurn.text));
+        throw new Error(usageExhaustedMessage());
+      }
+      throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
+    }
     // A reply shorter than the title filter's decision window is still held
     // back when the stream ends; it is owed to the screen.
     releaseHeld();
