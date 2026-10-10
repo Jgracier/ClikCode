@@ -44,10 +44,11 @@ export async function matchingVendorAccount(
  * created: a label is unique among one provider's accounts, ignoring case
  * (the same person's email on two harnesses is two real accounts).
  * `preferred` is the email the sign-in revealed or the name the user gave; a
- * taken one gets " (2)", " (3)", ... Without one, the harness's numbered
- * placeholder: "Codex 2" after removing "Codex 1" of two used to collide with
- * the surviving "Codex 2" (the number was just count + 1), so it is the first
- * number nobody holds. */
+ * taken one gets " (2)", " (3)", ... Without one (or with only the
+ * harness's own name), the harness's name, then numbered from 2 -- "Grok
+ * Build", "Grok Build 2", never "Grok Build 1" beside "Grok Build" -- with
+ * the first number nobody holds: "Codex 2" after removing one of two used to
+ * collide with the surviving "Codex 2" (the number was just count + 1). */
 export function nameAccount(
   accounts: readonly Pick<AiHarnessAccount, 'id' | 'provider' | 'label'>[],
   harness: Pick<AiLocalHarnessDefinition, 'provider' | 'displayName'>,
@@ -55,9 +56,11 @@ export function nameAccount(
 ): string {
   const used = (label: string): boolean => accounts.some((account) => account.id !== exceptId
     && account.provider === harness.provider && account.label.toLowerCase() === label.toLowerCase());
-  if (preferred && !used(preferred)) return preferred;
-  for (let number = preferred ? 2 : 1; ; number += 1) {
-    const candidate = preferred ? `${preferred} (${number})` : `${harness.displayName} ${number}`;
+  const named = preferred && preferred.toLowerCase() !== harness.displayName.toLowerCase() ? preferred : undefined;
+  const first = named ?? harness.displayName;
+  if (!used(first)) return first;
+  for (let number = 2; ; number += 1) {
+    const candidate = named ? `${named} (${number})` : `${harness.displayName} ${number}`;
     if (!used(candidate)) return candidate;
   }
 }

@@ -1183,6 +1183,16 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'list': ['not signed in']}, 'snap_lacks': {'list': ['reauth', 'del remove']},
         'never': ['reauth'],
     },
+    # A second account with no email to go by is "Grok Build 2", not "Grok
+    # Build 1" beside "Grok Build".
+    'second-account-numbered-2': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', 'hello'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
+                  ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 20), ('settle', 2),
+                  ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2), ('snap', 'list')],
+        'watch': [], 'snap_contains': {'list': ['Grok Build 2']}, 'never': ['Grok Build 1'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],
