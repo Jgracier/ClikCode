@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { installFailureTail, startSpinner } from './install-progress.js';
+import { waitingSpinnerGlyph } from './protocol/activity-view.js';
+import { SPIN_MS } from './protocol/timings.js';
 
 describe('installFailureTail', () => {
   it('keeps the error and drops npm\'s funding and audit noise', () => {
@@ -29,6 +31,28 @@ describe('startSpinner', () => {
     const spinner = startSpinner('Installing X…', (text) => written.push(text), false);
     spinner.stop('Installed X.');
     expect(written).toEqual(['Installing X…\n', 'Installed X.\n']);
+  });
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('steps as the waiting band\'s spinner does: its glyphs, at SPIN_MS', () => {
+    vi.useFakeTimers();
+    const written: string[] = [];
+    const spinner = startSpinner('Installing X…', (text) => written.push(text), true, false);
+    vi.advanceTimersByTime(SPIN_MS - 1);
+    expect(written).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    spinner.stop();
+    expect(written.slice(0, 2).map((text) => text.includes(waitingSpinnerGlyph(written.indexOf(text))))).toEqual([true, true]);
+  });
+
+  it('holds still under reduced motion', () => {
+    vi.useFakeTimers();
+    const written: string[] = [];
+    const spinner = startSpinner('Installing X…', (text) => written.push(text), true, true);
+    vi.advanceTimersByTime(SPIN_MS * 10);
+    spinner.stop();
+    expect(written).toHaveLength(2);
   });
 
   it('clears its line on a terminal so nothing is left behind', () => {
