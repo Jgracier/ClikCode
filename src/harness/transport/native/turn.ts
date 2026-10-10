@@ -152,7 +152,6 @@ interface NativeHarnessTurnOptions {
   input?: NativeTurnInput;
   signal?: AbortSignal;
   onStdoutLine?: (line: string) => void;
-  onStderrLine?: (line: string) => void;
   /** Milliseconds of complete silence -- no stdout, no stderr, no exit --
    * after which the harness is treated as hung. Zero or negative disables it.
    * Default: configuredIdleMs(). */
@@ -161,9 +160,6 @@ interface NativeHarnessTurnOptions {
   idleController?: NativeTurnIdleController;
   /** See createTurnRelease. */
   release?: NativeTurnRelease;
-  /** Newest bytes (UTF-16 units) of each stream retained when that stream has
-   * a line callback. Defaults to TURN_OUTPUT_TAIL_LIMIT. */
-  retainTailLimit?: number;
 }
 
 /** Hard cap on retained output when nothing streams it away. */
@@ -234,13 +230,12 @@ export async function captureNativeHarnessTurn(
     let interrupted = false;
     let settled = false;
     const stdoutLines = new LineBuffer();
-    const stderrLines = new LineBuffer();
     const stopTimers: NodeJS.Timeout[] = [];
     let closeGraceTimer: NodeJS.Timeout | undefined;
     let timedOut = false;
     let timedOutAfterMs = 0;
     const controller = options.idleController as BoundIdleController | undefined;
-    const tailLimit = Math.max(1024, options.retainTailLimit ?? TURN_OUTPUT_TAIL_LIMIT);
+    const tailLimit = TURN_OUTPUT_TAIL_LIMIT;
     const forward = (signal: NodeJS.Signals): void => killProcessTreePortable(child, signal, true);
     const later = (delayMs: number, signal: NodeJS.Signals): void => {
       const timer = setTimeout(() => forward(signal), delayMs);
@@ -264,7 +259,7 @@ export async function captureNativeHarnessTurn(
     child.stderr!.setEncoding('utf8');
     const collect = (target: 'stdout' | 'stderr', chunk: string): void => {
       watchdog.activity();
-      const callback = target === 'stdout' ? options.onStdoutLine : options.onStderrLine;
+      const callback = target === 'stdout' ? options.onStdoutLine : undefined;
       if (target === 'stdout') stdout += chunk;
       else stderr += chunk;
       // A consumed stream needs no full copy: every line already reached the
@@ -278,9 +273,8 @@ export async function captureNativeHarnessTurn(
           else stderr = retainTail(held, tailLimit);
         }
       }
-      const lines = (target === 'stdout' ? stdoutLines : stderrLines).push(chunk);
       if (callback) {
-        for (const line of lines) {
+        for (const line of stdoutLines.push(chunk)) {
           if (!line.trim()) continue;
           // A throwing consumer must not take the whole turn down with it (an
           // exception here would surface as an uncaught stream error).
@@ -340,9 +334,7 @@ export async function captureNativeHarnessTurn(
       settled = true;
       cleanup();
       const stdoutTail = stdoutLines.flush();
-      const stderrTail = stderrLines.flush();
       try { if (stdoutTail.trim()) options.onStdoutLine?.(stdoutTail); } catch { /* fail-open-ok: presentation-only consumer */ }
-      try { if (stderrTail.trim()) options.onStderrLine?.(stderrTail); } catch { /* fail-open-ok: presentation-only consumer */ }
       const exit = { ...(code !== null ? { exitCode: code } : {}), ...(signal ? { signalName: signal } : {}) };
       if (onReleasedExit) {
         try { onReleasedExit({ ...exit, timedOut }); } catch { /* fail-open-ok: the owner's bookkeeping */ }

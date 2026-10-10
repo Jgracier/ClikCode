@@ -88,7 +88,7 @@ export async function sessionHeldElsewhere(modelId: string, sessionId: string): 
 }
 
 /** Whether any live process holds a lease on a model. A server nobody
- * holds is only outliving its last lease (leaseGraceMs) and will stop. */
+ * holds is only outliving its last lease (LEASE_GRACE_MS) and will stop. */
 export async function heldByLiveProcess(modelId: string): Promise<boolean> {
   return leaseHeld(leasesDir(modelId));
 }
@@ -220,10 +220,6 @@ export interface SupervisorConfig {
   /** Stop after this long with no request; 0 keeps it while leased. */
   idleMs: number;
   pollMs: number;
-  /** How long the server outlives its last lease (default 10 s): a ClikCode
-   * run that starts right after another one joins it, instead of loading
-   * the model again beside a copy that is still shutting down. */
-  leaseGraceMs?: number;
   /** How often the logs' size is checked; tests only. */
   logCheckMs?: number;
   /** Watch the machine's memory while the model runs. */
@@ -472,12 +468,16 @@ function memoryTick() {
   }
 }
 
+// How long the server outlives its last lease: a ClikCode run that starts
+// right after another one joins it, instead of loading the model again
+// beside a copy that is still shutting down.
+const LEASE_GRACE_MS = 10000;
 let lastActive = Date.now(), lastSignature = '', leaselessSince;
 async function tick() {
   if (stopping) return;
   if (liveLeases() === 0) {
     leaselessSince ??= Date.now();
-    if (Date.now() - leaselessSince >= (config.leaseGraceMs ?? 10000)) return stop('no live ClikCode process holds a lease');
+    if (Date.now() - leaselessSince >= LEASE_GRACE_MS) return stop('no live ClikCode process holds a lease');
   } else leaselessSince = undefined;
   if (restartArgs) { lastActive = Date.now(); return; }
   const list = await slots();

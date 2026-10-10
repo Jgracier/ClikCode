@@ -115,31 +115,6 @@ export function displayTokens(value: string): string[] {
   return tokens;
 }
 
-/** Longest prefix of `value` fitting `width` cells, never splitting an SGR
- * sequence or a grapheme cluster. Zero-width tokens are always carried along,
- * so a style never survives as a half-written escape in the terminal.
- *
- * It always consumes at least one visible cluster: a character wider than the
- * row (a CJK glyph in a one-column gutter) must still advance, or every caller
- * that loops on the remainder would spin forever. */
-export function sliceToWidth(value: string, width: number): string {
-  let taken = '';
-  let takenWidth = 0;
-  for (const token of displayTokens(value)) {
-    const tokenWidth = terminalCellWidth(token);
-    if (tokenWidth && takenWidth + tokenWidth > width) break;
-    taken += token;
-    takenWidth += tokenWidth;
-  }
-  if (takenWidth > 0) return taken;
-  let forced = '';
-  for (const token of displayTokens(value)) {
-    forced += token;
-    if (terminalCellWidth(token)) return forced;
-  }
-  return value;
-}
-
 const CONTROLS = /^[\u0000-\u001f\u007f-\u009f]+$/;
 const MARK = /\p{Mark}/u;
 const EMOJI_PRESENTATION = /\p{Emoji_Presentation}/u;

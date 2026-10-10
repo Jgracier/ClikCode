@@ -54,10 +54,6 @@ export interface EnsureLocalModelOptions {
   context?: number;
   /** Load the vision projector too. */
   vision?: boolean;
-  /** Stop the server after this many minutes without a request; 0 keeps
-   * it for as long as a session holds it. Default 15, or
-   * CLIKCODE_LOCAL_IDLE_MINUTES. */
-  idleMinutes?: number;
   signal?: AbortSignal;
   /** Set only by a user action that has shown and accepted the download size. */
   allowDownload?: boolean;
@@ -81,8 +77,10 @@ export interface LocalModelEndpoint {
 
 const DEFAULT_IDLE_MINUTES = 15;
 
-function idleMs(minutes: number | undefined): number {
-  const configured = minutes ?? Number(process.env.CLIKCODE_LOCAL_IDLE_MINUTES ?? DEFAULT_IDLE_MINUTES);
+/** Stop the server after this many minutes without a request; 0 keeps it
+ * for as long as a session holds it. Default 15, or CLIKCODE_LOCAL_IDLE_MINUTES. */
+function idleMs(): number {
+  const configured = Number(process.env.CLIKCODE_LOCAL_IDLE_MINUTES ?? DEFAULT_IDLE_MINUTES);
   return Number.isFinite(configured) && configured > 0 ? configured * 60_000 : 0;
 }
 
@@ -345,7 +343,7 @@ export async function ensureLocalModel(options: EnsureLocalModelOptions): Promis
         modelId: model.id, alias: model.id, context: fit.context, port,
         command: runtime.serverPath, args,
         env: { [libraryVariable]: [runtime.directory, process.env[libraryVariable] ?? ''].filter(Boolean).join(delimiter) },
-        dir: serverDir(model.id), idleMs: idleMs(options.idleMinutes), pollMs: 2000,
+        dir: serverDir(model.id), idleMs: idleMs(), pollMs: 2000,
         ...(watched ? {
           memory: {
             bufferBytes: view.budget.bufferBytes, sampleMs: 2000, footprintsFile: footprintsFile(model.id), machine: view.machine,
