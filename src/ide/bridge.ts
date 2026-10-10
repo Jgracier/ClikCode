@@ -160,6 +160,9 @@ export class IdeBridge {
       case 'sign-in-cancel':
         this.prompter.cancelSignIn(request.id);
         return;
+      case 'sign-in-answer':
+        this.prompter.answerSignIn(request.id, request.text);
+        return;
       case 'sign-in-result': {
         const pending = this.signIns.get(request.id);
         if (!pending) return;

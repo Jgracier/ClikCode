@@ -85,6 +85,24 @@ describe('IdePrompter', () => {
     expect(await answer).toBe('');
   });
 
+  it('offers a key beside a link sign-in as a row on its card, never a sheet over it', async () => {
+    const { prompter, events } = harness();
+    const screen = prompter.signInScreen('Vendor');
+    screen.show({ url: 'https://example.test/device', code: 'AB12' });
+    const answer = screen.ask('Or paste your Vendor API key', true, true, true);
+    expect(events.some((event) => event.type === 'ui-request'), 'no sheet').toBe(false);
+    const card = events.filter((event) => event.type === 'sign-in-link').at(-1);
+    expect(card).toMatchObject({ url: 'https://example.test/device', code: 'AB12', ask: { prompt: 'Or paste your Vendor API key', secret: true } });
+    const id = (card as { id: string }).id;
+    prompter.answerSignIn(id, 'sk-1');
+    expect(await answer).toBe('sk-1');
+    // Answered: the card goes on with its link and code, without the row.
+    const after = events.filter((event) => event.type === 'sign-in-link').at(-1) as { ask?: unknown; code?: string };
+    expect(after.ask).toBeUndefined();
+    expect(after.code).toBe('AB12');
+    screen.stop();
+  });
+
   it('carries row actions and delete actions to the editor', () => {
     expect(pickItems([{ label: 'r', value: 1, group: 'G', argHint: '<x>', deleteAction: { label: 'Remove', value: 'remove' } }]))
       .toEqual([{ label: 'r', group: 'G', argHint: '<x>', deleteAction: { label: 'Remove', value: 'remove' } }]);

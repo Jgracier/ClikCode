@@ -119,6 +119,9 @@ export function chatSuite(): void {
       await api.send('/accounts add grok');
       const code = await waitFor(api, '#sign-in-link [data-code]', 'the sign-in card with its code', 30_000);
       if (code.text.trim() !== 'AB12-CD34') throw new Error(`the card shows code "${code.text}"`);
+      // The key Grok takes instead is a row on the card, never a sheet greying it out.
+      await waitFor(api, '#sign-in-link #sign-in-key', 'the key row on the card', 30_000);
+      if ((await query(api, '.sheet')).count) throw new Error('a sheet opened over the sign-in card');
       await screenshot('sign-in-card', 300);
       await waitFor(api, '#sign-in-link', 'the card gone once signed in', 30_000, (found) => found.count === 0);
       if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');

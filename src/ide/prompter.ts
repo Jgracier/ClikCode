@@ -36,6 +36,9 @@ export class IdePrompter implements HarnessPrompter {
   /** Sign-ins whose card the panel shows, by id: its Cancel aborts one. */
   private readonly signIns = new Map<string, AbortController>();
 
+  /** The key row a sign-in's card offers, by sign-in id: what is typed there. */
+  private readonly signInAnswers = new Map<string, (text: string) => void>();
+
   /** The bridge's queued job a sign-in opens inside: it lets the queue go
    * (see IdeBridge.enqueue). */
   private readonly queueHolder = new AsyncLocalStorage<(() => void) | undefined>();
@@ -57,21 +60,37 @@ export class IdePrompter implements HarnessPrompter {
     this.signIns.set(id, controller);
     this.queueHolder.getStore()?.();
     this.channel.send({ type: 'busy', label: `signing in to ${name}…` });
-    this.channel.send({ type: 'sign-in-link', id, name });
+    // The card as last sent: the link and code, and a key row while one is offered.
+    let card: { url?: string; code?: string; ask?: { prompt: string; secret?: boolean } } = {};
+    const sendCard = (): void => this.channel.send({ type: 'sign-in-link', id, name, ...card });
+    sendCard();
     return {
       signal: controller.signal,
-      show: (link) => this.channel.send({ type: 'sign-in-link', id, name, url: link.url, ...(link.code ? { code: link.code } : {}) }),
+      show: (link) => { card = { ...card, url: link.url, ...(link.code ? { code: link.code } : {}) }; sendCard(); },
       ask: async (prompt, secret, _optional, alongside) => {
+        // A key offered beside the browser sign-in: a row on its card, as the
+        // terminal's hint line under the link. A sheet greyed the card out.
+        if (alongside) {
+          card = { ...card, ask: { prompt, ...(secret ? { secret: true } : {}) } };
+          sendCard();
+          return new Promise<string>((resolve) => {
+            this.signInAnswers.set(id, (text) => {
+              this.signInAnswers.delete(id);
+              const { ask: _answered, ...rest } = card;
+              card = rest;
+              sendCard();
+              resolve(text);
+            });
+          });
+        }
         const result = await this.ask({ kind: 'input', prompt, ...(secret ? { secret: true } : {}) });
         if ('text' in result) return result.text;
-        // A key offered beside the browser sign-in, dismissed: that sign-in
-        // goes on.
-        if (alongside) return new Promise<string>(() => undefined);
         controller.abort();
         return '';
       },
       choose: (title, choices) => this.select(title, choices.map((choice, index) => ({ label: choice, value: index }))),
       stop: () => {
+        this.signInAnswers.delete(id);
         if (!this.signIns.delete(id)) return;
         this.channel.send({ type: 'sign-in-link', id, name, done: true });
         this.channel.send({ type: 'busy' });
@@ -82,6 +101,11 @@ export class IdePrompter implements HarnessPrompter {
   /** The card's Cancel. */
   cancelSignIn(id: string): void {
     this.signIns.get(id)?.abort();
+  }
+
+  /** A key typed into the card's key row. */
+  answerSignIn(id: string, text: string): void {
+    this.signInAnswers.get(id)?.(text);
   }
 
   /** An answer from the editor. Unknown ids are ignored: a request the
