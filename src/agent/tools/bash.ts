@@ -152,7 +152,7 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
     });
   });
   ctx.session.shells.set(id, shell);
-  return { output: `${notice ? `${notice}\n` : ''}Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, end your turn if there is nothing else to do, or use wait (shell_ids ["${id}"]) to continue in this turn once it exits. bash_output (id "${id}") reads its output so far; bash_input types into it; kill_bash stops it.` };
+  return { output: `${notice ? `${notice}\n` : ''}Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, end your turn if there is nothing else to do, or use wait (shell_ids ["${id}"]) to continue in this turn once it exits -- with output (a regex such as "listening|ready") to continue once it prints that instead. bash_output (id "${id}") reads its output so far; bash_input types into it; kill_bash stops it.` };
 }
 
 export const bashTool = defineTool<BashArgs>({
