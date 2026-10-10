@@ -1,6 +1,7 @@
 /** Durable, provider-neutral representation of a turn that has started but
  * has not reached a successful provider completion yet. */
 
+import { resetUserWait, userWaitedMs } from './user-wait.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
@@ -199,6 +200,7 @@ export function beginPendingTurn(session: HarnessSession, prompt: string, now: s
     return;
   }
   if (pending) session.messages = sessionTranscriptMessages(session);
+  resetUserWait(session.id);
   session.pendingTurn = {
     prompt, ...(session.attachments?.length ? { attachments: [...session.attachments] } : {}),
     startedAt: now, updatedAt: now, outputStarted: false,
@@ -348,7 +350,8 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   session.updatedAt = now;
   // The answer the turn ended on carries how long it took (see turnEnd).
   const last = session.messages[session.messages.length - 1];
-  const ms = Date.parse(now) - startedAt;
+  // Less the time it waited on the user, as both live clocks count it.
+  const ms = Date.parse(now) - startedAt - userWaitedMs(session.id, Date.parse(now));
   if (session.messages.length > before && last?.role === 'assistant' && Number.isFinite(ms)) {
     last.turnEnd = { ms: Math.max(0, ms), ...(stopped ? { stopped: true as const } : {}) };
     if (accountSwitch) last.accountSwitch = accountSwitch;
