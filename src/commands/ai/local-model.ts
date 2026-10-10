@@ -39,21 +39,35 @@ export function localProgressText(update: LocalModelProgress): string {
  * stderr line per distinct `shape` (a stage, not each percent) rather than
  * one per update. The wait starts on the first update, so work that has
  * nothing to do -- a model already running -- shows nothing at all. Shared
- * with commands/ai/turbofit.ts. */
+ * with commands/ai/turbofit.ts.
+ *
+ * A band already up -- the turn's own, drawn as its message was sent --
+ * only has its label moved, and gets it back after: stopping and starting a
+ * wait there dropped the band for a frame and set its clock back to 0. */
 export function waitingLineProgress(): { show: (text: string, shape: string) => void; done: () => void } {
   const terminal = TERMINAL.active;
   let waiting = false;
+  /** The label of the band borrowed, to give back. */
+  let borrowed: string | undefined;
   let stage = '';
   return {
     show: (text, shape) => {
       if (terminal) {
-        if (!waiting) { waiting = true; terminal.startWaiting(text); }
+        if (!waiting) {
+          waiting = true;
+          borrowed = terminal.waitingLabel();
+          if (borrowed === undefined) terminal.startWaiting(text);
+        }
         terminal.updateWaitingLabel(text);
         return;
       }
       if (shape !== stage) { stage = shape; process.stderr.write(`${text}\n`); }
     },
-    done: () => { if (waiting) terminal?.stopWaiting(); },
+    done: () => {
+      if (!waiting || !terminal) return;
+      if (borrowed !== undefined) terminal.updateWaitingLabel(borrowed);
+      else terminal.stopWaiting();
+    },
   };
 }
 

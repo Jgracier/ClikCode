@@ -1058,6 +1058,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return false;
   }
 
+  /** What the band showing says, or undefined with no band up: work done
+   * on a turn's way in (a local model loading) borrows that band. */
+  waitingLabel(): string | undefined {
+    return this.turn?.label;
+  }
+
   /** Progress on a wait already showing ("downloading… 42%"), without
    * restarting it the way startWaiting does. */
   updateWaitingLabel(message: string): void {
