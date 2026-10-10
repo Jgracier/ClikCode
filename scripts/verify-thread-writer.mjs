@@ -15,7 +15,13 @@
  * this is for). --replay-only stops after ACP `session/load` and reports what
  * the agent replayed -- no model call, no quota. --link passes a sign-in file
  * the catalog does not declare through to the sandbox (Cursor:
- * `--link .config/cursor/auth.json`). */
+ * `--link .config/cursor/auth.json`). --auth-from <path> takes the harness's
+ * sign-in file from there instead (a ClikCode account profile's).
+ *
+ * --summary: the codeword is only in a SUMMARY of the first turn, which is not
+ * written; the thread is handed over exactly as thread-start does it (the
+ * writer's own compaction where it writes one, else the summary opening the
+ * first kept request). Recalling the codeword proves the vendor read it. */
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -46,14 +52,14 @@ const { build } = await import('esbuild');
 const bundle = join(home, 'writers.mjs');
 await build({
   stdin: {
-    contents: "export { NATIVE_SESSION_STORES } from './src/session/discovery/registry.ts';\nexport { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';",
+    contents: "export { NATIVE_SESSION_STORES } from './src/session/discovery/registry.ts';\nexport { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';\nexport { summaryNote } from './src/session/conversation-summary.ts';",
     resolveDir: root, loader: 'ts',
   },
   bundle: true, platform: 'node', format: 'esm', outfile: bundle, logLevel: 'error',
   define: { __CLIKCODE_VERSION__: '"verify"' },
   banner: { js: "import { createRequire as __r } from 'node:module'; const require = __r(import.meta.url);" },
 });
-const { NATIVE_SESSION_STORES, AI_LOCAL_HARNESSES } = await import(pathToFileURL(bundle).href);
+const { NATIVE_SESSION_STORES, AI_LOCAL_HARNESSES, summaryNote } = await import(pathToFileURL(bundle).href);
 const harness = AI_LOCAL_HARNESSES.find((item) => item.command === command);
 const writer = NATIVE_SESSION_STORES[command]?.writer;
 if (!harness || !writer) { console.error(`${command}: ${harness ? 'no thread writer registered' : 'no such harness'}`); process.exit(2); }
@@ -73,8 +79,9 @@ const expand = (path, base, env) => path
   // A declared directory's trailing slash (Kimi's credentials/) cannot be
   // part of a symlink's own path.
   .replace(/\/+$/, '');
-for (const path of [...(harness.authFiles ?? []).map((file) => file.path), ...links.map((path) => (path.startsWith('~') ? path : `~/${path}`))]) {
-  const from = expand(path, home, {});
+const authFrom = option('--auth-from');
+for (const [index, path] of [...(harness.authFiles ?? []).map((file) => file.path), ...links.map((path) => (path.startsWith('~') ? path : `~/${path}`))].entries()) {
+  const from = index === 0 && authFrom ? authFrom : expand(path, home, {});
   const to = expand(path, profile, environment);
   if (!existsSync(from) || existsSync(to)) continue;
   mkdirSync(dirname(to), { recursive: true });
@@ -125,6 +132,19 @@ const record = {
   ],
 };
 
+if (argv.includes('--summary')) {
+  // The first turn, codeword and all, exists only as a summary now.
+  const summary = { text: `Earlier: the user asked me to remember the codeword ${codeword}, and I read notes.txt (the launch window is Thursday).`, through: 1, source: 'claude' };
+  record.turns = record.turns.slice(1);
+  record.summary = summary;
+  if (!writer.writesSummary) {
+    const [first] = record.turns;
+    record.turns = [{ ...first, providerNote: summaryNote(summary) }];
+    delete record.summary;
+  }
+  console.log(`summary handed over as ${writer.writesSummary ? "the writer's own compaction" : 'a note opening the first kept request'}`);
+}
+
 const binary = harness.binary ?? harness.command;
 const version = spawnSync(binary, ['--version'], { encoding: 'utf8', env: { ...process.env, ...environment } }).stdout?.split('\n')[0]?.trim();
 const context = { harness, workspace, environment, model: option('--model') ?? null, version };
@@ -172,7 +192,8 @@ function cliTurn() {
 }
 
 async function acpTurn() {
-  const child = spawn(binary, harness.acp.argv, { cwd: workspace, env, stdio: ['pipe', 'pipe', 'inherit'] });
+  // An agent whose ACP side is its own program (claude-agent-acp) is started as that.
+  const child = spawn(harness.acp.binary ?? binary, harness.acp.argv, { cwd: workspace, env, stdio: ['pipe', 'pipe', 'inherit'] });
   const pending = new Map();
   const updates = [];
   let next = 1;
