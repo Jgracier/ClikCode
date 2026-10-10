@@ -43,8 +43,20 @@ const claudeCredentials = args['claude-credentials'] ?? process.env.BENCH_CLAUDE
 const PRICES = { 'claude-sonnet-5-5': { input: 2, cacheRead: 0.2, output: 10 }, 'claude-opus-5-5': { input: 4, cacheRead: 0.4, output: 20 } };
 
 if (!existsSync(join(root, 'dist', 'index.js'))) throw new Error('no build: run `node scripts/build.mjs` first');
-const started = new Date();
+let started = new Date();
 const results = [];
+// --recompute <results.json>: the metrics again from the runs' kept artifacts
+// (after the runner learned a new one), written back over the same files.
+if (args.recompute) {
+  const saved = JSON.parse(readFileSync(args.recompute, 'utf8'));
+  started = new Date(saved.startedAt);
+  for (const result of saved.results) {
+    const artifacts = join(result.dir, 'artifacts');
+    results.push({ ...result, ...(existsSync(artifacts) ? (result.harness === 'clikcode' ? clikcodeMetrics(artifacts) : claudeMetrics(artifacts)) : {}) });
+  }
+  writeResults(results, args.recompute.replace(/\.json$/, ''));
+  process.exit(0);
+}
 for (const task of tasks) {
   for (const harness of harnesses) {
     console.error(`== ${task} on ${harness}`);
@@ -253,6 +265,7 @@ function clikcodeMetrics(artifacts) {
     ? ((usage.input - (usage.cacheRead ?? 0)) * price.input + (usage.cacheRead ?? 0) * price.cacheRead + (usage.output ?? 0) * price.output) / 1e6
     : null;
   return {
+    ...clikcodeSteps(artifacts),
     reply: (out.text ?? replies.at(-1)?.content ?? '').slice(0, 600),
     error: out.error ?? (stderr ? stderr.slice(0, 600) : undefined),
     inputTokens: usage.input ?? null,
@@ -268,10 +281,53 @@ function clikcodeMetrics(artifacts) {
   };
 }
 
+/** Model steps from the agent's own conversation log: a step runs from the
+ * last user item or tool result to its first assistant item. `setupMs` is the
+ * worker's turn start to the prompt being recorded (before the first step). */
+function clikcodeSteps(artifacts) {
+  const sessions = join(artifacts, 'home', 'sessions');
+  const dir = existsSync(sessions) ? readdirSync(sessions).find((name) => !name.endsWith('.json')) : undefined;
+  const items = dir ? readJsonLines(join(sessions, dir, 'harness.jsonl')).filter((line) => line.kind === 'item') : [];
+  const steps = [];
+  let from;
+  let inStep = false;
+  for (const line of items) {
+    const at = Date.parse(line.at);
+    if (line.item.role === 'assistant' || line.item.type === 'tool_call') {
+      if (!inStep && from !== undefined) steps.push(at - from);
+      inStep = true;
+    } else {
+      inStep = false;
+      from = at;
+    }
+  }
+  const started = readJsonLines(join(artifacts, 'home', 'logs', 'lifecycle.log')).find((line) => line.event === 'worker.turn.start');
+  const setupMs = started && items.length ? Date.parse(items[0].at) - Date.parse(started.t) : null;
+  return { modelCalls: steps.length || null, modelMs: steps.reduce((sum, ms) => sum + ms, 0) || null, stepMs: steps, setupMs };
+}
+
+/** The same from Claude Code's transcript: one step per assistant message id. */
+function claudeSteps(records) {
+  const lines = records.filter((record) => record.timestamp && (record.type === 'user' || record.type === 'assistant'))
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  const steps = new Map();
+  let from;
+  for (const line of lines) {
+    const at = Date.parse(line.timestamp);
+    if (line.type === 'user') { from = at; continue; }
+    const id = line.message?.id;
+    if (!steps.has(id)) steps.set(id, { from, to: at });
+    else steps.get(id).to = at;
+  }
+  const stepMs = [...steps.values()].filter((step) => step.from !== undefined).map((step) => step.to - step.from);
+  return { modelCalls: stepMs.length || null, modelMs: stepMs.reduce((sum, ms) => sum + ms, 0) || null, stepMs };
+}
+
 function claudeMetrics(artifacts) {
   const out = readJsonLines(join(artifacts, 'stdout.json')).at(-1) ?? {};
   const projects = join(artifacts, 'claude-projects');
   const tools = [];
+  const records = [];
   const stack = existsSync(projects) ? [projects] : [];
   while (stack.length) {
     const dir = stack.pop();
@@ -280,6 +336,7 @@ function claudeMetrics(artifacts) {
       if (entry.isDirectory()) stack.push(path);
       else if (entry.name.endsWith('.jsonl')) {
         for (const record of readJsonLines(path)) {
+          records.push(record);
           for (const block of record.message?.content ?? []) {
             if (block?.type === 'tool_use') tools.push(`${block.name}: ${JSON.stringify(block.input).slice(0, 120)}`);
             if (block?.type === 'tool_result' && block.is_error) tools.push(`  ! error: ${JSON.stringify(block.content).slice(0, 120)}`);
@@ -290,6 +347,7 @@ function claudeMetrics(artifacts) {
   }
   const usage = out.usage ?? {};
   return {
+    ...claudeSteps(records),
     reply: String(out.result ?? '').slice(0, 600),
     error: out.is_error ? String(out.result ?? 'error') : undefined,
     inputTokens: usage.input_tokens === undefined ? null : usage.input_tokens + (usage.cache_creation_input_tokens ?? 0) + (usage.cache_read_input_tokens ?? 0),
@@ -306,15 +364,15 @@ function claudeMetrics(artifacts) {
   };
 }
 
-function writeResults(list) {
+function writeResults(list, fixedStem) {
   const resultsDir = join(here, 'results');
   mkdirSync(resultsDir, { recursive: true });
   const day = started.toISOString().slice(0, 10);
-  let stem = join(resultsDir, day);
-  if (existsSync(`${stem}.md`)) stem += `-${started.toISOString().slice(11, 16).replace(':', '')}`;
+  let stem = fixedStem ?? join(resultsDir, day);
+  if (!fixedStem && existsSync(`${stem}.md`)) stem += `-${started.toISOString().slice(11, 16).replace(':', '')}`;
   writeFileSync(`${stem}.json`, `${JSON.stringify({ startedAt: started.toISOString(), model, timeoutMs, results: list }, null, 2)}\n`);
   const fmt = (n) => (n === null || n === undefined ? '–' : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
-  const rows = list.map((r) => `| ${r.task} | ${r.harness} | ${r.skipped ? 'skipped' : r.success ? 'PASS' : r.timedOut ? 'TIMEOUT' : 'FAIL'} | ${(r.wallMs / 1000).toFixed(1)} | ${fmt(r.inputTokens)} | ${fmt(r.cacheReadTokens)} | ${fmt(r.outputTokens)} | ${r.costUsd === null || r.costUsd === undefined ? '–' : `$${r.costUsd.toFixed(3)}${r.costSource === 'reported' ? '' : '*'}`} | ${r.turns ?? '–'} | ${r.toolCalls ?? '–'} | ${r.leftovers?.length ?? 0} |`);
+  const rows = list.map((r) => `| ${r.task} | ${r.harness} | ${r.skipped ? 'skipped' : r.success ? 'PASS' : r.timedOut ? 'TIMEOUT' : 'FAIL'} | ${(r.wallMs / 1000).toFixed(1)} | ${fmt(r.inputTokens)} | ${fmt(r.cacheReadTokens)} | ${fmt(r.outputTokens)} | ${r.costUsd === null || r.costUsd === undefined ? '–' : `$${r.costUsd.toFixed(3)}${r.costSource === 'reported' ? '' : '*'}`} | ${r.modelCalls ?? '–'} | ${r.modelMs ? (r.modelMs / 1000).toFixed(1) : '–'} | ${r.toolCalls ?? '–'} | ${r.leftovers?.length ?? 0} |`);
   const total = (harness, key) => list.filter((r) => r.harness === harness).reduce((sum, r) => sum + (r[key] ?? 0), 0);
   const summary = [...new Set(list.map((r) => r.harness))].map((harness) => {
     const mine = list.filter((r) => r.harness === harness);
@@ -324,14 +382,14 @@ function writeResults(list) {
   const md = [
     `# Harness benchmark ${started.toISOString()}`,
     '',
-    `Model \`${model}\` on both; timeout ${timeoutMs / 60_000} min; one run each. \\* = ClikCode reports no cost on the Gateway; estimated at list price (input less cache reads, cache reads at 10%, output).`,
+    `Model \`${model}\` on both; timeout ${timeoutMs / 60_000} min; one run each. \\* = ClikCode reports no cost on the Gateway; estimated at list price (input less cache reads, cache reads at 10%, output). \`model s\` = time spent waiting on model steps (from each tool result or prompt to the step's last output); \`wall s\` less that is the harness's own time plus tool runtime.`,
     '',
     '| harness | passed | wall s | input tok | output tok | cost |',
     '| --- | --- | --- | --- | --- | --- |',
     ...summary,
     '',
-    '| task | harness | result | wall s | input tok | cache read | output tok | cost | turns | tool calls | leftover procs |',
-    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
+    '| task | harness | result | wall s | input tok | cache read | output tok | cost | model calls | model s | tool calls | leftover procs |',
+    '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |',
     ...rows,
     '',
     failures.length ? '## Failures' : '',
