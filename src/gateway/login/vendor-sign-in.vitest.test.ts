@@ -219,6 +219,15 @@ describe.skipIf(process.platform === 'win32')('running a sign-in', () => {
     expect(screen.seen).toEqual(['ask Paste your API key (secret)', 'ask Label (optional, default: api-key-1)']);
   });
 
+  it('a rejected key is never in the failure it gives', async () => {
+    const vendor = await script('printf "Paste your API key: "\nread key\necho "$key"\nexit 4\n');
+    const screen = ui({ ask: ['sk-wrong-key-99'] });
+    const failure = await runVendorSignIn({ binary: vendor, args: [], env: {}, displayName: 'Hermes', local: false, ui: screen.value }).catch((error: Error) => error);
+    expect(String(failure)).toContain('exited with status 4');
+    expect(String(failure)).not.toContain('sk-wrong');
+    expect(String(failure)).not.toContain('Paste your API key');
+  });
+
   it('a yes/no question answered in ClikCode', async () => {
     const vendor = await script('printf "Login to OpenRouter or create a free account? (Y)es/(N)o [Yes]: "\nread answer\n[ "$answer" = "y" ] || exit 5\necho ok\n');
     const screen = ui({ choose: [0] });

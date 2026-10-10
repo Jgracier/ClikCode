@@ -2,7 +2,7 @@ import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { withSignIn } from './account.js';
+import { signInOutcomeSaid, withSignIn } from './account.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 
@@ -59,13 +59,14 @@ describe.skipIf(process.platform === 'win32')('a sign-in on the prompter\'s own 
     ]);
   });
 
-  it('cancels from the screen and says the sign-in did not finish', async () => {
+  it('cancels from the screen and says, in one plain line, it was cancelled', async () => {
     const spec = { command: 'grok', binary: await vendor(30), displayName: 'Grok Build', loginArgv: [] };
     const { value, calls, cancel } = prompter();
     const login = withSignIn(value, 'Grok Build', () => loginNativeHarness(spec, {}));
     setTimeout(cancel, 1_000);
     await expect(login).rejects.toThrow(/cancelled/);
     expect(calls.at(-2)).toBe('stop');
-    expect(calls.at(-1)).toMatch(/sign-in to Grok Build did not finish/);
+    expect(calls.at(-1)).toBe('activity Sign-in to Grok Build cancelled');
+    await login.catch((error: unknown) => expect(signInOutcomeSaid(error)).toBe('cancelled'));
   });
 });
