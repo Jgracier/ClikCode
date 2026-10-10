@@ -10,7 +10,9 @@
  */
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
-import { claimSession, releaseSession, sessionClaimIsLive } from './claim.js';
+import { sessionClaimIsLive } from './claim.js';
+import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from './claims.js';
+import { sessionForceStored } from './ephemeral.js';
 import { blankChatSweepable, discardIfBlank, ensureSessionOnDisk } from './blank.js';
 import { liveWorkerSessions } from './liveness.js';
 import { backfillListFacts } from './list-backfill.js';
@@ -106,25 +108,26 @@ export async function resolveSessionModel(id: string): Promise<void> {
 
 /** This client has the conversation open: taken on open and refreshed on a
  * timer (a third of the TTL). A claim another live client holds is left
- * alone and nothing is written; session/claims.ts would refuse it anyway. */
+ * alone; session/claims.ts would refuse it anyway.
+ *
+ * Only the claim file is touched. Going through writeState took the global
+ * state lock every 30 s in every open window and editor chat, to change
+ * nothing in the index. */
 export async function claimConversation(id: string): Promise<void> {
   // A claim is its own file (claims.ts), overlaid on the record: the
   // conversation's history is not needed to take or refresh it.
   const state = await readState({ transcripts: [] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session || sessionClaimIsLive(session)) return;
-  claimSession(session);
-  await writeState(state);
+  // A draft has no file and no claim; writeState skips it the same way.
+  if (isBlankConversation(session) && !sessionForceStored(id)) return;
+  if (!await heartbeatSessionClaim(id)) await acquireSessionClaim(id);
 }
 
 /** Hands the conversation back. Only this process's own claim is released
- * (releaseSession checks it too), and nothing is written when there is none. */
+ * (releaseSessionClaim checks), and nothing is written when there is none. */
 export async function releaseConversationClaim(id: string): Promise<void> {
-  const state = await readState({ transcripts: [] });
-  const session = state.sessions.find((item) => item.id === id);
-  if (session?.claim?.pid !== process.pid) return;
-  releaseSession(session);
-  await writeState(state);
+  await releaseSessionClaim(id);
 }
 
 /** This client stops showing a conversation: its claim goes, and one that

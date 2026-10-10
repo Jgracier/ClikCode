@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -6,6 +6,7 @@ import { afterTurnFailure, claimConversation, leaveConversation, openConversatio
 import { readState } from './state/read';
 import { writeState } from './state/write';
 import { acquireSessionClaim } from './claims';
+import { LOCK_TUNING } from './store/locks';
 import type { HarnessSession, HarnessState } from './model';
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -47,6 +48,27 @@ describe('a client attached to a conversation', () => {
     expect((await stored())!.claim!.heartbeatAt > before).toBe(true);
     await releaseConversationClaim('s1');
     expect((await stored())?.claim).toBeUndefined();
+  });
+
+  it('refreshes its claim without the state lock another process holds', async () => {
+    await writeState(stateWith(session()));
+    await claimConversation('s1');
+    const before = (await stored())!.claim!.heartbeatAt;
+    // A live holder of the global lock: a long index write elsewhere.
+    const lock = join(process.env.CLIKCODE_HOME!, 'harness-state.json.lock');
+    writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: hostname(), nonce: 'other', at: new Date().toISOString() }));
+    const waitMs = LOCK_TUNING.waitMs;
+    LOCK_TUNING.waitMs = 200;
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await claimConversation('s1');
+      await releaseConversationClaim('s1');
+      await claimConversation('s1');
+    } finally {
+      LOCK_TUNING.waitMs = waitMs;
+      unlinkSync(lock);
+    }
+    expect((await stored())!.claim!.heartbeatAt > before).toBe(true);
   });
 
   it('leaving keeps a conversation with something in it', async () => {
