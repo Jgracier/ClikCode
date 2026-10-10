@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  bwrapInvocation, parseSandboxMode, SANDBOX_DENIAL_HINT, sandboxDenialHint, sandboxExecInvocation, sandboxWritableDirs, seatbeltProfile, sessionSandboxMode, wrapForSandbox,
+  bwrapInvocation, parseSandboxMode, SANDBOX_DENIAL_HINT, sandboxCommand, sandboxDenialHint, sandboxExecInvocation, sandboxWritableDirs, seatbeltProfile, sessionSandboxMode, wrapForSandbox,
 } from './sandbox.js';
 import { bashTool } from './tools/bash.js';
 import { disposeSessionState, sessionState } from './session-state.js';
@@ -52,6 +52,28 @@ describe('sandbox argv', () => {
     // Binaries and config stay read-only; buildx state does not.
     for (const dir of ['/home/u/.bun', '/home/u/.deno', '/home/u/.docker/buildx', '/home/u/.local/share/uv']) expect(dirs).toContain(dir);
     for (const dir of ['/home/u/.local/bin', '/home/u/.config', '/home/u/.docker', '/home/u/.ssh']) expect(dirs).not.toContain(dir);
+  });
+
+  it("adds the platform's own temp and cache dirs", () => {
+    const dirs = sandboxWritableDirs({ cwd: '/work', addDirs: [], homeDir: '/Users/u', tmpDir: '/tmp', env: {}, platformDirs: ['/var/folders/ab/xy/T/', '/var/folders/ab/xy/C/'] });
+    expect(dirs).toContain('/var/folders/ab/xy/T');
+    expect(dirs).toContain('/var/folders/ab/xy/C');
+  });
+
+  it('resolves links, through the nearest existing ancestor for a cache not made yet, and keeps the named form for the hint', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'clikcode-sandbox-links-'));
+    try {
+      await mkdir(join(root, 'real home'));
+      await symlink(join(root, 'real home'), join(root, 'home'));
+      const real = realpathSync(join(root, 'real home'));
+      const { writable } = sandboxCommand('workspace', shell, { cwd: join(root, 'home'), addDirs: [], homeDir: join(root, 'home') });
+      expect(writable).toContain(real);
+      expect(writable).toContain(join(real, '.npm'));
+      expect(writable).toContain(join(root, 'home', '.npm'));
+      expect(sandboxDenialHint(`chmod: ${join(root, 'home', 'a')}: Operation not permitted`, writable)).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it('off passes the command through; a missing tool runs it unsandboxed and names the tool', () => {
@@ -122,14 +144,19 @@ describe.skipIf(process.platform !== 'linux')('a missing sandbox tool', () => {
 });
 
 const onPath = (binary: string): boolean => { try { execFileSync('sh', ['-c', `command -v ${binary}`], { stdio: 'ignore' }); return true; } catch { return false; } };
-const hasBwrap = process.platform === 'linux' && onPath('bwrap');
+const hasSandbox = (process.platform === 'linux' && onPath('bwrap')) || (process.platform === 'darwin' && existsSync('/usr/bin/sandbox-exec'));
 const hasDocker = onPath('docker');
 // The tests' HOME is a temp dir, which the sandbox lets commands write; the
-// checkout is somewhere it does not (unless it sits in the temp dir too).
-const outsideRoot = process.cwd();
-const outsideIsWritable = outsideRoot.startsWith(tmpdir()) || outsideRoot.startsWith('/tmp');
+// checkout is somewhere it does not (unless it sits in a temp dir too, as a
+// macOS checkout under /var/folders does: CLIKCODE_SANDBOX_TEST_OUTSIDE then
+// names a dir outside the sandbox, such as one made under /var/tmp).
+const outsideRoot = realpathSync(process.env.CLIKCODE_SANDBOX_TEST_OUTSIDE || process.cwd());
+const outsideIsWritable = sandboxCommand('workspace', shell, { cwd: '/nonexistent-clikcode-workspace', addDirs: [], homeDir: homedir() }).writable
+  .some((dir) => outsideRoot === dir || outsideRoot.startsWith(`${dir}/`));
+/** bwrap's read-only bind and Seatbelt's deny say it differently. */
+const REFUSED = process.platform === 'darwin' ? 'Operation not permitted' : 'Read-only file system';
 
-describe.skipIf(!hasBwrap || outsideIsWritable)('bwrap, for real', () => {
+describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox, for real', () => {
   let dir: string;
   let outside: string;
   beforeEach(async () => {
@@ -144,7 +171,7 @@ describe.skipIf(!hasBwrap || outsideIsWritable)('bwrap, for real', () => {
     expect(inside).toMatchObject({ isError: false, output: 'hello\ndata' });
     const refused = await bashTool.run({ command: `touch ${outside}` }, ctx);
     expect(refused.isError).toBe(true);
-    expect(refused.output).toMatch(/Read-only file system/);
+    expect(refused.output).toContain(REFUSED);
     expect(refused.output).toMatch(/\n\[sandbox: this looks like the workspace sandbox refusing a write/);
     expect(existsSync(outside)).toBe(false);
     disposeSessionState(dir, ctx.session.sessionId, 'test over');
@@ -171,6 +198,34 @@ describe.skipIf(!hasBwrap || outsideIsWritable)('bwrap, for real', () => {
     disposeSessionState(dir, ctx.session.sessionId, 'test over');
   });
 
+  it('reads the system and kills a background child', async () => {
+    const ctx = contextFor(dir);
+    const result = await bashTool.run({ command: 'head -c 1 /etc/hosts >/dev/null; sleep 30 & p=$!; kill $p; wait $p; echo killed=$?' }, ctx);
+    expect(result).toMatchObject({ isError: false, output: expect.stringContaining('killed=143') });
+    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+  });
+
+  it.skipIf(process.platform !== 'darwin')('macOS: the per-user temp and cache dirs, with or without TMPDIR, and a workspace named through /tmp', async () => {
+    const ctx = contextFor(dir);
+    const saved = process.env.TMPDIR;
+    delete process.env.TMPDIR;
+    try {
+      const probe = 'f=$(mktemp) && rm "$f" && c=$(getconf DARWIN_USER_CACHE_DIR)clikcode-sandbox-$$ && echo x > "$c" && rm "$c" && echo ok';
+      expect(await bashTool.run({ command: probe }, ctx)).toMatchObject({ isError: false, output: 'ok' });
+    } finally {
+      process.env.TMPDIR = saved;
+    }
+    const viaTmp = await mkdtemp('/tmp/clikcode-sandbox-ws-');
+    try {
+      const tmpCtx = contextFor(viaTmp);
+      expect(await bashTool.run({ command: 'echo hi > f && cat f && touch /tmp/clikcode-sandbox-$$ && rm /tmp/clikcode-sandbox-$$' }, tmpCtx)).toMatchObject({ isError: false, output: 'hi' });
+      disposeSessionState(viaTmp, tmpCtx.session.sessionId, 'test over');
+    } finally {
+      await rm(viaTmp, { recursive: true, force: true });
+    }
+    disposeSessionState(dir, ctx.session.sessionId, 'test over');
+  });
+
   it('a background shell is sandboxed too', async () => {
     const ctx = contextFor(dir);
     await bashTool.run({ command: `touch ${outside}; echo done > bg.txt`, run_in_background: true }, ctx);
@@ -181,7 +236,7 @@ describe.skipIf(!hasBwrap || outsideIsWritable)('bwrap, for real', () => {
   });
 });
 
-describe.skipIf(!hasBwrap || outsideIsWritable)('the sandbox in a turn', () => {
+describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox in a turn', () => {
   let dir: string;
   let outside: string;
   beforeEach(async () => {
@@ -206,7 +261,8 @@ describe.skipIf(!hasBwrap || outsideIsWritable)('the sandbox in a turn', () => {
     for (const mode of ['ask', 'auto', 'bypass'] as const) {
       const { asked, result } = await turn(mode);
       expect(asked.map((entry) => entry.title).filter((title) => title !== 'Approve command')).toEqual([]);
-      expect(result).toMatch(/Read-only file system[\s\S]*\[sandbox: this looks like the workspace sandbox[\s\S]*sandbox: false/);
+      expect(result).toContain(REFUSED);
+      expect(result).toMatch(/\[sandbox: this looks like the workspace sandbox[\s\S]*sandbox: false/);
       expect(existsSync(outside)).toBe(false);
     }
   });

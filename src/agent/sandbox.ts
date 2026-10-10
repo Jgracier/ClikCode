@@ -58,13 +58,16 @@ interface WritableInput {
   homeDir: string;
   tmpDir: string;
   env: Readonly<Record<string, string | undefined>>;
+  /** The platform's own per-user temp and cache dirs, wherever TMPDIR points
+   * (macOS: `getconf DARWIN_USER_TEMP_DIR` / `DARWIN_USER_CACHE_DIR`). */
+  platformDirs?: readonly string[];
 }
 
 /** Every directory a sandboxed command may write, absolute and deduplicated.
  * Pure: the caller resolves symlinks (Seatbelt matches real paths). */
 export function sandboxWritableDirs(input: WritableInput): string[] {
   const dirs = [
-    input.cwd, ...input.addDirs, input.tmpDir, '/tmp',
+    input.cwd, ...input.addDirs, input.tmpDir, '/tmp', ...(input.platformDirs ?? []),
     ...HOME_CACHE_DIRS.map((dir) => path.join(input.homeDir, dir)),
     ...CACHE_ENV_VARS.flatMap((name) => { const value = input.env[name]; return value && path.isAbsolute(value) ? [value] : []; }),
   ];
@@ -180,12 +183,39 @@ function sandboxAvailable(binary: string): boolean {
   return bwrapRuns;
 }
 
+/** The real path of `dir`: Seatbelt matches resolved paths (macOS /tmp and
+ * /var are links into /private). A dir that does not exist yet (a cache made
+ * by the first install) resolves through its nearest existing ancestor, so a
+ * home reached through a link still matches. */
 function realOrSame(dir: string): string {
-  try { return realpathSync.native(dir); } catch { return dir; }
+  const missing: string[] = [];
+  for (let at = dir; ; at = path.dirname(at)) {
+    try { return path.join(realpathSync.native(at), ...missing.reverse()); } catch { /* go up */ }
+    if (path.dirname(at) === at) return dir;
+    missing.push(path.basename(at));
+  }
 }
 
-/** wrapForSandbox with this machine's facts filled in. */
+/** macOS gives every user a temp dir and a cache dir under /var/folders that
+ * its tools use whether or not TMPDIR is set: mktemp and confstr-based temp
+ * files fall back to the first (a shell over ssh has no TMPDIR), and clang's
+ * module cache, swift and xcrun write the second. Asked once a process. */
+let darwinDirs: string[] | undefined;
+function platformDirs(): string[] {
+  if (process.platform !== 'darwin') return [];
+  darwinDirs ??= ['DARWIN_USER_TEMP_DIR', 'DARWIN_USER_CACHE_DIR'].flatMap((name) => {
+    const result = spawnSync('/usr/bin/getconf', [name], { encoding: 'utf8', timeout: 5000 });
+    const dir = result.status === 0 ? result.stdout.trim() : '';
+    return dir && path.isAbsolute(dir) ? [dir] : [];
+  });
+  return darwinDirs;
+}
+
+/** wrapForSandbox with this machine's facts filled in. `writable` is every
+ * dir as named and as resolved, for the denial hint: a message names a path
+ * the way the command spelled it (/tmp/x, not /private/tmp/x). */
 export function sandboxCommand(mode: SandboxMode, command: Invocation, scope: { cwd: string; addDirs: readonly string[]; homeDir: string }): SandboxWrap & { writable: string[] } {
-  const writable = sandboxWritableDirs({ ...scope, tmpDir: os.tmpdir(), env: process.env }).map(realOrSame);
-  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: [...new Set(writable)], cwd: scope.cwd, available: sandboxAvailable }), writable };
+  const named = sandboxWritableDirs({ ...scope, tmpDir: os.tmpdir(), env: process.env, platformDirs: platformDirs() });
+  const resolved = [...new Set(named.map(realOrSame))];
+  return { ...wrapForSandbox({ mode, platform: process.platform, command, writable: resolved, cwd: scope.cwd, available: sandboxAvailable }), writable: [...new Set([...resolved, ...named])] };
 }
