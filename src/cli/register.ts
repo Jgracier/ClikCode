@@ -35,6 +35,16 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('ide-terminal <spec>', { hidden: true }).action(async (spec: string) => (await import('../ide/terminal.js')).runIdeTerminal(spec));
   program.command('conversations-mcp', { hidden: true }).description('Serves search_conversations, read_conversation, active_conversations and hindsight to a vendor agent over stdio MCP').action(async () => (await import('../search/mcp.js')).serveConversationsMcp());
   program.command('swarm-mcp', { hidden: true }).description('Answers the swarm tool for the conversation that spawned it').action(async () => (await import('../swarm/mcp.js')).serveSwarmMcp());
+  // The search /search runs, from a shell: the same engine and ranking.
+  program.command('search <words...>').description('Find the conversations that mention something, any provider, most mentions first (--json: each hit and its first mention)')
+    .action(async (words: string[]) => {
+      const [{ searchConversations }, { searchResultsPayload }, { emitHarnessOutput }] = await Promise.all([
+        import('../search/engine.js'), import('../search/navigate.js'), import('../harness/output.js'),
+      ]);
+      const result = await searchConversations(words.join(' '));
+      if (!result) throw new Error('usage: clikcode search <words>');
+      emitHarnessOutput(searchResultsPayload(result));
+    });
   program.command('start').description('Start the optional loopback-only control API')
     .option('--port <port>', 'Optional explicit loopback port; default is OS-assigned')
     .action((options) => aiStart(config, options));
