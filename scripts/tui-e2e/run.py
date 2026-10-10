@@ -1221,6 +1221,13 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'plain': ['\n  Model  grok-4'], 'inline': ['\n  Model  grok-4', 'enter next', 'tab options']},
         'snap_lacks': {'inline': ['\n    Model']},
     },
+    # An account name that matches none is said in plain words, not "local
+    # AI account ... was not found".
+    'unknown-account-plain-words': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '/account nosuch'), ('wait_for', 'No account named "nosuch"', 10), ('settle', 1)],
+        'watch': [], 'never': ['local AI account'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

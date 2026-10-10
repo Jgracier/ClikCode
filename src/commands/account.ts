@@ -344,7 +344,7 @@ export function signInOutcomeSaid(error: unknown): 'cancelled' | 'failed' | unde
 
 function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {
   const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
-  if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
+  if (!account) throw new Error(`No account named "${labelOrId}"`);
   if (account.authKind !== 'vendor-cli') throw new Error(`account "${account.label}" is not owned by a vendor CLI`);
   const harness = localHarnessForProvider(account.provider);
   if (!harness) throw new Error(`no native harness is registered for provider ${account.provider}`);
@@ -463,7 +463,7 @@ export async function aiAccountAdd(options: { provider: string; label?: string; 
   if (harness && !harness.localAuth.includes(auth)) throw new Error(`${harness.displayName} does not support local ${auth} accounts`);
   const state = await readState({ transcripts: [] });
   if (given && state.accounts.some((account) => account.label.toLowerCase() === given.toLowerCase())) {
-    throw new Error(`a local AI account named "${given}" already exists`);
+    throw new Error(`An account named "${given}" already exists`);
   }
   if (state.accounts.some((account) => account.provider === provider && account.authKind === auth
     && account.credentialRef === credentialRef)) {
@@ -507,7 +507,7 @@ interface AccountRemoveOptions {
 export async function aiAccountRemove(labelOrId: string, options: AccountRemoveOptions = {}): Promise<void> {
   const state = await readState({ transcripts: [] });
   const index = state.accounts.findIndex((account) => account.id === labelOrId || account.label === labelOrId);
-  if (index < 0) throw new Error(`local AI account "${labelOrId}" was not found`);
+  if (index < 0) throw new Error(`No account named "${labelOrId}"`);
   const [removed] = state.accounts.splice(index, 1);
   const isolated = Boolean(removed.nativeProfile?.path) && 'path' in await resolvePurgeableProfile(removed.nativeProfile!.path);
   let loggedOut = false;
