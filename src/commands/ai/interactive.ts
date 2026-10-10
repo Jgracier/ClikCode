@@ -28,6 +28,7 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { readState } from '../../session/state/read.js';
+import { adoptHandedOverDraft, ephemeralSession } from '../../session/ephemeral.js';
 import { writeState } from '../../session/state/write.js';
 import { consumeSessionTurn } from '../../turn/checkpoint.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../../harness/accounts/account-usage.js';
@@ -105,6 +106,8 @@ export async function aiSessionOpenDefault(config: Conf, options: { continue?: b
 }
 
 export async function aiSessionResume(config: Conf, ref: string): Promise<void> {
+  // A window a newer build replaced, on a draft: the draft comes with it.
+  adoptHandedOverDraft();
   await aiSessionInteractive(config, await openConversation(process.cwd(), 'resume', ref));
 }
 
@@ -271,8 +274,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   const beginBuildReplace = (): Promise<void> | undefined => {
     if (!terminal || !newerBuild()) return undefined;
     const sessionId = id;
+    const draft = ephemeralSession(sessionId);
     return replaceCliWithNewBuild({
       sessionId,
+      ...(draft ? { draft } : {}),
       closeUi: () => terminal.close(),
       release: async () => {
         await releaseWindow();

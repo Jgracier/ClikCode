@@ -6,6 +6,8 @@ import { spawnSync } from 'node:child_process';
 import { stdout } from 'node:process';
 import { fileLocksIdle, fileLocksHeld } from '../../session/store/locks.js';
 import { REEXEC_TERMINAL_ENV } from '../../tui/restore.js';
+import { REEXEC_DRAFT_ENV } from '../../session/ephemeral.js';
+import type { HarnessSession } from '../../session/model.js';
 
 /** argv after the node binary: this CLI, and the chat to reopen. */
 export function relaunchArgv(entry: string, sessionId?: string): string[] {
@@ -16,6 +18,9 @@ export interface BuildReplace {
   /** The chat the new process reopens. Absent, it starts the way a bare
    * `clikcode` does. */
   sessionId?: string;
+  /** That chat when it is a draft -- held in this process only, never on
+   * disk -- for the new process to hold in its place. */
+  draft?: HarnessSession;
   /** The script this process is running. Defaults to argv[1], which is the
    * file a rebuild replaces. */
   entry?: string;
@@ -38,6 +43,8 @@ export function replaceCliWithNewBuild(input: BuildReplace): Promise<void> | und
   const entry = input.entry ?? process.argv[1];
   if (!entry || fileLocksHeld()) return undefined;
   const sessionId = input.sessionId || undefined;
+  // Inherited by the exec'd and the spawned process alike.
+  if (input.draft && input.draft.id === sessionId) process.env[REEXEC_DRAFT_ENV] = JSON.stringify(input.draft);
   replacing = (async () => {
     try { await input.release(); } catch { /* the new process is the point */ }
     // Released now, so there is no going back. Locks release() took end on
