@@ -265,7 +265,7 @@ function fileLine(topic: PresentedTopic): string {
   const files = topic.files.map((file) => `${file.path} (+${file.additions} -${file.removals})`);
   if (topic.unnamedEdits) files.push(`${topic.unnamedEdits} unnamed edit${topic.unnamedEdits === 1 ? '' : 's'}`);
   if (files.length) return `files: ${files.join(', ')}`;
-  return topic.logged ? 'files: none recorded for this span' : 'files: none kept (the turn log holds the last 20 turns)';
+  return topic.logged ? 'files: none recorded for this span' : 'files: none in the turn log for these requests';
 }
 
 function whenLine(topic: PresentedTopic, now: number): string {

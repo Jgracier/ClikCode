@@ -161,9 +161,11 @@ export async function undoLastTurn(
     // on, not the one the conversation is on now.
     let kept: TurnChangeRecord | undefined;
     let saw: boolean;
-    if (last.store === 'agent') {
-      const finished = await undoAgentTurn(options.stateDir, session.id, last, workspace, result);
-      saw = finished !== undefined;
+    // An agent turn whose snapshots the checkpoint store has since let go
+    // (its retention) is undone from the diffs it reported, as a vendor's is.
+    const finished = last.store === 'agent' ? await undoAgentTurn(options.stateDir, session.id, last, workspace, result) : undefined;
+    if (finished !== undefined) {
+      saw = true;
       if (finished === false) kept = last;
     } else {
       saw = last.changes.length > 0;
