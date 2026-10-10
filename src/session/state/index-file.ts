@@ -1,12 +1,14 @@
 /** The state index file itself: parsing it, its version gate, and the single
  * cached copy every read shares. */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir, stat, unlink } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessDefaultSettings, HarnessState } from '../model.js';
 import { cloneData } from '../store/data.js';
 import { atomicWriteFile } from '../store/files.js';
 import { cachedFile } from '../store/cached-file.js';
+import { pidIsAlive } from '../store/locks.js';
 import { resetSessionStoreCache } from '../store/records.js';
 import { loadInvocationLog, resetInvocationLogCache, storeInvocationLog, type Invocation, type InvocationLog, type InvocationRollup } from './invocations.js';
 import { hydrateAccountModels, resetAccountModelsCache, storeAccountModels } from './model-lists.js';
@@ -121,8 +123,35 @@ export async function storeIndex(index: StateIndex, options: { backup: boolean }
   if (replacing && raw === indexFile.raw()) return;
   await atomicWriteFile(path, raw);
   HARNESS_STATE_STATS.indexWrites += 1;
+  if (Date.now() - tempsSweptAt > TEMP_SWEEP_EVERY_MS) {
+    tempsSweptAt = Date.now();
+    await sweepDeadWriterTemps(path).catch(() => undefined);
+  }
   await indexFile.remember(raw, { ...cloneData(file), invocations: [] } as StateIndex);
   if (options.backup) await atomicWriteFile(`${path}.bak`, raw).catch(() => undefined);
+}
+
+/** A writer killed mid-write leaves its `index.json.<pid>.<hex>.tmp` -- a
+ * whole index each (717 KB of them were found). The daily sweep removes
+ * stale temporaries too, but a day of them adds up; this looks while
+ * writing anyway, at most every few minutes. Only a temp whose writer is
+ * gone, and a minute old: a live write's lasts milliseconds. */
+let tempsSweptAt = 0;
+const TEMP_SWEEP_EVERY_MS = 5 * 60_000;
+const DEAD_TEMP_MIN_AGE_MS = 60_000;
+
+export async function sweepDeadWriterTemps(path: string, now = Date.now()): Promise<number> {
+  const prefix = `${basename(path)}.`;
+  let removed = 0;
+  for (const name of await readdir(dirname(path)).catch(() => [] as string[])) {
+    const pid = name.startsWith(prefix) ? /^(\d+)\.[0-9a-f]+\.tmp$/.exec(name.slice(prefix.length))?.[1] : undefined;
+    if (!pid || Number(pid) === process.pid || pidIsAlive(Number(pid))) continue;
+    const temp = join(dirname(path), name);
+    const info = await stat(temp).catch(() => undefined);
+    if (!info || now - info.mtimeMs < DEAD_TEMP_MIN_AGE_MS) continue;
+    await unlink(temp).then(() => { removed += 1; }, () => undefined);
+  }
+  return removed;
 }
 
 export function resetHarnessStateCaches(): void {
