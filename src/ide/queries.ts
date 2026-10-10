@@ -116,8 +116,9 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
   const models: IdeModel[] = [...catalog.models]
     .sort((left, right) => (left === effective ? -1 : right === effective ? 1 : left.localeCompare(right)))
     .map((model) => {
-      const row = modelRow(harness, catalog, model, effective, false, free);
-      const detail = row.detail?.replace(/^·\s*/, '').replace(/(?:^|\s·\s)current$/, '').trim();
+      // No "current" in the words: the menu's checkmark says which it is.
+      const row = modelRow(harness, catalog, model, undefined, false, free);
+      const detail = row.detail?.replace(/^·\s*/, '').trim();
       return { id: model, label: row.label, ...(detail ? { detail } : {}), current: Boolean(onIt) && model === effective };
     });
   return { provider, models, custom: true };
