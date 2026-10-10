@@ -8,7 +8,7 @@ import { commandPaletteMatches } from '../../../../src/tui/command-palette';
 import { approvalHeading } from '../../../../src/tui/render/approval-keys';
 import { accountUsageText } from '../../../../src/harness/accounts/usage-reading';
 import { noticeLevel } from '../../src/text';
-import { modelWithEffort, toggleAgent } from '../../src/webview/picker';
+import { effortInitial, modelWithEffort, toggleAgent } from '../../src/webview/picker';
 import { conversationSection, rowState } from '../../src/webview/screens';
 import { splitEditorContext } from '../../src/editor-context';
 import { pathIn, relativeTime } from '../../src/webview/format';
@@ -201,6 +201,8 @@ describe('model and effort chip', () => {
   it('names them together, the model alone while it decides', () => {
     expect(modelWithEffort('opus', 'medium')).toBe('Opus Medium');
     expect(modelWithEffort('gpt-5.5', 'high')).toBe('gpt-5.5 High');
+    // The selected model's row shows each effort as its first letter.
+    expect(['default', 'low', 'medium', 'high', 'xhigh'].map(effortInitial).join('')).toBe('DLMHX');
     expect(modelWithEffort('opus', 'default')).toBe('Opus');
     expect(modelWithEffort(undefined, undefined)).toBe('Default model');
   });

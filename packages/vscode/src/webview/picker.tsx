@@ -279,6 +279,12 @@ export function effortLabel(value: string | undefined): string {
   return !value || value === 'default' ? 'Default' : titleCase(value);
 }
 
+/** An effort in one letter, for the selected model's row: the name
+ * shows whole on hover (and in the tooltip). */
+export function effortInitial(value: string | undefined): string {
+  return effortLabel(value).charAt(0).toUpperCase();
+}
+
 /** The chip's words for model and effort together, as Claude Code's picker
  * says them: `Opus Medium`; the model alone while the model decides. */
 export function modelWithEffort(modelName: string | undefined, effort: string | undefined): string {
@@ -300,8 +306,9 @@ function EffortBar(props: { model: ChatModel; onError: (message: string) => void
       {values.map((value) => (
         <button key={value} type="button" role="radio" aria-checked={value === current} class={`effort-option${value === current ? ' on' : ''}`}
           title={value === 'default' ? 'The model decides' : `${effortLabel(value)} reasoning effort`}
+          aria-label={effortLabel(value)}
           onClick={() => { setCurrent(value); choose({ kind: 'effort', value }).catch((failure: Error) => props.onError(failure.message)); }}>
-          {effortLabel(value)}
+          {props.inline ? <><span class="effort-short" aria-hidden="true">{effortInitial(value)}</span><span class="effort-full" aria-hidden="true">{effortLabel(value)}</span></> : effortLabel(value)}
         </button>
       ))}
     </div>
