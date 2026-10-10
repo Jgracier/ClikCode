@@ -9,7 +9,7 @@
  * copy is the prompt this client just submitted, shown until the worker's
  * own snapshot carries it.
  */
-import { composerUsageLabel } from '../../../src/tui/render/usage-words';
+import { chatCostLabel, composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { enterAgainSends, STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
 import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, resumeTurnClock, sameCall, stoppedCall, turnElapsedMs, withChildTool, type OpenTool, type Thought, type TurnClock } from '../../../src/harness/protocol/activity-view';
@@ -158,6 +158,9 @@ export interface ChatModel {
   route?: string;
   workspace?: string;
   accountUsage?: string;
+  /** "$1.23 this chat", from the bridge's `usage`; absent while no turn
+   * reported a cost. */
+  chatCost?: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   notes: Note[];
   /** `notification`: a finished background task the agent is owed, not
@@ -633,7 +636,7 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
     case 'usage':
       // The terminal's own words: the reset in place of the figure once a
       // window is spent, "Out Of Credits" for a spent balance.
-      return { ...model, accountUsage: composerUsageLabel(event.label, event.reset) };
+      return { ...model, accountUsage: composerUsageLabel(event.label, event.reset), chatCost: chatCostLabel(event.chatCost) };
     case 'closed':
       return event.sessionId === model.sessionId ? freshFor(model) : model;
     default:

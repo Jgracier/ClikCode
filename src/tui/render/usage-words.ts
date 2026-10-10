@@ -1,6 +1,7 @@
 /** How a usage reading is worded wherever it is shown -- the terminal's
  * composer rule and the VS Code chat bar alike. Pure, with no terminal
  * dependency, so the extension's webview can use the same words. */
+import { dollars } from '../../harness/protocol/format.js';
 
 /** How much of an allowance is left, read out of the label the harness gave.
  * Both forms appear: "42% left" and the legacy "58% used". */
@@ -23,6 +24,13 @@ export function composerUsageLabel(label?: string, resetLabel?: string): string 
   if (resetLabel) return resetLabel;
   if (label && /credits exhausted|out of credits/i.test(label)) return 'Out Of Credits';
   return label;
+}
+
+/** "$1.23 this chat": what the conversation has cost, beside the account's
+ * usage. Nothing when no turn reported a cost -- unknown is not $0. */
+export function chatCostLabel(costUsd: number | undefined): string | undefined {
+  if (costUsd === undefined || !Number.isFinite(costUsd)) return undefined;
+  return `${dollars(costUsd)} this chat`;
 }
 
 /** Whether the reading says the allowance is spent (it is then drawn red). */

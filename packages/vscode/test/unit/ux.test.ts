@@ -301,3 +301,15 @@ describe('a sign-in during a turn', () => {
     expect(liveElapsedMs(model.live!, Date.now())).toBe(held + 1_000);
   });
 });
+
+describe('running cost per chat', () => {
+  it("shows the bridge's dollars for this chat beside the usage, and nothing (never $0) when no cost was reported", async () => {
+    const costed = applyEvent(emptyModel(), { type: 'usage', label: '5h 40% left', chatCost: 1.234 });
+    expect(costed.chatCost).toBe('$1.23 this chat');
+    // Cheap turns keep their figure rather than rounding to nothing.
+    expect(applyEvent(emptyModel(), { type: 'usage', chatCost: 0.0042 }).chatCost).toBe('$0.0042 this chat');
+    // A subscription harness reports no cost: not shown, and a later reading without one clears it.
+    expect(applyEvent(emptyModel(), { type: 'usage', label: '5h 40% left' }).chatCost).toBeUndefined();
+    expect(applyEvent(costed, { type: 'usage', label: '5h 40% left' }).chatCost).toBeUndefined();
+  });
+});

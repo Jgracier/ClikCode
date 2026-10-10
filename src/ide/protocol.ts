@@ -300,7 +300,9 @@ export type IdeEvent =
    * the terminal's hint line under the link, never a sheet over it. */
   | { type: 'sign-in-link'; id: string; name: string; url?: string; code?: string; done?: boolean; ask?: { prompt: string; secret?: boolean } }
   | { type: 'open-file'; path: string }
-  | { type: 'usage'; label?: string; reset?: string }
+  /** `chatCost`: this conversation's dollars so far (/usage's "This chat"),
+   * absent when no turn reported a cost. */
+  | { type: 'usage'; label?: string; reset?: string; chatCost?: number }
   /** /copy: put this on the editor's clipboard (`copy` feature). */
   | { type: 'copy'; text: string }
   /** /search walking mentions (`search-walk` feature): show this one;

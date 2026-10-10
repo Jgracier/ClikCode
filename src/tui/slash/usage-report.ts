@@ -83,6 +83,14 @@ function splitLines(totals: UsageReportTotals): string[] {
   return lines;
 }
 
+/** What this conversation has cost in dollars, as /usage's "This chat"
+ * adds it up; undefined when no turn of it reported a cost (a subscription
+ * harness), which is not $0. */
+export function conversationCost(state: Pick<HarnessState, 'invocations'>, sessionId: string): number | undefined {
+  const totals = sumInvocations(state.invocations.filter((item) => item.sessionId === sessionId));
+  return totals.costKnown ? totals.costUsd : undefined;
+}
+
 /** Ids that name this chat's provider. A session stores the catalog id
  * (`xai`) and sometimes only the command (`grok`). Accounts are filed under
  * the catalog id. Both have to match, for every harness, not one of them. */
@@ -107,7 +115,8 @@ export function usageReport(
   const totals = { ...sumInvocations(providerInvocations), accounts: accounts.length };
   const conversation = sumInvocations(state.invocations.filter((item) => item.sessionId === session.id));
   const chatBits = [`${conversation.turns} ${conversation.turns === 1 ? 'turn' : 'turns'}`, ...(conversation.totalTokens ? [tokenFigure(conversation.totalTokens)] : [])];
-  if (conversation.costKnown) chatBits.push(dollars(conversation.costUsd));
+  const cost = conversationCost(state, session.id);
+  if (cost !== undefined) chatBits.push(dollars(cost));
   const lines = [
     providerName,
     '',
