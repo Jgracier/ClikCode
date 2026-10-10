@@ -7,7 +7,7 @@ import type { AiLocalHarnessDefinition } from '../definition';
 import { AI_LOCAL_HARNESSES } from '@clikcode/router/ai-local-harness';
 
 const harness = (fields: Partial<AiLocalHarnessDefinition>): AiLocalHarnessDefinition => ({
-  command: 'x', provider: 'x', displayName: 'X', surface: 'terminal', localAuth: ['vendor-cli'], binary: 'x', ...fields,
+  command: 'x', provider: 'x', displayName: 'X', localAuth: ['vendor-cli'], binary: 'x', ...fields,
 });
 
 describe('vendor credential files', () => {

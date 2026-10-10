@@ -45,7 +45,7 @@ const option = (overrides: Partial<AiHarnessOptionDefinition>): AiHarnessOptionD
 });
 
 const harness = (overrides: Partial<AiLocalHarnessDefinition> = {}): AiLocalHarnessDefinition => ({
-  command: 'acme', provider: 'acme', displayName: 'Acme CLI', surface: 'terminal',
+  command: 'acme', provider: 'acme', displayName: 'Acme CLI',
   localAuth: ['api-key'], binary: 'acme',
   ...overrides,
 } as AiLocalHarnessDefinition);

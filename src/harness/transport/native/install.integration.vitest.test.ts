@@ -76,7 +76,7 @@ describe.runIf(unprivileged && npmAvailable)('installing an npm harness when the
   });
 
   it('installs into ClikCode\'s own prefix, finds the binary there, and runs it', async () => {
-    const spec = { command: 'fake', binary: 'clikcode-fake-harness', displayName: 'Fake Harness', surface: 'terminal' as const, npmPackage: tarball };
+    const spec = { command: 'fake', binary: 'clikcode-fake-harness', displayName: 'Fake Harness', npmPackage: tarball };
     expect(await resolveBinaryPath(spec.binary), 'not installed to begin with').toBeUndefined();
     const reporter = recorder();
     // Two turns choosing it at once: one install, both get the harness.
@@ -97,7 +97,7 @@ describe.runIf(unprivileged && npmAvailable)('installing an npm harness when the
   }, 120_000);
 
   it('reports an npm failure with its tail and the command to run by hand', async () => {
-    const spec = { command: 'broken', binary: 'clikcode-no-such-harness', displayName: 'Broken', surface: 'terminal' as const, npmPackage: join(root, 'does-not-exist.tgz') };
+    const spec = { command: 'broken', binary: 'clikcode-no-such-harness', displayName: 'Broken', npmPackage: join(root, 'does-not-exist.tgz') };
     const reporter = recorder();
     const failure = await ensureHarnessInstalled(spec, { reporter }).then(() => undefined, (error: Error) => error);
     expect(failure?.message).toMatch(/^Could not install Broken automatically: npm install --global --prefix .+ exited \d+/);

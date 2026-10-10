@@ -7,7 +7,6 @@ export const codex = {
   command: 'codex',
   provider: 'codex',
   displayName: 'Codex',
-  surface: 'terminal',
   tier: 'primary',
   transport: 'structured-cli',
   parser: 'codex-items',

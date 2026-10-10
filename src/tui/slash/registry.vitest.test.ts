@@ -7,7 +7,7 @@ import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 
 const harness = (overrides: Partial<AiLocalHarnessDefinition> = {}): AiLocalHarnessDefinition => ({
-  command: 'vendor', provider: 'vendor', displayName: 'Vendor', surface: 'terminal', localAuth: ['vendor-cli'], binary: 'vendor',
+  command: 'vendor', provider: 'vendor', displayName: 'Vendor', localAuth: ['vendor-cli'], binary: 'vendor',
   modelArgvPrefix: ['--model'], ...overrides,
 });
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({

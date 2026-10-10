@@ -32,7 +32,6 @@ const pickerInspectionCache = new Map<string, { identity: string | undefined; re
  * many background subprocesses still competes with terminal rendering even
  * though the picker no longer awaits them. */
 export async function inspectNativeHarnessForPicker(spec: NativeHarnessSpec): Promise<NativeHarnessInspection> {
-  if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
   const identity = await harnessBinaryIdentity(spec.binary);
   const cached = inspectionCache.get(spec.command);
   if (cached && cached.identity === identity) return cached.result;
@@ -64,7 +63,6 @@ function clearNativeHarnessInspectionCache(command?: string): void {
 
 /** Inspect availability without installing, logging in, or entering a vendor TUI. */
 export async function inspectNativeHarness(spec: NativeHarnessSpec, timeoutMs = 5_000): Promise<NativeHarnessInspection> {
-  if (spec.surface === 'editor-extension') return { installed: false, error: 'editor-extension-only' };
   // What the binary is, before deciding whether it needs running. A version
   // string is a fact about a file: same path, mtime and size means the same
   // answer, however long ago it was learned.

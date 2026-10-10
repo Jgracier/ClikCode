@@ -14,7 +14,7 @@ import { assertInstallerUrl, ensureHarnessInstalled, isPermissionFailure, npmPre
 const PLATFORMS: readonly NodeJS.Platform[] = ['linux', 'darwin', 'win32'];
 
 describe('every catalog harness installs when it is chosen', () => {
-  const terminal = allLocalHarnesses().filter((harness) => harness.surface === 'terminal');
+  const terminal = allLocalHarnesses();
 
   it('has an automatic route on Linux, macOS and Windows', () => {
     const missing = PLATFORMS.flatMap((platform) => terminal
@@ -41,14 +41,8 @@ describe('every catalog harness installs when it is chosen', () => {
     }
   });
 
-  it('gives an editor extension no route, with the reason', () => {
-    const route = harnessInstallRoute({ command: 'ext', binary: 'ext', displayName: 'Some Extension', surface: 'editor-extension', npmPackage: 'ext' });
-    expect(route).toMatchObject({ kind: 'none' });
-    expect(route.kind === 'none' && route.reason).toContain('editor extension');
-  });
-
   it('gives a custom harness outside the catalog a clear instruction instead of a guess', () => {
-    const route = harnessInstallRoute({ command: 'mine', binary: 'mine-acp', displayName: 'Mine', surface: 'terminal' });
+    const route = harnessInstallRoute({ command: 'mine', binary: 'mine-acp', displayName: 'Mine' });
     expect(route.kind === 'none' && route.reason).toContain('`mine-acp` command is on PATH');
   });
 });
@@ -180,17 +174,13 @@ describe('ensureHarnessInstalled', () => {
   it('does nothing, and shows nothing, for a harness already on PATH', async () => {
     const shown: string[] = [];
     const reporter = { start: (label: string) => shown.push(label), done: (message: string) => shown.push(message), failed: (message: string) => shown.push(message) };
-    expect(await ensureHarnessInstalled({ command: 'node', binary: 'node', displayName: 'Node', surface: 'terminal', npmPackage: 'node' }, { reporter })).toBe(false);
+    expect(await ensureHarnessInstalled({ command: 'node', binary: 'node', displayName: 'Node', npmPackage: 'node' }, { reporter })).toBe(false);
     expect(shown).toEqual([]);
-  });
-
-  it('refuses an editor extension with the reason', async () => {
-    await expect(ensureHarnessInstalled({ command: 'ext', binary: 'ext', displayName: 'Ext', surface: 'editor-extension' })).rejects.toThrow(/editor extension/);
   });
 
   it('says what to do for a missing harness it has no installer for', async () => {
     const reporter = { start: () => undefined, done: () => undefined, failed: () => undefined };
-    await expect(ensureHarnessInstalled({ command: 'nope', binary: 'clikcode-no-such-binary', displayName: 'Nope', surface: 'terminal' }, { reporter }))
+    await expect(ensureHarnessInstalled({ command: 'nope', binary: 'clikcode-no-such-binary', displayName: 'Nope' }, { reporter }))
       .rejects.toThrow(/`clikcode-no-such-binary` command is on PATH\. Then retry \/nope\./);
   });
 });

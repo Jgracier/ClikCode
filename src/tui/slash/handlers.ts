@@ -612,7 +612,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       const provider = shortcut ? (localHarnessForCommand(shortcut)?.provider ?? shortcut) : undefined;
       if (!provider) throw new Error('usage: /accounts add <harness>');
       const knownHarness = shortcut ? localHarnessForCommand(shortcut) : undefined;
-      if (knownHarness?.surface === 'terminal') { await aiAccountLogin(knownHarness.command, words.join(' ') || undefined); return; }
+      if (knownHarness) { await aiAccountLogin(knownHarness.command, words.join(' ') || undefined); return; }
       return emitHarnessOutput({ panel: 'add-account', provider, next: `${harnessCommand()} accounts add --provider ${provider} --label <label> --auth api-key|vendor-cli --credential-ref <local-reference>`, credentialBoundary: 'local-only' });
     }
     return emitHarnessOutput({ panel: 'accounts', session, accounts: state.accounts.map(accountView), controls: ['use <label-or-id>', 'login <harness> [label]', 'add <harness> [label]', 'remove <label-or-id>'] });

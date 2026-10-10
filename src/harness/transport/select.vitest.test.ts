@@ -69,10 +69,6 @@ describe('harness turn transports', () => {
 
   it('keeps every catalog entry on an honest executable transport', () => {
     for (const candidate of AI_LOCAL_HARNESSES) {
-      if (candidate.surface === 'editor-extension') {
-        expect(harnessIntegrationLevel(candidate), candidate.command).toBe('editor-only');
-        continue;
-      }
       const transport = harnessTurnTransport(candidate);
       expect(Boolean(candidate.turn || candidate.acp), candidate.command).toBe(true);
       if (transport === 'text-cli') expect(harnessIntegrationLevel(candidate), candidate.command).toBe('compatibility');

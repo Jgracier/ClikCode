@@ -9,7 +9,6 @@ export interface NativeHarnessSpec {
   command: string;
   binary: string;
   displayName: string;
-  surface?: 'terminal' | 'editor-extension';
   npmPackage?: string;
   installer?: AiHarnessInstaller;
   /** A separate ACP executable, which an install must also provide. */

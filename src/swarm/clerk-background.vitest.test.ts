@@ -37,7 +37,7 @@ describe('a clerk whose vendor leaves a background task running', () => {
   it('waits for the task, and reports what came of it', async () => {
     const harness = {
       command: 'claude', provider: 'anthropic', displayName: 'Stand-in Claude', binary: process.execPath, parser: 'claude-stream-json',
-      localAuth: ['vendor-cli'], surface: 'terminal', transport: 'structured-cli', integration: 'structured',
+      localAuth: ['vendor-cli'], transport: 'structured-cli', integration: 'structured',
       turn: { startArgv: ['-e', stand(600)], promptInput: 'stdin', stdinFormat: 'stream-json', output: 'json-lines', responseFields: ['result'] },
     } as unknown as AiLocalHarnessDefinition;
     const account = { id: 'a', provider: 'anthropic', label: 'test', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:claude' } as unknown as AiHarnessAccount;

@@ -42,7 +42,7 @@ afterEach(async () => { await closePersistentTransport(); rmSync(dir, { recursiv
 
 function attempt(log: string, session: HarnessSession, text: string, signal?: AbortSignal) {
   const harness = {
-    command: 'fakeacp', displayName: 'Fake ACP', provider: 'fake', binary: process.execPath, surface: 'terminal',
+    command: 'fakeacp', displayName: 'Fake ACP', provider: 'fake', binary: process.execPath,
     transport: 'acp', acp: { binary: process.execPath, argv: ['-e', agent(log)], inheritCliOptions: false },
   } as unknown as AiLocalHarnessDefinition;
   const account = { id: 'acct', provider: 'fake', harness: 'fakeacp' } as unknown as AiHarnessAccount;

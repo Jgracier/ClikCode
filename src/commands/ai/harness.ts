@@ -39,7 +39,6 @@ import { harnessCommand } from '../../session/state/paths.js';
 export async function aiHarnessSelect(harnessCommandName: string, sessionId: string, options: { emit?: boolean; signIn?: boolean; prompter?: HarnessPrompter } = {}): Promise<void> {
   const harness = localHarnessForCommand(harnessCommandName);
   if (!harness) throw new Error(`unknown local harness: ${harnessCommandName}`);
-  if (harness.surface !== 'terminal') throw new Error(`${harness.displayName} is editor-only and cannot run turns inside ClikCode.`);
   if (!harnessCanRunTurns(harness)) throw new Error(`${harness.displayName} does not publish a non-interactive turn contract (CLI or ACP) required by the centralized ClikCode UI.`);
   // Installed now, while the user watches it happen (install.ts shows it on
   // whatever surface this is), rather than as a surprise on the first turn.

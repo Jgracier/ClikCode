@@ -11,7 +11,7 @@ vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => ({
 }));
 
 const harness = (command: string, provider: string, tier: number): AiLocalHarnessDefinition & { tier: number } => ({
-  command, provider, displayName: command, surface: 'terminal', localAuth: ['vendor-cli'], binary: command, tier,
+  command, provider, displayName: command, localAuth: ['vendor-cli'], binary: command, tier,
 } as never);
 const account = (id: string, provider: string, fields: Partial<AiHarnessAccount> = {}): AiHarnessAccount => ({
   id, provider, label: id, authKind: 'vendor-cli', models: [], status: 'ready', ...fields,
