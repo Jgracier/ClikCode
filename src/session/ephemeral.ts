@@ -59,3 +59,27 @@ export function unforceStoreSession(id: string): void {
 export function sessionForceStored(id: string): boolean {
   return forced.has(id);
 }
+
+/** A draft this process holds, if `id` is one. */
+export function ephemeralSession(id: string): HarnessSession | undefined {
+  const session = overlay().get(id);
+  return session ? cloneData(session) : undefined;
+}
+
+/** A newer build replacing this window (commands/ai/build-replace.ts)
+ * hands the draft it was on to the new process here: a draft is never on
+ * disk, so `sessions resume <id>` found nothing and the window came back on
+ * a fresh chat saying "no chat matches". */
+export const REEXEC_DRAFT_ENV = 'CLIKCODE_REEXEC_DRAFT';
+
+/** The draft a replaced window handed over, held in this process as its
+ * own. Read once; the variable goes, so no child inherits it. */
+export function adoptHandedOverDraft(): void {
+  const raw = process.env[REEXEC_DRAFT_ENV];
+  delete process.env[REEXEC_DRAFT_ENV];
+  if (!raw) return;
+  try {
+    const session = JSON.parse(raw) as HarnessSession;
+    if (session && typeof session.id === 'string') holdEphemeral(session);
+  } catch { /* fail-open-ok: without it the window opens a fresh chat */ }
+}

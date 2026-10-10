@@ -80,6 +80,27 @@ SCENARIOS = {
         'watch': ['The final answer is ready.'],
         'no_clear_after_type': True,
     },
+    # A newer build lands while the window is on a draft -- a chat nothing
+    # has happened in yet, which lives in this process only. The re-exec
+    # reopens that draft, its setup with it; it used to find nothing on
+    # disk and land on a fresh chat saying "no chat matches <id>".
+    'rebuild-on-draft-reopens-it': {
+        'rebuild_entry': True,
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '/model grok-4-fast'), ('wait_for', 'grok-4-fast', 10), ('settle', 2),
+                  ('touch_entry',), ('settle', 20), ('mark',),
+                  ('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 2)],
+        'watch': [], 'never': ['no chat matches'], 'final_contains': ['grok-4-fast', 'The final commit is live.'],
+    },
+    # The same for the draft /new opens after a conversation.
+    'rebuild-after-new-reopens-draft': {
+        'rebuild_entry': True,
+        'turns': [TWO_BLOCKS, {'blocks': ['Second answer arrives here.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'The final commit is live.', 30), ('settle', 2), ('type', '/new'), ('settle', 3),
+                  ('touch_entry',), ('settle', 20),
+                  ('type', 'and the second question'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2)],
+        'watch': [], 'never': ['no chat matches'],
+    },
     'rebuild-while-following-running-turn': {
         # A newer build lands while a turn runs; the window leaves for the
         # board and comes back. The quiet moment it re-execs at is while the
