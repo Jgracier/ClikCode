@@ -325,6 +325,18 @@ SCENARIOS = {
                   ('damage_and_redraw', 'Reasoning effort')],
         'watch': [], 'final_contains': ['Reasoning effort'],
     },
+    # The board on a phone whose keyboard comes up: 63 rows to 32. It is
+    # repainted as the board -- its headings as the board draws them, its
+    # list fitted to the new height -- not in the slash palette's style
+    # ("── Recent", indented rows) the repaint used to fall back to.
+    'board-resize-keeps-board': {
+        'cols': 70, 'rows': 63,
+        'turns': [{'blocks': ['First chat answered.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+                  ('keys', '\x1b[D'), ('wait_for', 'Recent', 10), ('settle', 1),
+                  ('resize', 32, 70), ('settle', 2), ('snap', 'short')],
+        'watch': [], 'snap_contains': {'short': ['Recent', 'enter open']}, 'snap_lacks': {'short': ['── Recent']},
+    },
     'redraw-while-waiting': {
         'turns': [TWO_BLOCKS],
         'steps': [

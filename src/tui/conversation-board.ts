@@ -296,8 +296,9 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
         spin.unref();
       }
       if (state.selected >= showing.length) state.selected = showing.length - 1;
-      // The whole page: the list takes every row the composer does not.
-      const capacity = Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
+      // The whole page: the list takes every row the composer does not, at
+      // whatever height the screen is when it is painted.
+      const capacity = (): number => Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
       host.paint(state.draft, showing.map((row) => ({
         // Conversations get the glyph column, the spinner animated; commands do not.
         label: boardShowsCommands(state) ? row.label : conversationLabel(row, frame), detail: row.detail, value: '', group: row.group,
