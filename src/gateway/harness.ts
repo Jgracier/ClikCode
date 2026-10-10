@@ -50,8 +50,6 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
    * modelClientForSession (agent/models/for-session.ts) chose for the route. */
   modelClient: ModelClient;
   modelClientForStep?: () => Promise<ModelClient | 'switch' | undefined>;
-  /** The user approved the plan (exit_plan_mode): plan mode is over. */
-  onPlanModeExit?: (plan: string) => void;
 }
 
 /** The agent loop's usage in the shape every harness reports. Cost arrives

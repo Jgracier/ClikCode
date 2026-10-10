@@ -35,6 +35,7 @@ import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { textTranscript } from '../turn/turn-activities.js';
 import { modelRow } from '../tui/pickers/model.js';
 import { swarmIsOn } from '../swarm/policy.js';
+import { planModeOnChat } from '../agent/plan-mode-setting.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import type {
   IdeAccount, IdeAccounts, IdeChatSettings, IdeConversation, IdeGateway, IdeModel, IdeModels,
@@ -205,9 +206,8 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
       detail: swarmOn ? 'This chat does its own work' : 'Hand work to other accounts that have usage left',
     }],
   };
-  if (harness) {
-    if (harness.planMode) settings.plan = session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
-  } else if (isClikCodeAgent(session)) settings.plan = session.planMode === true;
+  if (planModeOnChat(session, harness)) settings.plan = session.planMode === true;
+  else if (harness?.planMode) settings.plan = session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
   return settings;
 }
 

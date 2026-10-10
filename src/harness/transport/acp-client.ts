@@ -51,7 +51,10 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   effort?: string | null;
   /** The harness's catalog ACP entry: how model, effort and permission mode
    * are selected over the protocol, and what its usage readings mean. */
-  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'usageTotals' | 'cumulativeChunks'>;
+  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks'>;
+  /** The chat's Plan mode is on: the session runs in `acp.planModeId`; the
+   * agent leaving it is onPlanModeExit. */
+  planMode?: boolean;
   modelProviderSeparator?: string;
   /** The session lists only what the account's plan runs (catalog
    * `freePlan.listed`): a model it leaves out is refused, not swapped for
@@ -553,7 +556,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     };
     const startingRequest = (method: string, params: Json): Promise<Json> => waitOnStart(peer.request(method, params, control));
     const stillRunning = (): void => { if (turn.done) throw turnCancelledError(); };
-    const { effortConfigId, providerConfigId, permissionModeIds, usageTotals } = input.acp ?? {};
+    const { effortConfigId, providerConfigId, permissionModeIds, planModeId, usageTotals } = input.acp ?? {};
     // CLI launch flags are not valid for this agent's ACP entry point: model
     // and effort can only be selected over the protocol.
     const modelRequiresProtocol = input.acp?.inheritCliOptions === false;
@@ -670,10 +673,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       if (modelConfig) live.configOptions = live.configOptions?.map((option) => option === modelConfig ? { ...option, currentValue: modelId } : option);
       else live.models = { ...live.models, currentModelId: modelId };
     }
-    const modeId = permissionModeIds?.[input.permissionMode];
+    const planning = Boolean(input.planMode && planModeId);
+    const modeId = planning ? planModeId : permissionModeIds?.[input.permissionMode];
     if (modeId && live.modes?.currentModeId !== modeId) {
       const available: Json[] = Array.isArray(live.modes?.availableModes) ? live.modes.availableModes : [];
-      if (!available.some((mode) => mode.id === modeId)) throw new Error(`${input.command} ACP does not offer permission mode ${modeId}`);
+      if (!available.some((mode) => mode.id === modeId)) throw new Error(`${input.command} ACP does not offer ${planning ? 'plan' : 'permission'} mode ${modeId}`);
       await startingRequest('session/set_mode', { sessionId: turn.sessionId, modeId });
       stillRunning();
       live.modes = { ...live.modes, currentModeId: modeId };
@@ -838,6 +842,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const turn = this.turn && !this.turn.done ? this.turn : undefined;
     const expected = turn?.sessionId ?? this.sessionId;
     if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) return;
+    // The agent changed its own mode: leaving plan mode is its plan approved.
+    if (update.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string' && this.live) {
+      const before = this.live.modes?.currentModeId;
+      this.live.modes = { ...this.live.modes, currentModeId: update.currentModeId };
+      const planModeId = turn?.input.acp?.planModeId;
+      if (turn?.promptStarted && planModeId && before === planModeId && update.currentModeId !== planModeId) turn.input.onPlanModeExit?.();
+    }
     // Running totals are the session's, whoever is listening: taken during a
     // session/load replay (the baseline) and after a prompt was answered.
     const totals = acpSessionTotals(update);
