@@ -6,7 +6,7 @@
 import { untilStopped } from './stop-signal.js';
 import type { Command } from 'commander';
 import { acpAdd, acpList, acpRemove } from '../commands/acp.js';
-import { mcpAdd, mcpList, mcpRemove, mcpTargets } from '../commands/mcp.js';
+import { mcpAdd, mcpList, mcpLogin, mcpLogout, mcpRemove, mcpTargets } from '../commands/mcp.js';
 import type Conf from 'conf';
 import { sendScriptedTurn } from '../worker/scripted-send.js';
 import { aiPermissions } from '../tui/pickers/permissions.js';
@@ -112,15 +112,24 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .argument('<target>', 'Command to launch, or a URL for a remote server')
     .argument('[args...]', 'Arguments for a launched command')
     .description('Record an MCP server. It is installed into a harness when you choose that provider, if the name is not already there')
+    .option('--client-id <id>', "A remote server's OAuth client id, where its authorization server registers none itself")
+    .option('--callback-port <port>', 'The fixed loopback port that client id was registered with')
+    .option('--scope <scopes>', 'OAuth scopes to ask for, when the server names none')
     // A server's own flags (`--browser chrome`) are its arguments, not ours.
     .allowUnknownOption()
-    .action((name: string, target: string, args: string[]) => mcpAdd(name, target, args));
+    .action((name: string, target: string, args: string[], options: { clientId?: string; callbackPort?: string; scope?: string }) => mcpAdd(name, target, args, options));
   mcp.command('list')
     .description('List the MCP servers recorded in ClikCode, and the harnesses ClikCode has given each')
     .action(mcpList);
   mcp.command('remove <name>')
     .description('Remove a server from ClikCode, and take ClikCode\'s own copies back out of every harness (never one you added there)')
     .action(mcpRemove);
+  mcp.command('login <name>')
+    .description("Sign in to a remote server that asks for it (OAuth), for ClikCode's own agent")
+    .action(mcpLogin);
+  mcp.command('logout <name>')
+    .description("Forget ClikCode's sign-in to a remote server")
+    .action(mcpLogout);
   mcp.command('targets')
     .description('Show how each harness would be given a server, when you choose it')
     .action(mcpTargets);

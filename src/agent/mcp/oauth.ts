@@ -486,6 +486,11 @@ export async function signInMcpServer(options: McpSignInOptions): Promise<void> 
 }
 
 async function registerClient(discovery: McpOAuthDiscovery, redirectUri: string, fetchImpl: Fetch): Promise<NonNullable<McpOAuthRecord['client']>> {
+  // A public client where the server takes one; else a secret sent in the
+  // form (Figma registers no public clients).
+  const methods = discovery.authMethods;
+  const method = !methods?.length || methods.includes('none') ? 'none'
+    : methods.includes('client_secret_post') ? 'client_secret_post' : methods[0]!;
   const response = await fetchImpl(discovery.registrationEndpoint!, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -494,7 +499,7 @@ async function registerClient(discovery: McpOAuthDiscovery, redirectUri: string,
       redirect_uris: [redirectUri],
       grant_types: ['authorization_code', 'refresh_token'],
       response_types: ['code'],
-      token_endpoint_auth_method: 'none',
+      token_endpoint_auth_method: method,
       ...(discovery.scope ? { scope: discovery.scope } : {}),
     }),
     signal: AbortSignal.timeout(30_000),
@@ -509,7 +514,7 @@ async function registerClient(discovery: McpOAuthDiscovery, redirectUri: string,
   return {
     id: parsed.client_id,
     ...(typeof parsed.client_secret === 'string' ? { secret: parsed.client_secret } : {}),
-    ...(typeof parsed.token_endpoint_auth_method === 'string' ? { authMethod: parsed.token_endpoint_auth_method } : {}),
+    authMethod: typeof parsed.token_endpoint_auth_method === 'string' ? parsed.token_endpoint_auth_method : method,
     redirectUri, registered: true,
   };
 }

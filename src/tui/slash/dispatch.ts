@@ -42,7 +42,11 @@ import { doctorSummary } from '../doctor-summary.js';
 import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { aiSessionCommand, lastAnswer, slashRouteTurn } from './handlers.js';
 import { copyToClipboard } from '../../session/attachments.js';
-import { routeSlashInput, type SlashHandlerKey, type SlashRoute } from './registry.js';
+import { parseSlashInput, routeSlashInput, type SlashHandlerKey, type SlashRoute } from './registry.js';
+import { loginMcpServer, mcpServersText, mcpSignInUiFor } from '../../commands/mcp.js';
+import { forgetMcpOAuth } from '../../agent/mcp/oauth.js';
+import { stripAnsi } from '../../gateway/login/url.js';
+import { stateDirectory } from '../../session/store/paths.js';
 import { sessionHarness, slashRouteContextFor } from './context.js';
 import { enqueueCommandLine } from './queue.js';
 import { impliedHarnessCommand } from './infer-provider.js';
@@ -110,6 +114,31 @@ async function hasHarness(id: string): Promise<boolean> {
   return Boolean(session && (session.nativeHarness || isClikCodeAgent(session)));
 }
 
+/** `/mcp`, `/mcp login <name>`, `/mcp logout <name>`. A sign-in runs only
+ * here, because the user typed it: a turn never starts one (agent/mcp/oauth.ts). */
+async function agentMcpCommand(host: SlashHost, words: readonly string[]): Promise<InteractiveSlashOutcome> {
+  const [action, name] = words;
+  if ((action === 'login' || action === 'logout') && !name) throw new Error(`Usage: /mcp ${action} <name>`);
+  if (action === 'logout') {
+    return { notice: await forgetMcpOAuth(stateDirectory(), name!) ? `Signed out of ${name}` : `ClikCode holds no sign-in for ${name}` };
+  }
+  if (action === 'login') {
+    const screen = host.prompter.signInScreen?.(name!);
+    if (!screen) throw new Error(`Sign in from a terminal: clikcode mcp login ${name}`);
+    try {
+      await loginMcpServer(name!, mcpSignInUiFor(screen));
+    } catch (error) {
+      if (screen.signal.aborted) return { notice: `Sign-in to ${name} cancelled` };
+      throw error;
+    } finally { screen.stop(); }
+    return { notice: `Signed in to ${name}; its tools are offered from the next turn` };
+  }
+  if (action) throw new Error('Usage: /mcp [login|logout <name>]');
+  const text = await host.withBusy('checking MCP servers…', () => mcpServersText());
+  host.panel('mcp', 'MCP servers', text, `MCP servers\n\n${stripAnsi(text)}`);
+  return {};
+}
+
 /** Route one line on conversation `id`. A line taken from the queue as a
  * command (`fromQueuedCommand`) is never handed back to the queue. */
 export async function dispatchLine(host: SlashHost, id: string, line: string, options: { fromQueuedCommand?: boolean } = {}): Promise<InteractiveSlashOutcome> {
@@ -145,6 +174,11 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       return { id: chosen, ...(await hasHarness(chosen) ? { prompt: route.prompt, echo: true } : { notice: 'Choose a provider to send this.' }) };
     }
     return { prompt: route.prompt, echo: true };
+  }
+  // `/mcp` on ClikCode's own agent: its MCP servers and their sign-ins. On a
+  // vendor harness /mcp is that harness's own manager (below).
+  if (isClikCodeAgent(session) && (route.kind === 'unknown' ? route.head : route.kind === 'manager' ? route.name : undefined) === 'mcp') {
+    return agentMcpCommand(host, parseSlashInput(line)?.words ?? []);
   }
   if (route.kind === 'native' || route.kind === 'custom' || route.kind === 'unknown') {
     return slashRouteTurn(route, session, harness) ?? {};
