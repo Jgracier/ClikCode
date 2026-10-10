@@ -11,6 +11,7 @@ import { pastedText } from './keys.js';
 import { backslashNewline, composerVerticalMove, editWaitingComposer } from './composer-edit.js';
 import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, type PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
+import { noticeLines } from './render/wrap.js';
 import { composerLayout } from './render/composer-layout.js';
 import { closeOpenHyperlink } from './render/hyperlinks.js';
 import { createStreamingBlockParser } from './render/markdown.js';
@@ -1849,8 +1850,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // an elapsed clock in a fixed place are status, while a sentence being
     // rewritten under the eye is the thing that made reading impossible.
     const notice = this.mentionFocus?.status ?? this.transientNotice ?? this.currentNotice;
+    const noticeShown = notice ? noticeLines(notice, inner) : [];
     const budget = frameRowBudget({
-      targetHeight, waiting: Boolean(this.turn), notice: Boolean(notice), requestedPaletteCapacity,
+      targetHeight, waiting: Boolean(this.turn), notice: noticeShown.length, requestedPaletteCapacity,
     });
     const { waitingRows, noticeRows, paletteRows } = budget;
     const paletteCapacity = paletteRows;
@@ -2214,7 +2216,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // already carries its own blank, budgeted into the height -- adding a
     // second one there would double the gap and push an answer row off.
     if (!this.turn) footer.push('');
-    if (noticeRows && notice) footer.push(`  ${chalk.yellow(visibleSlice(notice, inner))}`);
+    footer.push(...noticeShown.slice(0, noticeRows).map((row) => `  ${chalk.yellow(row)}`));
     if (paletteCapacity) {
       footer.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
         ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),

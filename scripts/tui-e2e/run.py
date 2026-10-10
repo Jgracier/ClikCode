@@ -1079,6 +1079,17 @@ SCENARIOS = {
                   ('type', 'hello again'), ('wait_for', 'Answered after the questions were cancelled.', 30), ('settle', 2)],
         'watch': [], 'final_contains': ['› hello again'], 'never': ['ENOENT', 'Error:'],
     },
+    # A notice wraps (up to three rows) rather than being cut to one: at 70
+    # columns /export's notice kept its file name only in the middle of a
+    # long path, and /model's error lost the list of valid models.
+    'notices-wrap-at-70-cols': {
+        'cols': 70,
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
+                  ('type', '/export'), ('wait_for', 'Transcript written', 10), ('settle', 1), ('snap', 'export'),
+                  ('type', '/model nosuch-model'), ('settle', 3), ('snap', 'model')],
+        'watch': [], 'snap_contains': {'export': ['.md'], 'model': ['grok-4-fast']},
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

@@ -28,7 +28,8 @@ export function frameRowBudget(input: {
   targetHeight: number;
   /** Whether a turn is in flight, i.e. the generating band is drawn. */
   waiting: boolean;
-  notice: boolean;
+  /** Rows the notice wraps to (noticeLines); 0 for none. */
+  notice: number;
   requestedPaletteCapacity: number;
 }): FrameBudget {
   // TWO rows, not one: the generating line, and a blank above it so the text
@@ -37,7 +38,7 @@ export function frameRowBudget(input: {
   // that draws two and the last line of the answer is pushed off the screen.
   const waitingRows = input.waiting && input.targetHeight >= WAITING_BAND_MIN_HEIGHT ? 2 : 0;
   let optionalRows = Math.max(0, input.targetHeight - FIXED_FOOTER_ROWS - waitingRows);
-  const noticeRows = input.notice && optionalRows > 0 ? 1 : 0;
+  const noticeRows = Math.min(input.notice, optionalRows);
   optionalRows -= noticeRows;
   const available = Math.min(input.requestedPaletteCapacity, optionalRows);
   // All or nothing: a palette with one or two rows is its own border and no

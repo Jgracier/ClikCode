@@ -1,7 +1,7 @@
 /** Breaking a line to a width, for prose and for code. */
 
 import { expandTabs } from './text.js';
-import { displayTokens, terminalCellWidth } from './width.js';
+import { displayTokens, terminalCellWidth, visibleSlice } from './width.js';
 
 /** Split a code line into display-only continuation rows without modifying
  * the underlying Markdown. Unlike visibleSlice this preserves every byte;
@@ -116,4 +116,32 @@ export function wrapWordsLive(text: string, width: number): string[] {
     liveWrap = { text, width, lines: [...previous.lines.slice(0, -1), ...tail.lines], lastStart: tail.lastStart < 0 ? -1 : previous.lastStart + tail.lastStart };
   } else liveWrap = { text, width, ...wrapFrom(text, width) };
   return liveWrap.lines;
+}
+
+/** A notice above the composer, on at most `rows` rows: wrapped at words, a
+ * word too long for a row (a path) shortened in the middle so its start and
+ * its file name both show, and the last row ending in `…` when even that
+ * does not fit. One row cut the file /export wrote and the list of valid
+ * values an error gives. */
+export function noticeLines(text: string, width: number, rows = 3): string[] {
+  const safeWidth = Math.max(4, width);
+  const shortened = text.replace(/\S+/g, (word) => (terminalCellWidth(word) > safeWidth ? middleSlice(word, safeWidth) : word));
+  const lines = wrapWords(shortened, safeWidth);
+  if (lines.length <= rows) return lines;
+  const kept = lines.slice(0, rows);
+  const last = kept[rows - 1]!;
+  kept[rows - 1] = terminalCellWidth(last) < safeWidth ? `${last}…` : visibleSlice(last, safeWidth);
+  return kept;
+}
+
+/** `/home/me/very/long/…/file.md`: the start and the end, `…` between, in
+ * `width` cells. */
+export function middleSlice(value: string, width: number): string {
+  if (terminalCellWidth(value) <= width) return value;
+  const characters = [...value];
+  const tailRoom = Math.ceil((width - 1) / 2);
+  let tail = '';
+  for (let index = characters.length - 1; index >= 0 && terminalCellWidth(characters[index]! + tail) <= tailRoom; index -= 1) tail = characters[index]! + tail;
+  // visibleSlice ends what it cuts with the `…`.
+  return `${visibleSlice(value, width - terminalCellWidth(tail))}${tail}`;
 }
