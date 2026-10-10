@@ -1228,6 +1228,13 @@ SCENARIOS = {
         'steps': [('type', '/account nosuch'), ('wait_for', 'No account named "nosuch"', 10), ('settle', 1)],
         'watch': [], 'never': ['local AI account'],
     },
+    # Typing /effort offers "default" with the levels, as the picker does.
+    'effort-values-include-default': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/effort '), ('settle', 2), ('snap', 'values'), ('keys', '\x1b'), ('settle', 0.5),
+                  ('type', '/effort default'), ('settle', 2)],
+        'watch': [], 'snap_contains': {'values': ['❯ default', 'high']}, 'never': ['Error:'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],
