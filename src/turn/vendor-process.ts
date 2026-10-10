@@ -71,6 +71,14 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
   const existing = persistentTransports.get(sessionId);
   if (existing && existing.key === key && existing.transport === transport) return existing;
   if (existing) void closePersistentTransport(sessionId);
+  // A standby opened for exactly this launch (prepareAcpStandby) becomes the
+  // live child: its agent is started and its thread loaded already.
+  const standby = standbyTransports.get(sessionId);
+  if (standby && standby.transport.key === key && standby.transport.transport === transport) {
+    standbyTransports.delete(sessionId);
+    persistentTransports.set(sessionId, standby.transport);
+    return standby.transport;
+  }
   const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn) };
   const created: PersistentTransport = {
     key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
@@ -101,6 +109,8 @@ export async function waitForPersistentWork(sessionId: string, signal?: AbortSig
 }
 
 export async function closePersistentTransport(sessionId?: string): Promise<void> {
+  // Everything at once (the worker going away): standbys too.
+  if (sessionId === undefined) await Promise.all([...standbyTransports.keys()].map((id) => closeStandby(id)));
   const ids = sessionId === undefined ? [...persistentTransports.keys()] : [sessionId];
   await Promise.all(ids.map(async (id) => {
     const live = persistentTransports.get(id);
@@ -108,4 +118,46 @@ export async function closePersistentTransport(sessionId?: string): Promise<void
     persistentTransports.delete(id);
     await live.session.close().catch(() => undefined);
   }));
+}
+
+/** A second vendor child per ClikCode session, opened for the account a
+ * failover would move to while the current account's turn runs: its agent
+ * started and the thread loaded, so a refusal hands the turn over without a
+ * cold start (seconds: a Claude session connects every MCP server first). */
+interface StandbyTransport { accountId: string; transport: PersistentTransport; ready: Promise<boolean> }
+const standbyTransports = new Map<string, StandbyTransport>();
+
+/** The standby for `sessionId`, if one was opened for `accountId`. */
+export function standbyFor(sessionId: string, accountId: string): StandbyTransport | undefined {
+  const standby = standbyTransports.get(sessionId);
+  return standby?.accountId === accountId ? standby : undefined;
+}
+
+/** Open a standby: `prepare` runs the session up to the prompt on it. */
+export function openStandby(sessionId: string, accountId: string, transport: HarnessTurnTransport, key: string,
+  prepare: (session: CodexSession | AcpSession) => Promise<void>): StandbyTransport {
+  void closeStandby(sessionId);
+  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn) };
+  const created: PersistentTransport = {
+    key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
+  };
+  const standby: StandbyTransport = {
+    accountId, transport: created,
+    ready: prepare(created.session).then(() => true, () => {
+      // A standby that could not be prepared is no standby: the failover
+      // takes the ordinary path.
+      if (standbyTransports.get(sessionId) === standby) void closeStandby(sessionId);
+      return false;
+    }),
+  };
+  standbyTransports.set(sessionId, standby);
+  return standby;
+}
+
+/** Close the standby for `sessionId`, if one is open and was not taken up. */
+export async function closeStandby(sessionId: string): Promise<void> {
+  const standby = standbyTransports.get(sessionId);
+  if (!standby) return;
+  standbyTransports.delete(sessionId);
+  await standby.transport.session.close().catch(() => undefined);
 }

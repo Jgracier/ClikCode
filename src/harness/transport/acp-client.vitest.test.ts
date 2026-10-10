@@ -1,6 +1,6 @@
 import { changed } from '../../agent/line-diff.test-support.js';
 import { describe, expect, it } from 'vitest';
-import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, runAcpTurn } from './acp-client.js';
+import { acpActivityEvent, acpApprovalDetail, acpModelChoice, acpResponseDelta, acpSpawnArgv, acpVibeResponseChange, createAcpSession, runAcpTurn } from './acp-client.js';
 
 describe('shared ACP adapter contract', () => {
   // Devin 2026-10-06: signing in over ACP (`authenticate`) ran its own
@@ -98,6 +98,33 @@ describe('shared ACP adapter contract', () => {
       ['session/set_mode', { sessionId: 's1', modeId: 'approve' }],
       ['session/set_config_option', { sessionId: 's1', configId: 'thinking_effort', value: 'high' }],
     ]);
+  });
+
+  it('prepares a session up to the prompt, and the next turn on it starts at the prompt', async () => {
+    const agent = `
+      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+      const calls = [];
+      let buf = '';
+      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+        if (m.method) calls.push(m.method);
+        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true } } });
+        else if (m.method === 'session/load') send({ id: m.id, result: {} });
+        else if (m.method === 'session/prompt') {
+          send({ method: 'session/update', params: { sessionId: 'thread-1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(calls) } } } });
+          send({ id: m.id, result: { stopReason: 'end_turn' } });
+        }
+      } });
+    `;
+    const session = createAcpSession({});
+    const launch = { binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(), environment: {}, permissionMode: 'ask' as const, nativeSessionId: 'thread-1' };
+    try {
+      expect(await session.runTurn({ ...launch, prompt: '', prepareOnly: true })).toEqual({ text: '', nativeSessionId: 'thread-1' });
+      const result = await session.runTurn({ ...launch, prompt: 'go' });
+      expect(JSON.parse(result.text)).toEqual(['initialize', 'session/load', 'session/prompt']);
+    } finally {
+      await session.close();
+    }
   });
 
   it('reads the options a model change returns: no effort for a model that has none (Claude Haiku)', async () => {

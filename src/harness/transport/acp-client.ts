@@ -81,6 +81,10 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   setupTimeoutMs?: number;
   /** Servers this session should start. Empty keeps the previous request. */
   mcpServers?: readonly Record<string, unknown>[];
+  /** Open the session -- start the agent, load the thread, apply model,
+   *  mode and effort -- and stop before the prompt: the next turn on this
+   *  session then starts at the prompt (a failover's standby account). */
+  prepareOnly?: boolean;
   /** Override ACP_RATE_LIMIT_GRACE_MS. */
   rateLimitGraceMs?: number;
   signal?: AbortSignal;
@@ -718,6 +722,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     this.sessionId = turn.sessionId;
     if (!wanted) await input.onSessionId?.(turn.sessionId);
     stillRunning();
+    if (input.prepareOnly) {
+      lifecycle('vendor.acp.prepared', { harness: input.command, cold, setupMs: Date.now() - setupAt, threadLoadMs });
+      return { text: '', nativeSessionId: turn.sessionId! };
+    }
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();
     // Taken now, not when the turn was created: a session/load above may have
