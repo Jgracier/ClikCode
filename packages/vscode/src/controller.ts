@@ -57,6 +57,8 @@ export class ClikCodeController implements vscode.Disposable {
   private disposed = false;
   private postTimer: NodeJS.Timeout | undefined;
   private refreshTimer: NodeJS.Timeout | undefined;
+  /** A full read is pending in the coalesced refresh (refreshStructured). */
+  private refreshFull = false;
   private refreshedFor = '';
   private lastAutoRestart = 0;
   private readonly subscriptions: vscode.Disposable[] = [];
@@ -212,9 +214,15 @@ export class ClikCodeController implements vscode.Disposable {
    * setting; `onlyAccount` (the bridge's `usage`, every 30 s) re-reads usage. */
   private refreshStructured(onlyAccount: boolean): void {
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
+    // Coalesced, but a full read asked for stays full: a usage update right
+    // after a chat opened turned it into an account-only read, so the chat's
+    // settings (effort, permissions) were never read at all.
+    if (!onlyAccount) this.refreshFull = true;
     this.refreshTimer = setTimeout(() => {
       this.refreshTimer = undefined;
-      void this.readStructured(onlyAccount);
+      const full = this.refreshFull;
+      this.refreshFull = false;
+      void this.readStructured(!full);
     }, 120);
   }
 
