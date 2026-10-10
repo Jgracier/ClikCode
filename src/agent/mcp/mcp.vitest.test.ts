@@ -128,6 +128,29 @@ describe('config', () => {
   });
 });
 
+describe('a server with a turn wait', () => {
+  it('does not hold the turn past its wait: the others serve it, and it joins a later turn once up', async () => {
+    const ready = join(dir, 'ready');
+    // Silent until the file appears: a server whose start is slow this time.
+    const slow: McpServerSpec = { ...fake('slow', { FAKE_MCP_SILENT_UNTIL: ready }), turnWaitMs: 200 };
+    const subject = manager([fake('quick'), slow], { timeouts: { connectMs: 30_000 } });
+    const begun = Date.now();
+    const first = await subject.toolset();
+    expect(Date.now() - begun).toBeLessThan(5_000);
+    expect(first.tools.some((tool) => tool.name === 'mcp__quick__echo')).toBe(true);
+    expect(first.tools.some((tool) => tool.name.startsWith('mcp__slow__'))).toBe(false);
+    // Still starting is not a failure: nothing to tell the user.
+    expect(first.notes).toEqual([]);
+    await writeFile(ready, '');
+    // The start already under way finishes once the server answers, and a
+    // later turn offers its tools -- without starting it again.
+    let later = await subject.toolset();
+    for (let tries = 0; tries < 20 && !later.tools.some((tool) => tool.name === 'mcp__slow__echo'); tries += 1) later = await subject.toolset();
+    expect(later.tools.some((tool) => tool.name === 'mcp__slow__echo')).toBe(true);
+    expect(later.notes).toEqual([]);
+  });
+});
+
 describe('a stdio server', () => {
   it('lists every tool across pages, with read only where the server says so', async () => {
     const { tools, notes } = await manager([fake('fake')]).toolset();

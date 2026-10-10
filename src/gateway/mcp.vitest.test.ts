@@ -4,15 +4,17 @@ vi.mock('../agent/models/for-session.js', () => ({
   gatewayConnection: () => ({ baseUrl: 'https://clikdeploy.com/', apiKey: 'cd_live_key' }),
 }));
 
-const { clikDeployMcpServer, CLIKDEPLOY_CORE_TOOLS, routeMcpServers } = await import('./mcp.js');
+const { clikDeployMcpServer, CLIKDEPLOY_CORE_TOOLS, CLIKDEPLOY_MCP_TURN_WAIT_MS, routeMcpServers } = await import('./mcp.js');
 
 describe('ClikDeploy’s own MCP server', () => {
-  it('comes with a Gateway conversation: search mode, the Gateway key, a CLI-like core', () => {
+  it('comes with a Gateway conversation: search mode, the Gateway key, a CLI-like core, a short turn wait', () => {
     const [server] = routeMcpServers({ route: 'gateway' } as never, {} as never);
     expect(server).toEqual({
       name: 'clikdeploy', transport: 'http', url: 'https://clikdeploy.com/mcp?toolmode=search',
-      headers: { authorization: 'Bearer cd_live_key' }, core: CLIKDEPLOY_CORE_TOOLS,
+      headers: { authorization: 'Bearer cd_live_key' }, core: CLIKDEPLOY_CORE_TOOLS, turnWaitMs: CLIKDEPLOY_MCP_TURN_WAIT_MS,
     });
+    // A coding turn never waits the 30 s connect timeout on it.
+    expect(CLIKDEPLOY_MCP_TURN_WAIT_MS).toBeLessThanOrEqual(5000);
     expect(CLIKDEPLOY_CORE_TOOLS).toEqual(expect.arrayContaining(['list_apps', 'get_app_logs', 'deploy_app', 'search_tools', 'call_tool']));
   });
 
