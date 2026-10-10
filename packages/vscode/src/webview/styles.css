@@ -393,7 +393,11 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .effort-option.on { background: var(--vscode-button-background); border-color: var(--vscode-button-background); color: var(--vscode-button-foreground); }
 /* On the selected model's row: compact, at its right end. */
 .effort-bar.inline { flex: none; flex-wrap: nowrap; padding: 0; gap: 2px; }
-.effort-bar.inline .effort-option { padding: 0 6px; line-height: 18px; font-size: 0.85em; }
+.effort-bar.inline .effort-option { padding: 0 5px; min-width: 20px; line-height: 18px; font-size: 0.85em; }
+/* One letter each; the one under the pointer (or keyboard focus) spells its name. */
+.effort-bar.inline .effort-full { display: none; }
+.effort-bar.inline .effort-option:hover .effort-short, .effort-bar.inline .effort-option:focus-visible .effort-short { display: none; }
+.effort-bar.inline .effort-option:hover .effort-full, .effort-bar.inline .effort-option:focus-visible .effort-full { display: inline; }
 .status-account { display: inline-flex; align-items: center; gap: 6px; min-width: 0; background: none; border: none; padding: 1px 4px; margin-left: -4px; border-radius: 4px; color: var(--muted); }
 .status-account:hover { background: var(--hover); color: var(--vscode-foreground); }
 .status-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 14em; }
