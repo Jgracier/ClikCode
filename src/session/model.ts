@@ -40,6 +40,9 @@ export type TranscriptMessage = {
   /** On the answer a turn ended on: the account it moved to on the way,
    * from which, and why ("Switched to work: personal is out of usage"). */
   accountSwitch?: AccountSwitch;
+  /** On the answer a turn ended on: the sign-in it needed on the way (a
+   * vendor that refused it as signed out), by the name it signed in to. */
+  signedInTo?: string;
 };
 
 /** A turn moved to another account of the same provider (turn/account-routing.ts). */
@@ -182,6 +185,8 @@ export interface HarnessSession {
     subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string; provider?: string }>;
     /** The account this turn moved to, carried onto its answer at the end. */
     accountSwitch?: AccountSwitch;
+    /** A sign-in this turn needed and got, carried onto its answer too. */
+    signedInTo?: string;
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */
