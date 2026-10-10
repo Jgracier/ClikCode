@@ -26,6 +26,19 @@ const TOOLS = [
   { name: 'weird.name/with spaces', description: 'A name no model API accepts.' },
 ];
 
+// FAKE_MCP_RESOURCES: also a resources server (capability, list, read).
+const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000000', 'hex').toString('base64');
+const RESOURCES = [
+  { uri: 'file:///notes/todo.md', name: 'todo.md', mimeType: 'text/markdown', description: 'What is left to do.' },
+  { uri: 'file:///img/dot.png', name: 'dot.png', mimeType: 'image/png' },
+  { uri: 'file:///bin/report.pdf', name: 'report.pdf', mimeType: 'application/pdf' },
+];
+const RESOURCE_CONTENTS = {
+  'file:///notes/todo.md': [{ uri: 'file:///notes/todo.md', mimeType: 'text/markdown', text: '- ship resources' }],
+  'file:///img/dot.png': [{ uri: 'file:///img/dot.png', mimeType: 'image/png', blob: PNG }],
+  'file:///bin/report.pdf': [{ uri: 'file:///bin/report.pdf', mimeType: 'application/pdf', blob: Buffer.alloc(2048).toString('base64') }],
+};
+
 let cancelled = [];
 
 // FAKE_MCP_SILENT: alive, reading, never answering -- a server still starting
@@ -38,7 +51,18 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   if (message.id === undefined) return;
   const { id, method, params } = message;
   if (method === 'initialize') {
-    return send({ id, result: { protocolVersion: params.protocolVersion, capabilities: { tools: { listChanged: true } }, serverInfo: { name: 'fake', version: '1.0.0' } } });
+    const capabilities = { tools: { listChanged: true }, ...(process.env.FAKE_MCP_RESOURCES ? { resources: {} } : {}) };
+    return send({ id, result: { protocolVersion: params.protocolVersion, capabilities, serverInfo: { name: 'fake', version: '1.0.0' } } });
+  }
+  if (process.env.FAKE_MCP_RESOURCES && method === 'resources/list') {
+    // Two pages, as tools/list.
+    if (!params?.cursor) return send({ id, result: { resources: RESOURCES.slice(0, 2), nextCursor: 'more' } });
+    return send({ id, result: { resources: RESOURCES.slice(2) } });
+  }
+  if (process.env.FAKE_MCP_RESOURCES && method === 'resources/read') {
+    const contents = RESOURCE_CONTENTS[params.uri];
+    if (!contents) return send({ id, error: { code: -32002, message: `Resource not found: ${params.uri}` } });
+    return send({ id, result: { contents } });
   }
   if (method === 'tools/list') {
     // Two pages, to prove the client follows the cursor.

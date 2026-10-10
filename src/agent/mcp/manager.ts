@@ -21,6 +21,7 @@ import type { ToolDefinition } from '../tool-contract.js';
 import { McpClient, type McpCallResult, type McpToolInfo } from './client.js';
 import { loadMcpServers, type McpServerSpec } from './config.js';
 import { importNotice, importVendorMcpServers } from './import.js';
+import { mcpResourceTools, type McpResourceSource } from './resources.js';
 import { mcpToolDefinition, mcpToolName } from './tools.js';
 
 export interface McpTimeouts {
@@ -86,6 +87,7 @@ export class McpManager {
     await this.reconcile(servers);
     await Promise.all([...this.servers.values()].map((state) => this.ensureReady(state)));
     const tools: ToolDefinition[] = [];
+    const resources: McpResourceSource[] = [];
     const taken = new Set<string>();
     // By name, not by connection order: a server restarted or reconnected
     // would otherwise move, changing the tool list and with it the prompt
@@ -107,8 +109,16 @@ export class McpManager {
         taken.add(name);
         tools.push(mcpToolDefinition(state.spec.name, info, name, (tool, args, signal) => this.call(state, tool, args, signal), state.spec.core?.includes(info.name) ?? false));
       }
+      if (state.client.hasResources) {
+        const options = (signal?: AbortSignal) => ({ timeoutMs: this.timeouts.callMs, ...(signal ? { signal } : {}) });
+        resources.push({
+          server: state.spec.name,
+          list: async (signal) => (await this.clientFor(state)).listResources(options(signal)),
+          read: async (uri, signal) => (await this.clientFor(state)).readResource(uri, options(signal)),
+        });
+      }
     }
-    return { tools, notes };
+    return { tools: [...tools, ...mcpResourceTools(resources)], notes };
   }
 
   /** Stops every server. Safe to call more than once. */
@@ -193,6 +203,12 @@ export class McpManager {
    * reconnect before failing: the model already chose this tool, and a
    * restart is cheaper than a wasted step. */
   private async call(state: ServerState, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
+    return (await this.clientFor(state)).callTool(tool, args, { timeoutMs: this.timeouts.callMs, ...(signal ? { signal } : {}) });
+  }
+
+  /** The server's live client, restarted once if it died since this turn's
+   * listing. */
+  private async clientFor(state: ServerState): Promise<McpClient> {
     if (!state.client || state.client.closed) {
       state.client = undefined;
       state.failure = undefined;
@@ -200,7 +216,7 @@ export class McpManager {
     }
     const client = state.client;
     if (!client) throw new Error(`MCP server "${state.spec.name}" is not running: ${state.failure?.message ?? 'it could not be started'}`);
-    return client.callTool(tool, args, { timeoutMs: this.timeouts.callMs, ...(signal ? { signal } : {}) });
+    return client;
   }
 
   /** Stdio servers are their own process group (see transport.ts), so

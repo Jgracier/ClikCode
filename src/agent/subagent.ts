@@ -14,7 +14,7 @@ import { createAgentWorktree, finishAgentWorktree, type AgentWorktree } from './
 
 /** By name, not by class: `read` also covers bash_output and task itself,
  * and an MCP tool's class says nothing about what the server does. */
-const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(['read_file', 'list_dir', 'glob', 'grep', 'web_fetch', 'web_search']);
+const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(['read_file', 'list_dir', 'glob', 'grep', 'web_fetch', 'web_search', 'list_mcp_resources', 'read_mcp_resource']);
 const WORK_BLOCKED_TOOL_NAMES: ReadonlySet<string> = new Set(['task', 'agent', 'ask_user', 'exit_plan_mode']);
 
 export const SUBAGENT_MAX_STEPS = 20;
