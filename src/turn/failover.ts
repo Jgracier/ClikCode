@@ -278,8 +278,11 @@ export function accountSwitchNotice(kind: AccountFailureKind, to: string): strin
 export function classifyAccountFailure(error: unknown, signals: AccountFailureSignals = {}): AccountFailureKind {
   const carried = (error ?? {}) as {
     statusCode?: unknown; response?: { status?: unknown }; errorKind?: unknown; rateLimitStatus?: unknown;
-    stderrTail?: unknown; stdoutTail?: unknown;
+    stderrTail?: unknown; stdoutTail?: unknown; nativeThreadInvalid?: unknown;
   };
+  // The transport saw the load/resume of the wanted thread refused as not found
+  // (acp-client.ts markMissingThread): structured, so it outranks any wording.
+  if (carried.nativeThreadInvalid === true) return 'native-thread-invalid';
   const rawStatus = signals.statusCode ?? carried.statusCode ?? carried.response?.status;
   const status = typeof rawStatus === 'number' ? rawStatus : undefined;
   // Some harnesses report the code only inside the message they print. Grok

@@ -603,9 +603,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // is the startup budget, not the handshake's.
         const loading = { ...control, idleReset: true };
         this.sessionTotals = {};
-        if (capabilities.sessionCapabilities?.resume) loaded = await call('session/resume', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
-        else if (capabilities.loadSession) loaded = await call('session/load', { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
-        else throw new Error(`${input.command} ACP cannot load sessions`);
+        if (!capabilities.sessionCapabilities?.resume && !capabilities.loadSession) throw new Error(`${input.command} ACP cannot load sessions`);
+        const method = capabilities.sessionCapabilities?.resume ? 'session/resume' : 'session/load';
+        try {
+          loaded = await call(method, { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
+        } catch (error) {
+          throw markMissingThread(error, wanted);
+        }
         stillRunning();
         live.sessionId = wanted;
         live.models = loaded?.models ?? { configOptions: loaded?.configOptions };
@@ -1059,6 +1063,20 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 /** One agent process kept alive across turns: initialize once, open or resume
  * the session once, then one session/prompt per turn. If the child dies (or
  * its launch arguments change) the next turn respawns and resumes. */
+/** A load/resume of the wanted thread that the agent says does not exist. Claude Code's ACP
+ * answers `Resource not found: <id>` (JSON-RPC -32002, the ACP "resource not found" code): its
+ * own store lost the thread (chat de679bc3 failed six turns in a row on it, 2026-10-08, each
+ * classified `other`). The thread is gone, not the account, so the turn starts a fresh one and
+ * retells ClikCode's transcript (failover.ts `native-thread-invalid`). */
+export function markMissingThread(error: unknown, wanted: string): unknown {
+  if (!(error instanceof Error)) return error;
+  const code = (error as { rpcCode?: unknown }).rpcCode;
+  const text = error.message;
+  const notFound = code === -32002
+    || (/not\s+found|does not exist|no such/i.test(text) && (text.includes(wanted) || /\b(session|thread|conversation|resource)\b/i.test(text)));
+  return notFound ? Object.assign(error, { nativeThreadInvalid: true }) : error;
+}
+
 export function createAcpSession(options: PersistentSessionOptions = {}): AcpSession {
   return new AcpSessionImpl(options);
 }
