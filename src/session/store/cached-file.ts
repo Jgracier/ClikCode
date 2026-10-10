@@ -19,6 +19,8 @@ export interface CachedFile<T> {
   load(): Promise<T | undefined>;
   /** Records what this process just wrote, so the next load need not read it. */
   remember(raw: string, value: T): Promise<void>;
+  /** The bytes behind what load or remember last returned. */
+  raw(): string | undefined;
   reset(): void;
 }
 
@@ -54,6 +56,7 @@ export function cachedFile<T>(path: () => string, parse: (raw: string) => T): Ca
       const info = await stat(file).catch(() => undefined);
       entry = { path: file, raw, value, ...(info ? { identity: fileIdentity(info) } : {}) };
     },
+    raw: () => current()?.raw,
     reset() { entry = undefined; },
   };
 }
