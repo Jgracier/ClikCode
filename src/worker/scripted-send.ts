@@ -132,7 +132,10 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
           if (ours && !isJsonDefaultMode()) for (const line of renderActivityLine(event.event)) output.write(`${line}\n`);
           return;
         case 'note':
-          if (ours && !isJsonDefaultMode()) output.write(`${event.message}\n`);
+          // A note says something is missing from the turn (an MCP server that
+          // would not start): JSON output keeps stdout to the result, so it
+          // goes to stderr rather than nowhere.
+          if (ours) (isJsonDefaultMode() ? process.stderr : output).write(`${event.message}\n`);
           return;
         case 'turn-error':
           if (ours) failure = new Error(event.message);
