@@ -80,6 +80,9 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
   if (key === '\u001bf') return { value, cursor: nextWordIndex(value, cursor), changed: true };
   if (key === '\u007f' || key === '\b') {
     if (cursor <= 0) return { value, cursor, changed: true };
+    // Backspace on the `! ` a shell line opened with, nothing typed after:
+    // both go, as they came.
+    if (value === SHELL_PREFIX) return { value: '', cursor: 0, changed: true };
     return remove(previousCharacterIndex(value, cursor), cursor);
   }
   if (key === '\u0017' || key === '\u001b\u007f') return remove(previousWordIndex(value, cursor), cursor);
@@ -96,6 +99,13 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
     if (cursor >= value.length) return { value, cursor, changed: true };
     return remove(cursor, nextCharacterIndex(value, cursor));
   }
+  // `!` first on an empty composer starts a shell line: the space after it
+  // comes with it, so the command is typed where it reads.
+  if (key === '!' && value === '') return insert(SHELL_PREFIX);
   if (!key.startsWith('\u001b') && !/[\u0000-\u001f\u007f]/.test(key)) return insert(key);
   return { value, cursor, changed: false };
 }
+
+/** What `!` on an empty composer becomes (the command is trimmed, so the
+ * space is only where typing starts). */
+export const SHELL_PREFIX = '! ';
