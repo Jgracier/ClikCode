@@ -13,7 +13,6 @@ import { writeState } from '../../session/state/write.js';
 import { accountUsageLabel, cachedAccountUsageLabel } from '../../harness/accounts/account-usage.js';
 import { NATIVE_USAGE_PROBES } from '../../harness/accounts/usage-probes.js';
 import { aiAccountLogin, aiAccountRemove, signOutAccount, syncAccountIdentityAfterLogin, withSignIn } from '../../commands/account.js';
-import { TerminalHarnessPrompter } from '../prompter.js';
 import type { AiHarnessAccount } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { accountRow, harnessCanAddAccount } from '../../session/picker-rows.js';
@@ -114,7 +113,6 @@ export async function interactiveAccountPicker(
     const usageRefresh = Promise.allSettled(providerAccounts.map((account) => accountUsageLabel(account, state, { network: true })))
       .then(() => { usagePending = false; });
     let actionPerformed = false;
-    let backedOut = false;
     const selected = await chooseOption(
       rl, `${harness.displayName} accounts`, accountOptions(),
       async (choice, action) => {
@@ -122,12 +120,10 @@ export async function interactiveAccountPicker(
         actionPerformed = true;
         await manageAccountAction(rl, choice.accountId, action);
       },
-      { onBack: () => { backedOut = true; }, refreshedOptions: accountOptions, refresh: usageRefresh, totalItems: providerAccounts.length },
+      // ← is back to whatever opened the list (Settings' row), or closes it,
+      // as in every other list.
+      { refreshedOptions: accountOptions, refresh: usageRefresh, totalItems: providerAccounts.length },
     );
-    if (backedOut) {
-      if (rl instanceof TerminalHarnessPrompter) rl.restoreDraft('/');
-      return undefined;
-    }
     if (actionPerformed) continue;
     if (selected?.kind === 'add-account') {
       // The account just connected is the one the user meant to use.

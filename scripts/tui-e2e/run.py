@@ -647,8 +647,9 @@ SCENARIOS = {
         'hold_sign_in': True,
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15), ('settle', 0.5),
-                  ('keys', '\x1b'), ('wait_for', 'cancelled', 10), ('settle', 2)],
+                  ('keys', '\x1b'), ('wait_for', 'cancelled', 10), ('settle', 2), ('snap', 'after')],
         'watch': [], 'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish'],
+        'snap_lacks': {'after': ['› /account']},
     },
     # Nothing signs in at launch: a signed-out provider waits for its first
     # message.
@@ -1089,6 +1090,20 @@ SCENARIOS = {
                   ('type', '/export'), ('wait_for', 'Transcript written', 10), ('settle', 1), ('snap', 'export'),
                   ('type', '/model nosuch-model'), ('settle', 3), ('snap', 'model')],
         'watch': [], 'snap_contains': {'export': ['.md'], 'model': ['grok-4-fast']},
+    },
+    # ← in /account is back, as in every other list: to the Settings row it
+    # was opened from, or closed. It reopened the palette with "/", and Esc
+    # from Settings then left the palette open.
+    'account-back-returns-to-settings': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', 'hi'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
+                  ('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
+                  *[step for _ in range(3) for step in (('keys', '\x1b[B'), ('settle', 0.3))],
+                  ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 1),
+                  ('keys', '\x1b[D'), ('settle', 1.5), ('snap', 'settings'), ('keys', '\x1b'), ('settle', 1.5), ('snap', 'closed'),
+                  ('type', '/account'), ('wait_for', 'Grok Build accounts', 10), ('settle', 1), ('keys', '\x1b[D'), ('settle', 1.5), ('snap', 'direct')],
+        'watch': [], 'snap_contains': {'settings': ['❯ Account', 'Swarm']},
+        'snap_lacks': {'closed': ['› /', 'Swarm', '/settings'], 'direct': ['› /', 'Grok Build accounts']},
     },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
