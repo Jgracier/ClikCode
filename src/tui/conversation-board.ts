@@ -10,7 +10,7 @@
  *
  *   ↑↓      move between the composer and the list
  *   Enter   open the selected conversation (with a draft: start one)
- *   →       a working conversation's agents; otherwise open it
+ *   →       open it (a working one shows its agents live inside)
  *   ←       close
  *   Tab/Del a conversation's options / delete it
  *   Esc     clear the draft, then close

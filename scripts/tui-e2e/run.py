@@ -112,7 +112,7 @@ SCENARIOS = {
         ],
         'watch': ['The build passed.', 'Second answer arrives here.'],
         # The board, on the running chat: its one state, and the footer's keys for it.
-        'snap_contains': {'board1': ['Working', 'working', '2 agents', 'Recent', 'enter open · → agents · tab options · del delete · ← close']},
+        'snap_contains': {'board1': ['Working', 'working', '2 agents', 'Recent', 'enter open · tab options · del delete · ← close']},
         # A running sub-agent's title already says it is one.
         'ever': ['Agent worker 0'], 'never': ['agent Agent'],
         'no_clear_after_type': True,
@@ -451,7 +451,7 @@ SCENARIOS = {
     # spinner or empty composer flashed on the way into the list.
     'settings-back-lands-on-row': {
         'turns': [TWO_BLOCKS],
-        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Failover', 10), ('settle', 0.5),
+        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
                   ('wait_for', 'Choose a model', 10), ('settle', 0.5), ('keys', '\x1b[D'), ('settle', 1.5)],
         'watch': [], 'final_contains': ['❯ Model'], 'never': ['finding Grok Build models'],
