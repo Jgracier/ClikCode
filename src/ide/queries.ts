@@ -207,7 +207,7 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
   };
   if (harness) {
     if (harness.planMode) settings.plan = session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
-  }
+  } else if (isClikCodeAgent(session)) settings.plan = session.planMode === true;
   return settings;
 }
 

@@ -93,6 +93,10 @@ export interface HarnessSession {
   /** ClikDeploy Gateway only: `fast` asks to be served by the fastest
    * measured provider of the model rather than the cheapest (/fast). */
   speed?: 'fast';
+  /** ClikCode's own agent: plan mode -- research only, no edits or commands,
+   * until the user approves the plan it proposes (exit_plan_mode), which turns
+   * it off. Absent = off. Vendor harnesses keep theirs in harnessOptions. */
+  planMode?: boolean;
   name?: string;
   /** Who named it. `user` is a /rename and is never overwritten; `provider` is
    * the harness's own title, or one the first turn asked the model for. A name
