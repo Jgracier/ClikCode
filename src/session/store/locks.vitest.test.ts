@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { readlinkSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -80,6 +80,38 @@ describe('withFileLock', () => {
     await expect(withFileLock(path, async () => 'ran')).rejects.toThrow(/could not lock/);
     release();
     await stuck;
+  });
+});
+
+describe('a fair lock', () => {
+  const ticketName = (msAgo: number, pid: number) => `${String(Date.now() - msAgo).padStart(15, '0')}.${pid}.abc`;
+
+  it('waits for a live waiter that arrived first, and goes once it has left the line', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'f.lock');
+    const queue = `${path}.queue`;
+    await mkdir(queue, { recursive: true });
+    // Another process, alive and waiting since before this one asked.
+    const earlier = join(queue, ticketName(50, process.ppid));
+    await writeFile(earlier, owner({ pid: process.ppid }));
+    let ran = false;
+    const taking = withFileLock(path, async () => { ran = true; }, { fair: true });
+    await tick(150);
+    expect(ran, 'the lock was free, but not its turn').toBe(false);
+    await rm(earlier);
+    await taking;
+    expect(ran).toBe(true);
+    expect(await readdir(queue)).toEqual([]);
+  });
+
+  it('does not wait on the place of a waiter that is gone', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'g.lock');
+    const queue = `${path}.queue`;
+    await mkdir(queue, { recursive: true });
+    await writeFile(join(queue, ticketName(50, 2 ** 22 + 7)), owner({ ...(ourPidns ? { pidns: ourPidns } : {}) }));
+    expect(await withFileLock(path, async () => 'ran', { fair: true })).toBe('ran');
+    expect(await readdir(queue)).toEqual([]);
   });
 });
 

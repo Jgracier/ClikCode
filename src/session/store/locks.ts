@@ -157,9 +157,9 @@ const ORPHAN_TEMP_MS = 60_000;
  * removed: promises started inside a locked section inherited the "held"
  * mark after the section had released, and sibling tasks in one chain ran
  * past each other. */
-export async function withFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
+export async function withFileLock<T>(lockPath: string, run: () => Promise<T>, options: { fair?: boolean } = {}): Promise<T> {
   const previous = lockQueues.get(lockPath) ?? Promise.resolve();
-  const result = queueTurn(lockPath, previous).then(() => holdFileLock(lockPath, run));
+  const result = queueTurn(lockPath, previous).then(() => holdFileLock(lockPath, run, options.fair === true));
   const settled = result.catch(() => undefined);
   lockQueues.set(lockPath, settled);
   void settled.then(() => { if (lockQueues.get(lockPath) === settled) lockQueues.delete(lockPath); });
@@ -213,29 +213,76 @@ async function createLock(lockPath: string, mine: string): Promise<boolean> {
   }
 }
 
-async function holdFileLock<T>(lockPath: string, run: () => Promise<T>): Promise<T> {
+/** A waiter's place in line for a fair lock: a file named by when it
+ * arrived, holding its owner like the lock does, so a dead or stalled
+ * waiter's place is judged exactly as a dead or stalled holder is. */
+async function takeTicket(lockPath: string, mine: string): Promise<string> {
+  const queue = `${lockPath}.queue`;
+  await ensurePrivateDirectory(queue);
+  const ticket = join(queue, `${String(Date.now()).padStart(15, '0')}.${process.pid}.${randomBytes(6).toString('hex')}`);
+  await writeFile(ticket, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+  return ticket;
+}
+
+/** No live waiter arrived before `ticket`. Places left by a killed or
+ * stalled waiter are removed on the way. */
+async function firstInLine(ticket: string): Promise<boolean> {
+  const queue = dirname(ticket);
+  const own = basename(ticket);
+  const names = (await readdir(queue).catch(() => [] as string[])).filter((name) => name < own).sort();
+  for (const name of names) {
+    const path = join(queue, name);
+    const raw = await readFile(path, 'utf8').catch(() => undefined);
+    if (raw === undefined) continue; // Left the line meanwhile.
+    if (!await lockLooksStale(path, raw)) return false;
+    await unlink(path).catch(() => undefined);
+  }
+  return true;
+}
+
+async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: boolean): Promise<T> {
   await ensurePrivateDirectory(dirname(lockPath));
   const pidns = pidNamespace();
   const owner: LockOwner = { pid: process.pid, host: hostname(), nonce: randomBytes(12).toString('hex'), at: new Date().toISOString(), ...(pidns ? { pidns } : {}) };
   const mine = JSON.stringify(owner);
   const started = Date.now();
   let holder: string | undefined;
-  for (;;) {
-    if (await createLock(lockPath, mine)) break;
-    const raw = await readFile(lockPath, 'utf8').catch(() => undefined);
-    if (raw !== undefined) {
-      const other = parseLockOwner(raw);
-      holder = other ? `pid ${other.pid} on ${other.host}` : undefined;
-      if (await lockLooksStale(lockPath, raw)) {
-        await breakStaleLock(lockPath, raw, (current) => lockLooksStale(lockPath, current));
-        continue;
+  // A fair lock is taken in arrival order. Waiters used to re-poll at random
+  // with no line at all, so under load one could lose every race for many
+  // times the fair wait (p99 26 s on the state lock while idle).
+  let ticket = fair ? await takeTicket(lockPath, mine) : undefined;
+  let ticketTouched = Date.now();
+  try {
+    for (;;) {
+      const next = !ticket || await firstInLine(ticket);
+      if (next && await createLock(lockPath, mine)) break;
+      const raw = await readFile(lockPath, 'utf8').catch(() => undefined);
+      if (raw !== undefined) {
+        const other = parseLockOwner(raw);
+        holder = other ? `pid ${other.pid} on ${other.host}` : undefined;
+        if (await lockLooksStale(lockPath, raw)) {
+          await breakStaleLock(lockPath, raw, (current) => lockLooksStale(lockPath, current));
+          continue;
+        }
       }
+      const waited = Date.now() - started;
+      // Proceeding without the lock would make the read-merge-write below
+      // non-atomic and silently drop another terminal's work. Refuse instead.
+      if (waited > LOCK_TUNING.waitMs) throw new StateLockTimeoutError(lockPath, holder, waited);
+      // A waiter's place is kept fresh like a held lock (its heartbeat).
+      if (ticket && Date.now() - ticketTouched > LOCK_TUNING.heartbeatMs) {
+        ticketTouched = Date.now();
+        const now = new Date();
+        await utimes(ticket, now, now).catch(() => undefined);
+      }
+      // The next in line looks often, so the lock is not left idle between
+      // holders; the rest only wait for their turn.
+      await new Promise((resolve) => setTimeout(resolve, ticket && next ? 2 + Math.floor(Math.random() * 3) : 8 + Math.floor(Math.random() * 12)));
     }
-    const waited = Date.now() - started;
-    // Proceeding without the lock would make the read-merge-write below
-    // non-atomic and silently drop another terminal's work. Refuse instead.
-    if (waited > LOCK_TUNING.waitMs) throw new StateLockTimeoutError(lockPath, holder, waited);
-    await new Promise((resolve) => setTimeout(resolve, 8 + Math.floor(Math.random() * 12)));
+  } finally {
+    // Out of line once it holds the lock (or gave up): the next may go.
+    if (ticket) await unlink(ticket).catch(() => undefined);
+    ticket = undefined;
   }
   // A wait anyone would notice is recorded with whoever held it: a send in
   // VS Code once stood 30 s with nothing saying what it waited for.
@@ -280,5 +327,5 @@ const STATE_LOCK_HELD = Object.freeze({}) as StateLockHeld;
 
 /** The one lock every index and transcript write runs under. */
 export function withStateLock<T>(run: (held: StateLockHeld) => Promise<T>): Promise<T> {
-  return withFileLock(stateLockPath(), () => run(STATE_LOCK_HELD));
+  return withFileLock(stateLockPath(), () => run(STATE_LOCK_HELD), { fair: true });
 }
