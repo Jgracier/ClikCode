@@ -176,7 +176,7 @@ export async function interactiveSessionPicker(rl: HarnessPrompter, currentId: s
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string, boardCommands: readonly PickerOption<string>[] | undefined,
   hooks?: { onSessionsSettled?: () => boolean },
-): Promise<{ id: string } | { new: true } | { compose: string } | { command: string } | undefined>;
+): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | undefined>;
 export async function interactiveSessionPicker(
   rl: HarnessPrompter, currentId: string,
   /** The commands a board's `/` offers. Given, and the terminal can draw it,
@@ -185,7 +185,7 @@ export async function interactiveSessionPicker(
   /** The board calls `onSessionsSettled` when running chats finish and the
    * list is idle. A true return leaves the board up until the process exits. */
   hooks?: { onSessionsSettled?: () => boolean },
-): Promise<{ id: string } | { new: true } | { compose: string } | { command: string } | undefined> {
+): Promise<{ id: string; draft?: string } | { new: true } | { compose: string } | { command: string } | undefined> {
   const onBoard = Boolean(boardCommands && rl.board);
   // Titles, previews and dates live on the index. The transcript is read
   // when the chat is opened, not to draw this list.
@@ -407,6 +407,8 @@ export async function interactiveSessionPicker(
     }
   };
   let selected: string | undefined;
+  /** Typed on the board before the row was chosen: the chat opens with it. */
+  let draft: string | undefined;
   try {
     if (onBoard) {
       // The row for the conversation this window is in: its root, since the row
@@ -425,6 +427,7 @@ export async function interactiveSessionPicker(
       if (result && 'compose' in result) return { compose: result.compose };
       if (result && 'command' in result) return { command: result.command };
       selected = result?.open;
+      if (result && 'open' in result && result.draft) draft = result.draft;
     } else {
       selected = await chooseOption(rl, 'Conversations', buildOptions(),
         (value, action) => manage(value, action),
@@ -453,7 +456,7 @@ export async function interactiveSessionPicker(
     await discovery;
     return interactiveSessionPicker(rl, currentId, boardCommands, hooks);
   }
-  if (!selected.startsWith('native:')) return { id: selected };
+  if (!selected.startsWith('native:')) return { id: selected, ...(draft ? { draft } : {}) };
   const match = discovered.find(({ harness, item, accountId }) => nativeValue(harness.command, item.nativeId, accountId) === selected);
   if (!match) return undefined;
   const nativeId = match.item.nativeId;
@@ -496,5 +499,5 @@ export async function interactiveSessionPicker(
   // it as that vendor — forcing it onto whatever provider was already active
   // (the same-conversation /resume behavior below) would immediately discard
   // the native session id just adopted, undoing the entire point of listing it.
-  return { id: adopted.id };
+  return { id: adopted.id, ...(draft ? { draft } : {}) };
 }

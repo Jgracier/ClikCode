@@ -608,7 +608,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           }
           if (picked && 'compose' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }), prompt: picked.compose, echo: true };
           if (picked && 'new' in picked) return { id: fresh ?? await newConversation(id, { sameModel: true }) };
-          if (picked) return { id: picked.id };
+          if (picked) return { id: picked.id, ...(picked.draft ? { draft: picked.draft } : {}) };
           // Closed: back where it was, including the line that names the
           // provider, which showed the fresh chat's while it was set up.
           if (fresh) await showSession(id);
