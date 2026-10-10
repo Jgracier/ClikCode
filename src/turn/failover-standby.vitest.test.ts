@@ -13,7 +13,7 @@ import { turnCancelledError } from '../agent/cancellation.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 
-const attempt = vi.hoisted(() => ({ run: vi.fn(), prepare: vi.fn() }));
+const attempt = vi.hoisted(() => ({ run: vi.fn(), prepare: vi.fn(), transport: { kind: 'acp' as string }, carry: vi.fn(async () => 'carried' as const), move: vi.fn(async () => 'carried' as const) }));
 const harness = vi.hoisted(() => ({ command: 'fakecli', provider: 'fake', displayName: 'Fake' }));
 vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../runtime/lazy-bridge.js')>(),
@@ -37,10 +37,15 @@ vi.mock('../session/discovery/cli-listing.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../session/discovery/cli-listing.js')>(), adoptListedNativeId: async () => false,
 }));
 vi.mock('../harness/transport/select.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../harness/transport/select.js')>(), sessionTurnTransport: () => 'acp',
+  ...await importOriginal<typeof import('../harness/transport/select.js')>(), sessionTurnTransport: () => attempt.transport.kind,
 }));
 vi.mock('./turn-environment.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./turn-environment.js')>(), turnEnvironment: () => ({}),
+}));
+vi.mock('./vendor-cli-attempt.js', () => ({ runVendorCliAttempt: attempt.run }));
+vi.mock('../session/carry.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../session/carry.js')>(),
+  carryNativeSession: attempt.carry, moveThreadToAccount: attempt.move, reconcileNativeThread: async () => 'present',
 }));
 vi.mock('./vendor-session-attempt.js', () => ({ runVendorSessionAttempt: attempt.run, prepareAcpStandby: attempt.prepare, prepareCodexStandby: attempt.prepare }));
 
@@ -70,6 +75,9 @@ describe('a failover standby', () => {
   afterEach(async () => {
     attempt.run.mockReset();
     attempt.prepare.mockReset();
+    attempt.carry.mockClear();
+    attempt.move.mockClear();
+    attempt.transport.kind = 'acp';
     await closePersistentTransport();
     if (previousHome === undefined) delete process.env.CLIKCODE_HOME;
     else process.env.CLIKCODE_HOME = previousHome;
@@ -119,6 +127,37 @@ describe('a failover standby', () => {
     expect(saved.accountId).toBe('acct-b');
     // The second attempt ran on the standby child, not a cold one.
     expect(asked[1]!.child).toBe(standbys[0]);
+  });
+
+  it('copies a CLI harness\'s thread before its attempt, so a refusal hands over without copying again', async () => {
+    attempt.transport.kind = 'structured-cli';
+    const order: string[] = [];
+    attempt.carry.mockImplementation(async () => { order.push('copy'); return 'carried'; });
+    attempt.run.mockImplementation(async (input: { session: HarnessSession; turnText: string; checkpoint: { response: (text: string, mode: 'append') => void } }) => {
+      order.push(`attempt ${input.turnText}`);
+      if (order.filter((item) => item.startsWith('attempt')).length === 1) {
+        input.checkpoint.response(REFUSAL, 'append');
+        throw new Error(`Internal error: ${REFUSAL}`);
+      }
+      input.checkpoint.response('SWITCHED', 'append');
+      return { isError: false, text: 'SWITCHED' };
+    });
+    const state = await readState({ transcripts: ['s1'] });
+    const session = state.sessions.find((item) => item.id === 's1')!;
+    session.nativeSessionId = 'thread-1';
+    session.nativeThreadAccountId = 'acct-a';
+    await sendVendorTurn({
+      state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'Reply SWITCHED',
+      prepared: { images: [], textContext: '' } as never, turnText: 'Reply SWITCHED', startedAt: Date.now(), run: {},
+    });
+    // Copied once, before the first attempt, and not again at the switch.
+    expect(order).toEqual(['copy', 'attempt Reply SWITCHED', 'attempt Reply SWITCHED']);
+    expect(attempt.move).not.toHaveBeenCalled();
+    expect(attempt.prepare).not.toHaveBeenCalled();
+    const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
+    expect(saved.accountId).toBe('acct-b');
+    expect(saved.nativeThreadAccountId).toBe('acct-b');
+    expect(saved.messages?.at(-1)?.content).toBe('SWITCHED');
   });
 
   it('is not opened for an account with room to spare', async () => {

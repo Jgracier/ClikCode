@@ -5,7 +5,7 @@
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { closePersistentTransport } from './vendor-process.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
@@ -65,7 +65,10 @@ describe('a cancelled ACP turn', () => {
     await attempt(log, session, 'first');
     const controller = new AbortController();
     const hung = attempt(log, session, 'hang', controller.signal);
-    setTimeout(() => controller.abort(), 300);
+    // Stopped once the prompt is running: a fixed delay sometimes landed
+    // before it was sent on a loaded machine, which is a different stop.
+    await vi.waitFor(() => expect(readFileSync(log, 'utf8')).toContain('prompt hang'), { timeout: 30_000, interval: 20 });
+    controller.abort();
     await expect(hung).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
     await attempt(log, session, 'after');
     const lines = readFileSync(log, 'utf8');

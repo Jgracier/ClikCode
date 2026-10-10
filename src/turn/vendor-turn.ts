@@ -350,6 +350,9 @@ export async function sendVendorTurn(input: {
   let effortRetried = false;
   /** Whether this turn opened a standby for its failover account. */
   let standbyOpened = false;
+  /** The account this turn's thread was copied to before its first attempt
+   * wrote anything: a failover to it with nothing written needs no copy. */
+  let threadCopiedTo: string | undefined;
   /** A fresh native thread gets one recovery attempt per account. */
   let nativeThreadRetried = false;
   let transientRetried = false;
@@ -524,7 +527,12 @@ export async function sendVendorTurn(input: {
     // agent started and the thread loaded while this attempt runs. A refusal
     // then hands over without a cold start, which for Claude is seconds of
     // starting a session and connecting every MCP server.
-    if ((transport === 'acp' || transport === 'codex-app-server') && run.persistentTransports && !standbyOpened && nearUsageLimit(account)) {
+    // A harness run as one process per turn (structured or text CLI) has no
+    // child to open ahead; what a switch would still do -- copy the thread
+    // to the next account, provision it -- is done now instead, so a
+    // refusal hands over with nothing left but the next process's start.
+    const persistentStandby = (transport === 'acp' || transport === 'codex-app-server') && Boolean(run.persistentTransports);
+    if ((persistentStandby || transport === 'structured-cli' || transport === 'text-cli') && !standbyOpened && nearUsageLimit(account)) {
       standbyOpened = true;
       const next = nextUsableFailoverAccount(state, account, (item) => turnBackendForAccount(item) === 'vendor', new Map());
       const threadReady = !next ? false : !session.nativeSessionId || session.nativeSessionPreallocated ? true
@@ -534,6 +542,7 @@ export async function sendVendorTurn(input: {
         }).catch(() => undefined));
       if (next && threadReady) {
         const standbyFor = next;
+        threadCopiedTo = next.id;
         const permission = session.permissionMode ?? 'ask';
         void (async () => {
           const ready = await provisionChosenHarness({
@@ -541,7 +550,8 @@ export async function sendVendorTurn(input: {
             harness, account: standbyFor, workspace: session.workspace, stateDir: stateDirectory(), signIn: checkMcpSignIn,
             builtins: [...(conversations ? [conversations] : []), ...(!swarmRidesTurn(harness) && swarmEntry ? [swarmEntry] : [])],
           });
-          lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8) });
+          lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8), process: persistentStandby });
+          if (!persistentStandby) return;
           const standbyEnvironment = { ...turnEnvironment(harness, standbyFor, permission), CLIKCODE_SESSION_ID: session.id };
           if (transport === 'codex-app-server') {
             await prepareCodexStandby({ harness, account: standbyFor, session, model, effort: turnEffort(), environment: standbyEnvironment });
@@ -730,14 +740,18 @@ export async function sendVendorTurn(input: {
       const standby = !wrote ? standbyFor(session.id, fallback.id) : undefined;
       const warm = standby ? await standby.ready : false;
       if (!warm) await closeStandby(session.id);
-      const carriedThread = warm ? 'present' as const : await moveThreadToAccount(session, harness, account, fallback);
-      if (warm && session.nativeSessionId) session.nativeThreadAccountId = fallback.id;
+      // The thread as it stood before this turn is already in the account's
+      // profile (copied with the standby, or for a CLI harness on its own):
+      // copying again would bring the refused attempt with it.
+      const precopied = warm || (!wrote && threadCopiedTo === fallback.id);
+      const carriedThread = precopied ? 'present' as const : await moveThreadToAccount(session, harness, account, fallback);
+      if (precopied && session.nativeSessionId) session.nativeThreadAccountId = fallback.id;
       const carriedMs = Date.now() - switchAt - chosenMs - closedMs;
       await accounts.switchTo(fallback, failureKind);
       lifecycle('worker.switch', {
         harness: harness.command, from: leftId.slice(0, 8), to: fallback.id.slice(0, 8), why: failureKind,
         chooseMs: chosenMs, closeMs: closedMs, carryMs: carriedMs, recordMs: Date.now() - switchAt - chosenMs - closedMs - carriedMs,
-        carried: warm ? 'standby' : carriedThread ?? 'none',
+        carried: warm ? 'standby' : precopied ? 'precopied' : carriedThread ?? 'none',
       });
       nativeThreadRetried = false;
       const edit = session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear';
