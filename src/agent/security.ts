@@ -149,7 +149,11 @@ export function isSessionToolOutput(candidate: string, scope: PathScope): boolea
 
 // ── environment scrubbing ────────────────────────────────────────────────────
 
-const SCRUBBED_ENV_PATTERN = /(_KEY|_TOKEN|_SECRET|PASSWORD|CLIKCODE_)/i;
+// A credential's name ENDS in KEY/TOKEN/SECRET (OPENAI_API_KEY, GH_TOKEN, AWS_SECRET_ACCESS_KEY) or
+// names a password. Matched anywhere, `_KEY` also took git's own config-by-environment
+// (GIT_CONFIG_KEY_0 with GIT_CONFIG_COUNT left behind): every git command the agent ran then
+// died "missing config key GIT_CONFIG_KEY_0" under Claude Code and VS Code, which both set it.
+const SCRUBBED_ENV_PATTERN = /(_KEY|_TOKEN|_SECRET)$|_SECRET_|PASSWORD|PASSWD|^CLIKCODE_/i;
 
 export function scrubEnvironment(env: Readonly<Record<string, string | undefined>>): Record<string, string> {
   const out: Record<string, string> = {};
