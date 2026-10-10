@@ -9,54 +9,12 @@
 
 import { setFlagsFromString } from 'node:v8';
 import { runInNewContext } from 'node:vm';
-import { serveStdioMcp } from '../harness/mcp-stdio-server.js';
+import { serveStdioMcp, toolServer } from '../harness/mcp-stdio-server.js';
 import { resetCorpusCache } from './corpus.js';
 import { resetSessionStoreCache } from '../session/store/records.js';
 import { CONVERSATIONS_MCP_NAME } from './mcp-entry.js';
 import { currentConversationSession } from '../worker/current-session.js';
 import { CONVERSATION_TOOLS, CONVERSATION_TOOLS_NOTE, conversationTool, type ConversationToolContext } from './tools.js';
-
-interface RpcMessage {
-  jsonrpc?: string;
-  id?: number | string | null;
-  method?: string;
-  params?: { name?: string; arguments?: Record<string, unknown>; protocolVersion?: string };
-}
-
-const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
-
-export async function answerMcp(message: RpcMessage, context: ConversationToolContext): Promise<unknown | undefined> {
-  if (!message.method || message.id === undefined || message.id === null) return undefined;
-  const respond = (result: unknown) => ({ jsonrpc: '2.0', id: message.id, result });
-  if (message.method === 'initialize') {
-    const asked = message.params?.protocolVersion;
-    return respond({
-      protocolVersion: asked && SUPPORTED_PROTOCOLS.includes(asked) ? asked : SUPPORTED_PROTOCOLS[0],
-      capabilities: { tools: {} },
-      serverInfo: { name: CONVERSATIONS_MCP_NAME, version: '1' },
-      instructions: CONVERSATION_TOOLS_NOTE,
-    });
-  }
-  if (message.method === 'ping') return respond({});
-  if (message.method === 'tools/list') {
-    return respond({
-      tools: CONVERSATION_TOOLS.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: { readOnlyHint: true } })),
-    });
-  }
-  if (message.method === 'tools/call') {
-    const tool = conversationTool(message.params?.name ?? '');
-    if (!tool) return { jsonrpc: '2.0', id: message.id, error: { code: -32602, message: `Unknown tool ${message.params?.name ?? ''}` } };
-    try {
-      const result = await tool.run(message.params?.arguments ?? {}, context);
-      return respond({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
-    } catch (error) {
-      return respond({ content: [{ type: 'text', text: `${tool.name} failed: ${error instanceof Error ? error.message : String(error)}` }], isError: true });
-    }
-  }
-  if (message.method === 'resources/list') return respond({ resources: [] });
-  if (message.method === 'prompts/list') return respond({ prompts: [] });
-  return { jsonrpc: '2.0', id: message.id, error: { code: -32601, message: `Method not found: ${message.method}` } };
-}
 
 /** How long the server keeps every transcript's text after its last
  * request. The vendor keeps this process for the whole session, and a
@@ -99,7 +57,16 @@ export function serveConversationsMcp(): Promise<void> {
   const current = currentConversationSession();
   if (current) context.currentSessionId = current;
   const idle = idleRelease(releaseCorpus, CORPUS_IDLE_MS);
-  return serveStdioMcp(async (message) => {
-    try { return await answerMcp(message as RpcMessage, context); } finally { idle.touch(); }
+  const answer = toolServer({
+    name: CONVERSATIONS_MCP_NAME,
+    instructions: CONVERSATION_TOOLS_NOTE,
+    tools: () => CONVERSATION_TOOLS.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.inputSchema, annotations: { readOnlyHint: true } })),
+    call: async (name, args) => {
+      const tool = conversationTool(name);
+      return tool ? tool.run(args, context) : undefined;
+    },
+  });
+  return serveStdioMcp(async (message, send) => {
+    try { return await answer(message, send); } finally { idle.touch(); }
   });
 }

@@ -65,3 +65,74 @@ export function serveStdioMcp(
     streams.input.on('end', () => { void queue.then(() => resolve()); });
   });
 }
+
+/** The MCP protocol versions these servers speak, newest first: the client's
+ * own when it asks for one of these, else the newest. */
+const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
+
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: unknown;
+  annotations?: Record<string, unknown>;
+}
+
+export interface McpToolServer {
+  name: string;
+  instructions?: string;
+  /** Asked on every tools/list: the list may depend on the conversation. */
+  tools(): readonly McpTool[] | Promise<readonly McpTool[]>;
+  /** One call. Undefined for a tool this server does not have. `progress`
+   * is there when the client asked for progress on this call. */
+  call(name: string, args: Record<string, unknown>, progress: ((message: string) => void) | undefined):
+    Promise<{ text: string; isError?: boolean } | undefined>;
+}
+
+interface RpcMessage {
+  id?: number | string | null;
+  method?: string;
+  params?: { name?: string; arguments?: Record<string, unknown>; protocolVersion?: string; _meta?: { progressToken?: unknown } };
+}
+
+/** A tools-only MCP server's answers (initialize, ping, tools/list,
+ * tools/call, empty resource and prompt lists), for serveStdioMcp. A thrown
+ * tool is answered as a failed call the agent can read, not a protocol error. */
+export function toolServer(server: McpToolServer): (message: unknown, send: McpSend) => Promise<unknown> {
+  return async (raw, send) => {
+    const message = raw as RpcMessage;
+    if (!message.method || message.id === undefined || message.id === null) return undefined;
+    const respond = (result: unknown) => ({ jsonrpc: '2.0', id: message.id, result });
+    const error = (code: number, text: string) => ({ jsonrpc: '2.0', id: message.id, error: { code, message: text } });
+    switch (message.method) {
+      case 'initialize': {
+        const asked = message.params?.protocolVersion;
+        return respond({
+          protocolVersion: asked && SUPPORTED_PROTOCOLS.includes(asked) ? asked : SUPPORTED_PROTOCOLS[0],
+          capabilities: { tools: {} },
+          serverInfo: { name: server.name, version: '1' },
+          ...(server.instructions ? { instructions: server.instructions } : {}),
+        });
+      }
+      case 'ping': return respond({});
+      case 'tools/list': return respond({ tools: await server.tools() });
+      case 'resources/list': return respond({ resources: [] });
+      case 'prompts/list': return respond({ prompts: [] });
+      case 'tools/call': {
+        const name = message.params?.name ?? '';
+        const token = message.params?._meta?.progressToken;
+        let step = 0;
+        const progress = typeof token === 'string' || typeof token === 'number'
+          ? (text: string) => { step += 1; send({ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: token, progress: step, message: text } }); }
+          : undefined;
+        try {
+          const result = await server.call(name, message.params?.arguments ?? {}, progress);
+          if (!result) return error(-32602, `Unknown tool ${name}`);
+          return respond({ content: [{ type: 'text', text: result.text }], ...(result.isError ? { isError: true } : {}) });
+        } catch (thrown) {
+          return respond({ content: [{ type: 'text', text: `${name} failed: ${thrown instanceof Error ? thrown.message : String(thrown)}` }], isError: true });
+        }
+      }
+      default: return error(-32601, `Method not found: ${message.method}`);
+    }
+  };
+}
