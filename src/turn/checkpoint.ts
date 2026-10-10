@@ -330,8 +330,10 @@ export function durableAnswer(streamed: string, reported: string): string {
   return stream;
 }
 
-export function finishPendingTurn(session: HarnessSession, response: string | undefined, now: string): void {
+export function finishPendingTurn(session: HarnessSession, response: string | undefined, now: string, stopped = false): void {
   if (!session.pendingTurn) return;
+  const before = session.messages?.length ?? 0;
+  const startedAt = Date.parse(session.pendingTurn.startedAt);
   if (response?.trim() || session.pendingTurn.response?.trim()) {
     const pending = session.pendingTurn;
     const streamed = pending.response ?? '';
@@ -343,6 +345,12 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   session.messages = sessionTranscriptMessages(session);
   delete session.pendingTurn;
   session.updatedAt = now;
+  // The answer the turn ended on carries how long it took (see turnEnd).
+  const last = session.messages[session.messages.length - 1];
+  const ms = Date.parse(now) - startedAt;
+  if (session.messages.length > before && last?.role === 'assistant' && Number.isFinite(ms)) {
+    last.turnEnd = { ms: Math.max(0, ms), ...(stopped ? { stopped: true as const } : {}) };
+  }
 }
 
 /** The turn was stopped: a call still open did not finish, and the saved

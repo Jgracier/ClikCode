@@ -36,7 +36,8 @@ import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/act
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { reasoningBody, tensedLabel, turnStatus, endsWithSummary, turnSummary } from '../harness/protocol/turn-flow.js';
+import { reasoningBody, tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { turnEndLine } from './render/turn-end-line.js';
 import { turnStalled } from '../harness/protocol/turn-pace.js';
 import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
@@ -301,8 +302,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private terminalTitle?: string;
   /** Long pastes held as placeholders so far, for the next one's number. */
   private pasteCount = 0;
-  /** The line a turn ended on, owed to the transcript once. */
-  private pendingTurnSummary?: string;
   /** "Tell it instead" is being typed; the draft the composer held before. */
   private tellingInstead?: { draft: string; cursor: number };
   private approvalRestoreLabel?: string;
@@ -1199,7 +1198,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.submittedPrompt = submittedPrompt;
     // A summary its turn never got to write (it ended with no answer) is
     // not this turn's.
-    this.pendingTurnSummary = undefined;
     // Following again the very turn this window stepped out of, with nothing
     // redrawn in between: what it wrote is in scrollback, so it carries on
     // from there rather than starting the turn's view over beneath it.
@@ -1374,14 +1372,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // Stopped: what was still running did not finish. Its row says so, as
     // the worker's saved copy of the turn does (turn-journal.ts).
     if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));
-    // A turn that did real work ends on a line saying how long it took and
-    // what it changed (Codex). Only a real turn -- one that took messages,
-    // not a wait on a download or a shell command -- and only its end:
-    // stepping out of it is not.
-    if (turn?.submit && !this.steppedOut) {
-      this.pendingTurnSummary = this.endOfTurnSummary(turn);
-      // A stopped turn did not finish, and whoever stopped it knows.
-      if (!turn.cancelled) this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
+    // A real turn's end -- one that took messages, not a wait on a download
+    // or a shell command -- and not stepping out of it. A stopped turn did
+    // not finish, and whoever stopped it knows. (Its closing line is drawn
+    // from the saved answer: see turnEndLine.)
+    if (turn?.submit && !this.steppedOut && !turn.cancelled) {
+      this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
     }
     this.turn = undefined;
     this.thought = undefined;
@@ -1484,16 +1480,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       : []));
     if (!stopped.length) return;
     this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry) && stopped.some((event) => sameCall(entry.event!, event)));
-  }
-
-  /** The end-of-turn line, or nothing for a turn that ran no tools and took
-   * under END_SUMMARY_MS. A stopped turn always ends on it. */
-  private endOfTurnSummary(turn: WaitingTurn): string | undefined {
-    const ms = turnElapsedMs(turn.clock, Date.now());
-    const calls = this.activityEntries.filter((entry) => entry.event && entry.event.kind !== 'thinking' && this.ofThisTurn(entry));
-    const stopped = turn.cancelled || calls.some((entry) => entry.event?.stopped);
-    if (!stopped && !endsWithSummary(ms, calls.length)) return undefined;
-    return turnSummary({ ms, stopped, diffs: calls.flatMap((entry) => (entry.event?.diff?.length ? [entry.event.diff] : [])) });
   }
 
   /** The vendor is producing output: a phase reported before it is over. */
@@ -2148,6 +2134,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         drewLiveTurn = true;
         this.turnTranscript.reset();
       }
+      // The turn's closing line, with the answer it ended on.
+      const ended = message.role === 'assistant' ? turnEndLine(persistedMessages, index) : undefined;
+      if (ended) emit(['', `  ${chalk.dim(`─ ${ended} ─`)}`]);
       this.emitted.wrote(message);
       emit(['']);
       emit(standaloneActivity(index + 1));
@@ -2170,13 +2159,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       });
       emit(step.finished);
       liveConversation.push(...step.live);
-    }
-    // The turn's last line, once its answer has settled above it. Retired
-    // like every other row, exactly once: it is dropped as it is written.
-    const answered = persistedMessages.length > this.activityAnchor && persistedMessages[persistedMessages.length - 1]?.role === 'assistant';
-    if (this.pendingTurnSummary && !this.turn && (hasTransientAssistant || answered)) {
-      emit(['', `  ${chalk.dim(`─ ${this.pendingTurnSummary} ─`)}`, '']);
-      this.pendingTurnSummary = undefined;
     }
     for (const [queueIndex, message] of queuedMessages.entries()) {
       // Provisional, and so never retired: a queued turn becomes a real user

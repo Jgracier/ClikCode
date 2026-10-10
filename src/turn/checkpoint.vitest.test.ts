@@ -80,7 +80,7 @@ describe('durable turn checkpoints', () => {
       const { readState } = await import('../session/state/read.js');
       const saved = (await readState()).sessions.find((item) => item.id === target.id);
       expect(saved?.name).toBe('Parser Repair');
-      expect(saved?.messages?.at(-1)).toEqual({ role: 'assistant', content: 'Fixed it.', ...by });
+      expect(saved?.messages?.at(-1)).toEqual({ role: 'assistant', content: 'Fixed it.', ...by, turnEnd: { ms: expect.any(Number) } });
       expect(saved?.attachments).toEqual([]);
       expect(saved?.pendingTurn).toBeUndefined();
     } finally {
@@ -113,7 +113,7 @@ describe('durable turn checkpoints', () => {
     expect(target.pendingTurn).toBeUndefined();
     expect(target.messages?.slice(-2)).toEqual([
       { role: 'user', content: 'Continue' },
-      { role: 'assistant', content: 'Partial -- and the final answer', ...by },
+      { role: 'assistant', content: 'Partial -- and the final answer', ...by, turnEnd: { ms: 2_000 } },
     ]);
   });
 
@@ -191,7 +191,7 @@ describe('durable turn checkpoints', () => {
     expect(target.messages!.slice(-3)).toEqual([
       { role: 'assistant', content: 'First part. ', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a' }, responseOffset: 12 }], ...by },
       { role: 'user', content: 'also two' },
-      { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b' }, responseOffset: 12 }], ...by },
+      { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b' }, responseOffset: 12 }], ...by, turnEnd: { ms: 6_000 } },
     ]);
   });
 
@@ -394,7 +394,7 @@ describe('joining a turn another window is running', () => {
     updatePendingResponse(resumed, 'The other half', 'append', '2026-01-01T00:00:02.000Z');
     finishPendingTurn(resumed, undefined, '2026-01-01T00:00:03.000Z');
     expect(resumed.messages).toEqual([
-      { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half', ...by },
+      { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half', ...by, turnEnd: { ms: 2_000 } },
     ]);
   });
 });

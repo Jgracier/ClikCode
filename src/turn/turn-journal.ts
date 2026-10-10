@@ -43,7 +43,7 @@ export async function preserveInterruptedTurn(id: string, prompt: string, partia
   if (session.pendingTurn?.prompt === prompt) {
     stopPendingCalls(session);
     if (partialResponse) updatePendingResponse(session, partialResponse, 'replace', new Date().toISOString());
-    finishPendingTurn(session, partialResponse || undefined, new Date().toISOString());
+    finishPendingTurn(session, partialResponse || undefined, new Date().toISOString(), true);
   } else session.messages = interruptedTurnMessages(session.messages ?? [], prompt, partialResponse, outputStarted);
   session.attachments = [];
   session.shellNotes = [];
