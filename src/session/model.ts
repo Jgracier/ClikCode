@@ -59,7 +59,7 @@ export interface HarnessSession {
   conversationId?: string;
   /** The session this one was forked from (/fork, /compact), or -- in
    * conversations from before provider switches happened in place -- the
-   * branch a switch was made from (state/fold-handoffs.ts). */
+   * branch a switch was made from. */
   parentSessionId?: string;
   /** Made by /fork or /compact: a chat of its own beside the conversation's
    * history, not a piece of it. Set when the fork is made, and on a fork from
@@ -227,7 +227,7 @@ export interface HarnessSession {
   /** Set on a clerk run that was stored by mistake. Those rows are not chats. */
   clerkOf?: string;
   /** A branch from before provider switches happened in place, whose whole
-   * history the named session carries on (state/fold-handoffs.ts: its turns
+   * history the named session carries on (its turns
    * the other lacked were merged into it first). Kept, never listed. */
   foldedInto?: string;
 }

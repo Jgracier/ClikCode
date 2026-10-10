@@ -15,7 +15,6 @@ import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from 
 import { sessionForceStored } from './ephemeral.js';
 import { blankChatSweepable, discardIfBlank, ensureSessionOnDisk } from './blank.js';
 import { liveWorkerSessions } from './liveness.js';
-import { backfillListFacts } from './list-backfill.js';
 import { sweepStateDaily } from './state/sweep.js';
 import { chatNamed, isBlankConversation, latestChat } from './options.js';
 import type { HarnessSession, HarnessState } from './model.js';
@@ -45,16 +44,11 @@ export function activateSession(session: HarnessSession): boolean {
  * the start of one, a chat's name, or `last`. `sameWorkspace` limits
  * `continue` to unarchived chats of this workspace (the editor's); otherwise
  * it prefers this workspace's and falls back to any.
- *
- * Chats that predate the row summary are summarized in the background: waiting
- * made the first open after an upgrade pay for every transcript. */
+ */
 export async function openConversation(
   workspace: string, mode: 'new' | 'continue' | 'resume', ref?: string, options: { sameWorkspace?: boolean } = {},
 ): Promise<string> {
   const state = await readState({ transcripts: [] });
-  if (state.sessions.some((session) => !session.listChecked && !isBlankConversation(session))) {
-    void backfillListFacts().catch(() => undefined);
-  }
   // Housekeeping, in the background and at most daily (session/state/sweep.ts).
   void sweepStateDaily().catch(() => undefined);
   let session: HarnessSession | undefined;

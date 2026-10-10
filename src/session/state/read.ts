@@ -18,9 +18,6 @@ import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js';
 import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission, normalizedStatus } from './settings.js';
 import { writeState } from './write.js';
-import { foldHandoffBranches, hasLooseBranches } from './fold-handoffs.js';
-import { lifecycle } from '../../runtime/lifecycle-log.js';
-import { liveWorkerSessions } from '../liveness.js';
 
 function sessionClaimView(claim: SessionClaim): NonNullable<HarnessSession['claim']> {
   return { pid: claim.pid, host: claim.host, startedAt: claim.startedAt, heartbeatAt: claim.heartbeatAt };
@@ -65,42 +62,13 @@ function attachHidden(state: HarnessState, secrets: HarnessSecrets, rollups: Rec
   return state;
 }
 
-/** Harnesses that ran every turn on their one-shot CLI before ACP became
- * their transport. Their threads from then carry no transport marker and
- * belong to that CLI (Gemini's ACP even resets a CLI-born thread it is asked
- * to load); every thread since is marked when it is made. History, not a
- * catalog fact: this list never grows. */
-const CLI_BEFORE_ACP = new Set(['gemini', 'goose', 'kiro', 'qwen', 'cursor', 'auggie']);
-
-/** The marker an unmarked thread from before ACP gets, once, on read. */
-function legacyThreadTransport(session: HarnessSession): Pick<HarnessSession, 'nativeTransport'> {
-  return session.nativeSessionId && !session.nativeSessionPreallocated && !session.nativeTransport
-    && CLI_BEFORE_ACP.has(session.nativeHarness ?? '') ? { nativeTransport: 'structured-cli' } : {};
-}
-
-/** Older indexes stored `accountFailover` and a per-session `contextProfile`.
- * Neither is read. Dropping them makes the next write remove them. */
-function omitRetiredSessionFields(session: HarnessSession): HarnessSession {
-  const next = { ...session } as HarnessSession & { accountFailover?: unknown; contextProfile?: unknown };
-  delete next.accountFailover;
-  delete next.contextProfile;
-  return next;
-}
-
-function omitAccountFailover<T extends object>(value: T | undefined): T {
-  const next = { ...(value ?? {}) } as T & { accountFailover?: unknown };
-  delete next.accountFailover;
-  return next;
-}
-
 function normalizedState(raw: HarnessState): HarnessState {
   const sessions: HarnessSession[] = raw.sessions.map((session) => {
     const next: HarnessSession = {
-      ...omitRetiredSessionFields(session),
+      ...session,
       ...normalizedConversation(session),
       ...normalizedStatus(session),
       ...normalizedSessionPermission(session),
-      ...legacyThreadTransport(session),
     };
     // The spread above is a new object, so the marks have to be put back.
     if (sessionFromIndex(session)) markFromIndex(next);
@@ -111,19 +79,17 @@ function normalizedState(raw: HarnessState): HarnessState {
   // vendor's "resets in" hint, else a default window -- see
   // quotaMarkExpiresAt). The 60-second value older builds wrote is long past,
   // which only means that account is tried again and re-marked if it refuses.
-  // A usage reading older builds stored as an estimate (`learned`) is not the
-  // vendor's and goes; their learning is brought to the current shape.
+  // Learning is brought to the current shape.
   const accounts = (Array.isArray(raw.accounts) ? raw.accounts : []).map((account) => {
-    const usage = (account.usage as { learned?: boolean } | undefined)?.learned ? undefined : account.usage;
     const usageLearning = normalizeLearning(account.usageLearning);
-    return { ...account, usage, ...(usageLearning ? { usageLearning } : {}) };
+    return { ...account, ...(usageLearning ? { usageLearning } : {}) };
   });
   const normalized = {
     ...raw, accounts, sessions, invocations: Array.isArray(raw.invocations) ? raw.invocations : [],
-    globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...omitAccountFailover(raw.globalSettings), permissionMode: normalizedPermissionMode(raw.globalSettings?.permissionMode) },
+    globalSettings: { ...HARNESS_DEFAULT_SETTINGS, ...raw.globalSettings, permissionMode: normalizedPermissionMode(raw.globalSettings?.permissionMode) },
     providerSettings: Object.fromEntries(Object.entries(raw.providerSettings && typeof raw.providerSettings === 'object' ? raw.providerSettings : {}).map(([provider, settings]) => [
       provider,
-      { ...omitAccountFailover(settings), ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
+      { ...settings, ...(settings.permissionMode ? { permissionMode: normalizedPermissionMode(settings.permissionMode) } : {}) },
     ])),
   } as HarnessState;
   return attachHidden(normalized, { localApiToken: raw.localApiToken, devicePrivateKeyPem: raw.devicePrivateKeyPem },
@@ -157,11 +123,7 @@ export interface ReadStateOptions {
 export async function readState(options?: ReadStateOptions): Promise<HarnessState> {
   const transcripts = options?.transcripts ?? 'all';
   const wanted = transcripts === 'all' ? 'all' as const : new Set(transcripts);
-  let index = await loadIndex() ?? await createIndex();
-  if (!folding && index.version <= HARNESS_STATE_VERSION && hasLooseBranches(index.sessions as HarnessSession[])) {
-    await foldStoredHandoffs();
-    index = await loadIndex() ?? index;
-  }
+  const index = await loadIndex() ?? await createIndex();
   let secrets = await readSecretsFile();
   // The loopback bearer must survive the first process exit; otherwise a
   // runtime registration would be valid only for the process that created it.
@@ -177,25 +139,6 @@ export async function readState(options?: ReadStateOptions): Promise<HarnessStat
   if (index.version > HARNESS_STATE_VERSION) return withDrafts(normalized);
   if (!sameData(normalized, raw)) await writeState(normalized);
   return withDrafts(normalized);
-}
-
-/** Set while the fold below reads and writes the state itself. */
-let folding = false;
-
-/** Conversations stored as a branch per provider switch become one chat
- * history (fold-handoffs.ts). Only while the index shows a conversation with
- * two such chats listed, so once; again only for a branch an older build
- * made since. */
-async function foldStoredHandoffs(): Promise<void> {
-  folding = true;
-  try {
-    const state = await readState();
-    const report = foldHandoffBranches(state.sessions, await liveWorkerSessions());
-    await writeState(state);
-    lifecycle('state.fold-handoffs', { ...report });
-  } finally {
-    folding = false;
-  }
 }
 
 /** Drafts this process has not stored yet. They are not part of the baseline:

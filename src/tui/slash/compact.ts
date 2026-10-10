@@ -3,7 +3,6 @@
 import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import { COMPACTED_OPENING } from '../../session/state/fold-handoffs.js';
 import { closePersistentTransport } from '../../turn/vendor-process.js';
 import { hasConversationContent } from '../../session/options.js';
 import { conversationIdFor } from '../../session/conversation-rows.js';
@@ -12,6 +11,9 @@ import { textTranscript } from '../../turn/turn-activities.js';
 import { newConversationSession } from '../../commands/ai/conversations.js';
 import { sessionHarness } from './context.js';
 import { AGENT_COMPACTS_ITSELF, isClikCodeAgent } from '../../session/route.js';
+
+/** The first message of a chat /compact made. */
+const COMPACTED_OPENING = 'Summary of the conversation so far (compacted by ClikCode):';
 
 const COMPACT_PROMPT = 'Summarize this conversation so far for a fresh session that will continue the work. Include: the goal, decisions made and why, files created or changed (with paths), commands that matter, the current state, and the concrete next steps. Be complete but concise. Output only the summary.';
 

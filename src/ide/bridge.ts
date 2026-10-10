@@ -18,7 +18,6 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type Conf from 'conf';
 import { CLIKCODE_VERSION } from '../version.js';
-import { backfillListFacts } from '../session/list-backfill.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
@@ -734,7 +733,6 @@ export class IdeBridge {
           answer(await modelList(this.config, state, session, options.provider));
           return;
         case 'conversations':
-          if (state.sessions.some((item) => !item.listChecked)) void backfillListFacts();
           answer(await conversationList(state, this.sessionId));
           return;
         case 'accounts': answer(await accountList(state, session, Boolean(options.network))); return;

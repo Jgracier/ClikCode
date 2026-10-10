@@ -57,10 +57,12 @@ export function conversationPreview(session: HarnessSession, limit = 48): string
 }
 
 /** Copy the row's facts off a loaded transcript. Returns whether the index
- * row changed. A session whose transcript was not loaded is left alone, so a
- * light read cannot wipe the preview. */
+ * row changed. A row read from the index without its transcript is left
+ * alone, so a light read cannot wipe the preview; one made in this process
+ * (a new chat, a fork, /redo's archived copy) holds its whole transcript, so
+ * it is summarized on its first write. */
 export function stampListFacts(session: HarnessSession): boolean {
-  if (!transcriptWasLoaded(session)) return false;
+  if (!transcriptWasLoaded(session) && (sessionFromIndex(session) || session.messages === undefined)) return false;
   const preview = previewFromTranscript(session);
   const count = session.messages?.length ?? 0;
   let changed = false;
