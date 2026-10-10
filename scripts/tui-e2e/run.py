@@ -1050,6 +1050,12 @@ SCENARIOS = {
         'snap_contains': {'waiting': ['waiting for reset ·']},
         'final_contains': ['Stopped waiting for the reset'],
     },
+    # /status draws the current setup: it used to draw nothing at all.
+    'status-shows-setup': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '/status'), ('wait_for', 'Current setup', 10), ('settle', 1)],
+        'watch': [], 'final_contains': ['Current setup', 'provider', 'Grok Build', 'permissions'],
+    },
     # /usage all: every provider, then the days with use: today's row has its
     # one turn, and no tokens or cost (the fake reports none) -- never $0, and
     # never a field that only says it is unknown.

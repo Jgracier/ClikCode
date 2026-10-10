@@ -38,7 +38,7 @@ export function sessionModelLabel(session: HarnessSession, model: string | null 
   return nativeModelLabel(session.nativeHarness, model);
 }
 
-function renderSessionCard(session: HarnessSession, account?: string): string {
+export function renderSessionCard(session: HarnessSession, account?: string): string {
   const shownModel = sessionModelLabel(session);
   return [
     chalk.bold.cyan('ClikCode'),
@@ -124,7 +124,9 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     write(`\n${chalk.bold('Commands')}\n\n${payload.helpText}\n\n`);
     return;
   }
-  if (payload.panel === 'settings' && payload.session) {
+  // /status asks for the setup, so it is drawn -- in the TUI too, where a
+  // `settings` panel (a setting just changed) is the status line's to show.
+  if ((payload.panel === 'settings' || payload.panel === 'status') && payload.session) {
     const session = payload.session as HarnessSession;
     const account = typeof payload.account === 'string' ? payload.account : undefined;
     write(`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort or /provider.')}\n\n`);
