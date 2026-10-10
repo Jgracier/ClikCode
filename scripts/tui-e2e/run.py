@@ -53,6 +53,12 @@ TWO_BLOCKS = {'blocks': ['Checking the workspace first.', 'The final commit is l
 
 # Each step: ('type', text) types and presses Enter; ('wait_for', text, secs)
 # waits until text is on screen; ('settle', secs) lets the screen quiet down.
+# A second window on the same state: ('open2', secs, [args]) opens it, and 'type2',
+# 'keys2', 'wait_for2', 'snap2', 'mark2' act on it as their plain forms do
+# on the first; ('kill_workers', 'KILL') signals every conversation worker,
+# ('expect_workers', n) waits for exactly n to be running. Checks on it:
+# 'final2_contains', 'final2_once', 'never2' (from 'mark2' on); on any snap:
+# 'snap_lacks', 'snap_once'.
 SCENARIOS = {
     'two-blocks-with-tool': {
         'turns': [TWO_BLOCKS],
@@ -919,11 +925,11 @@ def run(name, spec, entry, keep):
     cols = spec.get('cols', COLS)
     rows = spec.get('rows', ROWS)
 
-    def launch():
+    def launch(args=()):
         child, terminal = pty.fork()
         if child == 0:
             os.chdir(workspace)
-            os.execve(node, ['node', entry], env)
+            os.execve(node, ['node', entry, *args], env)
         fcntl.ioctl(terminal, termios.TIOCSWINSZ, struct.pack('HHHH', rows, cols, 0, 0))
         return child, terminal
 
@@ -932,28 +938,97 @@ def run(name, spec, entry, keep):
     stream = ByteStream(screen)
     snaps = {}
     raw, frames = bytearray(), []
+    # A second window ('open2'): another ClikCode on the same CLIKCODE_HOME,
+    # in its own pty and on its own screen, as a second terminal would be.
+    pid2, fd2 = None, None
+    screen2 = Screen(cols, rows)
+    stream2 = ByteStream(screen2)
+    raw2, frames2 = bytearray(), []
+    # A window whose process has gone (its pty hung up) is not read again.
+    closed = {1: False, 2: False}
     start = time.time()
 
-    def pump(seconds, until=None):
+    def pump(seconds, until=None, which=1):
+        """Read both windows for `seconds`, or until `until` is on window
+        `which`'s screen. False when that window has gone."""
         end = time.time() + seconds
         while time.time() < end:
-            ready, _, _ = select.select([fd], [], [], 0.05)
-            if ready:
-                try: chunk = os.read(fd, 65536)
-                except OSError: return False
-                if not chunk: return False
-                raw.extend(chunk); stream.feed(chunk)
-                frames.append((time.time() - start, '\n'.join(screen.display)))
-            if until and frames and until in frames[-1][1]: return True
+            if closed[which] and until is not None: return False
+            open_fds = [f for f, n in ((fd, 1), (fd2, 2)) if f is not None and not closed[n]]
+            if not open_fds: return False
+            ready, _, _ = select.select(open_fds, [], [], 0.05)
+            for ready_fd in ready:
+                n = 1 if ready_fd == fd else 2
+                try: chunk = os.read(ready_fd, 65536)
+                except OSError: chunk = b''
+                if not chunk:
+                    closed[n] = True
+                    continue
+                if n == 1:
+                    raw.extend(chunk); stream.feed(chunk)
+                    frames.append((time.time() - start, '\n'.join(screen.display)))
+                else:
+                    raw2.extend(chunk); stream2.feed(chunk)
+                    frames2.append((time.time() - start, '\n'.join(screen2.display)))
+            shown = frames if which == 1 else frames2
+            if until and shown and until in shown[-1][1]: return True
         return until is None
+
+    def worker_pids():
+        """The pids the conversation workers' records name, alive or not."""
+        workers = os.path.join(state, 'workers')
+        found = []
+        for record in (os.listdir(workers) if os.path.isdir(workers) else []):
+            if not record.endswith('.json'): continue
+            try: found.append(json.load(open(os.path.join(workers, record)))['pid'])
+            except (OSError, ValueError, KeyError): pass
+        return found
+
+    def alive(process):
+        try: os.kill(process, 0); return True
+        except OSError: return False
 
     problems = []
     pump(spec.get('startup', 5))
     typed_at = None
     typed_raw_at = None
     marked_at = None
+    marked2_at = None
     for step in spec['steps']:
-        if step[0] == 'type':
+        if step[0] == 'open2':
+            # A second window on the same conversations, opened now; with
+            # ['--continue'] it opens the latest one.
+            pid2, fd2 = launch(step[2] if len(step) > 2 else ())
+            closed[2] = False
+            pump(step[1] if len(step) > 1 else 5)
+        elif step[0] == 'type2':
+            for ch in step[1]: os.write(fd2, ch.encode()); pump(0.02)
+            os.write(fd2, b'\r')
+            pump(0.3)
+        elif step[0] == 'keys2':
+            os.write(fd2, step[1].encode()); pump(0.3)
+        elif step[0] == 'wait_for2':
+            if not pump(step[2], step[1], 2): problems.append(f'window 2 timed out waiting for {step[1]!r}')
+        elif step[0] == 'snap2':
+            snaps[step[1]] = list(screen2.display)
+        elif step[0] == 'mark2':
+            # Where 'never2' starts looking.
+            marked2_at = len(frames2)
+        elif step[0] == 'kill_workers':
+            # Every conversation worker, by the signal named ('KILL', 'TERM').
+            for worker in worker_pids():
+                try: os.kill(worker, getattr(signal, f'SIG{step[1]}'))
+                except OSError: pass
+            pump(0.3)
+        elif step[0] == 'expect_workers':
+            # Exactly this many workers running, within a few seconds.
+            deadline = time.time() + (step[2] if len(step) > 2 else 10)
+            running = [worker for worker in worker_pids() if alive(worker)]
+            while len(running) != step[1] and time.time() < deadline:
+                pump(0.2)
+                running = [worker for worker in worker_pids() if alive(worker)]
+            if len(running) != step[1]: problems.append(f'{len(running)} worker(s) running, expected {step[1]}')
+        elif step[0] == 'type':
             if typed_raw_at is None: typed_raw_at = len(raw)
             for ch in step[1]: os.write(fd, ch.encode()); pump(0.02)
             os.write(fd, b'\r')
@@ -997,6 +1072,7 @@ def run(name, spec, entry, keep):
             try: os.close(fd)
             except OSError: pass
             pid, fd = launch()
+            closed[1] = False
             screen.reset()
             pump(step[1] if len(step) > 1 else 5)
         elif step[0] == 'reversed':
@@ -1068,19 +1144,33 @@ def run(name, spec, entry, keep):
             os.write(fd, f'\x1b[<32;{last};{row + 1}M'.encode()); pump(0.05)
             os.write(fd, f'\x1b[<0;{last};{row + 1}m'.encode()); pump(0.3)
     final = frames[-1][1] if frames else ''
-    for _ in range(2): os.write(fd, b'\x03'); pump(0.4)
+    final2 = frames2[-1][1] if frames2 else ''
+    # The second window goes first, so nothing it does on its way out lands
+    # on the first window's final screen.
+    if pid2 is not None:
+        try: os.kill(pid2, signal.SIGTERM)
+        except ProcessLookupError: pass
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                if os.waitpid(pid2, os.WNOHANG)[0] == pid2: break
+            except ChildProcessError: break
+            pump(0.05)
+        try: os.close(fd2)
+        except OSError: pass
+        fd2, closed[2] = None, True
+    for _ in range(2):
+        try: os.write(fd, b'\x03')
+        except OSError: pass
+        pump(0.4)
     try: os.kill(pid, signal.SIGTERM)
     except ProcessLookupError: pass
     # Session workers are spawned detached and outlive the TUI by their idle
     # timeout (30 minutes); every one this run started is stopped here.
-    workers = os.path.join(state, 'workers')
     stopped = []
-    for record in (os.listdir(workers) if os.path.isdir(workers) else []):
-        if not record.endswith('.json'): continue
-        try:
-            worker = json.load(open(os.path.join(workers, record)))['pid']
-            os.kill(worker, signal.SIGTERM); stopped.append(worker)
-        except (OSError, ValueError, KeyError): pass
+    for worker in worker_pids():
+        try: os.kill(worker, signal.SIGTERM); stopped.append(worker)
+        except OSError: pass
     # Gone before the directory is removed: an exiting process still writes
     # into it (its compile cache, its record), and would leave it behind.
     deadline = time.time() + 5
@@ -1088,11 +1178,7 @@ def run(name, spec, entry, keep):
         try:
             if os.waitpid(pid, os.WNOHANG)[0] == pid: pid = -1
         except ChildProcessError: pid = -1
-        def running(worker):
-            try: os.kill(worker, 0); return True
-            except OSError: return False
-        alive = [worker for worker in stopped if running(worker)]
-        if pid == -1 and not alive: break
+        if pid == -1 and not [worker for worker in stopped if alive(worker)]: break
         time.sleep(0.05)
 
     watched = [(t, text) for t, text in frames if typed_at is not None and t >= typed_at]
@@ -1146,6 +1232,21 @@ def run(name, spec, entry, keep):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     for phrase in spec.get('final_once', []):
         if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
+    for name, phrases in spec.get('snap_lacks', {}).items():
+        shown = '\n'.join(snaps.get(name, []))
+        for phrase in phrases:
+            if phrase in shown: problems.append(f'on the {name!r} screen, and never should be: {phrase!r}')
+    for name, phrases in spec.get('snap_once', {}).items():
+        shown = '\n'.join(snaps.get(name, []))
+        for phrase in phrases:
+            if shown.count(phrase) != 1: problems.append(f'on the {name!r} screen {shown.count(phrase)}x, expected once: {phrase!r}')
+    for phrase in spec.get('final2_contains', []):
+        if phrase not in final2: problems.append(f'expected on window 2\'s final screen: {phrase!r}')
+    for phrase in spec.get('final2_once', []):
+        if final2.count(phrase) != 1: problems.append(f'on window 2\'s screen {final2.count(phrase)}x at the end, expected once: {phrase!r}')
+    for phrase in spec.get('never2', []):
+        shown = [t for t, text in frames2[marked2_at or 0:] if phrase in text]
+        if shown: problems.append(f'shown on window 2 in {len(shown)} frame(s), first at {shown[0]:.2f}s, and never should be: {phrase!r}')
     for phrase in spec.get('ever_after_mark', []):
         if not any(phrase in text for _, text in frames[marked_at or 0:]): problems.append(f'never on screen after the mark: {phrase!r}')
     for phrase in spec.get('never_after_mark', []):
@@ -1191,14 +1292,17 @@ def run(name, spec, entry, keep):
 
     open(os.path.join(root, 'capture.bin'), 'wb').write(bytes(raw))
     open(os.path.join(root, 'final.txt'), 'w').write(final)
+    if frames2: open(os.path.join(root, 'final2.txt'), 'w').write(final2)
     if keep or problems:
         # Every distinct screen, timed: the way to see which draw did it.
-        with open(os.path.join(root, 'frames.txt'), 'w') as log:
-            last = None
-            for t, text in frames:
-                if text == last: continue
-                last = text
-                log.write(f'===== {t:.2f}s\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
+        for name, shots in (('frames.txt', frames), ('frames2.txt', frames2)):
+            if not shots: continue
+            with open(os.path.join(root, name), 'w') as log:
+                last = None
+                for t, text in shots:
+                    if text == last: continue
+                    last = text
+                    log.write(f'===== {t:.2f}s\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
     if not problems and not keep: shutil.rmtree(root, ignore_errors=True)
     return problems, root, final
 
