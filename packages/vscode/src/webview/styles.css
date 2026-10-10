@@ -544,12 +544,13 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
 .working .spinner { width: 2.2ch; }
 /* The working line: its tone, and a highlight sweeping across the words at
    the terminal's pace (--shimmer-cycle, set per label from shimmerCycleMs)
-   -- all CSS, nothing redrawn per frame. Still under reduced motion. */
+   -- all CSS, nothing redrawn per frame. Still under reduced motion, and
+   while the turn waits on the user (no .shimmer then). */
 .working .spinner, .working .working-label {
   --tone-now: var(--tone, var(--vscode-foreground));
   color: var(--tone-now);
 }
-.working .working-label {
+.working .working-label.shimmer {
   background: linear-gradient(90deg, var(--tone-now) 0%, var(--tone-now) 38%, color-mix(in srgb, var(--tone-now) 35%, var(--vscode-editor-foreground, #fff)) 50%, var(--tone-now) 62%, var(--tone-now) 100%);
   background-size: 300% 100%;
   -webkit-background-clip: text; background-clip: text;
