@@ -14,6 +14,7 @@
  *   ←       close
  *   Tab/Del a conversation's options / delete it
  *   Esc     clear the draft, then close
+ *   Ctrl+L  draw the whole screen again
  *
  * The decisions are `boardKey`, a pure function, so they are tested without a
  * terminal; `runConversationBoard` only wires it to one. */
@@ -44,6 +45,8 @@ export type BoardEffect =
   | { kind: 'draw' }
   | { kind: 'none' }
   | { kind: 'close' }
+  /** Ctrl+L: the whole screen drawn again. */
+  | { kind: 'repair' }
   | { kind: 'finish'; result: BoardResult }
   | { kind: 'inner' | 'actions' | 'delete'; option: PickerOption<string> };
 
@@ -76,6 +79,7 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
   const commandMode = boardShowsCommands(state);
   const row = state.selected >= 0 ? rows[state.selected] : undefined;
   if (key === '\u0003') return { kind: 'close' };
+  if (key === '\u000c') return { kind: 'repair' };
   if (key === FIND && !commandMode) {
     state.finding = !state.finding;
     state.query = '';
@@ -328,6 +332,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
     const handle = (key: string): void => {
       const effect = boardKey(state, key, rows());
       if (effect.kind === 'draw') draw();
+      else if (effect.kind === 'repair') { host.repair?.(); draw(); }
       else if (effect.kind === 'close') finish(undefined);
       else if (effect.kind === 'finish') finish(effect.result);
       else if (effect.kind === 'inner') {

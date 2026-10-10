@@ -311,6 +311,20 @@ SCENARIOS = {
         'steps': [('keys', '/'), ('wait_for', '/settings', 5), ('damage_and_redraw', '/settings')],
         'watch': [], 'final_contains': ['/settings'],
     },
+    # Ctrl+L on the conversation board and in a picker draws the whole
+    # screen again, as it does at the composer. Both ignored it.
+    'redraw-board': {
+        'turns': [{'blocks': ['First chat answered.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+                  ('keys', '\x1b[D'), ('wait_for', 'Recent', 10), ('settle', 1), ('damage_and_redraw', 'Recent')],
+        'watch': [], 'final_contains': ['Recent'],
+    },
+    'redraw-picker': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/effort'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Reasoning effort', 10), ('settle', 1),
+                  ('damage_and_redraw', 'Reasoning effort')],
+        'watch': [], 'final_contains': ['Reasoning effort'],
+    },
     'redraw-while-waiting': {
         'turns': [TWO_BLOCKS],
         'steps': [

@@ -74,3 +74,19 @@ describe('Del from a keyboard without forward Delete', () => {
     await expect(picked).resolves.toBe('acct');
   });
 });
+
+describe('Ctrl+L in a list', () => {
+  it('has the whole screen drawn again, the list still open', async () => {
+    const calls: string[] = [];
+    const host = {
+      paint: () => { calls.push('paint'); }, clearFrame: () => {}, setSelecting: () => {},
+      repair: () => { calls.push('repair'); }, select: async () => undefined as never,
+    };
+    const picked = runOptionPicker(host, 'Effort', [{ label: 'Low', value: 'low' }, { label: 'High', value: 'high' }]);
+    calls.length = 0;
+    pressKey('\u000c');
+    expect(calls).toEqual(['repair', 'paint']);
+    pressKey('\r');
+    await expect(picked).resolves.toBe('low');
+  });
+});

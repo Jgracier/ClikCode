@@ -3219,6 +3219,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       paint: (composer, pickerOptions, selected, prompt, cursor, palette) =>
         this.paint(composer, pickerOptions, selected, prompt, cursor, palette),
       clearFrame: () => this.clearInteractiveFrame(),
+      repair: () => { this.requestRedraw('repair'); this.forgetScreenPosition(); },
       // A closed picker is not the frame to come back to: resume() and any
       // repaint after it used to draw the finished list again (with the
       // palette's hint under it) before the next frame replaced it.
