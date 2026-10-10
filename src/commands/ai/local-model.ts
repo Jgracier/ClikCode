@@ -35,6 +35,10 @@ export function localProgressText(update: LocalModelProgress): string {
   return update.message;
 }
 
+/** Where progress shows for a surface that is not this terminal: the
+ * editor bridge's busy line, a label at a time. */
+export type ProgressSink = (label: string) => void;
+
 /** Long work with its progress on the waiting line; without a terminal, one
  * stderr line per distinct `shape` (a stage, not each percent) rather than
  * one per update. The wait starts on the first update, so work that has
@@ -44,7 +48,9 @@ export function localProgressText(update: LocalModelProgress): string {
  * A band already up -- the turn's own, drawn as its message was sent --
  * only has its label moved, and gets it back after: stopping and starting a
  * wait there dropped the band for a frame and set its clock back to 0. */
-export function waitingLineProgress(): { show: (text: string, shape: string) => void; done: () => void } {
+export function waitingLineProgress(sink?: ProgressSink): { show: (text: string, shape: string) => void; done: () => void } {
+  // A surface of its own (the editor's busy line): every update goes there.
+  if (sink) return { show: (text) => sink(text), done: () => undefined };
   const terminal = TERMINAL.active;
   let waiting = false;
   /** The label of the band borrowed, to give back. */
@@ -73,8 +79,8 @@ export function waitingLineProgress(): { show: (text: string, shape: string) => 
 
 /** ClikCode Local's progress: one stderr line per stage and per tenth of a
  * download. */
-export function localModelProgress(): { progress: (update: LocalModelProgress) => void; done: () => void } {
-  const shown = waitingLineProgress();
+export function localModelProgress(sink?: ProgressSink): { progress: (update: LocalModelProgress) => void; done: () => void } {
+  const shown = waitingLineProgress(sink);
   return {
     progress: (update) => {
       const tenth = update.totalBytes ? Math.floor(((update.bytes ?? 0) / update.totalBytes) * 10) : 0;
@@ -90,9 +96,9 @@ function reportNotice(sessionId: string, notice: string | undefined): void {
   emitHarnessOutput({ panel: 'notice', message: `ClikCode Local: ${notice}` });
 }
 
-async function ensureWithProgress(sessionId: string, modelId: string | undefined, allowDownload = false): Promise<LocalModelEndpoint> {
+async function ensureWithProgress(sessionId: string, modelId: string | undefined, allowDownload = false, sink?: ProgressSink): Promise<LocalModelEndpoint> {
   releaseLocalModelsOnExit();
-  const shown = localModelProgress();
+  const shown = localModelProgress(sink);
   try {
     const endpoint = await ensureLocalModel({ ...(modelId ? { modelId } : {}), sessionId, progress: shown.progress, allowDownload });
     held.add(sessionId);
@@ -111,9 +117,9 @@ export function localModelTurnHooks(sessionId: string): LocalModelHooks & { done
 
 /** Before a turn is handed to the worker: a ClikCode Local session's model
  * is running and this terminal holds it. Anything else is left alone. */
-export async function ensureLocalModelForTurn(session: HarnessSession | undefined): Promise<void> {
+export async function ensureLocalModelForTurn(session: HarnessSession | undefined, sink?: ProgressSink): Promise<void> {
   if (session?.route !== 'clikcode-local') return;
-  await ensureWithProgress(session.id, session.model ?? undefined);
+  await ensureWithProgress(session.id, session.model ?? undefined, false, sink);
 }
 
 /** `/model <id>` after download consent: the model is downloaded, loaded and

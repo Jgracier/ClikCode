@@ -103,6 +103,17 @@ describe('before a turn', () => {
     expect(calls).toEqual(['label downloading model.gguf 25%', 'label thinking']);
   });
 
+  it('sends its progress to the surface that asked (the editor\'s busy line), not to stderr', async () => {
+    engine.ensureLocalModel.mockImplementation(async (options: { progress: (update: unknown) => void }) => {
+      options.progress({ stage: 'download', message: 'model.gguf', bytes: 150, totalBytes: 200 });
+      return { baseUrl: 'http://127.0.0.1:1/v1', model: 'qwen3.5-4b', contextWindow: 8192 };
+    });
+    const shown: string[] = [];
+    await ensureLocalModelForTurn(session({ model: 'qwen3.5-4b' }), (label) => shown.push(label));
+    expect(shown).toEqual(['downloading model.gguf 75%']);
+    expect(process.stderr.write).not.toHaveBeenCalled();
+  });
+
   it('words download progress as a percentage', () => {
     expect(localProgressText({ stage: 'download', message: 'Qwen3.5-4B-Q4_K_M.gguf', bytes: 50, totalBytes: 200 })).toBe('downloading Qwen3.5-4B-Q4_K_M.gguf 25%');
     expect(localProgressText({ stage: 'start', message: 'loading Qwen3.5 4B… 12s' })).toBe('loading Qwen3.5 4B… 12s');
