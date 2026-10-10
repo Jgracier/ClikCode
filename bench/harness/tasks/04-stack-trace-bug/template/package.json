@@ -1,0 +1,9 @@
+{
+  "name": "bench-tickets",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "report": "node src/cli.ts"
+  }
+}
