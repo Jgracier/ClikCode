@@ -1,6 +1,6 @@
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
-import { serveStdioMcp } from './mcp-stdio-server.js';
+import { serveStdioMcp, toolServer } from './mcp-stdio-server.js';
 
 function served(handle: Parameters<typeof serveStdioMcp>[0]): { input: PassThrough; written: () => string; done: Promise<void> } {
   const input = new PassThrough();
@@ -42,5 +42,37 @@ describe('stdio MCP framing', () => {
     input.end();
     await done;
     expect(written()).toBe('{"id":1}\n{"id":2}\n');
+  });
+});
+
+describe('a tools-only MCP server', () => {
+  const sent: unknown[] = [];
+  const answer = toolServer({
+    name: 'test-server',
+    tools: () => [{ name: 'echo', description: 'echo', inputSchema: { type: 'object' } }],
+    call: async (name, args, progress) => {
+      if (name === 'boom') throw new Error('it broke');
+      if (name !== 'echo') return undefined;
+      progress?.('working');
+      return { text: String(args.text) };
+    },
+  });
+  const ask = (method: string, params?: object) => answer({ jsonrpc: '2.0', id: 1, method, ...(params ? { params } : {}) }, (payload) => sent.push(payload));
+
+  it("speaks the client's protocol version when it knows it, else its newest", async () => {
+    expect(await ask('initialize', { protocolVersion: '2024-11-05' })).toMatchObject({ result: { protocolVersion: '2024-11-05', serverInfo: { name: 'test-server' } } });
+    expect(await ask('initialize', { protocolVersion: '1999-01-01' })).toMatchObject({ result: { protocolVersion: '2025-06-18' } });
+  });
+
+  it('lists and calls tools, with progress only when asked, and says what failed', async () => {
+    expect(await ask('tools/list')).toMatchObject({ result: { tools: [{ name: 'echo' }] } });
+    expect(await ask('tools/call', { name: 'echo', arguments: { text: 'hi' } })).toEqual({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: 'hi' }] } });
+    expect(sent).toEqual([]);
+    await ask('tools/call', { name: 'echo', arguments: { text: 'hi' }, _meta: { progressToken: 'p' } });
+    expect(sent).toEqual([{ jsonrpc: '2.0', method: 'notifications/progress', params: { progressToken: 'p', progress: 1, message: 'working' } }]);
+    expect(await ask('tools/call', { name: 'nope' })).toMatchObject({ error: { code: -32602, message: 'Unknown tool nope' } });
+    expect(await ask('tools/call', { name: 'boom' })).toMatchObject({ result: { content: [{ text: 'boom failed: it broke' }], isError: true } });
+    expect(await ask('other/thing')).toMatchObject({ error: { code: -32601 } });
+    expect(await answer({ jsonrpc: '2.0', method: 'notifications/initialized' }, () => undefined)).toBeUndefined();
   });
 });
