@@ -5,6 +5,7 @@
  * `session/new` result). One short-lived child answers them; nothing is
  * prompted, so no turn is spent. */
 
+import { randomBytes } from 'node:crypto';
 import { mkdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,7 @@ import { stateDirectory } from '../../session/store/paths.js';
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import { JsonRpcPeer } from '../transport/jsonrpc-peer.js';
 import { spawnPortable } from '../transport/spawn.js';
+import { processesWithEnvironment } from '../transport/process-group.js';
 import { vendorMcpServerNames } from '../../agent/mcp/import.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.js';
 
@@ -28,8 +30,11 @@ export async function queryAcp<T>(
   const executable = await resolveBinaryPath(binary);
   if (!executable) return undefined;
   const detached = process.platform !== 'win32';
+  // Everything this query starts carries the tag, so what escaped the
+  // process group can still be found and stopped (see below).
+  const tag = randomBytes(8).toString('hex');
   const child = spawnPortable(executable, [...argv], {
-    env: { ...process.env, ...environment }, stdio: ['pipe', 'pipe', 'pipe'], detached,
+    env: { ...process.env, ...environment, [QUERY_TAG]: tag }, stdio: ['pipe', 'pipe', 'pipe'], detached,
   });
   const peer = new JsonRpcPeer(child, { label: `${binary} ACP`, detached, forwardParentSignals: false });
   const request = (method: string, params: Json = {}): Promise<Json> => peer.request(method, params, { timeoutMs });
@@ -40,7 +45,24 @@ export async function queryAcp<T>(
     return undefined;
   } finally {
     await peer.shutdown({ graceMs: 500, killMs: 1000 }).catch(() => undefined);
+    await stopEscaped(tag).catch(() => undefined);
   }
+}
+
+const QUERY_TAG = 'CLIKCODE_ACP_QUERY';
+
+/** What the query started that outlived the group's shutdown: Cline's hub
+ * daemon moves to a session of its own and was left running for days. A
+ * daemon that was already up (the user's) never carries this query's tag. */
+async function stopEscaped(tag: string): Promise<void> {
+  const signal = (pids: number[], name: NodeJS.Signals): void => {
+    for (const pid of pids) { try { process.kill(pid, name); } catch { /* gone already */ } }
+  };
+  const escaped = await processesWithEnvironment(QUERY_TAG, tag);
+  if (!escaped.length) return;
+  signal(escaped, 'SIGTERM');
+  await new Promise((resolve) => setTimeout(resolve, 1_000));
+  signal(await processesWithEnvironment(QUERY_TAG, tag), 'SIGKILL');
 }
 
 /** Where the model-list session runs. Not the user's home or any project, so

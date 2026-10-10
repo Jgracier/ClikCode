@@ -109,3 +109,19 @@ export function toolCallWork(group: ReadonlyMap<number, GroupProcess>, root: num
 export function processAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
 }
+
+/** Live processes whose environment holds `name=value`: whatever a child
+ * started, wherever it went -- a daemon that moved to a session of its own
+ * (setsid) leaves the process group, but keeps the environment it was given.
+ * Linux only (/proc); elsewhere none are found. */
+export async function processesWithEnvironment(name: string, value: string, platform: NodeJS.Platform = process.platform): Promise<number[]> {
+  if (platform !== 'linux') return [];
+  const needle = `\0${name}=${value}\0`;
+  const entries = await readdir('/proc').catch(() => [] as string[]);
+  const found: number[] = [];
+  await Promise.all(entries.filter((entry) => /^\d+$/.test(entry) && Number(entry) !== process.pid).map(async (entry) => {
+    const environment = await readFile(`/proc/${entry}/environ`, 'latin1').catch(() => undefined);
+    if (environment && `\0${environment}`.includes(needle)) found.push(Number(entry));
+  }));
+  return found;
+}

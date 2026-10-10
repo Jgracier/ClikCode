@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
-import { acpConfigOptionValues, acpDiscoveryDirectory, acpDiscoverySession, acpProbeArgv, acpSessionModels } from './acp-query.js';
+import { acpConfigOptionValues, acpDiscoveryDirectory, acpDiscoverySession, acpProbeArgv, acpSessionModels, queryAcp } from './acp-query.js';
+import { chmod, readFile } from 'node:fs/promises';
 
 describe('an ACP agent started only to be asked something', () => {
   it("switches off every MCP server in Copilot's config, so none can open a sign-in page", async () => {
@@ -104,5 +105,37 @@ describe('the model-list session', () => {
     await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:a');
     await acpDiscoverySession(vendor.request, { loadSession: true }, 'goose:b');
     expect(vendor.made.size).toBe(2);
+  });
+});
+
+describe.runIf(process.platform === 'linux')('an ACP query ending', () => {
+  it('stops a daemon the agent started in a session of its own', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'acp-escape-'));
+    try {
+      const pidFile = join(root, 'daemon.pid');
+      // An agent that, like Cline's hub, starts a daemon that leaves its
+      // process group (setsid), then answers initialize.
+      const agent = join(root, 'agent.mjs');
+      await writeFile(agent, `#!${process.execPath}
+import { spawn } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const daemon = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { detached: true, stdio: 'ignore' });
+daemon.unref();
+writeFileSync(${JSON.stringify(pidFile)}, String(daemon.pid));
+createInterface({ input: process.stdin }).on('line', (line) => {
+  const message = JSON.parse(line);
+  if (message.id !== undefined) process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: message.id, result: { agentCapabilities: {} } }) + '\\n');
+});
+`);
+      await chmod(agent, 0o755);
+      expect(await queryAcp(agent, [], {}, async () => 'asked')).toBe('asked');
+      const daemon = Number(await readFile(pidFile, 'utf8'));
+      const alive = (): boolean => { try { process.kill(daemon, 0); return true; } catch { return false; } };
+      for (let wait = 0; wait < 20 && alive(); wait += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(alive()).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
