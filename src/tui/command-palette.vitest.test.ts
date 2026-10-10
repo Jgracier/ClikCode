@@ -21,6 +21,15 @@ describe('command palette layout', () => {
     expect(pickerConfirmsSelection('\u001b[D')).toBe(false);
   });
 
+  it('matches a description only where a word starts', () => {
+    const commands = [
+      { label: '/compact', value: '/compact', detail: 'continue in a fresh native session' },
+      { label: '/new', value: '/new', detail: 'the current one stays resumable' },
+      { label: '/resume', value: '/resume', detail: 'resume another conversation' },
+    ];
+    expect(commandPaletteMatches('/res', commands).map((row) => row.value)).toEqual(['/resume', '/new']);
+  });
+
   it('fully reclaims the palette rows as soon as the slash is deleted', () => {
     const commands = [{ label: '/help', value: '/help' }, { label: '/model', value: '/model' }];
     expect(commandPaletteMatches('/', commands)).toHaveLength(2);

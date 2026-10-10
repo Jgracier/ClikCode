@@ -484,6 +484,36 @@ SCENARIOS = {
     },
     # What runs is what is highlighted: a typed command starts highlighted,
     # and its picker replaces it.
+    # /resume is a command like any other: `/res` highlights it (not
+    # /compact, whose description says "f-res-h") and Enter opens the board.
+    # It used to print "Press ← on an empty prompt…" instead.
+    'slash-resume-opens-board': {
+        'turns': [{'blocks': ['First chat answered.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+                  ('keys', '/res'), ('settle', 1), ('snap', 'palette'), ('keys', '\r'), ('wait_for', 'Recent', 10),
+                  ('settle', 1), ('snap', 'board')],
+        'watch': [], 'snap_contains': {'palette': ['❯ /resume'], 'board': ['enter open']},
+        'never': ['Press ← on an empty prompt'],
+    },
+    # `/new <text>` starts a new chat with that text as its first message; it
+    # used to throw the text away for a notice.
+    'slash-new-sends-text': {
+        'turns': [{'blocks': ['OLD answer lives here.']}, {'blocks': ['New chat answered.']}],
+        'steps': [('type', 'old question'), ('wait_for', 'OLD answer lives here.', 30), ('settle', 2), ('mark',),
+                  ('type', '/new carry this over'), ('wait_for', 'New chat answered.', 30), ('settle', 2), ('snap', 'end')],
+        'watch': [], 'final_contains': ['carry this over', 'New chat answered.'],
+        'never_after_mark': ['Press ← on an empty prompt'], 'snap_lacks': {'end': ['OLD answer']},
+    },
+    # `/clear` is Claude Code's: a new, empty chat (the old one stays
+    # resumable). It is /new's alias, and was swallowed with it.
+    'slash-clear-starts-new-chat': {
+        'turns': [{'blocks': ['OLD answer lives here.']}, {'blocks': ['New chat answered.']}],
+        'steps': [('type', 'old question'), ('wait_for', 'OLD answer lives here.', 30), ('settle', 2),
+                  ('type', '/clear'), ('settle', 3), ('snap', 'cleared'),
+                  ('type', 'fresh question'), ('wait_for', 'New chat answered.', 30), ('settle', 2)],
+        'watch': [], 'snap_lacks': {'cleared': ['OLD answer lives here.', 'Press ← on an empty prompt']},
+        'final_contains': ['fresh question', 'New chat answered.'],
+    },
     'typed-command-highlighted': {
         'turns': [TWO_BLOCKS],
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 1)],
