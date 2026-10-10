@@ -9,7 +9,6 @@ import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
 import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
-import { readState } from '../session/state/read.js';
 import { processAlive } from '../harness/transport/process-group.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 
@@ -65,29 +64,11 @@ async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecor
 }
 
 /** How long to wait for a retired worker to actually let go of its socket.
- * It shuts down gracefully on SIGTERM (session-worker.ts) -- telling its
- * clients, removing its record, unlinking the socket -- and that is fast, but
- * it is not instant and spawning a replacement onto a path still held is the
- * one way this can go wrong. */
+ * It shuts down gracefully (session-worker.ts) -- telling its clients,
+ * removing its record, unlinking the socket -- and that is fast, but it is
+ * not instant and spawning a replacement onto a path still held is the one
+ * way this can go wrong. */
 const RETIRE_TIMEOUT_MS = 3_000;
-
-/** A worker running different code than this client is not reused.
- *
- * A worker loads its entry once, at spawn, and then outlives every client:
- * reinstalling ClikCode and reopening the TUI left a new client talking to a
- * worker still running the old build, and every fix looked like it had not
- * landed. Restarting the terminal is the obvious thing to try and it does not
- * help, which is what makes this worth enforcing here rather than documenting.
- *
- * A turn in flight is the exception, and it is not a compromise: the user is
- * mid-answer, and finishing that matters more than this client's freshness.
- * The stale worker is then reused, and retired the next time nothing is
- * running -- which the next attach, after that turn, is. */
-async function retireWorker(record: WorkerRuntimeRecord): Promise<boolean> {
-  lifecycle('client.worker.retire', { worker: record.sessionId, workerPid: record.pid });
-  try { process.kill(record.pid, 'SIGTERM'); } catch { return true; }
-  return socketReleased(record);
-}
 
 async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
   const deadline = Date.now() + RETIRE_TIMEOUT_MS;
@@ -98,28 +79,15 @@ async function socketReleased(record: WorkerRuntimeRecord): Promise<boolean> {
   return false;
 }
 
-async function turnInFlight(sessionId: string): Promise<boolean> {
-  try {
-    const state = await readState({ transcripts: [sessionId] });
-    return Boolean(state.sessions.find((item) => item.id === sessionId)?.pendingTurn);
-  } catch {
-    // Unreadable state is not evidence a turn is running, but it is not
-    // evidence one is not either. Keep the worker: reusing a stale worker is
-    // a wrong build, killing one mid-turn is a lost answer.
-    return true;
-  }
-}
-
-/** How long a worker has to answer `retire` before it is taken to be one
- * from before the command existed. A worker answers within milliseconds even
- * mid-turn; this is only ever waited out in full by an old one, and a message
- * sent right after switching waits on it. */
+/** How long a worker has to answer `retire` before it is kept as it is. A
+ * worker answers within milliseconds even mid-turn, and a message sent right
+ * after switching waits on it. */
 const RETIRE_ANSWER_MS = 500;
 
 /** Asks a worker on another build to step down. It knows whether it is in
  * the middle of something and the asking window does not -- so it decides:
  * `retired` (it is shutting down), `declined` (busy; it goes once it is not),
- * or `unanswered` (a worker older than the question). */
+ * or `unanswered` (no answer in time: it is kept). */
 function askToRetire(record: WorkerRuntimeRecord): Promise<'retired' | 'declined' | 'unanswered'> {
   return new Promise((resolveAnswer) => {
     const socket = connect(record.socketPath);
@@ -170,10 +138,8 @@ async function retireIfStale(record: WorkerRuntimeRecord): Promise<WorkerRuntime
   const answer = await askToRetire(record);
   if (answer === 'declined') return record;
   if (answer === 'retired') return (await socketReleased(record)) ? undefined : record;
-  // A worker from before `retire`: the journal is the only evidence left of
-  // what it is doing. These age out as their conversations go idle.
-  if (await turnInFlight(record.sessionId)) return record;
-  return (await retireWorker(record)) ? undefined : record;
+  // No answer: kept. A window never stops a worker it cannot ask.
+  return record;
 }
 
 /** Asks every worker still running a different build to step down. Idle ones

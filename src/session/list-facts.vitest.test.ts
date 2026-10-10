@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { markTranscriptLoaded, stampListFacts } from './list-facts';
+import { markFromIndex, markTranscriptLoaded, stampListFacts } from './list-facts';
 import type { HarnessSession } from './model';
 
 function session(overrides: Partial<HarnessSession> = {}): HarnessSession {
@@ -33,5 +33,17 @@ describe('stampListFacts', () => {
     markTranscriptLoaded(row);
     stampListFacts(row);
     expect(row.listPreview).toBe('deploy it');
+  });
+
+  it('summarizes a chat made in this process on its first write, never an index row read without its transcript', () => {
+    const made = session({ messages: [{ role: 'user', content: 'forked here' }] });
+    expect(stampListFacts(made)).toBe(true);
+    expect(made).toMatchObject({ listChecked: true, listPreview: 'forked here', listMessageCount: 1 });
+
+    const light = session({ listPreview: 'kept', listMessageCount: 4, listChecked: true });
+    markFromIndex(light);
+    expect(stampListFacts(light)).toBe(false);
+    expect(stampListFacts(session())).toBe(false);
+    expect(light.listPreview).toBe('kept');
   });
 });

@@ -17,7 +17,6 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { cliThreadTransport } from '../../harness/transport/select.js';
-import { backfillListFacts } from '../../session/list-backfill.js';
 
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
@@ -277,30 +276,6 @@ export async function interactiveSessionPicker(
       built = undefined;
     })().finally(() => { activityRefresh = undefined; listChanged?.(); });
   };
-  // Conversations written before the summary existed get one after the list
-  // is already up. The redraw copies the new previews onto the rows it holds.
-  refreshes.push(backfillListFacts(state).then((fresh) => {
-    // Nothing was stored: the list already shows what the index holds.
-    if (!fresh) return;
-    const byId = new Map(fresh.sessions.map((session) => [session.id, session]));
-    for (const session of sessions) {
-      const next = byId.get(session.id);
-      if (!next) continue;
-      if (next.listPreview) session.listPreview = next.listPreview;
-      else delete session.listPreview;
-      if (next.listMessageCount !== undefined) session.listMessageCount = next.listMessageCount;
-      else delete session.listMessageCount;
-      if (next.listChecked) session.listChecked = true;
-      else delete session.listChecked;
-    }
-    for (let index = sessions.length - 1; index >= 0; index -= 1) {
-      const session = sessions[index]!;
-      if ((session.id !== currentId || onBoard) && isBlankConversation(session)) sessions.splice(index, 1);
-    }
-    fillActivity();
-    listRevision += 1;
-    built = undefined;
-  }).catch(() => undefined));
 
   const histories = new Map<string, PickerOption<string>[]>();
   const buildFresh = (): PickerOption<string>[] => {

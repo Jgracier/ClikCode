@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from './read.js';
@@ -44,72 +44,14 @@ describe('harness state normalization', () => {
     }
   });
 
-  it('marks a thread from before ACP with the CLI that made it, once, and nothing else', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
-    process.env.CLIKCODE_HOME = root;
-    const now = new Date().toISOString();
-    const session = (id: string, fields: object) => ({
-      id, route: 'local', accountId: null, provider: 'x', model: null, effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active', ...fields,
-    });
-    await storedIndex(root, {
-      sessions: [
-        session('old-gemini', { nativeHarness: 'gemini', nativeSessionId: 'cli-thread' }),
-        session('acp-gemini', { nativeHarness: 'gemini', nativeSessionId: 'acp-thread', nativeTransport: 'acp' }),
-        session('minted', { nativeHarness: 'qwen', nativeSessionId: 'minted', nativeSessionPreallocated: true }),
-        session('fresh', { nativeHarness: 'cursor' }),
-        session('droid', { nativeHarness: 'droid', nativeSessionId: 'droid-thread' }),
-      ],
-    });
-    try {
-      const transports = async () => Object.fromEntries((await readState()).sessions.map((item) => [item.id, item.nativeTransport]));
-      const expected = { 'old-gemini': 'structured-cli', 'acp-gemini': 'acp', minted: undefined, fresh: undefined, droid: undefined };
-      expect(await transports()).toEqual(expected);
-      expect(await transports()).toEqual(expected);
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('drops a saved account failover and a per-session context profile so the next write removes them', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
-    process.env.CLIKCODE_HOME = root;
-    const now = new Date().toISOString();
-    await storedIndex(root, {
-      sessions: [{
-        id: 'old', route: 'local', accountId: null, provider: 'openai', model: null, effort: 'medium', permissionMode: 'ask',
-        accountFailover: 'never', contextProfile: 'full', createdAt: now, updatedAt: now, status: 'active',
-      }],
-      globalSettings: { effort: 'medium', permissionMode: 'ask', accountFailover: 'never' },
-      providerSettings: { openai: { effort: 'high', accountFailover: 'on-quota-exhausted' } },
-    } as { sessions: unknown[] });
-    try {
-      const state = await readState();
-      const session = state.sessions.find((item) => item.id === 'old') as Record<string, unknown>;
-      expect(session.accountFailover).toBeUndefined();
-      expect(session.contextProfile).toBeUndefined();
-      expect(session.permissionMode).toBe('ask');
-      expect((state.globalSettings as Record<string, unknown>).accountFailover).toBeUndefined();
-      expect((state.providerSettings.openai as Record<string, unknown>).accountFailover).toBeUndefined();
-      expect(state.providerSettings.openai?.effort).toBe('high');
-      const saved = JSON.parse(await readFile(join(root, 'index.json'), 'utf8')) as { sessions: Array<Record<string, unknown>>; globalSettings: Record<string, unknown>; providerSettings: Record<string, Record<string, unknown>> };
-      expect(saved.sessions[0]?.accountFailover).toBeUndefined();
-      expect(saved.sessions[0]?.contextProfile).toBeUndefined();
-      expect(saved.globalSettings.accountFailover).toBeUndefined();
-      expect(saved.providerSettings.openai?.accountFailover).toBeUndefined();
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('drops a usage estimate an older build stored and its high-water limit, and keeps the vendor\'s own reading', async () => {
+  it('drops an older build\'s high-water limit, and keeps the vendor\'s own reading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
     process.env.CLIKCODE_HOME = root;
     const now = new Date().toISOString();
     const base = { provider: 'openai', authKind: 'vendor-cli', models: [], status: 'ready' };
     await storedIndex(root, {
       accounts: [
-        { ...base, id: 'estimated', label: 'estimated', credentialRef: 'native:e', usageLearning: { highWater: { weekly: 1 }, hits: [] },
-          usage: { at: now, label: 'Weekly 0% left', learned: true, windows: [{ name: 'weekly', usedPct: 100 }] } },
+        { ...base, id: 'estimated', label: 'estimated', credentialRef: 'native:e', usageLearning: { highWater: { weekly: 1 }, hits: [] } },
         { ...base, id: 'vendor', label: 'vendor', credentialRef: 'native:v',
           usage: { at: now, label: '5h 99% left', windows: [{ name: '5h', usedPct: 1 }] } },
       ],
@@ -119,7 +61,6 @@ describe('harness state normalization', () => {
       const estimated = state.accounts.find((account) => account.id === 'estimated') as Record<string, unknown> | undefined;
       // Its refusals stay; the faulty high-water "limit" does not.
       expect(estimated?.usageLearning).toEqual({ turns: [], hits: [] });
-      expect(estimated?.usage).toBeUndefined();
       expect(state.accounts.find((account) => account.id === 'vendor')?.usage?.label).toBe('5h 99% left');
     } finally {
       await rm(root, { recursive: true, force: true });

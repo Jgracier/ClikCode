@@ -8,7 +8,6 @@ import { writeState } from './write.js';
 import { runChild } from './testing/concurrency.js';
 import { listStoredSessionIds } from '../store/records.js';
 import { STORED_BLANK_GRACE_MS, discardIfBlank } from '../blank.js';
-import { backfillListFacts } from '../list-backfill.js';
 import { openConversation } from '../attach.js';
 
 const now = () => new Date().toISOString();
@@ -147,7 +146,6 @@ describe('an empty chat another process stored for its worker', () => {
     const fresh = await runChild(home, ['store-blank', 'for-worker']);
     expect(fresh, fresh.stderr).toMatchObject({ code: 0 });
 
-    await backfillListFacts();
     await openConversation('/work', 'new');
     await discardIfBlank('for-worker');
     const ids = (await readState({ transcripts: [] })).sessions.map((item) => item.id);
