@@ -103,6 +103,20 @@ describe('durable turn checkpoints', () => {
     expect(target.messages).toHaveLength(2);
   });
 
+  it('counts a turn\'s time without what it waited on the user, as both live clocks do', async () => {
+    const { setUserWaiting } = await import('./user-wait.js');
+    const target = session();
+    const at = (seconds: number): number => Date.parse('2026-01-02T00:00:00.000Z') + seconds * 1000;
+    beginPendingTurn(target, 'Edit it', new Date(at(0)).toISOString());
+    // An approval up from 2s to 32s, a sign-in from 40s to 50s.
+    setUserWaiting(target.id, true, at(2));
+    setUserWaiting(target.id, false, at(32));
+    setUserWaiting(target.id, true, at(40));
+    setUserWaiting(target.id, false, at(50));
+    finishPendingTurn(target, 'Done.', new Date(at(60)).toISOString());
+    expect(target.messages?.at(-1)?.turnEnd).toEqual({ ms: 20_000 });
+  });
+
   it('finalizes exactly once and clears the in-flight journal', () => {
     const target = session();
     beginPendingTurn(target, 'Continue', '2026-01-02T00:00:00.000Z');

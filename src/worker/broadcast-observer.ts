@@ -10,6 +10,7 @@
  * drift from it, which is the entire point of this architecture (see
  * clikcode-worker-client-split project memory for why that matters).
  */
+import { setUserWaiting } from '../turn/user-wait.js';
 import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -68,6 +69,14 @@ export class BroadcastObserver implements TurnObserver {
    * process can say a conversation is waiting on the user without
    * attaching to it. */
   onAwaitingApproval?: (approval: { title: string; since: string } | undefined) => Promise<void> | void;
+  /** The conversation this worker runs: its turn's time waiting on the
+   * user is kept under it (turn/user-wait.ts). */
+  sessionId?: string;
+
+  /** Approvals and sign-ins open: the turn waits on the user while any is. */
+  private userWaitChanged(): void {
+    if (this.sessionId) setUserWaiting(this.sessionId, this.pendingApprovals.size + this.pendingSignIns.size > 0);
+  }
   private awaitingSince = new Map<string, string>();
 
   private announceAwaiting(): Promise<void> | void {
@@ -122,6 +131,7 @@ export class BroadcastObserver implements TurnObserver {
     if (!pending) return;
     this.pendingApprovals.delete(id);
     this.awaitingSince.delete(id);
+    this.userWaitChanged();
     pending.resolve(approved);
     this.announceAwaiting();
   }
@@ -135,6 +145,7 @@ export class BroadcastObserver implements TurnObserver {
     if (hadApprovals) this.announceAwaiting();
     for (const pending of this.pendingSignIns.values()) pending.reject(new Error('the turn ended'));
     this.pendingSignIns.clear();
+    this.userWaitChanged();
   }
 
   /** To every attached window, or every one but `except` (sent its own). */
@@ -190,6 +201,7 @@ export class BroadcastObserver implements TurnObserver {
     return new Promise((resolveApproval) => {
       this.pendingApprovals.set(id, { resolve: resolveApproval, event });
       this.awaitingSince.set(id, new Date().toISOString());
+      this.userWaitChanged();
       // Recorded before anyone is asked: once a window sees the question,
       // the record already says the turn waits on it.
       const recorded = this.announceAwaiting();
@@ -281,6 +293,7 @@ export class BroadcastObserver implements TurnObserver {
     const event: WorkerEvent = { type: 'sign-in-request', id, ...request };
     return new Promise((resolve, reject) => {
       this.pendingSignIns.set(id, { resolve, reject, event });
+      this.userWaitChanged();
       this.broadcast(event);
     });
   }
@@ -289,6 +302,7 @@ export class BroadcastObserver implements TurnObserver {
     const pending = this.pendingSignIns.get(id);
     if (!pending) return;
     this.pendingSignIns.delete(id);
+    this.userWaitChanged();
     if (error) pending.reject(new Error(error));
     else pending.resolve();
   }

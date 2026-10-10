@@ -210,3 +210,20 @@ describe('an approval is recorded before it is asked', () => {
     expect(client.frames.some((frame) => frame.type === 'approval-request')).toBe(true);
   });
 });
+
+describe('a turn waiting on the user, for its closing line', () => {
+  it('is timed from an approval asked to its answer, under the worker\'s conversation', async () => {
+    const { userWaitedMs, resetUserWait } = await import('../turn/user-wait.js');
+    const observer = new BroadcastObserver();
+    observer.sessionId = 'waits';
+    resetUserWait('waits');
+    const asked = observer.approval('Run it?');
+    expect(userWaitedMs('waits', Date.now() + 5_000)).toBeGreaterThanOrEqual(5_000);
+    const [id] = [...(observer as unknown as { pendingApprovals: Map<string, unknown> }).pendingApprovals.keys()];
+    observer.resolveApproval(id!, true);
+    await asked;
+    const waited = userWaitedMs('waits');
+    expect(userWaitedMs('waits', Date.now() + 60_000)).toBe(waited);
+  });
+});
+

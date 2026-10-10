@@ -117,6 +117,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   if (await workerIsReachable(socketPath)) { await hold.release(); return; }
   await unlink(socketPath).catch(() => undefined);
   const observer = new BroadcastObserver();
+  observer.sessionId = sessionId;
   /** The last write of this worker's record: an approval's state, chained
    * so the file ends as the last state told (see onAwaitingApproval). */
   let recordWrite: Promise<void> = Promise.resolve();
