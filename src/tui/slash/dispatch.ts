@@ -329,7 +329,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       if (options.length > 1 && at === undefined) return {};
       const outcome = await viaHeadless(options.length > 1 ? `/fork @${at}` : text);
       // Said here too: the panel is drawn on the conversation being left.
-      return at === undefined ? outcome : { ...outcome, notice: `Forked after message ${at} · files on disk are not rewound: /changes lists each turn's edits, /undo takes them back` };
+      return at === undefined ? outcome : { ...outcome, notice: `Forked after message ${at} · files on disk are not rewound: /changes lists each turn's edits, /redo puts them back` };
     },
     // `/redo`: which prompt to go back to (newest first, arrows and Enter),
     // then whether its edits and later ones are put back; the prompt lands in

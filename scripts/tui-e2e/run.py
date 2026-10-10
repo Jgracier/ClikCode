@@ -1320,15 +1320,16 @@ SCENARIOS = {
         'final_contains': ['first question', 'ALPHA answer lives here.', 'files on disk are not rewound'],
         'never_after_mark': ['BETA answer lives here.'],
     },
-    # /changes lists the turn's edit, /changes 1 shows its diff, /undo 1 puts
-    # the file back.
-    'changes-and-undo': {
+    # /changes lists the turn's edit, /changes 1 shows its diff, /redo @1 with
+    # "Put files back" restores the file (the shared undo engine).
+    'changes-and-redo': {
         'turns': [{'edits': [{'path': 'notes.txt', 'old': 'alpha\nbeta\n', 'new': 'alpha\nGAMMA\n'}], 'blocks': ['Edited the notes.']}],
         'steps': [
             ('type', 'edit the notes'), ('wait_for', 'Edited the notes.', 30), ('settle', 2),
             ('type', '/changes'), ('wait_for', 'notes.txt · +1 -1', 10), ('settle', 1), ('keys', '\x1b'), ('settle', 1),
             ('type', '/changes 1'), ('wait_for', '+ GAMMA', 10), ('settle', 1), ('keys', '\x1b'), ('settle', 1),
-            ('type', '/undo 1'), ('wait_for', 'restored  notes.txt', 10), ('settle', 1),
+            ('type', '/redo @1'), ('wait_for', 'Put files back as they were', 10), ('settle', 0.5),
+            ('keys', '\r'), ('wait_for', 'restored  notes.txt', 10), ('settle', 1),
         ],
         'watch': [], 'ever': ['1  edit the notes', 'Turn 1 · edit the notes', '- beta'],
         'file_contains': {'notes.txt': 'alpha\nbeta\n'},

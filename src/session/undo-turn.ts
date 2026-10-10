@@ -1,9 +1,9 @@
-/** `/undo`: put back the files the conversation's last turn changed.
+/** Put back the files the conversation's last turn changed (/redo's rewind).
  *
  * Two sources, by who made the edits:
  *  - ClikCode's own agent snapshots every file before its tools write it
  *    (agent/file-checkpoints.ts), on disk, so the worker that ran the turn
- *    and the window that types /undo need not be the same process.
+ *    and the window that runs /redo need not be the same process.
  *  - A vendor harness's edits are known only as the diffs its event stream
  *    reported (session/turn-changes.ts); they are reversed hunk by hunk with
  *    the same code VS Code's "Undo all" uses (agent/diff-unwind.ts).
@@ -15,7 +15,7 @@
  * It acts on the conversation's actual last turn (every turn is recorded,
  * session/turn-changes.ts), with the store that turn recorded its edits in,
  * names that turn by its prompt, and says so when it made no edits rather
- * than reaching back. A repeated /undo walks back one turn at a time. It is
+ * than reaching back. Repeated, it walks back one turn at a time. It is
  * refused while a turn is running in the conversation. */
 
 import fs from 'node:fs/promises';
@@ -61,7 +61,7 @@ function describe(result: Omit<TurnUndo, 'text'>, workspace: string, name: strin
   for (const file of result.restored) lines.push(`  restored  ${shown(file, workspace)}`);
   for (const file of result.removed) lines.push(`  removed   ${shown(file, workspace)} (the turn created it)`);
   for (const item of result.conflicts) lines.push(`  kept      ${shown(item.path, workspace)}: ${item.reason}`);
-  if (result.conflicts.length) lines.push('', 'Files kept were not touched. Run /undo again once they are back as the turn left them, or revert them with git.');
+  if (result.conflicts.length) lines.push('', 'Files kept were not touched: revert them with git.');
   lines.push('', SHELL_CAVEAT);
   return lines.join('\n');
 }
@@ -147,13 +147,13 @@ export async function undoLastTurn(
   const workspace = session.workspace ?? process.cwd();
   const result: Omit<TurnUndo, 'text'> = { restored: [], removed: [], conflicts: [] };
   if (await (options.turnIsRunning ?? turnIsRunning)(session.id)) {
-    return { ...result, text: 'Not undone: a turn is running in this conversation. Its edits are still being made -- run /undo once it has finished, or stop it first.' };
+    return { ...result, text: 'Not undone: a turn is running in this conversation. Its edits are still being made -- wait for it to finish, or stop it first.' };
   }
   return withTurnChangesLock(options.stateDir, session.id, async () => {
     const records = await readTurnChanges(options.stateDir, session.id);
     const last = records.at(-1);
     if (!last) {
-      return { ...result, text: `Nothing to undo: no turn in this conversation has recorded file edits. /undo reverses the edits ClikCode saw a turn make through file-editing tools; edits made any other way (a shell command, a tool that reports no diff) are not seen -- use /diff and git for those.` };
+      return { ...result, text: `Nothing to undo: no turn in this conversation has recorded file edits. ClikCode reverses the edits it saw a turn make through file-editing tools; edits made any other way (a shell command, a tool that reports no diff) are not seen -- use /diff and git for those.` };
     }
     const earlier = records.slice(0, -1);
     const name = turnName(last);
@@ -179,15 +179,15 @@ export async function undoLastTurn(
       return { ...result, text: [
         `Nothing undone: ${name} made no edits ClikCode saw.`,
         `${who}'s edits made any other way (a shell command, a tool that reports no diff) are not seen -- use /diff and git for those.`,
-        ...(before ? [`/undo again undoes ${turnName(before)}, the turn before it.`] : []),
+        ...(before ? [`The turn before it is ${turnName(before)}.`] : []),
       ].join('\n') };
     }
     return { ...result, text: describe(result, workspace, name) };
   });
 }
 
-/** `/undo N`: the last N turns (1 = the last, as /changes numbers them),
- * newest first, each by the same rules as /undo -- and it stops at the first
+/** The last N turns (1 = the last, as /changes numbers them),
+ * newest first, each by the same rules as undoLastTurn -- and it stops at the first
  * turn that left a file alone: undoing an older turn under it would put back
  * a file the newer turn's kept change still depends on. */
 export async function undoTurnsBack(
@@ -209,7 +209,7 @@ export async function undoTurnsBack(
     total.restored.push(...step.restored);
     total.removed.push(...step.removed);
     total.conflicts.push(...step.conflicts);
-    texts.push(step.text.replace(`\n\n${SHELL_CAVEAT}`, '').replace(/\n\/undo again undoes .*$/, ''));
+    texts.push(step.text.replace(`\n\n${SHELL_CAVEAT}`, '').replace(/\nThe turn before it is .*$/, ''));
     if (step.conflicts.length) { undone += 1; break; }
   }
   if (!texts.length) return undoLastTurn(session, options);

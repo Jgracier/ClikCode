@@ -40,5 +40,5 @@ export function mentionScore(relative: string, typed: string): number | undefine
   return 3;
 }
 
-// Shared with the terminal's /undo, so both undo a turn the same way.
+// Shared with the terminal's /redo, so both undo a turn the same way.
 export { applyHunks, fileHunks, turnChanges, unwindChanges, type Hunk } from '../../../src/agent/diff-unwind';

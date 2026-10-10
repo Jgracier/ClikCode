@@ -38,7 +38,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * tables are typed `Record<SlashHandlerKey, …>` and a missing or extra handler
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
-  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo', 'changes',
+  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'changes',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'swarm', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
@@ -110,14 +110,14 @@ const bothRoutes = (what: string) => (
   ? { available: true }
   : harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.`, needs: 'provider' });
 
-/** /undo reverses ClikCode's agent's own snapshots, or the edits a vendor
+/** /changes lists ClikCode's agent's own snapshots, or the edits a vendor
  * harness reports with their diffs. A plain-text CLI reports none: its
- * output is prose, so there is nothing for ClikCode to reverse. */
-const undoAvailability = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
+ * output is prose, so there is nothing for ClikCode to list. */
+const recordedEditsAvailability = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
   if (isClikCodeAgent(session) || harness?.transport !== 'text-cli') return { available: true };
   return {
     available: false,
-    reason: `${harness.displayName} runs as a plain-text CLI: its output reports no file edits ClikCode could reverse, and it exposes no undo of its own to ClikCode. Use /diff to see what changed and git to revert it.`,
+    reason: `${harness.displayName} runs as a plain-text CLI: its output reports no file edits ClikCode could record. Use /diff to see what changed and git to revert it.`,
   };
 };
 
@@ -142,8 +142,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('history', 'Conversation', 'show this conversation'),
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
-  entry('undo', 'Conversation', "revert the last turn's file edits, or the last N turns' (refuses files changed since)", { argHint: '[N]', availability: undoAvailability }),
-  entry('changes', 'Conversation', "each recent turn's file edits; N shows that turn's diff", { argHint: '[N]', availability: undoAvailability }),
+  entry('changes', 'Conversation', "each recent turn's file edits; N shows that turn's diff", { argHint: '[N]', availability: recordedEditsAvailability }),
   entry('native', 'Conversation', 'send text to the harness verbatim (also: //text)', { argHint: '<text>', availability: needsHarness('sending native commands') }),
   entry('select', 'Conversation', "hand the mouse to the terminal's own selection (drag-to-copy works without it)"),
   entry('redraw', 'Conversation', 'repaint the screen'),
