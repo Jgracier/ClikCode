@@ -267,7 +267,7 @@ function clikcodeMetrics(artifacts) {
   return {
     ...clikcodeSteps(artifacts),
     reply: (out.text ?? replies.at(-1)?.content ?? '').slice(0, 600),
-    error: out.error ?? (stderr ? stderr.slice(0, 600) : undefined),
+    error: out.error ?? (out.status === 'error' ? out.message : undefined) ?? (stderr ? stderr.slice(0, 600) : undefined),
     inputTokens: usage.input ?? null,
     cacheReadTokens: usage.cacheRead ?? null,
     outputTokens: usage.output ?? null,
