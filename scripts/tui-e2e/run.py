@@ -632,6 +632,16 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'band': ['esc cancel'], 'after': ['› start the work']},
         'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish', 'Stopped'],
     },
+    # A sign-in waits on the user, as an approval does: the band holds still
+    # -- a ●, never a spinner frozen mid-step -- and its clock is stopped.
+    'sign-in-band-holds-still': {
+        'turns': [TWO_BLOCKS],
+        'hold_sign_in': True,
+        'steps': [('type', 'start the work'), ('wait_for', 'waiting for you to sign in', 30), ('settle', 3),
+                  ('release_sign_in',), ('wait_for', 'The final commit is live.', 40), ('settle', 1)],
+        'watch': [], 'ever': ['● waiting for you to sign in to Grok Build'],
+        'never_pattern': [r'[\u2800-\u28ff]{2}  waiting for you to sign in', r'waiting for you to sign in to Grok Build · \d+s'],
+    },
     # Ctrl+C in a sign-in's key field: one press cancels it, said the same way.
     'ctrl-c-cancels-key-sign-in': {
         'cols': 70,
@@ -1632,6 +1642,11 @@ def run(name, spec, entry, keep):
     for phrase in spec.get('never', []):
         shown = [t for t, text in frames if phrase in text]
         if shown: problems.append(f'shown in {len(shown)} frame(s), first at {shown[0]:.2f}s, and never should be: {phrase!r}')
+    # Like 'never', by regular expression.
+    for pattern in spec.get('never_pattern', []):
+        import re as regex
+        shown = [t for t, text in frames if regex.search(pattern, text)]
+        if shown: problems.append(f'matched in {len(shown)} frame(s), first at {shown[0]:.2f}s, and never should be: {pattern!r}')
     for phrase in spec.get('ever', []):
         if not any(phrase in text for _, text in frames): problems.append(f'never on screen: {phrase!r}')
     for left, right in spec.get('never_together', []):

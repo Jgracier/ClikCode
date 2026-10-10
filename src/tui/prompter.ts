@@ -173,7 +173,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * key: Enter hands the draft here instead of to the turn. */
   private signInInput?: { secret: boolean; optional?: boolean; alongside?: boolean; submit: (text: string) => void };
   /** A sign-in is up: the wait is on the user, in their browser, so the band
-   * holds still as it does for an approval -- the clock ticks, nothing spins. */
+   * holds still as it does for an approval -- a ●, the clock stopped. */
   private signingIn = false;
   /** collapseToolRuns over activityEntries, redone only when they change. */
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
@@ -1148,7 +1148,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       try {
         return await this.select(title, choices.map((choice, index) => ({ label: choice, value: index })));
       } finally {
-        if (!turn && !controller.signal.aborted) this.startWaiting(label, cancel);
+        if (!turn && !controller.signal.aborted) { this.startWaiting(label, cancel); this.pauseClock(); }
       }
     };
     this.signingIn = true;
@@ -1156,9 +1156,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.label = label;
       turn.cancel = cancel;
       turn.cancelled = false;
+      this.pauseClock();
       this.scheduleWaitingTick();
       this.updateWaiting();
-    } else this.startWaiting(label, cancel);
+    } else { this.startWaiting(label, cancel); this.pauseClock(); }
     return {
       signal: controller.signal, show, ask, choose,
       stop: () => {
@@ -1183,6 +1184,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           return;
         }
         if (this.turn !== turn) { this.schedulePaint(); return; }
+        // The user's time in the browser is not the turn's, nor its going quiet.
+        this.resumeClock();
         turn.label = saved!.label;
         turn.cancel = saved!.cancel;
         turn.cancelled = saved!.cancelled;
@@ -1312,7 +1315,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** What the turn waits on besides the model, for the clock's decisions. */
   private turnWaits(): TurnWaits {
-    return { toolsRunning: this.activeTools.size > 0, approval: Boolean(this.pendingApproval) || this.signingIn };
+    return { toolsRunning: this.activeTools.size > 0, approval: this.waitingOnUser() };
+  }
+
+  /** The wait is on the user -- an approval or a sign-in -- not the agent:
+   * the band holds still (a ● and no clock) until they act. */
+  private waitingOnUser(): boolean {
+    return Boolean(this.pendingApproval) || this.signingIn;
   }
 
   private scheduleWaitingTick(): void {
@@ -1337,10 +1346,20 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     turn.timer.unref();
   }
 
-  /** An approval has been answered (or the turn ended under one). */
+  /** The turn waits on the user (an approval, a sign-in): its clock stops,
+   * and the time is not the turn going quiet. */
+  private pauseClock(): void {
+    const turn = this.turn;
+    if (!turn) return;
+    turn.clock = pauseTurnClock(turn.clock, Date.now());
+    turn.activeAt = Date.now();
+  }
+
+  /** Whatever the turn waited on the user for has been answered (or the
+   * turn ended under it). Another wait on the user still up keeps it held. */
   private resumeClock(): void {
     const turn = this.turn;
-    if (turn?.clock.pausedAt === undefined) return;
+    if (turn?.clock.pausedAt === undefined || this.waitingOnUser()) return;
     turn.clock = resumeTurnClock(turn.clock, Date.now());
     // Time spent on the user's answer is not the turn going quiet.
     turn.activeAt = Date.now();
@@ -1550,7 +1569,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.turn) {
       this.turn.label = 'waiting for approval';
       // The clock stops while the turn waits on the user, not on the agent.
-      this.turn.clock = pauseTurnClock(this.turn.clock, Date.now());
+      this.pauseClock();
     }
     if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
     // Repaint when the guard lifts so the answer row visibly becomes live.
@@ -1649,9 +1668,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       asking: Boolean(this.pendingApproval),
       writing: turn.writingAt !== undefined && now - turn.writingAt < WRITING_MS,
     });
-    const asking = Boolean(this.pendingApproval);
+    // An approval or a sign-in: the wait is on the user.
+    const asking = this.waitingOnUser();
     // What the agent is doing is essential and stays at full contrast; the
-    // clock is dimmed. An approval stops the clock, so it is not shown.
+    // clock is dimmed. Waiting on the user stops the clock, so it is not shown.
     const rest = asking ? '' : ` · ${elapsed}`;
     // One spinner, one motion, for every harness and every tool, the label
     // shimmering with it. An approval is the turn waiting on the user, not
