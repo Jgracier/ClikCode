@@ -247,7 +247,7 @@ describe('/undo acts on the actual last turn', () => {
 
     const first = await undoLastTurn(s, { stateDir, who: 'OpenCode' });
     expect(first.text).toMatch(/^Nothing undone: the turn "what does a\.txt say" made no edits ClikCode saw/);
-    expect(first.text).toMatch(/\/undo again undoes the turn "change a to new"/);
+    expect(first.text).toMatch(/The turn before it is the turn "change a to new"/);
     expect(await read('a.txt')).toBe('new\n');
 
     const second = await undoLastTurn(s, { stateDir, who: 'OpenCode' });
@@ -342,10 +342,10 @@ describe('/undo stays inside the workspace', () => {
   });
 });
 
-describe('/undo availability', () => {
+describe('/changes availability', () => {
   const harness = (transport: AiLocalHarnessDefinition['transport']): AiLocalHarnessDefinition => (
     { command: 'x', provider: 'x', displayName: 'Aider', surface: 'terminal', transport, localAuth: [], binary: 'x' });
-  const undo = (route: HarnessSession['route'], definition?: AiLocalHarnessDefinition) => resolveSlashCommand('undo')!.availability({ id: 's', route } as HarnessSession, definition);
+  const undo = (route: HarnessSession['route'], definition?: AiLocalHarnessDefinition) => resolveSlashCommand('changes')!.availability({ id: 's', route } as HarnessSession, definition);
 
   it("is available on ClikCode's agent and on harnesses that stream their tool calls", () => {
     expect(undo('clikcode-local')).toMatchObject({ available: true });

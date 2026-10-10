@@ -73,7 +73,6 @@ import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
 import { cliThreadTransport } from '../../harness/transport/select.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
-import { undoTurnsBack } from '../../session/undo-turn.js';
 import { redoFrom } from '../../session/redo.js';
 import { readTurnChanges, turnChangesAgo, turnChangesDiff, turnChangesList } from '../../session/turn-changes.js';
 import { stateDirectory } from '../../session/store/paths.js';
@@ -328,7 +327,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // The fork is where the user goes next: returning its id switches to it.
     const text = at === undefined
       ? `Forked as ${fork.id.slice(0, 8)} -- you are in the fork; the original is still in your conversations.`
-      : `Forked after message ${at} as ${fork.id.slice(0, 8)} -- you are in the fork; the original is still in your conversations. Files on disk are not rewound: /changes lists what each turn edited, /undo takes it back.`;
+      : `Forked after message ${at} as ${fork.id.slice(0, 8)} -- you are in the fork; the original is still in your conversations. Files on disk are not rewound: /changes lists what each turn edited, /redo puts it back.`;
     emitHarnessOutput({ panel: 'session-forked', text, session: fork });
     return fork.id;
   },
@@ -684,14 +683,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     const redone = await redoFrom(state, session, n, { keepFiles: words[1] === 'keep', stateDir: stateDirectory(), who });
     await writeState(state);
     return emitHarnessOutput({ panel: 'redo', text: redone.text, prompt: redone.prompt });
-  },
-  undo: async ({ session, words }) => {
-    const who = isClikCodeAgent(session) ? clikCodeAgentLabel(session) : sessionHarness(session)?.displayName ?? 'This provider';
-    // `/undo N`: the last N turns, as /changes numbers them.
-    const back = words[0] ? Number(words[0]) : 1;
-    if (!Number.isInteger(back) || back < 1) throw new Error('usage: /undo [N]  -- N turns back, as /changes numbers them');
-    const undone = await undoTurnsBack(session, back, { stateDir: stateDirectory(), who });
-    return emitHarnessOutput({ panel: 'undo', text: undone.text, restored: undone.restored, removed: undone.removed, conflicts: undone.conflicts });
   },
 };
 
