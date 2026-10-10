@@ -155,6 +155,21 @@ SCENARIOS = {
         'snap_contains': {'kept': ['› are you there']},
         'never_after_mark': ['not found'],
     },
+    # A window with no worker attached -- its worker stopped (a rebuild
+    # retires them), or none ever ran -- sees the turn another window starts.
+    # It used to sit at its prompt showing none of it.
+    'unattached-window-sees-other-turn': {
+        'turns': [{'blocks': ['First chat answered.']}, {'blocks': ['Second answer arrives here.']}],
+        'steps': [
+            ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            ('kill_workers', 'TERM'), ('expect_workers', 0), ('settle', 2),
+            ('open2', 6, ['--continue']), ('wait_for2', 'First chat answered.', 10),
+            ('type2', 'from the other window'), ('wait_for2', 'Second answer arrives here.', 30),
+            ('wait_for', 'Second answer arrives here.', 15), ('settle', 2),
+        ],
+        'watch': [], 'final_contains': ['from the other window'],
+        'final_once': ['Second answer arrives here.'], 'final2_once': ['Second answer arrives here.'],
+    },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 4)],
