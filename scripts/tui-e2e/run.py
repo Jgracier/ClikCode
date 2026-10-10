@@ -540,15 +540,14 @@ SCENARIOS = {
     },
     # What runs is what is highlighted: a typed command starts highlighted,
     # and its picker replaces it.
-    # /resume is a command like any other: `/res` highlights it (not
-    # /compact, whose description says "f-res-h") and Enter opens the board.
-    # It used to print "Press ← on an empty prompt…" instead.
+    # /resume is not in the terminal's list (← is the board), and `/res`
+    # does not land on /compact ("f-res-h"); typed out, it opens the board.
     'slash-resume-opens-board': {
         'turns': [{'blocks': ['First chat answered.']}],
         'steps': [('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
-                  ('keys', '/res'), ('settle', 1), ('snap', 'palette'), ('keys', '\r'), ('wait_for', 'Recent', 10),
-                  ('settle', 1), ('snap', 'board')],
-        'watch': [], 'snap_contains': {'palette': ['❯ /resume'], 'board': ['enter open']},
+                  ('keys', '/res'), ('settle', 1), ('snap', 'palette'), ('keys', '\x7f' * 4), ('settle', 0.5),
+                  ('type', '/resume'), ('wait_for', 'Recent', 10), ('settle', 1), ('snap', 'board')],
+        'watch': [], 'snap_contains': {'board': ['enter open']}, 'snap_lacks': {'palette': ['/resume', '❯ /compact']},
         'never': ['Press ← on an empty prompt'],
     },
     # `/new <text>` starts a new chat with that text as its first message; it
@@ -1185,7 +1184,7 @@ SCENARIOS = {
     },
     # Out of usage on one of two accounts: the turn switches to the other on
     # its own, a line in the conversation says so and stays (it was on screen
-    # for a moment and never saved), and the status line names the account.
+    # for a moment and never saved).
     'failover-switch-is-said-and-kept': {
         'turns': [{'blocks': ['First answer on the first account.']},
                   {'refuse': 'The monthly usage limit has been reached. Try again in 2 hours.', 'blocks': ['unused']},
@@ -1197,7 +1196,7 @@ SCENARIOS = {
                   ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
                   ('wait_for', 'Answered on the other account.', 10), ('settle', 2)],
         'watch': [], 'snap_contains': {'after': ['Switched to ', 'is out of usage']},
-        'final_contains': ['Switched to ', 'is out of usage', 'Grok Build · '], 'never': ['usage exhausted', 'All accounts exhausted'],
+        'final_contains': ['Switched to ', 'is out of usage'], 'never': ['usage exhausted', 'All accounts exhausted'],
     },
     # A turn the vendor refuses as signed out signs in mid-turn and is
     # answered: a line says it signed in, and stays (there was none).

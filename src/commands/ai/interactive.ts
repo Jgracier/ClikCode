@@ -65,6 +65,10 @@ import { shownSettingsKey } from '../../worker/protocol.js';
 import { retireStaleWorkers } from '../../worker/client.js';
 import { replaceCliWithNewBuild } from './build-replace.js';
 
+/** Kept out of the terminal's list: ← on an empty prompt is the
+ * conversation board, so a /resume row only crowded it. Typed, it still
+ * opens the board. */
+const BOARD_OWNS: ReadonlySet<string> = new Set(['resume']);
 const DELETED_ELSEWHERE = 'That conversation was deleted · this is a new one';
 /** What Left on an empty prompt returns: not a slash line, so it cannot be
  * typed, and it opens the board however the registry changes. */
@@ -161,7 +165,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let paletteState: Pick<HarnessState, 'accounts' | 'sessions'> = state;
   const slashCommandsFor = (target: HarnessSession): PickerOption<string>[] => {
     const harness = sessionHarness(target);
-    return withArgValues(slashPalette(target, harness, slashExtrasFor(target, harness)), target, harness, paletteState);
+    return withArgValues(slashPalette(target, harness, { ...slashExtrasFor(target, harness), omit: BOARD_OWNS }), target, harness, paletteState);
   };
   // Created before auto-select so a first-ever install/sign-in — the most
   // common time either is actually needed — has somewhere to show its
@@ -433,7 +437,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         shownSettings = settingsKey;
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
-        terminal?.knowAccounts(latestState.accounts);
         // A turn parked for the quota reset: Esc on an empty composer stops it.
         if (terminal) {
           const parkedId = latest.id;
