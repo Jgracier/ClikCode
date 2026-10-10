@@ -16,7 +16,7 @@ import { localModelLabel } from '../local-models/catalog.js';
 import type { HarnessSession } from '../session/model.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitResult } from '../cli/structured-output.js';
-import { gatewayEffort } from '../gateway/options.js';
+import { gatewayDefaultEffort, gatewayEffort } from '../gateway/options.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
 
@@ -51,7 +51,7 @@ export function renderSessionCard(session: HarnessSession, account?: string): st
     // this card is also the JSON contract, and a fabricated model id there
     // would be consumed as if it were real.
     ...(shownModel ? [line('model', shownModel)] : []),
-    line('effort', session.route === 'gateway' ? gatewayEffort(session) ?? 'model default' : session.effort),
+    line('effort', session.route === 'gateway' ? gatewayEffort(session) ?? (gatewayDefaultEffort(session.model ?? undefined) ? `${gatewayDefaultEffort(session.model ?? undefined)} (default)` : 'model default') : session.effort),
     ...(session.route === 'gateway' ? [line('speed', session.speed === 'fast' ? 'fast (fastest provider)' : 'default (cheapest provider)')] : []),
     // The Gateway route's agent runs on this machine and honours the approval setting.
     line('permissions', session.permissionMode ?? 'ask'),

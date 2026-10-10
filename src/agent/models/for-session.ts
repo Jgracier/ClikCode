@@ -109,7 +109,7 @@ export function gatewayModelClient(input: {
 /** What the Gateway lists for the model this session will run (its pick, or
  * the Gateway's automatic one): its window, the most it writes in one answer,
  * and whether it takes images. */
-async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ contextWindow?: number; maxOutput?: number; vision?: boolean }> {
+async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ id?: string; contextWindow?: number; maxOutput?: number; vision?: boolean }> {
   try {
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
     const { savedGatewayModels, gatewayModels } = await import('../../gateway/models.js');
@@ -125,6 +125,7 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
       model = list.models.find((entry) => entry.id === (session.model ?? list?.automatic));
     }
     return {
+      ...(id ? { id } : {}),
       ...(model?.contextWindow ? { contextWindow: model.contextWindow } : {}),
       ...(model?.maxOutput ? { maxOutput: model.maxOutput } : {}),
       ...(model?.vision ? { vision: true } : {}),
@@ -132,7 +133,7 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
   } catch {
     // fail-open-ok: the window only tunes the context profile, and without a
     // known vision model images stay described in text; the turn runs either way
-    return {};
+    return session.model ? { id: session.model } : {};
   }
 }
 
@@ -143,10 +144,10 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
 export async function modelClientForSession(session: HarnessSession, config: Conf, local: LocalModelHooks = {}): Promise<ModelClient> {
   if (session.route === 'gateway') {
     const { baseUrl, apiKey } = gatewayConnection(config);
-    const facts = await gatewayModelFacts(session, config);
+    const { id: modelId, ...facts } = await gatewayModelFacts(session, config);
     return gatewayModelClient({
       baseUrl, apiKey, sessionId: session.id, ...(session.model ? { model: session.model } : {}), ...facts,
-      options: gatewayStepOptions(session),
+      options: gatewayStepOptions(session, modelId),
     });
   }
   if (session.route === 'clikcode-local') {
