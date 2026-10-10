@@ -55,7 +55,9 @@ export function accountPickerOptions(
         ].filter(Boolean).join(' '),
         value: { kind: 'account' as const, harness: harness.command, accountId: account.id },
         actions: row.actions.slice(0, -1).map((value) => ({ label: ACCOUNT_ACTION_LABELS[value], value })),
-        deleteAction: { label: ACCOUNT_ACTION_LABELS[deleteWith], value: deleteWith },
+        // Signing out is undone by signing in (/login, or Tab on the row):
+        // it runs at once, as /logout does. Removing an account is not, and asks.
+        deleteAction: { label: ACCOUNT_ACTION_LABELS[deleteWith], value: deleteWith, ...(deleteWith === 'disconnect' ? { undoable: true } : {}) },
       };
     }),
     // The only way to connect a second login from inside /account.
@@ -174,7 +176,8 @@ export async function addAccountForHarness(rl: HarnessPrompter, harness: AiLocal
 
 /** Maintenance actions are deliberately narrow label/value pairs rather than
  * nested PickerOptions. Non-destructive actions open with Tab; destructive
- * deleteAction values open only from Delete and are confirmed by select(). */
+ * deleteAction values open only from Delete; Remove is confirmed by select(),
+ * a sign-out (undone by signing in) is not. */
 export async function manageAccountAction(rl: HarnessPrompter, accountId: string, action: string): Promise<void> {
   const state = await readState({ transcripts: [] });
   const account = state.accounts.find((item) => item.id === accountId);
@@ -196,6 +199,8 @@ export async function manageAccountAction(rl: HarnessPrompter, accountId: string
   const environment = nativeProfileEnvironment(account.nativeProfile);
   if (action === 'disconnect') {
     await signOutAccount(account.id);
+    // Said, and how to undo it: it asked nothing first.
+    rl.activity?.(`Signed out of ${account.label} · /login signs back in`);
   } else if (action === 'reauthenticate' && harness.loginArgv) {
     await withSignIn(rl, harness.displayName, () => loginNativeHarness(harness, environment));
     await syncAccountIdentityAfterLogin(harness, account, state);

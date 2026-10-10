@@ -555,16 +555,17 @@ SCENARIOS = {
         'watch': [], 'ever': ['❯ /account'],
         'never_together': [('› /account', 'Grok Build accounts'), ('tab complete · enter run', 'Grok Build accounts')],
     },
-    # Del on a signed-in account asks first, then signs it out: the row
-    # turns to reauth and the vendor's own logout ran.
+    # Del on a signed-in account signs it out at once, as /logout does (it is
+    # undone by signing in): the row turns to reauth, the vendor's own logout
+    # ran, and a line says so.
     'account-del-disconnects': {
         'turns': [TWO_BLOCKS],
         # Signed in by the first message: nothing signs in at launch.
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
-                  ('keys', '\x1b[3~'), ('wait_for', 'Cancel', 10), ('settle', 0.5),
-                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
-        'watch': [], 'ever': ['del disconnect', 'Cancel'], 'final_contains': ['reauth'],
+                  ('keys', '\x1b[3~'), ('wait_for', 'reauth', 15), ('settle', 1)],
+        'watch': [], 'ever': ['del disconnect', 'Signed out of Grok Build · /login signs back in'], 'final_contains': ['reauth'],
+        'never': ['Cancel'],
     },
     # The same from a Mac or iPhone, whose "delete" key sends Backspace.
     'account-backspace-disconnects': {
@@ -572,9 +573,9 @@ SCENARIOS = {
         # Signed in by the first message: nothing signs in at launch.
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
-                  ('keys', '\x7f'), ('wait_for', 'Cancel', 10), ('settle', 0.5),
-                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'reauth', 15), ('settle', 1)],
-        'watch': [], 'ever': ['del disconnect', 'Cancel'], 'final_contains': ['reauth'],
+                  ('keys', '\x7f'), ('wait_for', 'reauth', 15), ('settle', 1)],
+        'watch': [], 'ever': ['del disconnect', 'Signed out of Grok Build · /login signs back in'], 'final_contains': ['reauth'],
+        'never': ['Cancel'],
     },
     # Adding a Grok account: its sign-in is a link and a code, shown on
     # ClikCode's own screen -- the vendor's own text never takes it over.
@@ -1133,6 +1134,16 @@ SCENARIOS = {
         'steps': [('type', '/doctor'), ('settle', 2), ('keys', '\x1b'), ('settle', 1),
                   ('type', '!true'), ('settle', 2)],
         'watch': [], 'never': ['checking harnesses', '! true ·'], 'final_contains': ['!true', 'exit 0'],
+    },
+    # Commands that did something say so: /logout (it said nothing), /swarm
+    # on, and /copy over SSH (OSC 52), which showed nothing at all.
+    'commands-say-what-they-did': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
+                  ('type', '/copy'), ('wait_for', 'Copied', 10), ('settle', 0.5),
+                  ('type', '/swarm on'), ('wait_for', 'Swarm on', 10), ('settle', 0.5),
+                  ('type', '/logout'), ('wait_for', 'Signed out of', 10), ('settle', 1)],
+        'watch': [], 'final_contains': ['Signed out of Grok Build · /login signs back in'], 'clipboard': 'Checking the workspace first.\n\nThe final commit is live.',
     },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
