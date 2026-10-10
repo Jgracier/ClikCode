@@ -108,6 +108,24 @@ describe('session worker (real spawned process, real socket)', () => {
     expect(snapshot).toMatchObject({ type: 'snapshot', session: { id: session.id } });
   });
 
+  it('stores a new chat that is still a draft here before its worker looks for it', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-worker-e2e-'));
+    process.env.CLIKCODE_HOME = root;
+    const state = await readState();
+    const now = new Date().toISOString();
+    const draft: HarnessSession = {
+      id: randomUUID(), conversationId: randomUUID(), route: 'local', accountId: null, provider: null, model: null,
+      effort: 'medium', permissionMode: 'ask', createdAt: now, updatedAt: now, status: 'active',
+    };
+    state.sessions.push(draft);
+    // Held in this process only, as a window holds a chat nothing was sent in.
+    await writeState(state);
+    spawnedSessionIds.push(draft.id);
+    const client = await WorkerClient.attach(draft.id);
+    spawnedClients.push(client);
+    expect(await readWorkerRecord(draft.id)).toBeDefined();
+  });
+
   it('a second attach finds the same already-running worker instead of spawning another', async () => {
     const session = await isolatedSession();
     const first = await WorkerClient.attach(session.id);
