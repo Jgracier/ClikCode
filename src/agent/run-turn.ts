@@ -15,7 +15,7 @@ import { exposeTools } from './mcp/deferred.js';
 import { gateNotebookTool, workspaceHasNotebooks } from './tools/notebook-gate.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
 import { type ConversationItem, type GatewayHarnessTurnInput, type GatewayHarnessTurnResult, type HarnessErrorKind, type ModelStepResult, type ModelToolCall, type TokenUsage } from './model-client.js';
-import { type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
+import { type SubagentCall, type ToolContext, type ToolDefinition, type ToolRunResult } from './tool-contract.js';
 import type { ToolCategory } from '../harness/prompter.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { emptyLedger, recordUsage } from './usage.js';
@@ -283,7 +283,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // Swarm, when the conversation has one, runs the task on another provider
   // and returns a card. Null means this host's own sub-agent still does it.
   const runSubagent = innerSubagent && input.swarmDelegate
-    ? async (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string; kind?: 'research' | 'work' }): Promise<ToolRunResult> => {
+    ? async (request: SubagentCall & { callId: string; signal?: AbortSignal }): Promise<ToolRunResult> => {
       const delegated = request.kind === 'work' ? null : await input.swarmDelegate?.(request);
       if (delegated) return delegated;
       return innerSubagent(request);
@@ -307,7 +307,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     outputCap: toolOutputCap(contextWindow, profile.toolOutputBytes),
     ...(stepAcceptsImages ? { acceptsImages: true } : {}),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
-    ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string; model?: string; kind?: 'research' | 'work' }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
+    ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
 
   const executeCall = async (call: ModelToolCall): Promise<ToolRunResult> => {
@@ -397,10 +397,16 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     return finish(result);
   };
 
-  /** Consecutive read-class calls run together; everything else runs alone,
-   * in the order the model asked, so a read after a write sees the write. */
+  /** Consecutive read-class calls (and calls whose tool says they touch
+   * nothing the others see) run together; everything else runs alone, in the
+   * order the model asked, so a read after a write sees the write. */
   const executeCalls = async (calls: readonly ModelToolCall[], collected: CallOutcome[]): Promise<void> => {
-    const isRead = (call: ModelToolCall): boolean => tools.find((tool) => tool.name === call.name)?.class === 'read';
+    const isRead = (call: ModelToolCall): boolean => {
+      const tool = tools.find((candidate) => candidate.name === call.name);
+      if (!tool) return false;
+      if (tool.class === 'read') return true;
+      try { return tool.concurrent?.(call.args) === true; } catch { return false; }
+    };
     for (let index = 0; index < calls.length;) {
       throwIfAborted();
       let end = index + 1;

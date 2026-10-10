@@ -1,7 +1,9 @@
+import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
+import { promisify } from 'node:util';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { FileCheckpointStore } from './file-checkpoints.js';
 import { runGatewayHarnessTurn } from './run-turn.js';
@@ -296,5 +298,125 @@ describe('task sub-agents', () => {
     expect(asked).toHaveLength(1);
     expect(toolResults(client.requests('peek')[1])[0]).toMatch(/declined/);
     expect(toolResults(client.requests(PARENT_PROMPT)[1]).map(withoutTrace)).toEqual(['was refused']);
+  });
+});
+
+describe('coding sub-agents in their own worktree', () => {
+  const execFileAsync = promisify(execFile);
+  const git = async (...args: string[]): Promise<string> => (await execFileAsync('git', args, { cwd })).stdout.trim();
+  let savedTmp: string | undefined;
+
+  beforeEach(async () => {
+    // The worktrees are made under the temp dir: this test's own, removed with it.
+    savedTmp = process.env.TMPDIR;
+    process.env.TMPDIR = path.join(root, 'tmp');
+    await fs.mkdir(process.env.TMPDIR);
+  });
+
+  afterEach(() => {
+    if (savedTmp === undefined) delete process.env.TMPDIR;
+    else process.env.TMPDIR = savedTmp;
+  });
+
+  async function initRepo(): Promise<void> {
+    await git('init', '-q', '-b', 'main');
+    await git('add', '-A');
+    await git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-q', '-m', 'base');
+  }
+
+  function branchOf(output: string): string {
+    const match = /on branch (clikcode\/\S+) \(from/.exec(output);
+    if (!match) throw new Error(`No branch in: ${output}`);
+    return match[1];
+  }
+
+  it('runs several isolated agents of one step in parallel, each on its own branch', async () => {
+    await initRepo();
+    let active = 0;
+    let peak = 0;
+    const slowEdit = (to: string): ScriptEntry => ({
+      toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: to } }],
+      before: async () => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        active--;
+      },
+    });
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [
+          { id: 'w1', name: 'agent', args: { prompt: 'make it 43', description: 'Make 43', isolation: 'worktree' } },
+          { id: 'w2', name: 'agent', args: { prompt: 'make it 44', description: 'Make 44', isolation: 'worktree' } },
+        ] },
+        { text: 'done' },
+      ] },
+      'make it 43': { script: [{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, slowEdit('43'), { text: 'Changed to 43.' }] },
+      'make it 44': { script: [{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, slowEdit('44'), { text: 'Changed to 44.' }] },
+    });
+    const { input } = turn(client);
+    expect((await runGatewayHarnessTurn(input)).stopReason).toBe('completed');
+    expect(peak).toBe(2);
+
+    const [first, second] = toolResults(client.requests(PARENT_PROMPT)[1]);
+    expect(first).toMatch(/^Changed to 43\./);
+    expect(second).toMatch(/^Changed to 44\./);
+    expect(first).toMatch(/a\.txt \| 2 \+-/);
+    // The user's tree is untouched; each branch holds its own agent's edit.
+    expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
+    expect(await git('show', `${branchOf(first)}:a.txt`)).toBe('the answer is 43');
+    expect(await git('show', `${branchOf(second)}:a.txt`)).toBe('the answer is 44');
+    // Not in the parent's undo: the branch is the record.
+    expect(await new FileCheckpointStore(stateDir).listTurns(input.sessionId)).toEqual([]);
+    // The checkouts are gone; only the branches remain.
+    expect((await git('worktree', 'list')).split('\n')).toHaveLength(1);
+    expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
+    // The child was told where it works.
+    expect(client.requests('make it 43')[0].system).toContain(`on branch ${branchOf(first)}`);
+  });
+
+  it('removes the worktree and branch of an agent that changed nothing', async () => {
+    await initRepo();
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'look only', isolation: 'worktree' } }] }, { text: 'done' }] },
+      'look only': { script: [{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { text: 'Nothing to change.' }] },
+    });
+    await runGatewayHarnessTurn(turn(client).input);
+    const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
+    expect(output).toMatch(/no changes were made; its worktree and branch were removed/);
+    expect(await git('branch', '--list', 'clikcode/*')).toBe('');
+    expect((await git('worktree', 'list')).split('\n')).toHaveLength(1);
+    expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
+  });
+
+  it('commits a cancelled isolated agent\'s edit to its branch', async () => {
+    await initRepo();
+    const controller = new AbortController();
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'edit then stop', isolation: 'worktree' } }] }] },
+      'edit then stop': { script: [
+        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '45' } }] },
+        { before: () => controller.abort(), text: 'not completed' },
+      ] },
+    });
+    await expect(runGatewayHarnessTurn(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    // The cancelled turn returns at once; the sub-agent winds down after it.
+    await vi.waitFor(async () => expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]));
+    const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
+    expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 45');
+    expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
+  });
+
+  it('refuses isolation outside a git repository, in one line', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', isolation: 'worktree' } }] }, { text: 'done' }] },
+      'never runs': { script: [{ text: 'ran' }] },
+    });
+    await runGatewayHarnessTurn(turn(client).input);
+    const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
+    expect(output).toMatch(/needs a git repository/);
+    expect(output.split('\n')).toHaveLength(1);
+    expect(client.requests('never runs')).toHaveLength(0);
   });
 });

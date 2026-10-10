@@ -9,7 +9,8 @@ import type { ConversationItem, GatewayHarnessTurnInput, GatewayHarnessTurnResul
 import { ConversationStore } from './conversation.js';
 import { disposeSessionState } from './session-state.js';
 import { toolOutputDir } from './security.js';
-import type { ToolDefinition, ToolRunResult } from './tool-contract.js';
+import type { SubagentCall, ToolDefinition, ToolRunResult } from './tool-contract.js';
+import { createAgentWorktree, finishAgentWorktree, type AgentWorktree } from './worktree.js';
 
 /** By name, not by class: `read` also covers bash_output and task itself,
  * and an MCP tool's class says nothing about what the server does. */
@@ -21,13 +22,10 @@ const WORK_SUBAGENT_MAX_STEPS = 60;
 
 const USAGE_FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd'] as const;
 
-export interface SubagentRequest {
-  prompt: string;
-  description?: string;
+export interface SubagentRequest extends SubagentCall {
   /** The parent's task call, which the sub-agent's activity nests under. */
   callId: string;
   signal?: AbortSignal;
-  kind?: 'research' | 'work';
 }
 
 type Approver = NonNullable<GatewayHarnessTurnInput['onApproval']>;
@@ -61,6 +59,15 @@ function subagentSystemPrompt(parent: GatewayHarnessTurnInput): string {
     ...(parent.addDirs?.length ? [`Additional directories: ${parent.addDirs.join(', ')}`] : []),
     `Platform: ${process.platform} (${os.release()})`,
     `Date: ${new Date().toISOString().slice(0, 10)}`,
+  ].join('\n');
+}
+
+function worktreeNote(worktree: AgentWorktree, parentCwd: string): string {
+  return [
+    '', '',
+    '# Isolated worktree',
+    `You work in your own git worktree at ${worktree.cwd}, on branch ${worktree.branch}, checked out from HEAD. That is your working directory, not ${parentCwd}: edit files and run commands only there.`,
+    'Uncommitted changes in the parent\'s working tree are not in it. Whatever you leave uncommitted is committed to your branch when you finish.',
   ].join('\n');
 }
 
@@ -109,12 +116,23 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
     // Unique per run: session state (read tracking) is keyed by it, and two
     // parallel sub-agents must not share it.
     const sessionId = `${parent.sessionId}.task.${randomUUID()}`;
+    let worktree: AgentWorktree | undefined;
+    if (work && request.isolation === 'worktree') {
+      try {
+        worktree = await createAgentWorktree(parent.cwd, request.description);
+      } catch (error) {
+        return { output: `Could not create a git worktree for the subagent: ${error instanceof Error ? error.message : String(error)}`, isError: true };
+      }
+      if (!worktree) return { output: `isolation "worktree" needs a git repository with a commit, and ${parent.cwd} is not in one; run the agent without isolation.`, isError: true };
+    }
     const transcriptFile = path.join(toolOutputDir(parent.stateDir, parent.sessionId), `${randomUUID()}.jsonl`);
     const store = new ConversationStore(parent.stateDir, sessionId, transcriptFile);
     let reported: TokenUsage = {};
+    let worktreeReport: string | undefined;
+    const commitMessage = (prefix: string): string => `${prefix}: ${request.description ?? request.prompt.split('\n')[0]}`.slice(0, 200);
     try {
       const result = await options.runTurn({
-        sessionId, cwd: parent.cwd, prompt: request.prompt,
+        sessionId, cwd: worktree?.cwd ?? parent.cwd, prompt: request.prompt,
         permissionMode: parent.permissionMode,
         ...(parent.currentPermissionMode ? { currentPermissionMode: parent.currentPermissionMode } : {}),
         ...(parent.permissionRules ? { permissionRules: parent.permissionRules } : {}),
@@ -123,9 +141,11 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         stateDir: parent.stateDir,
         tools, maxSteps: work ? WORK_SUBAGENT_MAX_STEPS : maxSteps,
         subagent: {
-          system: work ? `${options.workSystem}\n\n# Delegated task\nComplete the task you were given and report the changes and verification to the parent agent. Your tool calls are visible in the chat. You cannot start another agent or ask the user a question.` : subagentSystemPrompt(parent),
+          system: work ? `${options.workSystem}\n\n# Delegated task\nComplete the task you were given and report the changes and verification to the parent agent. Your tool calls are visible in the chat. You cannot start another agent or ask the user a question.${worktree ? worktreeNote(worktree, parent.cwd) : ''}` : subagentSystemPrompt(parent),
           transcriptFile,
-          ...(work ? { checkpoint: options.checkpoint } : {}),
+          // Isolated work has its branch as its record: undoing the parent's
+          // turn must not reach into another checkout.
+          ...(work && !worktree ? { checkpoint: options.checkpoint } : {}),
         },
         ...(parent.addDirs ? { addDirs: parent.addDirs } : {}),
         ...(parent.homeDir ? { homeDir: parent.homeDir } : {}),
@@ -146,9 +166,17 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         },
       });
       const answer = answerFrom(result, await store.load(), work ? WORK_SUBAGENT_MAX_STEPS : maxSteps);
-      return { ...answer, output: `${answer.output}\n\n[Sub-agent tool trace: ${transcriptFile}]` };
+      if (worktree) {
+        // Its shells stop before its changes are committed, not halfway through.
+        disposeSessionState(parent.stateDir, sessionId);
+        worktreeReport = await finishAgentWorktree(worktree, commitMessage('Agent'));
+      }
+      return { ...answer, output: `${answer.output}${worktreeReport ? `\n\n${worktreeReport}` : ''}\n\n[Sub-agent tool trace: ${transcriptFile}]` };
     } finally {
       disposeSessionState(parent.stateDir, sessionId);
+      // Cancelled or failed: what it changed is still committed to its branch,
+      // and an unchanged worktree is still removed.
+      if (worktree && worktreeReport === undefined) await finishAgentWorktree(worktree, commitMessage('Agent (stopped)'));
     }
   };
 }

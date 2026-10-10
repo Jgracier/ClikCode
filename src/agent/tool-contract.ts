@@ -30,7 +30,17 @@ export interface ToolContext {
   /** The model answering this step can see images (ModelClient.acceptsImages). */
   acceptsImages?: boolean;
   /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
-  runSubagent?(request: { prompt: string; description?: string; model?: string; kind?: 'research' | 'work' }): Promise<ToolRunResult>;
+  runSubagent?(request: SubagentCall): Promise<ToolRunResult>;
+}
+
+/** What a tool asks of a sub-agent; the loop adds the call id and signal. */
+export interface SubagentCall {
+  prompt: string;
+  description?: string;
+  model?: string;
+  kind?: 'research' | 'work';
+  /** A coding sub-agent in its own git worktree, on its own branch. */
+  isolation?: 'worktree';
 }
 
 export interface ToolRunResult {
@@ -59,6 +69,10 @@ export interface ToolDefinition<A = Record<string, unknown>> {
    * the tool. Lets their schemas be deferred until loaded (mcp/deferred.ts). */
   mcp?: { server: string; tool: string; core?: true };
   label(args: A): string;
+  /** True when this call may run alongside the other concurrent calls of its
+   * step although its class is not `read`: it touches nothing they can see
+   * (a coding sub-agent in its own worktree). Given unvalidated args. */
+  concurrent?(args: A): boolean;
   /** Filesystem paths this call touches; drives confinement and deny checks. */
   paths?(args: A): string[];
   /** Human-readable preview (diff) shown in the approval prompt. Must not mutate. */
