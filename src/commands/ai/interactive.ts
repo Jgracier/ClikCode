@@ -52,7 +52,7 @@ import { withSlowWait } from '../../tui/slow-wait.js';
 import { runShellLine } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor } from '../../tui/slash/context.js';
 import { dispatchLine, type SlashHost } from '../../tui/slash/dispatch.js';
-import { browseSearch } from '../../tui/slash/search-browse.js';
+import { browseSearch, walkTurns } from '../../tui/slash/search-browse.js';
 import { stopWaitingForReset, type ExhaustionRetryGuard } from '../../tui/pickers/resume-in.js';
 import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { autoSelectSessionHarness, interactiveEnginePicker } from '../../tui/pickers/engine.js';
@@ -728,7 +728,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           } satisfies Pick<SlashHost, 'runManager'> : {
             attached: (attachments) => emitHarnessOutput({ panel: 'attachments', attachments }),
           } satisfies Pick<SlashHost, 'attached'>),
-          ...(terminal ? { browseSearch: (query: string) => browseSearch(terminal, query, withWaiting) } : {}),
+          ...(terminal ? {
+            browseSearch: (query: string) => browseSearch(terminal, query, withWaiting),
+            walkTurns: (turns, start) => walkTurns(terminal, turns, start),
+          } satisfies Pick<SlashHost, 'browseSearch' | 'walkTurns'> : {}),
         };
         const outcome = await dispatchLine(host, id, line, { fromQueuedCommand });
         if (outcome.notice) notice = outcome.notice;

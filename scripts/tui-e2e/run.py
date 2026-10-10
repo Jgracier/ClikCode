@@ -1346,6 +1346,22 @@ SCENARIOS = {
         ],
         'watch': [], 'final_contains': ['2  answered', 'explain how the build works', '1  answered', 'notes.txt +1 -1', '/redo @N'],
     },
+    # /changes <path> from another conversation: the turns that edited the
+    # file, in any conversation; choosing one opens its conversation there.
+    'changes-for-path': {
+        'turns': [{'edits': [{'path': 'notes.txt', 'old': 'alpha\nbeta\n', 'new': 'alpha\nGAMMA\n'}], 'blocks': ['Edited the notes.']},
+                  {'blocks': ['Hello from the second chat.']}],
+        'steps': [
+            ('type', 'edit the notes'), ('wait_for', 'Edited the notes.', 30), ('settle', 2),
+            ('type', '/new'), ('settle', 2),
+            ('type', 'say hello'), ('wait_for', 'Hello from the second chat.', 30), ('settle', 2),
+            ('type', '/changes notes.txt'), ('wait_for', 'Turns that edited', 10), ('settle', 0.5),
+            ('keys', '\r'), ('wait_for', 'turn 1 of 1', 10), ('settle', 1), ('keys', '\x1b'), ('mark',), ('settle', 2),
+        ],
+        'watch': [], 'ever': ['"edit the notes" · +1 -1'],
+        'final_contains': ['edit the notes', 'Edited the notes.'],
+        'never_after_mark': ['Hello from the second chat.'],
+    },
     # `!<command>`: its output is a transcript message, drawn once, with no
     # notice repeating how it exited.
     'shell-line-in-transcript': {

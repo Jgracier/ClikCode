@@ -66,7 +66,9 @@ interface SlashCommandEntry {
   argHint?: string;
   description: string;
   group: SlashGroup;
-  availability(session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability;
+  /** `args`, where known: a form of the command can need less (`/changes
+   * <path>` reads every conversation's records, not this harness's). */
+  availability(session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, args?: string): SlashAvailability;
   handlerKey: SlashHandlerKey;
   /** `apply` means the ARGUMENT form of this command is a pure state write
    * that can run while a turn is streaming: no picker, no panel, nothing on
@@ -112,9 +114,11 @@ const bothRoutes = (what: string) => (
 
 /** /changes lists ClikCode's agent's own snapshots, or the edits a vendor
  * harness reports with their diffs. A plain-text CLI reports none: its
- * output is prose, so there is nothing for ClikCode to list. */
-const recordedEditsAvailability = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
+ * output is prose, so there is nothing for ClikCode to list. `/changes
+ * <path>` looks through every conversation's records, so it is always there. */
+const recordedEditsAvailability = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined, args?: string): SlashAvailability => {
   if (isClikCodeAgent(session) || harness?.transport !== 'text-cli') return { available: true };
+  if (args?.trim() && !/^\d+$/.test(args.trim())) return { available: true };
   return {
     available: false,
     reason: `${harness.displayName} runs as a plain-text CLI: its output reports no file edits ClikCode could record. Use /diff to see what changed and git to revert it.`,
@@ -143,7 +147,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('hindsight', 'Conversation', 'this conversation by topic, with the files each changed; numbered as /fork and /redo take them'),
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
-  entry('changes', 'Conversation', "each recent turn's file edits; N shows that turn's diff", { argHint: '[N]', availability: recordedEditsAvailability }),
+  entry('changes', 'Conversation', "each turn's file edits; N shows that turn's diff; a path lists the conversations that edited it", { argHint: '[N|path]', availability: recordedEditsAvailability }),
   entry('native', 'Conversation', 'send text to the harness verbatim (also: //text)', { argHint: '<text>', availability: needsHarness('sending native commands') }),
   entry('select', 'Conversation', "hand the mouse to the terminal's own selection (drag-to-copy works without it)"),
   entry('redraw', 'Conversation', 'repaint the screen'),

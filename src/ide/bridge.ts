@@ -43,7 +43,7 @@ import { selectGatewayAgent } from '../commands/ai/sessions.js';
 import { dispatchLine, type SlashHost } from '../tui/slash/dispatch.js';
 import { slashControls, slashHelpText, slashPalette, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
 import { lastAnswer } from '../tui/slash/handlers.js';
-import { browseSearch, type MentionScreen } from '../tui/slash/search-browse.js';
+import { browseSearch, walkTurns, type MentionScreen } from '../tui/slash/search-browse.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
 import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
@@ -659,7 +659,10 @@ export class IdeBridge {
         this.runInTerminal({ command: harness.command, mode: 'run', argv }, { environment, name: `${harness.displayName} ${label}` }),
       exported: (path) => this.channel.send({ type: 'open-file', path }),
       // The terminal's walk, where the editor can show it.
-      ...(this.features.has('search-walk') ? { browseSearch: (query: string) => browseSearch(this.searchScreen(), query, (label, work) => this.withBusy(label, work)) } : {}),
+      ...(this.features.has('search-walk') ? {
+        browseSearch: (query: string) => browseSearch(this.searchScreen(), query, (label, work) => this.withBusy(label, work)),
+        walkTurns: (turns, start) => walkTurns(this.searchScreen(), turns, start),
+      } satisfies Pick<SlashHost, 'browseSearch' | 'walkTurns'> : {}),
       intercept: (route, session, harness) => {
         const name = route.entry.name;
         if (TERMINAL_ONLY_COMMANDS.has(name)) return { notice: `/${name} is for the terminal; the editor has no use for it.` };

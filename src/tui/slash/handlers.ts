@@ -12,6 +12,7 @@ import { searchConversations } from '../../search/engine.js';
 import { searchResultsText } from '../../search/navigate.js';
 import { runsOn } from '../../search/format.js';
 import { hindsightPanelText } from './hindsight-panel.js';
+import { changesPath, fileTurnRows, fileTurnsText, isChangesPath } from './file-changes.js';
 import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService, ROUTE_CHOICES_TEXT } from '../../session/route.js';
 import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
 import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
@@ -675,12 +676,20 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     if (!account) throw new Error('This conversation has no account to sign out.');
     await aiAccountLogout(account.id);
   },
-  changes: async ({ session, words }) => {
+  changes: async ({ state, session, args, words }) => {
+    if (isChangesPath(args)) {
+      const file = changesPath(args, session.workspace ?? process.cwd());
+      const rows = await fileTurnRows(state, file);
+      return emitHarnessOutput({
+        panel: 'changes', text: fileTurnsText(file, rows), file,
+        turns: rows.map((row) => ({ sessionId: row.sessionId, turn: row.turnsAgo, at: row.record.at, prompt: row.record.prompt, additions: row.additions, removals: row.removals })),
+      });
+    }
     const records = await readTurnChanges(stateDirectory(), session.id);
     if (!words[0]) return emitHarnessOutput({ panel: 'changes', text: turnChangesList(records, session.workspace) });
     const n = Number(words[0]);
     const record = turnChangesAgo(records, n);
-    if (!record) throw new Error(records.length ? `usage: /changes [N]  -- N from 1 (the last turn) to ${records.length}` : 'No turns recorded yet in this conversation.');
+    if (!record) throw new Error(records.length ? `usage: /changes [N|path]  -- N from 1 (the last turn) to ${records.length}` : 'No turns recorded yet in this conversation.');
     return emitHarnessOutput({ panel: 'changes', text: turnChangesDiff(record, n, session.workspace), diff: record.changes });
   },
   redo: async ({ state, session, words }) => {
@@ -764,7 +773,7 @@ export async function aiSessionCommand(id: string, input: string, options: { inf
   const harness = sessionHarness(session);
   const route = routeSlashInput(text.startsWith('/') ? text : `/${text}`, slashRouteContextFor(session, harness));
   if (route.kind === 'command') {
-    const availability = route.entry.availability(session, harness);
+    const availability = route.entry.availability(session, harness, route.args);
     // Same as the interactive session: a command that names its provider --
     // `/model claude-opus-5` when only one account publishes that model --
     // selects it and runs, instead of refusing. Once only: a selection that
