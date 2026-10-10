@@ -1758,11 +1758,14 @@ def main():
     parser.add_argument('--repeat', type=int, default=1)
     parser.add_argument('--only')
     parser.add_argument('--keep', action='store_true')
+    # Every scenario that names no width of its own runs at this one.
+    parser.add_argument('--cols', type=int)
     args = parser.parse_args()
     entry = os.path.abspath(args.entry)
     failed = 0
     for name, spec in SCENARIOS.items():
         if args.only and name not in args.only.split(','): continue
+        if args.cols and 'cols' not in spec: spec = {**spec, 'cols': args.cols}
         for attempt in range(1, args.repeat + 1):
             problems, root, final = run(name, spec, entry, args.keep)
             status = 'PASS' if not problems else 'FAIL'
