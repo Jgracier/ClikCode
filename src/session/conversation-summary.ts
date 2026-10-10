@@ -180,9 +180,74 @@ export interface SummarySources {
   threadFile?: (thread: PreviousNativeThread) => Promise<string | undefined>;
 }
 
+function jsonLines(text: string): Record<string, unknown>[] {
+  return text.split('\n').flatMap((line) => {
+    if (!line.trim()) return [];
+    try { const value = JSON.parse(line) as unknown; return value && typeof value === 'object' ? [value as Record<string, unknown>] : []; } catch { return []; }
+  });
+}
+
+const blockText = (content: unknown, kind = 'type', field = 'text'): string => (
+  typeof content === 'string' ? content
+    : Array.isArray(content) ? content.flatMap((block) => {
+      const entry = block as Record<string, unknown> | undefined;
+      return entry?.[kind] === 'text' && typeof entry[field] === 'string' ? [entry[field] as string] : [];
+    }).join('\n') : '');
+
+/** Grok Build rewrites `chat_history.jsonl` when it compacts: the summary is a
+ * user row it marks `compaction_meta`, in Claude Code's words; every other
+ * unmarked user row left in the file is a request it kept. */
+export function grokThreadCompaction(jsonl: string): ThreadCompaction | undefined {
+  let text: string | undefined;
+  const prompts: string[] = [];
+  for (const row of jsonLines(jsonl)) {
+    if (row.type !== 'user') continue;
+    const content = blockText(row.content);
+    if (row.synthetic_reason === 'compaction_meta') {
+      if (CLAUDE_PREAMBLE.test(content)) text = claudeSummaryText(content) || text;
+    } else if (row.synthetic_reason === undefined && content.trim()) {
+      prompts.push(content.replace(/^\s*<user_query>\s*/, '').replace(/\s*<\/user_query>\s*$/, ''));
+    }
+  }
+  return text ? { text, prompts } : undefined;
+}
+
+/** Kiro (ACP) appends a `Compaction` entry holding the summary; its requests
+ * are the `Prompt` entries after it. */
+export function kiroThreadCompaction(jsonl: string): ThreadCompaction | undefined {
+  let found: ThreadCompaction | undefined;
+  for (const row of jsonLines(jsonl)) {
+    const data = row.data as Record<string, unknown> | undefined;
+    if (row.kind === 'Compaction' && typeof data?.summary === 'string' && data.summary.trim()) found = { text: data.summary.trim(), prompts: [] };
+    else if (found && row.kind === 'Prompt') {
+      const content = blockText(data?.content, 'kind', 'data');
+      if (content.trim()) found.prompts.push(content);
+    }
+  }
+  return found;
+}
+
+/** Copilot CLI appends `session.compaction_complete` with `summaryContent`;
+ * its requests are the `user.message` events after it. */
+export function copilotThreadCompaction(jsonl: string): ThreadCompaction | undefined {
+  let found: ThreadCompaction | undefined;
+  for (const row of jsonLines(jsonl)) {
+    const data = row.data as Record<string, unknown> | undefined;
+    if (row.type === 'session.compaction_complete' && data?.success !== false && typeof data?.summaryContent === 'string' && data.summaryContent.trim()) {
+      found = { text: data.summaryContent.trim(), prompts: [] };
+    } else if (found && row.type === 'user.message' && typeof data?.content === 'string' && data.content.trim()) {
+      found.prompts.push(data.content);
+    }
+  }
+  return found;
+}
+
 /** Vendors whose compaction ClikCode can read from their own thread, and how. */
-const THREAD_READERS: Record<string, (text: string) => ThreadCompaction | undefined> = {
-  claude: claudeThreadCompaction,
+const THREAD_READERS: Record<string, { read: (text: string) => ThreadCompaction | undefined; file?: string }> = {
+  claude: { read: claudeThreadCompaction },
+  grok: { read: grokThreadCompaction, file: 'chat_history.jsonl' },
+  kiro: { read: kiroThreadCompaction },
+  copilot: { read: copilotThreadCompaction, file: 'events.jsonl' },
 };
 
 export function readsVendorCompaction(command: string): boolean {
@@ -206,9 +271,11 @@ export async function conversationSummary(session: HarnessSession, record: Canon
   for (const thread of threads) {
     const reader = THREAD_READERS[thread.harness];
     if (!reader || !sources.threadFile) continue;
-    const file = await sources.threadFile(thread).catch(() => undefined);
+    const located = await sources.threadFile(thread).catch(() => undefined);
+    // A store that keeps a session as a directory names the file it is in.
+    const file = located && reader.file && await fs.stat(located).then((stat) => stat.isDirectory(), () => false) ? path.join(located, reader.file) : located;
     const text = file ? await readText(file) : undefined;
-    const compaction = text ? reader(text) : undefined;
+    const compaction = text ? reader.read(text) : undefined;
     if (compaction) candidates.push(placeCompaction(compaction, record, thread.harness));
   }
   const best = candidates.reduce<ConversationSummary | undefined>((winner, next) => (next && (!winner || next.through > winner.through) ? next : winner), undefined);

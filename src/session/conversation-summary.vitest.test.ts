@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalRecord } from './canonical';
 import {
+  copilotThreadCompaction, grokThreadCompaction, kiroThreadCompaction,
   agentMemoryCompaction, alignPrompts, claudeSummaryText, claudeThreadCompaction, conversationSummary,
   placeCompaction, summarizedRecord, turnsHash, validSummary,
 } from './conversation-summary';
@@ -57,6 +58,45 @@ describe('reading a summary a harness made', () => {
       JSON.stringify({ kind: 'item', item: { type: 'text', role: 'user', text: 'request number 6' } }),
     ].join('\n');
     expect(agentMemoryCompaction(memory)).toEqual({ text: 'Built the parser.', prompts: ['request number 5', 'request number 6'] });
+  });
+});
+
+describe("reading the summaries other vendors keep (shapes from their real session files)", () => {
+  const lines = (...rows: unknown[]): string => rows.map((row) => JSON.stringify(row)).join('\n');
+
+  it("Grok: the compaction_meta row in Claude Code's words, and every unmarked request left in the rewritten history", () => {
+    const history = lines(
+      { type: 'system', content: 'You are Grok' },
+      { type: 'user', synthetic_reason: 'compaction_meta', content: [{ type: 'text', text: '<user_info>OS Version: linux</user_info>' }] },
+      { type: 'user', content: [{ type: 'text', text: '<user_query>\nrequest number 6\n</user_query>' }] },
+      { type: 'user', synthetic_reason: 'compaction_meta', content: [{ type: 'text', text: 'This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.\n\nSummary:\nBuilt the parser.' }] },
+      { type: 'user', synthetic_reason: 'system_reminder', content: [{ type: 'text', text: '<system-reminder>skills</system-reminder>' }] },
+      { type: 'assistant', content: 'ok' },
+      { type: 'user', content: [{ type: 'text', text: '<user_query>request number 7</user_query>' }] },
+    );
+    expect(grokThreadCompaction(history)).toEqual({ text: 'Built the parser.', prompts: ['request number 6', 'request number 7'] });
+    expect(grokThreadCompaction(lines({ type: 'user', content: 'request number 1' }))).toBeUndefined();
+  });
+
+  it('Kiro: the newest Compaction entry and the Prompt entries after it', () => {
+    const conversation = lines(
+      { version: 'v1', kind: 'Prompt', data: { content: [{ kind: 'text', data: 'request number 5' }] } },
+      { version: 'v1', kind: 'Compaction', data: { summary: '## OBJECTIVE\nFix the stalled state.', strategy: {}, messages_snapshot: [] } },
+      { version: 'v1', kind: 'AssistantMessage', data: { content: [{ kind: 'text', data: 'ok' }] } },
+      { version: 'v1', kind: 'Prompt', data: { content: [{ kind: 'text', data: '[ClikCode: the following turns ran on Codex]\n\nrequest number 7' }] } },
+    );
+    expect(kiroThreadCompaction(conversation)).toEqual({ text: '## OBJECTIVE\nFix the stalled state.', prompts: ['[ClikCode: the following turns ran on Codex]\n\nrequest number 7'] });
+  });
+
+  it('Copilot: the newest successful compaction_complete and the user.message events after it', () => {
+    const events = lines(
+      { type: 'user.message', data: { content: 'request number 1' } },
+      { type: 'session.compaction_complete', data: { success: true, summaryContent: '<overview>Older.</overview>' } },
+      { type: 'session.compaction_complete', data: { success: false, summaryContent: 'failed attempt' } },
+      { type: 'session.compaction_complete', data: { success: true, summaryContent: '<overview>Streamline ClikDeploy.</overview>' } },
+      { type: 'user.message', data: { content: 'request number 7', transformedContent: '<current_datetime>x</current_datetime>\n\nrequest number 7' } },
+    );
+    expect(copilotThreadCompaction(events)).toEqual({ text: '<overview>Streamline ClikDeploy.</overview>', prompts: ['request number 7'] });
   });
 });
 
