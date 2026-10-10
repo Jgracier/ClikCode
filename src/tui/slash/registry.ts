@@ -38,7 +38,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * tables are typed `Record<SlashHandlerKey, …>` and a missing or extra handler
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
-  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'changes',
+  'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'hindsight', 'copy', 'select', 'changes',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'swarm', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
@@ -140,6 +140,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
   entry('compact', 'Conversation', 'summarize the conversation and continue in a fresh native session', { argHint: '[focus]', availability: vendorCompaction }),
   entry('history', 'Conversation', 'show this conversation'),
+  entry('hindsight', 'Conversation', 'this conversation by topic, with the files each changed; numbered as /fork and /redo take them'),
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
   entry('changes', 'Conversation', "each recent turn's file edits; N shows that turn's diff", { argHint: '[N]', availability: recordedEditsAvailability }),
