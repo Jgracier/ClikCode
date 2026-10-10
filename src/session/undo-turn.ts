@@ -38,7 +38,7 @@ export interface TurnUndo {
   text: string;
 }
 
-const SHELL_CAVEAT = 'Only edits made through file-editing tools are tracked: anything a shell command changed (generated files, installs, git operations) is not undone.';
+const SHELL_CAVEAT = 'Tracked: edits made through file-editing tools, and (ClikCode\'s agent) files a shell command changed in the git repository. Anything else a shell command changed (ignored or generated files, installs, git operations) is not undone.';
 const OUTSIDE_WORKSPACE = 'outside this conversation\'s workspace; not touched';
 
 function shown(file: string, workspace: string): string {
