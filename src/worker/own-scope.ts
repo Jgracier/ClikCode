@@ -44,28 +44,42 @@ export function adoptArgs(unit: string, pid: number): string[] {
   return [
     '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
     'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
-    unit, 'fail', '3',
+    unit, 'fail', '4',
     'PIDs', 'au', '1', String(pid),
     'Slice', 's', AGENT_SLICE,
     'CollectMode', 's', 'inactive-or-failed',
+    // The default, `stop`, ends the whole scope -- the worker and its agent --
+    // when the kernel kills any one process in it at the slice's ceiling.
+    // The test run that hit the ceiling is what should die, alone.
+    'OOMPolicy', 's', 'continue',
     '0',
   ];
 }
 
-/** The agent slice's memory ceiling when the host defines none: agents past
- * it are throttled (never killed), and the rest of RAM stays for the desktop
- * and editor however much the agents allocate. */
-export const DEFAULT_AGENT_MEMORY_SHARE = 0.75;
+/** The agent slice's limits when the host defines none, as shares of RAM.
+ *
+ * A HARD ceiling, not only a soft one. When the whole machine runs out, the
+ * kernel kills by score and Electron marks its GPU and renderer processes as
+ * preferred victims: MEASURED 2026-10-10, agents' test runs held 35G of RAM
+ * and 14G of swap past a soft-only ceiling, RAM and swap ran out, and the
+ * kill took VS Code's GPU process -- the editor quit -- while 4G vitest runs
+ * lived. At the slice's own MemoryMax the kernel picks inside the slice
+ * instead, normally the largest test run, and the editor never gets chosen.
+ * Swap is bounded too: swapped agent pages count toward neither RAM limit. */
+export const AGENT_MEMORY_SHARES = { high: 0.7, max: 0.8, swap: 0.1 } as const;
 
-/** Creates the agent slice with the default ceiling. systemd refuses when a
+/** Creates the agent slice with the default limits. systemd refuses when a
  * unit file for it exists -- a host's own limits win, untouched. */
-export function sliceArgs(memoryHighBytes: number): string[] {
+export function sliceArgs(ramBytes: number): string[] {
+  const bytes = (share: number): string => String(Math.floor(ramBytes * share));
   return [
     '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
     'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
-    AGENT_SLICE, 'fail', '2',
+    AGENT_SLICE, 'fail', '4',
     'Description', 's', 'ClikCode agent work',
-    'MemoryHigh', 't', String(Math.floor(memoryHighBytes)),
+    'MemoryHigh', 't', bytes(AGENT_MEMORY_SHARES.high),
+    'MemoryMax', 't', bytes(AGENT_MEMORY_SHARES.max),
+    'MemorySwapMax', 't', bytes(AGENT_MEMORY_SHARES.swap),
     '0',
   ];
 }
@@ -96,7 +110,7 @@ function busctl(args: string[]): Promise<boolean> {
 async function moveToOwnScope(sessionId: string, cgroup: string): Promise<boolean> {
   const slice = agentSliceDirectory(cgroup);
   // Only the first worker on a boot finds no slice; every later one skips this call.
-  if (slice && !existsSync(slice)) await busctl(sliceArgs(totalmem() * DEFAULT_AGENT_MEMORY_SHARE));
+  if (slice && !existsSync(slice)) await busctl(sliceArgs(totalmem()));
   const unit = scopeUnitName(sessionId, process.pid);
   const adopted = await busctl(adoptArgs(unit, process.pid));
   if (adopted) {

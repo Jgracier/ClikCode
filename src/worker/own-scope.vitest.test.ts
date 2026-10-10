@@ -21,10 +21,20 @@ describe('own scope', () => {
     expect(userManagerOwns('')).toBe(false);
   });
 
-  it('creates the agent slice with a memory ceiling in whole bytes', () => {
-    const args = sliceArgs(1000.7);
+  it('creates the agent slice with soft, hard and swap limits in whole bytes', () => {
+    const args = sliceArgs(1000);
+    const prop = (name: string) => args.slice(args.indexOf(name), args.indexOf(name) + 3);
     expect(args[args.indexOf('StartTransientUnit') + 2]).toBe(AGENT_SLICE);
-    expect(args.slice(args.indexOf('MemoryHigh'), args.indexOf('MemoryHigh') + 3)).toEqual(['MemoryHigh', 't', '1000']);
+    expect(prop('MemoryHigh')).toEqual(['MemoryHigh', 't', '700']);
+    expect(prop('MemoryMax')).toEqual(['MemoryMax', 't', '800']);
+    expect(prop('MemorySwapMax')).toEqual(['MemorySwapMax', 't', '100']);
+    expect(args[args.indexOf(AGENT_SLICE) + 2]).toBe('4');
+  });
+
+  it('keeps the worker when one process in its scope is killed at the ceiling', () => {
+    const args = adoptArgs('u.scope', 99);
+    expect(args.slice(args.indexOf('OOMPolicy'), args.indexOf('OOMPolicy') + 3)).toEqual(['OOMPolicy', 's', 'continue']);
+    expect(args[args.indexOf('u.scope') + 2]).toBe('4');
   });
 
   it('finds the agent slice under the user manager, beside app.slice', () => {
