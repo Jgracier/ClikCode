@@ -45,6 +45,8 @@ interface FakeOptions {
   refreshFails?: boolean;
   /** The first protected-resource lookup (from the challenge) is the only one. */
   noHeaderMetadata?: boolean;
+  /** An SSE-only server: a POST to its stream URL is refused (405); its GET carries the challenge. */
+  sseOnly?: boolean;
 }
 
 /** One server for both roles. Everything it was asked is kept for the asserts. */
@@ -75,6 +77,11 @@ async function fakeOAuthMcp(options: FakeOptions = {}) {
     if (url.pathname === '/mcp') {
       const auth = request.headers.authorization ?? '';
       const token = auth.replace(/^Bearer /, '');
+      if (options.sseOnly && request.method === 'POST' && !valid.has(token)) {
+        await body(request);
+        response.writeHead(405, { allow: 'GET' }).end();
+        return;
+      }
       if (!valid.has(token)) {
         await body(request);
         const metadata = options.noHeaderMetadata ? '' : `, resource_metadata="${base}/.well-known/oauth-protected-resource/mcp"`;
@@ -267,6 +274,14 @@ describe('sign-in', () => {
     };
     await signInMcpServer({ stateDir: dir, spec: fake.spec, ui });
     expect(prompts[1]).toMatch(/different sign-in/);
+  });
+
+  it('signs in to an SSE-only server, whose challenge comes on its GET', async () => {
+    const fake = await fakeOAuthMcp({ sseOnly: true });
+    const spec: HttpSpec = { ...fake.spec, transport: 'sse' };
+    await signInMcpServer({ stateDir: dir, spec, ui: browserUi() });
+    expect(fake.log.slice(0, 2)).toEqual(['POST /mcp', 'GET /mcp']);
+    expect((await readMcpOAuth(dir, spec.name, spec.url))?.tokens?.accessToken).toBe('at-1');
   });
 
   it('uses a configured client id where the server registers none', async () => {

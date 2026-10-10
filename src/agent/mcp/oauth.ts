@@ -33,6 +33,7 @@ import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { atomicWriteFile } from '../../session/store/files.js';
 import type { McpServerSpec } from './config.js';
+import { mcpChallenge } from '../../harness/mcp-sign-in.js';
 
 type Fetch = typeof fetch;
 type HttpSpec = Extract<McpServerSpec, { transport: 'http' | 'sse' }>;
@@ -407,18 +408,6 @@ function listen(server: Server, port: number): Promise<number> {
   });
 }
 
-/** The unauthenticated first request: its challenge starts discovery. */
-async function challengeOf(spec: HttpSpec, fetchImpl: Fetch): Promise<{ status: number; challenge: string | null }> {
-  const response = await fetchImpl(spec.url, {
-    method: 'POST',
-    headers: { ...spec.headers, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'clikcode', version: '1' } } }),
-    signal: AbortSignal.timeout(15_000),
-  });
-  await response.body?.cancel().catch(() => undefined);
-  return { status: response.status, challenge: response.headers.get('www-authenticate') };
-}
-
 /** Sign in to one server: discover, register (or use the configured client),
  * authorize with PKCE, and store the tokens. Throws with a reason the user
  * can act on; cancelled when `ui.signal` aborts. */
@@ -426,7 +415,8 @@ export async function signInMcpServer(options: McpSignInOptions): Promise<void> 
   const { stateDir, spec, ui } = options;
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now ?? Date.now;
-  const { status, challenge } = await challengeOf(spec, fetchImpl);
+  // The unauthenticated first request (POST, or GET for an SSE-only server): its challenge starts discovery.
+  const { status, challenge } = await mcpChallenge(spec.url, { headers: spec.headers, fetchImpl, timeoutMs: 15_000, clientName: 'clikcode' });
   if (status !== 401 && status !== 403 && !spec.oauth && !parseWwwAuthenticate(challenge).params.resource_metadata) {
     throw new Error(`${spec.name} does not ask for a sign-in (it answered HTTP ${status})`);
   }

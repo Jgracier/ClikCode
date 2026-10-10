@@ -47,30 +47,39 @@ export function signInFromResponse(status: number, wwwAuthenticate: string | nul
   return (status === 401 || status === 403) && !!wwwAuthenticate?.trim() ? 'sign-in' : 'open';
 }
 
-/** Asks the server, unauthenticated, the first thing every MCP client asks. */
-export async function probeRemoteMcp(url: string, fetchImpl: Fetch = fetch, timeoutMs = PROBE_TIMEOUT_MS): Promise<McpSignInAnswer> {
+/** The server's answer to the first thing every MCP client asks, sent without a credential: its
+ * status and its `WWW-Authenticate` challenge. The one probe for "does this server want a
+ * sign-in" -- provisioning (probeRemoteMcp) and the sign-in itself (agent/mcp/oauth.ts) both ask
+ * it. `headers` are the entry's own (an API key it already sends). */
+export async function mcpChallenge(url: string, options: {
+  headers?: Readonly<Record<string, string>>; fetchImpl?: Fetch; timeoutMs?: number; clientName?: string;
+} = {}): Promise<{ status: number; challenge: string | null }> {
+  const fetchImpl = options.fetchImpl ?? fetch;
   const ask = async (init: RequestInit): Promise<{ status: number; challenge: string | null }> => {
-    const response = await fetchImpl(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(timeoutMs) });
+    const response = await fetchImpl(url, { ...init, redirect: 'follow', signal: AbortSignal.timeout(options.timeoutMs ?? PROBE_TIMEOUT_MS) });
     const result = { status: response.status, challenge: response.headers.get('www-authenticate') };
     await response.body?.cancel().catch(() => undefined);
     return result;
   };
+  const posted = await ask({
+    method: 'POST',
+    headers: { ...options.headers, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: options.clientName ?? 'clikcode-sign-in-check', version: '1' } },
+    }),
+  });
+  // An SSE-only server refuses a POST to its stream URL; its GET is the
+  // request a client would make first.
+  if (posted.status === 404 || posted.status === 405) return ask({ method: 'GET', headers: { ...options.headers, accept: 'text/event-stream' } });
+  return posted;
+}
+
+/** Asks the server, unauthenticated, the first thing every MCP client asks. */
+export async function probeRemoteMcp(url: string, fetchImpl: Fetch = fetch, timeoutMs = PROBE_TIMEOUT_MS): Promise<McpSignInAnswer> {
   try {
-    const posted = await ask({
-      method: 'POST',
-      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'initialize',
-        params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'clikcode-sign-in-check', version: '1' } },
-      }),
-    });
-    // An SSE-only server refuses a POST to its stream URL; its GET is the
-    // request a client would make first.
-    if (posted.status === 404 || posted.status === 405) {
-      const got = await ask({ method: 'GET', headers: { accept: 'text/event-stream' } });
-      return signInFromResponse(got.status, got.challenge);
-    }
-    return signInFromResponse(posted.status, posted.challenge);
+    const { status, challenge } = await mcpChallenge(url, { fetchImpl, timeoutMs });
+    return signInFromResponse(status, challenge);
   } catch {
     return 'unknown';
   }
