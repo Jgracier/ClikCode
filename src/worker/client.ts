@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
 import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
 import { processAlive } from '../harness/transport/process-group.js';
+import { ensureSessionOnDisk } from '../session/blank.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
@@ -239,7 +240,13 @@ export class WorkerClient extends EventEmitter {
   }
 
   static async attach(sessionId: string): Promise<WorkerClient> {
-    return WorkerClient.connectTo((await usableWorker(sessionId)) ?? await spawnSessionWorker(sessionId));
+    const running = await usableWorker(sessionId);
+    if (running) return WorkerClient.connectTo(running);
+    // The worker is another process and reads the chat from disk. A new
+    // chat is a draft in this one until it is used, and starting its worker
+    // is using it: one started first found nothing and crashed.
+    await ensureSessionOnDisk(sessionId);
+    return WorkerClient.connectTo(await spawnSessionWorker(sessionId));
   }
 
   /** The session's worker if one is already running; never starts one. A

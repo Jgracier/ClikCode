@@ -101,7 +101,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const state = await readState({ transcripts: [sessionId] });
   const session = state.sessions.find((item) => item.id === sessionId);
-  if (!session) throw new Error(`AI session "${sessionId}" was not found`);
+  // Deleted (or never stored) before this worker got here: nothing to run,
+  // which is not a crash.
+  if (!session) { lifecycle('worker.no-session'); return; }
 
   // Two windows that both found no worker each spawn one: the second to get
   // here exits, and the spawning window finds the first by its record.
