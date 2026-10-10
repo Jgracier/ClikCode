@@ -68,7 +68,7 @@ export async function interactivePermissionPicker(rl: HarnessPrompter, id: strin
   const supported = harness || isClikCodeAgent(session) ? sessionPermissionModes(session, harness) : VALID_PERMISSION_MODES;
   if (!supported.length) throw new Error(`${harness?.displayName ?? 'This provider'} does not map ClikCode's permission modes to a real flag.`);
   const selected = await chooseOption(rl, 'Choose permissions', supported.map((value) => ({
-    label: value[0].toUpperCase() + value.slice(1), detail: `· ${descriptions[value]}${value === current ? ' · current' : ''}`, value,
+    label: value[0].toUpperCase() + value.slice(1), detail: `${value === current ? '· current ' : ''}· ${descriptions[value]}`, value,
   })));
   if (selected) { await applyToChat(id, 'permissions', selected); rl.notice?.(`Permissions set to ${selected[0]!.toUpperCase()}${selected.slice(1)}`); }
 }

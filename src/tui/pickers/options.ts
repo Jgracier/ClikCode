@@ -98,7 +98,7 @@ async function harnessOptionPickerOnce(rl: HarnessPrompter, id: string): Promise
       : 'off';
   } else if (option.values?.length) {
     raw = await chooseOption(rl, option.label, [
-      { label: 'Default', detail: `· ${harness.displayName} decides${current(option) === undefined ? ' · current' : ''}`, value: 'default' },
+      { label: 'Default', detail: `${current(option) === undefined ? '· current ' : ''}· ${harness.displayName} decides`, value: 'default' },
       ...option.values.map((entry) => ({ label: entry, detail: current(option) === entry ? '· current' : undefined, value: entry })),
     ]);
   } else {

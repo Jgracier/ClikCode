@@ -18,7 +18,7 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
   // The Gateway takes a level with every step; a model that does not reason ignores it.
   const decides = effort.gateway ? 'the model decides' : `${harness?.displayName ?? 'the harness'} decides`;
   const selected = await chooseOption(rl, 'Reasoning effort', [
-    { label: 'Default', detail: `· ${decides}${effort.current ? '' : ' · current'}`, value: 'default' },
+    { label: 'Default', detail: `${effort.current ? '' : '· current '}· ${decides}`, value: 'default' },
     ...effort.choices.map((value) => ({
       label: settingLabel(value),
       detail: value === effort.current ? '· current' : effort.gateway && value === 'none' ? '· least reasoning the model allows' : undefined,

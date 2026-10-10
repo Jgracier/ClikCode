@@ -58,4 +58,9 @@ describe('the panel band', () => {
     expect(fitHint('esc close · ↑↓ scroll · enter run', 22)).toBe('esc close · ↑↓ scroll');
     expect(fitHint('esc close', 5)).toBe('esc …');
   });
+
+  it('drops a count before any key', () => {
+    expect(fitHint('9 total · ↑↓ move · enter choose · esc close', 36)).toBe('↑↓ move · enter choose · esc close');
+    expect(fitHint('9 total · ↑↓ move · enter choose · esc close', 80)).toBe('9 total · ↑↓ move · enter choose · esc close');
+  });
 });

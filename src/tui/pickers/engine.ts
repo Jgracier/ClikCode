@@ -17,11 +17,12 @@ import { selectProviderConversation } from './conversation.js';
  * the value is the provider's id, as the editor's `choose` takes it. */
 export function providerPickerOptions(rows: readonly IdeProvider[]): PickerOption<string>[] {
   return rows.map((row) => {
-    const current = row.current ? ' · current' : '';
-    if (row.kind === 'gateway') return { label: row.name, detail: `· ${row.signedIn ? 'connected' : 'sign in with OAuth'}${current}`, value: row.id };
-    if (row.kind === 'clikcode-local') return { label: row.name, detail: `· local models on this machine${current}`, value: row.id };
+    // First, so a narrow screen cuts the description, never "current".
+    const current = row.current ? '· current ' : '';
+    if (row.kind === 'gateway') return { label: row.name, detail: `${current}· ${row.signedIn ? 'connected' : 'sign in with OAuth'}`, value: row.id };
+    if (row.kind === 'clikcode-local') return { label: row.name, detail: `${current}· local models on this machine`, value: row.id };
     const install = row.install === 'ready' ? `installed${row.version ? ` ${row.version}` : ''}` : row.install === 'auto' ? 'installs when chosen' : 'install it yourself';
-    return { label: row.name, detail: `· ${install} · ${row.integration}${current}`, value: row.id };
+    return { label: row.name, detail: `${current}· ${install} · ${row.integration}`, value: row.id };
   });
 }
 

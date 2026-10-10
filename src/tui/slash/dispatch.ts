@@ -232,7 +232,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       // runs does from now on, in every conversation.
       const current = sendModeOf(state.globalSettings);
       const chosen = await chooseOption(rl, 'Messages typed mid-turn', SEND_MODES.map((mode) => ({
-        label: mode[0]!.toUpperCase() + mode.slice(1), detail: `· ${SEND_MODE_DETAIL[mode]}${mode === current ? ' · current' : ''}`, value: mode,
+        label: mode[0]!.toUpperCase() + mode.slice(1), detail: `${mode === current ? '· current ' : ''}· ${SEND_MODE_DETAIL[mode]}`, value: mode,
       })), undefined, { startAt: current });
       if (!chosen) return {};
       await viaHeadless(`/send ${chosen}`);
