@@ -75,6 +75,13 @@ describe('slash registry', () => {
     expect(resolveSlashCommand('fast')!.availability(onGateway, undefined).available).toBe(true);
   });
 
+  it('offers /sandbox only where ClikCode\'s own agent runs the commands', () => {
+    const sandbox = resolveSlashCommand('sandbox')!;
+    expect(sandbox.availability(session({ route: 'gateway', nativeHarness: undefined }), undefined).available).toBe(true);
+    expect(sandbox.availability(session({ route: 'clikcode-local', nativeHarness: undefined }), undefined).available).toBe(true);
+    expect(sandbox.availability(session(), harness()).available).toBe(false);
+  });
+
   const VENDOR_EXTRAS = {
     managers: [{ name: 'mcp', label: 'MCP servers' }],
     native: [{ name: 'rewind', description: 'rewind the vendor conversation' }],

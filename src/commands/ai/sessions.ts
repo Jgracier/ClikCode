@@ -29,6 +29,7 @@ import { normalizeModelWord, optionForHarness, parseHarnessOption, sessionPermis
 import { turnBackendForAccount } from '../../turn/account-routing.js';
 import { newConversationSession } from './conversations.js';
 import { isAiHarnessRoute, isClikCodeAgent, ROUTE_CHOICES_TEXT } from '../../session/route.js';
+import { parseSandboxMode } from '../../agent/sandbox.js';
 import { forgetNativeThread } from '../../session/native-thread.js';
 import { forceStoreSession } from '../../session/ephemeral.js';
 
@@ -388,8 +389,10 @@ export const aiSessionClose = (id: string): Promise<void> => endSession(id, 'clo
 /** Save-and-leave lifecycle used by /exit. */
 export const aiSessionLeave = (id: string): Promise<void> => endSession(id, 'leave');
 
-export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; agent?: string; effort?: string; permissions?: AiHarnessPermissionMode; nativeSession?: string }): Promise<void> {
+export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute; account?: string; provider?: string; model?: string; agent?: string; effort?: string; permissions?: AiHarnessPermissionMode; nativeSession?: string; sandbox?: string }): Promise<void> {
   if (options.route !== undefined && !isAiHarnessRoute(options.route)) throw new Error(ROUTE_CHOICES_TEXT);
+  const sandbox = options.sandbox === undefined ? undefined : parseSandboxMode(options.sandbox);
+  if (options.sandbox !== undefined && !sandbox) throw new Error('sandbox must be off or workspace');
   if (options.permissions !== undefined && !VALID_PERMISSION_MODES.includes(options.permissions)) throw new Error('permissions must be ask, bypass, or auto');
   const state = await readState({ transcripts: [id] });
   const index = state.sessions.findIndex((item) => item.id === id);
@@ -452,6 +455,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     const choices = (await effortChoicesFor(selectedHarness, effortAccount, model ?? current.model)).values;
     parseHarnessOption(choices.length ? { ...effortOption, values: choices } : effortOption, options.effort);
   }
+  if (sandbox && !isClikCodeAgent({ route: effectiveRoute })) throw new Error("The sandbox applies to ClikCode's own agent (the gateway or clikcode-local route).");
   if (options.permissions && !sessionPermissionModes({ route: effectiveRoute }, selectedHarness).includes(options.permissions)) {
     if (!selectedHarness) throw new Error('Choose a provider before setting permissions.');
     throw new Error(`${selectedHarness.displayName} does not support ${options.permissions} permissions.`);
@@ -466,9 +470,11 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     ...(options.model !== undefined ? { model } : {}),
     ...(options.effort ? { effort: effectiveRoute === 'gateway' && options.effort === 'default' ? GATEWAY_DEFAULT_EFFORT : options.effort } : {}),
     ...(options.permissions ? { permissionMode: options.permissions } : {}),
+    ...(sandbox === 'workspace' ? { sandbox } : {}),
     ...(options.nativeSession !== undefined ? { nativeSessionId: options.nativeSession.trim() } : {}),
     updatedAt: new Date().toISOString(),
   };
+  if (sandbox === 'off') delete next.sandbox;
   if (effectiveRoute !== 'gateway') {
     delete next.gatewayAgentId;
     delete next.gatewayAgentThreadId;

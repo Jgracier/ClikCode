@@ -10,6 +10,9 @@ import {
 import { bashTool } from './tools/bash.js';
 import { disposeSessionState, sessionState } from './session-state.js';
 import type { ToolContext } from './tool-contract.js';
+import { runGatewayHarnessTurn } from './run-turn.js';
+import { ScriptedModelClient } from './testing.js';
+import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
 const shell = { file: '/bin/bash', args: ['-c', 'echo hi'] };
 const writable = ['/work', '/tmp', '/home/u/.cache'];
@@ -148,5 +151,41 @@ describe.skipIf(!hasBwrap || outsideIsWritable)('bwrap, for real', () => {
     expect(existsSync(join(dir, 'bg.txt'))).toBe(true);
     expect(existsSync(outside)).toBe(false);
     disposeSessionState(dir, ctx.session.sessionId, 'test over');
+  });
+});
+
+describe.skipIf(!hasBwrap || outsideIsWritable)('the sandbox in a turn', () => {
+  let dir: string;
+  let outside: string;
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'clikcode-sandbox-turn-'));
+    outside = join(outsideRoot, `.clikcode-sandbox-test-${process.pid}-${Math.random().toString(36).slice(2)}`);
+  });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); await rm(outside, { force: true }); });
+
+  const turn = async (permissionMode: AiHarnessPermissionMode) => {
+    const asked: string[] = [];
+    const client = new ScriptedModelClient([{ toolCalls: [{ id: 'b', name: 'bash', args: { command: `touch ${outside}` } }] }, { text: 'ok' }]);
+    await runGatewayHarnessTurn({
+      sessionId: `sandbox-turn-${Math.random()}`, cwd: dir, stateDir: dir, homeDir: dir, userConfigDir: dir, prompt: 'go',
+      permissionMode, modelClient: client, sandbox: 'workspace',
+      onApproval: async (title) => { asked.push(title); return true; },
+    });
+    const sent = client.requests[1]!.items.at(-1)!;
+    return { asked, result: sent.type === 'tool_result' ? sent.output : '' };
+  };
+
+  it('in ask mode, offers to run the refused command outside the sandbox', async () => {
+    const { asked, result } = await turn('ask');
+    expect(asked).toEqual(['Approve command', 'Run outside the sandbox?']);
+    expect(result).toMatch(/^\[sandbox: refused inside the sandbox; run again outside it/);
+    expect(existsSync(outside)).toBe(true);
+  });
+
+  it('in bypass mode, asks nothing and gives the model the hint', async () => {
+    const { asked, result } = await turn('bypass');
+    expect(asked).toEqual([]);
+    expect(result).toMatch(/Read-only file system[\s\S]*\[sandbox: this looks like the workspace sandbox/);
+    expect(existsSync(outside)).toBe(false);
   });
 });
