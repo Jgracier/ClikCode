@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
 import { harnessInstallRoute, manualInstallCommand } from './install-route.js';
 import { expandInstallDir, harnessInstallDirs, installStepFor, npmPrefixBinDir, withPathDirs } from './install-locations.js';
-import { assertInstallerUrl, ensureHarnessInstalled, isPermissionFailure, npmPrefixWritable, withInstallLock } from './install.js';
+import { assertInstallerUrl, ensureHarnessInstalled, isPermissionFailure, npmPrefixWritable, terminalInstallReporter, withInstallLock } from './install.js';
 
 const PLATFORMS: readonly NodeJS.Platform[] = ['linux', 'darwin', 'win32'];
 
@@ -211,5 +211,39 @@ describe('withInstallLock deadline', () => {
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
+  });
+});
+
+describe('an install on the terminal\'s band', () => {
+  function fakeTerminal(label?: string) {
+    const calls: string[] = [];
+    let current = label;
+    return {
+      calls,
+      terminal: {
+        waitingLabel: () => current,
+        startWaiting: (text: string) => { calls.push(`start ${text}`); current = text; },
+        stopWaiting: () => { calls.push('stop'); current = undefined; },
+        updateWaitingLabel: (text: string) => { calls.push(`label ${text}`); current = text; },
+        notice: (text: string) => { calls.push(`notice ${text}`); },
+      },
+    };
+  }
+
+  it('starts its wait once: a second start only moves the label, and the outcome is a notice', () => {
+    const { calls, terminal } = fakeTerminal();
+    const reporter = terminalInstallReporter(terminal);
+    reporter.start('waiting for another ClikCode to finish installing Grok…');
+    reporter.start('installing Grok…');
+    reporter.done('Installed Grok.');
+    expect(calls).toEqual(['start waiting for another ClikCode to finish installing Grok…', 'label installing Grok…', 'stop', 'notice Installed Grok.']);
+  });
+
+  it('borrows a band already up and gives its label back', () => {
+    const { calls, terminal } = fakeTerminal('thinking');
+    const reporter = terminalInstallReporter(terminal);
+    reporter.start('installing Grok…');
+    reporter.failed('Could not install Grok');
+    expect(calls).toEqual(['label installing Grok…', 'label thinking']);
   });
 });

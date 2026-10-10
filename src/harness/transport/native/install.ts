@@ -33,6 +33,7 @@ import { dirname, join } from 'node:path';
 import type { AiHarnessInstallStep } from '../../definition.js';
 import { stateDirectory } from '../../../session/store/paths.js';
 import { TERMINAL } from '../../../tui/active-terminal.js';
+import type { TerminalHarnessPrompter } from '../../../tui/prompter.js';
 import { installFailureTail, startSpinner } from '../../install-progress.js';
 import { spawnPortable as spawn, terminatePortable } from '../spawn.js';
 import { resolveBinaryPath } from './binary.js';
@@ -61,19 +62,43 @@ export function setHarnessInstallReporter(reporter: HarnessInstallReporter | und
 function defaultReporter(): HarnessInstallReporter {
   if (processReporter) return processReporter;
   const terminal = TERMINAL.active;
-  if (terminal) {
-    return {
-      start: (label) => terminal.startWaiting(label),
-      done: () => terminal.stopWaiting(),
-      failed: () => terminal.stopWaiting(),
-    };
-  }
+  if (terminal) return terminalInstallReporter(terminal);
   let spinner: ReturnType<typeof startSpinner> | undefined;
   const write = (text: string): void => { process.stderr.write(text); };
   return {
     start: (label) => { spinner?.stop(); spinner = startSpinner(label, write, process.stderr.isTTY); },
     done: (message) => { spinner?.stop(message); spinner = undefined; },
     failed: () => { spinner?.stop(); spinner = undefined; },
+  };
+}
+
+/** An install on the terminal's waiting band. The wait starts once: a
+ * second `start` (the wait for another process's install giving way to
+ * this one's) only moves the label, which a fresh start set back to 0s; a
+ * band already up -- the turn's -- is borrowed and given back. The outcome
+ * is a notice, as the editor shows it. */
+export function terminalInstallReporter(
+  terminal: Pick<TerminalHarnessPrompter, 'startWaiting' | 'stopWaiting' | 'updateWaitingLabel' | 'waitingLabel' | 'notice'>,
+): HarnessInstallReporter {
+  let started = false;
+  let borrowed: string | undefined;
+  const end = (): void => {
+    if (!started) return;
+    started = false;
+    if (borrowed !== undefined) terminal.updateWaitingLabel(borrowed);
+    else terminal.stopWaiting();
+  };
+  return {
+    start: (label) => {
+      if (!started) {
+        started = true;
+        borrowed = terminal.waitingLabel();
+        if (borrowed === undefined) { terminal.startWaiting(label); return; }
+      }
+      terminal.updateWaitingLabel(label);
+    },
+    done: (message) => { end(); terminal.notice(message); },
+    failed: end,
   };
 }
 
