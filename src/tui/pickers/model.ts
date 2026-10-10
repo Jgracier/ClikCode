@@ -82,10 +82,11 @@ export function modelRow(
   const bare = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
   const respells = name !== undefined && [shown, shown.slice(shown.indexOf('/') + 1)].some((id) => bare(id) === bare(name));
   const parts = [
+    // First: a narrow screen cuts the end of a row, and this is what it is for.
+    model === current ? 'current' : undefined,
     name && !respells ? name : undefined,
     modelSettingsDetail(model),
     free?.has(model) ? 'free plan' : undefined,
-    model === current ? 'current' : undefined,
     model === current && providerConfigured ? 'provider configured' : undefined,
   ].filter((part): part is string => Boolean(part));
   return { label: shown, detail: parts.length ? `· ${parts.join(' · ')}` : undefined, value: model };
@@ -199,14 +200,14 @@ type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: strin
 export function gatewayPickerRows(list: GatewayModelList, agents: readonly GatewayAgent[], current: string | null, currentAgent?: string): PickerOption<GatewayChoice>[] {
   return [
     { label: currentAgent ? 'Agent default' : 'Automatic', detail: currentAgent
-      ? `· use this agent's configured pin or router${current ? '' : ' · current'}`
-      : `· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}${current ? '' : ' · current'}`,
+      ? `${current ? '' : '· current '}· use this agent's configured pin or router`
+      : `${current ? '' : '· current '}· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}`,
       value: { kind: 'model' as const, id: 'auto' }, group: 'Models' },
     ...list.models.map((model) => {
       const price = gatewayModelDetail(model);
       return {
         label: gatewayModelLabel(model),
-        detail: `${price ? `· ${price}` : ''}${model.id === current ? ' · current' : ''}`,
+        detail: [model.id === current ? '· current' : '', price ? `· ${price}` : ''].filter(Boolean).join(' '),
         value: { kind: 'model' as const, id: model.id },
         group: 'Models',
       };

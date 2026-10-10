@@ -12,6 +12,10 @@ import { keyHintFor } from '../../harness/protocol/wording.js';
  * screen shows fewer keys, never half of one. */
 export function fitHint(hint: string, width: number): string {
   const parts = hint.split(' · ');
+  // A count ("9 total") goes first: it says the least, and a key it kept
+  // on screen (esc) was dropped before it.
+  const count = parts.findIndex((part) => /^\d+ total$/.test(part));
+  if (count >= 0 && parts.length > 1 && terminalCellWidth(parts.join(' · ')) > width) parts.splice(count, 1);
   while (parts.length > 1 && terminalCellWidth(parts.join(' · ')) > width) parts.pop();
   return visibleSlice(parts.join(' · '), Math.max(1, width));
 }

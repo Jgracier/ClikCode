@@ -1105,6 +1105,17 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'settings': ['❯ Account', 'Swarm']},
         'snap_lacks': {'closed': ['› /', 'Swarm', '/settings'], 'direct': ['› /', 'Grok Build accounts']},
     },
+    # At 70 columns the row in force still says "current" (a long
+    # description used to push it off), and the hint keeps "esc close"
+    # (it dropped before the "N total" count).
+    'current-and-esc-at-70-cols': {
+        'cols': 70,
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '/permissions'), ('wait_for', 'Choose permissions', 10), ('settle', 1), ('snap', 'permissions'),
+                  ('keys', '\x1b'), ('settle', 1),
+                  ('type', '/send'), ('wait_for', 'Messages typed mid-turn', 10), ('settle', 1), ('snap', 'send'), ('keys', '\x1b'), ('settle', 1)],
+        'watch': [], 'snap_contains': {'permissions': ['· current', 'esc close'], 'send': ['· current', 'esc close']},
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],
