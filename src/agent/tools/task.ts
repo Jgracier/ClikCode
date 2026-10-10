@@ -3,7 +3,8 @@
  * context pays for the conclusion unless it needs the details.
  *
  * Read-only calls can run in parallel. Coding subagents use the separate
- * `agent` tool, which runs serially and shares the parent's undo checkpoint. */
+ * `agent` tool, which runs serially and shares the parent's undo checkpoint
+ * unless it is isolated in its own git worktree. */
 import { defineTool } from '../tool-contract.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 
