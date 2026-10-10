@@ -6,7 +6,31 @@ import { formatToolRow } from '../../harness/protocol/tools.js';
 import { errorsAfterEdit } from './lsp.js';
 
 export interface EditOperation { old_string: string; new_string: string; replace_all?: boolean }
-interface EditFileArgs extends EditOperation { path: string }
+interface EditFileArgs extends EditOperation { path?: string; paths?: string[] }
+
+/** The files one edit_file call changes: `paths` (the same replacement in
+ * several files, a rename) or the single `path`. */
+function targetsOf(args: EditFileArgs): string[] {
+  if (Array.isArray(args.paths) && args.paths.length) return [...new Set(args.paths.filter((entry) => typeof entry === 'string'))];
+  return typeof args.path === 'string' ? [args.path] : [];
+}
+
+/** Every target prepared before any is written: one bad file changes none. */
+async function prepareTargets(args: EditFileArgs, ctx: ToolContext): Promise<PreparedEdit[]> {
+  const targets = targetsOf(args);
+  if (!targets.length) throw new ToolInputError('Give path (one file) or paths (several files).');
+  if (targets.length === 1) return [await prepareEdits(targets[0], [args], ctx)];
+  const prepared: PreparedEdit[] = [];
+  for (const target of targets) {
+    try {
+      prepared.push(await prepareEdits(target, [args], ctx));
+    } catch (error) {
+      if (error instanceof ToolInputError) throw new ToolInputError(`${target}: ${error.message} No file was changed.`);
+      throw error;
+    }
+  }
+  return prepared;
+}
 
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
@@ -60,25 +84,32 @@ export async function commitEdit(prepared: PreparedEdit, ctx: ToolContext): Prom
 export const editFileTool = defineTool<EditFileArgs>({
   name: 'edit_file',
   class: 'write',
-  description: 'Replace an exact string in a file. old_string must match the file verbatim (whitespace included, without the line-number prefix of read_file or grep output) and be unique unless replace_all is true. Text you have seen in read_file or grep output is enough; no separate read is needed. Keep old_string as small as uniqueness allows.',
+  description: 'Replace an exact string in a file. old_string must match the file verbatim (whitespace included, without the line-number prefix of read_file or grep output) and be unique unless replace_all is true. Text you have seen in read_file or grep output is enough; no separate read is needed. Keep old_string as small as uniqueness allows. For the same replacement in several files (a rename), give paths instead of path: one call, every file or none.',
   parameters: {
-    type: 'object', additionalProperties: false, required: ['path', 'old_string', 'new_string'],
+    type: 'object', additionalProperties: false, required: ['old_string', 'new_string'],
     properties: {
       path: { type: 'string' },
+      paths: { type: 'array', items: { type: 'string' }, minItems: 1, description: 'Several files, each changed the same way, instead of path.' },
       old_string: { type: 'string', description: 'Exact text to replace.' },
       new_string: { type: 'string', description: 'Replacement text.' },
       replace_all: { type: 'boolean', description: 'Replace every occurrence instead of requiring a unique match.' },
     },
   },
-  label: (args) => formatToolRow('edit_file', args.path, 'edit'),
-  paths: (args) => [args.path],
+  label: (args) => formatToolRow('edit_file', targetsOf(args).join(', '), 'edit'),
+  paths: (args) => targetsOf(args),
   async preview(args, ctx) {
-    const prepared = await prepareEdits(args.path, [args], ctx);
-    return eventDiff(prepared.before, prepared.after, { path: prepared.real, numbered: true });
+    return (await prepareTargets(args, ctx)).flatMap((prepared) => eventDiff(prepared.before, prepared.after, { path: prepared.real, numbered: true }));
   },
   async run(args, ctx) {
-    const prepared = await prepareEdits(args.path, [args], ctx);
-    await commitEdit(prepared, ctx);
-    return { output: `Edited ${prepared.shown}.${await errorsAfterEdit(prepared.real, ctx)}`, diff: eventDiff(prepared.before, prepared.after, { path: prepared.shown, numbered: true }) };
+    const all = await prepareTargets(args, ctx);
+    let errors = '';
+    for (const prepared of all) {
+      await commitEdit(prepared, ctx);
+      errors += await errorsAfterEdit(prepared.real, ctx);
+    }
+    return {
+      output: `Edited ${all.map((prepared) => prepared.shown).join(', ')}.${errors}`,
+      diff: all.flatMap((prepared) => eventDiff(prepared.before, prepared.after, { path: prepared.shown, numbered: true })),
+    };
   },
 });
