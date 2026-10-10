@@ -107,12 +107,11 @@ export const harnessReplyError = (harness: AiLocalHarnessDefinition, text: strin
 export const maxPromptArgvBytes = (): number => localCatalog().maxPromptArgvBytes;
 export const promptExceedsArgvLimit = (harness: AiLocalHarnessDefinition, prompt: string): boolean => localCatalog().promptExceedsArgvLimit(harness, prompt);
 export const harnessCanRunTurns = (harness: AiLocalHarnessDefinition): boolean =>
-  harness.surface === 'terminal' && Boolean(harness.turn || harness.acp);
+  Boolean(harness.turn || harness.acp);
 
 export const harnessIntegrationLevel = (harness: AiLocalHarnessDefinition): AiHarnessIntegrationLevel => {
   if (harness.integration) return harness.integration;
   return withoutRuntime((router) => router.harnessIntegrationLevel(harness), () => {
-    if (harness.surface === 'editor-extension') return 'editor-only';
     if (harness.transport === 'codex-app-server') return 'native';
     if (harness.transport === 'acp' && harness.acp) return 'structured';
     if (harness.transport === 'text-cli') return 'compatibility';

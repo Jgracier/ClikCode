@@ -39,7 +39,7 @@ afterAll(async () => {
 });
 
 describe('install and version', () => {
-  const spec = { command: 'fakecli', binary: 'fakecli', displayName: 'Fake CLI', surface: 'terminal' as const };
+  const spec = { command: 'fakecli', binary: 'fakecli', displayName: 'Fake CLI' };
 
   it('sees an update at once, not a minute later', async () => {
     await install('fakecli', '1.0.0');
@@ -50,7 +50,7 @@ describe('install and version', () => {
   });
 
   it('sees an install at once, where it had said "not installed"', async () => {
-    const later = { command: 'latecli', binary: 'latecli', displayName: 'Late CLI', surface: 'terminal' as const };
+    const later = { command: 'latecli', binary: 'latecli', displayName: 'Late CLI' };
     expect((await inspectNativeHarnessForPicker(later)).installed).toBe(false);
     await install('latecli', '1.0.0');
     expect((await inspectNativeHarnessForPicker(later)).installed).toBe(true);

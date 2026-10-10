@@ -8,7 +8,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnessLine(...line).response;
 
 const harness = (command: string, output: 'text' | 'json' | 'json-lines' = 'json-lines'): AiLocalHarnessDefinition => ({
-  command, provider: command, displayName: command, surface: 'terminal', localAuth: ['vendor-cli'], binary: command,
+  command, provider: command, displayName: command, localAuth: ['vendor-cli'], binary: command,
   parser: AI_LOCAL_HARNESSES.find((entry) => entry.command === command)?.parser,
   turn: { startArgv: [], output },
 });
@@ -115,7 +115,7 @@ const GENERIC_SAMPLE = { type: 'assistant', message: { role: 'assistant', conten
 describe('catalog streaming coverage', () => {
   it('gives every selectable terminal harness a live response path', () => {
     const silent = AI_LOCAL_HARNESSES.filter((entry: AiLocalHarnessDefinition) => {
-      if (entry.surface === 'editor-extension' || !entry.turn) return false;
+      if (!entry.turn) return false;
       // ACP and the codex app-server stream through their own transports and
       // never reach this adapter.
       const transport = harnessTurnTransport(entry);

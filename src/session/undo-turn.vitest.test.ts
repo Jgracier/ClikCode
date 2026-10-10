@@ -344,7 +344,7 @@ describe('/undo stays inside the workspace', () => {
 
 describe('/changes availability', () => {
   const harness = (transport: AiLocalHarnessDefinition['transport']): AiLocalHarnessDefinition => (
-    { command: 'x', provider: 'x', displayName: 'Aider', surface: 'terminal', transport, localAuth: [], binary: 'x' });
+    { command: 'x', provider: 'x', displayName: 'Aider', transport, localAuth: [], binary: 'x' });
   const undo = (route: HarnessSession['route'], definition?: AiLocalHarnessDefinition) => resolveSlashCommand('changes')!.availability({ id: 's', route } as HarnessSession, definition);
 
   it("is available on ClikCode's agent and on harnesses that stream their tool calls", () => {

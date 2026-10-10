@@ -101,7 +101,6 @@ export async function aiDoctor(): Promise<void> {
       command: harness.command,
       displayName: harness.displayName,
       provider: harness.provider,
-      surface: harness.surface,
       binary: harness.binary,
       integration: harnessIntegrationLevel(harness),
       install: installSummary(harness),

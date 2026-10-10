@@ -38,7 +38,6 @@ describe('local harness catalog', () => {
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(localHarnessForCommand(harness.command)).toEqual(harness);
       expect(localHarnessForProvider(harness.provider)).toEqual(harness);
-      expect(harness.surface).toBe('terminal');
     }
   });
 
@@ -67,18 +66,18 @@ describe('local harness catalog', () => {
     expect(localHarnessForCommand('aider')?.session).toEqual({ idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'] });
   });
 
-  it('carries no editor-extension-only product and binds the real terminal binaries', () => {
+  it('carries no editor-extension product and binds the real terminal binaries', () => {
     expect(localHarnessForCommand('roo')).toBeUndefined();
     expect(localHarnessForCommand('windsurf')).toBeUndefined();
     expect(AI_LOCAL_HARNESS_CAPABILITIES.roo).toBeUndefined();
     expect(AI_LOCAL_HARNESS_CAPABILITIES.windsurf).toBeUndefined();
-    expect(localHarnessForCommand('cursor')).toMatchObject({ surface: 'terminal', binary: 'cursor-agent' });
-    expect(localHarnessForCommand('kiro')).toMatchObject({ surface: 'terminal', binary: 'kiro-cli' });
-    expect(localHarnessForCommand('command')).toMatchObject({ surface: 'terminal', binary: 'cmdc' });
+    expect(localHarnessForCommand('cursor')).toMatchObject({ binary: 'cursor-agent' });
+    expect(localHarnessForCommand('kiro')).toMatchObject({ binary: 'kiro-cli' });
+    expect(localHarnessForCommand('command')).toMatchObject({ binary: 'cmdc' });
   });
 
   it('keeps every terminal harness behind a centralized CLI or ACP adapter', () => {
-    for (const harness of AI_LOCAL_HARNESSES.filter((item) => item.surface === 'terminal')) {
+    for (const harness of AI_LOCAL_HARNESSES) {
       expect(Boolean(harness.turn || harness.acp), harness.command).toBe(true);
       if (!harness.turn) expect(harnessTurnTransport(harness), harness.command).toBe('acp');
     }
@@ -570,7 +569,7 @@ describe('custom ACP harnesses', () => {
   it('builds a valid definition with no vendor code', () => {
     const harness = customAcpHarness({ command: '/Claude-ACP', binary: 'claude-code-acp', argv: [], displayName: 'Claude (ACP)' });
     expect(harness).toMatchObject({
-      command: 'claude-acp', provider: 'acp:claude-acp', displayName: 'Claude (ACP)', surface: 'terminal',
+      command: 'claude-acp', provider: 'acp:claude-acp', displayName: 'Claude (ACP)',
       transport: 'acp', integration: 'structured', tier: 'more', parser: 'text', binary: 'claude-code-acp', acp: { argv: [] },
     });
     expect(harness.turn).toBeUndefined();

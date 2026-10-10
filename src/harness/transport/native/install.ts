@@ -124,7 +124,6 @@ const inFlight = new Map<string, Promise<boolean>>();
  */
 export async function ensureHarnessInstalled(spec: InstallSpec, options: { reporter?: HarnessInstallReporter } = {}): Promise<boolean> {
   const route = harnessInstallRoute(spec);
-  if (spec.surface === 'editor-extension' && route.kind === 'none') throw new Error(route.reason);
   if (!(await missingBinaries(spec)).length) return false;
   if (route.kind === 'none') throw new Error(installFailureMessage(spec, route, new Error(route.reason)));
   const running = inFlight.get(spec.command);

@@ -247,7 +247,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       // a terminal handed over, the same as + Add account.
       const [action, name] = args.split(/\s+/);
       const target = (action === 'login' || action === 'add') && name ? localHarnessForCommand(name.toLowerCase()) : undefined;
-      if (target?.surface === 'terminal') {
+      if (target) {
         const added = await addAccountForHarness(rl, target);
         if (added && target.provider === session.provider) await useAddedAccount(id, target, added);
         return {};

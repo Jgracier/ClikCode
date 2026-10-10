@@ -277,7 +277,6 @@ export function integrationLabel(harness: AiLocalHarnessDefinition): string {
     native: 'full integration',
     structured: 'structured integration',
     compatibility: 'basic compatibility',
-    'editor-only': 'editor only',
   } as const)[harnessIntegrationLevel(harness)];
 }
 

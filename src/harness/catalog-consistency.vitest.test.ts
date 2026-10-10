@@ -127,7 +127,6 @@ describe('every declared capability is usable', () => {
 
   it('declares a turn or an ACP contract for every runnable harness', () => {
     for (const h of harnesses) {
-      if (h.surface !== 'terminal') continue;
       expect(Boolean(h.turn || h.acp), `${h.command} cannot run a turn at all`).toBe(true);
     }
   });

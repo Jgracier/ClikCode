@@ -6,7 +6,7 @@ import type { AiHarnessInstallStep, AiHarnessInstaller } from '../../definition.
 import type { NativeHarnessSpec } from './binary.js';
 import { installStepFor } from './install-locations.js';
 
-export type InstallSpec = Pick<NativeHarnessSpec, 'command' | 'binary' | 'displayName' | 'surface' | 'npmPackage'> & {
+export type InstallSpec = Pick<NativeHarnessSpec, 'command' | 'binary' | 'displayName' | 'npmPackage'> & {
   installer?: AiHarnessInstaller;
   acp?: { binary?: string; npmPackage?: string };
 };
@@ -19,9 +19,6 @@ export type HarnessInstallRoute =
 
 /** How this harness installs on this OS -- decided from the catalog alone. */
 export function harnessInstallRoute(spec: InstallSpec, platform: NodeJS.Platform = process.platform): HarnessInstallRoute {
-  if (spec.surface === 'editor-extension') {
-    return { kind: 'none', reason: `${spec.displayName} is an editor extension, not a standalone terminal harness; ClikCode cannot broker it as a native TUI.` };
-  }
   if (spec.npmPackage) return { kind: 'npm', package: spec.npmPackage };
   const step = installStepFor(spec.installer, platform);
   if (step?.kind === 'script') return { kind: 'script', step };

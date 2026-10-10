@@ -97,7 +97,7 @@ describe('who a host may delegate to', () => {
   });
 
   it('can use every terminal harness once that harness has usage left', () => {
-    const terminal = allLocalHarnesses().filter((harness) => harness.surface === 'terminal');
+    const terminal = allLocalHarnesses();
     const accounts = terminal.map((harness) => account({
       id: `acct-${harness.command}`, provider: harness.provider, label: harness.displayName, usage: windows(10),
     }));
