@@ -1,0 +1,1 @@
+The nightly report crashed in production; the log is in `logs/crash.log`. Find the root cause and fix it so that the whole report (`npm run report -- <file>`) works for tickets like the one in the log. A ticket with no tags counts as untagged. Add a regression test, and make sure `npm test` passes.

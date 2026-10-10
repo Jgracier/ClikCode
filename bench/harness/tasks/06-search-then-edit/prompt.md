@@ -1,0 +1,1 @@
+Configuration in this project must be read only through `readEnv` from `src/config/env.ts` (it records which variables the app consults). Find every place under `src/` outside that file that reads the environment directly, in any form, and convert it to `readEnv`, keeping every default and behavior the same. `npm test` must still pass.

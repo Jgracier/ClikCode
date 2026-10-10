@@ -1,0 +1,15 @@
+2026-10-08T02:00:00.112Z INFO  nightly-report starting (input=/srv/tickets/2026-10-07.jsonl)
+2026-10-08T02:00:00.140Z INFO  loaded 4182 tickets
+2026-10-08T02:00:00.141Z DEBUG first ticket {"id":"T-9001","title":"Export button greyed out","tags":["ui"],"openedAt":"2026-10-07"}
+2026-10-08T02:00:00.157Z DEBUG ticket 2211 {"id":"OLD-3307","title":"Migrate legacy invoices","openedAt":"2019-03-14"}
+2026-10-08T02:00:00.158Z ERROR nightly-report failed
+TypeError: Cannot read properties of undefined (reading 'length')
+    at summarize (file:///srv/app/src/report/summary.ts:17:21)
+    at renderReport (file:///srv/app/src/report/summary.ts:24:19)
+    at file:///srv/app/src/cli.ts:5:13
+    at ModuleJob.run (node:internal/modules/esm/module_job:271:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:578:26)
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:116:5)
+
+Node.js v26.7.0
+2026-10-08T02:00:00.160Z INFO  exit code 1
