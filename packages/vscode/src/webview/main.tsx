@@ -17,7 +17,7 @@ import { ConversationMark, HistoryMenu, rowState, useConversations } from './scr
 import { afterVisibleFor, useNow } from './clock';
 import { markMention, SearchBar } from './search';
 import { Sheet, type OpenQuestion } from './sheet';
-import { focusHere, Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
+import { focusHere, Icon, IconButton, KeyList, Logo, Popover, Spinner, type ListRow } from './ui';
 
 const REMEDY: Record<NonNullable<ChatModel['remedy']>, { command: string; label: string }> = {
   'install': { command: 'clikcode.install', label: 'Install ClikCode' },
@@ -377,7 +377,7 @@ function App(): JSX.Element {
       <main class="chat">
         <div class="log" ref={log} onScroll={() => { const element = log.current!; stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>
           <Banner model={model} />
-          {model.connection === 'starting' && !model.sessionId ? <div class="starting inline"><Icon name="loading" spin /><span class="muted">Starting ClikCode…</span></div> : null}
+          {model.connection === 'starting' && !model.sessionId ? <div class="starting inline"><Spinner /><span class="muted">Starting ClikCode…</span></div> : null}
           {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onMenu={showMenu} /> : null}
           {!empty ? <DrawGuard model={model}><Transcript model={model} reveal={searchFocus?.messageIndex} /></DrawGuard> : null}
         </div>
