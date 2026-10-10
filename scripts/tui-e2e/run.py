@@ -1200,6 +1200,16 @@ SCENARIOS = {
         'steps': [('type', '/diff'), ('wait_for', 'Not a git repository', 10), ('settle', 1)],
         'watch': [], 'never': ['Error:', 'unknown option'],
     },
+    # /gateway on a conversation with history moves it, as /provider's
+    # Gateway row does (it refused: "Use the interactive /provider menu");
+    # closing its sign-in choice leaves the conversation where it was.
+    'gateway-moves-existing-conversation': {
+        'turns': [{'blocks': ['Hello there, all good.']}],
+        'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
+                  ('type', '/gateway'), ('wait_for', 'Sign in to ClikDeploy Gateway', 10), ('settle', 0.5),
+                  ('keys', '\x1b'), ('settle', 2)],
+        'watch': [], 'never': ['Use the interactive /provider menu', 'Error:'], 'final_contains': ['Grok Build  •'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

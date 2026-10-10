@@ -13,14 +13,15 @@ import { leaveProvider } from '../../session/native-thread.js';
 import { applyClikCodeAgentSessionPolicy } from '../../commands/ai/sessions.js';
 import { chooseOption } from './choose.js';
 
-async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<void> {
+/** False when the user closed the sign-in choice: nothing moves. */
+async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<boolean> {
   const apiUrl = getApiUrl(config);
-  if (getApiKeyForUrl(config, apiUrl)) return;
+  if (getApiKeyForUrl(config, apiUrl)) return true;
   const provider = await chooseOption(rl, 'Sign in to ClikDeploy Gateway', [
     { label: 'Continue with Google', value: 'google' as const },
     { label: 'Continue with GitHub', value: 'github' as const },
   ]);
-  if (!provider) throw new Error('ClikDeploy Gateway sign-in was cancelled.');
+  if (!provider) return false;
   if (rl instanceof TerminalHarnessPrompter) await rl.suspend();
   try {
     await gatewayLogin(config, { google: provider === 'google', github: provider === 'github', embedded: true });
@@ -28,6 +29,7 @@ async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<vo
     if (rl instanceof TerminalHarnessPrompter) rl.resume();
   }
   if (!getApiKeyForUrl(config, apiUrl)) throw new Error('ClikDeploy OAuth completed without storing a ClikDeploy Gateway credential.');
+  return true;
 }
 
 /** Moving a conversation onto one of the routes that run ClikCode's own
@@ -36,7 +38,7 @@ async function ensureGatewayLogin(config: Conf, rl: HarnessPrompter): Promise<vo
 async function moveToAgentRoute(
   config: Conf, rl: HarnessPrompter, id: string, route: 'gateway' | 'clikcode-local',
 ): Promise<string> {
-  if (route === 'gateway') await ensureGatewayLogin(config, rl);
+  if (route === 'gateway' && !await ensureGatewayLogin(config, rl)) return id;
   const state = await readState({ transcripts: [id] });
   const current = state.sessions.find((item) => item.id === id);
   if (!current) throw new Error(`AI session "${id}" was not found`);
