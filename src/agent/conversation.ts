@@ -5,7 +5,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ConversationItem, ImageInput } from './model-client.js';
 
-/** Images live beside the item, never inside it: a build that predates them
+/** Images (attached to a user message, or shown by a tool such as read_file)
+ * live beside the item, never inside it: a build that predates them
  * loads `item` and hands it to the Gateway, whose schema rejects unknown item
  * fields, so an image inside the item would break that older build's resume. */
 type TranscriptRecord =
@@ -21,13 +22,13 @@ function isImages(value: unknown): value is ImageInput[] {
 
 /** Moves an item's images out to the record level (see TranscriptRecord). */
 function splitImages(item: ConversationItem): { item: ConversationItem; images?: ImageInput[] } {
-  if (item.type !== 'text' || !item.images?.length) return { item };
+  if ((item.type !== 'text' && item.type !== 'tool_result') || !item.images?.length) return { item };
   const { images, ...rest } = item;
   return { item: rest, images: [...images] };
 }
 
 function withImages(item: ConversationItem, images: unknown): ConversationItem {
-  if (item.type !== 'text' || !isImages(images)) return item;
+  if ((item.type !== 'text' && item.type !== 'tool_result') || !isImages(images)) return item;
   // Rebuilt from known fields so nothing but a valid image list is attached.
   return { ...item, images: images.map((image) => ({ mimeType: image.mimeType, data: image.data, ...(typeof image.name === 'string' ? { name: image.name } : {}) })) };
 }

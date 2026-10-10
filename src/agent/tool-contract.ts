@@ -3,7 +3,7 @@
 
 import type { FileCheckpointStore } from './file-checkpoints.js';
 import type { HarnessSessionState } from './session-state.js';
-import type { NetworkSeams, PlanEntry } from './model-client.js';
+import type { ImageInput, NetworkSeams, PlanEntry } from './model-client.js';
 
 export interface ToolContext {
   cwd: string;
@@ -27,6 +27,8 @@ export interface ToolContext {
   outputCap?: number;
   onPlan?(entries: PlanEntry[]): void;
   net?: NetworkSeams;
+  /** The model answering this step can see images (ModelClient.acceptsImages). */
+  acceptsImages?: boolean;
   /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
   runSubagent?(request: { prompt: string; description?: string; model?: string; kind?: 'research' | 'work' }): Promise<ToolRunResult>;
 }
@@ -34,6 +36,8 @@ export interface ToolContext {
 export interface ToolRunResult {
   output: string;
   isError?: boolean;
+  /** Pictures for the model to see with the result; `output` says what they are. */
+  images?: ImageInput[];
   diff?: import('./line-diff.js').FileDiff[];
   /** A finished command's exit code, shown on its row. */
   exitCode?: number;

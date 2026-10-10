@@ -125,7 +125,10 @@ export type ChatMessage =
 
 /** Consecutive user text (a summary followed by a steer, say) is merged into
  * one message, and an assistant's text joins the tool calls that follow it:
- * several chat templates reject two messages of one role in a row. */
+ * several chat templates reject two messages of one role in a row.
+ * A tool message carries text only, so images a tool showed (read_file on a
+ * picture) follow the run of tool messages as one user message, as other
+ * harnesses send them; the calls' results stay together, as the API needs. */
 export function toChatMessages(system: string, items: readonly ConversationItem[], vision: boolean): ChatMessage[] {
   const out: ChatMessage[] = [{ role: 'system', content: system }];
   const pushUser = (text: string, images: readonly ImageInput[] = []): void => {
@@ -143,7 +146,15 @@ export function toChatMessages(system: string, items: readonly ConversationItem[
     out.push(created);
     return created;
   };
+  let toolImages: ImageInput[] = [];
+  const flushToolImages = (): void => {
+    if (!toolImages.length) return;
+    const shown = toolImages;
+    toolImages = [];
+    pushUser(`[${shown.length === 1 ? 'Image' : 'Images'} from the tool results above: ${shown.map((image, index) => image.name ?? `image ${index + 1}`).join(', ')}]`, shown);
+  };
   for (const item of items) {
+    if (item.type !== 'tool_result') flushToolImages();
     if (item.type === 'summary') pushUser(`Summary of the earlier conversation:\n${item.text}`);
     else if (item.type === 'text' && item.role === 'user') pushUser(item.text, item.images);
     else if (item.type === 'text') {
@@ -156,8 +167,10 @@ export function toChatMessages(system: string, items: readonly ConversationItem[
       (message.tool_calls ??= []).push({ id: item.id, type: 'function', function: { name: item.name, arguments: JSON.stringify(item.args) } });
     } else {
       out.push({ role: 'tool', tool_call_id: item.id, content: item.isError ? `Error: ${item.output}` : item.output });
+      if (vision && item.images?.length) toolImages.push(...item.images);
     }
   }
+  flushToolImages();
   // Plain strings where no image is involved: the widest-supported form.
   for (const message of out) {
     if (message.role === 'user' && Array.isArray(message.content) && message.content.every((part) => part.type === 'text')) {
