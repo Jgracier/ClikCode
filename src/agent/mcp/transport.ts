@@ -259,6 +259,9 @@ export class HttpTransport implements McpTransport {
       // of these; the spec's compatibility rule is to try the old GET stream.
       if (message.method === 'initialize' && [400, 404, 405].includes(response.status) && this.spec.transport === 'http') {
         this.mode = 'sse';
+        // Kept for the failure message: when the old transport fails too, the
+        // server's own refusal of the new one is usually the real reason.
+        this.streamableRefusal = `HTTP ${response.status}${text ? `: ${text}` : ''}`;
         return this.sendLegacy(message);
       }
       // A 404 for an established session means the server forgot it; the
@@ -294,6 +297,8 @@ export class HttpTransport implements McpTransport {
   }
 
   private legacyOpening?: Promise<string>;
+  /** The streamable-HTTP answer that sent this connection to the legacy transport. */
+  private streamableRefusal?: string;
 
   /** The old transport: one long GET whose first event says where to POST,
    * and every answer comes back down that same stream. */
@@ -305,8 +310,10 @@ export class HttpTransport implements McpTransport {
         method: 'GET', headers: this.headers({ accept: 'text/event-stream' }), signal: controller.signal,
       });
       if (!response.ok || !response.body) {
-        this.lastError = `HTTP ${response.status}`;
-        throw new McpRequestError(`MCP server ${this.spec.name} did not open an event stream (${this.lastError})`);
+        this.lastError = this.streamableRefusal ? `${this.streamableRefusal} (and HTTP ${response.status} to the legacy event stream)` : `HTTP ${response.status}`;
+        throw new McpRequestError(this.streamableRefusal
+          ? `MCP server ${this.spec.name} answered ${this.lastError}`
+          : `MCP server ${this.spec.name} did not open an event stream (${this.lastError})`);
       }
       return new Promise<string>((resolve, reject) => {
         void this.consumeStream(response.body!, (endpoint) => {

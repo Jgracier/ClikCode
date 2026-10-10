@@ -21,6 +21,7 @@ import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.j
 import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { loadIndex } from '../session/state/index-file.js';
 import { readState } from '../session/state/read.js';
 import { swarmIsOn } from '../swarm/policy.js';
@@ -84,7 +85,13 @@ export async function runGatewayHarnessSessionTurn(
   // The user's MCP servers, the same ones `clikcode mcp add` gave every
   // harness. One that is down is named here rather than silently missing.
   const mcp = await mcpToolsForTurn(stateDir, input.signal, input.mcpServers ?? []);
-  for (const note of mcp.notes) prompter?.activity(note);
+  // Shown on every surface: headless (`send`, a script) has no prompter, and a
+  // note that reached nobody hid a Gateway agent's whole tool server failing.
+  for (const note of mcp.notes) {
+    lifecycle('mcp.note', { session: session.id, note: note.slice(0, 300) });
+    if (prompter) prompter.activity(note);
+    else process.stderr.write(`${note}\n`);
+  }
   // The user's Claude Code tool hooks, so they run whichever lane serves the
   // turn; a workspace's own only once the user trusts it.
   const workspace = session.workspace ?? process.cwd();

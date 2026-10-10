@@ -86,6 +86,35 @@ describe('a headless turn', () => {
     expect(seen).toMatch(/no approver is attached/);
     expect(seen).not.toMatch(/user declined/);
   });
+
+  it('says on stderr that an MCP server it was given could not be reached', async () => {
+    // Live 2026-10-09: a Gateway agent's tool server refused every request
+    // (`?agent=silas` was read as an unknown slice, HTTP 400), the turn ran
+    // without the agent's tools, and the note naming why reached nobody --
+    // a headless turn has no prompter to show it.
+    const { createServer } = await import('node:http');
+    const server = createServer((_req, res) => {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Unknown agent: silas. Valid agent values: remediation' }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const port = (server.address() as { port: number }).port;
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => { written.push(String(chunk)); return true; });
+    try {
+      await runGatewayHarnessSessionTurn({
+        session: session(workspace()), prompt: 'status?',
+        modelClient: new ScriptedModelClient([{ text: 'ok' }]) as never,
+        mcpServers: [{ name: 'silas', transport: 'http', url: `http://127.0.0.1:${port}/mcp?toolmode=deferred&turn=chat` }],
+      });
+    } finally {
+      spy.mockRestore();
+      const { releaseMcp } = await import('../agent/mcp/manager');
+      await releaseMcp();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+    expect(written.join('')).toMatch(/MCP server "silas" is unavailable.*Unknown agent: silas/);
+  });
 });
 
 describe('a titled first reply', () => {
