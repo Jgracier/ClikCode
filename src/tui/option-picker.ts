@@ -135,9 +135,16 @@ export function runOptionPicker<T>(
       const confirmation = keyHintFor('enter', 'choose');
       const selectedOption = visible[selected];
       if (selectedOption?.inline) {
+        // Every key that acts on the row: Enter steps to the next value, Tab
+        // opens its actions. And the list's own layout (headings), so the
+        // rows do not shift sideways as the cursor lands here.
         host.paint(title, renderOptions, selected, '', 0, {
-          capacity, hideCursor: true,
-          hint: `${keyHintFor(`\u2190\u2192 or 1-${selectedOption.inline.choices.length}`, 'choose')} · ${keyHintFor('\u2191\u2193', 'move')} · ${keyHintFor('esc', 'done')}`,
+          capacity, hideCursor: true, headings: true,
+          hint: [
+            keyHintFor(`\u2190\u2192 or 1-${selectedOption.inline.choices.length}`, 'choose'), keyHintFor('enter', 'next'),
+            ...(selectedOption.actions?.length ? [keyHintFor('tab', 'options')] : []),
+            keyHintFor('\u2191\u2193', 'move'), keyHintFor('esc', 'done'),
+          ].join(' · '),
         });
         return;
       }
