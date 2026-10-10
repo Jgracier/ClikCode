@@ -125,6 +125,9 @@ export interface CanonicalRecord {
   plan?: HarnessPlanEntry[];
   /** Plan entries not completed. */
   openTodos: HarnessPlanEntry[];
+  /** Set only on a record about to be handed over (summarizedRecord): the
+   * summary standing for the `through` turns before `turns`. */
+  summary?: { text: string; through: number; source: string };
 }
 
 /** A row's verb and target, from formatToolRow's shape (`Verb target`,

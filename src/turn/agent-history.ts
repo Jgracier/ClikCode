@@ -16,6 +16,7 @@ import { ConversationStore } from '../agent/conversation.js';
 import type { ConversationItem } from '../agent/model-client.js';
 import { canonicalRecord, markProviderBoundaries, withProviderNote, type CanonicalTurn } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
+import { conversationSummary, validSummary, type SummarySources } from '../session/conversation-summary.js';
 import { fitRecord, nativeThreadBudget } from './thread-start.js';
 
 /** One turn as the two messages the agent's memory holds. */
@@ -51,7 +52,9 @@ export function agentItemsFromTurn(turn: CanonicalTurn): ConversationItem[] {
  * agent's own turns carry (`gateway:gateway`, `clikcode-local:…`). */
 export async function seedAgentConversation(input: {
   session: HarnessSession; stateDir: string; contextWindow?: number; displayName?: (harness: string) => string | undefined;
-}): Promise<{ total: number; seeded: number }> {
+  /** Where summaries other harnesses made of this conversation are read. */
+  summaries?: SummarySources;
+}): Promise<{ total: number; seeded: number; summarized?: number; summaryFrom?: string }> {
   const { session } = input;
   // The turn about to run is not a turn yet: only what came before it.
   const record = canonicalRecord({ ...session, pendingTurn: undefined });
@@ -65,8 +68,21 @@ export async function seedAgentConversation(input: {
   else through ??= total;
   through = Math.min(through, total);
   if (through >= total) return { total, seeded: 0 };
-  const missing = { ...record, turns: record.turns.slice(through) };
   const receiving = `${session.route}:${session.provider ?? ''}`;
+  // A summary another harness (or this agent, earlier) made of turns this
+  // memory does not hold goes in as the agent's own compaction: what the
+  // agent would have after compacting them itself, not a retelling of them.
+  const summary = input.summaries
+    ? validSummary(await conversationSummary(session, record, input.summaries).catch(() => undefined), record)
+    : undefined;
+  if (summary && summary.through > through) {
+    const kept = { ...record, turns: record.turns.slice(summary.through) };
+    const room = nativeThreadBudget(input.contextWindow) - Buffer.byteLength(summary.text, 'utf8');
+    const fitted = fitRecord(markProviderBoundaries(kept, receiving, input.displayName), room);
+    await store.appendCompaction(summary.text, fitted.record.turns.flatMap(agentItemsFromTurn));
+    return { total, seeded: total - through, summarized: summary.through, summaryFrom: summary.source };
+  }
+  const missing = { ...record, turns: record.turns.slice(through) };
   const fitted = fitRecord(markProviderBoundaries(missing, receiving, input.displayName), nativeThreadBudget(input.contextWindow));
   await store.append(...fitted.record.turns.flatMap(agentItemsFromTurn));
   return { total, seeded: missing.turns.length };

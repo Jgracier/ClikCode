@@ -1,4 +1,6 @@
 /** Run a turn through a vendor's CLI or structured session protocol. */
+import { conversationSummary } from '../session/conversation-summary.js';
+import { summarySources } from './summary-sources.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -178,8 +180,11 @@ export async function sendVendorTurn(input: {
     const argvBound = (transport === 'structured-cli' || transport === 'text-cli') && harness.turn?.promptInput !== 'stdin';
     const contextWindow = await targetContextWindow(state.sessions, harness.command, model, modelsDevFiles()).catch(() => undefined);
     const writer = nativeSessionStore(harness)?.writer;
+    // A summary any harness already made of this conversation stands for the
+    // turns it covers, as this harness would have kept its own.
+    const summary = await conversationSummary(session, record, summarySources(state.accounts)).catch(() => undefined);
     const start = await startConversationThread({
-      record, request, interrupted: options.interrupted, harness, model,
+      record, request, interrupted: options.interrupted, harness, model, ...(summary ? { summary } : {}),
       workspace: session.workspace ?? process.cwd(), environment: turnEnvironment(harness, account),
       ...(contextWindow ? { contextWindow } : {}), ...(argvBound ? { argvLimit: maxPromptArgvBytes() } : {}),
       ...(writer ? { writer } : {}),
@@ -189,6 +194,7 @@ export async function sendVendorTurn(input: {
     });
     lifecycle('thread.take-up', {
       harness: harness.command, how: start.kind, turns: record.turns.length, interrupted: options.interrupted,
+      ...(summary ? { summarized: summary.through, summaryFrom: summary.source } : {}),
       ...(start.kind === 'transfer' ? { budget: start.budget, bytes: Buffer.byteLength(start.prompt, 'utf8'), contextWindow } : { omitted: start.omitted, contextWindow }),
     });
     if (start.kind === 'native') {

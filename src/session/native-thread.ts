@@ -6,6 +6,7 @@
  * Its id is remembered in `ownedThreads`. */
 import type { HarnessSession } from './model.js';
 import { messageOrigin, sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { readsVendorCompaction } from './conversation-summary.js';
 
 export function forgetNativeThread(session: HarnessSession): void {
   // Still ClikCode's: kept so discovery never offers it back as a vendor chat.
@@ -28,6 +29,15 @@ export function leaveProvider(session: HarnessSession): void {
   const origin = messageOrigin(session);
   session.messages = sessionTranscriptMessages(session).map((message) => (message.origin ? message : { ...message, origin }));
   delete session.pendingTurn;
+  // A vendor whose compactions ClikCode can read: where its thread is, so the
+  // next provider can be handed the summary it wrote (conversation-summary.ts).
+  if (session.nativeHarness && session.nativeSessionId && readsVendorCompaction(session.nativeHarness)) {
+    const accountId = session.nativeThreadAccountId ?? session.accountId ?? undefined;
+    session.previousNativeThread = {
+      harness: session.nativeHarness, id: session.nativeSessionId,
+      ...(accountId ? { accountId } : {}), ...(session.workspace ? { workspace: session.workspace } : {}),
+    };
+  }
   forgetNativeThread(session);
   for (const key of ['reported', 'effortRefused', 'lastUsage', 'resumeAt', 'harnessOptions', 'gatewayConfirmed'] as const) delete session[key];
   session.updatedAt = new Date().toISOString();

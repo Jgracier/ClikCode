@@ -3,6 +3,7 @@
 
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute } from '../harness/definition.js';
 import type { ShellNote } from '../commands/ai/shell-run.js';
+import type { ConversationSummary, PreviousNativeThread } from './conversation-summary.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 
@@ -137,6 +138,13 @@ export interface HarnessSession {
    * provider -- are written into that memory before its next model call
    * (turn/agent-history.ts). */
   agentThreadTurns?: number;
+  /** The conversation's summary, from whichever harness compacted it: the
+   * next provider gets it in place of the turns it covers
+   * (session/conversation-summary.ts). */
+  summary?: ConversationSummary;
+  /** The vendor thread the conversation had before it moved to another
+   * provider: a summary that vendor wrote is read from it. */
+  previousNativeThread?: PreviousNativeThread;
   nativeStartedAt?: string;
   /** Every vendor thread this conversation has used and let go of (a
    * switch, a new account, a thread the vendor lost), as `<harness>:<id>`.

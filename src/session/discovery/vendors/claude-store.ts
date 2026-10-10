@@ -57,6 +57,7 @@ export const claudeThreadWriter: NativeThreadWriter = {
   testedVersions: CLAUDE_TESTED_VERSIONS,
   versionOk: (context) => testedVersion(CLAUDE_TESTED_VERSIONS)(context),
   write: writeClaudeThread,
+  writesSummary: true,
 };
 
 export const claudeSessionStore: NativeSessionStore = {

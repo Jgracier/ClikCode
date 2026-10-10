@@ -237,7 +237,15 @@ export function transferPrompt(record: CanonicalRecord, request: string, options
     else runs.push(`${who}: ${range(turn.index + 1, turn.index + 1)}`);
   }
   if (turns.length) {
-    add(`This chat has ${turns.length} earlier turn${turns.length === 1 ? '' : 's'} (${runs.join('; ')}). Below: every request in order, a digest of the tool calls and the files changed, then the most recent turns in full and older answers condensed.`);
+    const total = turns.length + (record.summary?.through ?? 0);
+    const opening = record.summary ? `, the first ${record.summary.through} summarized` : '';
+    add(`This chat has ${total} earlier turn${total === 1 ? '' : 's'}${opening} (${runs.join('; ')}). Below: every request in order, a digest of the tool calls and the files changed, then the most recent turns in full and older answers condensed.`);
+  }
+  // A summary a harness already made of the opening turns stands for them:
+  // they are not retold (session/conversation-summary.ts).
+  if (record.summary) {
+    const summary = truncateMiddle(escapeFailoverContent(record.summary.text), Math.floor(room * 0.35));
+    add(`<summary turns="1-${record.summary.through}">\n${summary}\n</summary>`);
   }
 
   // 1. Every request, compact. All of them, however many: each is clipped
