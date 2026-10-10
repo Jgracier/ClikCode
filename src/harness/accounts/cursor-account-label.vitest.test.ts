@@ -45,9 +45,12 @@ describe('account naming at sign-in', () => {
     { id: '3', provider: 'anthropic', label: 'b@example.com' },
   ];
 
-  it('numbers a placeholder with the first number nobody holds', () => {
-    expect(nameAccount(accounts, codex)).toBe('Codex 1');
-    expect(nameAccount([...accounts, { id: '4', provider: 'openai', label: 'codex 1' }], codex)).toBe('Codex 3');
+  it('names a placeholder after the harness, then numbers it from 2 with the first number nobody holds', () => {
+    expect(nameAccount(accounts, codex)).toBe('Codex');
+    expect(nameAccount([...accounts, { id: '4', provider: 'openai', label: 'codex' }], codex)).toBe('Codex 3');
+    // The harness's own name as the preferred one: the same, never "Codex (2)".
+    expect(nameAccount([...accounts, { id: '4', provider: 'openai', label: 'Codex' }], codex, 'Codex')).toBe('Codex 3');
+    expect(nameAccount([{ id: '1', provider: 'openai', label: 'Codex' }], codex)).toBe('Codex 2');
   });
 
   it('keeps an email unique within one provider only', () => {

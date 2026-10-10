@@ -50,7 +50,7 @@ describe('naming an added API-key account', () => {
     expect(await aiAccountAdd({ provider: 'openai', auth: 'api-key', credentialRef: 'env:CLIKCODE_TEST_KEY', placeholder: 'Codex (CLIKCODE_TEST_KEY)' })).toBe('Codex (CLIKCODE_TEST_KEY)');
     process.env.OTHER_TEST_KEY = 'x';
     try {
-      expect(await aiAccountAdd({ provider: 'openai', auth: 'api-key', credentialRef: 'env:OTHER_TEST_KEY' })).toBe('Codex 1');
+      expect(await aiAccountAdd({ provider: 'openai', auth: 'api-key', credentialRef: 'env:OTHER_TEST_KEY' })).toBe('Codex');
     } finally { delete process.env.OTHER_TEST_KEY; }
     keyEmail.mockClear();
     expect(await aiAccountAdd({ provider: 'openai', label: 'Work', auth: 'api-key', credentialRef: 'env:THIRD_TEST_KEY' })).toBe('Work');
