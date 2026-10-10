@@ -117,12 +117,14 @@ describe('durable turn checkpoints', () => {
     ]);
   });
 
-  it('carries the account the turn moved to onto its answer', () => {
+  it('carries the account the turn moved to, and a sign-in it needed, onto its answer', () => {
     const target = session();
     beginPendingTurn(target, 'Continue', '2026-01-02T00:00:00.000Z');
     target.pendingTurn!.accountSwitch = { from: 'personal', to: 'work', reason: 'quota-exhausted' };
+    target.pendingTurn!.signedInTo = 'Grok Build';
     finishPendingTurn(target, 'Done.', '2026-01-02T00:00:02.000Z');
     expect(target.messages?.at(-1)?.accountSwitch).toEqual({ from: 'personal', to: 'work', reason: 'quota-exhausted' });
+    expect(target.messages?.at(-1)?.signedInTo).toBe('Grok Build');
   });
 
   it('keeps what streamed when the report is only its last part', () => {

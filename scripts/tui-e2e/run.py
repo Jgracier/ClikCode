@@ -1161,6 +1161,19 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'after': ['Switched to ', 'is out of usage']},
         'final_contains': ['Switched to ', 'is out of usage', 'Grok Build · '], 'never': ['usage exhausted', 'All accounts exhausted'],
     },
+    # A turn the vendor refuses as signed out signs in mid-turn and is
+    # answered: a line says it signed in, and stays (there was none).
+    'mid-turn-sign-in-is-said': {
+        'turns': [{'blocks': ['First answer.']},
+                  {'refuse': 'Authentication required: not logged in. Run grok login. (401 Unauthorized)', 'blocks': ['unused']},
+                  {'blocks': ['Answered after signing in again.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First answer.', 40), ('settle', 1), ('mark',),
+                  ('type', 'carry on'), ('wait_for', 'Answered after signing in again.', 40), ('settle', 3)],
+        'watch': [], 'ever_after_mark': ['waiting for you to sign in'], 'final_once': ['› carry on'],
+        'final_contains': ['Answered after signing in again.'],
+        # Twice: the first message's sign-in, and this one's.
+        'final_count': {'signed in to Grok Build': 2},
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],
@@ -1574,6 +1587,8 @@ def run(name, spec, entry, keep):
         if found != text: problems.append(f'{name} holds {found!r}, expected {text!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
+    for phrase, count in spec.get('final_count', {}).items():
+        if final.count(phrase) != count: problems.append(f'on screen {final.count(phrase)}x at the end, expected {count}x: {phrase!r}')
     for phrase in spec.get('final_once', []):
         if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
     for name, phrases in spec.get('snap_lacks', {}).items():
