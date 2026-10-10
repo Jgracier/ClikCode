@@ -680,11 +680,18 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const modelConfig = live.configOptions?.find((option) => (option.id ?? option.configId) === 'model');
     const currentModel = live.models?.currentModelId ?? modelConfig?.currentValue;
     if (modelId && modelId !== currentModel) {
-      if (modelConfig) await startingRequest('session/set_config_option', { sessionId: turn.sessionId, configId: 'model', value: modelId });
-      else await startingRequest('session/set_model', { sessionId: turn.sessionId, modelId });
+      const updated = modelConfig
+        ? await startingRequest('session/set_config_option', { sessionId: turn.sessionId, configId: 'model', value: modelId })
+        : await startingRequest('session/set_model', { sessionId: turn.sessionId, modelId });
       stillRunning();
-      if (modelConfig) live.configOptions = live.configOptions?.map((option) => option === modelConfig ? { ...option, currentValue: modelId } : option);
-      else live.models = { ...live.models, currentModelId: modelId };
+      // The options the model now has, as the agent returns them: a model
+      // without effort (Claude's Haiku) drops that option, and setting it
+      // from the old list failed the turn with "Unknown config option".
+      if (Array.isArray(updated?.configOptions)) {
+        live.configOptions = updated.configOptions;
+        live.models = { ...live.models, configOptions: live.configOptions };
+      } else if (modelConfig) live.configOptions = live.configOptions?.map((option) => option === modelConfig ? { ...option, currentValue: modelId } : option);
+      if (!modelConfig) live.models = { ...live.models, currentModelId: modelId };
     }
     const planning = Boolean(input.planMode && planModeId);
     const modeId = planning ? planModeId : permissionModeIds?.[input.permissionMode];

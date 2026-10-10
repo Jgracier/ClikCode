@@ -100,6 +100,36 @@ describe('shared ACP adapter contract', () => {
     ]);
   });
 
+  it('reads the options a model change returns: no effort for a model that has none (Claude Haiku)', async () => {
+    const agent = `
+      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+      const calls = [];
+      let buf = '';
+      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+        else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1', configOptions: [
+          { id: 'model', currentValue: 'default', options: [{ value: 'default' }, { value: 'haiku' }] },
+          { id: 'effort', currentValue: 'default', options: [{ value: 'default' }, { value: 'medium' }, { value: 'high' }] },
+        ] } });
+        else if (m.method === 'session/set_config_option') {
+          calls.push(m.params.configId);
+          if (m.params.configId === 'effort') send({ id: m.id, error: { code: -32603, message: 'Internal error: Unknown config option: effort' } });
+          else send({ id: m.id, result: { configOptions: [{ id: 'model', currentValue: 'haiku', options: [{ value: 'default' }, { value: 'haiku' }] }] } });
+        } else if (m.method === 'session/prompt') {
+          send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(calls) } } } });
+          send({ id: m.id, result: { stopReason: 'end_turn' } });
+        }
+      } });
+    `;
+    const result = await runAcpTurn({
+      binary: process.execPath, command: 'claude', argv: ['-e', agent], cwd: process.cwd(),
+      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'haiku', effort: 'medium',
+      acp: { inheritCliOptions: false, effortConfigId: 'effort' },
+    });
+    expect(JSON.parse(result.text)).toEqual(['model']);
+  });
+
   it('waits for an agent still starting up, rather than timing out a model change at the handshake limit', async () => {
     // claude-agent-acp answers session/new at once but set_config_option only
     // once Claude Code has started -- after it has connected every MCP

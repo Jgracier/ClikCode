@@ -80,6 +80,16 @@ export function isEffortRefusal(failure: Error): boolean {
 
 const RETRY_EDITS = { clear: ['', 'replace'], 'new-paragraph': ['\n\n', 'append'] } as const;
 
+/** Whether an attempt's streamed text is only the account refusal it then
+ * failed with ("You've hit your session limit · resets 3:50pm" streamed as
+ * a message, then "Internal error: You've hit your session limit …"). */
+export function echoesRefusal(text: string, failure: unknown): boolean {
+  const flat = (value: string): string => value.toLowerCase().replace(/^\s*internal error:\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const said = flat(text);
+  const refused = flat(failure instanceof Error ? failure.message : String(failure));
+  return said.length > 0 && refused.length > 0 && (refused.includes(said) || said.includes(refused));
+}
+
 /** Sessions whose current vendor process was opened with the swarm tool. */
 const swarmAttached = new Set<string>();
 
@@ -478,6 +488,10 @@ export async function sendVendorTurn(input: {
     let result: NativeTurnResult | undefined;
     let streamError: { message: string; statusCode?: number; kind?: string } | undefined;
     let cliOutputStarted = false;
+    // Where this attempt's text begins, and whether an earlier attempt had
+    // already written: a refusal the vendor streams as text is no answer.
+    const responseBefore = session.pendingTurn?.response?.length ?? 0;
+    const wroteBefore = Boolean(session.pendingTurn?.outputStarted);
     turnUsage = undefined;
     pendingWork.reset();
     swarmFold = emptySwarmFold();
@@ -658,7 +672,19 @@ export async function sendVendorTurn(input: {
       // request's own words. "Continue" there points at the previous
       // finished turn, and retelling the transcript repeats a conversation
       // the carried thread already holds.
-      const wrote = Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
+      // Claude streams "You've hit your session limit · resets …" as message
+      // text, then fails the prompt. That text is the refusal, not an
+      // answer: it is taken back off the turn, and the next account is
+      // asked the request itself rather than to continue it.
+      const attemptText = (session.pendingTurn?.response ?? '').slice(responseBefore);
+      const refusalOnly = attemptText.trim() !== '' && echoesRefusal(attemptText, failure);
+      if (refusalOnly) {
+        const kept = (session.pendingTurn?.response ?? '').slice(0, responseBefore);
+        checkpoint.response(kept, 'replace');
+        prompter?.response(kept, 'replace');
+        if (session.pendingTurn && !wroteBefore) session.pendingTurn.outputStarted = false;
+      }
+      const wrote = refusalOnly ? wroteBefore : Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
       const edit = session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear';
       const nextRequest = wrote ? INTERRUPTED_TURN_REQUEST : askedText;
       if (carriedThread) {
