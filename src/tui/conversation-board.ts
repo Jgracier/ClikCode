@@ -9,7 +9,8 @@
  * those first.
  *
  *   ↑↓      move between the composer and the list
- *   Enter   open the selected conversation (with a draft: start one)
+ *   Enter   open the selected conversation, taking a draft with it; with
+ *           none selected, a draft starts a new one
  *   →       open it (a working one shows its agents live inside)
  *   ←       close
  *   Tab/Del a conversation's options / delete it
@@ -30,7 +31,9 @@ import { conversationLabel } from './pickers/conversation-activity.js';
 import { SPIN_MS } from '../harness/protocol/timings.js';
 
 
-export type BoardResult = { open: string } | { compose: string } | { command: string };
+/** `draft`: text typed on the board before a row was chosen, for the opened
+ * conversation's composer -- never dropped. */
+export type BoardResult = { open: string; draft?: string } | { compose: string } | { command: string };
 
 export interface BoardState {
   draft: string;
@@ -48,7 +51,7 @@ export type BoardEffect =
   /** Ctrl+L: the whole screen drawn again. */
   | { kind: 'repair' }
   | { kind: 'finish'; result: BoardResult }
-  | { kind: 'inner' | 'actions' | 'delete'; option: PickerOption<string> };
+  | { kind: 'actions' | 'delete'; option: PickerOption<string> };
 
 /** A `/` draft shows the commands it matches in place of the conversations. */
 export function boardShowsCommands(state: BoardState): boolean {
@@ -127,16 +130,13 @@ export function boardKey(state: BoardState, key: string, rows: readonly PickerOp
       if (rows.length) state.selected = Math.min(rows.length - 1, state.selected + 1);
       return { kind: 'draw' };
     }
-    // Right goes in: to a row's inner list where it has one, else into the
-    // conversation. Left always comes back out.
-    if (key === RIGHT) {
-      if (row?.inner?.options.length) return { kind: 'inner', option: row };
-      return row ? { kind: 'finish', result: { open: row.value } } : { kind: 'none' };
-    }
+    // Right or Enter opens the selected conversation, taking a draft typed
+    // here with it; Left always comes back out.
+    const draft = state.draft.trim();
+    if (key === RIGHT) return row ? { kind: 'finish', result: { open: row.value, ...(draft ? { draft } : {}) } } : { kind: 'none' };
     if (key === '\r' || key === '\n') {
-      if (row) return { kind: 'finish', result: { open: row.value } };
-      const text = state.draft.trim();
-      return text ? { kind: 'finish', result: { compose: text } } : { kind: 'none' };
+      if (row) return { kind: 'finish', result: { open: row.value, ...(draft ? { draft } : {}) } };
+      return draft ? { kind: 'finish', result: { compose: draft } } : { kind: 'none' };
     }
     if (key === LEFT) return row || !state.draft ? { kind: 'close' } : { kind: 'none' };
     if (key === '\t') return row?.actions?.length ? { kind: 'actions', option: row } : { kind: 'none' };
@@ -172,7 +172,6 @@ export function boardHint(state: BoardState, rows: readonly PickerOption<string>
   }
   return [
     keyHintFor('enter', 'open'),
-    ...(row.inner?.options.length ? [keyHintFor('→', row.inner.title.toLowerCase())] : []),
     ...(row.actions?.length ? [keyHintFor('tab', 'options')] : []),
     ...(row.deleteAction ? [keyHintFor('del', row.deleteAction.label.toLowerCase())] : []),
     keyHintFor('←', 'close'),
@@ -299,7 +298,9 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       // The whole page: the list takes every row the composer does not, at
       // whatever height the screen is when it is painted.
       const capacity = (): number => Math.max(6, (output.rows ?? 24) - BOARD_CHROME_ROWS);
-      host.paint(state.draft, showing.map((row) => ({
+      // Nothing to list yet: said, rather than a bare hint line.
+      const empty = !showing.length && !boardShowsCommands(state) && !state.finding;
+      host.paint(state.draft, empty ? [{ label: 'No conversations yet', value: '' }] : showing.map((row) => ({
         // Conversations get the glyph column, the spinner animated; commands do not.
         label: boardShowsCommands(state) ? row.label : conversationLabel(row, frame), detail: row.detail, value: '', group: row.group,
       })),
@@ -336,15 +337,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
       else if (effect.kind === 'repair') { host.repair?.(); draw(); }
       else if (effect.kind === 'close') finish(undefined);
       else if (effect.kind === 'finish') finish(effect.result);
-      else if (effect.kind === 'inner') {
-        const inner = effect.option.inner!;
-        void openAside(async () => {
-          const value = await host.select(inner.title, inner.options);
-          if (value === undefined) return false;
-          finish({ open: value });
-          return true;
-        });
-      } else if (effect.kind === 'actions') {
+      else if (effect.kind === 'actions') {
         const option = effect.option;
         void openAside(async () => {
           const action = await host.select(option.label, (option.actions ?? []).map((item) => ({ label: item.label, value: item.value })));
@@ -358,7 +351,7 @@ export function runConversationBoard(host: OptionPickerHost, settings: Conversat
         const option = effect.option;
         const action = option.deleteAction!;
         void openAside(async () => {
-          if (!await confirmRowDelete(host, option, action)) return false;
+          if (!await confirmRowDelete(host, option, action, option.detail?.replace(/^·\s*/, ''))) return false;
           await settings.onAction?.(option.value, action.value);
           finish(undefined);
           return true;

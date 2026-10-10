@@ -111,7 +111,7 @@ SCENARIOS = {
             ('keys', '\x1b[D'), ('settle', 2), ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30), ('settle', 6),
             # Out to the first chat, then back into the running one.
             ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board1'), ('keys', '\x1b[B'), ('keys', '\x1b[C'), ('settle', 3),
-            # Enter, not Right: Right on a row with agents goes into its agents.
+            # Back up to the running chat, and into it.
             ('keys', '\x1b[D'), ('settle', 2), ('snap', 'board2'), ('keys', '\x1b[A'), ('keys', '\r'), ('settle', 3),
             ('wait_for', 'The build passed.', 40), ('settle', 3),
             ('type', 'and the second question'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2),
@@ -236,6 +236,23 @@ SCENARIOS = {
         ],
         'watch': [], 'snap_once': {'back': ['Worked for']}, 'final_once': ['Worked for'],
         'final_contains': ['please check the commit'],
+    },
+    # The board's small print. Empty, it says so. Deleting asks about the
+    # chat by its preview (every new one is "Untitled chat"), offers no
+    # filter on a two-row list, and says Esc closes -- not "exit", which it
+    # does not. A draft typed before choosing a row goes with that row.
+    'board-small-print': {
+        'turns': [{'blocks': ['First chat answered.']}],
+        'steps': [
+            ('keys', '\x1b[D'), ('settle', 2), ('snap', 'empty'), ('keys', '\x1b'), ('settle', 1),
+            ('type', 'hello there'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[3~'), ('wait_for', 'Cancel', 10), ('settle', 0.5), ('snap', 'confirm'),
+            ('keys', '\x1b'), ('settle', 1), ('keys', 'keep me'), ('settle', 0.5), ('keys', '\x1b[B'), ('settle', 0.5),
+            ('keys', '\r'), ('wait_for', 'First chat answered.', 10), ('settle', 1), ('snap', 'kept'),
+        ],
+        'watch': [],
+        'snap_contains': {'empty': ['No conversations yet'], 'confirm': ['· hello there?', 'esc close'], 'kept': ['› keep me']},
+        'snap_lacks': {'confirm': ['type to filter', 'esc exit']},
     },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],

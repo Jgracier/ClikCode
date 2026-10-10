@@ -7,9 +7,8 @@ const DOWN = '\u001b[B';
 const RIGHT = '\u001b[C';
 const LEFT = '\u001b[D';
 
-const subagent: PickerOption<string> = { label: 'Agent(Explore)', value: 'busy' };
 const conversations: PickerOption<string>[] = [
-  { label: 'Busy', value: 'busy', inner: { title: 'Agents', options: [subagent] }, actions: [{ label: 'Rename', value: 'rename' }] },
+  { label: 'Busy', value: 'busy', actions: [{ label: 'Rename', value: 'rename' }] },
   { label: 'Old', value: 'old', deleteAction: { label: 'Delete', value: 'delete' } },
 ];
 const commands: PickerOption<string>[] = [
@@ -66,11 +65,17 @@ describe('the conversation board', () => {
     expect(state).toEqual({ draft: 'h', selected: -1 });
   });
 
-  it('goes into a working conversation’s agents with Right; Enter still opens it, and Left closes', () => {
+  it('opens a working conversation with Right or Enter, and Left closes', () => {
     const state = fresh();
-    expect(press(state, DOWN, RIGHT)).toEqual({ kind: 'inner', option: conversations[0] });
+    expect(press(state, DOWN, RIGHT)).toEqual({ kind: 'finish', result: { open: 'busy' } });
     expect(press(state, '\r')).toEqual({ kind: 'finish', result: { open: 'busy' } });
     expect(press(state, LEFT)).toEqual({ kind: 'close' });
+  });
+
+  it('takes a typed draft into the conversation chosen after it', () => {
+    const state = fresh();
+    press(state, 'n', 'o', 't', 'e', DOWN);
+    expect(press(state, '\r')).toEqual({ kind: 'finish', result: { open: 'busy', draft: 'note' } });
   });
 
   it('closes with Left from an empty composer but not from a draft', () => {
@@ -111,7 +116,7 @@ describe('the board\'s footer', () => {
   const hint = (state: BoardState): string => boardHint(state, boardRows(state, conversations, commands));
 
   it('names only the keys that act on the selected row', () => {
-    expect(hint({ draft: '', selected: 0 })).toBe('enter open · → agents · tab options · ← close');
+    expect(hint({ draft: '', selected: 0 })).toBe('enter open · tab options · ← close');
     expect(hint({ draft: '', selected: 1 })).toBe('enter open · del delete · ← close');
   });
 

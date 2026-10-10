@@ -57,9 +57,11 @@ export function asideOpener(list: {
   };
 }
 
-/** The confirmation every row's delete gets: Cancel first. */
-export function confirmRowDelete(host: OptionPickerHost, option: PickerOption<unknown>, action: { label: string }): Promise<boolean | undefined> {
-  return host.select(`${action.label} ${option.label}?`, [
+/** The confirmation every row's delete gets: Cancel first. `preview` says
+ * which row it is when its label alone does not (every new chat is
+ * "Untitled chat"). */
+export function confirmRowDelete(host: OptionPickerHost, option: PickerOption<unknown>, action: { label: string }, preview?: string): Promise<boolean | undefined> {
+  return host.select(`${action.label} ${option.label}${preview ? ` · ${preview}` : ''}?`, [
     { label: 'Cancel', value: false },
     { label: `${action.label} ${option.label}`, value: true },
   ]);
@@ -142,11 +144,14 @@ export function runOptionPicker<T>(
       const secondary = selectedOption?.alternates?.length ? ` · ${keyHintFor('tab', 'history')}`
         : selectedOption?.actions?.length ? ` · ${keyHintFor('tab', 'options')}` : '';
       const destructive = selectedOption?.deleteAction ? ` · ${keyHintFor('del', selectedOption.deleteAction.label.toLowerCase())}` : '';
-      const inner = selectedOption?.inner?.options.length ? ` · ${keyHintFor('\u2192', selectedOption.inner.title.toLowerCase())}` : '';
-      const keys = `${keyHintFor('\u2191\u2193', 'move')} · ${confirmation}${inner}${secondary}${destructive} · ${keyHintFor('\u2190', 'back')} · ${keyHintFor('esc', 'exit')}`;
+      // Esc closes the list, back to whatever opened it -- it does not exit
+      // ClikCode, which "exit" read as.
+      const keys = `${keyHintFor('\u2191\u2193', 'move')} · ${confirmation}${secondary}${destructive} · ${keyHintFor('\u2190', 'back')} · ${keyHintFor('esc', 'close')}`;
+      // Filtering is worth offering only on a list longer than it shows.
+      const total = settings?.totalItems ?? currentOptions().length;
       const hint = query
         ? `"${query}" - ${visible.length} match${visible.length === 1 ? '' : 'es'} · ${keys}`
-        : `${settings?.totalItems ?? currentOptions().length} total · ${keys} · type to filter`;
+        : `${total} total · ${keys}${total > capacity - 2 ? ' · type to filter' : ''}`;
       host.paint(title, renderOptions, selected, '', 0, { capacity, hideCursor: true, headings: true, hint });
     };
     let finished = false;
@@ -180,8 +185,8 @@ export function runOptionPicker<T>(
       finish(undefined);
     };
     const openAside = asideOpener({ stopInput: () => stopInput(), listen, finished: () => finished });
-    /** A list inside a row (its history, its sub-agents): a value chosen
-     * there is this picker's answer. */
+    /** A list inside a row (its history): a value chosen there is this
+     * picker's answer. */
     const openList = (listTitle: string, list: readonly PickerOption<T>[]): Promise<void> => openAside(async () => {
       const value = await host.select(listTitle, list);
       if (value === undefined) return false;
@@ -265,8 +270,6 @@ export function runOptionPicker<T>(
       if (key === '\u001b[A') selected = visible.length ? (selected - 1 + visible.length) % visible.length : 0;
       else if (key === '\u001b[B') selected = visible.length ? (selected + 1) % visible.length : 0;
       else if (key === '\u001b[D') { settings?.onBack?.(); finish(undefined, 'back'); return; }
-      // Right goes into a row's inner list where it has one (the board's rule).
-      else if (key === '\u001b[C' && current?.inner?.options.length) { void openList(current.inner.title, current.inner.options); return; }
       else if (pickerConfirmsSelection(key)) {
         if (current) finish(current.value);
         return;
