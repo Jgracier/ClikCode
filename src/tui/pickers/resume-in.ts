@@ -194,7 +194,11 @@ export async function carryOnAfterExhaustion(
   const moved = await interactiveResumeInPicker(rl, id, prompt, sent);
   if (moved && 'waiting' in moved) return moved;
   if (moved) return { moved };
-  return { stayed: await sameProviderCanTakeTurn(id) ? [] : await takeQueuedMessages(id) };
+  // Not carried on (Esc on Resume-in, or nowhere to go): the message comes
+  // back to the composer to send again, with anything queued behind it.
+  // (Not a continuation ClikCode asked for: that was never typed.)
+  const typed = prompt === INTERRUPTED_TURN_REQUEST ? [] : [prompt];
+  return { stayed: [...typed, ...(await sameProviderCanTakeTurn(id) ? [] : await takeQueuedMessages(id))] };
 }
 
 /** Takes a parked turn off the session ("Wait for reset" cancelled from a

@@ -14,7 +14,8 @@ import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
 import { gatewayCreditLabel } from '../../gateway/credit-label.js';
 import { reconcileLocalModelLeases } from './local-model.js';
 import { withArgValues } from '../../tui/slash/arg-values.js';
-import { isUsageExhaustedMessage, resumeWaitLabel } from '../../turn/usage-exhausted.js';
+import { isUsageExhaustedMessage, nextQuotaReset, resumeWaitLabel } from '../../turn/usage-exhausted.js';
+import { quotaResetPhrase } from '../../harness/protocol/format.js';
 import { failureLine } from '../../harness/protocol/stderr-line.js';
 import { isShellCommandLine, shellMessageContent, type ShellNote } from './shell-run.js';
 import type Conf from 'conf';
@@ -362,8 +363,17 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
       if (parked) refreshUsage(parked, parkedState);
       return;
     }
-    notice = isUsageExhaustedMessage(message) ? message : `Error: ${failureLine(message)}`;
+    // Running out says when usage is back, as the Resume-in list did.
+    notice = isUsageExhaustedMessage(message) ? `${message}${await usageBackPhrase(id)}` : `Error: ${failureLine(message)}`;
     if (next.back.length) terminal?.restoreDraft(next.back.join('\n\n'));
+  };
+  /** ` · back 11:11PM`: when the conversation's provider has usage again,
+   * where an account says; empty when none does. */
+  const usageBackPhrase = async (chat: string): Promise<string> => {
+    const state = await readState({ transcripts: [] });
+    const provider = state.sessions.find((item) => item.id === chat)?.provider;
+    const reset = provider ? nextQuotaReset(state.accounts.filter((account) => account.provider === provider)) : undefined;
+    return reset ? ` · back ${quotaResetPhrase(reset)}` : '';
   };
   try {
     while (true) {
