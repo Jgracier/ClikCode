@@ -1,6 +1,13 @@
 /** The account-facing answer: given an account, what is its usage and what
  * should it say on screen. */
 
+import { randomBytes } from 'node:crypto';
+import { readFile, unlink, utimes, writeFile } from 'node:fs/promises';
+import { hostname } from 'node:os';
+import { dirname, join } from 'node:path';
+import { ensurePrivateDirectory } from '../../session/store/files.js';
+import { LOCK_TUNING, lockLooksStale } from '../../session/store/locks.js';
+import { stateDirectory } from '../../session/store/paths.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
@@ -209,8 +216,8 @@ export function accountsDueForUsageRecheck(
  * every terminal's /accounts, status line and failover see the quota the
  * moment it is back.
  *
- * One pass at a time per process, and each account is judged again on the
- * index as it is just before its probe: a pass over thirty held accounts
+ * One pass at a time, across processes too, and each account is judged
+ * again on the index as it is just before its probe: a pass over thirty held accounts
  * outlasts the 15 s tick that starts it, and every open window ran one. Each
  * re-asked what another pass (its own earlier one, another window's) had just
  * read -- a vendor process and a full index write per account, several times
@@ -224,13 +231,49 @@ export function recheckRecoveredAccounts(state: HarnessState, options: {
   const ask = options.ask ?? ((account, latest) => accountUsageReading(account, latest, { network: true }));
   const canBeAsked = options.canBeAsked ?? accountUsageCanBeAsked;
   rechecking ??= (async () => {
-    for (const due of accountsDueForUsageRecheck(state, options.now, canBeAsked)) {
-      const latest = await readState({ transcripts: [] });
-      const account = latest.accounts.find((item) => item.id === due.id);
-      if (!account || !accountsDueForUsageRecheck({ ...latest, accounts: [account] }, Date.now(), canBeAsked).length) continue;
-      await ask(account, latest).catch(() => undefined);
+    const due = accountsDueForUsageRecheck(state, options.now, canBeAsked);
+    if (!due.length) return;
+    // Another process's pass is under way: it reads these too.
+    const release = await takeRecheckLease();
+    if (!release) return;
+    try {
+      for (const { id } of due) {
+        const latest = await readState({ transcripts: [] });
+        const account = latest.accounts.find((item) => item.id === id);
+        if (!account || !accountsDueForUsageRecheck({ ...latest, accounts: [account] }, Date.now(), canBeAsked).length) continue;
+        await ask(account, latest).catch(() => undefined);
+      }
+    } finally {
+      await release();
     }
   })().finally(() => { rechecking = undefined; });
   return rechecking;
 }
 let rechecking: Promise<void> | undefined;
+
+/** One pass at a time across every process: a lease file, owned like a
+ * lock (locks.ts judges it stale the same way: owner dead, or not kept
+ * fresh). Resolves to its release, or undefined while someone else holds it. */
+async function takeRecheckLease(): Promise<(() => Promise<void>) | undefined> {
+  const path = join(stateDirectory(), 'cache', 'usage-recheck.lease');
+  await ensurePrivateDirectory(dirname(path));
+  const mine = JSON.stringify({ pid: process.pid, host: hostname(), nonce: randomBytes(9).toString('hex'), at: new Date().toISOString() });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await writeFile(path, mine, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') return undefined;
+      const raw = await readFile(path, 'utf8').catch(() => undefined);
+      if (raw !== undefined && !await lockLooksStale(path, raw)) return undefined;
+      if (raw !== undefined) await unlink(path).catch(() => undefined);
+      continue;
+    }
+    const heartbeat = setInterval(() => { const now = new Date(); void utimes(path, now, now).catch(() => undefined); }, LOCK_TUNING.heartbeatMs);
+    heartbeat.unref();
+    return async () => {
+      clearInterval(heartbeat);
+      if (await readFile(path, 'utf8').catch(() => undefined) === mine) await unlink(path).catch(() => undefined);
+    };
+  }
+  return undefined;
+}
