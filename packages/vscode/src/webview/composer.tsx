@@ -453,19 +453,19 @@ export function Composer(props: {
           ))}
         </div>
       ) : null}
+    {/* The account's usage and when it resets, right-aligned directly above
+        the composer, where the terminal puts it on the rule above its own. */}
+      {model.accountUsage ? (
+        <div class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} id="composer-usage"
+          title={model.accountUsageDetail ? `This account's usage\n${model.accountUsageDetail}` : "This account's usage"}>
+          <span class="usage-figure">{model.accountUsage}</span>
+          {model.accountUsageNext ? <span class="usage-reset"> · {model.accountUsageNext}</span> : null}
+        </div>
+      ) : null}
       <div class={`composer-box${dropping ? ' dropping' : ''}`} data-running={model.running ? 'true' : undefined}
         onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; if (!dropping) setDropping(true); }}
         onDragLeave={(event) => { if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) setDropping(false); }}
         onDrop={onDrop}>
-        {/* The account's usage and when it resets, top right, as the terminal
-            puts it on the rule above its composer. */}
-        {model.accountUsage ? (
-          <div class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} id="composer-usage"
-            title={model.accountUsageDetail ? `This account's usage\n${model.accountUsageDetail}` : "This account's usage"}>
-            <span class="usage-figure">{model.accountUsage}</span>
-            {model.accountUsageNext ? <span class="usage-reset"> · {model.accountUsageNext}</span> : null}
-          </div>
-        ) : null}
         {dropping ? <div class="drop-hint" aria-hidden="true"><Icon name="cloud-upload" /> Drop to attach · hold Shift to drop files from VS Code</div> : null}
         {menu === 'provider' ? <ProviderModelPicker mode="provider" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'model' ? <ProviderModelPicker key={model.providerId} mode="model" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
