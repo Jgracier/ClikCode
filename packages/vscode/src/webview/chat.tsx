@@ -520,7 +520,7 @@ const VISIBLE_ACTIVITIES = 6;
  * running sub-agent or swarm agent keeps its own spinner on its chat row.
  * The thought being had is this line's tooltip, and opens under it. Ticks
  * on its own. */
-function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; elsewhere: boolean; asking: boolean }): JSX.Element {
+function Working({ live, asking }: { live: LiveTurn | undefined; asking: boolean }): JSX.Element {
   const now = useNow();
   const [open, setOpen] = useState(false);
   const status = workingStatus(live, asking, now);
@@ -537,7 +537,7 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
-        <span class="muted">{live && !asking ? formatElapsed(liveElapsedMs(live, now)) : ''}{elsewhere ? `${live && !asking ? ' · ' : ''}running in another window` : ''}</span>
+        <span class="muted">{live && !asking ? formatElapsed(liveElapsedMs(live, now)) : ''}</span>
         {/* A thin rule on to the right edge, as the one above the composer
             runs from the left to the usage. */}
         <span class="rule-line" aria-hidden="true" />
@@ -577,10 +577,10 @@ function ActivityRun({ activities, workspace }: { activities: Activity[]; worksp
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
  * it, the newest still streaming; then the working line. */
-const LiveTurnView = memo(({ live, workspace, elsewhere, asking }: { live: LiveTurn | undefined; workspace?: string; elsewhere: boolean; asking: boolean }): JSX.Element => (
+const LiveTurnView = memo(({ live, workspace, asking }: { live: LiveTurn | undefined; workspace?: string; asking: boolean }): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
     {live ? <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }} /> : null}
-    <Working live={live} elsewhere={elsewhere} asking={asking} />
+    <Working live={live} asking={asking} />
   </div>
 ));
 
@@ -634,7 +634,7 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
   // A plan is on screen while it has open steps; finished, it goes, and is
   // kept with its turn (planStillNeeded, as the terminal decides).
   if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} running={model.running} />);
-  if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} asking={waitingOnUser(model)} />);
+  if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} asking={waitingOnUser(model)} />);
   // Notes from the running turn (an account switch, "Stopped") follow it.
   model.notes.forEach((note, position) => { if (note.after > model.messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
   const queuedTexts = new Set(model.queued.map((item) => item.text));
