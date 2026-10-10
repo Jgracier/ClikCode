@@ -5,6 +5,8 @@ import { defineTool } from '../tool-contract.js';
 import { displayPath, IMAGE_EXTENSIONS, looksBinary, resolveForRead } from './fs-helpers.js';
 import { isNotebookPath, parseNotebook, renderNotebook } from './notebook.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
+import { IMAGE_MIME, MAX_IMAGE_SIDE, MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
+import type { ToolRunResult } from '../tool-contract.js';
 
 interface ReadFileArgs { path: string; offset?: number; limit?: number }
 
@@ -13,7 +15,7 @@ const MAX_READ_BYTES = 20 * 1024 * 1024;
 export const readFileTool = defineTool<ReadFileArgs>({
   name: 'read_file',
   class: 'read',
-  description: 'Read a text file. Returns numbered lines (`N\\tline`). Reads up to 2000 lines from the start by default; use offset (1-based line) and limit for large files.',
+  description: 'Read a text file. Returns numbered lines (`N\\tline`). Reads up to 2000 lines from the start by default; use offset (1-based line) and limit for large files. A PNG, JPEG, GIF or WebP image is shown to you as the picture itself.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['path'],
     properties: {
@@ -32,8 +34,10 @@ export const readFileTool = defineTool<ReadFileArgs>({
     }
     if (stat.isDirectory()) return { output: `${args.path} is a directory. Use list_dir.`, isError: true };
     const shown = displayPath(resolved.absolute, ctx);
-    if (IMAGE_EXTENSIONS.has(path.extname(resolved.real).toLowerCase())) {
-      return { output: `${shown} is an image (${stat.size} bytes). Image content cannot be read as text by this tool.` };
+    const extension = path.extname(resolved.real).toLowerCase();
+    if (IMAGE_MIME[extension]) return readImage(resolved.real, shown, stat.size, ctx.acceptsImages === true);
+    if (IMAGE_EXTENSIONS.has(extension)) {
+      return { output: `${shown} is an image (${stat.size} bytes) in a format this tool cannot show; only PNG, JPEG, GIF and WebP are shown.` };
     }
     if (stat.size > MAX_READ_BYTES) return { output: `${shown} is ${stat.size} bytes, which is too large to read. Use grep to find the relevant part.`, isError: true };
     const buffer = await fs.readFile(resolved.real);
@@ -74,3 +78,24 @@ export const readFileTool = defineTool<ReadFileArgs>({
     return { output: `${body.join('\n')}${notes}` };
   },
 });
+
+/** The picture itself, for a model that can see it: the loop sends it with
+ * the result (models/openai-client.ts toChatMessages), and the text says
+ * what it is for any later model that cannot. */
+async function readImage(file: string, shown: string, size: number, acceptsImages: boolean): Promise<ToolRunResult> {
+  if (!acceptsImages) return { output: `${shown} is an image (${size} bytes), and the current model cannot see images.` };
+  if (size > MAX_TOOL_IMAGE_BYTES) {
+    return { output: `${shown} is an image of ${size} bytes, more than the ${MAX_TOOL_IMAGE_BYTES} a model is shown. Make a smaller copy (scale it down or convert it to JPEG) and read that.`, isError: true };
+  }
+  const buffer = await fs.readFile(file);
+  const image = sniffImage(buffer);
+  if (!image) return { output: `${shown} is named as an image but its content is not a PNG, JPEG, GIF or WebP image; not shown.`, isError: true };
+  const pixels = image.width && image.height ? `, ${image.width}x${image.height}` : '';
+  if (Math.max(image.width ?? 0, image.height ?? 0) > MAX_IMAGE_SIDE) {
+    return { output: `${shown} is ${image.width}x${image.height} pixels, more than the ${MAX_IMAGE_SIDE} a side a model is shown. Make a smaller copy and read that.`, isError: true };
+  }
+  return {
+    output: `${shown} is an image (${image.mimeType}${pixels}, ${size} bytes), attached for you to see.`,
+    images: [{ mimeType: image.mimeType, data: buffer.toString('base64'), name: path.basename(file) }],
+  };
+}

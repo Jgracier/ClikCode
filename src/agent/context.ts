@@ -228,11 +228,16 @@ function estimateTextTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
+/** Tokens one image is taken to cost: about what a model charges for a
+ * picture at the size it scales one to (~1.15 megapixels / 750). */
+const IMAGE_TOKENS = 1_600;
+
 function estimateItemTokens(item: ConversationItem): number {
   switch (item.type) {
-    case 'text': case 'summary': return estimateTextTokens(item.text) + 4;
+    case 'text': return estimateTextTokens(item.text) + 4 + (item.images?.length ?? 0) * IMAGE_TOKENS;
+    case 'summary': return estimateTextTokens(item.text) + 4;
     case 'tool_call': return estimateTextTokens(item.name) + estimateTextTokens(JSON.stringify(item.args)) + 8;
-    case 'tool_result': return estimateTextTokens(item.output) + 8;
+    case 'tool_result': return estimateTextTokens(item.output) + 8 + (item.images?.length ?? 0) * IMAGE_TOKENS;
   }
 }
 
@@ -275,14 +280,20 @@ export function toolOutputCap(contextWindow: number | undefined, ceilingBytes: n
 
 const ELIDE_KEEP_CHARS = 600;
 
-/** Stage 1: shrink old tool results to head+tail. Cheap, no model call, and
- * usually what is actually filling the window. */
+/** Stage 1: shrink old tool results to head+tail, and stop showing the
+ * images old ones carried (their text still says what each was). Cheap, no
+ * model call, and usually what is actually filling the window. */
 function elideOldToolResults(items: readonly ConversationItem[], keepRecent = KEEP_RECENT_ITEMS): ConversationItem[] {
   const boundary = Math.max(0, items.length - keepRecent);
   return items.map((item, index) => {
-    if (index >= boundary || item.type !== 'tool_result' || item.output.length <= ELIDE_KEEP_CHARS * 2 + 80) return item;
+    if (index >= boundary || item.type !== 'tool_result') return item;
+    const hasImages = !!item.images?.length;
+    if (!hasImages && item.output.length <= ELIDE_KEEP_CHARS * 2 + 80) return item;
+    const { images: _images, ...rest } = item;
+    const imageNote = hasImages ? '\n[The image this showed is no longer shown, to save context; read the file again to see it.]' : '';
+    if (item.output.length <= ELIDE_KEEP_CHARS * 2 + 80) return { ...rest, output: `${item.output}${imageNote}` };
     const dropped = item.output.length - ELIDE_KEEP_CHARS * 2;
-    return { ...item, output: `${item.output.slice(0, ELIDE_KEEP_CHARS)}\n… [${dropped} characters elided to save context] …\n${item.output.slice(-ELIDE_KEEP_CHARS)}` };
+    return { ...rest, output: `${item.output.slice(0, ELIDE_KEEP_CHARS)}\n… [${dropped} characters elided to save context] …\n${item.output.slice(-ELIDE_KEEP_CHARS)}${imageNote}` };
   });
 }
 

@@ -28,12 +28,14 @@ export interface ImageInput {
 }
 
 export type ConversationItem =
-  /** `images` only ever rides on a user item, and only when the model client
+  /** On a text item, `images` only ever rides on a user item, and only when the model client
    * said it accepts them; `text` still names the files, so a client that
    * cannot send pixels loses nothing by ignoring the field. */
   | { type: 'text'; role: 'user' | 'assistant'; text: string; images?: readonly ImageInput[] }
   | { type: 'tool_call'; id: string; name: string; args: Record<string, unknown> }
-  | { type: 'tool_result'; id: string; name: string; output: string; isError?: boolean }
+  /** `images` are what the tool showed the model (read_file on a picture);
+   * `output` still describes them in words for a client that cannot see. */
+  | { type: 'tool_result'; id: string; name: string; output: string; isError?: boolean; images?: readonly ImageInput[] }
   | { type: 'summary'; text: string };
 
 export interface ToolSpec {

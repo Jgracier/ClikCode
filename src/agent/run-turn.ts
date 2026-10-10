@@ -290,6 +290,9 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     }
     : innerSubagent;
 
+  /** Whether the model answering the current step can see images; a tool
+   * that would show one (read_file) says so in words otherwise. */
+  let stepAcceptsImages = input.modelClient.acceptsImages === true;
   const toolContext = (callId: string, toolName: string, emitOutput: (chunk: string) => void): ToolContext => ({
     cwd, addDirs,
     // A coding child shares its parent's background shell lifecycle. A shell
@@ -302,6 +305,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     callId, emitOutput,
     ...(input.subagent?.checkpoint ? { checkpoint: input.subagent.checkpoint } : {}),
     outputCap: toolOutputCap(contextWindow, profile.toolOutputBytes),
+    ...(stepAcceptsImages ? { acceptsImages: true } : {}),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
     ...(runSubagent ? { runSubagent: (request: { prompt: string; description?: string; model?: string; kind?: 'research' | 'work' }) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
@@ -471,6 +475,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       const stepped = await abortable(Promise.resolve(input.modelClientForStep?.()), signal);
       if (stepped === 'switch') return result({ stopReason: 'account-switch' });
       const modelClient = stepped ?? input.modelClient;
+      stepAcceptsImages = modelClient.acceptsImages === true;
       try {
         step = await abortable(modelClient.step({
           system, items, signal,
@@ -616,7 +621,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         const done = new Map(outcomes.map((outcome) => [outcome.call.id, outcome]));
         const resultItems = calls.flatMap((call): ConversationItem[] => {
           const outcome = done.get(call.id);
-          return outcome ? [{ type: 'tool_result', id: call.id, name: call.name, output: outcome.result.output, ...(outcome.result.isError ? { isError: true } : {}) }] : [];
+          return outcome ? [{ type: 'tool_result', id: call.id, name: call.name, output: outcome.result.output, ...(outcome.result.isError ? { isError: true } : {}), ...(outcome.result.images?.length ? { images: outcome.result.images } : {}) }] : [];
         });
         // A result that is not on disk reads, on resume, as a call that never
         // finished (repairDanglingCalls), though it ran. One retry covers a
