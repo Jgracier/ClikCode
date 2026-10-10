@@ -1,12 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const bus = vi.hoisted(() => ({ requests: [] as unknown[] }));
-vi.mock('../../src/webview/bus', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../../src/webview/bus')>(),
+vi.mock('../../src/webview/bus', () => ({
+  post: () => undefined, listen: () => () => undefined, save: () => undefined, saved: () => ({}), uid: () => 'id', command: () => undefined,
   request: async (body: unknown) => { bus.requests.push(body); return undefined; },
 }));
 
-const { conversationMark, holdConversationWatch, rowState } = await import('../../src/webview/screens');
+import { conversationMark, holdConversationWatch, listSecond, rowState } from '../../src/webview/screens';
 
 const row = (patch: Record<string, unknown> = {}) => ({ id: 'c1', title: 'Fix it', updatedAt: new Date().toISOString(), ...patch }) as never;
 
@@ -33,5 +33,13 @@ describe('the conversation list on the welcome screen and in the history menu', 
     expect(conversationMark(asking, rowState(asking, now))).toBe('needs-you');
     const finished = row();
     expect(conversationMark(finished, rowState(finished, now))).toBe('none');
+  });
+});
+
+describe('the history list\'s clock', () => {
+  it('moves each second while a row works, so its "working Ns" counts up and can turn stalled', () => {
+    const rows = [row({ activity: 'working' })];
+    expect(listSecond(rows, 10_500)).not.toBe(listSecond(rows, 11_500));
+    expect(listSecond([row()], 10_500)).toBe(listSecond([row()], 11_500));
   });
 });

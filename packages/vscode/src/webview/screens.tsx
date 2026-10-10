@@ -82,6 +82,12 @@ export function useConversations(onError?: (message: string) => void, key?: unkn
   return { rows, load };
 }
 
+/** The second a list's rows are read at: the current one while a row
+ * works (its time counts up), else fixed -- nothing to redraw. */
+export function listSecond(rows: readonly ListedConversation[] | undefined, now: number): number {
+  return rows?.some((row) => row.activity === 'working') ? Math.floor(now / 1000) : 0;
+}
+
 /** What a row is marked with, by its one state: waiting on you, working
  * (stalled), the chat on screen, finished unseen, or nothing. */
 export function conversationMark(row: ListedConversation, state: ReturnType<typeof rowState>): 'needs-you' | 'working' | 'stalled' | 'current' | 'unread' | 'none' {
@@ -124,20 +130,24 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
   };
 
   const query = search.trim().toLowerCase();
+  // A working row's "working 3m" counts up and can turn "stalled": the rows
+  // are rebuilt each second while one works, and only then.
+  const now = useNow(Boolean(rows?.some((row) => row.activity === 'working')));
+  const second = listSecond(rows, now);
   const listRows = useMemo((): ListRow[] => {
     // The chat on screen is listed once it is a conversation, not while empty.
     const matching = (rows ?? []).filter((row) => !(row.current && !row.messages))
       .filter((row) => !query || `${row.title} ${row.preview ?? ''} ${row.provider ?? ''}`.toLowerCase().includes(query));
     // Within a section one that needs you comes first, as on the terminal's
     // board; ClikCode's order otherwise (the sort is stable).
-    const needsYouFirst = (left: ListedConversation, right: ListedConversation): number => Number(rowState(right).kind === 'needs-you') - Number(rowState(left).kind === 'needs-you');
+    const needsYouFirst = (left: ListedConversation, right: ListedConversation): number => Number(rowState(right, now).kind === 'needs-you') - Number(rowState(left, now).kind === 'needs-you');
     const sections: Array<[string, ListedConversation[]]> = SECTIONS.map(([section, title]) => [title, matching.filter((row) => conversationSection(row) === section).sort(needsYouFirst)]);
     const result: ListRow[] = [];
     for (const [title, items] of sections) {
       if (!items.length) continue;
       result.push({ key: `h:${title}`, heading: true, render: () => <>{title}</> });
       for (const row of items) {
-        const state = rowState(row);
+        const state = rowState(row, now);
         result.push({
           key: row.id,
           onSelect: () => (renaming === row.id ? undefined : open(row)),
@@ -172,7 +182,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
       }
     }
     return result;
-  }, [rows, query, renaming, confirming]);
+  }, [rows, query, renaming, confirming, second]);
 
   return (
     <Popover label="Conversations" onClose={props.onClose} class="picker history-menu" id="history-menu">
