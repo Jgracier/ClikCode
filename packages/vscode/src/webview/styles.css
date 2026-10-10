@@ -307,7 +307,7 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .approval-note-input:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
 
 /* ---- composer ---- */
-.composer-wrap { padding: 6px var(--gap) 8px; flex: none; display: flex; flex-direction: column; gap: 6px; }
+.composer-wrap { padding: 6px var(--gap) 8px; flex: none; display: flex; flex-direction: column; gap: 6px; container: composer-wrap / inline-size; }
 .composer-box {
   position: relative; border: 1px solid var(--vscode-input-border, var(--border)); border-radius: 10px; background: var(--input);
   display: flex; flex-direction: column; transition: border-color 0.12s;
@@ -343,16 +343,15 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 }
 .slash-glyph { font-family: var(--mono); font-weight: 600; font-size: 13px; }
 /* Usage as the terminal words it ("5h 96% left · Weekly 18% left") and when
-   the closest window resets, in the composer's top-right corner as the
-   terminal puts it on the rule above its composer. Red once spent. Narrow,
+   the closest window resets, right-aligned directly above the composer as
+   the terminal puts it on the rule above its own. Red once spent. Narrow,
    the reset goes before the figure does. */
 .composer-usage {
-  align-self: flex-end; max-width: calc(100% - 12px); padding: 5px 10px 0; color: var(--muted); font-size: 0.85em;
+  align-self: flex-end; max-width: 100%; margin-bottom: -2px; padding: 0 6px; color: var(--muted); font-size: 0.85em;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums;
 }
 .composer-usage.spent { color: var(--vscode-errorForeground, var(--err)); }
-.composer-box:has(.composer-usage) textarea, .composer-box:has(.composer-usage) .attachments { padding-top: 2px; }
-@container (max-width: 360px) { .composer-usage .usage-reset { display: none; } }
+@container composer-wrap (max-width: 360px) { .composer-usage .usage-reset { display: none; } }
 /* "$1.23 this chat": the conversation's cost so far, only where one was reported. */
 .status-cost { flex: 0 0 auto; white-space: nowrap; height: 24px; line-height: 24px; padding: 0 6px; font-size: 0.88em; }
 @container (max-width: 320px) { .status-cost { display: none; } }
