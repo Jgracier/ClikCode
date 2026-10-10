@@ -158,6 +158,11 @@ export interface ChatModel {
   route?: string;
   workspace?: string;
   accountUsage?: string;
+  /** When the window closest to running out resets, while it has not: "5h
+   * resets 5:34PM" (with the date when not today). */
+  accountUsageNext?: string;
+  /** Every window, its share left and its reset, one per line. */
+  accountUsageDetail?: string;
   /** "$1.23 this chat", from the bridge's `usage`; absent while no turn
    * reported a cost. */
   chatCost?: string;
@@ -636,7 +641,11 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
     case 'usage':
       // The terminal's own words: the reset in place of the figure once a
       // window is spent, "Out Of Credits" for a spent balance.
-      return { ...model, accountUsage: composerUsageLabel(event.label, event.reset), chatCost: chatCostLabel(event.chatCost) };
+      return {
+        ...model, accountUsage: composerUsageLabel(event.label, event.reset), chatCost: chatCostLabel(event.chatCost),
+        // Spent, the label already is the reset.
+        accountUsageNext: event.reset ? undefined : event.next, accountUsageDetail: event.detail,
+      };
     case 'closed':
       return event.sessionId === model.sessionId ? freshFor(model) : model;
     default:

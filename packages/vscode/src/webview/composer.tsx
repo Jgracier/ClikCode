@@ -457,6 +457,15 @@ export function Composer(props: {
         onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; if (!dropping) setDropping(true); }}
         onDragLeave={(event) => { if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) setDropping(false); }}
         onDrop={onDrop}>
+        {/* The account's usage and when it resets, top right, as the terminal
+            puts it on the rule above its composer. */}
+        {model.accountUsage ? (
+          <div class={`composer-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} id="composer-usage"
+            title={model.accountUsageDetail ? `This account's usage\n${model.accountUsageDetail}` : "This account's usage"}>
+            <span class="usage-figure">{model.accountUsage}</span>
+            {model.accountUsageNext ? <span class="usage-reset"> · {model.accountUsageNext}</span> : null}
+          </div>
+        ) : null}
         {dropping ? <div class="drop-hint" aria-hidden="true"><Icon name="cloud-upload" /> Drop to attach · hold Shift to drop files from VS Code</div> : null}
         {menu === 'provider' ? <ProviderModelPicker mode="provider" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'model' ? <ProviderModelPicker key={model.providerId} mode="model" model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
@@ -530,10 +539,6 @@ export function Composer(props: {
         ) : null}
         <span class="spacer" />
         <BusyLine label={busy && !installing && !model.signIn ? busy : undefined} />
-        {/* Usage always visible beside context: remaining allowance, or reset time when spent. */}
-        {model.accountUsage ? (
-          <span class={`status-usage${usageLabelIsSpent(model.accountUsage) ? ' spent' : ''}`} title="This account's usage">{model.accountUsage}</span>
-        ) : null}
         {model.chatCost ? <span class="muted status-cost" title="What this chat has cost so far">{model.chatCost}</span> : null}
         {/* Context ring: fills as context window is used; figures on hover, breakdown on click. */}
         {model.context ? <ContextMeter context={model.context} tokens={tokens} />

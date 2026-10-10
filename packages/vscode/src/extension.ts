@@ -45,7 +45,7 @@ export function statusText(model: ChatModel): { text: string; tooltip: string } 
     `${model.title ?? 'New chat'}${waiting ? ' (waiting for your approval)' : model.running ? ' (working)' : ''}`,
     `Provider: ${name ?? '—'}`, `Model: ${chatModelLabel(model, name) ?? 'default'}`,
     ...(model.account ? [`Account: ${model.account}`] : []), ...(model.effort ? [`Effort: ${model.effort}`] : []),
-    ...(model.permissions ? [`Permissions: ${model.permissions}`] : []), ...(usage ? [`Usage: ${usage}`] : []),
+    ...(model.permissions ? [`Permissions: ${model.permissions}`] : []), ...(usage ? [`Usage: ${usage}${model.accountUsageNext ? ` · ${model.accountUsageNext}` : ''}`] : []),
     ...(model.chatCost ? [`Cost: ${model.chatCost}`] : []),
   ].join('\n');
   const icon = waiting ? '$(bell-dot)' : model.running ? '$(sync~spin)' : '$(comment-discussion)';
