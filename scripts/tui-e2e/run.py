@@ -1210,6 +1210,17 @@ SCENARIOS = {
                   ('keys', '\x1b'), ('settle', 2)],
         'watch': [], 'never': ['Use the interactive /provider menu', 'Error:'], 'final_contains': ['Grok Build  •'],
     },
+    # Settings' rows stay where they are as the cursor lands on a row chosen
+    # in place (they moved two columns right), and its hint names Enter and
+    # Tab, which both act there.
+    'settings-inline-row-steady': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('snap', 'plain'),
+                  *[step for _ in range(3) for step in (('keys', '\x1b[B'), ('settle', 0.3))], ('settle', 0.5), ('snap', 'inline')],
+        'watch': [], 'snap_contains': {'plain': ['\n  Model  grok-4'], 'inline': ['\n  Model  grok-4', 'enter next', 'tab options']},
+        'snap_lacks': {'inline': ['\n    Model']},
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],
