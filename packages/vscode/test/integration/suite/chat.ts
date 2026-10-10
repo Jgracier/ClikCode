@@ -49,6 +49,10 @@ export function chatSuite(): void {
       await waitFor(api, `#history-list [data-key="${id}"]`, 'the chat named elsewhere, without reopening the list', 5_000, (found) => /Named in another window/.test(found.text));
       await click(api, '#history-button');
       await waitFor(api, '#composer-input', 'the chat screen again');
+      // The welcome's Recent hears of it too, with the menu closed: it used
+      // to load once and keep what it had.
+      clikcode('sessions', 'command', id, '/rename', 'Renamed in another window');
+      await waitFor(api, `.recent-row[data-key="${id}"]`, 'the renamed chat in the welcome\'s Recent', 5_000, (found) => /Renamed in another window/.test(found.text));
     });
 
     it('walks /search mention by mention, as the terminal does', async () => {
@@ -71,6 +75,20 @@ export function chatSuite(): void {
     });
 
     it('lists only this provider\'s accounts, and sets effort beside the model', async () => {
+      // A chat of its own, on a provider with accounts (the stand-in Grok):
+      // after the /search walk the panel was on a Gateway chat, whose button
+      // is its credit, and on a machine with no vendor CLI a new chat has no
+      // provider at all -- the test passed or failed by what ran before it.
+      const path = process.env.PATH;
+      process.env.PATH = `${process.env.CLIKCODE_IT_FAKE_BIN}:${path ?? ''}`;
+      await vscode.commands.executeCommand('clikcode.restart');
+      await api.ready();
+      try {
+      const from = api.state.sessionId;
+      await api.open('new');
+      await until(api, (state) => state.connection === 'ready' && Boolean(state.sessionId) && state.sessionId !== from, 'a new chat');
+      await api.send('/grok');
+      await waitFor(api, '#provider-button', 'the chat on Grok Build', 30_000, (found) => /Grok/.test(found.text));
       await waitFor(api, '#account-button', 'the account under the message box');
       await click(api, '#account-button');
       await waitFor(api, '#account-menu [role="option"], #account-menu .keylist-empty, #account-menu .row', 'the account list', 30_000, (found) => found.count > 0);
@@ -80,7 +98,10 @@ export function chatSuite(): void {
       // Copilot and added a Grok account.
       const shownName = (await query(api, '#provider-button')).text.trim();
       const title = (await waitFor(api, '#account-menu .menu-title', 'the account menu title', 30_000, (found) => found.count > 0 && found.text.trim() !== 'Accounts')).text.trim();
-      if (shownName && !shownName.toLowerCase().includes(title.toLowerCase())) throw new Error(`account menu titled "${title}" on a chat showing "${shownName}"`);
+      // One name may be the other's short form ("Grok" before the provider
+      // list has loaded, "Grok Build" after): the same provider either way.
+      const [shown, titled] = [shownName.toLowerCase(), title.toLowerCase()];
+      if (shownName && !shown.includes(titled) && !titled.includes(shown)) throw new Error(`account menu titled "${title}" on a chat showing "${shownName}"`);
       await waitFor(api, '#account-menu [data-key="add"]', 'Add account for the chat\'s provider');
       await key(api, '#account-menu', 'Escape');
       if ((await query(api, '#model-button')).count) {
@@ -106,6 +127,12 @@ export function chatSuite(): void {
       await screenshot('settings', 1000);
       await key(api, '.sheet', 'Escape');
       await waitFor(api, '#composer-input', 'back to the chat');
+      } finally {
+        process.env.PATH = path;
+        await vscode.commands.executeCommand('clikcode.restart');
+        await api.ready();
+        await waitFor(api, '#provider-button', 'the provider button, enabled again', 60_000, (found) => found.count > 0 && !found.disabled);
+      }
     });
 
     it('signs in inside the panel: a link card with its code, a masked key sheet, never a terminal', async () => {
@@ -119,6 +146,11 @@ export function chatSuite(): void {
       await api.send('/accounts add grok');
       const code = await waitFor(api, '#sign-in-link [data-code]', 'the sign-in card with its code', 30_000);
       if (code.text.trim() !== 'AB12-CD34') throw new Error(`the card shows code "${code.text}"`);
+      // The key Grok takes instead is a row on the card, never a sheet greying it out.
+      await waitFor(api, '#sign-in-link #sign-in-key', 'the key row on the card', 30_000);
+      if ((await query(api, '.sheet')).count) throw new Error('a sheet opened over the sign-in card');
+      // A wait on the user holds still: no progress bar sliding on the card.
+      if ((await query(api, '#sign-in-link .progress')).count) throw new Error('the sign-in card animates a progress bar');
       await screenshot('sign-in-card', 300);
       await waitFor(api, '#sign-in-link', 'the card gone once signed in', 30_000, (found) => found.count === 0);
       if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');
@@ -132,6 +164,9 @@ export function chatSuite(): void {
         await waitFor(api, '#sign-in-link [data-cancel]', 'the second sign-in card', 30_000);
         await click(api, '#sign-in-link [data-cancel]');
         await waitFor(api, '#sign-in-link', 'the card gone once cancelled', 15_000, (found) => found.count === 0);
+        // The user's own Cancel: one plain line, never a red error.
+        await waitFor(api, '.notice', 'the cancelled line', 15_000, (found) => found.texts.some((text) => /Sign-in to Grok Build cancelled/.test(text)));
+        if ((await query(api, '.notice.error')).count) throw new Error(`an error note for a cancelled sign-in: ${(await query(api, '.notice.error')).text}`);
       } finally { rmSync(process.env.CLIKCODE_IT_HOLD!, { force: true }); }
       if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');
 
