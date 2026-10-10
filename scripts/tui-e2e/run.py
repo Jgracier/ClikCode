@@ -1334,6 +1334,18 @@ SCENARIOS = {
         'watch': [], 'ever': ['1  edit the notes', 'Turn 1 · edit the notes', '- beta'],
         'file_contains': {'notes.txt': 'alpha\nbeta\n'},
     },
+    # /hindsight: the chat by topic, newest first, numbered by prompt (the N
+    # /fork @N and /redo @N take), with the file each topic's turn edited.
+    'hindsight-panel': {
+        'turns': [{'edits': [{'path': 'notes.txt', 'old': 'alpha\nbeta\n', 'new': 'alpha\nGAMMA\n'}], 'blocks': ['Edited the notes.']},
+                  {'blocks': ['Explained the build.']}],
+        'steps': [
+            ('type', 'edit the notes file'), ('wait_for', 'Edited the notes.', 30), ('settle', 2),
+            ('type', 'explain how the build works'), ('wait_for', 'Explained the build.', 30), ('settle', 2),
+            ('type', '/hindsight'), ('wait_for', 'Hindsight · 2 topics', 10), ('settle', 1),
+        ],
+        'watch': [], 'final_contains': ['2  answered', 'explain how the build works', '1  answered', 'notes.txt +1 -1', '/redo @N'],
+    },
     # `!<command>`: its output is a transcript message, drawn once, with no
     # notice repeating how it exited.
     'shell-line-in-transcript': {
