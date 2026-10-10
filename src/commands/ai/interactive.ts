@@ -41,7 +41,7 @@ import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
 import { SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
 import { activateSession, afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
-import { slashControls, slashHelpText, slashPalette } from '../../tui/slash/registry.js';
+import { slashPalette } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversation } from './conversations.js';
 import { signInBeforeUse } from './harness.js';
@@ -61,11 +61,6 @@ import { shownSettingsKey } from '../../worker/protocol.js';
 import { retireStaleWorkers } from '../../worker/client.js';
 import { replaceCliWithNewBuild } from './build-replace.js';
 
-/** Commands the terminal replaced with the board. `/resume` is ← on an empty
- * prompt; `/new` is ← and typing. They stay in the registry for the surfaces
- * without a board (VS Code, headless `sessions send`). */
-const BOARD_REPLACES: ReadonlySet<string> = new Set(['resume', 'new']);
-const BOARD_REPLACES_NOTICE = 'Press ← on an empty prompt for your conversations -- pick one, or type to start a new one.';
 const DELETED_ELSEWHERE = 'That conversation was deleted · this is a new one';
 /** What Left on an empty prompt returns: not a slash line, so it cannot be
  * typed, and it opens the board however the registry changes. */
@@ -160,7 +155,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   let paletteState: Pick<HarnessState, 'accounts' | 'sessions'> = state;
   const slashCommandsFor = (target: HarnessSession): PickerOption<string>[] => {
     const harness = sessionHarness(target);
-    return withArgValues(slashPalette(target, harness, { ...slashExtrasFor(target, harness), omit: BOARD_REPLACES }), target, harness, paletteState);
+    return withArgValues(slashPalette(target, harness, slashExtrasFor(target, harness)), target, harness, paletteState);
   };
   // Created before auto-select so a first-ever install/sign-in — the most
   // common time either is actually needed — has somewhere to show its
@@ -689,14 +684,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             attached: (attachments) => emitHarnessOutput({ panel: 'attachments', attachments }),
           } satisfies Pick<SlashHost, 'attached'>),
           ...(terminal ? { browseSearch: (query: string) => browseSearch(terminal, query, withWaiting) } : {}),
-          intercept: (route, commandSession, commandHarness) => {
-            if (BOARD_REPLACES.has(route.entry.name) && !viaBoard) return { notice: BOARD_REPLACES_NOTICE };
-            if (route.entry.name !== 'help') return undefined;
-            // The terminal's own list: without the commands the board replaced.
-            const extras = { ...slashExtrasFor(commandSession, commandHarness), omit: BOARD_REPLACES };
-            emitHarnessOutput({ panel: 'help', helpText: slashHelpText(commandSession, commandHarness, extras), controls: slashControls().filter((item) => !BOARD_REPLACES.has(item.command.slice(1))) });
-            return {};
-          },
         };
         const outcome = await dispatchLine(host, id, line, { fromQueuedCommand });
         if (outcome.notice) notice = outcome.notice;

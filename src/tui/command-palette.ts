@@ -52,8 +52,9 @@ function paletteRank(entry: PaletteEntry, query: string): number | undefined {
     else if (isSubsequence(query, name)) consider(4 + alias);
   }
   // A one- or two-letter query occurs in nearly every description; matching
-  // those would list every command for `/c`.
-  if (best === undefined && query.length >= 3 && `${entry.detail ?? ''}`.toLowerCase().includes(query)) consider(5);
+  // those would list every command for `/c`. And only where a word starts:
+  // `/res` is not "f-res-h", which put /compact first.
+  if (best === undefined && query.length >= 3 && new RegExp(`(?:^|[^a-z0-9])${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`).test(`${entry.detail ?? ''}`.toLowerCase())) consider(5);
   return best;
 }
 
