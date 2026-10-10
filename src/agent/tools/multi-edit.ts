@@ -2,6 +2,7 @@ import { eventDiff } from '../line-diff.js';
 import { defineTool } from '../tool-contract.js';
 import { commitEdit, prepareEdits, type EditOperation } from './edit-file.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
+import { errorsAfterEdit } from './lsp.js';
 
 interface MultiEditArgs { path: string; edits: EditOperation[] }
 
@@ -33,6 +34,6 @@ export const multiEditTool = defineTool<MultiEditArgs>({
     // only mutation, which is what makes the batch all-or-nothing.
     const prepared = await prepareEdits(args.path, args.edits, ctx);
     await commitEdit(prepared, ctx);
-    return { output: `Applied ${args.edits.length} edit(s) to ${prepared.shown}.`, diff: eventDiff(prepared.before, prepared.after, { path: prepared.shown, numbered: true }) };
+    return { output: `Applied ${args.edits.length} edit(s) to ${prepared.shown}.${await errorsAfterEdit(prepared.real, ctx)}`, diff: eventDiff(prepared.before, prepared.after, { path: prepared.shown, numbered: true }) };
   },
 });

@@ -10,6 +10,7 @@ import { exitPlanModeTool } from './exit-plan-mode.js';
 import { globTool } from './glob.js';
 import { grepTool } from './grep.js';
 import { listDirTool } from './list-dir.js';
+import { lspTool } from './lsp.js';
 import { multiEditTool } from './multi-edit.js';
 import { notebookEditTool } from './notebook.js';
 import { readFileTool } from './read-file.js';
@@ -23,7 +24,7 @@ import { writeFileTool } from './write-file.js';
 
 export function defaultTools(): ToolDefinition[] {
   return [
-    readFileTool, listDirTool, globTool, grepTool,
+    readFileTool, listDirTool, globTool, grepTool, lspTool,
     writeFileTool, editFileTool, multiEditTool, notebookEditTool,
     bashTool, bashOutputTool, bashInputTool, killBashTool, waitTool,
     webFetchTool, webSearchTool, todoWriteTool, exitPlanModeTool, skillTool,

@@ -4,6 +4,7 @@ import { eventDiff } from '../line-diff.js';
 import { defineTool, type ToolContext } from '../tool-contract.js';
 import { displayPath, looksBinary, resolveForWrite } from './fs-helpers.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
+import { errorsAfterEdit } from './lsp.js';
 
 interface WriteFileArgs { path: string; content: string }
 
@@ -68,8 +69,9 @@ export const writeFileTool = defineTool<WriteFileArgs>({
     await writeTextAtomic(resolved.real, args.content, existing?.mode);
     await rememberWritten(resolved.real, ctx);
     const shown = displayPath(resolved.absolute, ctx);
+    const errors = await errorsAfterEdit(resolved.real, ctx);
     return {
-      output: existing ? `Overwrote ${shown} (${args.content.length} characters).` : `Created ${shown} (${args.content.length} characters).`,
+      output: `${existing ? `Overwrote ${shown} (${args.content.length} characters).` : `Created ${shown} (${args.content.length} characters).`}${errors}`,
       diff: eventDiff(existing?.text ?? '', args.content, { path: args.path, numbered: true }),
     };
   },
