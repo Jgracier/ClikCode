@@ -334,6 +334,7 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   if (!session.pendingTurn) return;
   const before = session.messages?.length ?? 0;
   const startedAt = Date.parse(session.pendingTurn.startedAt);
+  const accountSwitch = session.pendingTurn.accountSwitch;
   if (response?.trim() || session.pendingTurn.response?.trim()) {
     const pending = session.pendingTurn;
     const streamed = pending.response ?? '';
@@ -350,6 +351,7 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   const ms = Date.parse(now) - startedAt;
   if (session.messages.length > before && last?.role === 'assistant' && Number.isFinite(ms)) {
     last.turnEnd = { ms: Math.max(0, ms), ...(stopped ? { stopped: true as const } : {}) };
+    if (accountSwitch) last.accountSwitch = accountSwitch;
   }
 }
 

@@ -117,6 +117,14 @@ describe('durable turn checkpoints', () => {
     ]);
   });
 
+  it('carries the account the turn moved to onto its answer', () => {
+    const target = session();
+    beginPendingTurn(target, 'Continue', '2026-01-02T00:00:00.000Z');
+    target.pendingTurn!.accountSwitch = { from: 'personal', to: 'work', reason: 'quota-exhausted' };
+    finishPendingTurn(target, 'Done.', '2026-01-02T00:00:02.000Z');
+    expect(target.messages?.at(-1)?.accountSwitch).toEqual({ from: 'personal', to: 'work', reason: 'quota-exhausted' });
+  });
+
   it('keeps what streamed when the report is only its last part', () => {
     // Claude-shaped CLIs put only the LAST text block in `result`. Saving it
     // is what made everything before the final tool call vanish at turn end.

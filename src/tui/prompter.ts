@@ -39,6 +39,7 @@ import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock,
 import { logProcessWarnings } from './warnings.js';
 import { reasoningBody, tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
+import { accountSwitchLine } from '../turn/failover.js';
 import { turnStalled } from '../harness/protocol/turn-pace.js';
 import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
@@ -808,6 +809,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** What this client just sent, from the moment Enter was pressed until the
    * turn ends. The turn's own journal (`session.pendingTurn`) is the other
    * source and arrives later; see render/pending-prompt.ts. */
+  /** Every account, as last read: the status line names the conversation's
+   * when its provider has more than one. */
+  private knownAccounts: ReadonlyArray<{ id: string; label: string; provider: string }> = [];
+  knowAccounts(accounts: ReadonlyArray<{ id: string; label: string; provider: string }>): void {
+    this.knownAccounts = accounts.map(({ id, label, provider }) => ({ id, label, provider }));
+  }
+
   submitted(prompt: string | undefined): void {
     // A held prompt let go before its turn (its sign-in did not sign in): a
     // line written after it now goes after the conversation, or it would sit
@@ -1608,7 +1616,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
     // The title is not on this line: it sits on the rule under the composer,
     // so a long one never truncates the provider, model or directory.
-    const lead = [provider, [model, effort].filter(Boolean).join(' ')].filter(Boolean).join('  •  ');
+    // The account, once the provider has more than one: which of them the
+    // conversation is on -- and, after a failover, that it moved.
+    const account = this.knownAccounts.find((item) => item.id === session.accountId);
+    const named = account && this.knownAccounts.filter((item) => item.provider === account.provider).length > 1 ? ` · ${account.label}` : '';
+    const lead = [`${provider}${named}`, [model, effort].filter(Boolean).join(' ')].filter(Boolean).join('  •  ');
     const context = visiblePathTail(path, Math.max(12, width - terminalCellWidth(lead) - 5));
     return visibleSlice([lead, context].filter(Boolean).join('  •  '), width);
   }
@@ -2157,6 +2169,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // The turn's closing line, with the answer it ended on.
       const ended = message.role === 'assistant' ? turnEndLine(persistedMessages, index) : undefined;
       if (ended) emit(['', `  ${chalk.dim(`─ ${ended} ─`)}`]);
+      // The account the turn moved to on the way, saved with its answer.
+      if (message.role === 'assistant' && message.accountSwitch) emit(['', `  ${chalk.yellow(accountSwitchLine(message.accountSwitch))}`]);
       this.emitted.wrote(message);
       emit(['']);
       emit(standaloneActivity(index + 1));
