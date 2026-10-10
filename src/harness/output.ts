@@ -19,6 +19,7 @@ import { emitResult } from '../cli/structured-output.js';
 import { gatewayDefaultEffort, gatewayEffort } from '../gateway/options.js';
 import { isClikCodeAgent } from '../session/route.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
+import { summaryHeadline } from '../session/conversation-summary.js';
 
 export function line(label: string, value: unknown): string {
   return `  ${chalk.dim(label.padEnd(10))}${String(value ?? '—')}`;
@@ -168,7 +169,10 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
   }
   if (payload.panel === 'history' && Array.isArray(payload.messages)) {
     const messages = payload.messages as Array<{ role: string; content: string }>;
-    write(`\n${chalk.bold('Conversation')}\n\n` + (messages.length
+    // The summary the next provider is given for the opening turns.
+    const summary = payload.summary as { through: number; text: string } | undefined;
+    const opening = summary ? `${chalk.dim(`${summaryHeadline(summary).replace(/^f/, 'F')} -- what the next provider is given for them:`)}\n${summary.text.trim()}\n\n` : '';
+    write(`\n${chalk.bold('Conversation')}\n\n${opening}` + (messages.length
       ? messages.map((message) => `${message.role === 'assistant' ? chalk.cyan('assistant') : chalk.green('you')}\n${message.content}`).join('\n\n')
       : chalk.dim('No messages yet.')) + '\n\n');
     return;

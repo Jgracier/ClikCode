@@ -15,7 +15,7 @@ chunk of output. Then it checks what matters for display fragility:
 Exit status 0 when every scenario passes every repeat. Captures of failures
 are kept (the path is printed) so they can be replayed frame by frame.
 """
-import argparse, fcntl, json, os, pty, select, shutil, signal, struct, sys, tempfile, termios, time
+import argparse, fcntl, hashlib, json, os, pty, select, shutil, signal, struct, sys, tempfile, termios, time
 
 import pyte
 
@@ -1362,6 +1362,20 @@ SCENARIOS = {
         'final_contains': ['edit the notes', 'Edited the notes.'],
         'never_after_mark': ['Hello from the second chat.'],
     },
+    # A carried summary shows: a hint on the board's row, and /history opens
+    # with it, saying how many turns it covers.
+    'summary-shown': {
+        'turns': [{'blocks': ['First answer here.']}, {'blocks': ['Second answer here.']}],
+        'steps': [
+            ('type', 'first question'), ('wait_for', 'First answer here.', 30), ('settle', 2),
+            ('type', 'second question'), ('wait_for', 'Second answer here.', 30), ('settle', 2),
+            ('set_summary', 1, 'SUMMARY-OF-THE-OPENING asked a first question.'), ('restart', 6),
+            ('keys', '\x1b[D'), ('wait_for', 'first 1 turn summarized', 10), ('settle', 1),
+            ('keys', '\x1b[B'), ('keys', '\r'), ('wait_for', 'Second answer here.', 10), ('settle', 2),
+            ('type', '/history'), ('wait_for', 'SUMMARY-OF-THE-OPENING', 10), ('settle', 1),
+        ],
+        'watch': [], 'final_contains': ['First 1 turn summarized', 'SUMMARY-OF-THE-OPENING asked a first question.'],
+    },
     # `!<command>`: its output is a transcript message, drawn once, with no
     # notice repeating how it exited.
     'shell-line-in-transcript': {
@@ -1601,6 +1615,22 @@ def run(name, spec, entry, keep):
                     found = all(screen.buffer[row][col].reverse for col in range(at, at + len(wanted)) if line[col] != ' ')
                     at = line.lower().find(wanted, at + 1)
             if not found: problems.append(f'not highlighted on screen: {step[1]!r}')
+        elif step[0] == 'set_summary':
+            # ('set_summary', through, text): the newest conversation gets a
+            # carried summary of its first `through` turns, bound to them the
+            # way session/conversation-summary.ts turnsHash binds it.
+            index_file = os.path.join(state, 'index.json')
+            index = json.load(open(index_file))
+            newest = max(index['sessions'], key=lambda item: item.get('updatedAt', ''))
+            messages = json.load(open(os.path.join(state, 'sessions', f"{newest['id']}.json"))).get('messages', [])
+            turns = []
+            for message in messages:
+                if message['role'] == 'user': turns.append([message['content'], ''])
+                elif turns: turns[-1][1] += message['content'] if message['content'].strip() else ''
+            digest = hashlib.sha256()
+            for user, assistant in turns[:step[1]]: digest.update(user.encode()); digest.update(b'\0'); digest.update(assistant.strip().encode()); digest.update(b'\x01')
+            newest['summary'] = {'text': step[2], 'through': step[1], 'hash': digest.hexdigest()[:32], 'source': 'clikcode', 'at': '2026-10-10T00:00:00.000Z'}
+            json.dump(index, open(index_file, 'w'))
         elif step[0] == 'touch_entry':
             os.utime(entry, None)
         elif step[0] == 'damage_and_redraw':

@@ -11,6 +11,7 @@
  * importing each other. The pickers' rows as data are session/picker-rows.ts.
  */
 import { conversationPreview, sessionFromIndex, transcriptWasLoaded } from './list-facts.js';
+import { listedSummary, summaryHeadline } from './conversation-summary.js';
 import { isConversationChat } from './conversation-rows.js';
 
 export { conversationPreview };
@@ -133,6 +134,7 @@ export function conversationOption(
   const latest = row.latest;
   const title = latest.name?.replace(/\s+\(from [^)]+\)$/i, '').trim() || 'Untitled chat';
   const preview = conversationPreview(latest);
+  const summarized = listedSummary(latest);
   // conversationRows already determined activity via sessionActivity - only pass
   // turn facts when the row is actually working (has a live worker behind it).
   const state = conversationState({
@@ -144,7 +146,7 @@ export function conversationOption(
   const activity = state.kind === 'working' || state.kind === 'stalled' || state.kind === 'needs-you' ? state.kind : undefined;
   return {
     label: title,
-    detail: [`· ${state.kind === 'stalled' ? chalk.yellow(state.text) : state.text}`, preview].filter(Boolean).join(' · '),
+    detail: [`· ${state.kind === 'stalled' ? chalk.yellow(state.text) : state.text}`, preview, summarized && summaryHeadline(summarized)].filter(Boolean).join(' · '),
     ...(activity ? { activity } : {}),
     value: latest.id,
     alternates: history.length > 1 ? history.map((session) => ({

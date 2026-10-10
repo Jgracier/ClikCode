@@ -8,6 +8,7 @@ import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels
 import { decodeAttachmentPath, expandHomePath } from '../../session/attachments.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { textTranscript } from '../../turn/turn-activities.js';
+import { shownSummary, summaryHeadline } from '../../session/conversation-summary.js';
 
 function transcriptMarkdown(session: HarnessSession): string {
   const title = session.name ?? `ClikCode conversation ${session.id.slice(0, 8)}`;
@@ -21,8 +22,11 @@ function transcriptMarkdown(session: HarnessSession): string {
     `- Workspace: ${session.workspace ?? process.cwd()}`,
     `- Exported: ${new Date().toISOString()}`, '',
   ];
+  // The summary the next provider is given in place of the opening turns.
+  const summary = shownSummary(session);
+  const opening = summary ? [`## Summary (${summaryHeadline(summary)})`, '', summary.text.trim(), ''] : [];
   const body = textTranscript(sessionTranscriptMessages(session)).flatMap((message) => [`## ${message.role === 'assistant' ? 'Assistant' : 'You'}`, '', message.content.trim(), '']);
-  return `${[...header, ...body].join('\n').trimEnd()}\n`;
+  return `${[...header, ...opening, ...body].join('\n').trimEnd()}\n`;
 }
 
 /** Never overwrites silently: `confirmOverwrite` decides (a prompt in the TUI,
