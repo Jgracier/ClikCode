@@ -471,8 +471,10 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         return;
       }
     }
-    // A new message from the user replaces a turn parked for the reset.
-    if (!command.queuedTurnId) await resumeWaiter.cancel('Stopped waiting for the reset · a new message was sent');
+    // A new message from the user replaces a turn parked for the reset. The
+    // window that sent it says so, in a line before its answer (a notice
+    // from here was drawn under that answer).
+    if (!command.queuedTurnId) await resumeWaiter.cancel();
     if (startTurn(command)) return;
     let queuedTurnId = command.queuedTurnId;
     if (!queuedTurnId) {
