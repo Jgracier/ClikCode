@@ -295,6 +295,7 @@ describe('model labels', () => {
 describe('output formatting', () => {
   it('turns command results into panels, notices, or nothing', () => {
     expect(formatOutput({ panel: 'settings', session: {} })).toEqual({ kind: 'none' });
+    expect(formatOutput({ panel: 'status', session: {}, text: 'provider  Grok Build' })).toEqual({ kind: 'panel', title: 'Current setup', body: 'provider  Grok Build' });
     expect(formatOutput({ panel: 'error', message: 'bad' })).toEqual({ kind: 'notice', text: 'bad', level: 'error' });
     expect(formatOutput({ panel: 'error', message: 'All accounts exhausted' })).toMatchObject({ level: 'info' });
     expect(formatOutput({ panel: 'help', helpText: '\u001b[1m/help\u001b[0m' })).toEqual({ kind: 'panel', title: 'Commands', body: '/help' });

@@ -7,6 +7,7 @@
  * need live beside this file, one concern each.
  */
 
+import { stripVTControlCharacters } from 'node:util';
 import { searchConversations } from '../../search/engine.js';
 import { searchResultsText } from '../../search/navigate.js';
 import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService, ROUTE_CHOICES_TEXT } from '../../session/route.js';
@@ -33,7 +34,7 @@ import { writeState } from '../../session/state/write.js';
 import { aiAccountLogin, aiAccountLogout, aiAccountRemove, aiDoctor } from '../../commands/account.js';
 import Conf from 'conf';
 import { sendScriptedTurn } from '../../worker/scripted-send.js';
-import { emitHarnessOutput } from '../../harness/output.js';
+import { emitHarnessOutput, renderSessionCard } from '../../harness/output.js';
 import { SELECTION_MODE, setSelectionMode } from '../modes.js';
 import { TERMINAL } from '../active-terminal.js';
 import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
@@ -165,7 +166,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   },
   status: async ({ state, session }) => {
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;
-    return emitHarnessOutput({ panel: 'settings', session, account });
+    // `text` too: the card as plain lines, for a surface that draws a
+    // panel's text (VS Code) rather than the session it carries.
+    return emitHarnessOutput({ panel: 'status', session, account, text: stripVTControlCharacters(renderSessionCard(session, account)) });
   },
   new: async ({ state, session, args }) => {
     // `/reset` and `/clear` are aliases, not an in-place wipe. Clearing the

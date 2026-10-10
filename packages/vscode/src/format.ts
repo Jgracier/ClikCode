@@ -25,7 +25,7 @@ const CONFIRMATIONS = new Set([
 
 const TITLES: Record<string, string> = {
   help: 'Commands', usage: 'Usage', context: 'Context', diff: 'Changes', capabilities: 'Capabilities',
-  doctor: 'Doctor', shell: 'Shell', memory: 'Memory', permissions: 'Permissions', attachments: 'Attachments',
+  doctor: 'Doctor', shell: 'Shell', memory: 'Memory', permissions: 'Permissions', attachments: 'Attachments', status: 'Current setup',
 };
 
 function titleFor(panel: string): string {
