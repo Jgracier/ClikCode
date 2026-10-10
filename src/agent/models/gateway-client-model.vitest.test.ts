@@ -30,8 +30,15 @@ describe('a Gateway step', () => {
     const body = sent(fetchImpl).body as { reasoning_effort?: string; speed?: string; messages: Array<{ content: unknown }> };
     expect(body).toMatchObject({ reasoning_effort: 'high', speed: 'fast' });
     expect(body.messages[1]!.content).toEqual([{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }]);
-    // No choice made: nothing sent, the model's own default applies.
+    // No choice made: nothing sent, the model's own default applies...
     expect(gatewayStepOptions({ effort: 'platform-managed' })).toEqual({});
+    expect(gatewayStepOptions({ effort: 'platform-managed' }, 'gpt-5.6-sol')).toEqual({});
+    // ...except where Claude Code runs the model below the vendor's default: Claude Sonnet 5.5 and
+    // Claude Opus 5.5 at medium, as Claude Code does.
+    expect(gatewayStepOptions({ effort: 'platform-managed' }, 'claude-sonnet-5-5')).toEqual({ reasoning_effort: 'medium' });
+    expect(gatewayStepOptions({ effort: 'platform-managed' }, 'claude-opus-5-5')).toEqual({ reasoning_effort: 'medium' });
+    // The session's own choice always wins.
+    expect(gatewayStepOptions({ effort: 'none' }, 'claude-sonnet-5-5')).toEqual({ reasoning_effort: 'none' });
   });
 
   it('names the request an error came from', async () => {
