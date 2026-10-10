@@ -142,7 +142,16 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         ...(parent.permissionRules ? { permissionRules: parent.permissionRules } : {}),
         ...(parent.sandbox ? { sandbox: parent.sandbox } : {}),
         modelClient: parent.modelClient,
-        ...(parent.modelClientForStep ? { modelClientForStep: parent.modelClientForStep } : {}),
+        // A model change reaches the sub-agent at its next step, but the
+        // conversation leaving this route does not stop it: it runs to its
+        // answer, and the parent takes the switch at its own next step,
+        // after this call returns. Cut off partway, its work was lost.
+        ...(parent.modelClientForStep ? {
+          modelClientForStep: async () => {
+            const next = await parent.modelClientForStep!();
+            return next === 'switch' ? undefined : next;
+          },
+        } : {}),
         stateDir: parent.stateDir,
         tools, maxSteps: work ? WORK_SUBAGENT_MAX_STEPS : maxSteps,
         subagent: {

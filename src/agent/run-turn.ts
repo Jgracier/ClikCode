@@ -513,7 +513,22 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         }
       };
       const stepped = await abortable(Promise.resolve(input.modelClientForStep?.()), signal);
-      if (stepped === 'switch') return result({ stopReason: 'account-switch' });
+      if (stepped === 'switch') {
+        // The conversation left this route. Background agents it started
+        // finish first, in this process, rather than being stopped by the
+        // turn's end; their results go into this turn's memory and rows, so
+        // the provider that takes over sees what they found.
+        while (backgroundAgents?.running()) {
+          input.onPhase?.('waiting for background agents');
+          await abortable(backgroundAgents.nextFinish(signal), signal);
+        }
+        const done = backgroundAgents?.takeFinished() ?? [];
+        if (done.length) {
+          for (const note of done) input.onActivity?.({ kind: note.result.isError ? 'tool-error' : 'tool-done', label: `${note.id} finished: ${note.label}`, id: `agent-done-${note.id}`, agent: true, output: note.result.output.split('\n').slice(0, 40) });
+          await append({ type: 'text', role: 'user', text: formatAgentNotifications(done) });
+        }
+        return result({ stopReason: 'account-switch' });
+      }
       const modelClient = stepped ?? input.modelClient;
       stepAcceptsImages = modelClient.acceptsImages === true;
       try {

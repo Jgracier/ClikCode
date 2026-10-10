@@ -195,6 +195,33 @@ describe('task sub-agents', () => {
     expect(await fs.readdir(path.join(stateDir, 'sessions'))).toEqual([input.sessionId]);
   });
 
+  it('runs a sub-agent to its answer when the conversation leaves this route mid-task; the parent stops at its next step', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ id: 't1', name: 'task', args: { prompt: 'What does a.txt say?', description: 'Read a.txt' } }] },
+        { text: 'It says 42.' },
+      ] },
+      'What does a.txt say?': { script: [
+        { toolCalls: [{ id: 'c1', name: 'read_file', args: { path: 'a.txt' } }] },
+        { toolCalls: [{ id: 'c2', name: 'read_file', args: { path: 'a.txt' } }] },
+        { text: 'a.txt:1 says the answer is 42.' },
+      ] },
+    });
+    // Checked before each model step. The parent's first step goes through;
+    // from then on the conversation has left this route.
+    let checks = 0;
+    const { input, events } = turn(client, { modelClientForStep: async () => (++checks >= 2 ? 'switch' as const : undefined) });
+    const result = await runGatewayHarnessTurn(input);
+
+    expect(result.stopReason).toBe('account-switch');
+    // The sub-agent was not cut off: both its reads ran and it gave its answer.
+    expect(events.filter((event) => event.parentId === 't1' && event.kind === 'tool-done')).toHaveLength(2);
+    expect(client.requests('What does a.txt say?')).toHaveLength(3);
+    expect(events.find((event) => event.id === 't1' && event.kind === 'tool-done')).toBeDefined();
+    // The parent made no further model call after the switch.
+    expect(client.requests(PARENT_PROMPT)).toHaveLength(1);
+  });
+
   it('runs several task calls of one step in parallel', async () => {
     let active = 0;
     let peak = 0;
@@ -479,6 +506,42 @@ describe('coding sub-agents in their own worktree', () => {
     expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 47');
     expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
     expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
+  });
+
+  it('lets a background agent finish when the conversation switches away mid-turn, and keeps its result', async () => {
+    await initRepo();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ id: 'bg', name: 'agent', args: { prompt: 'slow edit', description: 'Slow edit', background: true } }] },
+        { text: 'unused: the conversation switched before this step' },
+      ] },
+      'slow edit': { script: [
+        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }], before: () => released },
+        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '47' } }] },
+        { text: 'Changed to 47.' },
+      ] },
+    });
+    // The parent's first step goes through; at its second the conversation
+    // has left this route, while the agent is still held.
+    let checks = 0;
+    const { input, events } = turn(client, { modelClientForStep: async () => {
+      checks += 1;
+      if (checks === 2) setTimeout(() => release(), 50);
+      return checks >= 2 ? 'switch' as const : undefined;
+    } });
+    const result = await runGatewayHarnessTurn(input);
+    expect(result.stopReason).toBe('account-switch');
+    // The agent was not stopped: it made its edit and gave its answer.
+    expect(client.requests('slow edit')).toHaveLength(3);
+    const done = events.find((event) => event.id === 'agent-done-agent_1');
+    expect(done?.kind).toBe('tool-done');
+    expect(done?.output?.join('\n')).toMatch(/Changed to 47/);
+    const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
+    expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 47');
+    // The parent made no model call after the switch.
+    expect(client.requests(PARENT_PROMPT)).toHaveLength(1);
   });
 
   it('gives a running background agent a follow-up and waits for its result', async () => {
