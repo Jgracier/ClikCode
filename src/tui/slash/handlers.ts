@@ -548,7 +548,7 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       const labelOrId = words.join(' ').trim();
       if (!labelOrId) throw new Error('usage: /accounts use <label-or-id>');
       const account = state.accounts.find((item) => item.id === labelOrId || item.label.toLowerCase() === labelOrId.toLowerCase());
-      if (!account) throw new Error(`local AI account "${labelOrId}" was not found`);
+      if (!account) throw new Error(`No account named "${labelOrId}" -- /account lists them`);
       // Leaving either agent route: an account means a vendor harness.
       const leavingAgentRoute = isClikCodeAgent(session);
       if (session.route === 'clikcode-local') await releaseHeldLocalModel(session.id);

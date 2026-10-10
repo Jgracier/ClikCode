@@ -214,7 +214,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
   const named = options.provider ? localHarnessForCommand(options.provider) : undefined;
   const state = await readState({ transcripts: [] });
   const account = options.account ? findAccount(state, options.account, named?.provider ?? options.provider) : undefined;
-  if (options.route === 'local' && options.account && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  if (options.route === 'local' && options.account && !account) throw new Error(`No account named "${options.account}"`);
   // The same guard aiSessionSet already applied. Without it, a label that
   // exists under several providers silently bound the session to the wrong
   // one instead of saying so.
@@ -417,7 +417,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
   const account = options.account === undefined
     ? undefined
     : findAccount(state, options.account, options.provider ?? current.provider);
-  if (options.account !== undefined && !account) throw new Error(`local AI account "${options.account}" was not found`);
+  if (options.account !== undefined && !account) throw new Error(`No account named "${options.account}"`);
   if (account && options.provider && options.provider !== account.provider) {
     throw new Error(`account "${account.label}" belongs to ${account.provider}, not ${options.provider}`);
   }
