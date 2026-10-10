@@ -5,6 +5,7 @@ import path from 'node:path';
 import { ConversationStore } from './conversation.js';
 import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
+import { claudeToolName } from './hooks.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, parsePermissionRules, suggestPermissionRule, visibleTools } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
@@ -201,6 +202,13 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   // the prompt-submit hook, which may refuse the prompt or add to it. A
   // sub-agent's prompt is the parent's, already through them.
   const turnHookInfo = { sessionId: input.sessionId, cwd, ...(signal ? { signal } : {}) };
+  /** Notification hooks watch the agent wait on the user; they never hold
+   * up the prompt, so they are not awaited. */
+  const notifyHook = (message: string, notificationType: 'permission_prompt' | 'idle_prompt'): void => {
+    if (!input.hooks?.notification) return;
+    const sessionId = input.subagent?.parentSessionId ?? input.sessionId;
+    void input.hooks.notification({ ...turnHookInfo, sessionId, message, notificationType }).catch(() => undefined);
+  };
   const hookContexts: string[] = [];
   let promptBlocked: string | undefined;
   if (!input.subagent && input.hooks) {
@@ -369,6 +377,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         if (now.decision === 'allow') return true;
         const prompt = await buildApprovalPrompt(tool, call.args, ctx, verdict.reason);
         input.onPhase?.('waiting for approval');
+        notifyHook(`ClikCode needs your permission to use ${claudeToolName(tool.name)}`, 'permission_prompt');
         return input.onApproval!(prompt.title, prompt.detail, rule, prompt.diff ? { diff: prompt.diff } : undefined);
       });
       const approved = await abortable(ask, signal);
@@ -440,6 +449,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
      * compact. Saved, and its own model usage counted, like any step. */
     const compact = async (system: string, targetTokens?: number): Promise<boolean> => {
       input.onPhase?.('compacting context');
+      if (!input.subagent && input.hooks?.preCompact) await abortable(input.hooks.preCompact({ ...turnHookInfo, trigger: 'auto' }), signal);
       const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, ...(targetTokens !== undefined ? { targetTokens } : {}) }), signal);
       if (compacted.stage === 'none') return false;
       items = compacted.items;
@@ -608,11 +618,20 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         // Steering, or a background shell that finished while this step ran:
         // one more step answers it now rather than in a follow-up turn.
         if (steerQueue.length || (!input.subagent && session.notifications.length)) continue;
-        if (!input.subagent && input.hooks?.stop && stopContinues < MAX_STOP_HOOK_CONTINUES) {
-          const verdict = await abortable(Promise.resolve(input.hooks.stop({ ...turnHookInfo, stopHookActive: stopContinues > 0 })), signal);
+        // A sub-agent answers to SubagentStop, named as Claude Code names it:
+        // the parent's session, the sub-agent's own id and trace.
+        const sub = input.subagent;
+        const stopHook = sub
+          ? input.hooks?.subagentStop && (() => input.hooks!.subagentStop!({
+            ...turnHookInfo, sessionId: sub.parentSessionId ?? input.sessionId, stopHookActive: stopContinues > 0,
+            agentId: input.sessionId, agentType: sub.kind ?? 'research', agentTranscriptPath: sub.transcriptFile,
+          }))
+          : input.hooks?.stop && (() => input.hooks!.stop!({ ...turnHookInfo, stopHookActive: stopContinues > 0 }));
+        if (stopHook && stopContinues < MAX_STOP_HOOK_CONTINUES) {
+          const verdict = await abortable(Promise.resolve(stopHook()), signal);
           if (verdict?.continueWith) {
             stopContinues += 1;
-            await append({ type: 'text', role: 'user', text: `[Stop hook] ${verdict.continueWith}` });
+            await append({ type: 'text', role: 'user', text: `[${sub ? 'SubagentStop' : 'Stop'} hook] ${verdict.continueWith}` });
             continue;
           }
         }
@@ -650,6 +669,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         input.onResponseDelta?.(`${needsSeparator ? '\n\n' : ''}${question}`, 'append');
         segments.push(question);
         await append({ type: 'text', role: 'assistant', text: question });
+        notifyHook(question, 'idle_prompt');
         return result({ stopReason: 'completed' });
       }
 

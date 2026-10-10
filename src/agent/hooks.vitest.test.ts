@@ -86,6 +86,47 @@ describe('the prompt, session and stop hooks', () => {
   });
 });
 
+describe('the sub-agent, compaction and notification hooks', () => {
+  it('lets a SubagentStop hook matching the agent type send a sub-agent back, with Claude\'s fields', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { SubagentStop: [{ matcher: 'work', hooks: [{ command: 'cat > seen.json; echo "check the diff" >&2; exit 2' }] }] } });
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
+    const stop = { ...info(cwd), stopHookActive: false, agentId: 's1.task.x', agentTranscriptPath: '/t/x.jsonl' };
+    expect(await hooks.subagentStop!({ ...stop, agentType: 'work' })).toEqual({ continueWith: 'check the diff' });
+    expect(JSON.parse(await readFile(path.join(cwd, 'seen.json'), 'utf8'))).toEqual({
+      session_id: 's1', cwd, hook_event_name: 'SubagentStop', stop_hook_active: false,
+      agent_id: 's1.task.x', agent_type: 'work', agent_transcript_path: '/t/x.jsonl',
+    });
+    expect(await hooks.subagentStop!({ ...stop, agentType: 'research' })).toBeUndefined();
+  });
+
+  it('runs PreCompact hooks for the auto trigger, and never lets them stop compaction', async () => {
+    const errors: string[] = [];
+    const { cwd, home } = await workspaceWith({ hooks: { PreCompact: [
+      { matcher: 'auto', hooks: [{ command: 'cat > seen.json; exit 2' }] },
+      { matcher: 'manual', hooks: [{ command: 'touch manual.txt' }] },
+    ] } });
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }), (message) => errors.push(message))!;
+    await expect(hooks.preCompact!({ ...info(cwd), trigger: 'auto' })).resolves.toBeUndefined();
+    expect(JSON.parse(await readFile(path.join(cwd, 'seen.json'), 'utf8'))).toEqual({ session_id: 's1', cwd, hook_event_name: 'PreCompact', trigger: 'auto', custom_instructions: '' });
+    await expect(readFile(path.join(cwd, 'manual.txt'))).rejects.toThrow();
+    expect(errors[0]).toMatch(/PreCompact hook .* failed \(exit 2\)/);
+  });
+
+  it('hands a Notification hook the message and type, matched by type', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { Notification: [{ matcher: 'permission_prompt', hooks: [{ command: 'cat >> seen.jsonl; echo >> seen.jsonl' }] }] } });
+    const hooks = toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))!;
+    await hooks.notification!({ ...info(cwd), message: 'ClikCode needs your permission to use Bash', notificationType: 'permission_prompt' });
+    await hooks.notification!({ ...info(cwd), message: 'Which database?', notificationType: 'idle_prompt' });
+    const seen = (await readFile(path.join(cwd, 'seen.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
+    expect(seen).toEqual([{ session_id: 's1', cwd, hook_event_name: 'Notification', message: 'ClikCode needs your permission to use Bash', notification_type: 'permission_prompt' }]);
+  });
+
+  it('counts a config with only these events as declaring hooks', async () => {
+    const { cwd, home } = await workspaceWith({ hooks: { Notification: [{ hooks: [{ command: 'true' }] }] } });
+    expect(toolHooksFrom(await readClaudeHooks(cwd, home, { includeProject: true }))?.notification).toBeDefined();
+  });
+});
+
 describe('workspace trust', () => {
   const projectHook = { hooks: { UserPromptSubmit: [{ hooks: [{ command: 'touch ran.txt' }] }] } };
 

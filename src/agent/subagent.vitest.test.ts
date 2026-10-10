@@ -299,6 +299,32 @@ describe('task sub-agents', () => {
     expect(toolResults(client.requests('peek')[1])[0]).toMatch(/declined/);
     expect(toolResults(client.requests(PARENT_PROMPT)[1]).map(withoutTrace)).toEqual(['was refused']);
   });
+  it('runs SubagentStop, not Stop, when a sub-agent would finish, and lets it send the sub-agent back', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ id: 't-stop', name: 'task', args: { prompt: 'look closer' } }] }, { text: 'parent done' }] },
+      'look closer': { script: [{ text: 'first answer' }, { text: 'checked again' }] },
+    });
+    const seen: Array<Record<string, unknown>> = [];
+    let stops = 0;
+    const { input } = turn(client, { hooks: {
+      stop: async () => { stops += 1; },
+      subagentStop: async (info) => {
+        seen.push({ ...info });
+        return info.stopHookActive ? undefined : { continueWith: 'verify it' };
+      },
+    } });
+    const result = await runGatewayHarnessTurn(input);
+    expect(result.text).toBe('parent done');
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toMatchObject({ sessionId: input.sessionId, cwd, agentType: 'research', stopHookActive: false });
+    expect(String(seen[0].agentId)).toMatch(new RegExp(`^${input.sessionId}\\.task\\.`));
+    expect(String(seen[0].agentTranscriptPath)).toMatch(/\.jsonl$/);
+    const nudge = client.requests('look closer')[1]!.items.at(-1);
+    expect(nudge?.type === 'text' && nudge.text).toBe('[SubagentStop hook] verify it');
+    expect(withoutTrace(toolResults(client.requests(PARENT_PROMPT)[1])[0]!)).toMatch(/checked again$/);
+    // The parent's own Stop hook ran once, for the parent.
+    expect(stops).toBe(1);
+  });
 });
 
 describe('coding sub-agents in their own worktree', () => {

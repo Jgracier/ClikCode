@@ -124,6 +124,12 @@ interface HarnessHooks {
   sessionStart?(info: HookInfo & { source: 'startup' | 'resume' }): Promise<{ context?: string } | void>;
   /** May keep the agent working when it would finish (`continueWith` is given to the model). */
   stop?(info: HookInfo & { stopHookActive: boolean }): Promise<{ continueWith?: string } | void>;
+  /** The same, for a sub-agent about to hand its answer back to its parent. */
+  subagentStop?(info: HookInfo & { stopHookActive: boolean; agentId: string; agentType: string; agentTranscriptPath: string }): Promise<{ continueWith?: string } | void>;
+  /** Before the conversation is compacted. Watches only. */
+  preCompact?(info: HookInfo & { trigger: 'auto' | 'manual' }): Promise<void>;
+  /** The agent is waiting on the user: an approval, or a question it ended its turn on. Watches only. */
+  notification?(info: HookInfo & { message: string; notificationType: 'permission_prompt' | 'idle_prompt' }): Promise<void>;
 }
 
 export interface GatewayHarnessTurnInput {
@@ -186,8 +192,9 @@ export interface GatewayHarnessTurnInput {
   net?: NetworkSeams;
   /** Set when this turn is a `task` sub-agent's: `system` replaces the built-in
    * prompt, the conversation goes to `transcriptFile`, and the turn cannot
-   * start sub-agents of its own. */
-  subagent?: { system: string; transcriptFile: string; checkpoint?: { sessionId: string; turnId: string } };
+   * start sub-agents of its own. `parentSessionId` and `kind` name it to a
+   * SubagentStop hook. */
+  subagent?: { system: string; transcriptFile: string; checkpoint?: { sessionId: string; turnId: string }; parentSessionId?: string; kind?: 'research' | 'work' };
   /** When the conversation has a swarm, a `task` call asks this before the
    * same-model sub-agent. Null keeps that sub-agent. */
   swarmDelegate?: (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string }) => Promise<ToolRunResult | null>;
