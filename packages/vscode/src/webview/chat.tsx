@@ -552,6 +552,12 @@ function Working({ live, elsewhere, asking }: { live: LiveTurn | undefined; else
   );
 }
 
+/** The turn waits on the user -- an approval, or a sign-in in their
+ * browser: the working line holds still, its clock stopped. */
+export function waitingOnUser(model: Pick<ChatModel, 'approvals' | 'signIn'>): boolean {
+  return model.approvals.length > 0 || Boolean(model.signIn);
+}
+
 /** The working line's label: in its tone, and shimmering only while the
  * turn works. Waiting on the user it holds still, as the terminal's does. */
 export function workingLabelClass(toneClass: string, asking: boolean): string {
@@ -633,7 +639,7 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
   // A plan is on screen while it has open steps; finished, it goes, and is
   // kept with its turn (planStillNeeded, as the terminal decides).
   if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} running={model.running} />);
-  if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} asking={model.approvals.length > 0} />);
+  if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} elsewhere={!model.ownTurn} asking={waitingOnUser(model)} />);
   // Notes from the running turn (an account switch, "Stopped") follow it.
   model.notes.forEach((note, position) => { if (note.after > model.messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
   const queuedTexts = new Set(model.queued.map((item) => item.text));
