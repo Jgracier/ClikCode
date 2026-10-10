@@ -538,9 +538,6 @@ function Working({ live, asking }: { live: LiveTurn | undefined; asking: boolean
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
         <span class="muted">{live && !asking ? formatElapsed(liveElapsedMs(live, now)) : ''}</span>
-        {/* A thin rule on to the right edge, as the one above the composer
-            runs from the left to the usage. */}
-        <span class="rule-line" aria-hidden="true" />
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
