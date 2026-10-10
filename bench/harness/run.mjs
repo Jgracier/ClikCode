@@ -4,7 +4,7 @@
  *
  *   node bench/harness/run.mjs [--tasks 01,05] [--harnesses clikcode,claude]
  *       [--model claude-sonnet-5-5] [--timeout-min 10]
- *       [--claude-credentials <path to a .credentials.json>]
+ *       [--claude-credentials <path to a .credentials.json>] [--gateway-log]
  *   node bench/harness/run.mjs --self-check
  *
  * Each task × harness gets a fresh copy of tasks/<task>/template under
@@ -12,6 +12,10 @@
  * scripts/vendor-sandbox.mjs (so nothing lands in the real home), then runs
  * tasks/<task>/verify.mjs in it. Results go to results/<date>.json and .md;
  * each run's work copy and transcripts stay in the printed /var/tmp folder.
+ *
+ * --gateway-log puts a local pass-through proxy (lib/gateway-log.mjs) in
+ * front of the Gateway for ClikCode runs and keeps artifacts/gateway.jsonl:
+ * each model step's usage (reasoning tokens included) and request shape.
  *
  * --self-check proves every verify script: the bare template must fail, and
  * the template with solution/ laid over it (plus solution/solve.mjs, when
@@ -23,6 +27,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { startGatewayLog } from './lib/gateway-log.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..', '..');
@@ -117,8 +122,10 @@ function selfCheck(list) {
 
 /** The bash wrapper that runs inside the sandbox: the harness, then a copy
  * of its transcripts out of the sandbox home before the sandbox deletes it. */
-function wrapper(harness) {
+function wrapper(harness, gatewayLog) {
   const lines = ['#!/bin/bash', 'cd "$BENCH_WORK" || exit 90'];
+  // The sign-in, rewritten to the proxy's URL, in the run's own tmp (deleted after).
+  if (gatewayLog) lines.push('mkdir -p "$HOME/.config/clikcode" && cp "$BENCH_GATEWAY_AUTH" "$HOME/.config/clikcode/auth.json"');
   if (harness === 'claude') {
     lines.push('mkdir -p "$HOME/.claude" && ln -s "$BENCH_CLAUDE_CREDENTIALS" "$HOME/.claude/.credentials.json"');
   }
@@ -133,9 +140,9 @@ function wrapper(harness) {
   return `${lines.join('\n')}\n`;
 }
 
-function command(harness, prompt) {
+function command(harness, prompt, gatewayLog) {
   if (harness === 'clikcode') {
-    return ['--link', '.config/clikcode/auth.json', '--', 'bash', 'WRAP', 'node', join(root, 'dist', 'index.js'), 'send', '--harness', 'gateway', '--model', model, '--permissions', 'bypass', prompt];
+    return [...(gatewayLog ? [] : ['--link', '.config/clikcode/auth.json']), '--', 'bash', 'WRAP', 'node', join(root, 'dist', 'index.js'), 'send', '--harness', 'gateway', '--model', model, '--permissions', 'bypass', prompt];
   }
   if (harness === 'claude') {
     return ['--', 'bash', 'WRAP', 'claude', '-p', '--model', model, '--permission-mode', 'bypassPermissions', '--output-format', 'json', prompt];
@@ -169,15 +176,16 @@ async function runOne(task, harness) {
   if (skip) return { ...base, success: false, skipped: true, note: skip, wallMs: 0 };
 
   const wrap = join(dir, 'wrap.sh');
-  writeFileSync(wrap, wrapper(harness));
+  const proxy = harness === 'clikcode' && args['gateway-log'] ? await startGatewayProxy(tmp, artifacts) : null;
+  writeFileSync(wrap, wrapper(harness, Boolean(proxy)));
   const runId = `${task}-${harness}-${Date.now()}`;
-  const argv = command(harness, prompt).map((part) => (part === 'WRAP' ? wrap : part));
+  const argv = command(harness, prompt, Boolean(proxy)).map((part) => (part === 'WRAP' ? wrap : part));
   const startedAt = Date.now();
   const child = spawn('node', [join(root, 'scripts', 'vendor-sandbox.mjs'), ...argv], {
     cwd: work,
     detached: true,
     stdio: ['ignore', 'inherit', 'inherit'],
-    env: { ...process.env, TMPDIR: tmp, BENCH_WORK: work, BENCH_ARTIFACTS: artifacts, BENCH_CLAUDE_CREDENTIALS: claudeCredentials, BENCH_RUN_ID: runId },
+    env: { ...process.env, TMPDIR: tmp, BENCH_WORK: work, BENCH_ARTIFACTS: artifacts, BENCH_CLAUDE_CREDENTIALS: claudeCredentials, BENCH_RUN_ID: runId, ...proxy?.env },
   });
   let timedOut = false;
   const timer = setTimeout(() => {
@@ -188,6 +196,7 @@ async function runOne(task, harness) {
   const exitCode = await new Promise((done) => child.on('exit', (code, signal) => done(code ?? signal)));
   clearTimeout(timer);
   const wallMs = Date.now() - startedAt;
+  await proxy?.close();
   if (timedOut) salvage(tmp, artifacts, harness);
 
   const checked = verify(task, work);
@@ -208,6 +217,16 @@ async function runOne(task, harness) {
     diffStat: diff.split('\n').at(-1) ?? '',
     ...metrics,
   };
+}
+
+/** The logging proxy for one ClikCode run, and the environment that points
+ * the run at it: a copy of the Gateway sign-in naming the proxy's URL. */
+async function startGatewayProxy(tmp, artifacts) {
+  const auth = JSON.parse(readFileSync(join(homedir(), '.config', 'clikcode', 'auth.json'), 'utf8'));
+  const proxy = await startGatewayLog(auth.apiUrl, join(artifacts, 'gateway.jsonl'));
+  const authFile = join(tmp, 'gateway-auth.json');
+  writeFileSync(authFile, JSON.stringify({ ...auth, apiUrl: proxy.url }), { mode: 0o600 });
+  return { close: proxy.close, env: { CLIKCODE_GATEWAY_URL_OVERRIDE: proxy.url, BENCH_GATEWAY_AUTH: authFile } };
 }
 
 /** A timed-out sandbox never reached its own copy step. */
@@ -264,8 +283,14 @@ function clikcodeMetrics(artifacts) {
   const cost = price && usage.input !== undefined
     ? ((usage.input - (usage.cacheRead ?? 0)) * price.input + (usage.cacheRead ?? 0) * price.cacheRead + (usage.output ?? 0) * price.output) / 1e6
     : null;
+  const gatewaySteps = readJsonLines(join(artifacts, 'gateway.jsonl'));
   return {
     ...clikcodeSteps(artifacts),
+    ...(gatewaySteps.length ? {
+      stepOutput: gatewaySteps.map((step) => step.output),
+      stepReasoning: gatewaySteps.map((step) => step.reasoning),
+      stepTools: gatewaySteps.map((step) => step.toolNames?.length ?? 0),
+    } : {}),
     reply: (out.text ?? replies.at(-1)?.content ?? '').slice(0, 600),
     error: out.error ?? (out.status === 'error' ? out.message : undefined) ?? (stderr ? stderr.slice(0, 600) : undefined),
     inputTokens: usage.input ?? null,
