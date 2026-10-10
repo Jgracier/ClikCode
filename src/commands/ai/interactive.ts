@@ -418,6 +418,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         shownSettings = settingsKey;
         const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
         paletteState = latestState;
+        terminal?.knowAccounts(latestState.accounts);
         // A turn parked for the quota reset: Esc on an empty composer stops it.
         if (terminal) {
           const parkedId = latest.id;

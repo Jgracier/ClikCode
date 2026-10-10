@@ -255,6 +255,13 @@ export function verificationNotice(verification: { url?: string }): string {
  * ID into the same `accountSwitchedFrom` output field the native sites filled
  * with a label, so a headless consumer got a UUID from one path and a name
  * from the other. */
+/** The line a turn that moved accounts keeps: `Switched to work: personal is
+ * out of usage`. */
+export function accountSwitchLine(change: { from: string; to: string; reason: string }): string {
+  const why = change.reason === 'quota-exhausted' ? 'is out of usage' : `failed (${accountFailureReason(change.reason as AccountFailureKind)})`;
+  return `Switched to ${change.to}: ${change.from} ${why}`;
+}
+
 export function accountSwitchNotice(kind: AccountFailureKind, to: string): string {
   return kind === 'quota-exhausted'
     ? `out of usage, switching to ${to}`

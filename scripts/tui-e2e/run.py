@@ -1145,6 +1145,22 @@ SCENARIOS = {
                   ('type', '/logout'), ('wait_for', 'Signed out of', 10), ('settle', 1)],
         'watch': [], 'final_contains': ['Signed out of Grok Build · /login signs back in'], 'clipboard': 'Checking the workspace first.\n\nThe final commit is live.',
     },
+    # Out of usage on one of two accounts: the turn switches to the other on
+    # its own, a line in the conversation says so and stays (it was on screen
+    # for a moment and never saved), and the status line names the account.
+    'failover-switch-is-said-and-kept': {
+        'turns': [{'blocks': ['First answer on the first account.']},
+                  {'refuse': 'The monthly usage limit has been reached. Try again in 2 hours.', 'blocks': ['unused']},
+                  {'blocks': ['Answered on the other account.']}],
+        'steps': [('type', 'hello'), ('wait_for', 'First answer on the first account.', 40), ('settle', 1),
+                  ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 20), ('settle', 2),
+                  ('type', 'carry on'), ('wait_for', 'Answered on the other account.', 40), ('settle', 2), ('snap', 'after'),
+                  ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
+                  ('wait_for', 'Answered on the other account.', 10), ('settle', 2)],
+        'watch': [], 'snap_contains': {'after': ['Switched to ', 'is out of usage']},
+        'final_contains': ['Switched to ', 'is out of usage', 'Grok Build · '], 'never': ['usage exhausted', 'All accounts exhausted'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

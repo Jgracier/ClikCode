@@ -302,14 +302,19 @@ export function turnAccounts(input: {
   /** Why the turn left that account: the failure it met there. */
   let switchReason: AccountFailureKind = 'quota-exhausted';
   const switchTo = async (to: AiHarnessAccount, why: AccountFailureKind): Promise<void> => {
-    // The status line says it while it happens; the band names the account
-    // the turn is on. A line in the conversation per switch was noise.
+    // The status line says it while it happens, and names the account the
+    // turn is on after; the turn's answer keeps it as a line in the
+    // conversation (TranscriptMessage.accountSwitch), drawn at its end.
     prompter?.phase(accountSwitchNotice(why, to.label));
     await input.beforeSwitch?.();
     switchedFrom = input.current().label;
     switchReason = why;
+    // From the account the turn first ran on: two switches are one move.
+    const first = session.pendingTurn?.accountSwitch?.from ?? switchedFrom;
+    if (session.pendingTurn) session.pendingTurn.accountSwitch = { from: first, to: to.label, reason: why };
     input.adopt(to);
     await recordAccount(to);
+    await persist();
   };
   return {
     recordAccount,

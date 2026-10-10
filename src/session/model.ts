@@ -37,7 +37,13 @@ export type TranscriptMessage = {
    * 3s") is drawn from this, so it is there however the conversation is
    * opened again -- not only in the window that watched the turn end. */
   turnEnd?: { ms: number; stopped?: true };
+  /** On the answer a turn ended on: the account it moved to on the way,
+   * from which, and why ("Switched to work: personal is out of usage"). */
+  accountSwitch?: AccountSwitch;
 };
+
+/** A turn moved to another account of the same provider (turn/account-routing.ts). */
+export type AccountSwitch = { from: string; to: string; reason: string };
 
 /** The harness (or, for ClikCode's own agent, the route) and model that
  * produced a message. */
@@ -174,6 +180,8 @@ export interface HarnessSession {
     /** Sub-agents this turn has running, so another terminal's conversation
      * list can show them. Part of the journal, so it ends with the turn. */
     subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string; provider?: string }>;
+    /** The account this turn moved to, carried onto its answer at the end. */
+    accountSwitch?: AccountSwitch;
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */

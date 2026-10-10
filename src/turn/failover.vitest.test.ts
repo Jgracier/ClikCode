@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerification, verificationNotice, accountSwitchNotice, classifyAccountFailure, isTransientStartFailure, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, isTransientStartFailure, quotaRetryHint } from './failover';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -164,6 +164,11 @@ describe('one wording for an account switch, wherever it happens', () => {
   it('says running out plainly, and calls it a switch rather than a retry', () => {
     expect(accountSwitchNotice('quota-exhausted', 'work@example.com'))
       .toBe('out of usage, switching to work@example.com');
+  });
+
+  it('keeps the switch as one line: where it went, and why it left', () => {
+    expect(accountSwitchLine({ from: 'personal', to: 'work', reason: 'quota-exhausted' })).toBe('Switched to work: personal is out of usage');
+    expect(accountSwitchLine({ from: 'personal', to: 'work', reason: 'temporarily-throttled' })).toBe('Switched to work: personal failed (rate limited)');
   });
 
   it('never calls a switch a retry, for any failure kind', () => {
