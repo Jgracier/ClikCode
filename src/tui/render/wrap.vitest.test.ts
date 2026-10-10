@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { wrapCodeLine, wrapWords, wrapWordsLive } from './wrap.js';
+import { middleSlice, noticeLines, wrapCodeLine, wrapWords, wrapWordsLive } from './wrap.js';
 
 describe('wrapWordsLive', () => {
   it('gives wrapWords\' lines at every step of a growing text', () => {
@@ -22,5 +22,24 @@ describe('hard breaks', () => {
     expect(wrapCodeLine('abcdefgh', 3)).toEqual(['abc', 'def', 'gh']);
     expect(wrapCodeLine('a中b', 1)).toEqual(['a', '中', 'b']);
     expect(wrapWords('\u001b[1mabcdef\u001b[22m', 4)).toEqual(['\u001b[1mabcd', 'ef\u001b[22m']);
+  });
+});
+
+describe('a notice above the composer', () => {
+  it('wraps to up to three rows, the last ending in … when more was cut', () => {
+    const text = 'unknown model nosuch-model; choose one of grok-4, grok-4-fast, grok-3, grok-3-mini, grok-code-fast, grok-2, grok-beta, grok-vision';
+    const rows = noticeLines(text, 30);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.length <= 30)).toBe(true);
+    expect(rows[2]!.endsWith('…')).toBe(true);
+    expect(noticeLines('Stopped', 30)).toEqual(['Stopped']);
+  });
+
+  it('shortens a path too long for a row in the middle, keeping its file name', () => {
+    const path = '~/projects/a/very/deep/folder/tree/that/goes/on/transcript.md';
+    expect(middleSlice(path, 30)).toHaveLength(30);
+    expect(middleSlice(path, 30).endsWith('transcript.md')).toBe(true);
+    expect(middleSlice(path, 30).startsWith('~/projects')).toBe(true);
+    expect(noticeLines(`Transcript written to ${path}`, 30).join(' ')).toContain('transcript.md');
   });
 });

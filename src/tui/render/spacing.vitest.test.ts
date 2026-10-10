@@ -20,7 +20,7 @@ describe('the composer has room to breathe', () => {
   it('opens the resting composer with a clear row', async () => {
     const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
     const footer = source.slice(source.indexOf('const footer: string[] = [];'));
-    const firstPush = footer.slice(0, footer.indexOf('if (noticeRows'));
+    const firstPush = footer.slice(0, footer.indexOf('footer.push(...noticeShown'));
     expect(firstPush, 'the footer must open with a blank row').toContain("footer.push('')");
   });
 
