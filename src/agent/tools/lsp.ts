@@ -87,7 +87,8 @@ export function hoverText(result: unknown): string {
   const contents = (result as { contents?: unknown } | null)?.contents;
   const part = (value: unknown): string => typeof value === 'string' ? value
     : value && typeof value === 'object' && typeof (value as { value?: unknown }).value === 'string' ? (value as { value: string }).value : '';
-  const text = (Array.isArray(contents) ? contents.map(part) : [part(contents)]).filter(Boolean).join('\n\n').trim();
+  // Code fences are markdown for an editor's popup; the code reads the same without them.
+  const text = (Array.isArray(contents) ? contents.map(part) : [part(contents)]).filter(Boolean).join('\n\n').replace(/^```[\w+-]*[ \t]*\r?\n?/gm, '').trim();
   return text.length > MAX_HOVER_CHARS ? `${text.slice(0, MAX_HOVER_CHARS)}…` : text;
 }
 
@@ -159,7 +160,7 @@ async function diagnostics(files: readonly string[], ctx: ToolContext): Promise<
   }));
   const lines = formatDiagnostics(byFile, ctx);
   const checked = byFile.size;
-  const summary = checked ? (lines.length ? [] : [`No diagnostics in ${checked === 1 ? displayPath([...byFile.keys()][0]!, ctx) : `${checked} files`}.`]) : [];
+  const summary = checked && !notes.length ? (lines.length ? [] : [`No diagnostics in ${checked === 1 ? displayPath([...byFile.keys()][0]!, ctx) : `${checked} files`}.`]) : [];
   return [...lines, ...summary, ...notes, ...problems].join('\n');
 }
 
@@ -248,13 +249,15 @@ export async function errorsAfterEdit(file: string, ctx: ToolContext): Promise<s
     const server = await runningServerFor(file, ctx.cwd);
     if (!server) return '';
     const uri = fileUri(file);
-    const before = new Set((server.documents.has(uri) ? server.diagnostics.get(uri)?.items ?? [] : []).filter(isError).map(errorKey));
+    // A file the server had not seen yet has no baseline: all its errors show.
+    const known = server.documents.has(uri);
+    const before = new Set((known ? server.diagnostics.get(uri)?.items ?? [] : []).filter(isError).map(errorKey));
     if (!await server.sync(file)) return '';
     const result = await server.waitForDiagnostics([file], AFTER_EDIT_WAIT_MS, ctx.signal);
     const introduced = (result.byFile.get(file) ?? []).filter((item) => isError(item) && !before.has(errorKey(item)));
     if (!introduced.length) return '';
     const lines = formatDiagnostics(new Map([[file, introduced]]), ctx, AFTER_EDIT_ERRORS);
-    return `\n\n${server.name} reports new errors:\n${lines.join('\n')}`;
+    return `\n\n${server.name} reports ${known ? 'new errors' : 'errors in this file'}:\n${lines.join('\n')}`;
   } catch {
     return ''; // fail-open-ok: the edit is done; a server problem is the lsp tool's to report.
   }
