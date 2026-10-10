@@ -12,6 +12,7 @@
 import { JsonRpcPeer } from '../../harness/transport/jsonrpc-peer.js';
 import { spawnPortable } from '../../harness/transport/spawn.js';
 import type { McpServerSpec } from './config.js';
+import { McpSignInRequired, type McpAuth } from './oauth.js';
 
 type Message = Record<string, any>;
 
@@ -183,6 +184,9 @@ export class HttpTransport implements McpTransport {
     private readonly spec: Extract<McpServerSpec, { transport: 'http' | 'sse' }>,
     private readonly handlers: McpTransportHandlers,
     private readonly fetchImpl: Fetch = fetch,
+    /** The server's OAuth credential (oauth.ts), when ClikCode holds one or
+     * may: sent on every request, refreshed on a 401. */
+    private readonly auth?: McpAuth,
   ) {
     this.mode = spec.transport === 'sse' ? 'sse' : 'streamable';
   }
@@ -217,8 +221,9 @@ export class HttpTransport implements McpTransport {
     // Ending the session tells the server it may free what it holds for us.
     // Best effort: a server that ignores DELETE (405) is within the spec.
     if (sessionId) {
+      const authorization = await this.auth?.authorization().catch(() => undefined);
       await this.fetchImpl(this.spec.url, {
-        method: 'DELETE', headers: { ...this.spec.headers, 'mcp-session-id': sessionId }, signal: AbortSignal.timeout(2000),
+        method: 'DELETE', headers: { ...this.spec.headers, 'mcp-session-id': sessionId, ...(authorization ? { authorization } : {}) }, signal: AbortSignal.timeout(2000),
       }).catch(() => undefined);
     }
   }
@@ -243,9 +248,24 @@ export class HttpTransport implements McpTransport {
     };
   }
 
+  /** A request with the credential attached. A 401 gets one fresh token and
+   * one retry; a server that still refuses, or whose credential is gone,
+   * needs a sign-in -- reported, never started from here (oauth.ts). */
+  private async authorizedFetch(url: string, init: RequestInit & { headers: Record<string, string> }): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+      const authorization = await this.auth?.authorization();
+      const response = await this.fetchImpl(url, { ...init, headers: { ...init.headers, ...(authorization ? { authorization } : {}) } });
+      if (response.status !== 401 || !this.auth) return response;
+      const verdict = await this.auth.unauthorized(response.headers.get('www-authenticate'), authorization, attempt > 0);
+      if (verdict === 'fail') return response;
+      await response.body?.cancel().catch(() => undefined);
+      if (verdict === 'sign-in') throw new McpSignInRequired(this.spec.name);
+    }
+  }
+
   private async send(message: Message): Promise<void> {
     if (this.mode === 'sse') return this.sendLegacy(message);
-    const response = await this.fetchImpl(this.spec.url, {
+    const response = await this.authorizedFetch(this.spec.url, {
       method: 'POST',
       headers: this.headers({ 'content-type': 'application/json', accept: 'application/json, text/event-stream' }),
       body: JSON.stringify(message),
@@ -285,7 +305,7 @@ export class HttpTransport implements McpTransport {
 
   private async sendLegacy(message: Message): Promise<void> {
     const endpoint = this.sseEndpoint ?? await this.openLegacyStream();
-    const response = await this.fetchImpl(endpoint, {
+    const response = await this.authorizedFetch(endpoint, {
       method: 'POST', headers: this.headers({ 'content-type': 'application/json' }), body: JSON.stringify(message),
       signal: this.lifetime.signal,
     });
@@ -306,7 +326,7 @@ export class HttpTransport implements McpTransport {
     this.legacyOpening ??= (async () => {
       const controller = new AbortController();
       this.streams.add(controller);
-      const response = await this.fetchImpl(this.spec.url, {
+      const response = await this.authorizedFetch(this.spec.url, {
         method: 'GET', headers: this.headers({ accept: 'text/event-stream' }), signal: controller.signal,
       });
       if (!response.ok || !response.body) {
@@ -374,6 +394,6 @@ export class HttpTransport implements McpTransport {
   }
 }
 
-export function openTransport(spec: McpServerSpec, handlers: McpTransportHandlers, fetchImpl?: Fetch): McpTransport {
-  return spec.transport === 'stdio' ? stdioTransport(spec, handlers) : new HttpTransport(spec, handlers, fetchImpl);
+export function openTransport(spec: McpServerSpec, handlers: McpTransportHandlers, fetchImpl?: Fetch, auth?: McpAuth): McpTransport {
+  return spec.transport === 'stdio' ? stdioTransport(spec, handlers) : new HttpTransport(spec, handlers, fetchImpl, auth);
 }
