@@ -14,6 +14,7 @@ import { captureNativeHarnessOutput } from '../harness/transport/native/command.
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessInstallRoute, manualInstallCommand } from '../harness/transport/native/install-route.js';
 import { loginNativeHarness, withSignInScreen } from '../harness/transport/native/login.js';
+import { SignInCancelled } from '../gateway/login/vendor-sign-in.js';
 import { builtInHarnesses, harnessAdapterVersion, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { ADOPTED_TRANSCRIPT_READERS, FS_SESSION_DISCOVERY } from '../session/discovery/registry.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -314,19 +315,30 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
 export async function withSignIn<T>(prompter: Pick<HarnessPrompter, 'signInScreen' | 'activity'> | undefined, name: string, work: () => Promise<T>): Promise<T> {
   const screen = prompter?.signInScreen?.(name);
   if (!screen) return work();
-  const outcome = (error: unknown): void => prompter?.activity?.(error === undefined
-    ? `${chalk.green('signed in to')} ${chalk.dim(name)}`
-    : `${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
   try {
     const result = await withSignInScreen(screen, work);
     screen.stop();
-    outcome(undefined);
+    prompter?.activity?.(`${chalk.green('signed in to')} ${chalk.dim(name)}`);
     return result;
   } catch (error) {
     screen.stop();
-    outcome(error);
-    throw error;
+    // Cancelled (Esc, Ctrl+C) is an outcome, said plainly; a failure says
+    // why. Either way this is the one line about it: the error goes on
+    // marked as said (signInOutcomeSaid).
+    const cancelled = screen.signal.aborted || error instanceof SignInCancelled;
+    prompter?.activity?.(cancelled
+      ? chalk.dim(`Sign-in to ${name} cancelled`)
+      : `${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { [SIGN_IN_SAID]: cancelled ? 'cancelled' : 'failed' });
   }
+}
+
+const SIGN_IN_SAID = Symbol('sign-in outcome said');
+
+/** A sign-in that ended without signing in, whose line withSignIn already
+ * wrote: `cancelled` or `failed`, else undefined (any other error). */
+export function signInOutcomeSaid(error: unknown): 'cancelled' | 'failed' | undefined {
+  return (error as { [SIGN_IN_SAID]?: 'cancelled' | 'failed' } | null)?.[SIGN_IN_SAID];
 }
 
 function nativeAccountContext(state: HarnessState, labelOrId: string): { account: AiHarnessAccount; harness: AiLocalHarnessDefinition; environment: Record<string, string> } {

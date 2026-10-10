@@ -45,6 +45,7 @@ import { slashPalette } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
 import { newConversation } from './conversations.js';
 import { signInBeforeUse } from './harness.js';
+import { signInOutcomeSaid } from '../account.js';
 import { runShellLine } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor } from '../../tui/slash/context.js';
 import { dispatchLine, type SlashHost } from '../../tui/slash/dispatch.js';
@@ -344,6 +345,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     lifecycle('window.turn.error', { message: message.slice(0, 8000) });
     // Keep the submitted message visible when there's an error, so the user sees what failed
     // (don't clear it like we would for a turn that never started properly)
+    // A sign-in that did not sign in has said so in its own line: the message
+    // that opened it was never sent, and goes back to the composer.
+    if (signInOutcomeSaid(error)) {
+      terminal?.submitted(undefined);
+      if (failed.line) terminal?.restoreDraft(failed.line);
+      return;
+    }
     const next = await afterTurnFailure(terminal, id, error, { ...failed, guard: exhaustionGuard });
     if (next.cancelled && terminal) { notice = STOPPED; return; }
     if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message) }); return; }

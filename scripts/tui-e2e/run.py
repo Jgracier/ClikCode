@@ -610,6 +610,46 @@ SCENARIOS = {
         'watch': [], 'ever': ['Paste your API key · type it and press Enter', 'Base URL [https://api.example.test/v1] · type it and press Enter'],
         'final_contains': ['signed in to', 'The final commit is live.'], 'never': ['sk-test-42', 'did not finish'],
     },
+    # A rejected key is never shown back: the failure is one line, and the
+    # vendor's last line -- its prompt with the typed key on it -- is not it.
+    'key-sign-in-rejected-hides-key': {
+        'turns': [TWO_BLOCKS],
+        'env': {'FAKE_LOGIN_KEY': 'sk-test-42'},
+        'steps': [('type', 'please check the commit'), ('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
+                  ('keys', 'sk-wrong-key-99'), ('settle', 0.5), ('keys', '\r'), ('settle', 6)],
+        'watch': [], 'never': ['sk-wrong', 'Error:'], 'final_once': ['did not finish'],
+    },
+    # Esc cancels a sign-in the first message opened, and the band says it
+    # does: one plain line says it was cancelled, and the message goes back
+    # to the composer to send again.
+    'esc-cancels-sign-in': {
+        'cols': 70,
+        'turns': [TWO_BLOCKS],
+        'hold_sign_in': True,
+        'steps': [('type', 'start the work'), ('wait_for', 'waiting for you to sign in', 30), ('settle', 0.5), ('snap', 'band'),
+                  ('keys', '\x1b'), ('wait_for', 'cancelled', 10), ('settle', 2), ('snap', 'after')],
+        'watch': [], 'snap_contains': {'band': ['esc cancel'], 'after': ['› start the work']},
+        'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish', 'Stopped'],
+    },
+    # Ctrl+C in a sign-in's key field: one press cancels it, said the same way.
+    'ctrl-c-cancels-key-sign-in': {
+        'cols': 70,
+        'turns': [TWO_BLOCKS],
+        'env': {'FAKE_LOGIN_KEY': 'sk-test-42'},
+        'steps': [('type', 'start the work'), ('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
+                  ('keys', '\x03'), ('wait_for', 'cancelled', 10), ('settle', 2), ('snap', 'after')],
+        'watch': [], 'snap_contains': {'after': ['› start the work']},
+        'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish'],
+    },
+    # Adding an account from /account: Esc cancels its sign-in too.
+    'esc-cancels-account-sign-in': {
+        'turns': [TWO_BLOCKS],
+        'hold_sign_in': True,
+        'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15), ('settle', 0.5),
+                  ('keys', '\x1b'), ('wait_for', 'cancelled', 10), ('settle', 2)],
+        'watch': [], 'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish'],
+    },
     # Nothing signs in at launch: a signed-out provider waits for its first
     # message.
     'no-sign-in-at-launch': {
@@ -1504,7 +1544,7 @@ def main():
     entry = os.path.abspath(args.entry)
     failed = 0
     for name, spec in SCENARIOS.items():
-        if args.only and args.only != name: continue
+        if args.only and name not in args.only.split(','): continue
         for attempt in range(1, args.repeat + 1):
             problems, root, final = run(name, spec, entry, args.keep)
             status = 'PASS' if not problems else 'FAIL'

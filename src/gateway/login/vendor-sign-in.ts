@@ -511,8 +511,22 @@ export async function runVendorSignIn(input: {
    * and the vendor is closed after a moment to finish writing. */
   signedIn?: () => Promise<boolean>;
 }): Promise<void> {
-  const { ui } = input;
-  const cancelled = (): Error => new Error(`sign-in to ${input.displayName} was cancelled`);
+  const { ui: given } = input;
+  const cancelled = (): Error => new SignInCancelled(input.displayName);
+  // Every answer to a secret question: never repeated in what the sign-in
+  // says when it fails (a vendor's last line is often its prompt, with the
+  // typed key echoed after it).
+  const secrets: string[] = [];
+  const ui: SignInUi = {
+    show: (link) => given.show(link),
+    choose: (title, choices, selected) => given.choose(title, choices, selected),
+    ...(given.signal ? { signal: given.signal } : {}),
+    ask: async (prompt, secret, optional, alongside) => {
+      const typed = await given.ask(prompt, secret, optional, alongside);
+      if (secret && typed) secrets.push(typed);
+      return typed;
+    },
+  };
   if (ui.signal?.aborted) throw cancelled();
   // Cancel and a cancelled choice both end the vendor through this.
   const controller = new AbortController();
@@ -669,9 +683,24 @@ export async function runVendorSignIn(input: {
   if (succeeded) return;
   if (controller.signal.aborted) throw cancelled();
   if (exitCode !== 0) {
-    const said = screenLines(raw).map((line) => line.trim()).filter(Boolean).pop();
-    throw new Error(`${input.displayName} sign-in exited with status ${exitCode}${said ? `: ${said}` : ''}`);
+    throw new Error(`${input.displayName} sign-in exited with status ${exitCode}${failureReason(raw, secrets)}`);
   }
+}
+
+/** A sign-in the user cancelled (Esc, Ctrl+C, a cancelled choice): an
+ * outcome, said as one plain line, never a failure. */
+export class SignInCancelled extends Error {
+  constructor(name: string) { super(`sign-in to ${name} was cancelled`); }
+}
+
+/** `: <the vendor's last line>`, the reason a failed sign-in gives -- never a
+ * line holding an answer to a secret question (it is the prompt with the
+ * typed key echoed on it), nor the prompt that asked for one. */
+export function failureReason(raw: string, secrets: readonly string[]): string {
+  const said = screenLines(raw).map((line) => line.trim()).filter(Boolean)
+    .filter((line) => !secrets.some((secret) => line.includes(secret)) && !(secrets.length && isSecret(line)))
+    .pop();
+  return said ? `: ${said}` : '';
 }
 
 /** Where there is no script(1) (Windows): plain pipes. A vendor that

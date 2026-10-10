@@ -396,7 +396,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // A download, a shell, or a sign-in is not the conversation: Esc leaves
       // it. A conversation turn with no answer yet comes back to edit; one
       // that has started answering stops.
-      if (turn.cancelled || this.signingIn || (!turn.submit && !turn.early)) return;
+      if (turn.cancelled) return;
+      // A sign-in, the turn's or its own: Esc cancels it (its outcome line
+      // says so, and the message that opened it comes back).
+      if (this.signingIn) {
+        turn.cancelled = true;
+        this.updateWaiting();
+        turn.cancel?.(false);
+        return;
+      }
+      if (!turn.submit && !turn.early) return;
       const restoreDraft = !this.turnHasAnswer();
       turn.cancelled = true;
       turn.label = restoreDraft ? 'editing…' : 'stopping…';
@@ -799,6 +808,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * turn ends. The turn's own journal (`session.pendingTurn`) is the other
    * source and arrives later; see render/pending-prompt.ts. */
   submitted(prompt: string | undefined): void {
+    // A held prompt let go before its turn (its sign-in did not sign in): a
+    // line written after it now goes after the conversation, or it would sit
+    // past the end and never be drawn.
+    if (prompt === undefined && this.submittedPrompt !== undefined && !this.turn && this.currentSession) {
+      const end = this.transcriptMessages(this.currentSession).length;
+      this.activityEntries = this.activityEntries.map((entry) => (entry.anchor > end ? { ...entry, anchor: end } : entry));
+    }
     this.submittedPrompt = prompt;
   }
 
@@ -1059,7 +1075,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   signInScreen(name: string): SignInScreen {
     lifecycle('window.signin.start', { name });
     const controller = new AbortController();
-    const label = `waiting for you to sign in to ${name} in your browser`;
+    const label = `waiting for you to sign in to ${name}`;
     const cancel = (): void => controller.abort();
     const local = hasLocalDisplay();
     let opened = false;
@@ -1635,8 +1651,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       stalled: !asking && !turn.cancelled && turnStalled(now - turn.activeAt),
     });
     const line = `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
-    const hint = ` · ${keyHint('escStop')}`;
-    return this.escStops() && terminalCellWidth(line) + terminalCellWidth(hint) <= width ? `${line}${chalk.dim(hint)}` : line;
+    // A sign-in's wait: Esc cancels it.
+    const cancels = this.signingIn && !turn.cancelled;
+    const hint = ` · ${cancels ? keyHintFor('esc', 'cancel') : keyHint('escStop')}`;
+    return (cancels || this.escStops()) && terminalCellWidth(line) + terminalCellWidth(hint) <= width ? `${line}${chalk.dim(hint)}` : line;
   }
 
   /** Esc would stop the running turn (see onWaitingKey): a conversation's
