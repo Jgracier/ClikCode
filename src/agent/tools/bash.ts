@@ -105,7 +105,11 @@ export function stopBackgroundShell(shell: BackgroundShell, reason: string): voi
 function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
   const detached = process.platform !== 'win32';
   const { file, args: argv } = shellInvocation(args.command);
-  const child = spawnPortable(file, argv, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], detached, windowsHide: true });
+  // stdin is a pipe so bash_input can answer a prompt or drive a REPL. A
+  // foreground command keeps 'ignore': nothing could ever type into it.
+  const child = spawnPortable(file, argv, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true });
+  // A write after the process exits is EPIPE; bash_input reports the exit instead.
+  child.stdin?.on('error', () => undefined);
   const id = `bash_${ctx.session.nextShellNumber++}`;
   const shell: BackgroundShell = { id, command: args.command, child, detached, unread: '', droppedBytes: 0, status: 'running', startedAt: Date.now() };
   const onData = (chunk: string): void => {
@@ -131,13 +135,13 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
     });
   });
   ctx.session.shells.set(id, shell);
-  return { output: `Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, end your turn if there is nothing else to do, or use wait (shell_ids ["${id}"]) to continue in this turn once it exits. bash_output (id "${id}") reads its output so far; kill_bash stops it.` };
+  return { output: `Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, end your turn if there is nothing else to do, or use wait (shell_ids ["${id}"]) to continue in this turn once it exits. bash_output (id "${id}") reads its output so far; bash_input types into it; kill_bash stops it.` };
 }
 
 export const bashTool = defineTool<BashArgs>({
   name: 'bash',
   class: 'exec',
-  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs: you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Commands are non-interactive: never start editors or prompts.',
+  description: 'Run a shell command in the working directory and return its combined stdout/stderr and exit code. Default timeout 120s (max 600s via timeout_ms). Use run_in_background for servers, watchers and long jobs: you are notified automatically when a background shell exits, so never poll it or sleep waiting for it -- end your turn instead if nothing else is left to do, and the exit arrives as a new message; to continue in the same turn once it exits, use wait. Do not use it to read, search or edit files — use read_file, grep, glob and edit_file. Foreground commands get no input: never start editors there. A command that prompts or a REPL runs with run_in_background, and bash_input types into it.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['command'],
     properties: {
@@ -200,17 +204,87 @@ export const bashOutputTool = defineTool<ShellIdArgs>({
   label: (args) => `Output of ${args.id}`,
   async run(args, ctx) {
     const shell = ctx.session.shells.get(args.id);
-    if (!shell) return { output: `No background shell "${args.id}". Known: ${[...ctx.session.shells.keys()].join(', ') || 'none'}.`, isError: true };
-    const text = shell.unread;
-    const dropped = shell.droppedBytes;
-    shell.unread = '';
-    shell.droppedBytes = 0;
-    const status = shell.status === 'running' ? 'running' : `${shell.status}${shell.exitCode !== undefined && shell.exitCode !== null ? ` (exit code ${shell.exitCode})` : shell.signal ? ` (${shell.signal})` : ''}`;
-    const half = Math.floor(OUTPUT_CAPS.toolOutputBytes / 2);
-    const body = redactSecrets(text.length > OUTPUT_CAPS.toolOutputBytes ? `${text.slice(0, half)}\n… [${text.length - half * 2} characters truncated] …\n${text.slice(-half)}` : text);
-    return { output: `[${args.id}: ${status}]${dropped ? ` [${dropped} earlier characters dropped]` : ''}\n${body || '(no new output)'}` };
+    if (!shell) return unknownShell(args.id, ctx);
+    return { output: drainShell(shell) };
   },
 });
+
+function unknownShell(id: string, ctx: ToolContext): { output: string; isError: true } {
+  return { output: `No background shell "${id}". Known: ${[...ctx.session.shells.keys()].join(', ') || 'none'}.`, isError: true };
+}
+
+/** Hand the model everything the shell printed since the last read. */
+function drainShell(shell: BackgroundShell): string {
+  const text = shell.unread;
+  const dropped = shell.droppedBytes;
+  shell.unread = '';
+  shell.droppedBytes = 0;
+  const status = shell.status === 'running' ? 'running' : `${shell.status}${shell.exitCode !== undefined && shell.exitCode !== null ? ` (exit code ${shell.exitCode})` : shell.signal ? ` (${shell.signal})` : ''}`;
+  const half = Math.floor(OUTPUT_CAPS.toolOutputBytes / 2);
+  const body = redactSecrets(text.length > OUTPUT_CAPS.toolOutputBytes ? `${text.slice(0, half)}\n… [${text.length - half * 2} characters truncated] …\n${text.slice(-half)}` : text);
+  return `[${shell.id}: ${status}]${dropped ? ` [${dropped} earlier characters dropped]` : ''}\n${body || '(no new output)'}`;
+}
+
+interface BashInputArgs { id: string; text?: string; newline?: boolean; close?: boolean; wait_ms?: number }
+
+const INPUT_DEFAULT_WAIT_MS = 2000;
+const INPUT_MAX_WAIT_MS = 30_000;
+/** Output that has stopped growing for this long is taken as the whole reply. */
+const INPUT_QUIET_MS = 300;
+const INPUT_POLL_MS = 50;
+
+/** Until the shell exits, its reply goes quiet, or the wait is up -- whichever
+ * comes first. */
+async function settle(shell: BackgroundShell, waitMs: number, signal?: AbortSignal): Promise<void> {
+  const deadline = Date.now() + waitMs;
+  let seen = shell.unread.length;
+  let changedAt: number | undefined;
+  while (Date.now() < deadline && shell.status === 'running' && !signal?.aborted) {
+    await new Promise((resolve) => setTimeout(resolve, INPUT_POLL_MS));
+    const now = shell.unread.length;
+    if (now !== seen) { seen = now; changedAt = Date.now(); continue; }
+    if (changedAt !== undefined && Date.now() - changedAt >= INPUT_QUIET_MS) return;
+  }
+}
+
+export const bashInputTool = defineTool<BashInputArgs>({
+  name: 'bash_input',
+  class: 'exec',
+  description: 'Type into a background shell started with bash run_in_background: write text to its stdin (a newline is added unless newline is false), then return its new output once it settles. Use it to answer a prompt or drive a REPL. close: true closes stdin (end of input, like Ctrl+D) after writing any text. stdin is a pipe, not a terminal: a program that insists on a TTY may not prompt.',
+  parameters: {
+    type: 'object', additionalProperties: false, required: ['id'],
+    properties: {
+      id: { type: 'string', description: 'Background shell id, e.g. bash_1.' },
+      text: { type: 'string', description: 'What to type.' },
+      newline: { type: 'boolean', description: 'Add a trailing newline (default true).' },
+      close: { type: 'boolean', description: 'Close stdin after writing (end of input).' },
+      wait_ms: { type: 'integer', minimum: 0, maximum: INPUT_MAX_WAIT_MS, description: `How long to wait for a reply (default ${INPUT_DEFAULT_WAIT_MS}).` },
+    },
+  },
+  label: (args) => `Input to ${args.id}`,
+  async describe(args) {
+    return [`types into ${args.id}: ${JSON.stringify(typedText(args))}`, ...(args.close ? ['then closes its stdin'] : [])].join('\n');
+  },
+  async run(args, ctx) {
+    const shell = ctx.session.shells.get(args.id);
+    if (!shell) return unknownShell(args.id, ctx);
+    const stdin = shell.child.stdin;
+    if (shell.status !== 'running') return { output: `${args.id} is not running, so it takes no input.\n${drainShell(shell)}`, isError: true };
+    if (!stdin || stdin.destroyed || stdin.writableEnded) return { output: `${args.id}'s stdin is already closed.\n${drainShell(shell)}`, isError: true };
+    const text = typedText(args);
+    if (!text && !args.close) return { output: 'Nothing to send: give text, or close: true.', isError: true };
+    if (text) await new Promise<void>((resolve) => { stdin.write(text, () => resolve()); });
+    if (args.close) stdin.end();
+    await settle(shell, Math.min(Math.max(args.wait_ms ?? INPUT_DEFAULT_WAIT_MS, 0), INPUT_MAX_WAIT_MS), ctx.signal);
+    if (ctx.signal?.aborted) throw turnCancelledError();
+    return { output: drainShell(shell) };
+  },
+});
+
+function typedText(args: BashInputArgs): string {
+  if (args.text === undefined) return '';
+  return args.newline === false ? args.text : `${args.text}\n`;
+}
 
 export const killBashTool = defineTool<ShellIdArgs>({
   name: 'kill_bash',
