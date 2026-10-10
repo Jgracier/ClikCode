@@ -30,6 +30,19 @@ describe('command palette layout', () => {
     expect(commandPaletteMatches('/res', commands).map((row) => row.value)).toEqual(['/resume', '/new']);
   });
 
+  it('puts the best match first when something is typed, keeping groups together', () => {
+    const commands = [
+      { label: '/account', value: '/account', group: 'Setup' },
+      { label: '/provider', value: '/provider', group: 'Setup' },
+      { label: '/compact', value: '/compact', group: 'Conversation' },
+      { label: '/copy', value: '/copy', group: 'Conversation' },
+    ];
+    expect(commandPaletteMatches('/co', commands).map((row) => row.value)).toEqual(['/compact', '/copy', '/account']);
+    expect(commandPaletteMatches('/c', commands)[0]!.value).toBe('/compact');
+    // Nothing typed: the groups in their own order.
+    expect(commandPaletteMatches('/', commands).map((row) => row.value)).toEqual(['/account', '/provider', '/compact', '/copy']);
+  });
+
   it('fully reclaims the palette rows as soon as the slash is deleted', () => {
     const commands = [{ label: '/help', value: '/help' }, { label: '/model', value: '/model' }];
     expect(commandPaletteMatches('/', commands)).toHaveLength(2);
