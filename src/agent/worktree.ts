@@ -36,6 +36,11 @@ function git(args: readonly string[], cwd: string): Promise<string> {
   });
 }
 
+/** Whether cwd is inside a git work tree with at least one commit. */
+export async function canCreateAgentWorktree(cwd: string): Promise<boolean> {
+  return git(['rev-parse', '--verify', 'HEAD^{commit}'], cwd).then(() => true, () => false);
+}
+
 /** Undefined when cwd is not inside a git work tree with at least one commit. */
 export async function createAgentWorktree(cwd: string, label = 'agent'): Promise<AgentWorktree | undefined> {
   let top: string;

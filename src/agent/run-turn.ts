@@ -23,6 +23,7 @@ import { emptyLedger, recordUsage } from './usage.js';
 import { resolveContextProfile } from './context-profile.js';
 import { readImageInputs } from './images.js';
 import { createSubagentRunner } from './subagent.js';
+import { BackgroundAgents, formatAgentNotifications } from './background-agents.js';
 import { completedArguments } from './models/openai-client.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
 import { categoryOf, GATEWAY_HARNESS_COMMAND } from '../harness/protocol/tools.js';
@@ -276,6 +277,11 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     return next;
   };
   const onApproval = input.onApproval;
+  // Background coding agents belong to this turn: it does not end while one
+  // runs, and whatever ends it stops them.
+  const backgroundAgents = input.subagent ? undefined : new BackgroundAgents();
+  const backgroundStop = new AbortController();
+  const backgroundSignal = signal ? AbortSignal.any([signal, backgroundStop.signal]) : backgroundStop.signal;
   const innerSubagent = input.subagent ? undefined : createSubagentRunner({
     // A sub-agent runs under its parent's profile, whatever decided it.
     parent: { ...input, contextProfile: profile.name, permissionRules: turnRules }, tools, runTurn: runGatewayHarnessTurn,
@@ -324,7 +330,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         return !!(await abortable(queueApproval(() => { input.onPhase?.('waiting for approval'); return onApproval(prompt.title, prompt.detail); }), signal));
       },
     } : {}),
-    ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
+    ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({ ...request, callId, ...(request.background ? { signal: backgroundSignal } : signal ? { signal } : {}) }) } : {}),
+    ...(backgroundAgents ? { agents: backgroundAgents } : {}),
   });
 
   const executeCall = async (call: ModelToolCall): Promise<ToolRunResult> => {
@@ -477,6 +484,12 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         for (const note of finished) input.onActivity?.({ kind: 'tool-done', label: `${note.shellId} ${note.reason ? 'stopped' : 'exited'}: ${note.command}`, id: `shell-exit-${note.shellId}`, category: 'run' });
         await append({ type: 'text', role: 'user', text: formatShellNotifications(finished) });
       }
+      // Background agents that finished without the model waiting for them.
+      const agentResults = backgroundAgents?.takeFinished() ?? [];
+      if (agentResults.length) {
+        for (const note of agentResults) input.onActivity?.({ kind: note.result.isError ? 'tool-error' : 'tool-done', label: `${note.id} finished: ${note.label}`, id: `agent-done-${note.id}`, agent: true });
+        await append({ type: 'text', role: 'user', text: formatAgentNotifications(agentResults) });
+      }
 
       const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
       const system = session.plan.active ? `${baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : baseSystem;
@@ -627,6 +640,13 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         // Steering, or a background shell that finished while this step ran:
         // one more step answers it now rather than in a follow-up turn.
         if (steerQueue.length || (!input.subagent && session.notifications.length)) continue;
+        // A background agent's result is part of this turn's answer: wait
+        // for the next to finish, and the next step hears it.
+        if (backgroundAgents?.running()) {
+          input.onPhase?.('waiting for background agents');
+          await abortable(backgroundAgents.nextFinish(signal), signal);
+          continue;
+        }
         // A sub-agent answers to SubagentStop, named as Claude Code names it:
         // the parent's session, the sub-agent's own id and trace.
         const sub = input.subagent;
@@ -643,6 +663,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
             await append({ type: 'text', role: 'user', text: `[${sub ? 'SubagentStop' : 'Stop'} hook] ${verdict.continueWith}` });
             continue;
           }
+          // Steered while the hook ran (a user, or agent_send): answer it, not drop it.
+          if (steerQueue.length) continue;
         }
         return result({ stopReason: 'completed' });
       }
@@ -705,6 +727,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   } finally {
     steerOpen = false;
     input.onSteerReady?.(undefined);
+    // An early end (cancel, error, step limit, a question) stops them; each
+    // commits its work to its branch before the turn returns.
+    backgroundStop.abort();
+    await backgroundAgents?.settled();
     await checkpoints.seal(input.sessionId, turnId).catch(() => undefined);
     await checkpoints.prune(input.sessionId).catch(() => undefined);
   }

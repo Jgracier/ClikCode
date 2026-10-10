@@ -445,4 +445,101 @@ describe('coding sub-agents in their own worktree', () => {
     expect(output.split('\n')).toHaveLength(1);
     expect(client.requests('never runs')).toHaveLength(0);
   });
+
+  it('runs a background agent while the parent works, and the turn ends with its result', async () => {
+    await initRepo();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ id: 'bg', name: 'agent', args: { prompt: 'slow edit', description: 'Slow edit', background: true } }] },
+        // The agent is still held: the parent carries on meanwhile.
+        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }], before: () => release() },
+        { text: 'I will wait for it.' },
+        { text: 'It changed a.txt to 47 on its branch.' },
+      ] },
+      'slow edit': { script: [
+        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }], before: () => released },
+        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '47' } }] },
+        { text: 'Changed to 47.' },
+      ] },
+    });
+    const { input, events } = turn(client);
+    const result = await runGatewayHarnessTurn(input);
+    expect(result.stopReason).toBe('completed');
+    const parent = client.requests(PARENT_PROMPT);
+    expect(toolResults(parent[1])[0]).toMatch(/^Started agent_1 in the background/);
+    expect(toolResults(parent[2])[1]).toMatch(/the answer is 42/);
+    // Its result arrived as a message after the parent's own answer.
+    const note = parent[3].items.at(-1);
+    expect(note).toMatchObject({ type: 'text', role: 'user' });
+    expect(note?.type === 'text' && note.text).toMatch(/^\[background agent agent_1 finished\] Slow edit\nChanged to 47\./);
+    expect(events.some((event) => event.id === 'agent-done-agent_1')).toBe(true);
+    const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
+    expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 47');
+    expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 42\n');
+    expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
+  });
+
+  it('gives a running background agent a follow-up and waits for its result', async () => {
+    await initRepo();
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ name: 'agent', args: { prompt: 'edit a.txt', background: true } }] },
+        { toolCalls: [{ name: 'agent_send', args: { id: 'agent_1', message: 'Make it 46 instead.' } }] },
+        { toolCalls: [{ name: 'agent_wait', args: { id: 'agent_1' } }], before: () => release() },
+        { text: 'done' },
+      ] },
+      'edit a.txt': { script: [
+        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }], before: () => released },
+        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '46' } }] },
+        { text: 'Made it 46.' },
+      ] },
+    });
+    await runGatewayHarnessTurn(turn(client).input);
+    // The instruction reached the agent before its second step.
+    const second = client.requests('edit a.txt')[1].items;
+    expect(second.some((item) => item.type === 'text' && item.role === 'user' && item.text === 'Make it 46 instead.')).toBe(true);
+    const parent = client.requests(PARENT_PROMPT);
+    expect(toolResults(parent[2])[1]).toMatch(/^Sent to agent_1/);
+    const waited = toolResults(parent[3])[2];
+    expect(waited).toMatch(/^\[agent_1 finished\] edit a\.txt\nMade it 46\./);
+    expect(waited).toMatch(/on branch clikcode\//);
+    // Delivered by the wait, so not again as a message.
+    expect(parent[3].items.some((item) => item.type === 'text' && /background agent agent_1 finished/.test(item.text))).toBe(false);
+    expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
+  });
+
+  it('refuses a background agent outside a git repository at once', async () => {
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', background: true } }] }, { text: 'done' }] },
+      'never runs': { script: [{ text: 'ran' }] },
+    });
+    await runGatewayHarnessTurn(turn(client).input);
+    expect(toolResults(client.requests(PARENT_PROMPT)[1])[0]).toMatch(/not in a git repository/);
+    expect(client.requests('never runs')).toHaveLength(0);
+  });
+
+  it('stops a background agent when the turn is cancelled, keeping its work on its branch', async () => {
+    await initRepo();
+    const controller = new AbortController();
+    const client = new RoutedModelClient({
+      [PARENT_PROMPT]: { script: [
+        { toolCalls: [{ name: 'agent', args: { prompt: 'edit and hang', background: true } }] },
+        { text: 'waiting' },
+      ] },
+      'edit and hang': { script: [
+        { toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] },
+        { toolCalls: [{ name: 'edit_file', args: { path: 'a.txt', old_string: '42', new_string: '48' } }] },
+        { before: () => controller.abort(), text: 'never' },
+      ] },
+    });
+    await expect(runGatewayHarnessTurn(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    // The turn returned only after the agent wound down.
+    expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
+    const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
+    expect(await git('show', `${branch}:a.txt`)).toBe('the answer is 48');
+  });
 });

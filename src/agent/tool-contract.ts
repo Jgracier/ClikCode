@@ -36,6 +36,8 @@ export interface ToolContext {
   approveUnsandboxed?(command: string): Promise<boolean>;
   /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
   runSubagent?(request: SubagentCall): Promise<ToolRunResult>;
+  /** This turn's background coding agents. Absent inside a sub-agent. */
+  agents?: import('./background-agents.js').BackgroundAgents;
 }
 
 /** What a tool asks of a sub-agent; the loop adds the call id and signal. */
@@ -46,6 +48,10 @@ export interface SubagentCall {
   kind?: 'research' | 'work';
   /** A coding sub-agent in its own git worktree, on its own branch. */
   isolation?: 'worktree';
+  /** Started in the background: outlives the call, not the turn. */
+  background?: true;
+  /** Hands over the running sub-agent's steering handler (agent_send). */
+  onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
 }
 
 export interface ToolRunResult {
