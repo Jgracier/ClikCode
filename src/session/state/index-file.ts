@@ -116,6 +116,9 @@ export async function storeIndex(index: StateIndex, options: { backup: boolean }
   const replacing = await indexFile.load().catch(() => undefined);
   const file = { ...rest, accounts: await storeAccountModels(index.accounts, replacing?.accounts) };
   const raw = `${JSON.stringify(file)}\n`;
+  // What is there already says the same: a rename would only wake every
+  // list watching the directory, and the backup is no newer either.
+  if (replacing && raw === indexFile.raw()) return;
   await atomicWriteFile(path, raw);
   HARNESS_STATE_STATS.indexWrites += 1;
   await indexFile.remember(raw, { ...cloneData(file), invocations: [] } as StateIndex);
