@@ -164,6 +164,23 @@ describe('the editor bridge and a pending sign-in', () => {
   });
 });
 
+describe('the editor bridge reporting a sign-in the user cancelled', () => {
+  it('says it as one plain line, as the terminal does, never a red error', async () => {
+    const { withSignIn } = await import('../commands/account.js');
+    const { SignInCancelled } = await import('../gateway/login/vendor-sign-in.js');
+    const events: Array<{ type: string; message?: string; level?: string }> = [];
+    const bridge = new IdeBridge({} as Conf, { send: (event) => events.push(event as never) });
+    const controller = new AbortController();
+    const screen = { signal: controller.signal, show: () => undefined, ask: async () => '', choose: async () => undefined, stop: () => undefined };
+    const error = await withSignIn({ signInScreen: () => screen }, 'Grok Build', async () => {
+      controller.abort();
+      throw new SignInCancelled('Grok Build');
+    }).catch((caught: unknown) => caught);
+    (bridge as unknown as { report(error: unknown): void }).report(new Error('wrapped', { cause: error }));
+    expect(events).toEqual([{ type: 'notice', message: 'Sign-in to Grok Build cancelled', level: 'info' }]);
+  });
+});
+
 describe('the editor bridge shutting down', () => {
   it('is one shutdown however many ask, so an exit waits for the close already writing', async () => {
     const bridge = new IdeBridge({} as Conf, { send: () => undefined });

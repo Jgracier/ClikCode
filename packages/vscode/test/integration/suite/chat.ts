@@ -135,6 +135,9 @@ export function chatSuite(): void {
         await waitFor(api, '#sign-in-link [data-cancel]', 'the second sign-in card', 30_000);
         await click(api, '#sign-in-link [data-cancel]');
         await waitFor(api, '#sign-in-link', 'the card gone once cancelled', 15_000, (found) => found.count === 0);
+        // The user's own Cancel: one plain line, never a red error.
+        await waitFor(api, '.notice', 'the cancelled line', 15_000, (found) => found.texts.some((text) => /Sign-in to Grok Build cancelled/.test(text)));
+        if ((await query(api, '.notice.error')).count) throw new Error(`an error note for a cancelled sign-in: ${(await query(api, '.notice.error')).text}`);
       } finally { rmSync(process.env.CLIKCODE_IT_HOLD!, { force: true }); }
       if (vscode.window.terminals.length !== terminals) throw new Error('a terminal opened for a link sign-in');
 

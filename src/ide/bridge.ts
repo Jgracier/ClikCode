@@ -33,7 +33,7 @@ import { nativeUsageReading, recheckRecoveredAccounts } from '../harness/account
 import { usageResetLabel } from '../harness/accounts/usage-reading.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { withSignIn } from '../commands/account.js';
+import { signInCancelledLine, withSignIn } from '../commands/account.js';
 import { newConversation } from '../commands/ai/conversations.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
@@ -244,6 +244,9 @@ export class IdeBridge {
 
   private report(error: unknown): void {
     if (error instanceof TurnFailed) return;
+    // The user's own Cancel is an outcome: one plain line, as the terminal says it.
+    const cancelled = signInCancelledLine(error);
+    if (cancelled) { this.channel.send({ type: 'notice', message: cancelled, level: 'info' }); return; }
     this.channel.send({ type: 'notice', message: messageOf(error), level: 'error' });
   }
 

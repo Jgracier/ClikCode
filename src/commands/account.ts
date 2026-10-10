@@ -330,11 +330,26 @@ export async function withSignIn<T>(prompter: Pick<HarnessPrompter, 'signInScree
     prompter?.activity?.(cancelled
       ? chalk.dim(`Sign-in to ${name} cancelled`)
       : `${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
-    throw Object.assign(error instanceof Error ? error : new Error(String(error)), { [SIGN_IN_SAID]: cancelled ? 'cancelled' : 'failed' });
+    throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
+      [SIGN_IN_SAID]: cancelled ? 'cancelled' : 'failed',
+      ...(cancelled ? { [SIGN_IN_CANCELLED_LINE]: `Sign-in to ${name} cancelled` } : {}),
+    });
   }
 }
 
 const SIGN_IN_SAID = Symbol('sign-in outcome said');
+const SIGN_IN_CANCELLED_LINE = Symbol('sign-in cancelled line');
+
+/** The plain line a sign-in the user cancelled is said with ("Sign-in to
+ * Grok Build cancelled"), for a surface that reports the error itself (the
+ * editor bridge): an outcome, never a red failure. */
+export function signInCancelledLine(error: unknown): string | undefined {
+  for (let at = error, depth = 0; at && depth < 5; at = (at as { cause?: unknown }).cause, depth += 1) {
+    const line = (at as { [SIGN_IN_CANCELLED_LINE]?: string })[SIGN_IN_CANCELLED_LINE];
+    if (line) return line;
+  }
+  return undefined;
+}
 
 /** A sign-in that ended without signing in, whose line withSignIn already
  * wrote: `cancelled` or `failed`, else undefined (any other error). */
