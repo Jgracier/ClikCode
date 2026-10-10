@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -94,5 +94,23 @@ describe('one dispatch for every client', () => {
   it('refuses an unknown command, and a command needing a provider where nothing can be picked', async () => {
     await expect(dispatchLine(recordingHost(), 's1', '/definitely-not-a-command')).rejects.toThrow();
     await expect(dispatchLine(recordingHost(), 's1', '/login')).rejects.toThrow(/Choose a provider/);
+  });
+
+  it("lists ClikCode's own MCP servers under /mcp on its agent, with the ones needing sign-in", async () => {
+    await writeState(stateWith(chat({ workspace, route: 'gateway' })));
+    const home = process.env.CLIKCODE_HOME!;
+    writeFileSync(join(home, 'mcp.json'), JSON.stringify({ mcpServers: {
+      local: { command: 'echo' }, remote: { url: 'http://127.0.0.1:1/mcp' },
+    } }));
+    mkdirSync(join(home, 'mcp-oauth'), { recursive: true });
+    writeFileSync(join(home, 'mcp-oauth', 'remote.json'), JSON.stringify({ server: 'http://127.0.0.1:1/mcp', needsSignIn: true }));
+    const bodies: string[] = [];
+    await dispatchLine(recordingHost({ panel: (_kind, _title, _body, plain) => { bodies.push(plain); } }), 's1', '/mcp');
+    expect(bodies[0]).toMatch(/remote\s+http:\/\/127\.0\.0\.1:1\/mcp\s+needs sign-in/);
+    expect(bodies[0]).toContain('/mcp login <name>');
+    // A sign-in only where a screen can show it; a logout forgets the record.
+    await expect(dispatchLine(recordingHost(), 's1', '/mcp login remote')).rejects.toThrow(/clikcode mcp login remote/);
+    expect(await dispatchLine(recordingHost(), 's1', '/mcp logout remote')).toEqual({ notice: 'Signed out of remote' });
+    expect(existsSync(join(home, 'mcp-oauth', 'remote.json'))).toBe(false);
   });
 });

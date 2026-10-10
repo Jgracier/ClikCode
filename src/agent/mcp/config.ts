@@ -15,7 +15,7 @@
  * for this agent to spawn would be code execution on clone, before any
  * approval prompt could be shown.
  */
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 export type McpServerSpec = (
@@ -94,4 +94,15 @@ export async function loadMcpServers(stateDir: string): Promise<{ servers: McpSe
   return {
     servers: Object.entries(table).flatMap(([name, raw]) => parseMcpServerEntry(name, raw) ?? []),
   };
+}
+
+/** `clikcode mcp add --client-id …`: the OAuth settings go on the entry just
+ * recorded, beside whatever else it holds. */
+export async function writeMcpOAuthConfig(stateDir: string, name: string, oauth: McpOAuthConfig): Promise<void> {
+  const path = mcpConfigFilePath(stateDir);
+  const root = JSON.parse(await readFile(path, 'utf8')) as Record<string, any>;
+  const entry = root?.[MCP_SERVERS_KEY]?.[name];
+  if (!entry || typeof entry !== 'object') throw new Error(`${name} is not recorded in ${path}`);
+  entry.oauth = oauth;
+  await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
 }
