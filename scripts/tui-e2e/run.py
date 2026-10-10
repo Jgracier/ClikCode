@@ -1125,6 +1125,15 @@ SCENARIOS = {
         'watch': [], 'snap_contains': {'usage': ['This chat · 1 turn']},
         'snap_lacks': {'usage': ['0 in', '0 out', '1 turn · 0', '\n  0 \n', '  0   ']},
     },
+    # Fast work shows no spinner: "checking harnesses" (/doctor) and a quick
+    # `!true` flashed their band (and a blank frame) for a few milliseconds.
+    # The `!` line is drawn at once, before its output.
+    'no-spinner-flash-on-fast-work': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '/doctor'), ('settle', 2), ('keys', '\x1b'), ('settle', 1),
+                  ('type', '!true'), ('settle', 2)],
+        'watch': [], 'never': ['checking harnesses', '! true ·'], 'final_contains': ['!true', 'exit 0'],
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

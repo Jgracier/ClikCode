@@ -1,5 +1,6 @@
 /** `clikcode harness`: choosing which harness a session runs on. */
 
+import { withSlowWait } from '../../tui/slow-wait.js';
 import { forceStoreSession } from '../../session/ephemeral.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
 import { isClikCodeAgent } from '../../session/route.js';
@@ -190,13 +191,13 @@ async function ensureHermesTurboFit(harness: AiLocalHarnessDefinition, environme
   // whether or not TurboFit needs installing now.
   await restoreHermesPluginScan(harness, environment).catch(() => undefined);
   const installed = await hermesTurboFitInstalled(environment);
-  TERMINAL.active?.startWaiting(installed ? 'connecting TurboFit to Hermes…' : 'installing TurboFit local models for Hermes…');
   try {
-    if (!installed) await installHermesTurboFit(harness, environment);
-    await registerHermesTurboFitProvider(harness, environment);
+    await withSlowWait(TERMINAL.active, installed ? 'connecting TurboFit to Hermes…' : 'installing TurboFit local models for Hermes…', async () => {
+      if (!installed) await installHermesTurboFit(harness, environment);
+      await registerHermesTurboFitProvider(harness, environment);
+    });
   }
   catch (error) { emitHarnessOutput({ panel: 'error', message: error instanceof Error ? error.message : String(error) }); }
-  finally { TERMINAL.active?.stopWaiting(); }
 }
 
 /** About to send on a chat whose provider has no signed-in account (marked

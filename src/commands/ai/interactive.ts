@@ -46,6 +46,7 @@ import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/chec
 import { newConversation } from './conversations.js';
 import { signInBeforeUse } from './harness.js';
 import { signInOutcomeSaid } from '../account.js';
+import { withSlowWait } from '../../tui/slow-wait.js';
 import { runShellLine } from '../../tui/slash/handlers.js';
 import { sessionHarness, sessionOrProviderHarness, slashExtrasFor } from '../../tui/slash/context.js';
 import { dispatchLine, type SlashHost } from '../../tui/slash/dispatch.js';
@@ -587,12 +588,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
           ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}),
         });
       };
-      /** A subprocess the user has to wait for gets the same waiting indicator a turn does. */
-      const withWaiting = async <T>(label: string, work: () => Promise<T>): Promise<T> => {
-        if (!terminal) return work();
-        terminal.startWaiting(label);
-        try { return await work(); } finally { terminal.stopWaiting(); }
-      };
+      /** A subprocess the user has to wait for gets the same waiting
+       * indicator a turn does -- once it is slow enough to see. */
+      const withWaiting = <T>(label: string, work: () => Promise<T>): Promise<T> => withSlowWait(terminal, label, work);
       const showSession = async (target: string): Promise<void> => {
         const shown = await readState({ transcripts: [target] });
         const session = shown.sessions.find((item) => item.id === target);
@@ -651,12 +649,15 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
             continue;
           }
           const controller = new AbortController();
-          terminal?.startWaiting(`! ${command}`, () => controller.abort());
+          // The command line is drawn at once, as a sent message is; the band
+          // only if it runs long enough to need one.
+          terminal?.submitted(line.trim());
+          terminal?.render(lastSeen, undefined, undefined, { running: false });
           let result: ShellNote;
           try {
-            result = await runShellLine(id, command, controller.signal);
+            result = await withSlowWait(terminal, `! ${command}`, () => runShellLine(id, command, controller.signal), () => controller.abort());
           } finally {
-            terminal?.stopWaiting();
+            terminal?.submitted(undefined);
           }
           // The run is a transcript message -- command, output, exit -- which
           // the terminal draws with the conversation; a notice repeating its
