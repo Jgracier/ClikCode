@@ -14,7 +14,7 @@ import { Composer, type ComposerHandle } from './composer';
 import { tildePath } from './format';
 import { choose } from './picker';
 import { ConversationMark, HistoryMenu, rowState, useConversations } from './screens';
-import { useNow } from './clock';
+import { afterVisibleFor, useNow } from './clock';
 import { markMention, SearchBar } from './search';
 import { Sheet, type OpenQuestion } from './sheet';
 import { focusHere, Icon, IconButton, KeyList, Logo, Popover, type ListRow } from './ui';
@@ -176,8 +176,13 @@ class DrawGuard extends Component<{ model: ChatModel; children: ComponentChildre
   }
 }
 
+/** Each error reported: a toast's key. */
+let toastCount = 0;
+
+/** An error, for NOTICE_MS of the panel being in sight. Keyed by each
+ * report: the same message again is a new toast with its own time. */
 function Toast({ message, onClose }: { message: string; onClose: () => void }): JSX.Element {
-  useEffect(() => { const timer = setTimeout(onClose, NOTICE_MS); return () => clearTimeout(timer); }, [message]);
+  useEffect(() => afterVisibleFor(NOTICE_MS, onClose), []);
   return <div class="toast" role="alert"><Icon name="error" /><span>{message}</span><IconButton icon="close" label="Dismiss" onClick={onClose} /></div>;
 }
 
@@ -216,7 +221,9 @@ function App(): JSX.Element {
   const [model, setModel] = useState<ChatModel>();
   const [history, setHistory] = useState(false);
   const [questions, setQuestions] = useState<Array<OpenQuestion & { items?: readonly IdePickItem[] }>>([]);
-  const [error, setError] = useState<string>();
+  const [error, setErrorState] = useState<{ message: string; id: number }>();
+  // Stable, as the state setter it replaces was: menus and the composer hold it.
+  const setError = useRef((message: string | undefined): void => setErrorState(message === undefined ? undefined : { message, id: ++toastCount })).current;
   const [search, setSearch] = useState<IdeSearchFocus>();
   const composer = useRef<ComposerHandle | null>(null);
   const log = useRef<HTMLDivElement>(null);
@@ -390,7 +397,7 @@ function App(): JSX.Element {
         <Composer model={model} handle={composer} onError={setError} />
       </main>
       {question ? <Sheet key={question.id} question={question} items={question.items} answer={(result) => answer(question.id, result)} /> : null}
-      {error ? <Toast message={error} onClose={() => setError(undefined)} /> : null}
+      {error ? <Toast key={error.id} message={error.message} onClose={() => setError(undefined)} /> : null}
     </div>
   );
 }
