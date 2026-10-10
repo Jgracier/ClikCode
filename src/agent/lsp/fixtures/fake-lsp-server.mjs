@@ -44,7 +44,7 @@ function publish(uri, version) {
   docs.get(uri).split('\n').forEach((line, index) => {
     for (const [word, severity] of [['ERROR', 1], ['WARN', 2]]) {
       const at = line.indexOf(word);
-      if (at !== -1) diagnostics.push({ range: { start: { line: index, character: at }, end: { line: index, character: at + word.length } }, severity, message: `found ${word}\nsecond line`, source: 'fake', code: severity });
+      if (at !== -1) diagnostics.push({ range: { start: { line: index, character: at }, end: { line: index, character: at + word.length } }, severity, message: `found ${word}: ${line.trim()}\nsecond line`, source: 'fake', code: severity });
     }
   });
   setTimeout(() => send({ method: 'textDocument/publishDiagnostics', params: { uri, version, diagnostics } }), 20);
