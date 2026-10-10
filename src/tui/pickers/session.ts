@@ -1,7 +1,7 @@
 /** Choosing a session to resume, including sessions a vendor CLI started
  * outside ClikCode and that can be adopted. */
 
-import { SLOW_WAIT_MS } from '../../harness/protocol/timings.js';
+import { slowWaitGate } from '../../harness/protocol/slow-wait-gate.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { randomUUID } from 'node:crypto';
 import { inspectNativeHarness } from '../../harness/transport/native/inspect.js';
@@ -252,10 +252,13 @@ export async function interactiveSessionPicker(
     .then((found) => { discovered = found; })
     .finally(() => { discovering = false; earlyLanded(); });
   // The "Looking for chats from other CLIs…" row is for a search worth
-  // waiting on. Most finish in milliseconds, and the row flashed in and out.
+  // waiting on. Most finish in milliseconds, and the row flashed in and out:
+  // it shows by the slow-wait gate, after SLOW_WAIT_MS and then for long
+  // enough to read.
   let slowDiscovery = false;
-  const slow = new Promise<void>((resolveSlow) => { setTimeout(resolveSlow, SLOW_WAIT_MS).unref(); }).then(() => { slowDiscovery = true; });
-  const refreshes = [early, discovery, slow];
+  const looking = slowWaitGate(() => { slowDiscovery = true; }, () => { slowDiscovery = false; });
+  const lookingGone = discovery.catch(() => undefined).then(() => looking.end());
+  const refreshes = [early, discovery, looking.shown, lookingGone];
   let listRevision = 0;
   let built: { discovering: boolean; slow: boolean; discovered: AdoptableNativeSession[]; revision: number; second: number; options: PickerOption<string>[] } | undefined;
   /** Re-check workers and the turns they are generating, and have the board
@@ -338,7 +341,7 @@ export async function interactiveSessionPicker(
         group: OTHER_CLIS,
       });
     }
-    if (discovering && slowDiscovery) {
+    if (slowDiscovery) {
       options.push({
         label: discovered.length ? 'Refreshing chats from other CLIs…' : 'Looking for chats from other CLIs…',
         detail: discovered.length ? '· showing what they listed last time' : '· your ClikCode conversations are listed above',

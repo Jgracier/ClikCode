@@ -642,6 +642,13 @@ SCENARIOS = {
         'watch': [], 'ever': ['● waiting for you to sign in to Grok Build'],
         'never_pattern': [r'[\u2800-\u28ff]{2}  waiting for you to sign in', r'waiting for you to sign in to Grok Build · \d+s'],
     },
+    # A slow wait's band, once shown, stays long enough to read: a command
+    # just past SLOW_WAIT_MS used to flash its band for a frame or two.
+    'slow-wait-band-stays-readable': {
+        'turns': [TWO_BLOCKS],
+        'steps': [('type', '!sleep 0.45'), ('settle', 3)],
+        'watch': [], 'ever': ['! sleep 0.45'], 'min_visible': {'! sleep 0.45': 0.28},
+    },
     # Ctrl+C in a sign-in's key field: one press cancels it, said the same way.
     'ctrl-c-cancels-key-sign-in': {
         'cols': 70,
@@ -1647,6 +1654,14 @@ def run(name, spec, entry, keep):
         import re as regex
         shown = [t for t, text in frames if regex.search(pattern, text)]
         if shown: problems.append(f'matched in {len(shown)} frame(s), first at {shown[0]:.2f}s, and never should be: {pattern!r}')
+    # Each time the phrase appears it stays at least this many seconds.
+    for phrase, least in spec.get('min_visible', {}).items():
+        shown_at = None
+        for t, text in frames:
+            if phrase in text and shown_at is None: shown_at = t
+            elif phrase not in text and shown_at is not None:
+                if t - shown_at < least: problems.append(f'{phrase!r} on screen only {t - shown_at:.2f}s, expected {least}s at least')
+                shown_at = None
     for phrase in spec.get('ever', []):
         if not any(phrase in text for _, text in frames): problems.append(f'never on screen: {phrase!r}')
     for left, right in spec.get('never_together', []):
