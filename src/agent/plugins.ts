@@ -12,17 +12,16 @@
  * servers the turn's servers, agents the `agent`/`task` tools' types.
  * `${CLAUDE_PLUGIN_ROOT}` is expanded as Claude Code expands it.
  *
- * Two places hold plugins:
- *   - ClikCode's own, `<state dir>/plugins/plugins.json`, written by
- *     `clikcode plugin` (plugin-install.ts).
- *   - The ones the user installed for Claude Code, read live from
- *     `~/.claude/plugins/installed_plugins.json` (user scope), enabled as
- *     Claude's settings say unless ClikCode's file says otherwise. Never
- *     written: enabling or disabling one here is recorded in ClikCode's file.
+ * The plugins are the ones the user installed for Claude Code, read live
+ * from `~/.claude/plugins/installed_plugins.json` (user scope), enabled as
+ * Claude's settings say unless ClikCode's own choice
+ * (`<state dir>/plugins/plugins.json`, `clikcode plugin enable|disable`)
+ * says otherwise. Nothing under ~/.claude is ever written.
  *
  * Everything here is synchronous and reads small files: the slash-command
  * list is built synchronously, and a plugin is a handful of entries. */
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdir, rename, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import type { HookConfig } from './hooks.js';
@@ -30,39 +29,20 @@ import { parseMcpServerEntry, type McpServerSpec } from './mcp/config.js';
 import { parseFrontmatter } from './skills.js';
 
 export const PLUGIN_MANIFEST = path.join('.claude-plugin', 'plugin.json');
-export const MARKETPLACE_MANIFEST = path.join('.claude-plugin', 'marketplace.json');
 const REGISTRY_FILE = 'plugins.json';
 const MAX_AGENT_FILES = 100;
 const MAX_FILE_BYTES = 256 * 1024;
 
-export interface PluginRecord {
-  name: string;
-  /** Absolute path of the installed copy (or, for a local marketplace, the plugin in place). */
-  path: string;
-  /** What the user passed to `plugin add`. */
-  source: string;
-  marketplace?: string;
-  version?: string;
-  description?: string;
-  enabled: boolean;
-  installedAt: string;
-}
-
-export interface MarketplaceRecord { name: string; source: string; path: string; addedAt: string }
-
 export interface PluginRegistry {
-  plugins: Record<string, PluginRecord>;
-  marketplaces: Record<string, MarketplaceRecord>;
   /** Enable/disable choices made in ClikCode for Claude Code's plugins, by Claude's id. */
   claude: Record<string, { enabled: boolean }>;
 }
 
 export interface InstalledPlugin {
-  /** `name@marketplace`, or the bare name of one added from a path or URL. */
+  /** Claude Code's id: `name@marketplace`. */
   id: string;
   name: string;
   root: string;
-  origin: 'clikcode' | 'claude';
   enabled: boolean;
   version?: string;
   description?: string;
@@ -102,11 +82,7 @@ export function pluginRegistryPath(stateDir: string): string {
 export function readPluginRegistry(stateDir: string): PluginRegistry {
   const raw = readJson(pluginRegistryPath(stateDir));
   const table = (key: string) => (isRecord(raw) && isRecord(raw[key]) ? raw[key] : {});
-  return {
-    plugins: table('plugins') as PluginRegistry['plugins'],
-    marketplaces: table('marketplaces') as PluginRegistry['marketplaces'],
-    claude: table('claude') as PluginRegistry['claude'],
-  };
+  return { claude: table('claude') as PluginRegistry['claude'] };
 }
 
 export function claudePluginsDirectory(home: string = homedir()): string {
@@ -125,17 +101,11 @@ export function readPluginManifest(root: string): PluginManifest | undefined {
   return isRecord(raw) ? raw as PluginManifest : undefined;
 }
 
-/** A directory Claude Code would load as a plugin: a manifest, or at least one conventional part. */
-export function looksLikePlugin(root: string): boolean {
-  return existsSync(path.join(root, PLUGIN_MANIFEST))
-    || ['commands', 'agents', 'skills', path.join('hooks', 'hooks.json'), '.mcp.json'].some((part) => existsSync(path.join(root, part)));
-}
-
 // ── which plugins ────────────────────────────────────────────────────────────
 
 /** Claude Code's user-scope plugins: `installed_plugins.json` (version 2 keeps
  * a list per id, version 1 one entry), enabled unless its settings say false. */
-export function claudeInstalledPlugins(home: string = homedir()): Array<Omit<InstalledPlugin, 'enabled'> & { claudeEnabled: boolean }> {
+function claudeInstalledPlugins(home: string = homedir()): Array<Omit<InstalledPlugin, 'enabled'> & { claudeEnabled: boolean }> {
   const record = readJson(path.join(claudePluginsDirectory(home), 'installed_plugins.json'));
   const table = isRecord(record) && isRecord(record.plugins) ? record.plugins : isRecord(record) ? record : {};
   const settings = readJson(path.join(home, '.claude', 'settings.json'));
@@ -149,7 +119,7 @@ export function claudeInstalledPlugins(home: string = homedir()): Array<Omit<Ins
     if (!root || !existsSync(root)) continue;
     const manifest = readPluginManifest(root);
     found.push({
-      id, name: manifest?.name ?? id.split('@')[0]!, root, origin: 'claude', claudeEnabled: enabled[id] !== false,
+      id, name: manifest?.name ?? id.split('@')[0]!, root, claudeEnabled: enabled[id] !== false,
       ...(typeof entry?.version === 'string' ? { version: entry.version } : manifest?.version ? { version: manifest.version } : {}),
       ...(manifest?.description ? { description: manifest.description } : {}),
     });
@@ -157,17 +127,35 @@ export function claudeInstalledPlugins(home: string = homedir()): Array<Omit<Ins
   return found;
 }
 
-/** Every plugin ClikCode knows: its own first, then Claude Code's (an id in both is ClikCode's). */
+/** Every plugin ClikCode knows: Claude Code's, with ClikCode's own choice. */
 export function listPlugins(roots: PluginRoots): InstalledPlugin[] {
   const registry = readPluginRegistry(roots.stateDir);
-  const own: InstalledPlugin[] = Object.entries(registry.plugins).map(([id, record]) => ({
-    id, name: record.name, root: record.path, origin: 'clikcode', enabled: record.enabled !== false,
-    ...(record.version ? { version: record.version } : {}), ...(record.description ? { description: record.description } : {}),
-  }));
-  const ids = new Set(own.map((plugin) => plugin.id));
-  const claude = claudeInstalledPlugins(roots.home ?? homedir()).filter((plugin) => !ids.has(plugin.id))
+  return claudeInstalledPlugins(roots.home ?? homedir())
     .map(({ claudeEnabled, ...plugin }): InstalledPlugin => ({ ...plugin, enabled: registry.claude[plugin.id]?.enabled ?? claudeEnabled }));
-  return [...own, ...claude];
+}
+
+/** By id, or by a name only one plugin has. */
+export function findPlugin(roots: PluginRoots, query: string): InstalledPlugin {
+  const plugins = listPlugins(roots);
+  const exact = plugins.find((plugin) => plugin.id === query);
+  if (exact) return exact;
+  const named = plugins.filter((plugin) => plugin.name === query);
+  if (named.length === 1) return named[0]!;
+  if (named.length > 1) throw new Error(`${query} is ambiguous: ${named.map((plugin) => plugin.id).join(', ')}`);
+  throw new Error(`No plugin named ${query}`);
+}
+
+/** Records ClikCode's choice; Claude Code's own setting is not touched. */
+export async function setPluginEnabled(roots: PluginRoots, query: string, enabled: boolean): Promise<InstalledPlugin> {
+  const plugin = findPlugin(roots, query);
+  const registry = readPluginRegistry(roots.stateDir);
+  registry.claude[plugin.id] = { enabled };
+  const file = pluginRegistryPath(roots.stateDir);
+  await mkdir(path.dirname(file), { recursive: true });
+  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(temporary, `${JSON.stringify(registry, null, 2)}\n`);
+  await rename(temporary, file);
+  return { ...plugin, enabled };
 }
 
 export function enabledPlugins(roots: PluginRoots): InstalledPlugin[] {

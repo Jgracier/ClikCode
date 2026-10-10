@@ -128,26 +128,14 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   mcp.command('targets')
     .description('Show how each harness would be given a server, when you choose it')
     .action(mcpTargets);
-  // Claude Code-format plugins for ClikCode's own agent.
-  const plugin = program.command('plugin').description('Install Claude Code-format plugins (skills, commands, agents, hooks, MCP servers) for ClikCode\'s own agent');
-  plugin.command('add <source>')
-    .description('Install a plugin from a directory, a git URL, or name@marketplace')
-    .action(async (source: string) => (await import('../commands/plugin.js')).pluginAdd(source));
-  plugin.command('list').description('List ClikCode\'s plugins and the ones installed for Claude Code')
+  // Claude Code's plugins, as ClikCode's own agent uses them.
+  const plugin = program.command('plugin').description('Choose which of Claude Code\'s plugins (skills, commands, agents, hooks, MCP servers) ClikCode\'s own agent uses');
+  plugin.command('list').description('List the plugins installed for Claude Code, and whether ClikCode uses each')
     .action(async () => (await import('../commands/plugin.js')).pluginList());
-  plugin.command('remove <plugin>').description('Uninstall a plugin added in ClikCode')
-    .action(async (name: string) => (await import('../commands/plugin.js')).pluginRemove(name));
   plugin.command('enable <plugin>').description('Use a plugin in ClikCode\'s own agent')
     .action(async (name: string) => (await import('../commands/plugin.js')).pluginSetEnabled(name, true));
   plugin.command('disable <plugin>').description('Stop using a plugin in ClikCode (Claude Code\'s setting is not changed)')
     .action(async (name: string) => (await import('../commands/plugin.js')).pluginSetEnabled(name, false));
-  const marketplace = plugin.command('marketplace').description('Plugin marketplaces: a directory or git repository with .claude-plugin/marketplace.json');
-  marketplace.command('add <source>').description('Add a marketplace from a directory or a git URL')
-    .action(async (source: string) => (await import('../commands/plugin.js')).pluginMarketplaceAdd(source));
-  marketplace.command('list').description('List marketplaces, ClikCode\'s and Claude Code\'s')
-    .action(async () => (await import('../commands/plugin.js')).pluginMarketplaceList());
-  marketplace.command('remove <name>').description('Remove a marketplace added in ClikCode')
-    .action(async (name: string) => (await import('../commands/plugin.js')).pluginMarketplaceRemove(name));
   const gateway = program.command('gateway').description('Connect ClikDeploy Gateway for models and private agents');
   gateway.command('status').description('Show the gateway connection state').action(() => aiGatewayStatus(config));
   gateway.command('models').description('List the models ClikDeploy Gateway offers you, cheapest access first')
