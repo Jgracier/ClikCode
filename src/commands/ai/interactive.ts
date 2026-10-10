@@ -345,13 +345,8 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     lifecycle('window.turn.error', { message: message.slice(0, 8000) });
     // Keep the submitted message visible when there's an error, so the user sees what failed
     // (don't clear it like we would for a turn that never started properly)
-    // A sign-in that did not sign in has said so in its own line: the message
-    // that opened it was never sent, and goes back to the composer.
-    if (signInOutcomeSaid(error)) {
-      terminal?.submitted(undefined);
-      if (failed.line) terminal?.restoreDraft(failed.line);
-      return;
-    }
+    // A sign-in that did not sign in has said so in its own line.
+    if (signInOutcomeSaid(error)) return;
     const next = await afterTurnFailure(terminal, id, error, { ...failed, guard: exhaustionGuard });
     if (next.cancelled && terminal) { notice = STOPPED; return; }
     if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message) }); return; }
@@ -554,7 +549,16 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         // outcome stays in the transcript. Nothing signed in at launch.
         // The turn's wait goes up the moment it finishes, taking whatever was
         // typed under the sign-in, so that is never drawn missing between.
-        if (terminal && await signInBeforeUse(targetId)) terminal.turnStarting();
+        // One that does not sign in: the message was never sent, and goes
+        // back to the composer (its line says how the sign-in ended).
+        const signedIn = terminal ? await signInBeforeUse(targetId).catch((error: unknown) => {
+          if (signInOutcomeSaid(error)) {
+            terminal.submitted(undefined);
+            if (turn.echo) terminal.restoreDraft(promptText);
+          }
+          throw error;
+        }) : false;
+        if (terminal && signedIn) terminal.turnStarting();
         // A draft is written now, because this message is what makes the chat
         // a conversation; the waiting line says what a local model is doing.
         const { state: activeState, active } = await prepareTurn(targetId);
