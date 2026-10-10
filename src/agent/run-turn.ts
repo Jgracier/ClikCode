@@ -177,6 +177,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         .then((catalog) => buildSystemPrompt({
           cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir,
           skillsSection: skillsPromptSection(catalog.skills, profile), toolUsageGuidance: profile.toolUsageGuidance,
+          ...(input.agentInstructions ? { agentInstructions: input.agentInstructions } : {}),
         })),
     workspaceHasNotebooks([cwd, ...addDirs]),
   ]), signal);
