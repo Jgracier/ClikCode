@@ -66,6 +66,28 @@ describe('/usage report', () => {
   });
 });
 
+describe('/usage with nothing counted', () => {
+  it('leaves out token figures a vendor never reported, never a bare 0', () => {
+    const invocations: HarnessState['invocations'] = [
+      { id: 'a', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: new Date(NOW).toISOString(), latencyMs: 1 },
+    ];
+    const report = usageReport(state([account('full')], invocations), session('full'), { now: NOW, providerName: 'Claude Code' });
+    expect(report.text).toContain('This chat · 1 turn');
+    expect(report.text).not.toMatch(/(?:^|\s)0(?:\s|$)/m);
+    expect(report.text).not.toContain('0 in');
+    expect(report.text).not.toContain('\n\n\n');
+  });
+
+  it('says what a figure is', () => {
+    const invocations: HarnessState['invocations'] = [
+      { id: 'a', accountId: 'full', provider: 'anthropic', sessionId: 'chat', at: new Date(NOW).toISOString(), inputTokens: 1200, outputTokens: 300, latencyMs: 1 },
+    ];
+    const report = usageReport(state([account('full')], invocations), session('full'), { now: NOW, providerName: 'Claude Code' });
+    expect(report.text).toContain('tokens');
+    expect(report.text).toContain('This chat · 1 turn · ');
+  });
+});
+
 describe('/usage all', () => {
   const at = (daysBack: number): string => new Date(NOW - daysBack * 86_400_000).toISOString();
   const invocations: HarnessState['invocations'] = [
