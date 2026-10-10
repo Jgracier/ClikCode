@@ -82,6 +82,9 @@ export function withArgValues(
   const swarm: Values = swarmIsOn(session)
     ? [{ value: 'off', label: 'Turn swarm off' }]
     : [{ value: 'on', label: 'Turn swarm on' }];
+  const sandbox: Values = session.sandbox === 'workspace'
+    ? [{ value: 'off', label: 'Turn the sandbox off' }]
+    : [{ value: 'on', label: 'Turn the sandbox on' }];
   const sources: Record<string, () => Values> = {
     '/model': () => vendor?.models ?? [],
     '/effort': () => vendor?.efforts ?? [],
@@ -89,6 +92,7 @@ export function withArgValues(
     '/account': () => accounts,
     '/resume': () => chats,
     '/swarm': () => swarm,
+    '/sandbox': () => sandbox,
   };
   return entries.map((entry) => (sources[entry.value] ? { ...entry, argValues: sources[entry.value] } : entry));
 }

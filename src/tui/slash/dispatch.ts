@@ -33,6 +33,7 @@ import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, us
 import { interactiveModelPicker } from '../pickers/model.js';
 import { interactiveEffortPicker } from '../pickers/effort.js';
 import { interactivePermissionPicker } from '../pickers/permissions.js';
+import { parseSandboxMode, sandboxModeText } from '../../agent/sandbox.js';
 import { interactiveHarnessOptionPicker } from '../pickers/options.js';
 import { interactiveToolsPicker } from '../pickers/tools.js';
 import { interactiveSettingsPicker } from '../pickers/settings.js';
@@ -223,6 +224,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     },
     effort: async () => args ? setWithValue(`Effort set to ${settingLabel(args.trim().toLowerCase() === 'default' ? '' : args.trim().toLowerCase())}`) : interactiveEffortPicker(rl, id),
     permissions: async () => args ? setWithValue(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`) : interactivePermissionPicker(rl, id),
+    sandbox: async () => (args ? setWithValue(sandboxModeText(parseSandboxMode(args) ?? 'off')) : viaHeadless(text)),
     send: async () => {
       if (args) return setWithValue(`Messages typed mid-turn: ${parseSendMode(args)}`);
       // Two rows, the current one marked: what a message typed while a turn

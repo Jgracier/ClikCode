@@ -41,7 +41,7 @@ export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'undo', 'changes',
   'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
-  'model', 'effort', 'fast', 'swarm', 'permissions', 'send', 'options', 'capabilities', 'settings',
+  'model', 'effort', 'fast', 'swarm', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
   'usage', 'doctor',
 ] as const;
@@ -91,6 +91,10 @@ const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
 const vendorCompaction = (session: HarnessSession | undefined): SlashAvailability => (isClikCodeAgent(session)
   ? { available: false, reason: AGENT_COMPACTS_ITSELF }
   : { available: true });
+/** ClikCode's own agent's settings: a vendor harness runs its own commands. */
+const agentOnly = (session: HarnessSession | undefined): SlashAvailability => (isClikCodeAgent(session)
+  ? { available: true }
+  : { available: false, reason: "The sandbox applies to ClikCode's own agent (ClikDeploy Gateway or ClikCode Local); a vendor harness sandboxes its own commands." });
 const needsHarness = (what: string) => (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
   const local = localOnly(session);
   if (!local.available) return local;
@@ -190,6 +194,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       : { available: false, reason: 'Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.' }),
   }),
   entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
+  entry('sandbox', 'Settings', "run the agent's shell commands so they write only the workspace, temp and caches", { argHint: '[on|off]', availability: agentOnly }),
   entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
   entry('capabilities', 'Settings', 'what the selected provider supports'),

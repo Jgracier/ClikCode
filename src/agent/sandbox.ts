@@ -19,6 +19,13 @@ export function parseSandboxMode(value: string): SandboxMode | undefined {
   return undefined;
 }
 
+/** One line for /sandbox and its confirmation. */
+export function sandboxModeText(mode: SandboxMode): string {
+  return mode === 'workspace'
+    ? 'Sandbox on · shell commands write only the workspace, the temp dir and tool caches; they read everything and keep the network'
+    : 'Sandbox off · shell commands run with your full permissions';
+}
+
 /** Under home: the package-manager and toolchain caches an install or a
  * build writes. Read-only caches would fail most real work. */
 const HOME_CACHE_DIRS = [
