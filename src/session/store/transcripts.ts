@@ -154,6 +154,11 @@ export function mergeTranscripts(base: SessionTranscript, next: SessionTranscrip
   } else if (theyAppended) messages = [...mine, ...theirs.slice(before.length)];
   else messages = next.messages;
   const pendingTurn = sameData(base.pendingTurn, next.pendingTurn) ? disk.pendingTurn : next.pendingTurn;
+  // Nothing of disk's to add: the writer's own copy, so what is stored is
+  // recognised as written from it (storedFrom). A fresh object here made
+  // every later write of a streaming turn merge again, and none ever took
+  // the journal path: the whole transcript was rewritten per checkpoint.
+  if (messages === next.messages && pendingTurn === next.pendingTurn) return next;
   return {
     ...(messages !== undefined ? { messages } : {}),
     ...(pendingTurn !== undefined ? { pendingTurn } : {}),
