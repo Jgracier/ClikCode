@@ -1343,6 +1343,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stopWaiting();
   }
 
+  /** The turn showing was stopped elsewhere -- from another window, or its
+   * worker is gone -- and ends as one stopped here does: what was still
+   * running did not finish, its line says "Stopped after", and it is not
+   * announced as finished. */
+  turnStopped(): void {
+    if (this.turn) this.turn.cancelled = true;
+  }
+
   /** The turn showing now drives it, if a follow does (see WaitingTurn.ended). */
   onWaitingEnded(ended: () => void): void {
     if (this.turn) this.turn.ended = ended;
@@ -1372,7 +1380,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // stepping out of it is not.
     if (turn?.submit && !this.steppedOut) {
       this.pendingTurnSummary = this.endOfTurnSummary(turn);
-      this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
+      // A stopped turn did not finish, and whoever stopped it knows.
+      if (!turn.cancelled) this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
     }
     this.turn = undefined;
     this.thought = undefined;

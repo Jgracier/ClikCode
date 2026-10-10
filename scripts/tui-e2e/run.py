@@ -170,6 +170,24 @@ SCENARIOS = {
         'watch': [], 'final_contains': ['from the other window'],
         'final_once': ['Second answer arrives here.'], 'final2_once': ['Second answer arrives here.'],
     },
+    # The worker running a turn is killed mid-call. The turn ends there as a
+    # stopped one, under its own prompt -- its answer used to be drawn above
+    # it, the call left running (▸), and "session worker connection closed
+    # unexpectedly" shown -- and the next message starts a worker again.
+    'worker-killed-mid-turn': {
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 20000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Second answer arrives here.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30), ('settle', 2),
+            ('kill_workers', 'KILL'), ('wait_for', 'send again to continue', 10), ('settle', 2), ('snap', 'stopped'),
+            ('type', 'carry on'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2),
+        ],
+        'watch': [],
+        'snap_contains': {'stopped': ["The conversation's worker stopped; send again to continue.", 'Stopped after']},
+        'snap_once': {'stopped': ['start the build', 'Starting the long build.']},
+        'snap_lacks': {'stopped': ['▸', 'Worked for']},
+        'final_once': ['Second answer arrives here.'], 'never': ['closed unexpectedly'],
+    },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 4)],

@@ -10,6 +10,7 @@ import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
 import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
 import { readState } from '../session/state/read.js';
+import { processAlive } from '../harness/transport/process-group.js';
 import { encodeFrame, FrameDecoder, type ClientCommand, type WorkerEvent } from './protocol.js';
 
 const SPAWN_TIMEOUT_MS = 5_000;
@@ -53,7 +54,7 @@ async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecor
   const deadline = Date.now() + SPAWN_TIMEOUT_MS;
   for (;;) {
     const record = await readWorkerRecord(sessionId);
-    if (record && await workerIsReachable(record.socketPath)) return record;
+    if (record && await recordIsLive(record)) return record;
     // A scripted send is running a turn in-process: the worker starts when it
     // ends, and this waits for it like any turn already running.
     if (Date.now() > deadline && (await conversationHolder(sessionId))?.kind !== 'turn') {
@@ -200,7 +201,16 @@ export async function retireStaleWorkers(): Promise<void> {
 async function findRunningWorker(sessionId: string): Promise<WorkerRuntimeRecord | undefined> {
   const record = await readWorkerRecord(sessionId);
   if (!record) return undefined;
-  return (await workerIsReachable(record.socketPath)) ? record : undefined;
+  return (await recordIsLive(record)) ? record : undefined;
+}
+
+/** The record's own worker is there: its socket answers, and it is that
+ * record's process answering. The socket path is the conversation's, not one
+ * worker's: a killed worker leaves its record behind, and the next one
+ * listens on the same path before it writes its own -- connecting with the
+ * old record's token then is refused ("stale or invalid token"). */
+async function recordIsLive(record: WorkerRuntimeRecord): Promise<boolean> {
+  return processAlive(record.pid) && workerIsReachable(record.socketPath);
 }
 
 /** One connection to one session's worker. `send` is fire-and-forget over the

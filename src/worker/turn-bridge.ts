@@ -25,6 +25,8 @@ import { withSignIn } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
+import { readState } from '../session/state/read.js';
+import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 
 export interface WorkerTurnRequest {
   echo: boolean;
@@ -43,6 +45,8 @@ const clients = new Map<string, WorkerClient>();
  * answered rather than guessed. */
 const pendingSubmissions = new Map<string, (event: Extract<WorkerEvent, { type: 'submission' }>) => void>();
 const SUBMISSION_ANSWER_MS = 8_000;
+/** The worker running a turn went away mid-turn. */
+const WORKER_STOPPED = "The conversation's worker stopped; send again to continue.";
 /** Messages being taken back (Esc), waiting for the worker's `unqueued`. */
 const pendingTakeBacks = new Map<string, (outcome: TakeBackOutcome) => void>();
 
@@ -308,6 +312,8 @@ async function driveWorkerTurn(
 ): Promise<{ notice?: string; left?: true }> {
   let notice: string | undefined;
   let left = false;
+  /** The account the worker last named, for a render of this window's own. */
+  let account: string | undefined;
   const tracker = trackers.get(client)!;
   tracker.driving = true;
   try {
@@ -334,6 +340,7 @@ async function driveWorkerTurn(
       const onEvent = (event: WorkerEvent): void => {
         switch (event.type) {
           case 'snapshot':
+            account = event.account;
             // `live` says the worker still runs this turn, so its journal is
             // the live view's and is never drawn as ended; a snapshot without
             // it (the one that closes a turn) holds an interrupted one.
@@ -432,7 +439,17 @@ async function driveWorkerTurn(
         }
       };
       const onClose = (): void => {
-        finish('closed', () => rejectTurn(new Error('session worker connection closed unexpectedly')));
+        // The worker is gone mid-turn (killed, crashed): nothing more of
+        // this turn comes. It ends here as a stopped one -- its running calls
+        // settle as stopped -- drawn from what the worker saved of it, while
+        // the live view is still this turn's, so the answer is retired in
+        // its place under its prompt rather than above it.
+        notice = WORKER_STOPPED;
+        rl.turnStopped();
+        void readState({ transcripts: [sessionId] }).then((state) => {
+          const saved = state.sessions.find((item) => item.id === sessionId);
+          if (saved) rl.render({ ...saved, messages: sessionTranscriptMessages(saved), pendingTurn: undefined }, account, undefined, { running: false });
+        }).catch(() => undefined).finally(() => finish('closed', () => resolveTurn()));
       };
       client.on('event', onEvent);
       client.on('close', onClose);
