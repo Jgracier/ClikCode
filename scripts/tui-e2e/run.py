@@ -1235,6 +1235,14 @@ SCENARIOS = {
                   ('type', '/effort default'), ('settle', 2)],
         'watch': [], 'snap_contains': {'values': ['❯ default', 'high']}, 'never': ['Error:'],
     },
+    # Esc on Resume-in: the message that ran out comes back to the composer,
+    # and the notice keeps when usage is back.
+    'esc-on-resume-in-gives-message-back': {
+        'turns': [{'refuse': 'The monthly usage limit has been reached. Try again in 2 hours.', 'blocks': ['unused']}],
+        'steps': [('type', 'please check the commit'), ('wait_for', 'Wait for reset (', 30), ('settle', 1), ('snap', 'picker'),
+                  ('keys', '\x1b'), ('settle', 2), ('snap', 'after')],
+        'watch': [], 'snap_contains': {'after': ['\n  › please check the commit', 'All accounts exhausted · back ']},
+    },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
         'turns': [TWO_BLOCKS],

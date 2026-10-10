@@ -185,7 +185,7 @@ export async function afterTurnFailure(
   const message = error instanceof Error ? error.message : String(error);
   if (cancelled || !prompter || !turn.line || !isUsageExhaustedMessage(message)) return { cancelled, back };
   const next = await carryOnAfterExhaustion(prompter, id, turn.line, turn.guard, turn.sent ?? turn.line);
-  if ('stayed' in next) return { cancelled, back: [...back, ...next.stayed] };
+  if ('stayed' in next) return { cancelled, back: [...back, ...next.stayed.filter((text) => !back.includes(text))] };
   // Parked for the reset: nothing goes back to the composer -- it is sent then.
   if ('waiting' in next) return { cancelled, back: [], waiting: next.waiting };
   return { cancelled, ...next };

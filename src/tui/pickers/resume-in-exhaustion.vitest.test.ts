@@ -74,7 +74,7 @@ describe('running out of usage', () => {
 
   it('hands the messages queued behind back once, when nothing here can run them and the chat stays', async () => {
     await chat([account('a1', true)], { queuedTurns: queue() });
-    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ stayed: ['and then this', 'and this too'] });
+    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', {})).toEqual({ stayed: ['fix the parser', 'and then this', 'and this too'] });
     const session = (await readState()).sessions.find((item) => item.id === 's1')!;
     expect(session.queuedTurns?.map((item) => item.id)).toEqual(['q2', 'q4']);
   });
@@ -82,7 +82,8 @@ describe('running out of usage', () => {
   it('leaves the queue alone while an account of the provider can still take it', async () => {
     await chat([account('a1', false)], { queuedTurns: queue() });
     const guard: ExhaustionRetryGuard = { autoResent: 's1\nfix the parser' };
-    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', guard)).toEqual({ stayed: [] });
+    // The message itself goes back to the composer; the queue stays.
+    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', guard)).toEqual({ stayed: ['fix the parser'] });
     expect((await readState()).sessions.find((item) => item.id === 's1')!.queuedTurns).toHaveLength(4);
   });
 });
