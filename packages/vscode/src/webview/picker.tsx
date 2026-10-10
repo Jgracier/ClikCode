@@ -131,6 +131,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
   };
 
   const provider = providers?.find((item) => item.id === drill);
+  const effort = drill === current ? props.model.chatSettings?.effort : undefined;
   const query = search.trim().toLowerCase();
 
   const rows = useMemo((): ListRow[] => {
@@ -144,12 +145,17 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
         key: `m:${item.id}`,
         disabled: Boolean(item.unavailable),
         onSelect: () => apply(drill, item.id),
-        render: () => (
-          <div class="row" title={item.unavailable}>
-            <span class="row-check">{item.current || (drill === current && item.id === props.model.model) ? <Icon name="check" /> : null}</span>
-            <span class="row-main"><span class="row-label">{rowLabel(item, drill, provider?.name)}</span>{item.detail ? <span class="row-detail">{item.detail}</span> : null}</span>
-          </div>
-        ),
+        render: () => {
+          const selected = Boolean(item.current || (drill === current && item.id === props.model.model));
+          return (
+            <div class="row" title={item.unavailable}>
+              <span class="row-check">{selected ? <Icon name="check" /> : null}</span>
+              <span class="row-main"><span class="row-label">{rowLabel(item, drill, provider?.name)}</span>{item.detail && !(selected && effort) ? <span class="row-detail">{item.detail}</span> : null}</span>
+              {/* Effort only on the model it applies to: the selected one. */}
+              {selected && effort ? <EffortBar model={props.model} onError={props.onError} inline /> : null}
+            </div>
+          );
+        },
       })));
       if (agents.length) {
         result.push({ key: 'h:agents', heading: true, render: () => <>Platform agents (remote)<span class="count">{agents.length}</span></> });
@@ -200,7 +206,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       }
     }
     return result;
-  }, [drill, models, providers, query, current]);
+  }, [drill, models, providers, query, current, effort]);
 
   return (
     <Popover label={drill ? 'Choose model' : 'Choose provider'} onClose={props.onClose} class="picker" id={drill ? 'model-picker' : 'provider-picker'}>
@@ -214,7 +220,6 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
         <input ref={input} type="text" value={search} placeholder={drill ? 'Search or type a model id…' : 'Search providers…'}
           aria-label={drill ? 'Search models' : 'Search providers'} aria-controls="picker-list" onInput={(event) => setSearch((event.target as HTMLInputElement).value)} />
       </div>
-      {drill && props.model.chatSettings?.effort ? <EffortBar model={props.model} onError={props.onError} /> : null}
       {error ? <div class="picker-error">{error}</div> : null}
       {drill && models?.error ? <div class="picker-error">{models.error}</div> : null}
       {drill && models?.agentsError ? <div class="picker-error">Could not load your agents: {models.agentsError}</div> : null}
@@ -281,16 +286,17 @@ export function modelWithEffort(modelName: string | undefined, effort: string | 
   return !effort || effort === 'default' ? name : `${name} ${effortLabel(effort)}`;
 }
 
-/** Effort, chosen beside the model in the same menu (or alone, EffortMenu):
- * picking one keeps the menu open, so a model and its effort are set together. */
-function EffortBar(props: { model: ChatModel; onError: (message: string) => void }): JSX.Element {
+/** Effort, chosen on the selected model's own row (`inline`), or alone for
+ * a provider with no model list (EffortMenu). Picking one keeps the menu
+ * open, so a model and its effort are set together. */
+function EffortBar(props: { model: ChatModel; onError: (message: string) => void; inline?: boolean }): JSX.Element {
   const effort = props.model.chatSettings?.effort;
   const [current, setCurrent] = useState(effort?.current ?? 'default');
   useEffect(() => { setCurrent(effort?.current ?? 'default'); }, [effort?.current]);
   const values = ['default', ...(effort?.choices ?? [])];
   return (
-    <div class="effort-bar" role="radiogroup" aria-label="Reasoning effort">
-      <span class="effort-title muted">Effort</span>
+    <div class={props.inline ? 'effort-bar inline' : 'effort-bar'} role="radiogroup" aria-label="Reasoning effort" data-row-action>
+      {props.inline ? null : <span class="effort-title muted">Effort</span>}
       {values.map((value) => (
         <button key={value} type="button" role="radio" aria-checked={value === current} class={`effort-option${value === current ? ' on' : ''}`}
           title={value === 'default' ? 'The model decides' : `${effortLabel(value)} reasoning effort`}
