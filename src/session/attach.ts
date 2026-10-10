@@ -150,12 +150,14 @@ export async function prepareTurn(
   if (active && harness) {
     busy?.('preparing…');
     try {
-      await ensureTurboFitForTurn(harness, state.accounts.find((item) => item.id === active.accountId), targetId, active.model);
+      await ensureTurboFitForTurn(harness, state.accounts.find((item) => item.id === active.accountId), targetId, active.model, busy);
     } finally { busy?.(); }
   }
   if (active?.route === 'clikcode-local') {
     busy?.('loading the local model…');
-    try { await ensureLocalModelForTurn(active); } finally { busy?.(); }
+    // Its download's percentage on the same line, where the caller shows
+    // one (the editor's busy line); the terminal's band otherwise.
+    try { await ensureLocalModelForTurn(active, busy); } finally { busy?.(); }
   }
   return { state, active };
 }

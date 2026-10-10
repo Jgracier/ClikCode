@@ -9,15 +9,15 @@ import { emitHarnessOutput } from '../../harness/output.js';
 import {
   ensureTurboFitServing, isTurboFitModel, prepareTurboFitModel, releaseTurboFitLeasesOnExit, releaseTurboFitRuntime,
 } from '../../harness/accounts/turbofit-local.js';
-import { waitingLineProgress } from './local-model.js';
+import { waitingLineProgress, type ProgressSink } from './local-model.js';
 
 let exitHookInstalled = false;
 
 /** Long work with its progress on the waiting line (see waitingLineProgress);
  * a runtime already up, the usual case before a turn, shows nothing. */
-async function withProgress<T>(work: (progress: (message: string) => void) => Promise<T>): Promise<T> {
+async function withProgress<T>(work: (progress: (message: string) => void) => Promise<T>, sink?: ProgressSink): Promise<T> {
   if (!exitHookInstalled) { exitHookInstalled = true; releaseTurboFitLeasesOnExit(); }
-  const shown = waitingLineProgress();
+  const shown = waitingLineProgress(sink);
   try { return await work((message) => shown.show(message, message.replace(/\d+/g, '#'))); }
   finally { shown.done(); }
 }
@@ -46,11 +46,11 @@ export async function turboFitModelChanged(
  * Returns the model as Hermes can route it -- a session saved with the old
  * `turbofit:` spelling is corrected here, on its next turn. */
 export async function ensureTurboFitForTurn<T extends string | null | undefined>(
-  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, sessionId: string, model: T,
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, sessionId: string, model: T, sink?: ProgressSink,
 ): Promise<T> {
   if (!harness.turboFit || !isTurboFitModel(model)) return model;
   const routable = hermesTurboFitModelId(model!) as T;
-  const ready = await withProgress((progress) => ensureTurboFitServing(harness, account, sessionId, routable!, progress));
+  const ready = await withProgress((progress) => ensureTurboFitServing(harness, account, sessionId, routable!, progress), sink);
   reportNotice(ready.notice);
   return routable;
 }
