@@ -55,13 +55,22 @@ export async function assertRealModel(harness: AiLocalHarnessDefinition | undefi
 
 /** A model for a Gateway session: `auto` (and its synonyms) hands the choice
  * back to the Gateway (null); anything else must be on the Gateway's list for
- * this account, matched without regard to case. */
+ * this account, matched without regard to case. A model missing from the
+ * list is looked up once more on a fresh one before it is refused: the
+ * Gateway's list differs between its instances from one second to the next
+ * (203 models, then 155), and a cached or unlucky list refused a model the
+ * Gateway served a moment before (bench/harness, 2026-10-10). */
 export async function chooseGatewayModel(value: string): Promise<string | null> {
   if (isAutomaticModelWord(value)) return null;
-  const { models } = await gatewayModels();
   const wanted = value.trim().toLowerCase();
-  const found = models.find((model) => model.id.toLowerCase() === wanted)
+  const lookup = (models: readonly { id: string }[]) => models.find((model) => model.id.toLowerCase() === wanted)
     ?? models.find((model) => model.id.toLowerCase().endsWith(`/${wanted}`));
+  let { models } = await gatewayModels();
+  let found = lookup(models);
+  if (!found) {
+    models = (await gatewayModels({ fresh: true })).models;
+    found = lookup(models);
+  }
   if (!found) {
     const near = models.filter((model) => model.id.toLowerCase().includes(wanted)).slice(0, 5).map((model) => model.id);
     throw new Error(`"${value.trim()}" is not a model ClikDeploy Gateway offers you${near.length ? `. Did you mean: ${near.join(', ')}` : '; see `' + harnessCommand() + ' gateway models`'}.`);

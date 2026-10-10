@@ -122,6 +122,16 @@ describe('choosing a Gateway model', () => {
     }
   });
 
+  it('looks a missing model up once more on a fresh list before refusing it', async () => {
+    // The Gateway's instances answer with different lists from one moment to the next.
+    resetGatewayModelCache();
+    const partial = { ...WIRE, data: WIRE.data.filter((entry) => entry.id !== 'claude-opus-5') };
+    const fetchMock = vi.fn(async () => reply(partial)).mockImplementationOnce(async () => reply(partial)).mockImplementationOnce(async () => reply(WIRE));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(await chooseGatewayModel('claude-opus-5')).toBe('claude-opus-5');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('refuses a model the Gateway does not offer, and suggests near ones', async () => {
     await expect(chooseGatewayModel('gpt-5.6')).rejects.toThrow('Did you mean: gpt-5.6-sol');
     await expect(chooseGatewayModel('nothing-like-it')).rejects.toThrow('gateway models');
