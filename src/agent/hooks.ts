@@ -63,6 +63,7 @@ const CLAUDE_TOOL_NAMES: Record<string, string> = {
   web_fetch: 'WebFetch', web_search: 'WebSearch',
   todo_write: 'TodoWrite', task: 'Task', skill: 'Skill', exit_plan_mode: 'ExitPlanMode',
   ask_user: 'AskUserQuestion', notebook_edit: 'NotebookEdit',
+  list_mcp_resources: 'ListMcpResourcesTool', read_mcp_resource: 'ReadMcpResourceTool',
 };
 
 export function claudeToolName(name: string): string {

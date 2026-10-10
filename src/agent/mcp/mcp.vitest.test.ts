@@ -367,3 +367,61 @@ describe('in a turn', () => {
     expect(rules).toHaveLength(2);
   });
 });
+
+describe('resources', () => {
+  const resourceCtx = (acceptsImages = false): ToolContext => ({ acceptsImages } as unknown as ToolContext);
+
+  it('offers no resource tools when no server has resources', async () => {
+    const { tools } = await manager([fake('fake')]).toolset();
+    expect(tools.map((tool) => tool.name)).not.toContain('list_mcp_resources');
+    expect(tools.map((tool) => tool.name)).not.toContain('read_mcp_resource');
+  });
+
+  it('lists every page of every resource server, or only the one named', async () => {
+    const { tools } = await manager([fake('docs', { FAKE_MCP_RESOURCES: '1' }), fake('plain')]).toolset();
+    const list = find(tools, 'list_mcp_resources');
+    expect(list.class).toBe('read');
+    expect(list.mcp).toBeUndefined();
+    expect((list.parameters as { properties: { server: { enum: string[] } } }).properties.server.enum).toEqual(['docs']);
+    const all = await list.run({}, resourceCtx());
+    expect(all.isError).toBeFalsy();
+    expect(all.output).toBe([
+      'docs: 3 resources',
+      '- file:///notes/todo.md (todo.md, text/markdown): What is left to do.',
+      '- file:///img/dot.png (dot.png, image/png)',
+      '- file:///bin/report.pdf (report.pdf, application/pdf)',
+    ].join('\n'));
+    expect((await list.run({ server: 'plain' }, resourceCtx())).isError).toBe(true);
+  });
+
+  it('reads text as text, summarizes a blob, and names a missing resource', async () => {
+    const { tools } = await manager([fake('docs', { FAKE_MCP_RESOURCES: '1' })]).toolset();
+    const read = find(tools, 'read_mcp_resource');
+    expect(await read.run({ server: 'docs', uri: 'file:///notes/todo.md' }, resourceCtx())).toEqual({ output: '- ship resources' });
+    expect((await read.run({ server: 'docs', uri: 'file:///bin/report.pdf' }, resourceCtx(true))).output).toBe('[binary resource file:///bin/report.pdf (application/pdf), 2.0 KB]');
+    const missing = await read.run({ server: 'docs', uri: 'file:///nope' }, resourceCtx());
+    expect(missing.isError).toBe(true);
+    expect(missing.output).toMatch(/Resource not found: file:\/\/\/nope/);
+  });
+
+  it('attaches an image resource for a model that can see it, and only summarizes it for one that cannot', async () => {
+    const { tools } = await manager([fake('docs', { FAKE_MCP_RESOURCES: '1' })]).toolset();
+    const read = find(tools, 'read_mcp_resource');
+    const seen = await read.run({ server: 'docs', uri: 'file:///img/dot.png' }, resourceCtx(true));
+    expect(seen.output).toMatch(/attached for you to see/);
+    expect(seen.images).toEqual([{ mimeType: 'image/png', data: expect.any(String), name: 'file:///img/dot.png' }]);
+    const blind = await read.run({ server: 'docs', uri: 'file:///img/dot.png' }, resourceCtx(false));
+    expect(blind.images).toBeUndefined();
+    expect(blind.output).toMatch(/^\[binary resource file:\/\/\/img\/dot\.png \(image\/png\), \d+ B\]$/);
+  });
+
+  it('restarts a resource server that died since the listing', async () => {
+    const pidFile = join(dir, 'docs.pid');
+    const { tools } = await manager([fake('docs', { FAKE_MCP_RESOURCES: '1', FAKE_MCP_PID_FILE: pidFile })]).toolset();
+    const first = Number(await readFile(pidFile, 'utf8'));
+    process.kill(first, 'SIGKILL');
+    await until(() => !alive(first));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await find(tools, 'read_mcp_resource').run({ server: 'docs', uri: 'file:///notes/todo.md' }, resourceCtx())).output).toBe('- ship resources');
+  });
+});

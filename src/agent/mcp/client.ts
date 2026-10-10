@@ -23,6 +23,18 @@ export type McpContent =
   | { type: 'resource_link'; uri?: string; name?: string; mimeType?: string }
   | { type: string; [key: string]: unknown };
 
+export interface McpResourceInfo {
+  uri: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  mimeType?: string;
+  size?: number;
+}
+
+/** One item of a resources/read answer: text, or base64 `blob`. */
+export interface McpResourceContents { uri?: string; mimeType?: string; text?: string; blob?: string }
+
 export interface McpCallResult {
   content?: McpContent[];
   structuredContent?: unknown;
@@ -35,7 +47,11 @@ interface ConnectOptions extends McpTransportHandlers {
 }
 
 export class McpClient {
-  private constructor(readonly spec: McpServerSpec, private readonly transport: McpTransport, readonly serverName: string) {}
+  private constructor(
+    readonly spec: McpServerSpec, private readonly transport: McpTransport, readonly serverName: string,
+    /** The server said it has resources (initialize `capabilities.resources`). */
+    readonly hasResources = false,
+  ) {}
 
   /** Opens the transport and completes the handshake, or closes what it
    * opened and throws with the server's own explanation attached. */
@@ -50,14 +66,15 @@ export class McpClient {
     try {
       const result = await transport.request('initialize', {
         protocolVersion: MCP_PROTOCOL_VERSION,
-        // No roots, sampling or elicitation: this client only calls tools.
+        // No roots, sampling or elicitation: this client calls tools and reads resources.
         capabilities: {},
         clientInfo: { name: 'clikcode', version: CLIKCODE_VERSION },
       }, { timeoutMs: options.timeoutMs });
       if (typeof result.protocolVersion === 'string') transport.setProtocolVersion(result.protocolVersion);
       transport.notify('notifications/initialized');
       const serverName = typeof result.serverInfo?.name === 'string' ? result.serverInfo.name : spec.name;
-      return new McpClient(spec, transport, serverName);
+      const resources = result.capabilities?.resources;
+      return new McpClient(spec, transport, serverName, Boolean(resources) && typeof resources === 'object');
     } catch (error) {
       const detail = transport.detail();
       await transport.close().catch(() => undefined);
@@ -70,22 +87,41 @@ export class McpClient {
   get closed(): boolean { return this.transport.closed; }
   detail(): string { return this.transport.detail(); }
 
-  /** Every tool, across pages. A cursor that repeats would loop forever, so
-   * one seen twice ends the listing. */
+  /** Every tool, across pages. */
   async listTools(timeoutMs: number): Promise<McpToolInfo[]> {
-    const tools: McpToolInfo[] = [];
+    return (await this.listAll('tools/list', 'tools', { timeoutMs }))
+      .filter((tool): tool is McpToolInfo => typeof tool?.name === 'string');
+  }
+
+  /** Every resource, across pages. */
+  async listResources(options: { timeoutMs: number; signal?: AbortSignal }): Promise<McpResourceInfo[]> {
+    return (await this.listAll('resources/list', 'resources', options))
+      .filter((resource): resource is McpResourceInfo => typeof resource?.uri === 'string');
+  }
+
+  async readResource(uri: string, options: { timeoutMs: number; signal?: AbortSignal }): Promise<McpResourceContents[]> {
+    try {
+      const result = await this.transport.request('resources/read', { uri }, options);
+      return Array.isArray(result.contents) ? result.contents.filter((item: unknown) => item && typeof item === 'object') : [];
+    } catch (error) {
+      throw withDetail(error, this.transport.detail());
+    }
+  }
+
+  /** A paged list method's items. A cursor that repeats would loop forever,
+   * so one seen twice ends the listing. */
+  private async listAll(method: string, key: string, options: { timeoutMs: number; signal?: AbortSignal }): Promise<any[]> {
+    const items: any[] = [];
     const seen = new Set<string>();
     let cursor: string | undefined;
     do {
-      const page = await this.transport.request('tools/list', cursor ? { cursor } : {}, { timeoutMs })
+      const page = await this.transport.request(method, cursor ? { cursor } : {}, options)
         .catch((error: unknown) => { throw withDetail(error, this.transport.detail()); });
-      for (const tool of Array.isArray(page.tools) ? page.tools : []) {
-        if (tool && typeof tool.name === 'string') tools.push(tool as McpToolInfo);
-      }
+      for (const item of Array.isArray(page[key]) ? page[key] : []) if (item) items.push(item);
       cursor = typeof page.nextCursor === 'string' && !seen.has(page.nextCursor) ? page.nextCursor : undefined;
       if (cursor) seen.add(cursor);
     } while (cursor);
-    return tools;
+    return items;
   }
 
   async callTool(name: string, args: Record<string, unknown>, options: { timeoutMs: number; signal?: AbortSignal }): Promise<McpCallResult> {
