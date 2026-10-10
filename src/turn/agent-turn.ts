@@ -16,7 +16,8 @@ import type { TurnRunOptions } from './session-turn.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
-import { recordInvocation, showStopReason } from './turn-output.js';
+import { recordInvocation, recordUnfinishedInvocation, showStopReason } from './turn-output.js';
+import { isTurnCancelled } from '../agent/cancellation.js';
 import { runGatewayAgentTurn } from './gateway-agent-turn.js';
 import { seedAgentConversation } from './agent-history.js';
 import { ConversationStore } from '../agent/conversation.js';
@@ -93,6 +94,18 @@ export async function runAgentTurn(input: {
     prompter?.response(held, 'append');
   };
   let turnUsage: TurnUsage | undefined;
+  /** The turn's usage went into the invocation log: once, however it ended. */
+  let usageRecorded = false;
+  const recordUnfinished = (ended: 'stopped' | 'error'): void => {
+    if (usageRecorded) return;
+    usageRecorded = true;
+    // Every model step reported its running total through onUsage: a turn
+    // stopped, failed or handed on mid-way spent that much all the same.
+    recordUnfinishedInvocation(state, {
+      sessionId: session.id, accountId: attributedTo, provider: session.provider ?? attributedTo,
+      model: (gatewayService ? session.reported?.model : undefined) ?? session.model, startedAt, usage: turnUsage,
+    }, ended);
+  };
   // The agent remembers what it ran itself. Turns that ran elsewhere -- the
   // conversation moved here from another harness, or was away on one since --
   // go into its memory first (agent-history.ts), so the model the Gateway
@@ -155,6 +168,7 @@ export async function runAgentTurn(input: {
       } : undefined),
     });
     if (harnessTurn.stopReason === 'account-switch') {
+      recordUnfinished('stopped');
       releaseHeld();
       const progressed = Boolean(harnessTurn.text.trim() || harnessTurn.steps > 0);
       if (!progressed) {
@@ -174,6 +188,7 @@ export async function runAgentTurn(input: {
     // The loop's own reason wins where it ended the turn early (max-steps).
     const loopStop = turnStopReason(harnessTurn.stopReason);
     if (loopStop && loopStop !== 'completed') usage.stopReason = loopStop;
+    usageRecorded = true;
     const harnessInvocation = recordInvocation(state, {
       sessionId: session.id, accountId: attributedTo, provider: session.provider ?? attributedTo,
       // The model that answered: for Automatic the session names none.
@@ -198,6 +213,9 @@ export async function runAgentTurn(input: {
         },
       });
     }
+  } catch (error) {
+    recordUnfinished(isTurnCancelled(error) ? 'stopped' : 'error');
+    throw error;
   } finally {
     // The turn is in the agent's memory once it wrote to it -- also when the
     // turn then failed or was stopped, which leaves its prompt there.

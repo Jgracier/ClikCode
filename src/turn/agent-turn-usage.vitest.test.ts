@@ -39,6 +39,37 @@ async function fakeModel(frames: readonly object[], ending: 'done' | 'drop'): Pr
   return { server, url: `http://127.0.0.1:${port}/v1` };
 }
 
+/** A model server that, per request in order, streams a list_dir call with
+ * usage (a finished model step), then answers the next request `then`:
+ * a refusal, or nothing at all (a turn the user then stops). */
+async function stepThen(then: 'refuse' | 'hang'): Promise<{ server: Server; url: string; asked: Promise<void> }> {
+  let requests = 0;
+  let second!: () => void;
+  const asked = new Promise<void>((resolve) => { second = resolve; });
+  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    req.resume();
+    req.on('end', () => {
+      requests += 1;
+      if (requests === 1) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'list_dir', arguments: '{"path":"."}' } }] } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 700, completion_tokens: 20 } })}\n\n`);
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+      second();
+      if (then === 'refuse') {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'bad request' } }));
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as { port: number };
+  return { server, url: `http://127.0.0.1:${port}/v1`, asked };
+}
+
 const local = (workspace: string): HarnessSession => ({
   id: 's1', conversationId: 's1', route: 'clikcode-local', accountId: null, provider: 'clikcode-local', model: 'test-model', effort: 'auto',
   permissionMode: 'auto', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
@@ -95,6 +126,28 @@ describe('a ClikCode agent turn', () => {
     await runSessionTurn(config, 's1', 'go', undefined, {});
     const session = (await readState()).sessions.find((item) => item.id === 's1')!;
     expect(session.reported?.model).toBe('served-7b');
+  }, 30_000);
+
+  it('records what a failed turn spent, once, as an error', async () => {
+    const served = await stepThen('refuse');
+    model = served;
+    engine.ensureLocalModel.mockResolvedValue({ baseUrl: served.url, model: 'test-model', contextWindow: 32768 });
+    await expect(runSessionTurn(config, 's1', 'go', undefined, {})).rejects.toThrow();
+    const recorded = (await readState()).invocations.filter((item) => item.sessionId === 's1');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ inputTokens: 700, outputTokens: 20, stopReason: 'error' });
+  }, 30_000);
+
+  it('records what a stopped turn spent, once, as stopped', async () => {
+    const served = await stepThen('hang');
+    model = served;
+    engine.ensureLocalModel.mockResolvedValue({ baseUrl: served.url, model: 'test-model', contextWindow: 32768 });
+    const stop = new AbortController();
+    void served.asked.then(() => stop.abort());
+    await expect(runSessionTurn(config, 's1', 'go', stop.signal, {})).rejects.toThrow();
+    const recorded = (await readState()).invocations.filter((item) => item.sessionId === 's1');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ inputTokens: 700, outputTokens: 20, stopReason: 'stopped' });
   }, 30_000);
 
   it('keeps what streamed when the turn dies before it completes', async () => {
