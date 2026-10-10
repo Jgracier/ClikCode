@@ -18,7 +18,6 @@ import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { recordInvocation, recordUnfinishedInvocation, showStopReason } from './turn-output.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
-import { runGatewayAgentTurn } from './gateway-agent-turn.js';
 import { seedAgentConversation } from './agent-history.js';
 import { ConversationStore } from '../agent/conversation.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -32,13 +31,9 @@ export async function runAgentTurn(input: {
 }): Promise<'continue' | 'resend' | void> {
   const { config, state, session, prompt, signal, run } = input;
   // A Gateway agent runs HERE, as ClikCode's own agent: the Gateway is the intelligence, the agent adds
-  // its instructions and its platform tools, ClikCode is the harness (gateway/agent-session.ts). Only a
-  // server too old to hand an agent over still runs it remotely.
-  let agent: GatewayAgentSession | undefined;
-  if (session.route === 'gateway' && session.gatewayAgentId) {
-    agent = await gatewayAgentSession(config, session, signal);
-    if (!agent) return runGatewayAgentTurn(input);
-  }
+  // its instructions and its platform tools, ClikCode is the harness (gateway/agent-session.ts).
+  const agentId = session.route === 'gateway' ? session.gatewayAgentId : undefined;
+  const agent: GatewayAgentSession | undefined = agentId ? await gatewayAgentSession(config, { ...session, gatewayAgentId: agentId }, signal) : undefined;
   const prompter = run.prompter;
   const gatewayService = isGatewayService(session);
   // Attribution for the invocation log and the output payload: the route's
