@@ -44,6 +44,20 @@ describe('edit_file and multi_edit', () => {
     expect(await readFile(path.join(root, 'a.ts'), 'utf8')).toContain('calcTotal(1)');
   });
 
+  it('makes the same replacement in several files with paths, all or none', async () => {
+    await writeFile(path.join(root, 'b.md'), 'See calcTotal.\n');
+    const result = await editFileTool.run({ paths: ['a.ts', 'b.md'], old_string: 'calcTotal', new_string: 'total', replace_all: true }, ctx);
+    expect(result.output).toBe('Edited a.ts, b.md.');
+    expect(result.diff?.map((entry) => entry.path)).toEqual(['a.ts', 'b.md']);
+    expect(await readFile(path.join(root, 'b.md'), 'utf8')).toBe('See total.\n');
+    expect(editFileTool.paths?.({ paths: ['a.ts', 'b.md'], old_string: 'x', new_string: 'y' })).toEqual(['a.ts', 'b.md']);
+
+    await writeFile(path.join(root, 'c.md'), 'nothing here\n');
+    await expect(editFileTool.run({ paths: ['a.ts', 'c.md'], old_string: 'total', new_string: 'sum', replace_all: true }, ctx)).rejects.toThrow(/c\.md: old_string was not found.*No file was changed/s);
+    expect(await readFile(path.join(root, 'a.ts'), 'utf8')).toContain('total(1)');
+    await expect(editFileTool.run({ old_string: 'total', new_string: 'sum' } as never, ctx)).rejects.toThrow(/path/);
+  });
+
   it('write_file still needs a read before replacing an existing file', async () => {
     expect(await writeFileTool.run({ path: 'a.ts', content: 'x\n' }, ctx)).toMatchObject({ isError: true });
     expect(await readFile(path.join(root, 'a.ts'), 'utf8')).toContain('calcTotal');
