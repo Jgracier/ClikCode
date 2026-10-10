@@ -2,9 +2,42 @@
  * menu and picker in the panel. */
 import type { ComponentChildren, JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { waitingSpinnerGlyph } from '../../../../src/harness/protocol/activity-view';
+import { slowWaitGate } from '../../../../src/harness/protocol/slow-wait-gate';
+import { useSpinFrame } from './clock';
 
 export function Icon({ name, label, spin }: { name: string; label?: string; spin?: boolean }): JSX.Element {
   return <i class={`codicon codicon-${name}${spin ? ' codicon-modifier-spin' : ''}`} {...(label ? { 'aria-label': label, role: 'img' } : { 'aria-hidden': 'true' })} />;
+}
+
+/** The terminal's spinner, the same braille frames at the same rate: a
+ * command's in yellow, a sub-agent's in cyan, the turn's own still and
+ * yellow when nothing is arriving. Every spinner on the page steps on the
+ * page's one clock; still under reduced motion and while hidden. */
+export function Spinner({ tone = '', still = false }: { tone?: string; still?: boolean }): JSX.Element {
+  const frame = useSpinFrame(!still);
+  return <span class={`spinner ${tone}`} aria-hidden="true">{waitingSpinnerGlyph(frame)}</span>;
+}
+
+/** Whether a wait is shown, by the terminal's rule (slow-wait-gate.ts):
+ * only once it has taken SLOW_WAIT_MS, and once shown for MIN_VISIBLE_MS
+ * at least. Most lookups answer at once, and a loading line that came and
+ * went in a frame read as a flash. */
+export function useSlowWait(waiting: boolean): boolean {
+  const [shown, setShown] = useState(false);
+  useEffect(() => {
+    if (!waiting) return undefined;
+    const gate = slowWaitGate(() => setShown(true), () => setShown(false));
+    return () => { void gate.end(); };
+  }, [waiting]);
+  return shown;
+}
+
+/** A loading line ("Loading accounts…"), shown by useSlowWait's rule, with
+ * the page's spinner. */
+export function Loading({ waiting, children }: { waiting: boolean; children: ComponentChildren }): JSX.Element | null {
+  const shown = useSlowWait(waiting);
+  return shown ? <div class="picker-loading" role="status"><Spinner />{children}</div> : null;
 }
 
 export function Logo({ size = 40 }: { size?: number }): JSX.Element {

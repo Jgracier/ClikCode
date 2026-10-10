@@ -7,7 +7,7 @@ import { listen, request } from './bus';
 import { useNow } from './clock';
 import { conversationState, SECTION_TITLES, type ConversationSection } from '../../../../src/session/conversation-state';
 import { choose } from './picker';
-import { Icon, IconButton, KeyList, Popover, type ListRow } from './ui';
+import { Icon, IconButton, KeyList, Loading, Popover, type ListRow } from './ui';
 
 type Section = ConversationSection;
 /** The terminal board's sections, in its order and words (session/conversation-state.ts). */
@@ -191,7 +191,7 @@ export function HistoryMenu(props: { model: ChatModel; onClose: () => void; onEr
         <input ref={input} type="text" value={search} placeholder="Search conversations…" aria-label="Search conversations"
           aria-controls="history-list" onInput={(event) => setSearch((event.target as HTMLInputElement).value)} />
       </div>
-      {!rows ? <div class="picker-loading"><Icon name="loading" spin /> Loading…</div> : null}
+      <Loading waiting={!rows}>Loading…</Loading>
       <KeyList id="history-list" rows={listRows} label="Conversations" inputRef={input} onEscape={props.onClose}
         emptyText={rows ? (query ? 'No conversation matches.' : 'No conversations yet.') : undefined} />
     </Popover>
