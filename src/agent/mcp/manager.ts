@@ -20,8 +20,10 @@
 import type { ToolDefinition } from '../tool-contract.js';
 import { McpClient, type McpCallResult, type McpToolInfo } from './client.js';
 import { loadMcpServers, type McpServerSpec } from './config.js';
+import { carriesCredentials } from '../../harness/mcp-sign-in.js';
 import { importNotice, importVendorMcpServers } from './import.js';
 import { enabledPluginMcpServers } from '../plugins.js';
+import { isMcpSignInRequired, mcpOAuthProvider, mcpSignInNote, type McpAuth } from './oauth.js';
 import { mcpResourceTools, type McpResourceSource } from './resources.js';
 import { mcpToolDefinition, mcpToolName } from './tools.js';
 
@@ -49,7 +51,14 @@ interface ServerState {
   connecting?: Promise<void>;
   /** Set by `notifications/tools/list_changed`; the next turn re-lists. */
   stale?: boolean;
-  failure?: { message: string; at: number; reported?: boolean };
+  failure?: {
+    message: string; at: number; reported?: boolean;
+    /** Needs a sign-in only the user can start: retried only once the stored
+     * credential changes (`clikcode mcp login`), never on the clock. */
+    signIn?: { stamp: string };
+  };
+  /** The http server's OAuth credential, made once per state. */
+  auth?: McpAuth;
   /** Shut down or removed from the config. A start still in flight when that
    * happened must not leave a server behind: it closes what it started. */
   retired?: boolean;
@@ -70,14 +79,21 @@ export class McpManager {
 
   constructor(
     private readonly loadServers: () => Promise<{ servers: McpServerSpec[]; problem?: string }>,
-    options: { timeouts?: Partial<McpTimeouts>; fetchImpl?: typeof fetch; now?: () => number } = {},
+    options: {
+      timeouts?: Partial<McpTimeouts>; fetchImpl?: typeof fetch; now?: () => number;
+      /** An http server's OAuth credential: what it sends, and how it is
+       * refreshed. Never a sign-in -- that is the user's to start. */
+      authFor?: (spec: McpServerSpec) => McpAuth | undefined;
+    } = {},
   ) {
     this.timeouts = { ...DEFAULT_TIMEOUTS, ...options.timeouts };
     this.fetchImpl = options.fetchImpl;
     this.now = options.now ?? Date.now;
+    this.authFor = options.authFor;
   }
 
   private readonly fetchImpl?: typeof fetch;
+  private readonly authFor?: (spec: McpServerSpec) => McpAuth | undefined;
   private readonly now: () => number;
 
   /** The tools every configured server offers right now. Servers connect in
@@ -100,7 +116,9 @@ export class McpManager {
         // (one needing a login the agent cannot do) would otherwise add the
         // same line to every conversation. A different reason is said again.
         if (state.failure && !state.failure.reported) {
-          notes.push(`MCP server "${state.spec.name}" is unavailable, so its tools are not offered: ${state.failure.message}`);
+          notes.push(state.failure.signIn
+            ? `MCP server ${state.failure.message}; its tools are not offered until then`
+            : `MCP server "${state.spec.name}" is unavailable, so its tools are not offered: ${state.failure.message}`);
           state.failure.reported = true;
         }
         continue;
@@ -166,6 +184,14 @@ export class McpManager {
       state.failure = undefined;
     }
     if (state.client && state.tools && !state.stale) return Promise.resolve();
+    const signIn = !state.client ? state.failure?.signIn : undefined;
+    if (signIn) {
+      state.connecting = (async () => {
+        if (await this.auth(state)?.stamp() === signIn.stamp) return;
+        await this.connect(state);
+      })().finally(() => { state.connecting = undefined; });
+      return state.connecting;
+    }
     if (!state.client && state.failure && this.now() - state.failure.at < this.timeouts.retryAfterMs) return Promise.resolve();
     state.connecting = this.connect(state).finally(() => { state.connecting = undefined; });
     return state.connecting;
@@ -180,6 +206,7 @@ export class McpManager {
           signal: state.starting.signal,
           timeoutMs: this.timeouts.connectMs,
           ...(this.fetchImpl ? { fetchImpl: this.fetchImpl } : {}),
+          ...(this.auth(state) ? { auth: this.auth(state)! } : {}),
           onNotification: (method) => { if (method === 'notifications/tools/list_changed') state.stale = true; },
         });
         // Shut down while it was starting: nothing owns it any more, and the
@@ -194,17 +221,38 @@ export class McpManager {
       state.failure = undefined;
     } catch (error) {
       state.starting = undefined;
-      const message = firstLine(error);
-      state.failure = { message, at: this.now(), reported: state.failure?.message === message && state.failure.reported };
-      await this.stop(state);
+      await this.fail(state, error);
     }
+  }
+
+  private auth(state: ServerState): McpAuth | undefined {
+    if (state.spec.transport === 'stdio') return undefined;
+    state.auth ??= this.authFor?.(state.spec);
+    return state.auth;
+  }
+
+  private async fail(state: ServerState, error: unknown): Promise<void> {
+    const signIn = isMcpSignInRequired(error);
+    const message = signIn ? mcpSignInNote(state.spec.name) : firstLine(error);
+    state.failure = {
+      message, at: this.now(), reported: state.failure?.message === message && state.failure.reported,
+      ...(signIn ? { signIn: { stamp: await this.auth(state)?.stamp() ?? '' } } : {}),
+    };
+    await this.stop(state);
   }
 
   /** A call to a server that died since its tools were listed gets one
    * reconnect before failing: the model already chose this tool, and a
    * restart is cheaper than a wasted step. */
   private async call(state: ServerState, tool: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
-    return (await this.clientFor(state)).callTool(tool, args, { timeoutMs: this.timeouts.callMs, ...(signal ? { signal } : {}) });
+    try {
+      return await (await this.clientFor(state)).callTool(tool, args, { timeoutMs: this.timeouts.callMs, ...(signal ? { signal } : {}) });
+    } catch (error) {
+      // Its sign-in ran out mid-conversation: the next turn says so instead
+      // of offering tools that will only be refused.
+      if (isMcpSignInRequired(error)) await this.fail(state, error);
+      throw error;
+    }
   }
 
   /** The server's live client, restarted once if it died since this turn's
@@ -273,7 +321,14 @@ export async function mcpToolsForTurn(stateDir: string, signal?: AbortSignal, bu
 async function sharedToolset(stateDir: string): Promise<McpToolset> {
   if (shared?.stateDir !== stateDir) {
     await shared?.manager.shutdown();
-    shared = { stateDir, manager: new McpManager(() => loadAllServers(stateDir)) };
+    shared = {
+      stateDir,
+      manager: new McpManager(() => loadAllServers(stateDir), {
+        // A server the user gave its own credential (an API key header) is
+        // theirs to authorize; a 401 there is a wrong key, not a sign-in.
+        authFor: (spec) => (spec.transport === 'stdio' || carriesCredentials(spec.headers) ? undefined : mcpOAuthProvider(stateDir, spec)),
+      }),
+    };
     imports = undefined;
   }
   // Before the first load, once per process and state directory: the servers

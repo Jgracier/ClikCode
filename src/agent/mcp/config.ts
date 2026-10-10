@@ -20,13 +20,35 @@ import { join } from 'node:path';
 
 export type McpServerSpec = (
   | { name: string; transport: 'stdio'; command: string; args: readonly string[]; env: Readonly<Record<string, string>> }
-  | { name: string; transport: 'http' | 'sse'; url: string; headers: Readonly<Record<string, string>> }
+  | {
+    name: string; transport: 'http' | 'sse'; url: string; headers: Readonly<Record<string, string>>;
+    /** Present when the user configured this server's OAuth client
+     * (`clikcode mcp add --client-id`): its authorization server registers
+     * none dynamically, or the user wants their own. See oauth.ts. */
+    oauth?: McpOAuthConfig;
+  }
 ) & {
   /** Tools of this server always offered with their schemas, never deferred
    * behind the loader -- a built-in server's everyday set (the rest are found
    * with its search). Absent: every tool follows the deferral rule. */
   core?: readonly string[];
 };
+
+/** ClikCode's own key in an entry; no vendor reads it, and provisioning never
+ * copies it (nor the server: one ClikCode signs in to is never a vendor's). */
+export interface McpOAuthConfig { clientId?: string; callbackPort?: number; scope?: string }
+
+function oauthConfig(value: unknown): McpOAuthConfig | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const port = Number(raw.callbackPort);
+  const config: McpOAuthConfig = {
+    ...(typeof raw.clientId === 'string' && raw.clientId.trim() ? { clientId: raw.clientId.trim() } : {}),
+    ...(Number.isInteger(port) && port > 0 && port < 65536 ? { callbackPort: port } : {}),
+    ...(typeof raw.scope === 'string' && raw.scope.trim() ? { scope: raw.scope.trim() } : {}),
+  };
+  return Object.keys(config).length ? config : undefined;
+}
 
 export const MCP_SERVERS_KEY = 'mcpServers';
 
@@ -48,7 +70,8 @@ export function parseMcpServerEntry(name: string, raw: unknown): McpServerSpec |
   if (entry.disabled === true || entry.enabled === false) return undefined;
   const url = typeof entry.url === 'string' ? entry.url : typeof entry.uri === 'string' ? entry.uri : undefined;
   if (url && /^https?:\/\//i.test(url)) {
-    return { name, transport: entry.type === 'sse' ? 'sse' : 'http', url, headers: stringRecord(entry.headers) };
+    const oauth = oauthConfig(entry.oauth);
+    return { name, transport: entry.type === 'sse' ? 'sse' : 'http', url, headers: stringRecord(entry.headers), ...(oauth ? { oauth } : {}) };
   }
   const command = typeof entry.command === 'string' ? entry.command : typeof entry.cmd === 'string' ? entry.cmd : undefined;
   if (!command?.trim()) return undefined;

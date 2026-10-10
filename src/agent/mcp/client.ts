@@ -1,6 +1,7 @@
 /** One connected MCP server: the handshake, its tool list, and calls. */
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { McpServerSpec } from './config.js';
+import type { McpAuth } from './oauth.js';
 import { openTransport, type McpTransport, type McpTransportHandlers } from './transport.js';
 
 /** The revision this client is written against. A server answering with an
@@ -44,6 +45,8 @@ export interface McpCallResult {
 interface ConnectOptions extends McpTransportHandlers {
   timeoutMs: number;
   fetchImpl?: typeof fetch;
+  /** An http server's OAuth credential (oauth.ts). */
+  auth?: McpAuth;
 }
 
 export class McpClient {
@@ -56,7 +59,7 @@ export class McpClient {
   /** Opens the transport and completes the handshake, or closes what it
    * opened and throws with the server's own explanation attached. */
   static async connect(spec: McpServerSpec, options: ConnectOptions & { signal?: AbortSignal }): Promise<McpClient> {
-    const transport = openTransport(spec, options, options.fetchImpl);
+    const transport = openTransport(spec, options, options.fetchImpl, options.auth);
     // Aborted mid-start (the conversation left the agent route): the server
     // and everything it spawned go at once, not when the handshake would have
     // finished or timed out.
