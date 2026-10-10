@@ -137,8 +137,9 @@ export class BroadcastObserver implements TurnObserver {
     this.pendingSignIns.clear();
   }
 
-  broadcast(event: WorkerEvent): void {
-    for (const client of this.clients) sendEvent(client, event);
+  /** To every attached window, or every one but `except` (sent its own). */
+  broadcast(event: WorkerEvent, except?: Socket): void {
+    for (const client of this.clients) if (client !== except) sendEvent(client, event);
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {

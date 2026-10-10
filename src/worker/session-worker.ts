@@ -146,7 +146,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * (steered, or queued durably) and answering. The turn is not over for the
    * windows until each has been: see runTurn's `finally`. */
   let activeSubmissions: Set<Promise<void>> | undefined;
-  let activeRestoreDraft = false;
+  /** The window whose Esc stopped the turn asking for its message back. */
+  let activeRestoreDraft: Socket | undefined;
 
   // --- Vendor background turns (persistent transports) -------------------
   // Work a Codex app-server or ACP agent does between turns: broadcast,
@@ -535,12 +536,16 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
         // the prompt comes back when the client asked, and the turn is not
         // kept. An answer is kept even when the client asked for the draft.
         const answered = observer.turnHasAnswer;
+        // The draft goes back to the window that took it back, and only
+        // there: every other window is only told the turn stopped.
+        const restoreTo = answered ? undefined : activeRestoreDraft;
         if (answered) await preserveInterruptedTurn(sessionId, command.text, observer.liveResponseText, true);
-        else {
-          await discardInterruptedTurn(sessionId, command.text);
-          if (activeRestoreDraft) observer.broadcast({ type: 'restore-draft', text: command.text });
+        else await discardInterruptedTurn(sessionId, command.text);
+        observer.broadcast({ type: 'notice', message: STOPPED }, restoreTo);
+        if (restoreTo && !restoreTo.destroyed) {
+          sendEvent(restoreTo, { type: 'restore-draft', text: command.text });
+          sendEvent(restoreTo, { type: 'notice', message: `${STOPPED} · draft restored` });
         }
-        broadcastNotice(!answered && activeRestoreDraft ? `${STOPPED} · draft restored` : STOPPED);
       } else {
         const message = error instanceof Error ? error.message : String(error);
         await markFailedTurn(sessionId, command.text).catch((saveError: unknown) => {
@@ -565,7 +570,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       activeController = undefined;
       activeLiveInput = undefined;
       activeSubmissions = undefined;
-      activeRestoreDraft = false;
+      activeRestoreDraft = undefined;
       // A message typed as the turn ended may still be on its way into the
       // queue (the broker falls back to it once steering has closed). The
       // final snapshot, the queue drained below and its answer to the window
@@ -731,7 +736,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (command.type === 'cancel') {
       if (activeController) {
         lifecycle('worker.cancel', { stopped: 'turn' });
-        activeRestoreDraft = command.restoreDraft;
+        activeRestoreDraft = command.restoreDraft ? socket : undefined;
         activeController.abort();
         return;
       }

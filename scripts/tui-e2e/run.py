@@ -188,6 +188,21 @@ SCENARIOS = {
         'snap_lacks': {'stopped': ['▸', 'Worked for']},
         'final_once': ['Second answer arrives here.'], 'never': ['closed unexpectedly'],
     },
+    # Esc on a turn that has not answered yet takes the message back -- into
+    # the composer of the window that pressed it, and no other. A second
+    # window on the chat used to get the same draft put into its composer.
+    'esc-take-back-only-in-its-window': {
+        'turns': [{'blocks': ['First chat answered.']},
+                  {'thought': {'text': 'Pondering the request slowly.', 'ms': 20000}, 'blocks': ['Never gets here.']}],
+        'steps': [
+            ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
+            ('open2', 6, ['--continue']), ('wait_for2', 'First chat answered.', 10), ('settle', 1),
+            ('type', 'take this back'), ('wait_for', 'Pondering', 20), ('wait_for2', 'Pondering', 20), ('settle', 1),
+            ('keys', '\x1b'), ('settle', 4), ('snap', 'one'), ('snap2', 'two'),
+        ],
+        'watch': [], 'snap_contains': {'one': ['› take this back', 'draft restored'], 'two': ['Stopped']},
+        'snap_lacks': {'two': ['› take this back', 'draft restored']},
+    },
     'single-block': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 4)],
