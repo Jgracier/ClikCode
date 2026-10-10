@@ -93,7 +93,12 @@ export function toolCallWork(group: ReadonlyMap<number, GroupProcess>, root: num
       // Left the group below the vendor: reparented, its starter gone.
       if (!above) { work.add(pid); break; }
       if (seen.has(parent)) break;
-      if (candidates.has(parent) && isShellName(above.name)) { work.add(pid); break; }
+      // A tool call's shell is one the vendor's agent started itself: its parent is the vendor or
+      // the agent directly under it (the Claude CLI below claude-agent-acp). A shell further down
+      // is a helper's own launcher -- `npm exec` runs an MCP server through `sh -c` -- and made
+      // every worker whose vendor respawned mid-turn wait on its MCP servers forever (MEASURED
+      // 2026-10-10: seven workers two days old, each `held: retiring once the vendor's work ends`).
+      if (candidates.has(parent) && isShellName(above.name) && (above.ppid === root || group.get(above.ppid)?.ppid === root)) { work.add(pid); break; }
       seen.add(parent);
     }
   }

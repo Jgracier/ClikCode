@@ -42,6 +42,12 @@ describe('what counts as work a tool call left running', () => {
   it('never counts the vendor\'s helpers, or a shell with nothing running under it', () => {
     expect(toolCallWork(tree, 10, new Set([11, 12, 13, 17, 18])).size).toBe(0);
   });
+  it('a helper\'s own launcher shell is not a tool call: npm exec runs an MCP server via sh -c', () => {
+    // A Claude CLI respawned mid-turn (30) with its MCP server started through npm exec (31) ->
+    // sh -c (32) -> node (33); and the same CLI's Bash tool (34) running a dev server (35).
+    const respawned = group([[10, 1, 'node'], [30, 10, 'claude'], [31, 30, 'npm exec mcp-re'], [32, 31, 'sh'], [33, 32, 'node'], [34, 30, 'bash'], [35, 34, 'node']]);
+    expect([...toolCallWork(respawned, 10, new Set([30, 31, 32, 33, 34, 35]))]).toEqual([35]);
+  });
   it('a shell from before the turn (a launcher) does not make its children work', () => {
     const launched = group([[10, 1, 'sh'], [11, 10, 'node'], [12, 11, 'node']]);
     expect(toolCallWork(launched, 10, new Set([12])).size).toBe(0);
