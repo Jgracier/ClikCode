@@ -23,8 +23,6 @@ import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
-import { loadIndex } from '../session/state/index-file.js';
-import { isManualAccountSwitch, linkAbortSignals, manualAccountSwitchError, pickedAccount } from './manual-account.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -51,6 +49,8 @@ import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { provisionChosenHarness } from '../harness/provision.js';
+import { mcpServerNeedsSignIn, type McpSignInAnswer } from '../harness/mcp-sign-in.js';
+import type { McpServerEntry } from '../harness/mcp-registry.js';
 import { builtClikcodeLauncher, conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
@@ -97,9 +97,6 @@ export async function sendVendorTurn(input: {
   const { state, session, text, prepared, startedAt, signal, run } = input;
   let { account, model, turnText } = input;
   const prompter = run.prompter;
-  /** The record's account when this turn last acknowledged it
-   * (manual-account.ts pickedAccount). */
-  let seenAccountId = account.id;
   const harness = session.nativeHarness
     ? localHarnessForCommand(session.nativeHarness)
     : localHarnessForProvider(account.provider);
@@ -227,17 +224,18 @@ export async function sendVendorTurn(input: {
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
     beforeSwitch: () => closePersistentTransport(session.id),
   });
-  const canRunVendor = (item: AiHarnessAccount): boolean => item.provider === harness.provider && turnBackendForAccount(item) === 'vendor';
-  let lookingForPick = false;
-  /** The account the user picked since this turn last looked. The pick is on
-   * the session record, written by the process that handled the command; this
-   * turn runs in another. */
-  const userPick = async (): Promise<AiHarnessAccount | undefined> => {
-    const recorded = (await loadIndex())?.sessions.find((item) => item.id === session.id)?.accountId;
-    // The record has caught up with this turn's own account (a failover's
-    // write landed): that is the new baseline.
-    if (recorded === account.id) seenAccountId = recorded;
-    return pickedAccount({ recorded, seen: seenAccountId, current: account, accounts: state.accounts, canRun: canRunVendor });
+  // A quota refusal can try several accounts in one turn. A remote MCP
+  // server that times out otherwise costs its full probe timeout on every
+  // attempt, though its answer is the same for this harness and config.
+  const signInChecks = new Map<string, Promise<McpSignInAnswer>>();
+  const checkMcpSignIn = (entry: McpServerEntry, headersReach: boolean): Promise<McpSignInAnswer> => {
+    const key = JSON.stringify([entry.target, entry.headers, headersReach]);
+    let check = signInChecks.get(key);
+    if (!check) {
+      check = mcpServerNeedsSignIn(entry, { stateDir: stateDirectory(), headersReach });
+      signInChecks.set(key, check);
+    }
+    return check;
   };
   /** The thread under the account this turn runs on (session/carry.ts). */
   const settleThread = async (): Promise<void> => {
@@ -412,29 +410,13 @@ export async function sendVendorTurn(input: {
     // is stated rather than implied.
     onApproval: async (title: string, detail?: string, preview?: ApprovalPreview) => (await prompter?.approval(title, detail, preview)) === true,
     onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
-    // A tool call just settled and nothing else is open: the next model call
-    // has not started. A manual account change takes effect here.
-    onBetweenCalls: () => {
-      if (lookingForPick) return;
-      lookingForPick = true;
-      userPick().then((to) => { if (to) switchNow.run(); })
-        .catch(() => undefined) // fail-open-ok: a pick not seen now is seen at the next boundary
-        .finally(() => { lookingForPick = false; });
-    },
   } satisfies HarnessTurnObserver;
-  /** Aborts the vendor prompt so the loop can continue it on the account
-   * the user picked. Replaced at each attempt; a spent controller cannot
-   * be reset. */
-  const switchNow: { run: () => void } = { run: () => undefined };
   let activeTransport: ReturnType<typeof sessionTurnTransport> | undefined;
   // The request this turn was asked, before a retry replaces it. A failover
   // that produced no output sends this again; rebuilding the transcript
   // would repeat the whole conversation on top of a thread that already has it.
   const askedText = turnText;
   for (;;) {
-    const switchController = new AbortController();
-    switchNow.run = () => { if (!switchController.signal.aborted) switchController.abort(manualAccountSwitchError()); };
-    const attemptSignal = linkAbortSignals(signal, switchController.signal);
     // Before this attempt spawns the vendor. A server, skill, or same-format
     // hook that is already in the harness is left as it is. A new MCP server
     // is invisible to a process that is already running, so that process is
@@ -442,14 +424,16 @@ export async function sendVendorTurn(input: {
     const conversations = conversationsMcpEntry();
     const swarmEntry = swarmProvisionEntry();
     const launcher = builtClikcodeLauncher();
+    const provisioningAt = Date.now();
     const provisioned = await provisionChosenHarness({
       ...(launcher ? { launcher } : {}),
-      harness, account, workspace: session.workspace, stateDir: stateDirectory(),
+      harness, account, workspace: session.workspace, stateDir: stateDirectory(), signIn: checkMcpSignIn,
       builtins: [
         ...(conversations ? [conversations] : []),
         ...(!swarmRidesTurn(harness) && swarmEntry ? [swarmEntry] : []),
       ],
     });
+    lifecycle('turn.provisioned', { harness: harness.command, ms: Date.now() - provisioningAt, account: account.id.slice(0, 8) });
     // A server taken back out is just as invisible to a running process,
     // which would go on asking for its sign-in.
     if (provisioned.mcpInstalled.length || provisioned.mcpRemoved.length) await closePersistentTransport(session.id);
@@ -486,7 +470,7 @@ export async function sendVendorTurn(input: {
     // all five instead of the ones someone remembered.
     titleStream = titleStreamForAttempt(titleStream, turnText);
     const runStructuredCliTurn = (): Promise<NativeTurnResult> => runVendorCliAttempt({
-      harness, session, turnText, model, environment, images, signal: attemptSignal, run, checkpoint,
+      harness, session, turnText, model, environment, images, signal, run, checkpoint,
       effort: turnEffort(), sharedObserver,
       onOutputStart: () => { cliOutputStarted = true; },
       onStreamError: (error) => { streamError = error; },
@@ -496,32 +480,12 @@ export async function sendVendorTurn(input: {
         result = await runStructuredCliTurn();
       } else {
         result = await runVendorSessionAttempt({
-          harness, account, session, transport, turnText, model, environment, images, signal: attemptSignal, run, checkpoint,
+          harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint,
           sharedObserver, effort: turnEffort(), onSessionId, mcpServers: sessionMcpServers,
           runCli: runStructuredCliTurn,
         });
       }
     } catch (error) {
-      // The user picked another account of this provider between calls.
-      // The prompt stopped at that boundary; this same turn continues there.
-      if (isManualAccountSwitch(error)) {
-        recordUnfinishedAttempt('stopped');
-        const picked = await userPick();
-        if (!picked) throw error;
-        await closePersistentTransport(session.id);
-        account = picked;
-        seenAccountId = picked.id;
-        session.accountId = picked.id;
-        await settleThread();
-        const wrote = Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
-        const nextRequest = wrote ? INTERRUPTED_TURN_REQUEST : askedText;
-        if (!session.nativeSessionId) turnText = await retell(nextRequest, wrote && session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear');
-        else {
-          turnText = nextRequest;
-          if (wrote) continueAnswer(session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear');
-        }
-        continue;
-      }
       if (isTurnCancelled(error)) { recordUnfinishedAttempt('stopped'); throw error; }
       if ((error as NodeJS.ErrnoException).code === 'ERR_PROMPT_TOO_LARGE') { recordUnfinishedAttempt('error'); throw error; }
       caughtTurnFailure = error instanceof Error ? error : new Error(String(error));

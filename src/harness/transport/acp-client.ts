@@ -18,6 +18,7 @@ import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
 import { configuredIdleMs, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 
 type Json = Record<string, any>;
 
@@ -536,7 +537,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   private async flow(turn: ActiveTurn, argv: readonly string[]): Promise<AcpTurnResult> {
     const { input } = turn;
+    const setupAt = Date.now();
     const live = this.ensureLive(input, argv);
+    const cold = !live.capabilities;
+    let threadLoadMs = 0;
     const { peer } = live;
     const setup = { timeoutMs: input.setupTimeoutMs ?? JSONRPC_SETUP_TIMEOUT_MS };
     // Past the handshake, a request waits on the agent's backend, which is
@@ -550,7 +554,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     let announced = Boolean(live.capabilities);
     const waitOnStart = async <T>(pending: Promise<T>): Promise<T> => {
       if (announced) return pending;
-      const notice = setTimeout(() => { announced = true; input.onPhase?.(`waiting for ${input.command} to start`); }, START_NOTICE_MS);
+      const notice = setTimeout(() => { announced = true; input.onPhase?.(`connecting to ${input.command}`); }, START_NOTICE_MS);
       notice.unref?.();
       try { return await pending; } finally { clearTimeout(notice); }
     };
@@ -609,7 +613,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         if (!capabilities.sessionCapabilities?.resume && !capabilities.loadSession) throw new Error(`${input.command} ACP cannot load sessions`);
         const method = capabilities.sessionCapabilities?.resume ? 'session/resume' : 'session/load';
         try {
+          const loadAt = Date.now();
           loaded = await call(method, { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
+          threadLoadMs = Date.now() - loadAt;
         } catch (error) {
           throw markMissingThread(error, wanted);
         }
@@ -705,6 +711,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     turn.base = { ...this.sessionTotals };
     await this.promptSent();
     stillRunning();
+    lifecycle('vendor.acp.ready', { harness: input.command, cold, setupMs: Date.now() - setupAt, threadLoadMs });
     turn.promptStarted = true;
     // The turn ends with the agent's answer to session/prompt. This is only
     // the ceiling for an agent that has stopped talking without answering.
@@ -884,7 +891,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       target?.watchdog?.toolFinished(id);
       if (target && target === this.turn && this.pendingTools.size === 0) {
         this.steerPause(this.turn);
-        this.turn?.input.onBetweenCalls?.();
       }
     } else if (update.sessionUpdate === 'tool_call' ? toolRunning(update) : update.status === 'in_progress' || update.status === 'pending') {
       if (!this.pendingTools.has(id)) this.pendingTools.set(id, String(update.title ?? 'tool'));
@@ -1061,7 +1067,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       this.pendingTools.delete(callId!);
       if (this.pendingTools.size === 0) {
         this.steerPause(turn);
-        turn.input.onBetweenCalls?.();
       }
     }
     // ACP requires `cancelled` for requests outstanding when a turn is cancelled.

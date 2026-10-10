@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { answeredApproval, applyEvent, emptyModel, enterAgainReady, liveElapsedMs, queuedRowLabel, stoppingTurn, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { answeredApproval, applyEvent, emptyModel, enterAgainReady, liveElapsedMs, queuedRowLabel, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedGroupCount, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -19,6 +19,22 @@ const begin = (): ChatModel => run([
 ]);
 
 afterEach(() => { vi.useRealTimers(); });
+
+describe('submitted prompt before worker startup', () => {
+  it('shows immediately, survives a pre-turn snapshot, and yields to the worker prompt', () => {
+    const opened = run([{ type: 'session', session: session() }]);
+    const submitted = submittingPrompt(opened, 'check the build');
+    expect(submitted.pendingPrompt).toBe('check the build');
+    expect(submitted.running).toBe(false);
+    expect(run([{ type: 'session', session: session() }], submitted).pendingPrompt).toBe('check the build');
+    expect(run([{ type: 'turn-start', sessionId: 's1', prompt: 'check the build' }], submitted).pendingPrompt).toBe('check the build');
+  });
+
+  it('clears a submission rejected before a turn starts', () => {
+    const opened = run([{ type: 'session', session: session() }]);
+    expect(rejectedPrompt(submittingPrompt(opened, 'check the build')).pendingPrompt).toBeUndefined();
+  });
+});
 
 describe('how long the model has thought', () => {
   it('counts from the turn start, and again from when its last call closed', () => {

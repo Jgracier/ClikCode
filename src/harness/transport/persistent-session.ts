@@ -6,7 +6,6 @@
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
-import { isManualAccountSwitch } from '../../turn/manual-account.js';
 import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
 import type { BackgroundTurnChannel, BackgroundTurnEnd, VendorBackgroundTurnHandler } from './background-turn.js';
@@ -155,7 +154,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     let succeeded = false;
     try {
       if (this.settling) await this.settling;
-      if (signal?.aborted) throw isManualAccountSwitch(signal.reason) ? signal.reason as Error : turnCancelledError();
+      if (signal?.aborted) throw turnCancelledError();
       const running = flow();
       running.catch(() => undefined);
       const result = await Promise.race([running, failure]);
@@ -163,10 +162,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       return result;
     } catch (error) {
       const failureError = error instanceof Error ? error : new Error(String(error));
-      // A manual account switch stops the prompt so the same turn can
-      // continue on the new account. The child stays until that turn closes
-      // it, so the vendor can finish writing the thread first.
-      if (!isTurnCancelled(failureError) && !isManualAccountSwitch(failureError)) hooks.failed(failureError);
+      if (!isTurnCancelled(failureError)) hooks.failed(failureError);
       throw failureError;
     } finally {
       turn.done = true;
@@ -182,7 +178,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (turn.done) return;
     turn.done = true;
     const live = this.live;
-    const error = isManualAccountSwitch(reason) ? reason as Error : turnCancelledError();
+    const error = turnCancelledError();
     // Mid-setup there is nothing to cancel politely.
     if (live && !this.interrupt(turn, live)) this.dropLive(error);
     turn.fail(error);

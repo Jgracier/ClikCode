@@ -306,14 +306,18 @@ export function turnAccounts(input: {
     // turn is on after; the turn's answer keeps it as a line in the
     // conversation (TranscriptMessage.accountSwitch), drawn at its end.
     prompter?.phase(accountSwitchNotice(why, to.label));
-    await input.beforeSwitch?.();
+    // Closing the old account's process and recording the new choice are
+    // independent after its thread has been carried. Overlap them: waiting
+    // for shutdown before touching the index added its full latency to each
+    // account switch.
+    const closing = input.beforeSwitch?.();
     switchedFrom = input.current().label;
     switchReason = why;
     // From the account the turn first ran on: two switches are one move.
     const first = session.pendingTurn?.accountSwitch?.from ?? switchedFrom;
     if (session.pendingTurn) session.pendingTurn.accountSwitch = { from: first, to: to.label, reason: why };
     input.adopt(to);
-    await recordAccount(to);
+    await Promise.all([closing, recordAccount(to)]);
     await persist();
   };
   return {
