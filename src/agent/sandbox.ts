@@ -1,9 +1,11 @@
-/** The optional OS sandbox around the bash tool's commands, after Claude
- * Code (bubblewrap / Seatbelt) and Codex (workspace-write). `workspace`
- * lets a command READ everything and reach the network, and WRITE only the
- * workspace, the temp dir and the caches builds and installs use. Off by
- * default; a missing sandbox binary runs the command unsandboxed with one
- * notice a session, never a failure. The argv builders are pure. */
+/** The OS sandbox around the bash tool's commands, after Claude Code
+ * (bubblewrap / Seatbelt) and Codex (workspace-write). `workspace` lets a
+ * command READ everything and reach the network, and WRITE only the
+ * workspace, the temp dir and the caches builds and installs use. On by
+ * default; `off` is the user's explicit choice. It never blocks work: a
+ * missing sandbox binary runs the command unsandboxed with one notice a
+ * session, and the model may run one command with `sandbox: false`, under
+ * the session's own permission mode. The argv builders are pure. */
 import { spawnSync } from 'node:child_process';
 import { accessSync, constants, realpathSync } from 'node:fs';
 import os from 'node:os';
@@ -11,6 +13,12 @@ import path from 'node:path';
 
 export type SandboxMode = 'off' | 'workspace';
 export const SANDBOX_MODES: readonly SandboxMode[] = ['off', 'workspace'];
+
+/** A session's stored setting: unset (and any legacy value) is the default,
+ * `workspace`; only an explicit `off` turns it off. */
+export function sessionSandboxMode(value: unknown): SandboxMode {
+  return value === 'off' ? 'off' : 'workspace';
+}
 
 /** `on` is what /sandbox takes; `workspace` is the mode's name. */
 export function parseSandboxMode(value: string): SandboxMode | undefined {
@@ -28,15 +36,20 @@ export function sandboxModeText(mode: SandboxMode): string {
 }
 
 /** Under home: the package-manager and toolchain caches an install or a
- * build writes. Read-only caches would fail most real work. */
+ * build writes. Read-only caches would fail most real work. Binaries
+ * (~/.local/bin) and config (~/.gitconfig, ~/.config) stay readable, not
+ * writable: changing them is what `sandbox: false` is for. The docker CLI
+ * needs no entry: connecting to its socket is not a file write; only buildx
+ * keeps state under ~/.docker. */
 const HOME_CACHE_DIRS = [
-  '.cache', '.npm', '.pnpm-store', '.local/share/pnpm', '.local/state', '.yarn', '.bun', '.deno',
-  '.cargo', '.rustup', 'go', '.gradle', '.m2', '.nuget', '.dotnet', '.composer', '.gem', '.bundle', 'Library/Caches',
+  '.cache', '.npm', '.pnpm-store', '.local/share/pnpm', '.local/share/uv', '.local/state', '.yarn', '.bun', '.deno',
+  '.cargo', '.rustup', 'go', '.gradle', '.m2', '.ivy2', '.sbt', '.nuget', '.dotnet', '.composer', '.gem', '.bundle',
+  '.node-gyp', '.pub-cache', '.cabal', '.stack', '.docker/buildx', 'Library/Caches',
 ];
 /** Variables that move those caches somewhere else. */
 const CACHE_ENV_VARS = [
   'TMPDIR', 'XDG_CACHE_HOME', 'npm_config_cache', 'PNPM_HOME', 'CARGO_HOME', 'RUSTUP_HOME', 'GOPATH', 'GOMODCACHE', 'GOCACHE',
-  'GRADLE_USER_HOME', 'PIP_CACHE_DIR', 'YARN_CACHE_FOLDER', 'BUN_INSTALL', 'DENO_DIR',
+  'GRADLE_USER_HOME', 'PIP_CACHE_DIR', 'UV_CACHE_DIR', 'YARN_CACHE_FOLDER', 'BUN_INSTALL', 'DENO_DIR',
 ];
 
 interface WritableInput {
@@ -126,6 +139,8 @@ export function sandboxMissingNotice(missing: string): string {
   return `[sandbox: ${missing} is not installed or cannot run here, so commands in this session run unsandboxed]`;
 }
 
+export const SANDBOX_DENIAL_HINT = "[sandbox: this looks like the workspace sandbox refusing a write outside the workspace (it may write only the workspace, the temp dir and tool caches). If the command genuinely needs that write, run it again with sandbox: false; the session's permission mode still applies.]";
+
 const DENIAL = /Read-only file system|EROFS|Operation not permitted|EPERM/;
 /** Absolute paths named on a line, quoted or not. */
 const PATHS = /(?:^|[\s'"`‘’:(])(\/[^\s'"`‘’:)]+)/g;
@@ -144,7 +159,7 @@ export function sandboxDenialHint(output: string, writable: readonly string[]): 
     const named = [...line.matchAll(PATHS)].map((match) => match[1]!);
     return !named.length || named.some((entry) => !writable.some((root) => inside(entry, root)));
   });
-  return denied ? '[sandbox: this looks like the workspace sandbox refusing a write outside the workspace. It may write only the workspace, the temp dir and tool caches; ask the user to approve running it unsandboxed (or /sandbox off) rather than working around it.]' : undefined;
+  return denied ? SANDBOX_DENIAL_HINT : undefined;
 }
 
 // ── impure helpers for the bash tool ─────────────────────────────────────────

@@ -21,6 +21,7 @@ import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { harnessSupportsPermissionMode } from '../../runtime/lazy-bridge.js';
 import { isBlankConversation, VALID_PERMISSION_MODES } from '../../session/options.js';
 import { swarmIsOn } from '../../swarm/policy.js';
+import { sessionSandboxMode } from '../../agent/sandbox.js';
 import type { PaletteEntry } from '../command-palette.js';
 
 type Values = readonly { value: string; label?: string; detail?: string }[];
@@ -82,7 +83,7 @@ export function withArgValues(
   const swarm: Values = swarmIsOn(session)
     ? [{ value: 'off', label: 'Turn swarm off' }]
     : [{ value: 'on', label: 'Turn swarm on' }];
-  const sandbox: Values = session.sandbox === 'workspace'
+  const sandbox: Values = sessionSandboxMode(session.sandbox) === 'workspace'
     ? [{ value: 'off', label: 'Turn the sandbox off' }]
     : [{ value: 'on', label: 'Turn the sandbox on' }];
   const sources: Record<string, () => Values> = {

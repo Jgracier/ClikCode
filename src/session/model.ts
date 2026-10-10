@@ -76,9 +76,10 @@ export interface HarnessSession {
    * default until the effort, model or harness changes. */
   effortRefused?: string;
   permissionMode?: AiHarnessPermissionMode;
-  /** ClikCode's own agent: `workspace` runs its shell commands in the OS
-   * sandbox (agent/sandbox.ts, /sandbox). Absent = off. */
-  sandbox?: 'workspace';
+  /** ClikCode's own agent: whether its shell commands run in the OS sandbox
+   * (agent/sandbox.ts, /sandbox). Absent = on (`workspace`); only an explicit
+   * `off` turns it off. Read it through sessionSandboxMode. */
+  sandbox?: 'off' | 'workspace';
   /** ClikDeploy Gateway only: `fast` asks to be served by the fastest
    * measured provider of the model rather than the cheapest (/fast). */
   speed?: 'fast';

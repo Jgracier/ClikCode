@@ -202,7 +202,7 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--agent <id>', 'Gateway agent ID, or none to use the normal Gateway')
     .option('--native-session <id>', 'Verified native session id to resume through its adapter')
     .option('--effort <effort>', 'low, medium, high, or xhigh').option('--permissions <mode>', 'ask, bypass, or auto')
-    .option('--sandbox <mode>', "off or workspace: ClikCode's own agent's shell commands write only the workspace, temp and caches")
+    .option('--sandbox <mode>', "workspace (the default) or off: ClikCode's own agent's shell commands write only the workspace, temp and caches")
     .action((id, options) => aiSessionSet(id, options));
   sessions.command('create').description('Create a session')
     .option('--route <route>', 'local, gateway, or clikcode-local', 'local').option('--account <account>', 'Local account label or id')

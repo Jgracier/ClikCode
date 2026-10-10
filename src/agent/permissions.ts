@@ -207,6 +207,10 @@ export async function buildApprovalPrompt(
   if (tool.name === BASH_TOOL) {
     const lines = [String(args.command ?? ''), '', `cwd: ${ctx.cwd}`];
     if (args.run_in_background === true) lines.push('runs in the background');
+    // `sandbox: false` adds no question of its own: it is answered here, by
+    // whatever the session's mode already asks (auto/bypass run it, plan
+    // refuses every command), so the human sees that it runs outside.
+    if (args.sandbox === false && ctx.sandbox === 'workspace') lines.push('runs outside the sandbox: it can write anywhere you can');
     lines.push(`why: ${reason}`);
     return { title: 'Approve command', detail: lines.join('\n') };
   }
@@ -222,12 +226,6 @@ export async function buildApprovalPrompt(
   }
   if (tool.class === 'network') return { title: 'Approve network request', detail: `${String(args.url ?? tool.label(args))}\nwhy: ${reason}` };
   return { title: `Approve ${tool.label(args)}`, detail: [...paths.map((entry) => path.resolve(ctx.cwd, entry)), ...(described ? [described] : []), ...(unavailable ? [unavailable] : []), `why: ${reason}`].join('\n'), ...(diff?.length ? { diff } : {}) };
-}
-
-/** The one prompt the sandbox adds: rerun a command it refused, outside it.
- * Never remembered as a rule; the next refusal asks again. */
-export function unsandboxedApprovalPrompt(command: string, cwd: string): ApprovalPrompt {
-  return { title: 'Run outside the sandbox?', detail: [command, '', `cwd: ${cwd}`, 'why: the workspace sandbox refused a write outside the workspace; this runs the command once without it'].join('\n') };
 }
 
 // ── persisted rules ──────────────────────────────────────────────────────────

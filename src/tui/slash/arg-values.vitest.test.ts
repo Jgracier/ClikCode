@@ -65,9 +65,10 @@ describe('/account palette values', () => {
   });
 
   it('offers the other side of the sandbox', () => {
-    const off = withArgValues([{ label: '/sandbox', value: '/sandbox' }], session, harness, { accounts: [], sessions: [] });
-    expect(off[0]?.argValues?.()).toEqual([{ value: 'on', label: 'Turn the sandbox on' }]);
-    const on = withArgValues([{ label: '/sandbox', value: '/sandbox' }], { ...session, sandbox: 'workspace' }, harness, { accounts: [], sessions: [] });
+    // Unset is on, the default.
+    const on = withArgValues([{ label: '/sandbox', value: '/sandbox' }], session, harness, { accounts: [], sessions: [] });
     expect(on[0]?.argValues?.()).toEqual([{ value: 'off', label: 'Turn the sandbox off' }]);
+    const off = withArgValues([{ label: '/sandbox', value: '/sandbox' }], { ...session, sandbox: 'off' }, harness, { accounts: [], sessions: [] });
+    expect(off[0]?.argValues?.()).toEqual([{ value: 'on', label: 'Turn the sandbox on' }]);
   });
 });
