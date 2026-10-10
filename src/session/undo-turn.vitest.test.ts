@@ -13,7 +13,7 @@ import { resolveSlashCommand } from '../tui/slash/registry.js';
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from './model.js';
 import { forgetSessionArtifacts } from './store/forget.js';
-import { appendTurnChanges, readTurnChanges, TurnRecorder, turnChangesAgo, turnChangesDiff, turnChangesList } from './turn-changes.js';
+import { appendTurnChanges, readTurnChanges, TurnRecorder, turnChangesAgo, turnChangesDiff, turnChangesList, withinDiffBudget, writeTurnChanges, type TurnChangeRecord } from './turn-changes.js';
 import { undoLastTurn as undoTurn, undoTurnsBack } from './undo-turn.js';
 
 const undoLastTurn = (s: HarnessSession, options: { stateDir: string; who: string }) => undoTurn(s, { ...options, turnIsRunning: async () => false });
@@ -420,5 +420,46 @@ describe('/undo N and /changes', () => {
     process.env.CLIKCODE_HOME = stateDir;
     try { await forgetSessionArtifacts(s.id); } finally { if (home === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = home; }
     expect(await readTurnChanges(stateDir, s.id)).toEqual([]);
+  });
+});
+
+describe('retention: the whole conversation, bounded by diff text', () => {
+  it('keeps a record for every turn, not the last 20', async () => {
+    const s = session('keep-all', 'local');
+    for (let turn = 1; turn <= 45; turn += 1) {
+      await reportTurn(s.id, [{ kind: 'tool-done', id: `c${turn}`, label: 'Edit', diff: eventDiff(`v${turn}`, `v${turn + 1}`, { path: 'a.txt' }) }], `turn ${turn}`);
+    }
+    const records = await readTurnChanges(stateDir, s.id);
+    expect(records).toHaveLength(45);
+    expect(turnChangesAgo(records, 45)?.prompt).toBe('turn 1');
+  });
+
+  it("drops the oldest turns' diff lines past the budget, keeping their files and counts, the newest whole", async () => {
+    const big = (n: number): TurnChangeRecord => ({
+      at: `2026-10-10T00:00:${String(n).padStart(2, '0')}Z`, prompt: `turn ${n}`,
+      changes: [{ path: 'a.txt', additions: 50, removals: 0, lines: Array.from({ length: 50 }, (_, i) => ({ kind: 'added' as const, text: `line ${i} ${'x'.repeat(80)}` })) }],
+    });
+    const records = Array.from({ length: 10 }, (_, n) => big(n + 1));
+    const bounded = withinDiffBudget(records, 20_000);
+    expect(bounded).toHaveLength(10);
+    expect(Buffer.byteLength(JSON.stringify(bounded))).toBeLessThanOrEqual(20_000 + 10);
+    expect(bounded[0]!.changes[0]).toMatchObject({ path: 'a.txt', additions: 50, removals: 0, lines: [], omitted: 50 });
+    expect(bounded.at(-1)).toEqual(records.at(-1));
+    expect(turnChangesDiff(bounded[0]!, 10, cwd)).toContain('… 50 more lines not recorded');
+    // Under the budget, nothing changes.
+    expect(withinDiffBudget(records)).toEqual(records);
+    // Written through the log, the same.
+    const s = session('budget', 'local');
+    await writeTurnChanges(stateDir, s.id, records);
+    expect((await readTurnChanges(stateDir, s.id))).toHaveLength(10);
+  });
+
+  it("undoes an agent turn whose snapshots are gone from the diffs it reported", async () => {
+    const s = session('agent-pruned', 'clikcode-local');
+    await fs.writeFile(path.join(cwd, 'a.txt'), 'one\nTWO\n');
+    await appendTurnChanges(stateDir, s.id, { at: new Date().toISOString(), startedAt: new Date().toISOString(), prompt: 'shout', store: 'agent', changes: eventDiff('two', 'TWO', { path: 'a.txt' })! });
+    const undone = await undoLastTurn(s, { stateDir, who: "ClikCode's agent" });
+    expect(undone.restored).toEqual([path.join(cwd, 'a.txt')]);
+    expect(await read('a.txt')).toBe('one\ntwo\n');
   });
 });

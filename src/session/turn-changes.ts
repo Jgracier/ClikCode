@@ -1,17 +1,28 @@
-/** One record per turn that ran, kept on disk per conversation, so `/undo`
- * acts on the conversation's actual last turn from any window -- the turn ran
- * in a worker or a script, `/undo` runs wherever it is typed.
+/** One record per turn that ran, kept on disk per conversation, so /redo
+ * puts back the edits of the conversation's actual turns from any window --
+ * the turn ran in a worker or a script, /redo runs wherever it is typed --
+ * and /changes, /hindsight and `/changes <path>` can say what each turn edited.
  *
  * Every turn is recorded where every turn path goes through (the turn
- * journal, turn/turn-journal.ts), a turn with no edits too: otherwise /undo
+ * journal, turn/turn-journal.ts), a turn with no edits too: otherwise an undo
  * after a turn that changed nothing reached back to an older one while saying
  * "the last turn". Each record names the store that owns its edits, fixed when
  * the turn ran, so a conversation that switched harness undoes each turn with
  * the store that recorded it:
  *  - `agent`: ClikCode's own agent; real pre-image snapshots
- *    (agent/file-checkpoints.ts) taken between `startedAt` and `at`.
+ *    (agent/file-checkpoints.ts) taken between `startedAt` and `at`, while
+ *    that store keeps them; past its retention, the reported diffs below.
  *  - `reported`: a vendor harness; only the diffs its event stream reported
- *    (`changes`). A record without `store` predates this and is `reported`. */
+ *    (`changes`). A record without `store` predates this and is `reported`.
+ *
+ * Retention: every turn of the conversation keeps its record -- its prompt,
+ * when, and each file with the lines added and removed -- so the numbers
+ * reach back as far as the conversation does. What is bounded is the diff
+ * TEXT: once a log is over DIFF_TEXT_BUDGET, the oldest turns' diff lines are
+ * dropped (counted in `omitted`) until it fits. /changes N then shows such a
+ * turn's files without its lines, and its edits are not reversed by /redo
+ * (a change known only in part is never put back), unless the agent's
+ * snapshots still hold them. */
 
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
@@ -27,23 +38,48 @@ export interface TurnChangeRecord {
   /** When the turn ended. */
   at: string;
   startedAt?: string;
-  /** What the user sent, to name the turn /undo acts on. */
+  /** What the user sent, to name the turn. */
   prompt?: string;
   store?: TurnChangeStore;
   /** Every finished call's reported diffs, in the order made. */
   changes: FileDiff[];
 }
 
-/** Turns kept per conversation; /undo walks back through them. */
-const KEEP_TURNS = 20;
+/** Bytes of a log's JSON before its oldest turns' diff text goes (the
+ * records stay). A record without its lines is a few hundred bytes, so a
+ * conversation of thousands of turns still reads in a moment. */
+export const DIFF_TEXT_BUDGET = 2 * 1024 * 1024;
+
+/** `records` within `budget` bytes of JSON: the oldest turns' diff lines are
+ * dropped first, newest kept whole, every record kept. */
+export function withinDiffBudget(records: readonly TurnChangeRecord[], budget = DIFF_TEXT_BUDGET): TurnChangeRecord[] {
+  const sizes = records.map((record) => Buffer.byteLength(JSON.stringify(record), 'utf8') + 1);
+  let total = sizes.reduce((sum, size) => sum + size, 0);
+  const kept = [...records];
+  for (let index = 0; index < kept.length - 1 && total > budget; index += 1) {
+    const record = kept[index]!;
+    if (!record.changes.some((change) => change.lines.length)) continue;
+    const stripped: TurnChangeRecord = {
+      ...record,
+      changes: record.changes.map((change) => {
+        const dropped = change.lines.filter((line) => line.kind !== 'gap').length;
+        return dropped ? { ...change, lines: [], omitted: (change.omitted ?? 0) + dropped } : change;
+      }),
+    };
+    const size = Buffer.byteLength(JSON.stringify(stripped), 'utf8') + 1;
+    total -= sizes[index]! - size;
+    kept[index] = stripped;
+  }
+  return kept;
+}
 
 function logPath(stateDir: string, sessionId: string): string {
   return path.join(stateDir, 'turn-changes', `${safeRecordFileName(sessionId)}.json`);
 }
 
-/** The log's own cross-process lock: a turn recording itself and an /undo's
+/** The log's own cross-process lock: a turn recording itself and a /redo's
  * read-modify-write never interleave, whichever processes they run in. Not
- * the session or state lock -- neither is needed, and an /undo must not wait
+ * the session or state lock -- neither is needed, and a /redo must not wait
  * on a turn's transcript writes. */
 export function withTurnChangesLock<T>(stateDir: string, sessionId: string, run: () => Promise<T>): Promise<T> {
   return withFileLock(`${logPath(stateDir, sessionId)}.lock`, run);
@@ -65,7 +101,7 @@ export async function writeTurnChanges(stateDir: string, sessionId: string, reco
   if (!records.length) { await fs.rm(file, { force: true }); return; }
   await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
   const temporary = `${file}.${randomUUID()}.tmp`;
-  await fs.writeFile(temporary, JSON.stringify(records.slice(-KEEP_TURNS)), { mode: 0o600 });
+  await fs.writeFile(temporary, JSON.stringify(withinDiffBudget(records)), { mode: 0o600 });
   await fs.rename(temporary, file);
 }
 
@@ -129,7 +165,7 @@ export class TurnChangeCollector {
 
 // ---------------------------------------------------------------------------
 // /changes: the recorded turns, newest first, numbered as turns ago -- 1 is
-// the last turn, the same N `/undo N` undoes back through.
+// the last turn.
 // ---------------------------------------------------------------------------
 
 function promptLine(record: TurnChangeRecord, width = 60): string {
@@ -161,7 +197,7 @@ export function turnChangesList(records: readonly TurnChangeRecord[], workspace?
       : 'no edits seen';
     return `  ${String(index + 1).padStart(2)}  ${promptLine(record)}\n      ${what}`;
   });
-  return [...rows, '', '/changes N shows that turn\'s diff; /undo N undoes the turns back through it.'].join('\n');
+  return [...rows, '', '/changes N shows that turn\'s diff; /redo goes back to before one of your prompts and puts its edits and later ones back.'].join('\n');
 }
 
 /** `/changes N`: that turn's diff, file by file. */

@@ -100,7 +100,7 @@ describe.skipIf(process.platform === 'win32')('bash changes are undoable', () =>
 
   it('records at most the cap and says the rest are not undoable', async () => {
     const result = await run('for i in $(seq 1 205); do echo $i > f$i.txt; done');
-    expect(result.output).toMatch(/\[changed 205 files: .*… 197 more; 5 of them not recorded for \/undo/);
+    expect(result.output).toMatch(/\[changed 205 files: .*… 197 more; 5 of them not recorded for \/redo/);
     expect(result.diff?.length).toBe(10);
     const [turn] = await store.listTurns(sessionId);
     expect(turn?.files.length).toBe(200);

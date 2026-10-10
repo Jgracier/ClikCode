@@ -249,7 +249,7 @@ export function describeShellChanges(changes: ShellChanges): string | undefined 
   const names = changes.changed.slice(0, NAMES_SHOWN).map((item) => `${mark[item.change]}${item.path}`);
   const more = count > NAMES_SHOWN ? `, … ${count - NAMES_SHOWN} more` : '';
   const undo = changes.unrecorded
-    ? `; ${changes.unrecorded} of them not recorded for /undo (too large, or past the per-command cap): revert those with git`
+    ? `; ${changes.unrecorded} of them not recorded for /redo (too large, or past the per-command cap): revert those with git`
     : '';
   return `[changed ${count} file${count === 1 ? '' : 's'}: ${names.join(', ')}${more}${undo}]`;
 }
