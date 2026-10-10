@@ -427,7 +427,6 @@ export function chatSuite(): void {
       };
       const [pid] = bridges();
       assert.ok(pid, 'the side bar bridge is a child of the extension host');
-      const panels = api.state.notes.length;
       process.kill(pid!, 'SIGKILL');
       await until(api, (state) => state.connection !== 'ready', 'the chat to notice', 30_000);
       // Typed and sent while it reconnects: the box takes it, and the line
@@ -438,7 +437,11 @@ export function chatSuite(): void {
       const back = await until(api, (state) => state.connection === 'ready' && Boolean(state.sessionId), 'the chat to reconnect', 90_000);
       assert.strictEqual(back.sessionId, session, 'it came back to the same conversation');
       assert.notStrictEqual(bridges()[0], pid, 'on a new bridge');
-      await until(api, (state) => state.notes.length > panels, 'the held /help to run', 30_000);
+      // The reconnected chat is rebuilt from its snapshot, notes and all, so
+      // a count taken before the kill compares across that reset: with a
+      // panel an earlier test left, the held /help's made the count equal.
+      // Its own panel, after the reconnect, is the proof it ran.
+      await until(api, (state) => state.notes.some((note) => note.kind === 'panel' && note.title === 'Commands'), 'the held /help to run', 30_000);
       await waitFor(api, '#composer-input', 'the box emptied by the send', 10_000, (found) => !found.value);
       await waitFor(api, '.banner', 'no error banner', 10_000, (found) => found.count === 0);
     });
