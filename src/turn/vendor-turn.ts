@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { createPendingWorkTracker } from './pending-work.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
-import { turnAccounts, turnBackendForAccount } from './account-routing.js';
+import { nextUsableFailoverAccount, turnAccounts, turnBackendForAccount } from './account-routing.js';
 import { classifyAccountFailure, isTransientStartFailure, TRANSIENT_START_RETRY_MS } from './failover.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { keepsNoHistory, startConversationThread } from './thread-start.js';
@@ -22,7 +22,7 @@ import { modelsDevFiles } from '../harness/accounts/goose-discovery.js';
 import { inspectNativeHarness } from '../harness/transport/native/inspect.js';
 import { maxPromptArgvBytes } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
+import { carryNativeSession, moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
 import { sessionTitleSource, prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { nativeGeneratedTitle } from '../session/discovery/titles.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -33,13 +33,14 @@ import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider 
 import { writeState } from '../session/state/write.js';
 import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
 import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
-import { closePersistentTransport, persistentWorkRunning, waitForPersistentWork, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
+import { closePersistentTransport, closeStandby, persistentWorkRunning, standbyFor, waitForPersistentWork, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
 import { hasHeldVendorProcess, releaseHeldVendorProcess, waitForHeldVendorSubagents } from '../harness/transport/native/held-vendor.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
 import { turnEnvironment } from './turn-environment.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
-import { runVendorSessionAttempt } from './vendor-session-attempt.js';
+import { prepareAcpStandby, runVendorSessionAttempt } from './vendor-session-attempt.js';
+import { vendorWindows } from '../harness/accounts/usage-reading.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
@@ -79,6 +80,14 @@ export function isEffortRefusal(failure: Error): boolean {
 }
 
 const RETRY_EDITS = { clear: ['', 'replace'], 'new-paragraph': ['\n\n', 'append'] } as const;
+
+/** How much of a window an account has used before a turn on it opens a
+ * standby for the account a failover would move to (worth a second vendor
+ * child only when a refusal is likely). */
+const STANDBY_AT_USED_PCT = 80;
+export function nearUsageLimit(account: AiHarnessAccount): boolean {
+  return vendorWindows(account).some((window) => !window.advisory && window.usedPct >= STANDBY_AT_USED_PCT);
+}
 
 /** Whether an attempt's streamed text is only the account refusal it then
  * failed with ("You've hit your session limit · resets 3:50pm" streamed as
@@ -339,6 +348,8 @@ export async function sendVendorTurn(input: {
     return true;
   };
   let effortRetried = false;
+  /** Whether this turn opened a standby for its failover account. */
+  let standbyOpened = false;
   /** A fresh native thread gets one recovery attempt per account. */
   let nativeThreadRetried = false;
   let transientRetried = false;
@@ -507,6 +518,39 @@ export async function sendVendorTurn(input: {
       onOutputStart: () => { cliOutputStarted = true; },
       onStreamError: (error) => { streamError = error; },
     });
+    // An account close to its limit may refuse this turn. The account a
+    // failover would move to is opened beside it, on a standby child: the
+    // thread copied as it stands now (before this attempt adds to it), its
+    // agent started and the thread loaded while this attempt runs. A refusal
+    // then hands over without a cold start, which for Claude is seconds of
+    // starting a session and connecting every MCP server.
+    if (transport === 'acp' && run.persistentTransports && !standbyOpened && nearUsageLimit(account)) {
+      standbyOpened = true;
+      const next = nextUsableFailoverAccount(state, account, (item) => turnBackendForAccount(item) === 'vendor', new Map());
+      const threadReady = !next ? false : !session.nativeSessionId || session.nativeSessionPreallocated ? true
+        : Boolean(await carryNativeSession({
+          harness, nativeId: session.nativeSessionId, workspace: session.workspace,
+          from: turnEnvironment(harness, account), to: turnEnvironment(harness, next),
+        }).catch(() => undefined));
+      if (next && threadReady) {
+        const standbyFor = next;
+        const permission = session.permissionMode ?? 'ask';
+        void (async () => {
+          const ready = await provisionChosenHarness({
+            ...(launcher ? { launcher } : {}),
+            harness, account: standbyFor, workspace: session.workspace, stateDir: stateDirectory(), signIn: checkMcpSignIn,
+            builtins: [...(conversations ? [conversations] : []), ...(!swarmRidesTurn(harness) && swarmEntry ? [swarmEntry] : [])],
+          });
+          lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8) });
+          await prepareAcpStandby({
+            harness, account: standbyFor, session, model, effort: turnEffort(),
+            environment: { ...turnEnvironment(harness, standbyFor, permission), CLIKCODE_SESSION_ID: session.id },
+            mcpServers: conversationsForAcpSession(conversations, ready.mcpSkipped,
+              { CLIKCODE_SESSION_ID: session.id, ...(process.env.CLIKCODE_HOME ? { CLIKCODE_HOME: process.env.CLIKCODE_HOME } : {}) }),
+          });
+        })().catch(() => undefined);
+      }
+    }
     try {
       if (transport === 'structured-cli' || transport === 'text-cli') {
         result = await runStructuredCliTurn();
@@ -653,25 +697,6 @@ export async function sendVendorTurn(input: {
       const leftId = account.id;
       const fallback = await accounts.after(failure, failureKind, signal);
       const chosenMs = Date.now() - switchAt;
-      // Closing after the last tool settled lets the vendor flush its own
-      // transcript before the receiving account copies it.
-      await closePersistentTransport(session.id);
-      const closedMs = Date.now() - switchAt - chosenMs;
-      const carriedThread = await moveThreadToAccount(session, harness, account, fallback);
-      const carriedMs = Date.now() - switchAt - chosenMs - closedMs;
-      await accounts.switchTo(fallback, failureKind);
-      lifecycle('worker.switch', {
-        harness: harness.command, from: leftId.slice(0, 8), to: fallback.id.slice(0, 8), why: failureKind,
-        chooseMs: chosenMs, closeMs: closedMs, carryMs: carriedMs, recordMs: Date.now() - switchAt - chosenMs - closedMs - carriedMs,
-        carried: carriedThread ?? 'none',
-      });
-      nativeThreadRetried = false;
-      // The answer on screen stays when this attempt already wrote one: the
-      // next account carries on from it, so clearing it made the first half
-      // vanish. An attempt that produced nothing is asked again in the
-      // request's own words. "Continue" there points at the previous
-      // finished turn, and retelling the transcript repeats a conversation
-      // the carried thread already holds.
       // Claude streams "You've hit your session limit · resets …" as message
       // text, then fails the prompt. That text is the refusal, not an
       // answer: it is taken back off the turn, and the next account is
@@ -679,12 +704,38 @@ export async function sendVendorTurn(input: {
       const attemptText = (session.pendingTurn?.response ?? '').slice(responseBefore);
       const refusalOnly = attemptText.trim() !== '' && echoesRefusal(attemptText, failure);
       if (refusalOnly) {
-        const kept = (session.pendingTurn?.response ?? '').slice(0, responseBefore);
-        checkpoint.response(kept, 'replace');
-        prompter?.response(kept, 'replace');
+        const earlier = (session.pendingTurn?.response ?? '').slice(0, responseBefore);
+        checkpoint.response(earlier, 'replace');
+        prompter?.response(earlier, 'replace');
         if (session.pendingTurn && !wroteBefore) session.pendingTurn.outputStarted = false;
       }
+      // The answer on screen stays when this attempt already wrote one: the
+      // next account carries on from it, so clearing it made the first half
+      // vanish. An attempt that produced nothing is asked again in the
+      // request's own words. "Continue" there points at the previous
+      // finished turn, and retelling the transcript repeats a conversation
+      // the carried thread already holds.
       const wrote = refusalOnly ? wroteBefore : Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
+      // Closing after the last tool settled lets the vendor flush its own
+      // transcript before the receiving account copies it.
+      await closePersistentTransport(session.id);
+      const closedMs = Date.now() - switchAt - chosenMs;
+      // The account this turn opened a standby for, its thread loaded as it
+      // stood before this turn: taken up when the attempt wrote nothing, so
+      // its copy is still the whole conversation. Anything else starts cold.
+      const standby = !wrote ? standbyFor(session.id, fallback.id) : undefined;
+      const warm = standby ? await standby.ready : false;
+      if (!warm) await closeStandby(session.id);
+      const carriedThread = warm ? 'present' as const : await moveThreadToAccount(session, harness, account, fallback);
+      if (warm && session.nativeSessionId) session.nativeThreadAccountId = fallback.id;
+      const carriedMs = Date.now() - switchAt - chosenMs - closedMs;
+      await accounts.switchTo(fallback, failureKind);
+      lifecycle('worker.switch', {
+        harness: harness.command, from: leftId.slice(0, 8), to: fallback.id.slice(0, 8), why: failureKind,
+        chooseMs: chosenMs, closeMs: closedMs, carryMs: carriedMs, recordMs: Date.now() - switchAt - chosenMs - closedMs - carriedMs,
+        carried: warm ? 'standby' : carriedThread ?? 'none',
+      });
+      nativeThreadRetried = false;
       const edit = session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear';
       const nextRequest = wrote ? INTERRUPTED_TURN_REQUEST : askedText;
       if (carriedThread) {
@@ -731,6 +782,9 @@ export async function sendVendorTurn(input: {
   }
   } finally {
     stopSwarmWatch();
+    // A standby the turn did not need (it answered on its own account, or
+    // ended otherwise) is a second vendor child: closed with the turn.
+    await closeStandby(session.id);
     await checkpoint.flush();
   }
 }

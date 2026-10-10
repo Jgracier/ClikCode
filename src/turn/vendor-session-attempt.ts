@@ -18,7 +18,7 @@ import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { swarmIsOn } from '../swarm/policy.js';
 import { swarmAcpMcpServers, swarmCodexConfig } from '../swarm/publish.js';
-import { closePersistentTransport, persistentTransportFor, vendorChildKey } from './vendor-process.js';
+import { closePersistentTransport, openStandby, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
@@ -102,40 +102,9 @@ export async function runVendorSessionAttempt(input: {
       };
       result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
     } else {
-      const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: session.permissionMode ?? 'ask' });
-      if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
-      const optionArgv = declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId));
-      if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
-        throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
-      }
-      const mcpServers = [...input.mcpServers ?? [], ...(swarmIsOn(session) ? swarmAcpMcpServers(session.id) : [])];
       const acpInput: AcpTurnInput = {
-        binary: launch.binary, command: harness.command, prompt: turnText,
-        argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
-        extraArgv: [...launch.optionArgv, ...optionArgv],
-        ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
-        cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
-        acp: harness.acp,
-        // Plan mode as an ACP session mode (catalog acp.planModeId); the
-        // agent leaving it -- its plan approved -- turns the chat's off.
-        ...(session.planMode && harness.acp?.planModeId ? {
-          planMode: true,
-          onPlanModeExit: () => {
-            delete session.planMode;
-            checkpoint.touch();
-            prompter?.render(session);
-          },
-        } : {}),
-        modelProviderSeparator: harness.modelProviderSeparator,
-        plansListModels: Boolean(harness.freePlan?.listed),
-        // Claude Code's quota, carried by the turn itself: published like a
-        // stream reading, so the composer and the account picker see it.
-        onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
-        // The models this session offers are the catalog model discovery
-        // would otherwise start a second copy of the agent to read.
-        onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
-        environment, signal, images, onSessionId,
-        ...(mcpServers.length ? { mcpServers } : {}),
+        ...acpLaunchInput({ harness, account, session, model, effort, environment, mcpServers: input.mcpServers, checkpoint, prompter }),
+        prompt: turnText, signal, images, onSessionId,
         ...sharedObserver,
         onSteerReady,
       };
@@ -197,4 +166,64 @@ export async function runVendorSessionAttempt(input: {
     throw error;
   }
   return result;
+}
+
+/** Everything an ACP turn is launched and opened with -- what decides
+ * whether a live child can be reused (binary, argv, cwd, environment) and
+ * what the session is set to. One builder for a turn and for a failover's
+ * standby (prepareAcpStandby), so the standby is the child the turn wants. */
+function acpLaunchInput(input: {
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string;
+  environment: Record<string, string>; mcpServers?: readonly Record<string, unknown>[];
+  checkpoint?: DurableTurnCheckpoint; prompter?: TurnRunOptions['prompter'];
+}): Omit<AcpTurnInput, 'prompt'> {
+  const { harness, account, session, model, effort, environment, checkpoint, prompter } = input;
+  const declaredOptions = localHarnessCapabilityManifest(harness).options;
+  const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: session.permissionMode ?? 'ask' });
+  if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
+  const optionArgv = declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId));
+  if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
+    throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
+  }
+  const mcpServers = [...input.mcpServers ?? [], ...(swarmIsOn(session) ? swarmAcpMcpServers(session.id) : [])];
+  return {
+    binary: launch.binary, command: harness.command,
+    argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
+    extraArgv: [...launch.optionArgv, ...optionArgv],
+    ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
+    cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
+    acp: harness.acp,
+    // Plan mode as an ACP session mode (catalog acp.planModeId); the
+    // agent leaving it -- its plan approved -- turns the chat's off.
+    ...(session.planMode && harness.acp?.planModeId ? {
+      planMode: true,
+      onPlanModeExit: () => {
+        delete session.planMode;
+        checkpoint?.touch();
+        prompter?.render(session);
+      },
+    } : {}),
+    modelProviderSeparator: harness.modelProviderSeparator,
+    plansListModels: Boolean(harness.freePlan?.listed),
+    // Claude Code's quota, carried by the turn itself: published like a
+    // stream reading, so the composer and the account picker see it.
+    onQuotaReading: (reading) => { void recordDerivedUsage(session, reading).catch(() => undefined); },
+    // The models this session offers are the catalog model discovery
+    // would otherwise start a second copy of the agent to read.
+    onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
+    environment,
+    ...(mcpServers.length ? { mcpServers } : {}),
+  };
+}
+
+/** Open `account`'s ACP session for this conversation up to the prompt, on a
+ * standby child, while the current account's turn runs: a failover to it
+ * then starts at the prompt. The thread must already be in its profile. */
+export function prepareAcpStandby(input: {
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string;
+  environment: Record<string, string>; mcpServers?: readonly Record<string, unknown>[];
+}): Promise<boolean> {
+  const launch = acpLaunchInput(input);
+  return openStandby(input.session.id, input.account.id, 'acp', vendorChildKey(input.harness, input.account, input.environment, input.session.workspace),
+    async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); }).ready;
 }
