@@ -49,6 +49,10 @@ export interface AiHarnessAccount {
    * the credentials it started with, so this is part of what makes a child
    * reusable: a sign-out and sign-in starts a fresh one. */
   signedInAt?: string;
+  /** Made for a provider nobody has signed in to yet (chosen at launch, its
+   * sign-in waiting for first use): "not signed in", not signed out. Cleared
+   * by its first sign-in, and by a sign-out. */
+  neverSignedIn?: true;
   credentialRef: string;
   /** Last usage reading for this account, shared across every terminal.
    * The figure belongs to the account, not to one chat, so caching it per

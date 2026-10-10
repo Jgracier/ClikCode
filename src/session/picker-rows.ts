@@ -82,15 +82,20 @@ export function harnessCanAddAccount(harness: AiLocalHarnessDefinition): boolean
 export function accountRow(
   account: AiHarnessAccount, harness: AiLocalHarnessDefinition | undefined, session: HarnessSession | undefined, now = Date.now(),
 ): Omit<IdeAccount, 'usage'> {
+  const neverSignedIn = account.status === 'needs_login' && account.neverSignedIn === true;
   const problem: IdeAccount['problem'] = account.verification ? 'verify'
-    : account.status === 'needs_login' ? 'reauth'
-      : accountQuotaSpent(account, now) ? 'out-of-usage' : undefined;
+    : neverSignedIn ? 'sign-in'
+      : account.status === 'needs_login' ? 'reauth'
+        : accountQuotaSpent(account, now) ? 'out-of-usage' : undefined;
   const backAt = problem === 'out-of-usage' ? accountBackAt(account, now) : undefined;
   const vendorSignIn = account.authKind === 'vendor-cli';
   const actions: IdeAccount['actions'] = [
     ...(harness?.loginArgv && vendorSignIn && account.status !== 'ready' ? ['reauthenticate' as const] : []),
     ...(account.verification ? ['verified' as const] : []),
-    harness && harnessCanLogout(harness) && vendorSignIn && account.status === 'ready' ? 'disconnect' as const : 'remove' as const,
+    // Nothing to sign out of or remove on one never signed in: signing in
+    // is all there is to do.
+    ...(neverSignedIn && harness?.loginArgv && vendorSignIn ? []
+      : [harness && harnessCanLogout(harness) && vendorSignIn && account.status === 'ready' ? 'disconnect' as const : 'remove' as const]),
   ];
   return {
     id: account.id, provider: account.provider, ...(harness ? { harness: harness.command } : {}),

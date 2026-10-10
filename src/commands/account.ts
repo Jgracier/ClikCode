@@ -153,6 +153,7 @@ export async function syncAccountIdentityAfterLogin(
   // remember to do either around this call.
   account.status = 'ready';
   account.signedInAt = new Date().toISOString();
+  delete account.neverSignedIn;
   const captureCredential = vendorCredentialCapture(harness);
   if (captureCredential && account.nativeProfile?.path) {
     if (!await captureCredential(account.nativeProfile.path)) {
@@ -378,6 +379,7 @@ export async function signOutAccount(labelOrId: string): Promise<AiHarnessAccoun
   await logoutNativeHarness(harness, environment);
   account.status = 'needs_login';
   delete account.signedInAt;
+  delete account.neverSignedIn;
   await writeState(state);
   return account;
 }

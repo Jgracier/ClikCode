@@ -134,6 +134,8 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
       account ??= state.accounts.find((item) => item.provider === harness.provider && turnBackendForAccount(item) === 'vendor');
       if (account) {
         if (account.status === 'ready') account.status = 'needs_login';
+        // The one just made has never been signed in to: /account says so.
+        if (accountJustCreated) account.neverSignedIn = true;
         session.accountId = account.id;
       }
     } else if (shouldCheckLogin && signer) {
