@@ -20,6 +20,7 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { loadMcpServers, writeMcpOAuthConfig, type McpOAuthConfig, type McpServerSpec } from '../agent/mcp/config.js';
 import { forgetMcpOAuth, mcpOAuthState, signInMcpServer, type McpSignInUi } from '../agent/mcp/oauth.js';
 import { mcpServerNeedsSignIn } from '../harness/mcp-sign-in.js';
+import { userMcpServers } from '../agent/mcp/manager.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
@@ -104,7 +105,7 @@ function terminalSignInUi(name: string): McpSignInUi & { done(): void } {
 
 /** The one sign-in, wherever it was asked for. */
 export async function loginMcpServer(name: string, ui: McpSignInUi, stateDir: string = stateDirectory()): Promise<void> {
-  const { servers } = await loadMcpServers(stateDir);
+  const { servers } = await userMcpServers(stateDir);
   const spec = servers.find((server) => server.name === name);
   if (!spec) throw new Error(`${name} is not recorded in ClikCode; add it with \`clikcode mcp add ${name} <url>\``);
   if (spec.transport === 'stdio') throw new Error(`${name} is a local server; there is nothing to sign in to`);
@@ -133,7 +134,7 @@ export async function mcpLogout(name: string): Promise<void> {
 /** `/mcp` in a conversation on ClikCode's own agent: each server, and which
  * need a sign-in. */
 export async function mcpServersText(stateDir: string = stateDirectory()): Promise<string> {
-  const { servers, problem } = await loadMcpServers(stateDir);
+  const { servers, problem } = await userMcpServers(stateDir);
   const states = await mcpSignInStates(stateDir, servers);
   const lines = servers.map((spec) => {
     const state = states.get(spec.name);
