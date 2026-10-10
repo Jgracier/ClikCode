@@ -667,7 +667,9 @@ SCENARIOS = {
     'slow-wait-band-stays-readable': {
         'turns': [TWO_BLOCKS],
         'steps': [('type', '!sleep 0.45'), ('settle', 3)],
-        'watch': [], 'ever': ['! sleep 0.45'], 'min_visible': {'! sleep 0.45': 0.28},
+        # The band's own line ("! sleep 0.45 · 0s"): the composer shows the
+        # same words while they are typed, since `!` opens with a space.
+        'watch': [], 'ever': ['! sleep 0.45 · '], 'min_visible': {'! sleep 0.45 · ': 0.28},
     },
     # Ctrl+C in a sign-in's key field: one press cancels it, said the same way.
     'ctrl-c-cancels-key-sign-in': {
