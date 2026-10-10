@@ -511,9 +511,13 @@ function usageFrom(raw: Record<string, unknown>): TokenUsage {
   const completionDetails = (raw.completion_tokens_details && typeof raw.completion_tokens_details === 'object' ? raw.completion_tokens_details : {}) as Record<string, unknown>;
   const cached = numberOf(promptDetails.cached_tokens);
   const reasoning = numberOf(completionDetails.reasoning_tokens);
-  // USD; OpenRouter and the ClikDeploy Gateway report what the call cost.
+  // USD; OpenRouter and the ClikDeploy Gateway report what the call cost. When the provider was
+  // paid directly rather than through the server (OpenRouter's own-key calls, the Gateway's
+  // operator, charged 0) that part is cost_details.upstream_inference_cost: the spend is the sum.
+  const costDetails = (raw.cost_details && typeof raw.cost_details === 'object' ? raw.cost_details : {}) as Record<string, unknown>;
   const cost = numberOf(raw.cost);
-  if (cost !== undefined) out.costMicroUsd = Math.round(cost * 1_000_000);
+  const upstream = numberOf(costDetails.upstream_inference_cost);
+  if (cost !== undefined || upstream !== undefined) out.costMicroUsd = Math.round(((cost ?? 0) + (upstream ?? 0)) * 1_000_000);
   if (input !== undefined) out.input = input;
   if (output !== undefined) out.output = output;
   if (cached !== undefined) out.cached = cached;

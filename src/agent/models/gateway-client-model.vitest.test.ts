@@ -54,6 +54,16 @@ describe('a Gateway step', () => {
     expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k' }).contextHints.hosted).toBe(true);
   });
 
+  it('counts what the provider charged directly beside the charge (the operator is charged 0)', async () => {
+    const fetchImpl = vi.fn(async () => sse(
+      { model: 'claude-sonnet-5-5', choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }] },
+      { model: 'claude-sonnet-5-5', choices: [], usage: { prompt_tokens: 10, completion_tokens: 2, cost: 0, cost_details: { upstream_inference_cost: 0.050573 } } },
+      '[DONE]',
+    ));
+    const result = await gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: fetchImpl as never }).step(step);
+    expect(result.usage.costMicroUsd).toBe(50_573);
+  });
+
   it('turns the Gateway\'s codes into the ones the loop acts on', async () => {
     const limited = vi.fn(async () => sse({ error: { message: 'slow down', type: 'rate_limit_error', code: 'rate_limit_exceeded', retry_after: 7 } }));
     await expect(gatewayModelClient({ baseUrl: 'https://g', apiKey: 'k', fetchImpl: limited as never }).step(step))

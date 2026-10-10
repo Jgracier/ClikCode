@@ -280,9 +280,12 @@ function clikcodeMetrics(artifacts) {
   const tools = replies.flatMap((message) => (message.activities ?? []).map((activity) => activity.event).filter((event) => event?.kind?.startsWith('tool')));
   const usage = out.usage ?? session?.lastUsage ?? {};
   const price = PRICES[model];
-  const cost = price && usage.input !== undefined
+  // The Gateway reports each step's cost (usage.cost, plus cost_details.upstream_inference_cost
+  // for the operator, who is charged 0); the list-price estimate is only for a run that has none.
+  const reported = typeof usage.costUsd === 'number' && usage.costUsd > 0 ? usage.costUsd : null;
+  const cost = reported ?? (price && usage.input !== undefined
     ? ((usage.input - (usage.cacheRead ?? 0)) * price.input + (usage.cacheRead ?? 0) * price.cacheRead + (usage.output ?? 0) * price.output) / 1e6
-    : null;
+    : null);
   const gatewaySteps = readJsonLines(join(artifacts, 'gateway.jsonl'));
   return {
     ...clikcodeSteps(artifacts),
@@ -297,7 +300,7 @@ function clikcodeMetrics(artifacts) {
     cacheReadTokens: usage.cacheRead ?? null,
     outputTokens: usage.output ?? null,
     costUsd: cost,
-    costSource: 'estimate (list price)',
+    costSource: reported !== null ? 'reported' : 'estimate (list price)',
     turns: null,
     toolCalls: tools.length,
     toolFailures: tools.filter((event) => event.kind === 'tool-failed' || event.error || event.status === 'failed').length,
@@ -407,7 +410,7 @@ function writeResults(list, fixedStem) {
   const md = [
     `# Harness benchmark ${started.toISOString()}`,
     '',
-    `Model \`${model}\` on both; timeout ${timeoutMs / 60_000} min; one run each. \\* = ClikCode reports no cost on the Gateway; estimated at list price (input less cache reads, cache reads at 10%, output). \`model s\` = time spent waiting on model steps (from each tool result or prompt to the step's last output); \`wall s\` less that is the harness's own time plus tool runtime.`,
+    `Model \`${model}\` on both; timeout ${timeoutMs / 60_000} min; one run each. \\* = no cost reported by the run; estimated at list price (input less cache reads, cache reads at 10%, output). \`model s\` = time spent waiting on model steps (from each tool result or prompt to the step's last output); \`wall s\` less that is the harness's own time plus tool runtime.`,
     '',
     '| harness | passed | wall s | input tok | output tok | cost |',
     '| --- | --- | --- | --- | --- | --- |',
