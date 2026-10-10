@@ -26,7 +26,7 @@ export const multiEditTool = defineTool<MultiEditArgs>({
   label: (args) => formatToolRow('multi_edit', `${args.path} (${args.edits.length} changes)`, 'edit'),
   paths: (args) => [args.path],
   async preview(args, ctx) {
-    const prepared = await prepareEdits(args.path, args.edits, ctx, false);
+    const prepared = await prepareEdits(args.path, args.edits, ctx);
     return eventDiff(prepared.before, prepared.after, { path: prepared.real, numbered: true });
   },
   async run(args, ctx) {

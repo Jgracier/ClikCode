@@ -34,16 +34,18 @@ function applyEdit(content: string, edit: EditOperation, label = 'old_string'): 
 
 interface PreparedEdit { real: string; shown: string; before: string; after: string; mode: number }
 
-/** Validate everything (guards + all edits) without touching the disk. */
-export async function prepareEdits(filePath: string, edits: readonly EditOperation[], ctx: ToolContext, enforceReadGuard = true): Promise<PreparedEdit> {
+/** Validate everything (path guards + all edits) without touching the disk.
+ *
+ * No prior read_file is required: an exact, unique old_string is itself the
+ * proof that the model has seen the text it replaces (from a read, a grep
+ * line or its own earlier edit), and an edit whose text is not there fails
+ * whole. Requiring a read cost a model step per file in a multi-file change
+ * whose lines grep had already shown (bench/harness task 03). write_file,
+ * which replaces what it never matched, still requires one. */
+export async function prepareEdits(filePath: string, edits: readonly EditOperation[], ctx: ToolContext): Promise<PreparedEdit> {
   const resolved = resolveForWrite(filePath, ctx);
   const existing = await readExisting(resolved.real);
   if (!existing) throw new ToolInputError(`File not found: ${filePath}. Use write_file to create it.`);
-  if (enforceReadGuard) {
-    const stamp = ctx.session.readFiles.get(resolved.real);
-    if (!stamp) throw new ToolInputError(`Read ${filePath} with read_file before editing it.`);
-    if (Math.abs(stamp.mtimeMs - existing.mtimeMs) > 1) throw new ToolInputError(`${filePath} changed on disk since it was last read. Read it again before editing.`);
-  }
   let after = existing.text;
   edits.forEach((edit, index) => { after = applyEdit(after, edit, edits.length > 1 ? `edits[${index}].old_string` : 'old_string'); });
   return { real: resolved.real, shown: displayPath(resolved.absolute, ctx), before: existing.text, after, mode: existing.mode };
@@ -58,7 +60,7 @@ export async function commitEdit(prepared: PreparedEdit, ctx: ToolContext): Prom
 export const editFileTool = defineTool<EditFileArgs>({
   name: 'edit_file',
   class: 'write',
-  description: 'Replace an exact string in a file. old_string must match the file verbatim (whitespace included, without the line-number prefix from read_file) and be unique unless replace_all is true. Read the file first. Keep old_string as small as uniqueness allows.',
+  description: 'Replace an exact string in a file. old_string must match the file verbatim (whitespace included, without the line-number prefix of read_file or grep output) and be unique unless replace_all is true. Text you have seen in read_file or grep output is enough; no separate read is needed. Keep old_string as small as uniqueness allows.',
   parameters: {
     type: 'object', additionalProperties: false, required: ['path', 'old_string', 'new_string'],
     properties: {
@@ -71,7 +73,7 @@ export const editFileTool = defineTool<EditFileArgs>({
   label: (args) => formatToolRow('edit_file', args.path, 'edit'),
   paths: (args) => [args.path],
   async preview(args, ctx) {
-    const prepared = await prepareEdits(args.path, [args], ctx, false);
+    const prepared = await prepareEdits(args.path, [args], ctx);
     return eventDiff(prepared.before, prepared.after, { path: prepared.real, numbered: true });
   },
   async run(args, ctx) {
