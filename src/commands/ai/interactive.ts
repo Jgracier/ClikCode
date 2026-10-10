@@ -66,6 +66,7 @@ import { replaceCliWithNewBuild } from './build-replace.js';
  * without a board (VS Code, headless `sessions send`). */
 const BOARD_REPLACES: ReadonlySet<string> = new Set(['resume', 'new']);
 const BOARD_REPLACES_NOTICE = 'Press ← on an empty prompt for your conversations -- pick one, or type to start a new one.';
+const DELETED_ELSEWHERE = 'That conversation was deleted · this is a new one';
 /** What Left on an empty prompt returns: not a slash line, so it cannot be
  * typed, and it opens the board however the registry changes. */
 const BOARD_LINE = '\u0000board';
@@ -316,6 +317,9 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     // How soon the status line shows a turn another terminal ran on this
     // account, or a window that reset.
   }, 15_000) : undefined;
+  /** The conversation as this window last read it: what a fresh one copies
+   * its setup from when this one is deleted under it. */
+  let lastSeen: HarnessSession = session;
   /** A message to send next, without asking: the one that ran out of usage,
    * after "Resume in" moved the chat to a harness that has some. */
   let resend: string | undefined;
@@ -385,7 +389,16 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         const queueMark = terminal ? await workerQueueMark(id) : undefined;
         const latestState = await readState({ transcripts: [id] });
         const latest = latestState.sessions.find((item) => item.id === id);
-        if (!latest) break;
+        if (!latest) {
+          // Deleted while open (another window's board, `clikcode sessions`):
+          // this window carries on in a fresh conversation set up the same
+          // way, and says so. Leaving ClikCode is never the answer to that.
+          id = await newConversation(lastSeen.id, { sameModel: true, lastSeen });
+          await claimConversation(id).catch(() => undefined);
+          notice = DELETED_ELSEWHERE;
+          continue;
+        }
+        lastSeen = latest;
         warmCatalogFor(latest, latestState);
         // Whatever the last command or turn did to the conversation this
         // terminal shows, it holds a local model for that one alone.
@@ -697,6 +710,13 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
         if (outcome.draft !== undefined) terminal?.restoreDraft(outcome.draft);
         if (outcome.prompt) await runInteractiveTurn(id, outcome.prompt, { echo: outcome.echo !== false });
       } catch (error) {
+        // The conversation was deleted under this window: what was typed
+        // stays in the composer, for the fresh one the next pass opens.
+        if (!(await readState({ transcripts: [] })).sessions.some((item) => item.id === id)) {
+          terminal?.submitted(undefined);
+          if (!viaBoard) terminal?.restoreDraft(line);
+          continue;
+        }
         // A queued message is handed back, and one that ran out of usage is
         // offered "Resume in" as a typed one is.
         await handleTurnFailure(error, { line, sent: sentPrompt ?? line, ...(queuedTurnId ? { queuedTurnId } : {}) });
