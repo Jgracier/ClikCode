@@ -26,7 +26,7 @@ import type { FileDiff } from '../protocol';
 import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
-import { Icon } from './ui';
+import { Icon, Spinner } from './ui';
 import { foldedGroupCount, foldedSummary, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
@@ -132,14 +132,6 @@ function toneOf(activity: Activity): string {
   return activity.category ? `tone-${TOOL_CATEGORY[activity.category].colour}` : '';
 }
 
-/** The terminal's spinner, the same braille frames at the same rate: a
- * command's in yellow, a sub-agent's in cyan, the turn's own still and
- * yellow when nothing is arriving. Every spinner on the page steps on the
- * page's one clock; still under reduced motion and while hidden. */
-export function Spinner({ tone = '', still = false }: { tone?: string; still?: boolean }): JSX.Element {
-  const frame = useSpinFrame(!still);
-  return <span class={`spinner ${tone}`} aria-hidden="true">{waitingSpinnerGlyph(frame)}</span>;
-}
 
 /** A tool label with the path in it made a link to the file. */
 function ActivityLabel({ label, workspace, shimmer }: { label: string; workspace?: string; shimmer?: boolean }): JSX.Element {

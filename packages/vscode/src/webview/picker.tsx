@@ -9,7 +9,7 @@ import { post, request, uid } from './bus';
 import { modelLabel, titleCase } from './format';
 import { dollars } from '../../../../src/harness/protocol/format';
 import { accountUsageText, outOfUsageText } from '../../../../src/harness/accounts/usage-reading';
-import { Icon, KeyList, Popover, Switch, type ListRow } from './ui';
+import { Icon, KeyList, Loading, Popover, Spinner, Switch, useSlowWait, type ListRow } from './ui';
 
 /** Model lists, kept for the panel's life: a second look is instant. */
 const modelCache = new Map<string, IdeModels>();
@@ -81,6 +81,8 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
   const drill = props.mode === 'model' ? current : undefined;
   const [models, setModels] = useState<IdeModels | undefined>(drill ? modelCache.get(drill) : undefined);
   const [loading, setLoading] = useState(false);
+  /** Shown only once the lookup is slow (useSlowWait). */
+  const modelsLoading = useSlowWait(Boolean(drill && loading));
   const [search, setSearch] = useState('');
   const input = useRef<HTMLInputElement>(null);
 
@@ -205,7 +207,7 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       <div class="picker-head">
         <Icon name={drill ? 'symbol-namespace' : 'server-environment'} />
         <span class="picker-title">{drill ? <>Model <span class="muted">· {provider?.name ?? drill}</span></> : 'Provider'}</span>
-        {drill && loading ? <Icon name="loading" spin label="Loading models" /> : null}
+        {drill && modelsLoading ? <span role="img" aria-label="Loading models"><Spinner /></span> : null}
       </div>
       <div class="search">
         <Icon name="search" />
@@ -216,9 +218,10 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       {error ? <div class="picker-error">{error}</div> : null}
       {drill && models?.error ? <div class="picker-error">{models.error}</div> : null}
       {drill && models?.agentsError ? <div class="picker-error">Could not load your agents: {models.agentsError}</div> : null}
-      {!providers && !error ? <div class="picker-loading"><Icon name="loading" spin /> Loading providers…</div> : null}
+      <Loading waiting={!providers && !error}>Loading providers…</Loading>
+      {/* Still loading and not yet slow: nothing, rather than "No models match". */}
       <KeyList id="picker-list" rows={rows} label={drill ? 'Models' : 'Providers'} inputRef={input} onEscape={props.onClose}
-        emptyText={drill ? (loading ? 'Finding models…' : 'No models match.') : providers ? 'No providers match.' : undefined} />
+        emptyText={drill ? (loading ? (modelsLoading ? 'Finding models…' : undefined) : 'No models match.') : providers ? 'No providers match.' : undefined} />
       <div class="picker-foot muted">
         <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span><span><kbd>Enter</kbd> select</span><span><kbd>Esc</kbd> close</span>
       </div>
@@ -365,7 +368,7 @@ export function AccountMenu(props: { model: ChatModel; onClose: () => void; onEr
   return (
     <Popover label="Accounts" onClose={props.onClose} class="menu" id="account-menu">
       <div class="menu-title">{onGateway ? 'ClikDeploy Gateway' : data?.chat?.name ?? 'Accounts'}</div>
-      {!data ? <div class="picker-loading"><Icon name="loading" spin /> Loading accounts…</div>
+      {!data ? <Loading waiting>Loading accounts…</Loading>
         : <KeyList rows={rows} label="Accounts" onEscape={props.onClose} />}
     </Popover>
   );
