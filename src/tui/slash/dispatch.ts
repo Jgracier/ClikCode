@@ -29,6 +29,7 @@ import { aiHarnessSelect } from '../../commands/ai/harness.js';
 import { settingLabel } from '../pickers/setting-scope.js';
 import { chooseOption } from '../pickers/choose.js';
 import { interactiveEnginePicker } from '../pickers/engine.js';
+import { selectProviderConversation } from '../pickers/conversation.js';
 import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, useAddedAccount } from '../pickers/account.js';
 import { interactiveModelPicker } from '../pickers/model.js';
 import { interactiveEffortPicker } from '../pickers/effort.js';
@@ -238,6 +239,9 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
     redraw: () => host.redraw(id),
     provider: async () => ({ id: await interactiveEnginePicker(host.config, rl, id) ?? id }),
+    // This conversation, moved to the Gateway in place -- as choosing it in
+    // /provider does, history and all. (Headless, only a fresh one can be.)
+    gateway: async () => ({ id: await selectProviderConversation(host.config, rl, id, '__gateway__') }),
     accounts: async () => {
       // `/accounts login <harness>` and `/accounts add <harness>` sign in with
       // a terminal handed over, the same as + Add account.
