@@ -197,7 +197,7 @@ export interface GatewayHarnessTurnInput {
    * prompt, the conversation goes to `transcriptFile`, and the turn cannot
    * start sub-agents of its own. `parentSessionId` and `kind` name it to a
    * SubagentStop hook. */
-  subagent?: { system: string; transcriptFile: string; checkpoint?: { sessionId: string; turnId: string }; parentSessionId?: string; kind?: 'research' | 'work' };
+  subagent?: { system: string; transcriptFile: string; checkpoint?: { sessionId: string; turnId: string }; parentSessionId?: string; kind?: 'research' | 'work'; agentType?: string };
   /** When the conversation has a swarm, a `task` call asks this before the
    * same-model sub-agent. Null keeps that sub-agent. */
   swarmDelegate?: (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string }) => Promise<ToolRunResult | null>;

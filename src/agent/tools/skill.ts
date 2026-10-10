@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { discoverSkills, parseFrontmatter, SKILL_FILE, SKILL_TOOL, type Skill } from '../skills.js';
 import { defineTool } from '../tool-contract.js';
+import { expandPluginRoot } from '../plugins.js';
 import { looksBinary } from './fs-helpers.js';
 
 interface SkillArgs { name: string; file?: string }
@@ -87,7 +88,8 @@ export const skillTool = defineTool<SkillArgs>({
       return { output: `Cannot read ${args.file ?? SKILL_FILE} of skill ${skill.name}: ${(error as NodeJS.ErrnoException).code ?? 'error'}`, isError: true };
     }
     if (looksBinary(buffer)) return { output: `${args.file} is a binary file (${buffer.length} bytes); not shown.` };
-    const text = buffer.toString('utf8');
+    // A plugin's skill names its own files as Claude Code lets it: ${CLAUDE_PLUGIN_ROOT}/...
+    const text = skill.pluginRoot ? expandPluginRoot(buffer.toString('utf8'), skill.pluginRoot) : buffer.toString('utf8');
     if (args.file) return { output: text || `${args.file} is empty.` };
 
     const parsed = parseFrontmatter(text);

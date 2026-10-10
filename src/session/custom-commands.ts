@@ -4,7 +4,9 @@
  * ClikCode's own `.clikcode/commands` (workspace) and `~/.clikcode/commands`.
  * Optional frontmatter carries `description` and `argument-hint`; the body is
  * the prompt, with `$ARGUMENTS` and `$1`..`$9` expanded client-side whenever
- * the harness cannot run the command natively. No harness names here. */
+ * the harness cannot run the command natively. Enabled plugins' `commands/`
+ * come last (agent/plugins.ts): `/name` when free, else `/plugin:name`, as
+ * Claude Code namespaces them. No harness names here. */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -27,6 +29,8 @@ interface CustomCommandRoots {
   home?: string;
   /** Replaces the ClikCode directories (tests). */
   clikcodeDirs?: readonly string[];
+  /** Enabled plugins' command directories, expanded client-side. */
+  plugins?: ReadonlyArray<{ plugin: string; root: string; dir: string }>;
 }
 
 const CLIKCODE_DIRS = ['.clikcode/commands', '~/.clikcode/commands'] as const;
@@ -149,6 +153,15 @@ export function discoverCustomCommands(
   };
   add(harness?.customCommandDirs ?? [], 'harness');
   add(roots.clikcodeDirs ?? CLIKCODE_DIRS, 'clikcode');
+  for (const item of roots.plugins ?? []) {
+    for (const command of scanDirectory(item.dir, 'clikcode')) {
+      const namespaced = `${item.plugin.toLowerCase()}:${command.name}`;
+      const name = seen.has(command.name) ? namespaced : command.name;
+      if (seen.has(name)) continue;
+      seen.add(name);
+      result.push({ ...command, name, body: command.body.replace(/\$\{CLAUDE_PLUGIN_ROOT\}/g, () => item.root) });
+    }
+  }
   return result;
 }
 
