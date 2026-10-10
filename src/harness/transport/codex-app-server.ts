@@ -310,21 +310,23 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       input, observer: input, done: false, lastAgentMessage: '', streamedMessage: '', sawActivity: false,
       items: new Map(), output: new Map(), thoughts: new Map(), complete, fail,
     };
+    let keepFailedWork = false;
     return this.runActive(turn, input.signal, failure, () => this.flow(turn, completion), {
       failed: (error) => {
         // Prefer the server's structured error over the transport's message.
         Object.assign(error, codexErrorKind(turn.lastError ?? error));
+        keepFailedWork = this.pendingWork.size > 0;
         // A failed *turn* leaves a healthy server; anything else is unknown.
-        if (!(error as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(error);
+        if (!keepFailedWork && !(error as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(error);
       },
       ended: (succeeded) => {
         input.onSteerReady?.(undefined);
         // A turn/steer in flight when the turn ends is never answered.
         this.live?.peer.rejectPending(new Error('Codex turn ended'), (method) => method !== 'turn/interrupt');
-        // A reply can be written while a shell or a sub-agent it started is
-        // still running. That work is reported as a background turn; after a
-        // failed or stopped turn nothing is known to be running any more.
-        if (!succeeded) { this.pendingWork.clear(); this.settleBackground(); } else if (this.pendingWork.size && this.live) this.openBackground('background-work', undefined, turn.items);
+        // A parent failure does not stop items the server already started.
+        // Leave that server to finish them before retrying or switching.
+        if (!succeeded && !keepFailedWork) { this.pendingWork.clear(); this.settleBackground(); }
+        else if (this.pendingWork.size && this.live) this.openBackground('background-work', undefined, turn.items);
       },
     });
   }
@@ -338,6 +340,10 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
 
   protected pendingCount(): number {
     return this.pendingWork.size;
+  }
+
+  protected hasActiveSubagents(): boolean {
+    return [...this.pendingWork.keys()].some((key) => key.startsWith('agent:'));
   }
 
   protected clearPending(): void {

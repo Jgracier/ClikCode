@@ -8,6 +8,7 @@ import type { HarnessTurnTransport } from '../harness/transport/select.js';
 import type { CodexSession } from '../harness/transport/codex-app-server.js';
 import type { AcpSession } from '../harness/transport/acp-client.js';
 import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harness/transport/background-turn.js';
+import { turnCancelledError } from '../agent/cancellation.js';
 
 /** Harnesses whose `turn` contract was rejected, by the build that rejected
  * it; later turns on that build go straight to the catalog's declared
@@ -86,6 +87,17 @@ export function hasPersistentTransport(sessionId: string): boolean {
  * turns: its worker stays up for it rather than closing the child under it. */
 export async function persistentWorkRunning(sessionId: string): Promise<boolean> {
   return await persistentTransports.get(sessionId)?.session.backgroundWorkRunning?.().catch(() => false) ?? false;
+}
+
+/** Do not retire an account's vendor while work it started is still running.
+ * The worker receives the late tool events through its background channel;
+ * once they settle, the native thread can be copied to the next account. */
+export async function waitForPersistentWork(sessionId: string, signal?: AbortSignal): Promise<void> {
+  while (await persistentWorkRunning(sessionId)) {
+    if (signal?.aborted) throw turnCancelledError();
+    await new Promise<void>((resolve) => setTimeout(resolve, 200));
+  }
+  if (signal?.aborted) throw turnCancelledError();
 }
 
 export async function closePersistentTransport(sessionId?: string): Promise<void> {

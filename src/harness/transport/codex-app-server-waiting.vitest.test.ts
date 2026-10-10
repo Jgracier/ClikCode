@@ -123,6 +123,25 @@ describe('the idle watchdog on a Codex turn', () => {
 });
 
 describe('work a Codex turn leaves running', () => {
+  it('keeps a subagent alive when the parent turn fails', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const codex = session([[
+      { send: { method: 'item/started', params: { threadId: 'T', turnId: '{{turn}}', item: { type: 'subAgentActivity', id: 'call-1', kind: 'started', agentThreadId: 'C', agentPath: '/root/check' } } } },
+      { send: turnCompleted('T', '{{turn}}', 'failed') },
+      { after: 600, send: turnCompleted('C', 'CU1') },
+    ]], { idleMs: 200, toolIdleMs: 200, backgroundTurns: (turn) => turns.push(turn) });
+    try {
+      await expect(codex.runTurn(input())).rejects.toThrow();
+      expect(turns).toHaveLength(1);
+      expect(turns[0]!.reason).toBe('background-work');
+      expect(await codex.backgroundWorkRunning()).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(await codex.backgroundWorkRunning()).toBe(true);
+      expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
+      expect(await codex.backgroundWorkRunning()).toBe(false);
+    } finally { await codex.close(); }
+  });
+
   it('reports a background shell that finishes after the reply as a background turn', async () => {
     const turns: VendorBackgroundTurn[] = [];
     const codex = session([[

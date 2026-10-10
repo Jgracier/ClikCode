@@ -215,7 +215,7 @@ function acpToolClass(update: Json): { category?: ToolCategory; agent?: true } {
   const head = titled.split(/[\s:(]/, 1)[0] || titled;
   const fromKind = ACP_KIND_CATEGORY[String(update.kind ?? '').toLowerCase()];
   const category = fromKind ?? (acpCommand(raw)?.trim() ? 'run' as const : categoryOf(head, raw).category);
-  const agent = isAgentToolName(head) || isAgentToolName(String(update.tool ?? '')) ? true as const : undefined;
+  const agent = isAgentToolName(head) || isAgentToolName(String(update.tool ?? '')) || typeof raw?.subagent_type === 'string' ? true as const : undefined;
   return { ...(category ? { category } : {}), ...(agent ? { agent } : {}) };
 }
 
@@ -449,6 +449,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   /** Tool calls the agent started and has not settled, within the turn or
    * background turn that is receiving updates. */
   private readonly pendingTools = new Map<string, string>();
+  private readonly pendingAgents = new Set<string>();
   private sessionId?: string;
   private lastCumulativeChunks = false;
   /** The live session's running totals as the agent last reported them
@@ -473,26 +474,32 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       held: [], approvals: 0,
     };
     return this.runActive(turn, input.signal, failure, () => this.flow(turn, argv), {
-      // After a failure the child's protocol state is unknown. Drop it; the
-      // next turn respawns and resumes. Cancellation settles on its own path.
-      failed: (error) => this.dropLive(error),
+      failed: (error) => {
+        // The parent may have failed while a tool is still active.
+        // Its child is the only process that can finish that tool; keep it
+        // until the tool settles, even though this parent prompt failed.
+        if (!this.pendingTools.size) this.dropLive(error);
+      },
       ended: () => {
         if (turn.throttled) clearTimeout(turn.throttled);
         input.onSteerReady?.(undefined);
         this.releaseSteers(turn);
         this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
-        // ACP defines the answer to session/prompt as the end of the turn: a
-        // tool call it left unsettled is not waited for (agents do leave some,
-        // and waiting would hold a background turn open for the whole ceiling).
-        // Anything the agent reports about it later opens a background turn.
-        this.pendingTools.clear();
+        // An unsettled tool call belongs to the still-live vendor, even
+        // after its parent request ends. Route its later events into the
+        // worker's background turn and keep the process alive until it ends.
+        if (this.live && this.pendingTools.size && this.openBackground('background-work')) return;
+        this.clearPending();
       },
     });
   }
 
   protected clearPending(): void {
     this.pendingTools.clear();
+    this.pendingAgents.clear();
   }
+
+  protected hasActiveSubagents(): boolean { return this.pendingAgents.size > 0; }
 
   protected pendingCount(): number {
     // Cleared at each answer (see `ended` above): between turns only tools a
@@ -511,11 +518,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   }
 
   /** Open a background turn for the agent's out-of-turn updates. */
-  private openBackground(): BackgroundRun | undefined {
+  private openBackground(reason: 'vendor-turn' | 'background-work' = 'vendor-turn'): BackgroundRun | undefined {
     return this.openBackgroundRun(() => {
-      const channel = new BackgroundTurnChannel('acp', 'vendor-turn');
+      const channel = new BackgroundTurnChannel('acp', reason);
       return { channel, observer: channel.observer, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
-    });
+    }, (watchdog) => { for (const id of this.pendingTools.keys()) watchdog.toolStarted(id); });
   }
 
   private ensureLive(input: AcpTurnInput, argv: readonly string[]): LiveAgent {
@@ -888,12 +895,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!id) return;
     if (toolSettled(update)) {
       this.pendingTools.delete(id);
+      this.pendingAgents.delete(id);
       target?.watchdog?.toolFinished(id);
       if (target && target === this.turn && this.pendingTools.size === 0) {
         this.steerPause(this.turn);
       }
     } else if (update.sessionUpdate === 'tool_call' ? toolRunning(update) : update.status === 'in_progress' || update.status === 'pending') {
       if (!this.pendingTools.has(id)) this.pendingTools.set(id, String(update.title ?? 'tool'));
+      if (acpActivityEvent(update)?.agent) this.pendingAgents.add(id);
       target?.watchdog?.toolStarted(id);
     }
   }

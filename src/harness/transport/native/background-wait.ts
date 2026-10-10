@@ -49,6 +49,8 @@ export interface BackgroundWait {
   noteInput(): void;
   /** Main-agent background tasks still running. */
   readonly pending: number;
+  /** An Agent task, or the follow-up turn owed after one finished. */
+  readonly agentWork: boolean;
   /** Whether stdin is to be held open right now. */
   readonly settled: boolean;
   /** Between turns: no turn open and no follow-up owed. Tasks may still run. */
@@ -76,6 +78,8 @@ const DEFAULT_GRACE_MS = 30_000;
 export function createBackgroundWait(options: BackgroundWaitOptions): BackgroundWait {
   const graceMs = options.graceMs ?? DEFAULT_GRACE_MS;
   const tasks = new Map<string, string>();
+  const agents = new Set<string>();
+  let hadAgent = false;
   const notOurs = new Set<string>();
   let turnOpen = true;
   let followUpOwed = false;
@@ -86,6 +90,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
   const clear = (timer: NodeJS.Timeout | undefined): undefined => { if (timer) clearTimeout(timer); return undefined; };
   const finish = (id: string, status: string): boolean => {
     if (!tasks.delete(id)) return false;
+    agents.delete(id);
     options.onTaskFinished?.(id, status);
     return true;
   };
@@ -104,7 +109,8 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
     timer.unref();
     return timer;
   };
-  const track = (id: string, description: string): void => {
+  const track = (id: string, description: string, agent = false): void => {
+    if (agent) { agents.add(id); hadAgent = true; }
     if (tasks.has(id) || notOurs.has(id)) return;
     tasks.set(id, description);
     options.onTaskStarted?.(id, description);
@@ -123,12 +129,9 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
       }
       if (type === 'result') {
         turnOpen = false;
-        // A failed turn is over whatever is still running: the turn loop is
-        // about to fail over or report, and nothing will read a follow-up.
-        if (value.is_error === true) {
-          for (const id of [...tasks.keys()]) finish(id, 'abandoned');
-          followUpOwed = false;
-        } else if (options.resultGraceMs !== undefined && tasks.size > 0) {
+        // A failed parent request does not end the tasks it started. Keep
+        // stdin open for their notifications and follow-up before failover.
+        if (options.resultGraceMs !== undefined && tasks.size > 0) {
           resultTimer = clear(resultTimer);
           resultTimer = setTimeout(() => {
             resultTimer = undefined;
@@ -145,7 +148,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
       const id = typeof value.task_id === 'string' ? value.task_id : undefined;
       if (subtype === 'task_started' && id) {
         if (value.is_backgrounded === true && value.owned_by_subagent !== true) {
-          track(id, typeof value.description === 'string' ? value.description : 'background task');
+          track(id, typeof value.description === 'string' ? value.description : 'background task', value.task_type === 'local_agent');
         } else notOurs.add(id);
         return;
       }
@@ -155,7 +158,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
           const task = entry && typeof entry === 'object' ? entry as Json : undefined;
           if (typeof task?.task_id !== 'string') continue;
           listed.add(task.task_id);
-          track(task.task_id, typeof task.description === 'string' ? task.description : 'background task');
+          track(task.task_id, typeof task.description === 'string' ? task.description : 'background task', task.task_type === 'local_agent');
         }
         // Gone from the list: its notification is due any moment. If it never
         // comes, stop waiting for it rather than holding the turn forever.
@@ -186,6 +189,7 @@ export function createBackgroundWait(options: BackgroundWaitOptions): Background
       turnOpen = true;
     },
     get pending() { return tasks.size; },
+    get agentWork() { return hadAgent && (agents.size > 0 || turnOpen || followUpOwed); },
     get settled() { return settled; },
     get quiet() { return !turnOpen && !followUpOwed; },
     dispose() {

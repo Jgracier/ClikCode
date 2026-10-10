@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createBackgroundWait, streamJsonUserMessage } from './background-wait.js';
-import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, stopHeldVendorProcess, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
+import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, stopHeldVendorProcess, waitForHeldVendorSubagents, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
 import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease } from './turn.js';
 import { reportStructuredLine } from '../../events/structured.js';
 import { createStreamState } from '../../events/adapters.js';
@@ -25,9 +25,17 @@ const claude = { command: 'claude', parser: 'claude-stream-json' } as unknown as
 
 /** Stand-in claude: the head up to the first result at once, the rest after
  * `delayMs` (never, when null) unless stdin closed first; exits when stdin ends. */
-const vendor = (delayMs: number | null, ignoresEnd = false): string[] => {
-  const head = records.slice(0, firstResult).map((record) => JSON.stringify(record));
-  const tail = records.slice(firstResult).map((record) => JSON.stringify(record));
+const vendor = (delayMs: number | null, ignoresEnd = false, asAgent = false, failed = false): string[] => {
+  const timeline = records.map((record) => {
+    if (asAgent && (record.subtype === 'task_started' || record.subtype === 'background_tasks_changed')) {
+      const tasks = Array.isArray(record.tasks) ? record.tasks.map((task: Json) => ({ ...task, task_type: 'local_agent' })) : undefined;
+      return { ...record, ...(tasks ? { tasks } : {}), ...(record.subtype === 'task_started' ? { task_type: 'local_agent' } : {}) };
+    }
+    if (failed && record.type === 'result' && record === records[firstResult - 1]) return { ...record, is_error: true, subtype: 'error_during_execution' };
+    return record;
+  });
+  const head = timeline.slice(0, firstResult).map((record) => JSON.stringify(record));
+  const tail = timeline.slice(firstResult).map((record) => JSON.stringify(record));
   return ['-e', `
     const head = ${JSON.stringify(head)}, tail = ${JSON.stringify(tail)}, delay = ${JSON.stringify(delayMs)};
     let started = false, closed = false;
@@ -42,7 +50,7 @@ const vendor = (delayMs: number | null, ignoresEnd = false): string[] => {
 };
 
 /** The turn loop's side, as the vendor turn wires it. */
-async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = false) {
+async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = false, asAgent = false, failed = false) {
   const input = createTurnInput();
   const idle = createTurnIdleController();
   const release = createTurnRelease();
@@ -52,13 +60,13 @@ async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = f
   const streams = new WeakMap<object, ReturnType<typeof createStreamState>>();
   const started = Date.now();
   const output = await captureNativeHarnessTurn(
-    { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs, ignoresEnd), {}, {
+    { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs, ignoresEnd, asAgent, failed), {}, {
       stdinText: streamJsonUserMessage('go'), input, idleController: idle, idleTimeoutMs: 10_000, release,
       onStdoutLine: (line) => {
         const record = JSON.parse(line) as Json;
         if (held) { held.line(line, record); return; }
         background.note(record);
-        if (record.type === 'result' && record.is_error !== true && background.pending > 0 && background.quiet) {
+        if (record.type === 'result' && background.pending > 0 && background.quiet) {
           held = holdVendorProcess({
             sessionId, background, release, endInput: () => input.end(), handler: (turn) => { turns.push(turn); },
             report: (text, observer, parsed) => {
@@ -74,6 +82,19 @@ async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = f
 }
 
 describe('a Claude turn that leaves background tasks running', () => {
+  it('holds a subagent through a failed parent reply and lets it finish before release', async () => {
+    const { turns } = await runTurn('held-agent', 400, false, true, true);
+    expect(hasHeldVendorProcess('held-agent')).toBe(true);
+    let finished = false;
+    const waiting = waitForHeldVendorSubagents('held-agent').then(() => { finished = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(finished).toBe(false);
+    await waiting;
+    expect(turns).toHaveLength(1);
+    expect((await turns[0]!.finished).ended).toBe('completed');
+    await vi.waitFor(() => expect(hasHeldVendorProcess('held-agent')).toBe(false), { timeout: 5000 });
+  });
+
   it('ends at the first result, and the follow-up arrives as a background turn', async () => {
     const { output, turns, elapsedMs } = await runTurn('held-a', 400);
     expect(output.exitCode).toBe(0);

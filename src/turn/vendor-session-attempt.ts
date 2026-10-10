@@ -189,12 +189,11 @@ export async function runVendorSessionAttempt(input: {
       }
     }
   } catch (error) {
-    // After a failed turn the child's protocol state is unknown. A cancel is
-    // not a failure: the transport asked the vendor to stop and either saw it
-    // settle (the child stays, resumable) or killed the child itself
-    // (persistent-session.ts settleCancel). Closing here as well respawned the
-    // vendor and every MCP server it starts on each stop.
-    if (persistent && !isTurnCancelled(error)) await closePersistentTransport(session.id);
+    // The parent request can fail while an Agent call or shell it started is
+    // still running. Keep that child alive so the work and its transcript can
+    // finish before the turn retries or moves to another account. A cancel
+    // already has its own settle path in PersistentSession.
+    if (persistent && !isTurnCancelled(error) && !await persistent.session.backgroundWorkRunning()) await closePersistentTransport(session.id);
     throw error;
   }
   return result;
