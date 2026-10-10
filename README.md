@@ -60,6 +60,10 @@ registry, install the same release from GitHub:
 For VS Code (and VSCodium, Cursor, Windsurf), the **ClikCode** extension
 (`clikcode.clikcode`, on the Visual Studio Marketplace and Open VSX) puts the
 same chats in a panel beside your code; it runs the ClikCode you installed.
+The same slash commands work there. Its chat bar shows the account's usage and,
+where turns report a price, what the chat has cost so far ("$1.23 this chat").
+Right-click a file, in the editor or the explorer, for **Open the Conversation
+That Edited This File**.
 
 Requires **Node.js 22.12 or newer**. Nothing to configure. You do not need any
 of the coding tools installed first: choose one — to sign in, or as the tool for
@@ -135,13 +139,13 @@ by accident. (In the composer it moves the cursor, as you would expect.)
 | Key | What it does |
 | --- | --- |
 | **→** | Open the command list, or select what is highlighted |
-| **←** | Back, one level |
+| **←** | Back, one level. On an empty message line, the conversation board: what is running, and what you can resume |
 | **↑ ↓** | Move through a list; in an empty composer, your previous messages |
-| **Enter** | Send, or confirm the highlighted row. While an answer runs, what you type goes into it or waits for it to end (`/send`); Enter again with nothing typed stops the answer and sends what is waiting now |
+| **Enter** | Send, or confirm the highlighted row. While an answer runs, what you type is steered into it at its next pause or waits for it to end (`/send steer\|queue`); Enter again with nothing typed puts the waiting message into the answer now, which keeps running |
 | **Tab** | Complete the highlighted command |
 | **Delete** | In a picker, the destructive action on a row — remove an account, delete a conversation |
-| **Esc** | Stop the current answer, keeping what you typed (if you have scrolled back, the first press returns to the live end). Closes the command list and clears its filter |
-| **Ctrl+C** | Stop the answer. On a draft, clears it; twice within two seconds exits |
+| **Esc** | While an answer runs: back to the live end if you have scrolled up; otherwise your newest waiting message comes back to edit; with none waiting, a prompt not answered yet comes back to edit, and an answer already under way stops. Otherwise closes the command list and clears its filter |
+| **Ctrl+C** | Stop the answer (one with nothing in it yet gives your prompt back, unless you have typed something). On a draft, clears it; twice within two seconds exits |
 | **Ctrl+D** | Exit, on an empty line |
 | **Ctrl+Z** | Drop to a shell; `fg` brings you back |
 | **Ctrl+L** | Redraw the fullscreen view if a terminal loses or garbles cells; keeps the chat and draft |
@@ -165,21 +169,18 @@ That is what makes the rest possible — running out only survives if there is
 somewhere else to go.
 
 Each account gets its own directory under `~/.clikcode/profiles/`, and
-ClikCode points the tool at it using that vendor's own supported setting —
-`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `COPILOT_HOME`, `GEMINI_CLI_HOME`,
-`QWEN_HOME` and so on — for
-one child process at a time. Nothing global changes, and the `~/.claude`,
-`~/.codex` logins you already had are untouched.
+ClikCode points the tool at it for one child process at a time. Nine tools
+have a supported setting for that — `CLAUDE_CONFIG_DIR` (Claude Code),
+`CODEX_HOME`, `COPILOT_HOME`, `GEMINI_CLI_HOME`, `QWEN_HOME`,
+`PI_CODING_AGENT_DIR`, `HERMES_HOME`, `OPENCLAW_STATE_DIR` and `VIBE_HOME`
+(Mistral Vibe). Nothing global changes, and the `~/.claude`, `~/.codex` logins
+you already had are untouched.
 
-Nine tools work this way today: Claude Code, Codex, GitHub Copilot, Gemini
-CLI, Qwen Code, Antigravity, Pi, Hermes and Command Code. The rest hold one
-account each — usually an API key — added with `clikcode accounts add`.
-
-Two of the nine, Antigravity and Command Code, have no such setting, so
-ClikCode points `HOME` elsewhere for that one process instead. On its own that
-would also hide your git, npm, GitHub CLI, Docker, GnuPG, Cargo, rustup and ssh-agent
-configuration from the agent, so ClikCode points those back at your real home.
-Turns still commit, push and install as you.
+The other twenty have no such setting, so ClikCode points `HOME` elsewhere for
+that one process instead. On its own that would also hide your git, npm, GitHub
+CLI, Docker, GnuPG, Cargo, rustup and ssh-agent configuration from the agent,
+so ClikCode points those back at your real home. Turns still commit, push and
+install as you.
 
 Switch by hand with `/account` in a session, or
 `clikcode sessions set <id> --account <label>`.
@@ -224,9 +225,12 @@ command: `/provider` to pick from a list, or its name directly — `/claude`,
 ```
 
 The conversation keeps its name, its history and its place in your list. No
-vendor can read another vendor's memory, so the new tool is sent the
-conversation so far as context. On a long thread that costs tokens and a few
-seconds. Nothing else changes.
+vendor can read another vendor's memory, so ClikCode writes the conversation
+into the new tool's own thread where it knows that tool's format, and sends it
+as context where it does not. When a tool has already summarized the opening
+turns (a compaction), the summary goes in their place; `/history` and
+`/export` show it, and the conversation's row says "first N turns summarized".
+On a long thread that costs tokens and a few seconds. Nothing else changes.
 
 ## One MCP server, whichever tool you choose
 
@@ -240,6 +244,8 @@ clikcode mcp targets                        # how each harness would receive it
 clikcode mcp add postgres -- npx -y pg-mcp  # record it; install on choose
 clikcode mcp list                           # what is recorded, and which harnesses have it
 clikcode mcp remove postgres                # forget it, and take ClikCode's copies back out
+clikcode mcp login <name>                   # OAuth sign-in to a remote server, for ClikCode's own agent
+clikcode mcp logout <name>                  # forget that sign-in
 ```
 
 `mcp remove` takes out only the copies ClikCode itself wrote. A server you
@@ -250,6 +256,12 @@ directly, exactly as it would if you had configured it by hand. Skills follow
 the same rule. Hooks are never copied: Claude Code and Grok already run
 Claude's hook files themselves, and every other harness uses its own hook
 format, so ClikCode leaves those alone.
+
+Claude Code's plugins (skills, commands, agents, hooks, MCP servers) can be
+used by ClikCode's own agent too. `clikcode plugin list` shows the plugins
+installed for Claude Code and whether ClikCode uses each;
+`clikcode plugin enable <plugin>` and `disable <plugin>` choose. Installing a
+plugin stays Claude Code's job.
 
 ## Everyday commands
 
@@ -263,12 +275,18 @@ when you would rather type than pick.
 | `clikcode accounts providers` | Every supported tool and how it signs in |
 | `clikcode accounts login <tool> [--label <label>]` | Run that tool's own login, kept separate from your others |
 | `clikcode accounts list` / `status` / `logout` / `remove` | Your accounts: what they are called, and what is left on each |
-| `clikcode models`, `clikcode usage` | Models you can pick, and how much each account has left |
-| `clikcode sessions list` / `show` / `create` / `open` / `resume` / `send` / `set` / `close` | Your conversations, including ones a tool started on its own |
-| `clikcode send <prompt> [--chat <id\|name\|last>] [--harness <tool>] [--model <model>]` | Send one message without opening a session: a new chat, or continue one |
+| `clikcode models` | The models your local accounts offer |
+| `clikcode usage` | The calls and tokens ClikCode recorded, every one (what is left on each account is `accounts list`) |
+| `clikcode sessions list` / `show` / `create` / `resume` (also `open`) / `send` / `command` / `set` / `close` | Your conversations, including ones a tool started on its own; `command <id> <slash…>` runs a slash command on one |
+| `clikcode send <prompt> [--chat <id\|name\|last>] [--harness <tool>] [--model <model>] [--permissions <mode>]` | Send one message without opening a session: a new chat, or continue one |
+| `clikcode search <words>` | Find the conversations that mention something, any provider, most mentions first; `--json` gives each hit and its first mention |
 | `clikcode logs [--session <id>] [--role <role>] [--since 10m] [-f]` | What every ClikCode window, worker and editor bridge did, in order; the first place to look when something went wrong |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
-| `clikcode gateway login [--github]` / `gateway status` | ClikDeploy Gateway sign-in (Google by default) |
+| `clikcode mcp add` / `list` / `remove` / `login` / `logout` / `targets` | One MCP server for every tool (below) |
+| `clikcode plugin list` / `enable <plugin>` / `disable <plugin>` | Which of Claude Code's plugins ClikCode's own agent uses |
+| `clikcode acp add <command> <binary> [-- <flags>]` / `acp list` / `acp remove` | An ACP agent the catalog does not ship |
+| `clikcode start` / `status` / `stop` | The optional local control API (below) |
+| `clikcode gateway login [--github]` / `gateway status` / `gateway models` | ClikDeploy Gateway sign-in (Google by default), and the models it offers |
 | `clikcode gateway usage [--days N]` | Your AI use and credit as ClikDeploy Gateway records it: every call, by surface and model |
 | `clikcode gateway credit [--amount USD]` | Add AI credit: opens a Stripe checkout ($5–$500). Paying it also saves your card for automatic top-ups when credit runs low |
 | `clikcode gateway credit --auto-topup on\|off` | Turn those automatic top-ups on or off |
@@ -283,37 +301,51 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list. Six are pinned at the top, in the order
-people reach for them: pick a tool, pick an account on it, resume a
-conversation, change the model, start over, change what needs your approval.
+Pressing `/` opens a searchable list of ClikCode's 46 commands. Ten are pinned
+at the top, in the order people reach for them: resume a conversation, pick a
+tool, an account on it, then its model, start over, change what needs your
+approval, then settings, sessions, status and help. (The terminal leaves
+`/resume` out of the list — ← on an empty line is the conversation board — so
+it pins nine; typed, `/resume` still works.)
 
 | Command | What it does |
 | --- | --- |
+| `/resume` | resume another conversation |
 | `/provider` | choose a provider |
 | `/account [label]` | switch accounts |
-| `/resume` | resume another conversation |
 | `/model [name]` | choose or set a model |
 | `/new [first message]` | start a fresh conversation (the current one stays resumable) |
 | `/permissions [ask\|bypass\|auto]` | approval behavior |
+| `/settings` | configure this workspace (below) |
+| `/sessions` | manage conversations |
+| `/status` | current configuration |
+| `/help` (also `/?`) | all commands |
 
 `/help` lists every command grouped by topic instead of by frequency, since a
-reference reads better that way. The remaining ~35 commands, grouped as
-`/help` groups them:
+reference reads better that way. All of them, grouped as `/help` groups them:
 
 **Conversation**
 
 | Command | What it does |
 | --- | --- |
 | `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
-| `/compact [focus]` | summarize the conversation and continue in a fresh native session |
-| `/history` | show this conversation |
+| `/compact [focus]` | summarize the conversation and continue in a fresh native session (a vendor tool; ClikCode's own agent compacts by itself) |
+| `/history` | show this conversation; a summary carried for its opening turns comes first |
+| `/hindsight` | this conversation cut into topics, newest first, with the files each one changed, numbered by your prompts — the numbers `/fork @N` and `/redo @N` take |
 | `/copy` | copy the last answer |
 | `/export [path]` | write the transcript as markdown |
-| `/redo [@N] [keep]` | go back to before one of your prompts and send it again; that turn's file edits and every later one's are put back (unless `keep`), and a file changed since is left alone and named. ClikCode's agent restores its own snapshots; a vendor harness's edits are reversed from the diffs it reported (not on the plain-text CLIs, Aider and Continue). Shell-command changes are not tracked. |
+| `/changes [N\|path]` | each turn's file edits, newest first; `N` shows that turn's diff. With a path, every turn in any conversation that edited that file, newest first: pick one and its conversation opens at that turn (↑↓ to the others) |
+| `/redo [@N] [keep]` | go back to before one of your prompts and send it again, edited or not; that turn's file edits and every later one's are put back (unless `keep`), and a file changed since is left alone and named. The conversation as it was is archived beside it. ClikCode's agent restores its own snapshots; a vendor harness's edits are reversed from the diffs it reported (not on the plain-text CLIs, Aider and Continue). What a shell command changed is put back only for ClikCode's agent, and only files tracked in the git repository. To undo a turn, `/redo` to before it and leave the prompt unsent; there is no separate undo command |
 | `/native <text>` (also `//text`) | send text straight to the tool, unchanged |
 | `/select` | release the mouse so you can select and copy text |
 | `/redraw` | repaint the screen |
 | `/exit` (also `/quit`) | save and leave |
+
+Every turn's file changes are recorded for the whole conversation, so
+`/changes`, `/hindsight` and `/redo` reach back to its first turn. The record
+of an old turn keeps its files and line counts, but once a conversation's log
+passes 2 MiB the oldest turns' diff text is dropped; such a turn is listed,
+not reversed.
 
 **Workspace**
 
@@ -325,15 +357,14 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | `/diff` | changes against HEAD, staged included, plus untracked files |
 | `/cwd [dir]` | show or change the working directory |
 | `/add-dir <dir>` | let the tool write in another directory too |
-| `/mention [path]` | attach a file to the next request |
-| `/attachments [clear]` | queued files; `clear` empties them |
+| `/mention [path\|clear]` (also `/attachments`) | attach a file to the next request; alone, list what is attached; `clear` empties it |
 
 **Provider**
 
 | Command | What it does |
 | --- | --- |
 | `/provider` (also `/switch`) | choose a provider |
-| `/account [label\|login\|add\|remove]` (also `/accounts`) | switch, add or remove accounts |
+| `/account [label\|login\|add\|remove …]` (also `/accounts`) | switch, add or remove accounts |
 | `/login` | sign in to the current provider |
 | `/logout` | sign the current account out |
 | `/gateway` | route this conversation through ClikDeploy Gateway |
@@ -343,22 +374,30 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | Command | What it does |
 | --- | --- |
 | `/model [name]` | choose or set a model |
-| `/models` | list models configured on local accounts |
 | `/effort [level]` | reasoning level |
+| `/swarm [on\|off]` | swarm for this chat: while on, a task is handed to another of your accounts when it can do it for less, and small ones stay here. Off unless turned on |
+| `/fast [on\|off]` | on ClikDeploy Gateway, serve from the fastest provider of the model instead of the cheapest |
 | `/permissions [ask\|bypass\|auto]` | approval behavior |
+| `/sandbox [on\|off]` | ClikCode's own agent: its shell commands write only the workspace, temp and caches (on by default) |
 | `/send [steer\|queue]` | messages typed mid-turn: steer them into the running turn at its next pause (where the agent takes steering; elsewhere they queue, and say so), or queue them for after it. Global; bare `/send` shows the two |
 | `/options` | provider-specific modes and controls |
 | `/capabilities` | what the selected provider supports |
-| `/settings [route\|account\|model\|effort\|permissions\|option\|global\|provider …]` | configure this workspace |
+| `/settings [tools\|route\|account\|model\|effort\|permissions\|option\|global\|provider …]` | configure this workspace. Bare, the settings screen; `tools` goes straight to MCP servers, skills and agents; `option <id> <value\|default>` sets one of the tool's own options; `global <effort\|permissions\|send> <value>` and `provider <id> <model\|effort\|permissions> <value>` (or `provider <id> clear`) set defaults |
+
+**Plan mode** is a row in `/settings`: read-only, plan and change nothing. On
+Claude Code and ClikCode's own agent it is kept on the chat until you approve
+the plan; GitHub Copilot, Cursor, Cline, Antigravity, Factory Droid (spec mode),
+Command Code and Auggie get it as their own option.
 
 **Sessions**
 
 | Command | What it does |
 | --- | --- |
 | `/sessions [list\|show\|open\|close <id>]` | manage conversations |
-| `/resume` | resume another conversation |
+| `/resume [name]` | resume another conversation (the board, or straight to the one a name picks out) |
+| `/search <words>` | open the conversation that mentions something most, at its first mention: ↑↓ walk the mentions, Tab the next conversation, Esc stays there |
 | `/rename [name]` | name this conversation |
-| `/fork [name]` | branch this conversation |
+| `/fork [@N] [name]` | branch this conversation, or only through your prompt N |
 | `/archive` | archive this conversation |
 | `/delete [confirm]` | delete this conversation |
 
@@ -368,7 +407,7 @@ reference reads better that way. The remaining ~35 commands, grouped as
 | --- | --- |
 | `/status` | current configuration |
 | `/context` | how much of the model's context this conversation is using |
-| `/usage` | quota, tokens, and cost for the provider you are in (`/cost` is the same command) |
+| `/usage [all]` (also `/cost`) | quota, tokens, and cost for the provider you are in, and this chat; `all` for every provider and the last seven days |
 | `/doctor` | check your installed tools and accounts |
 | `/help` (also `/?`) | all commands |
 
@@ -377,18 +416,21 @@ Gateway-managed setting on the ClikDeploy Gateway route — stays listed with a 
 (`unavailable · …`) instead of disappearing, so the palette always explains
 itself.
 
-Two shortcuts are not in the list but work anywhere. Typing a tool's name —
+Three shortcuts are not in the list but work anywhere. Typing a tool's name —
 `/claude`, `/codex` — hands the conversation to it, with your next message on
-the same line if you want. And `//` sends whatever follows straight to the
+the same line if you want. `//` sends whatever follows straight to the
 tool, unchanged, for the occasions when you want its own syntax rather than
-ClikCode's.
+ClikCode's. And `!<command>` runs a shell command here, its output going into
+the next request.
 
 Some tools bring commands of their own (`/mcp`, `/plugins`, …), and a few
 announce more mid-conversation. Those work when typed and appear in `/help`,
-but stay out of the pinned list so they don't read as ClikCode's. So do your
-own: drop a `*.md` prompt template in `.clikcode/commands/` for this project,
-or `~/.clikcode/commands/` for all of them, and it becomes a slash command
-named after the file.
+but stay out of the list so they don't read as ClikCode's. On ClikCode's own
+agent, `/mcp` lists its MCP servers, and `/mcp login <name>` and
+`/mcp logout <name>` sign it in and out of one. Your own commands work too:
+drop a `*.md` prompt template in `.clikcode/commands/` for this project, or
+`~/.clikcode/commands/` for all of them, and it becomes a slash command named
+after the file.
 
 ## Running without a vendor tool
 
@@ -408,6 +450,7 @@ Everything it owns is under `~/.clikcode`, readable only by you (directories
   index, usage records and the installation id
 - `secrets.json` — the local control API token and this device's key
 - `sessions/` — session records and history
+- `turn-changes/` — each conversation's per-turn file changes (`/changes`, `/redo`)
 - `profiles/<harness>/<account-id>/` — per-account vendor configuration roots
 - `runtime.json`, `runtime.lock` — present only while the control API is running
 - `crash.log` — uncaught errors
@@ -457,7 +500,7 @@ If you want to work on ClikCode itself:
 
 ```sh
 pnpm install
-pnpm build          # dist/index.js, dist/harness-catalog.cjs, dist/ai-router-runtime.cjs
+pnpm build          # dist/index.js (the entry), cli.js, conversations-mcp.js, harness-catalog.cjs, ai-router-runtime.cjs
 pnpm build:analyze  # + bundle report: top inputs by bytes, runtime packages
 pnpm build:strict   # + fail on a missing or extra runtime dependency
 pnpm type-check     # tsc over src/ and over packages/clikrouter
@@ -484,10 +527,11 @@ Three packages, one lockfile:
   `pnpm --dir packages/vscode type-check`, `test`, `run package` and, in a real
   VS Code, `test:integration`.
 
-`dist/index.js` inlines the small pure-JS dependencies (chalk, commander, conf,
+`dist/cli.js` inlines the small pure-JS dependencies (chalk, commander, conf,
 cross-spawn, marked) so startup is a single file read, which is why the
-published package declares a single runtime dependency (`yaml`) — a property
-the build asserts rather than assumes. The version reported by `--version` is
+published package declares only the runtime dependencies it loads
+(`@huggingface/gguf`, `yaml`) — a property the build asserts rather than
+assumes. The version reported by `--version` is
 injected at build time from `package.json`.
 
 Releases are published by ClikDeploy, not by hand or by CI: `package.json`
