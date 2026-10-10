@@ -53,7 +53,6 @@ export async function runVendorSessionAttempt(input: {
     session.nativeSessionId = undefined;
     delete session.nativeSessionPreallocated;
   }
-  const declaredOptions = localHarnessCapabilityManifest(harness).options;
   // Codex steers at once; ACP may hold a message until no tool call is open
   // (acp-client.ts). Recorded under the id the composer shows it by, so the
   // durable steer matches its row by identity.
@@ -70,33 +69,16 @@ export async function runVendorSessionAttempt(input: {
     : undefined;
   try {
     if (transport === 'codex-app-server') {
-      const overrides = appServerThreadOverrides(declaredOptions, session.harnessOptions);
+      const launch = codexLaunchInput({ harness, session, model, effort, environment });
       // The user's own option going unapplied is theirs to know -- once per
       // chat and set of options, not as a note on every turn.
-      const ignored = overrides.unmapped.join(', ');
+      const ignored = launch.unmapped.join(', ');
       if (ignored && ignoredOptionsSaid.get(session.id) !== ignored) {
         ignoredOptionsSaid.set(session.id, ignored);
         prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${ignored}`));
       }
-      const swarmConfig = swarmIsOn(session) ? swarmCodexConfig(session.id) : {};
-      const configOverrides = {
-        ...(overrides.configOverrides ? overrides.configOverrides : {}),
-        ...swarmConfig,
-      };
       const codexInput: CodexAppServerTurnInput = {
-        binary: harness.binary, prompt: turnText, nativeSessionId: session.nativeSessionId,
-        cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
-        images, environment, signal, onSessionId,
-        ...(Object.keys(configOverrides).length ? { configOverrides } : {}),
-        ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
-        // Codex reports its own quota on this connection during the turn,
-        // which is the same figure codexUsageProbe otherwise spawns a whole
-        // second app-server to ask for.
-        onRateLimits: (rateLimits) => {
-          // The structured reading (not just its label) so the windows'
-          // resetsAt survives into account.usage for the reset-time line.
-          void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
-        },
+        ...launch.input, prompt: turnText, images, signal, onSessionId,
         ...sharedObserver,
         onSteerReady,
       };
@@ -226,4 +208,46 @@ export function prepareAcpStandby(input: {
   const launch = acpLaunchInput(input);
   return openStandby(input.session.id, input.account.id, 'acp', vendorChildKey(input.harness, input.account, input.environment, input.session.workspace),
     async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); }).ready;
+}
+
+/** What a Codex app-server turn is launched and opened with, for a turn and
+ * for a failover's standby alike (see acpLaunchInput). `unmapped`: the
+ * chat's own options the app-server has no place for. */
+function codexLaunchInput(input: {
+  harness: AiLocalHarnessDefinition; session: HarnessSession; model: string | null; effort?: string; environment: Record<string, string>;
+}): { input: Omit<CodexAppServerTurnInput, 'prompt'>; unmapped: readonly string[] } {
+  const { harness, session, model, effort, environment } = input;
+  const overrides = appServerThreadOverrides(localHarnessCapabilityManifest(harness).options, session.harnessOptions);
+  const configOverrides = {
+    ...(overrides.configOverrides ? overrides.configOverrides : {}),
+    ...(swarmIsOn(session) ? swarmCodexConfig(session.id) : {}),
+  };
+  return {
+    unmapped: overrides.unmapped,
+    input: {
+      binary: harness.binary, nativeSessionId: session.nativeSessionId,
+      cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask', environment,
+      ...(Object.keys(configOverrides).length ? { configOverrides } : {}),
+      ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
+      // Codex reports its own quota on this connection during the turn,
+      // which is the same figure codexUsageProbe otherwise spawns a whole
+      // second app-server to ask for.
+      onRateLimits: (rateLimits) => {
+        // The structured reading (not just its label) so the windows'
+        // resetsAt survives into account.usage for the reset-time line.
+        void recordDerivedUsage(session, codexRateLimitsReading(rateLimits)).catch(() => undefined);
+      },
+    },
+  };
+}
+
+/** The Codex counterpart of prepareAcpStandby: the account's thread resumed
+ * on a standby app-server, up to turn/start. */
+export function prepareCodexStandby(input: {
+  harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string;
+  environment: Record<string, string>;
+}): Promise<boolean> {
+  const launch = codexLaunchInput(input).input;
+  return openStandby(input.session.id, input.account.id, 'codex-app-server', vendorChildKey(input.harness, input.account, input.environment, input.session.workspace),
+    async (child) => { await (child as CodexSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); }).ready;
 }

@@ -39,7 +39,7 @@ import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
 import { turnEnvironment } from './turn-environment.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
-import { prepareAcpStandby, runVendorSessionAttempt } from './vendor-session-attempt.js';
+import { prepareAcpStandby, prepareCodexStandby, runVendorSessionAttempt } from './vendor-session-attempt.js';
 import { vendorWindows } from '../harness/accounts/usage-reading.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
@@ -524,7 +524,7 @@ export async function sendVendorTurn(input: {
     // agent started and the thread loaded while this attempt runs. A refusal
     // then hands over without a cold start, which for Claude is seconds of
     // starting a session and connecting every MCP server.
-    if (transport === 'acp' && run.persistentTransports && !standbyOpened && nearUsageLimit(account)) {
+    if ((transport === 'acp' || transport === 'codex-app-server') && run.persistentTransports && !standbyOpened && nearUsageLimit(account)) {
       standbyOpened = true;
       const next = nextUsableFailoverAccount(state, account, (item) => turnBackendForAccount(item) === 'vendor', new Map());
       const threadReady = !next ? false : !session.nativeSessionId || session.nativeSessionPreallocated ? true
@@ -542,9 +542,13 @@ export async function sendVendorTurn(input: {
             builtins: [...(conversations ? [conversations] : []), ...(!swarmRidesTurn(harness) && swarmEntry ? [swarmEntry] : [])],
           });
           lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8) });
+          const standbyEnvironment = { ...turnEnvironment(harness, standbyFor, permission), CLIKCODE_SESSION_ID: session.id };
+          if (transport === 'codex-app-server') {
+            await prepareCodexStandby({ harness, account: standbyFor, session, model, effort: turnEffort(), environment: standbyEnvironment });
+            return;
+          }
           await prepareAcpStandby({
-            harness, account: standbyFor, session, model, effort: turnEffort(),
-            environment: { ...turnEnvironment(harness, standbyFor, permission), CLIKCODE_SESSION_ID: session.id },
+            harness, account: standbyFor, session, model, effort: turnEffort(), environment: standbyEnvironment,
             mcpServers: conversationsForAcpSession(conversations, ready.mcpSkipped,
               { CLIKCODE_SESSION_ID: session.id, ...(process.env.CLIKCODE_HOME ? { CLIKCODE_HOME: process.env.CLIKCODE_HOME } : {}) }),
           });

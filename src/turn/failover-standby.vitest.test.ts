@@ -42,7 +42,7 @@ vi.mock('../harness/transport/select.js', async (importOriginal) => ({
 vi.mock('./turn-environment.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('./turn-environment.js')>(), turnEnvironment: () => ({}),
 }));
-vi.mock('./vendor-session-attempt.js', () => ({ runVendorSessionAttempt: attempt.run, prepareAcpStandby: attempt.prepare }));
+vi.mock('./vendor-session-attempt.js', () => ({ runVendorSessionAttempt: attempt.run, prepareAcpStandby: attempt.prepare, prepareCodexStandby: attempt.prepare }));
 
 const { sendVendorTurn } = await import('./vendor-turn.js');
 const { openStandby, persistentTransportFor, vendorChildKey, closePersistentTransport } = await import('./vendor-process.js');
