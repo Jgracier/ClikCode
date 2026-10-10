@@ -145,6 +145,8 @@ export interface GatewayHarnessTurnInput {
    * makes mid-turn (ask -> bypass while a turn is running) applies to the rest
    * of that turn, not only the next one. Absent = `permissionMode` throughout. */
   currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
+  /** The bash tool's OS sandbox (sandbox.ts). Absent = off. */
+  sandbox?: import('./sandbox.js').SandboxMode;
   planMode?: boolean;
   modelClient: ModelClient;
   /** Before each model step. A returned client is the one that step calls.

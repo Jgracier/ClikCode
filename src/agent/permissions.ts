@@ -224,6 +224,12 @@ export async function buildApprovalPrompt(
   return { title: `Approve ${tool.label(args)}`, detail: [...paths.map((entry) => path.resolve(ctx.cwd, entry)), ...(described ? [described] : []), ...(unavailable ? [unavailable] : []), `why: ${reason}`].join('\n'), ...(diff?.length ? { diff } : {}) };
 }
 
+/** The one prompt the sandbox adds: rerun a command it refused, outside it.
+ * Never remembered as a rule; the next refusal asks again. */
+export function unsandboxedApprovalPrompt(command: string, cwd: string): ApprovalPrompt {
+  return { title: 'Run outside the sandbox?', detail: [command, '', `cwd: ${cwd}`, 'why: the workspace sandbox refused a write outside the workspace; this runs the command once without it'].join('\n') };
+}
+
 // ── persisted rules ──────────────────────────────────────────────────────────
 
 function permissionSettingsPath(cwd: string): string {

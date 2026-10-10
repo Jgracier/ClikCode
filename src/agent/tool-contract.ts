@@ -29,6 +29,11 @@ export interface ToolContext {
   net?: NetworkSeams;
   /** The model answering this step can see images (ModelClient.acceptsImages). */
   acceptsImages?: boolean;
+  /** The bash tool's OS sandbox (sandbox.ts). Absent = off. */
+  sandbox?: import('./sandbox.js').SandboxMode;
+  /** Asks the user, in permission mode `ask` only, to run one command the
+   * sandbox refused again without it. Absent or false: the model gets a hint. */
+  approveUnsandboxed?(command: string): Promise<boolean>;
   /** Runs a `task` sub-agent under this call. Absent inside a sub-agent. */
   runSubagent?(request: SubagentCall): Promise<ToolRunResult>;
 }
