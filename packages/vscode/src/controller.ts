@@ -91,14 +91,28 @@ export class ClikCodeController implements vscode.Disposable {
 
   attach(surface: WebviewSurface): vscode.Disposable {
     this.surfaces.add(surface);
+    this.visibilityChanged();
     return new vscode.Disposable(() => {
       this.surfaces.delete(surface);
+      this.visibilityChanged();
       for (const [id, owner] of [...this.panelQuestions]) {
         if (owner !== surface) continue;
         this.panelQuestions.delete(id);
         this.bridge?.send({ type: 'ui-response', id, result: { cancelled: true } });
       }
     });
+  }
+
+  /** What the bridge was last told of `visible`: only a chat on screen
+   * polls its usage (ide/protocol.ts `visible`). */
+  private shownToBridge: boolean | undefined;
+
+  /** A surface was shown, hidden, attached or closed. */
+  visibilityChanged(): void {
+    const visible = this.visible;
+    if (!this.bridge || visible === this.shownToBridge) return;
+    this.shownToBridge = visible;
+    this.bridge.send({ type: 'visible', visible });
   }
 
   /** The surface one-off messages go to: the focused one, else the most
@@ -328,6 +342,8 @@ export class ClikCodeController implements vscode.Disposable {
     try {
       await ready;
       if (this.bridge !== bridge) return;
+      this.shownToBridge = undefined;
+      this.visibilityChanged();
       const resume = sessionToResume ?? this.model.sessionId ?? (this.first?.mode === 'resume' ? this.first.sessionId : undefined);
       const mode = resume ? 'resume' : this.first?.mode ?? settings.get<'continue' | 'new'>('startWith') ?? 'continue';
       await bridge.call({ type: 'open', workspace: this.workspaceFolder(), mode, ...(resume ? { sessionId: resume } : {}), features: IDE_FEATURES }).catch(async (error: unknown) => {

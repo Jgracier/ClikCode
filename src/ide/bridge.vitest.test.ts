@@ -226,3 +226,27 @@ describe('the editor bridge running a `!` line', () => {
   });
 });
 
+
+describe('the editor bridge polling usage', () => {
+  it('polls only while the editor shows the chat, and catches up when it is shown again', () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+      const refresh = vi.fn(async () => undefined);
+      (bridge as unknown as { refreshUsage: () => Promise<void> }).refreshUsage = refresh;
+      bridge.start();
+      vi.advanceTimersByTime(15_000);
+      expect(refresh, 'shown until the editor says otherwise').toHaveBeenCalledTimes(1);
+      bridge.handle({ type: 'visible', visible: false });
+      vi.advanceTimersByTime(60_000);
+      expect(refresh).toHaveBeenCalledTimes(1);
+      bridge.handle({ type: 'visible', visible: true });
+      expect(refresh).toHaveBeenCalledTimes(2);
+      vi.advanceTimersByTime(15_000);
+      expect(refresh).toHaveBeenCalledTimes(3);
+      for (const timer of (bridge as unknown as { timers: NodeJS.Timeout[] }).timers) clearInterval(timer);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

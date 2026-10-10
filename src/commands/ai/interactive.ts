@@ -313,6 +313,10 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   // newer build.
   usageInterval = terminal ? setInterval(() => {
     noteNewerBuild();
+    // Only a terminal being looked at asks: every open window asking every
+    // 15 s was a vendor process and an index write per account, per window.
+    // The first tick after focus comes back catches up.
+    if (terminal.lookedAway()) return;
     void readState({ transcripts: [] }).then((latestState) => {
       const latest = latestState.sessions.find((item) => item.id === id);
       if (latest) refreshUsage(latest, latestState);

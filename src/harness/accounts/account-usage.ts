@@ -1,6 +1,7 @@
 /** The account-facing answer: given an account, what is its usage and what
  * should it say on screen. */
 
+import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { nativeProfileEnvironment } from '../transport/profile-environment.js';
 import { localHarnessForProvider } from '../../runtime/lazy-bridge.js';
@@ -206,9 +207,30 @@ export function accountsDueForUsageRecheck(
 /** Re-read every account that is due (see above). Each probe stamps the
  * shared clock, publishes its reading and clears a refusal it overtakes, so
  * every terminal's /accounts, status line and failover see the quota the
- * moment it is back. */
-export async function recheckRecoveredAccounts(state: HarnessState, now: number = Date.now()): Promise<void> {
-  for (const account of accountsDueForUsageRecheck(state, now)) {
-    await accountUsageReading(account, state, { network: true }).catch(() => undefined);
-  }
+ * moment it is back.
+ *
+ * One pass at a time per process, and each account is judged again on the
+ * index as it is just before its probe: a pass over thirty held accounts
+ * outlasts the 15 s tick that starts it, and every open window ran one. Each
+ * re-asked what another pass (its own earlier one, another window's) had just
+ * read -- a vendor process and a full index write per account, several times
+ * a second while nothing was happening. */
+export function recheckRecoveredAccounts(state: HarnessState, options: {
+  now?: number;
+  /** Tests: the probe, and which accounts can be probed. */
+  ask?: (account: AiHarnessAccount, latest: HarnessState) => Promise<unknown>;
+  canBeAsked?: (account: AiHarnessAccount) => boolean;
+} = {}): Promise<void> {
+  const ask = options.ask ?? ((account, latest) => accountUsageReading(account, latest, { network: true }));
+  const canBeAsked = options.canBeAsked ?? accountUsageCanBeAsked;
+  rechecking ??= (async () => {
+    for (const due of accountsDueForUsageRecheck(state, options.now, canBeAsked)) {
+      const latest = await readState({ transcripts: [] });
+      const account = latest.accounts.find((item) => item.id === due.id);
+      if (!account || !accountsDueForUsageRecheck({ ...latest, accounts: [account] }, Date.now(), canBeAsked).length) continue;
+      await ask(account, latest).catch(() => undefined);
+    }
+  })().finally(() => { rechecking = undefined; });
+  return rechecking;
 }
+let rechecking: Promise<void> | undefined;
