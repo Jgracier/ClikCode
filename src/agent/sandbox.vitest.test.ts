@@ -100,7 +100,7 @@ describe.skipIf(process.platform !== 'linux')('a missing sandbox tool', () => {
     const ctx = contextFor(dir);
     const first = await bashTool.run({ command: 'echo one' }, ctx);
     expect(first.isError).toBeFalsy();
-    expect(first.output).toBe('[sandbox: bubblewrap (bwrap) is not installed, so commands in this session run unsandboxed]\none');
+    expect(first.output).toBe('[sandbox: bubblewrap (bwrap) is not installed or cannot run here, so commands in this session run unsandboxed]\none');
     expect((await bashTool.run({ command: 'echo two' }, ctx)).output).toBe('two');
     disposeSessionState(dir, ctx.session.sessionId, 'test over');
   });
