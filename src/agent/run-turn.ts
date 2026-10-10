@@ -245,7 +245,11 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let ledger = emptyLedger();
   let lastStepUsage: TokenUsage | undefined;
   let itemsAtLastUsage = items.length;
-  let contextWindow = input.contextWindow;
+  // The window the model client reported is the one compaction measures against: the same figure a
+  // switch sized the conversation it handed over to (agent-history.ts). Falling to the 128k default
+  // here compacted a 1M-window Gateway model on its first step (MEASURED 2026-10-10: 458 turns
+  // seeded for Opus 5.5, compaction before the model answered).
+  let contextWindow = input.contextWindow ?? input.modelClient.contextHints?.contextWindow;
   let servedModel: string | undefined;
   const segments: string[] = [];
   let needsSeparator = false;

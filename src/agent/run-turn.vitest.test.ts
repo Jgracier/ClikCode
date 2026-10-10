@@ -601,6 +601,23 @@ describe('runGatewayHarnessTurn', () => {
     ]);
   });
 
+  it("does not compact a long history that fits the window the model client reports", async () => {
+    // ~250k tokens already in the conversation (a switch onto a Gateway model seeds it): past the
+    // 128k default's threshold, well inside the 1M window this client reports.
+    const phases: string[] = [];
+    const h = harness([{ text: 'answered' }], { onPhase: (phase) => phases.push(phase) });
+    Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
+    const store = path.join(stateDir, 'sessions', h.input.sessionId);
+    await fs.mkdir(store, { recursive: true });
+    const turn = 'x'.repeat(10_000);
+    const lines = Array.from({ length: 100 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: turn } }));
+    await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result.stopReason).toBe('completed');
+    expect(phases).not.toContain('compacting context');
+    expect(h.client.requests).toHaveLength(1);
+  });
+
   it('compacts when the reported context passes 80% of the window', async () => {
     await fs.writeFile(path.join(cwd, 'big.txt'), `${'line of filler text\n'.repeat(400)}`);
     const phases: string[] = [];
