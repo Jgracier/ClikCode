@@ -8,9 +8,10 @@ import { classifyCommand } from '../command-classifier.js';
 import { OUTPUT_CAPS, redactSecrets, scrubEnvironment, toolOutputDir } from '../security.js';
 import { queueShellNotification, type BackgroundShell } from '../session-state.js';
 import { turnCancelledError } from '../cancellation.js';
-import { defineTool, type ToolContext } from '../tool-contract.js';
+import { defineTool, type ToolContext, type ToolRunResult } from '../tool-contract.js';
 import { scopeOf } from './fs-helpers.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
+import { sandboxCommand, sandboxDenialHint, sandboxMissingNotice } from '../sandbox.js';
 
 interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string }
 
@@ -24,6 +25,20 @@ const NOTIFICATION_TAIL_CHARS = 2000;
 function shellInvocation(command: string): { file: string; args: string[] } {
   if (process.platform === 'win32') return { file: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] };
   return { file: existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', args: ['-c', command] };
+}
+
+/** The shell invocation, inside the session's sandbox when it has one on.
+ * `notice` is the once-a-session line saying no sandbox is installed. */
+function sandboxedInvocation(command: string, ctx: ToolContext): { file: string; args: string[]; sandboxed: boolean; writable: string[]; notice?: string } {
+  const shell = shellInvocation(command);
+  if (ctx.sandbox !== 'workspace') return { ...shell, sandboxed: false, writable: [] };
+  const wrapped = sandboxCommand(ctx.sandbox, shell, { cwd: ctx.cwd, addDirs: ctx.addDirs, homeDir: ctx.homeDir });
+  let notice: string | undefined;
+  if (!wrapped.sandboxed && wrapped.missing && !ctx.session.sandboxNoticeShown) {
+    ctx.session.sandboxNoticeShown = true;
+    notice = sandboxMissingNotice(wrapped.missing);
+  }
+  return { ...wrapped.invocation, sandboxed: wrapped.sandboxed, writable: wrapped.writable, ...(notice ? { notice } : {}) };
 }
 
 function shellEnvironment(): Record<string, string> {
@@ -104,7 +119,7 @@ export function stopBackgroundShell(shell: BackgroundShell, reason: string): voi
 
 function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
   const detached = process.platform !== 'win32';
-  const { file, args: argv } = shellInvocation(args.command);
+  const { file, args: argv, notice } = sandboxedInvocation(args.command, ctx);
   // stdin is a pipe so bash_input can answer a prompt or drive a REPL. A
   // foreground command keeps 'ignore': nothing could ever type into it.
   const child = spawnPortable(file, argv, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['pipe', 'pipe', 'pipe'], detached, windowsHide: true });
@@ -135,7 +150,7 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
     });
   });
   ctx.session.shells.set(id, shell);
-  return { output: `Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, end your turn if there is nothing else to do, or use wait (shell_ids ["${id}"]) to continue in this turn once it exits. bash_output (id "${id}") reads its output so far; bash_input types into it; kill_bash stops it.` };
+  return { output: `${notice ? `${notice}\n` : ''}Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, end your turn if there is nothing else to do, or use wait (shell_ids ["${id}"]) to continue in this turn once it exits. bash_output (id "${id}") reads its output so far; bash_input types into it; kill_bash stops it.` };
 }
 
 export const bashTool = defineTool<BashArgs>({
@@ -161,38 +176,53 @@ export const bashTool = defineTool<BashArgs>({
     if (args.run_in_background) return startBackground(args, ctx);
 
     const timeoutMs = Math.min(Math.max(args.timeout_ms ?? BASH_DEFAULT_TIMEOUT_MS, 1), BASH_MAX_TIMEOUT_MS);
-    const detached = process.platform !== 'win32';
-    const { file, args: argv } = shellInvocation(args.command);
-    const spillTarget = path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${(ctx.callId ?? `call-${Date.now()}`).replace(/[^A-Za-z0-9._-]/g, '_')}.log`);
-    const output = new CappedOutput(spillTarget, ctx.outputCap);
-    return new Promise((resolve, reject) => {
-      const child = spawnPortable(file, argv, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], detached, windowsHide: true });
-      let timedOut = false;
-      let pending: Promise<void> = Promise.resolve();
-      const onData = (chunk: string): void => {
-        pending = pending.then(() => output.push(chunk)).catch(() => undefined);
-        try { ctx.emitOutput?.(chunk); } catch { /* a UI fault must not break the command */ }
-      };
-      const timer = setTimeout(() => { timedOut = true; killTree(child, detached); }, timeoutMs);
-      const abort = (): void => killTree(child, detached);
-      ctx.signal?.addEventListener('abort', abort, { once: true });
-      child.stdout!.setEncoding('utf8').on('data', onData);
-      child.stderr!.setEncoding('utf8').on('data', onData);
-      const cleanup = (): void => { clearTimeout(timer); ctx.signal?.removeEventListener('abort', abort); };
-      child.once('error', (error) => { cleanup(); resolve({ output: `Failed to start the shell: ${error.message}`, isError: true }); });
-      child.once('close', (code, signal) => {
-        cleanup();
-        void pending.then(() => output.finish()).then((text) => {
-          if (ctx.signal?.aborted) return reject(turnCancelledError());
-          const body = redactSecrets(text).replace(/\s+$/, '');
-          if (timedOut) return resolve({ output: `${body}\n\n[timed out after ${Math.round(timeoutMs / 1000)}s; the process group was killed. For long-running work use run_in_background.]`.trim(), isError: true });
-          const status = code === 0 ? '' : `\n\n[exit code ${code ?? `signal ${signal}`}]`;
-          resolve({ output: `${body || '(no output)'}${status}`, isError: code !== 0, ...(code !== null ? { exitCode: code } : {}) });
-        }, reject);
-      });
-    });
+    const callName = (ctx.callId ?? `call-${Date.now()}`).replace(/[^A-Za-z0-9._-]/g, '_');
+    const invocation = sandboxedInvocation(args.command, ctx);
+    const result = await runForeground(invocation, timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}.log`), ctx);
+    const hint = invocation.sandboxed && result.isError && !result.timedOut ? sandboxDenialHint(result.output, invocation.writable) : undefined;
+    if (hint && await ctx.approveUnsandboxed?.(args.command)) {
+      const rerun = await runForeground(shellInvocation(args.command), timeoutMs, path.join(toolOutputDir(ctx.stateDir, ctx.sessionId), `${callName}-unsandboxed.log`), ctx);
+      return withNote(rerun, '[sandbox: refused inside the sandbox; run again outside it with the user\'s approval]');
+    }
+    return withNote(withNote(result, invocation.notice), hint, 'after');
   },
 });
+
+function withNote({ timedOut: _timedOut, ...result }: ToolRunResult & { timedOut?: boolean }, note: string | undefined, where: 'before' | 'after' = 'before'): ToolRunResult {
+  if (!note) return result;
+  return { ...result, output: where === 'before' ? `${note}\n${result.output}` : `${result.output}\n${note}` };
+}
+
+function runForeground(invocation: { file: string; args: string[] }, timeoutMs: number, spillTarget: string, ctx: ToolContext): Promise<ToolRunResult & { timedOut?: boolean }> {
+  const detached = process.platform !== 'win32';
+  const output = new CappedOutput(spillTarget, ctx.outputCap);
+  return new Promise((resolve, reject) => {
+    const child = spawnPortable(invocation.file, invocation.args, { cwd: ctx.cwd, env: shellEnvironment(), stdio: ['ignore', 'pipe', 'pipe'], detached, windowsHide: true });
+    let timedOut = false;
+    let pending: Promise<void> = Promise.resolve();
+    const onData = (chunk: string): void => {
+      pending = pending.then(() => output.push(chunk)).catch(() => undefined);
+      try { ctx.emitOutput?.(chunk); } catch { /* a UI fault must not break the command */ }
+    };
+    const timer = setTimeout(() => { timedOut = true; killTree(child, detached); }, timeoutMs);
+    const abort = (): void => killTree(child, detached);
+    ctx.signal?.addEventListener('abort', abort, { once: true });
+    child.stdout!.setEncoding('utf8').on('data', onData);
+    child.stderr!.setEncoding('utf8').on('data', onData);
+    const cleanup = (): void => { clearTimeout(timer); ctx.signal?.removeEventListener('abort', abort); };
+    child.once('error', (error) => { cleanup(); resolve({ output: `Failed to start the shell: ${error.message}`, isError: true }); });
+    child.once('close', (code, signal) => {
+      cleanup();
+      void pending.then(() => output.finish()).then((text) => {
+        if (ctx.signal?.aborted) return reject(turnCancelledError());
+        const body = redactSecrets(text).replace(/\s+$/, '');
+        if (timedOut) return resolve({ output: `${body}\n\n[timed out after ${Math.round(timeoutMs / 1000)}s; the process group was killed. For long-running work use run_in_background.]`.trim(), isError: true, timedOut: true });
+        const status = code === 0 ? '' : `\n\n[exit code ${code ?? `signal ${signal}`}]`;
+        resolve({ output: `${body || '(no output)'}${status}`, isError: code !== 0, ...(code !== null ? { exitCode: code } : {}) });
+      }, reject);
+    });
+  });
+}
 
 interface ShellIdArgs { id: string }
 

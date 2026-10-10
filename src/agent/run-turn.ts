@@ -6,7 +6,7 @@ import { ConversationStore } from './conversation.js';
 import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { claudeToolName } from './hooks.js';
-import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, parsePermissionRules, suggestPermissionRule, visibleTools } from './permissions.js';
+import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, parsePermissionRules, suggestPermissionRule, unsandboxedApprovalPrompt, visibleTools } from './permissions.js';
 import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview, type PathScope } from './security.js';
 import { formatShellNotifications, sessionState, takeShellNotifications } from './session-state.js';
@@ -315,6 +315,15 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     outputCap: toolOutputCap(contextWindow, profile.toolOutputBytes),
     ...(stepAcceptsImages ? { acceptsImages: true } : {}),
     ...(input.onPlan ? { onPlan: input.onPlan } : {}), ...(input.net ? { net: input.net } : {}),
+    ...(input.sandbox === 'workspace' ? { sandbox: input.sandbox } : {}),
+    // Only where the user is asked anyway: other modes get the model a hint.
+    ...(input.sandbox === 'workspace' && onApproval ? {
+      approveUnsandboxed: async (command: string): Promise<boolean> => {
+        if (await permissionModeNow() !== 'ask') return false;
+        const prompt = unsandboxedApprovalPrompt(command, cwd);
+        return !!(await abortable(queueApproval(() => { input.onPhase?.('waiting for approval'); return onApproval(prompt.title, prompt.detail); }), signal));
+      },
+    } : {}),
     ...(runSubagent ? { runSubagent: (request: SubagentCall) => runSubagent({ ...request, callId, ...(signal ? { signal } : {}) }) } : {}),
   });
 

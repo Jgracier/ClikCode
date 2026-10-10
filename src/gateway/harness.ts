@@ -120,6 +120,7 @@ export async function runGatewayHarnessSessionTurn(
     // runs in the worker: read the mode back before each tool call so a switch
     // (ask -> bypass) applies to the rest of this turn.
     currentPermissionMode: async () => (await loadIndex())?.sessions.find((item) => item.id === session.id)?.permissionMode,
+    ...(session.sandbox === 'workspace' ? { sandbox: 'workspace' as const } : {}),
     modelClient,
     ...(input.modelClientForStep ? { modelClientForStep: input.modelClientForStep } : {}),
     stateDir,

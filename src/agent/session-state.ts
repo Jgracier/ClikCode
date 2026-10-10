@@ -49,6 +49,8 @@ export interface HarnessSessionState {
    * the user's next message is the answer. */
   pendingQuestion?: string;
   nextShellNumber: number;
+  /** The "no sandbox installed" notice has been given (sandbox.ts): once a session. */
+  sandboxNoticeShown?: boolean;
   /** Finished background shells the model has not been told about yet. */
   readonly notifications: ShellNotification[];
   /** Called after each notification is queued. The worker sets it to start a

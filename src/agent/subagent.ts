@@ -136,6 +136,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
         permissionMode: parent.permissionMode,
         ...(parent.currentPermissionMode ? { currentPermissionMode: parent.currentPermissionMode } : {}),
         ...(parent.permissionRules ? { permissionRules: parent.permissionRules } : {}),
+        ...(parent.sandbox ? { sandbox: parent.sandbox } : {}),
         modelClient: parent.modelClient,
         ...(parent.modelClientForStep ? { modelClientForStep: parent.modelClientForStep } : {}),
         stateDir: parent.stateDir,
