@@ -818,6 +818,9 @@ export class ClikCodeController implements vscode.Disposable {
       case 'signInCancel':
         this.bridge?.send({ type: 'sign-in-cancel', id: message.id });
         return;
+      case 'signInAnswer':
+        this.bridge?.send({ type: 'sign-in-answer', id: message.id, text: message.text });
+        return;
       case 'log':
         this.host.log.appendLine(`[${this.label} page] ${message.text}`);
         return;

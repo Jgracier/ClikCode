@@ -397,6 +397,8 @@ textarea::placeholder { color: var(--vscode-input-placeholderForeground); }
 .install-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; background: var(--subtle); display: flex; flex-direction: column; gap: 6px; }
 .install-text { display: flex; align-items: center; gap: 8px; }
 .signin-code { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.signin-key { display: flex; gap: 6px; align-items: center; }
+.signin-key input { flex: 1; min-width: 0; font: inherit; padding: 4px 8px; border-radius: var(--radius-small); border: 1px solid var(--vscode-input-border, var(--border)); background: var(--input); color: var(--vscode-input-foreground); }
 .signin-code code { font-size: 1.25em; letter-spacing: 0.08em; font-weight: 600; user-select: all; }
 .progress { height: 3px; border-radius: 2px; background: var(--vscode-progressBar-background); opacity: 0.25; position: relative; overflow: hidden; }
 .progress.indeterminate { opacity: 1; background: color-mix(in srgb, var(--vscode-progressBar-background) 25%, transparent); }

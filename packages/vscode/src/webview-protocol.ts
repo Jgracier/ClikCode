@@ -98,6 +98,8 @@ export type FromWebview =
   | { type: 'openLink'; href: string }
   /** Stop the link sign-in the card shows. */
   | { type: 'signInCancel'; id: string }
+  /** The key typed into a sign-in card's key row. */
+  | { type: 'signInAnswer'; id: string; text: string }
   /** Open the sign-in card's link again. */
   | { type: 'signInOpen'; url: string }
   | { type: 'openFile'; path: string; line?: number }

@@ -66,6 +66,8 @@ export type IdeRequest =
   | { type: 'sign-in-result'; id: string; error?: string }
   /** Stop the link sign-in a `sign-in-link` event is showing. */
   | { type: 'sign-in-cancel'; id: string }
+  /** What was typed into the key row a `sign-in-link` offered (its `ask`). */
+  | { type: 'sign-in-answer'; id: string; text: string }
   /** Data for the editor's own screens. Only `slash-commands` before
    * revision 2 (a bridge from then answers every query with the command list,
    * so an editor checks `ready.revision` before asking for anything else). */
@@ -288,8 +290,10 @@ export type IdeEvent =
   | { type: 'sign-in'; id: string; name: string; spec: string; environment: Record<string, string> }
   /** A link sign-in running in the bridge: show the link and code, open the
    * link, and offer `sign-in-cancel`. Sent again if the code arrives later;
-   * `done` when it is over, however it ended. */
-  | { type: 'sign-in-link'; id: string; name: string; url?: string; code?: string; done?: boolean }
+   * `done` when it is over, however it ended. `ask`: a key it takes
+   * instead, offered as a row on the card (answered by `sign-in-answer`) --
+   * the terminal's hint line under the link, never a sheet over it. */
+  | { type: 'sign-in-link'; id: string; name: string; url?: string; code?: string; done?: boolean; ask?: { prompt: string; secret?: boolean } }
   | { type: 'open-file'; path: string }
   | { type: 'usage'; label?: string; reset?: string }
   /** /copy: put this on the editor's clipboard (`copy` feature). */

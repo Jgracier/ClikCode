@@ -180,7 +180,7 @@ export interface ChatModel {
   approvals: Approval[];
   busy?: string;
   /** A sign-in the bridge is running: its card shows the link and code. */
-  signIn?: { id: string; name: string; url?: string; code?: string };
+  signIn?: { id: string; name: string; url?: string; code?: string; ask?: { prompt: string; secret?: boolean } };
   /** A message typed during the turn and what became of it. */
   submissions: Array<{ id: string; text: string; disposition?: string; unsteered?: boolean }>;
   /** Read by the extension after each change of conversation. */
@@ -612,7 +612,7 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
       return { ...model, busy: event.label };
     case 'sign-in-link':
       if (event.done) return model.signIn?.id === event.id ? { ...model, signIn: undefined } : model;
-      return { ...model, signIn: { id: event.id, name: event.name, ...(event.url ? { url: event.url } : {}), ...(event.code ? { code: event.code } : {}) } };
+      return { ...model, signIn: { id: event.id, name: event.name, ...(event.url ? { url: event.url } : {}), ...(event.code ? { code: event.code } : {}), ...(event.ask ? { ask: event.ask } : {}) } };
     case 'notice':
       return withNote(model, { kind: 'notice', level: event.level, text: stripAnsi(event.message) });
     case 'panel':

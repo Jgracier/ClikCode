@@ -562,10 +562,12 @@ function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['con
 }
 
 /** A sign-in in progress: its link opened in the browser and its code to
- * confirm there, once the vendor gives one; questions it asks come up as
- * sheets over it. Cancel ends it. Nothing is typed into a terminal. */
+ * confirm there, once the vendor gives one; a key it takes instead as a row
+ * under them (the terminal's hint line under the link); questions it asks
+ * come up as sheets over it. Cancel ends it. Nothing is typed into a terminal. */
 function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): JSX.Element {
   const [copied, setCopied] = useState(false);
+  const [key, setKey] = useState('');
   return (
     <div class="install-card signin-link" role="status" id="sign-in-link">
       <div class="install-text"><Icon name="key" /> {signIn.url ? `Sign in to ${signIn.name} in your browser` : `Signing in to ${signIn.name}…`}</div>
@@ -578,6 +580,13 @@ function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): J
             <Icon name={copied ? 'check' : 'copy'} />
           </button>
         </div>
+      ) : null}
+      {signIn.ask ? (
+        <form class="signin-key" onSubmit={(event) => { event.preventDefault(); if (!key.trim()) return; post({ type: 'signInAnswer', id: signIn.id, text: key.trim() }); setKey(''); }}>
+          <input id="sign-in-key" type={signIn.ask.secret ? 'password' : 'text'} value={key} placeholder={signIn.ask.prompt} aria-label={signIn.ask.prompt}
+            autocomplete="off" spellcheck={false} onInput={(event) => setKey((event.target as HTMLInputElement).value)} />
+          <button type="submit" class="secondary" disabled={!key.trim()}>Use key</button>
+        </form>
       ) : null}
       <div class="banner-actions">
         {signIn.url ? <button type="button" class="secondary" data-open onClick={() => post({ type: 'signInOpen', url: signIn.url! })}>Open the page again</button> : null}
