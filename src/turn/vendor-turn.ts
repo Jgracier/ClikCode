@@ -70,6 +70,14 @@ import { watchSwarmActivity } from '../swarm/spool.js';
 /** A vendor refusing the reasoning level itself, in the words the CLIs use. */
 const EFFORT_REJECTED = /\b(?:unknown|invalid|unsupported|not supported)\b[^\n]{0,40}\b(?:reasoning[ _-]?)?effort\b|\beffort\b[^\n]{0,40}\b(?:is not supported|not supported|unsupported|invalid)\b/i;
 
+/** A sign-in that was refused up front because nobody can do it here: a
+ * script or pipe answers the worker's sign-in request with "X is not signed
+ * in; run ... in a terminal" (worker/scripted-send.ts), and a worker with no
+ * window attached says "sign in to X needs an open ClikCode window". */
+export function signInNotPossibleHere(error: unknown): boolean {
+  return error instanceof Error && /is not signed in; run |needs an open ClikCode window/.test(error.message);
+}
+
 /** Whether a failed turn is the vendor refusing the reasoning level: an ACP
  * session that offers no such level (acp-client.ts), or a CLI saying so in
  * its message or stderr -- never read from a model's reply. */
@@ -332,6 +340,10 @@ export async function sendVendorTurn(input: {
       ? prompter.signIn({ command: harness.command, argv: signInArgv, environment, name: signInName })
       : withSignIn(prompter, signInName, () => loginNativeHarness(signIn, environment)))
       .then(() => true, (error: unknown) => {
+        // No one to sign in (a script, a worker with no window): nothing was
+        // attempted, so nothing "did not finish". The turn's own error says
+        // the account is not signed in, once.
+        if (signInNotPossibleHere(error)) return false;
         prompter?.activity(chalk.yellow(`sign-in to ${signInName} did not finish: ${error instanceof Error ? error.message : String(error)}`));
         return false;
       });
