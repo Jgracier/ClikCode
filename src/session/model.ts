@@ -16,6 +16,27 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
  * (turn/turn-activities.ts). */
 export type TurnActivity = { event: HarnessActivityEvent; responseOffset: number };
 
+/** What a turn kept besides its tool calls, in its own order (standard 4, 7,
+ * 8, 11): a settled thought, the plan, a notice, the outcome of an approval
+ * or question. Placed like a call -- `responseOffset` into the answer text
+ * when the row began, then `seq`, the worker's order of first sight -- so a
+ * reopened chat draws every one where it appeared live. Kept beside
+ * `activities` (never inside it), so a reader that does not know them is
+ * unaffected. Bounded (turn/turn-marks.ts). */
+export type TurnMark = { id: string; seq: number; responseOffset: number } & (
+  /** `heading`: the model's own `**heading**` when it wrote one. `text` is
+   * capped; the heading and the duration are not optional. */
+  | { kind: 'thought'; durationMs: number; heading?: string; text?: string }
+  /** Updated in place: one per turn, kept after every step is done. */
+  | { kind: 'plan'; entries: Array<{ content: string; status?: string; priority?: string }> }
+  | { kind: 'notice'; message: string }
+  | { kind: 'outcome'; outcome: 'approved' | 'denied' | 'answered'; label: string }
+);
+
+/** The thought being had when the journal was last written: settled into a
+ * `thought` mark when the turn goes on or is stopped. */
+export type OpenThought = { id?: string; text: string; heading?: string; seq: number; responseOffset: number; startedAtMs: number };
+
 /** A message of the conversation. `activities` only on an assistant message,
  * with `responseOffset` into this message's `content`; absent on anything
  * saved before they were kept (and on turns that called nothing).
@@ -24,6 +45,12 @@ export type TurnActivity = { event: HarnessActivityEvent; responseOffset: number
  * over later still learns what an earlier request was about. */
 export type TranscriptMessage = {
   role: 'user' | 'assistant'; content: string; activities?: TurnActivity[]; attachments?: string[];
+  /** On an assistant message: its thoughts, plan, notices and approval
+   * outcomes, offsets into `content` like `activities`. */
+  marks?: TurnMark[];
+  /** On a user message that was a steer: the worker's order of its
+   * acknowledgement (HarnessActivityEvent.seq). */
+  seq?: number;
   /** The steer this user message was, when it was typed into a running turn.
    *  The live copy and this one are the same message, matched by this id. */
   id?: string;
@@ -185,7 +212,13 @@ export interface HarnessSession {
     activities?: TurnActivity[];
     /** Additional user instructions accepted by a provider's active-turn
      * steering protocol. They are part of this turn, not future prompts. */
-    steers?: Array<{ text: string; submittedAt: string; responseOffset?: number; id?: string }>;
+    steers?: Array<{ text: string; submittedAt: string; responseOffset?: number; id?: string; seq?: number }>;
+    /** The turn's thoughts, plan, notices and approval outcomes so far,
+     * offsets into `response` (TurnMark). Absent on journals written before. */
+    marks?: TurnMark[];
+    /** The thought being had right now, so a turn stopped mid-thought still
+     * keeps it (checkpoint.ts stopPendingCalls). */
+    thought?: OpenThought;
     startedAt: string;
     updatedAt: string;
     outputStarted: boolean;
