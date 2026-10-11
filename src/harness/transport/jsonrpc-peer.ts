@@ -63,6 +63,30 @@ interface JsonRpcShutdownOptions {
   killMs?: number;
 }
 
+/** The vendor's own machine-readable failure kind in an error's `data`, so
+ * classification need not read prose: claude-agent-acp's `data.errorKind`
+ * (`authentication_failed`, `billing_error`, `budget_exhausted`, ...) and
+ * Codex's `codexErrorInfo` (a string such as `usageLimitExceeded`, or a tagged
+ * object `{httpConnectionFailed:{httpStatusCode:429}}`). `statusCode` is any
+ * HTTP status carried inside it. */
+export function jsonRpcStructuredKind(data: unknown): { errorKind?: string; statusCode?: number } {
+  if (!data || typeof data !== 'object') return {};
+  const record = data as Record<string, unknown>;
+  let errorKind: string | undefined;
+  let statusCode: number | undefined;
+  const direct = [record.errorKind, record.error_kind].find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  if (direct) errorKind = direct.trim();
+  const info = record.codexErrorInfo ?? record.codex_error_info;
+  if (!errorKind && typeof info === 'string' && info.trim()) errorKind = info.trim();
+  else if (info && typeof info === 'object') {
+    const [tag, body] = Object.entries(info as Record<string, unknown>)[0] ?? [];
+    if (!errorKind && tag) errorKind = tag;
+    const code = body && typeof body === 'object' ? (body as Record<string, unknown>).httpStatusCode ?? (body as Record<string, unknown>).http_status_code : undefined;
+    if (typeof code === 'number' && code >= 400 && code < 600) statusCode = code;
+  }
+  return { ...(errorKind ? { errorKind } : {}), ...(statusCode !== undefined ? { statusCode } : {}) };
+}
+
 /** What an error response's `data` says, when it says more than its message.
  *
  * Agents put the vendor's real refusal there and a generic line in `message`:
@@ -76,11 +100,11 @@ interface JsonRpcShutdownOptions {
  * read too, or a refused turn was just "Internal error" and no account
  * switch could follow. */
 export function jsonRpcErrorDetail(data: unknown): { reason?: string; statusCode?: number } {
-  const field = (name: 'message' | 'details'): string | undefined => {
+  const field = (name: 'message' | 'details' | 'error' | 'reason' | 'detail'): string | undefined => {
     const value = data && typeof data === 'object' ? (data as Record<string, unknown>)[name] : undefined;
     return typeof value === 'string' && value.trim() ? value.trim() : undefined;
   };
-  const text = typeof data === 'string' ? data.trim() : field('message') ?? field('details');
+  const text = typeof data === 'string' ? data.trim() : field('message') ?? field('details') ?? field('error') ?? field('reason') ?? field('detail');
   if (!text) return {};
   const leading = /^(\d{3})\b\s*/.exec(text);
   const body = leading ? text.slice(leading[0].length) : text;
@@ -97,11 +121,17 @@ export function jsonRpcErrorDetail(data: unknown): { reason?: string; statusCode
 
 class JsonRpcError extends Error {
   readonly statusCode?: number;
+  /** The vendor's structured failure kind (data.errorKind, codexErrorInfo);
+   * classifyAccountFailure reads it before any wording. */
+  readonly errorKind?: string;
   constructor(message: string, readonly rpcCode?: number, readonly data?: unknown) {
     const detail = jsonRpcErrorDetail(data);
+    const structured = jsonRpcStructuredKind(data);
     super(detail.reason && !message.includes(detail.reason) ? `${message}: ${detail.reason}` : message);
     this.name = 'JsonRpcError';
-    if (detail.statusCode !== undefined) this.statusCode = detail.statusCode;
+    const status = detail.statusCode ?? structured.statusCode;
+    if (status !== undefined) this.statusCode = status;
+    if (structured.errorKind) this.errorKind = structured.errorKind;
   }
 }
 

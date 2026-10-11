@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
 import type { ChildProcess } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { JsonRpcPeer, jsonRpcErrorDetail, panicMessage } from './jsonrpc-peer.js';
+import { JsonRpcPeer, jsonRpcErrorDetail, jsonRpcStructuredKind, panicMessage } from './jsonrpc-peer.js';
 
 class FakeChild extends EventEmitter {
   stdin = new PassThrough();
@@ -307,5 +307,18 @@ describe('an error response that explains itself in data', () => {
     expect(jsonRpcErrorDetail({ message: 'rate limited', retryAfter: 3 })).toEqual({ reason: 'rate limited' });
     expect(jsonRpcErrorDetail(undefined)).toEqual({});
     expect(jsonRpcErrorDetail({ stack: 'x' })).toEqual({});
+  });
+});
+
+describe('jsonRpcStructuredKind', () => {
+  it('reads claude-agent-acp errorKind and Codex codexErrorInfo', () => {
+    expect(jsonRpcStructuredKind({ errorKind: 'billing_error' })).toEqual({ errorKind: 'billing_error' });
+    expect(jsonRpcStructuredKind({ codexErrorInfo: 'usageLimitExceeded' })).toEqual({ errorKind: 'usageLimitExceeded' });
+    expect(jsonRpcStructuredKind({ codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 429 } } })).toEqual({ errorKind: 'httpConnectionFailed', statusCode: 429 });
+    expect(jsonRpcStructuredKind('text')).toEqual({});
+    expect(jsonRpcStructuredKind(undefined)).toEqual({});
+  });
+  it('reads error/reason fields as detail', () => {
+    expect(jsonRpcErrorDetail({ reason: 'Not signed in' })).toEqual({ reason: 'Not signed in' });
   });
 });

@@ -155,6 +155,15 @@ export function nativeTurnResult(harness: AiLocalHarnessDefinition, stdout: stri
       const declared = [...fields].map((key) => record[key]).find((child): child is string => typeof child === 'string' && Boolean(child.trim()));
       if (declared) errorMessage ??= declared.trim();
     }
+    // pi (--mode json) exits 0 on a failed model call: the provider's 429,
+    // auth or billing error stays on the assistant message as
+    // {stopReason:"error", errorMessage:"..."} (print-mode.js).
+    if (!toolScoped && record.stopReason === 'error' && typeof record.errorMessage === 'string' && record.errorMessage.trim()
+      && (record.role === undefined || record.role === 'assistant')) {
+      isError = true;
+      errorRecord = current;
+      errorMessage = record.errorMessage.trim();
+    }
     if (typeof record.api_error_status === 'number') statusCode = record.api_error_status;
     else if (typeof record.status === 'number' && record.status >= 400) statusCode = record.status;
     if (!toolScoped && typeof record.error === 'string' && record.error.trim()) errorMessage = record.error.trim();
