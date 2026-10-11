@@ -80,3 +80,23 @@ it("reads a command's output and exit code from claude-agent-acp's terminal exte
   expect(acpActivityEvent({ sessionUpdate: 'tool_call_update', toolCallId: 'b', status: 'failed', _meta: { terminal_exit: { terminal_id: 'b', exit_code: 2, signal: null } } }))
     .toMatchObject({ kind: 'tool-error', exitCode: 2 });
 });
+
+it('reads the parent call of a sub-agent update from every shape an ACP agent publishes, not only Claude\'s', async () => {
+  const { acpActivityEvent, acpParentToolId } = await import('./acp-client.js');
+  const call = (extra: Record<string, unknown>) => ({ sessionUpdate: 'tool_call', toolCallId: 'grep-1', title: 'grep TODO', kind: 'search', status: 'in_progress', ...extra });
+  const shapes: Record<string, Record<string, unknown>> = {
+    // Qwen Code: tool_call._meta.{parentToolCallId, subagentType} (its own conformance fixture "subagent-nesting").
+    'qwen _meta.parentToolCallId': { _meta: { parentToolCallId: 'task-1', subagentType: 'code-reviewer' } },
+    'snake_case _meta': { _meta: { parent_tool_call_id: 'task-1' } },
+    'parent_tool_use_id in _meta': { _meta: { parent_tool_use_id: 'task-1' } },
+    'under a vendor namespace': { _meta: { grok: { parent_tool_call_id: 'task-1' } } },
+    'on the update itself': { parentToolCallId: 'task-1' },
+    'Claude (claude-agent-acp)': { _meta: { claudeCode: { parentToolUseId: 'task-1' } } },
+  };
+  for (const [name, extra] of Object.entries(shapes)) {
+    expect(acpParentToolId(call(extra)), name).toBe('task-1');
+    expect(acpActivityEvent(call(extra))?.parentId, name).toBe('task-1');
+  }
+  // Nothing published, nothing invented: the call's own input is not a parent.
+  expect(acpActivityEvent(call({ rawInput: { parentToolCallId: 'x' }, _meta: { terminal_output: true } }))?.parentId).toBeUndefined();
+});

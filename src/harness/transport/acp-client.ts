@@ -134,12 +134,33 @@ function acpThoughtDelta(update: Json): string | undefined {
     ? update.content.text : undefined;
 }
 
-/** The tool call a sub-agent's update belongs to: claude-agent-acp's
- * `_meta.claudeCode.parentToolUseId` (stamped on the sub-agent's tool calls,
- * prose and thinking). */
+/** The field names agents use for "this update belongs to that tool call":
+ * claude-agent-acp's `claudeCode.parentToolUseId`, Qwen Code's
+ * `_meta.parentToolCallId` (+ `subagentType`), and the snake_case forms of
+ * both. Read from the update itself, its `_meta`, or one vendor namespace
+ * inside `_meta` -- never from `rawInput`, which is the call's own argument. */
+const PARENT_KEYS = ['parentToolUseId', 'parentToolCallId', 'parent_tool_use_id', 'parent_tool_call_id'] as const;
+
+function parentIn(record: unknown): string | undefined {
+  if (!record || typeof record !== 'object') return undefined;
+  for (const key of PARENT_KEYS) {
+    const value = (record as Json)[key];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
+}
+
+/** The tool call a sub-agent's update belongs to (stamped on the sub-agent's
+ * tool calls, prose and thinking), whichever agent says so. */
 export function acpParentToolId(update: Json): string | undefined {
-  const parent = update?._meta?.claudeCode?.parentToolUseId;
-  return typeof parent === 'string' && parent ? parent : undefined;
+  const meta = update?._meta && typeof update._meta === 'object' ? update._meta as Json : undefined;
+  const direct = parentIn(update) ?? parentIn(meta);
+  if (direct || !meta) return direct;
+  for (const namespace of Object.values(meta)) {
+    const nested = parentIn(namespace);
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined {
