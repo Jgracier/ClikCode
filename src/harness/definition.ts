@@ -11,7 +11,7 @@ import type {
   AiHarnessPermissionMode, AiHarnessTransport, AiHarnessTurnDefinition, AiKeyProvider, AiKeyProviderId, AiLocalHarnessDefinition,
 } from '@clikcode/router/ai-local-harness';
 export type {
-  AiCustomAcpHarnessInput, AiHarnessAcpDefinition, AiHarnessAcpLaunch, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessInstallStep,
+  AiCustomAcpHarnessInput, AiHarnessAcpDefinition, AiHarnessAcpLaunch, AiHarnessAuthKind, AiHarnessCapabilityManifest, AiHarnessFlowCapabilities, AiHarnessInstallStep,
   AiHarnessInstaller, AiHarnessIntegrationLevel, AiHarnessKeyRoute, AiHarnessOptionDefinition, AiHarnessPermissionMode, AiHarnessTransport,
   AiKeyProvider, AiKeyProviderId, AiLocalHarnessDefinition,
 } from '@clikcode/router/ai-local-harness';
