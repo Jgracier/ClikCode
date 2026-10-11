@@ -341,6 +341,36 @@ function acpPermissionPlan(mode: AiHarnessPermissionMode, params: Json): AcpPerm
   };
 }
 
+/** What an agent answers a prompt with when it is still busy with an earlier
+ * one (Hermes: "Queued for the next turn. (1 queued)", "Stopped") -- a notice,
+ * not an answer. ClikCode queues nothing at the agent, so a reply that is only
+ * this is the cancelled turn still alive in the process. "Stopped" is read so
+ * only straight after a cancel: otherwise it may be what the agent meant. */
+export function vendorBusyNotice(text: string, afterCancel: boolean): boolean {
+  const plain = text.trim().replace(/^[^\w]+/, '');
+  if (/^queued for the next turn\.?(?:\s*\(\d+ queued\))?\.?$/i.test(plain)) return true;
+  return afterCancel && /^(?:stopped|interrupted|cancelled|canceled)\.?$/i.test(plain);
+}
+
+/** Lines an agent prints as it starts, not as it fails ("[acp] starting ACP
+ * mode over stdio..."). Read as the failure, Cline's refusal of an empty
+ * balance showed as this banner. */
+const STARTUP_BANNER = /^\s*(?:\[acp\]|(?:info|debug|trace)\b|.*\bstarting (?:acp|the agent|agent)\b|.*\blistening on\b)/i;
+const FAILURE_WORDS = /insufficient|balance|credit|quota|limit|unauthori[sz]ed|not logged in|sign.?in|invalid|denied|forbidden|exceeded|rate|billing|payment|\b(?:error|fail(?:ed|ure)?|fatal|panic)\b|\b(?:401|402|403|429)\b/i;
+
+/** The vendor's own words out of a dead child's output: startup banner lines
+ * dropped, the line that says why it failed first. */
+export function acpFailureMessage(output: string): string {
+  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line && !STARTUP_BANNER.test(line));
+  if (!lines.length) return '';
+  const why = lines.findIndex((line) => FAILURE_WORDS.test(line));
+  return (why > 0 ? [lines[why]!, ...lines.slice(0, why), ...lines.slice(why + 1)] : lines).join('\n');
+}
+
+/** A category the agent keeps reporting with no progress between: this many
+ * in a row ends the turn (a person's patience, not a clock). */
+const RETRY_STREAK_LIMIT = 5;
+
 /** Full child argv for one ACP launch, or undefined without an adapter.
  * The argv comes from the catalog (`harnessAcpLaunch`), which derives the
  * mode, model, effort and permission flags from the harness's own entry; no
@@ -428,6 +458,9 @@ interface LiveAgent {
   /** The agent takes `_session/steering` (InitializeResponse
    * `_meta.steering.supported`; claude-agent-acp 0.84). */
   steering?: boolean;
+  /** A prompt of this process was cancelled: the agent may still be unwinding
+   * it when the next prompt arrives (see vendorBusyNotice). */
+  cancelled?: boolean;
 }
 
 /** A message typed during the turn, waiting for a moment it can be steered
@@ -513,6 +546,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   private readonly pendingAgents = new Set<string>();
   private sessionId?: string;
   private lastCumulativeChunks = false;
+  /** The agent's `_session/retrying` category and how many times in a row, with no content between. */
+  private retryStreak?: { category: string; count: number };
   /** The live session's running totals as the agent last reported them
    * (acpSessionTotals, and a prompt response for an agent declaring
    * `usageTotals: 'session'`). Reset when a session is opened in this
@@ -534,8 +569,21 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       input, observer: input, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
       held: [], approvals: 0,
     };
-    return this.runActive(turn, input.signal, failure, () => this.flow(turn, argv), {
+    this.retryStreak = undefined;
+    return this.runActive(turn, input.signal, failure, () => this.flow(turn, argv).catch((error: unknown) => {
+      if (!(error as { acpStaleTurn?: boolean } | null)?.acpStaleTurn || turn.done) throw error;
+      // The prompt went to the cancelled turn's process, which is gone now:
+      // the same prompt, once, on a fresh process that resumes the session.
+      turn.watchdog?.stop();
+      Object.assign(turn, { text: '', messageText: '', sawActivity: false, thoughts: 0, promptStarted: false, prompt: undefined, thought: undefined, watchdog: undefined, sessionId: undefined });
+      return this.flow(turn, argv);
+    }), {
       failed: (error) => {
+        // A child that died says why on its stderr, after its startup banner.
+        if ((error as { code?: unknown }).code === 'ERR_JSONRPC_CLOSED') {
+          const why = acpFailureMessage(error.message);
+          if (why) error.message = why;
+        }
         // The parent may have failed while a tool is still active.
         // Its child is the only process that can finish that tool; keep it
         // until the tool settles, even though this parent prompt failed.
@@ -573,6 +621,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // The agent answers the prompt with stopReason `cancelled` once it has
     // unwound. Give it two seconds so the session stays resumable.
     live.peer.notify('session/cancel', { sessionId: turn.sessionId });
+    live.cancelled = true;
     this.settleCancel(live, (settled) => void prompt.then(() => undefined, () => undefined).then(settled));
     return true;
   }
@@ -852,6 +901,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const stopReason = turnStopReason(completed.stopReason);
     if (usage || stopReason) input.onUsage?.({ ...usage, ...(stopReason ? { stopReason } : {}) });
     const text = turn.text.trim();
+    // Only a notice that the agent is still busy with the cancelled turn: not
+    // an answer, never stored as one.
+    if (vendorBusyNotice(text, live.cancelled === true) && !turn.sawActivity) {
+      this.dropLive(new Error(`${input.command} ACP restarted`));
+      throw Object.assign(new Error(`${input.command} was still finishing the cancelled turn and answered "${text}" instead of the message`), { acpStaleTurn: true });
+    }
+    live.cancelled = false;
     // Tool-only turns are real work with nothing to say. Only a turn that
     // produced neither prose nor activity is a failure.
     if (!text && !turn.sawActivity) throw new Error(`${input.command} ACP returned no assistant text`);
@@ -983,6 +1039,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     const target = this.targetFor(update);
     target?.watchdog?.activity();
+    if (CONTENT_UPDATES.has(String(update.sessionUpdate))) this.retryStreak = undefined;
     this.trackTool(target, update);
     if (target) this.deliver(target, update, totals);
     const run = this.background;
@@ -1161,9 +1218,23 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   private retrying(params: Json): void {
     const target = this.liveTarget(params);
     if (!target) return;
+    if ((this.retryStreak?.count ?? 0) >= RETRY_STREAK_LIMIT) return; // the turn is already ending
     const command = this.turn?.input.command ?? 'the agent';
     const detail = typeof params.detail === 'string' ? params.detail : '';
-    target.observer.onPhase?.(`${command} is retrying${detail ? ` (${detail})` : ''}`);
+    const category = typeof params.category === 'string' ? params.category : '';
+    const count = category && this.retryStreak?.category === category ? this.retryStreak.count + 1 : 1;
+    this.retryStreak = { category, count };
+    target.observer.onPhase?.(`${command} is retrying${category || detail ? ` (${[category.replace(/_/g, ' '), detail].filter(Boolean).join(': ')})` : ''}, attempt ${count}`);
+    // The same refusal again and again with nothing between: the account is
+    // spent or throttled and retrying here cannot help. End the turn with the
+    // vendor's own category so failover and account routing can act.
+    const turn = this.turn;
+    if (category && count >= RETRY_STREAK_LIMIT && turn && target === turn && !turn.done) {
+      const status = /\b([45]\d\d)\b/.exec(detail)?.[1];
+      turn.fail(Object.assign(new Error(`${command} kept failing with ${category.replace(/_/g, ' ')}${detail ? ` (${detail})` : ''} ${count} times in a row`), {
+        errorKind: category, ...(status ? { statusCode: Number(status) } : {}),
+      }));
+    }
   }
 
   /** Where a session-scoped extension notification goes: the user's turn, or
@@ -1223,6 +1294,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const prompt = this.openPrompt();
     if (id !== undefined) this.requestPrompts.set(String(id), prompt.abort);
     try {
+      stream.observer.onPhase?.(`waiting for your answer: ${request.title}`);
       return await askHarnessQuestion(stream.observer, request, prompt.signal, declined);
     } finally {
       if (id !== undefined) this.requestPrompts.delete(String(id));
@@ -1309,6 +1381,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const prompt = this.openPrompt();
       if (id !== undefined) this.requestPrompts.set(String(id), prompt.abort);
       try {
+        stream.observer.onPhase?.(`waiting for your approval: ${title}`);
         const diff = acpActivityEvent({ ...params.toolCall, sessionUpdate: 'tool_call' })?.diff;
         accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail, diff?.length ? { diff } : undefined, prompt.signal) === true;
       } finally {

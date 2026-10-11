@@ -213,10 +213,14 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     }).finally(() => { this.settling = undefined; });
   }
 
+  /** Children this session let go of itself: their exit is not the current turn's failure. */
+  private readonly dropped = new WeakSet<object>();
+
   protected dropLive(error: Error): void {
     const live = this.live;
     if (!live) return;
     this.live = undefined;
+    this.dropped.add(live);
     this.finishBackground('closed');
     this.clearPending();
     this.closePrompts();
@@ -258,7 +262,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
             this.clearPending();
           }
           const turn = this.turn;
-          if (turn && !turn.done) turn.fail(this.closedTurnError(turn, error));
+          if (turn && !turn.done && !this.dropped.has(live)) turn.fail(this.closedTurnError(turn, error));
         },
       }),
     } as L;

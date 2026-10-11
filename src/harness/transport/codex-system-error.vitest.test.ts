@@ -19,7 +19,7 @@ function fakeServer(steps: Step[]): string {
       else if (m.method === 'thread/start' || m.method === 'thread/resume') send({ id: m.id, result: { thread: { id: 'T' } } });
       else if (m.method === 'turn/start') {
         send({ id: m.id, result: { turn: { id: 'U1' } } });
-        for (const step of steps) { if (step.stderr) process.stderr.write(step.stderr); if (step.send) send(step.send); }
+        (async () => { for (const step of steps) { if (step.stderr) { process.stderr.write(step.stderr); await new Promise((r) => setTimeout(r, 150)); } if (step.send) send(step.send); } })();
       }
     } });
   `;
