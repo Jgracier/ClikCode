@@ -2,6 +2,7 @@
  * model and page logic hold it. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyEvent, connectionLost, emptyModel, submittingPrompt, type ChatModel } from '../../src/model';
+import { traceSummaryLine } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -63,5 +64,37 @@ describe('the sticky prompt (V2)', () => {
   it('still shows while the worker has not written it yet', () => {
     const sent = submittingPrompt(run([{ type: 'session', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'ok' }] }) }]), 'hi again');
     expect(applyEvent(sent, { type: 'session', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'ok' }] }) }).pendingPrompt).toBe('hi again');
+  });
+});
+
+describe('a reopened turn says what the live one said (V3)', () => {
+  const saved = (turnEnd?: { ms: number; stopped?: true }, activities = true): HarnessSession => session({
+    messages: [{ role: 'user', content: 'go' }, {
+      role: 'assistant', content: 'done', ...(turnEnd ? { turnEnd } : {}),
+      ...(activities ? { activities: [{ event: { kind: 'tool-done', id: 'a', label: 'read a.ts', category: 'read' }, responseOffset: 0 }] } : {}),
+    } as never],
+  });
+
+  it('takes the duration from the saved turnEnd', () => {
+    const trace = applyEvent(emptyModel(), { type: 'session', session: saved({ ms: 62_000 }) }).traces[0]!;
+    expect(trace.endedAt - trace.startedAt).toBe(62_000);
+    expect(traceSummaryLine(trace, [])).toBe('Worked for 1m 2s');
+  });
+
+  it('says Stopped after for a stopped one', () => {
+    const trace = applyEvent(emptyModel(), { type: 'session', session: saved({ ms: 3_000, stopped: true }) }).traces[0]!;
+    expect(trace.stopped).toBe(true);
+    expect(traceSummaryLine(trace, [])).toBe('Stopped after 3s');
+  });
+
+  it('invents no duration when none was saved', () => {
+    const trace = applyEvent(emptyModel(), { type: 'session', session: saved() }).traces[0]!;
+    expect(traceSummaryLine(trace, [])).toBeUndefined();
+  });
+
+  it('keeps a turn with no calls that ran long enough to be summarised', () => {
+    const model = applyEvent(emptyModel(), { type: 'session', session: saved({ ms: 90_000 }, false) });
+    expect(model.traces).toHaveLength(1);
+    expect(traceSummaryLine(model.traces[0]!, [])).toBe('Worked for 1m 30s');
   });
 });

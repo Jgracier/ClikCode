@@ -19,6 +19,7 @@ import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
+import { endsWithSummary } from '../../../src/harness/protocol/turn-flow';
 import { failureLine } from '../../../src/harness/protocol/stderr-line';
 import { pendingPromptText } from '../../../src/tui/render/pending-prompt';
 
@@ -376,14 +377,19 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
   messages.forEach((message, index) => {
     if (message.role !== 'assistant') return;
     const saved = readTurnActivities(message.activities, message.content.length);
-    if (!saved.length) return;
+    // The worker's own record of how the turn ended: what the live window
+    // said ("Worked for 1m 2s", "Stopped after 3s"), said again on reopen.
+    const end = (message as { turnEnd?: { ms: number; stopped?: true } }).turnEnd;
+    const ended = end ? { startedAt: 0, endedAt: Math.max(0, end.ms), ...(end.stopped ? { stopped: true as const } : {}) } : undefined;
+    // A turn with no calls has a trace only to carry its closing line.
+    if (!saved.length && !(ended && (ended.stopped || endsWithSummary(ended.endedAt, 0)))) return;
     // Folded by the same upsert live frames go through.
     const activities = settledCalls(saved.filter((item) => !item.event.parentId).reduce<LiveTurn>(
       (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
     ).activities.map(({ startedAt: _startedAt, ...activity }) => activity), false);
     const prior = byUser.get(index - 1);
-    const stopped = activities.some((activity) => activity.stopped);
-    const next: TurnTrace = { startedAt: 0, endedAt: 0, ...prior, userIndex: index - 1, activities, text: message.content, saved: true, ...(stopped ? { stopped } : {}) };
+    const stopped = ended?.stopped || activities.some((activity) => activity.stopped);
+    const next: TurnTrace = { startedAt: 0, endedAt: 0, ...ended, ...prior, userIndex: index - 1, activities, text: message.content, saved: true, ...(stopped ? { stopped: true } : {}) };
     if (prior && JSON.stringify(prior) === JSON.stringify(next)) return;
     byUser.set(index - 1, next);
     changed = true;
