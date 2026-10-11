@@ -7,7 +7,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { claudeShaped, JsonRecord, opencodeShaped, asRecord } from './json-lines.js';
 import { eventDiff, unifiedEventDiff } from '../../agent/line-diff.js';
-import { categoryOf, formatToolRow, toolLabel } from './tools.js';
+import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from './tools.js';
 
 import { COMMAND_HEAD_LINES } from './activity-view.js';
 
@@ -183,7 +183,10 @@ export function editDiffFromInput(input: JsonRecord | undefined): HarnessActivit
 export function toolFacts(name: string, input: JsonRecord | undefined, command: string): Pick<HarnessActivityEvent, 'label' | 'category' | 'agent' | 'diff' | 'call'> {
   const classified = categoryOf(name, input, command);
   const diff = classified.category === 'edit' ? editDiffFromInput(input) : undefined;
-  return { label: toolLabel(name, input, classified.category), ...classified, ...(diff?.length ? { diff } : {}), call: toolCall(name, input) };
+  // The call that spawns a sub-agent is the parent row (standard section 5),
+  // by the tool's own name or the sub-agent type its input names.
+  const agent = isAgentToolName(name) || typeof input?.subagent_type === 'string' ? { agent: true as const } : {};
+  return { label: toolLabel(name, input, classified.category), ...classified, ...agent, ...(diff?.length ? { diff } : {}), call: toolCall(name, input) };
 }
 
 /** Characters one argument string keeps in a call record. */

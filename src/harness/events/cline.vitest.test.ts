@@ -50,7 +50,8 @@ describe('Cline CLI tool rows', () => {
     expect(events.map((event) => [event.kind, event.id, event.output])).toEqual([
       ['tool-start', 'cline-20', undefined],
       ['tool-start', 'cline-20', ['PASS a', 'PASS b']],
-      ['tool-done', 'cline-20', undefined],
+      // The settled row carries what the command printed.
+      ['tool-done', 'cline-20', ['PASS a', 'PASS b']],
     ]);
     expect(events[0]).toMatchObject({ label: '$ npm test', category: 'run' });
   });
