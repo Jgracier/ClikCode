@@ -27,6 +27,16 @@ export interface HarnessActivityEvent {
   /** For a sub-agent's call: the tokens it spent, where the harness reports
    * them on its result (Claude Code's Task result, `totalTokens`). */
   childTokens?: number;
+  /** The row's emission sequence: assigned ONCE by the worker when it first
+   * saw the row, strictly increasing within a turn (turn/mark-sequence.ts).
+   * With `responseOffset` it is the row's place (activity-view.ts orderMarks).
+   * A later frame of the same call keeps the first one. Absent on turns
+   * saved before it existed: readers derive it from the record's position. */
+  seq?: number;
+  /** For a sub-agent's call: the ids of the child calls already counted in
+   * `childTools`, so "N tool uses" counts calls, not the several frames each
+   * call arrives in. Live only -- never saved or sent (CallIdSet.toJSON). */
+  childCallIds?: ReadonlySet<string>;
   /** Set when this call belongs to a sub-agent (Claude's parent_tool_use_id).
    * It is journaled for recovery; the parent agent row carries its display. */
   parentId?: string;
