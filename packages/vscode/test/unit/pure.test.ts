@@ -77,7 +77,7 @@ describe('chat model', () => {
       live: { text: 'abc', waitingLabel: 'thinking' },
     })], run([{ type: 'session', session: session() }]));
     expect(joined.live?.startedAt).toBe(Date.parse(startedAt));
-    expect(joined.live?.steers).toEqual([{ text: 'also this', offset: 2 }]);
+    expect(joined.live?.steers).toEqual([{ text: 'also this', offset: 2, seq: expect.any(Number) }]);
   });
 
   it('shows a submitted steer only as a user message once the turn finishes', () => {

@@ -4,7 +4,7 @@
 import { COPIED_MS, NOTICE_MS } from '../../../../src/harness/protocol/timings';
 import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, turnHasAnswer, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, preparing, turnHasAnswer, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
 import type { IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
@@ -15,6 +15,7 @@ import { tildePath } from './format';
 import { choose } from './picker';
 import { ConversationMark, HistoryMenu, rowState, useConversations } from './screens';
 import { afterVisibleFor, useNow } from './clock';
+import { followsBottom } from './flow';
 import { markMention, SearchBar } from './search';
 import { Sheet, type OpenQuestion } from './sheet';
 import { focusHere, Icon, IconButton, KeyList, Logo, Popover, Spinner, type ListRow } from './ui';
@@ -228,8 +229,9 @@ function App(): JSX.Element {
   const composer = useRef<ComposerHandle | null>(null);
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
+  const lastScroll = useRef({ top: 0, height: 0 });
   const runningRef = useRef(false);
-  runningRef.current = Boolean(model?.running);
+  runningRef.current = Boolean(model && (model.running || preparing(model)));
   const stoppingRef = useRef(false);
   stoppingRef.current = Boolean(model?.live?.stopping);
   const approvalRef = useRef<string>();
@@ -350,6 +352,18 @@ function App(): JSX.Element {
     hadQuestion.current = questions.length > 0;
   }, [questions.length]);
 
+  // Another conversation, or a message just sent: the bottom is where the
+  // reader wants to be (their own prompt, the answer), wherever they had
+  // scrolled to before.
+  const sessionId = model?.sessionId;
+  const sentCount = (model?.submissions.length ?? 0) + (model?.ownTurn && model.pendingPrompt ? 1 : 0);
+  const sentBefore = useRef(sentCount);
+  useLayoutEffect(() => { stick.current = true; lastScroll.current = { top: 0, height: 0 }; }, [sessionId]);
+  useLayoutEffect(() => {
+    if (sentCount > sentBefore.current) stick.current = true;
+    sentBefore.current = sentCount;
+  }, [sentCount]);
+
   // Follow the conversation while the reader is at the bottom of it.
   useLayoutEffect(() => {
     const element = log.current;
@@ -375,7 +389,12 @@ function App(): JSX.Element {
     <div class="app">
       <Header model={model} onMenu={showMenu} history={history} setHistory={setHistory} onError={setError} />
       <main class="chat">
-        <div class="log" ref={log} onScroll={() => { const element = log.current!; stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>
+        <div class="log" ref={log} onScroll={() => {
+          const element = log.current!;
+          const next = followsBottom({ follow: stick.current, ...lastScroll.current }, { top: element.scrollTop, height: element.scrollHeight, client: element.clientHeight });
+          stick.current = next.follow;
+          lastScroll.current = { top: next.top, height: next.height };
+        }}>
           <Banner model={model} />
           {model.connection === 'starting' && !model.sessionId ? <div class="starting inline"><Spinner /><span class="muted">Starting ClikCode…</span></div> : null}
           {model.connection === 'ready' && model.sessionId && empty ? <Welcome model={model} onPrompt={sendNow} onMenu={showMenu} /> : null}

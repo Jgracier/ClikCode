@@ -2,10 +2,11 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
-import { exploreRuns, exploreSummary, tensedLabel, turnStatus, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { endsWithSummary, exploreRuns, explores, exploreSummary, tensedLabel, turnStatus, turnSummary, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
-import type { Activity, LiveTurn } from '../model';
+import type { FileDiff } from '../protocol';
+import type { Activity, LiveTurn, TurnTrace } from '../model';
 import { WRITING_MS } from '../../../../src/harness/protocol/timings';
 import { titleCase } from './format';
 
@@ -21,7 +22,9 @@ export interface WorkingStatus {
 /** The working line, by turn-flow's rule: waiting on the user, else the open
  * call's verb, else the reasoning's heading, else "writing" while answer
  * text arrives, else "thinking". */
-export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: number): WorkingStatus {
+export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: number, reconnecting = false): WorkingStatus {
+  // The bridge is coming back: not working, not waiting on the user.
+  if (reconnecting) return { label: 'Reconnecting…', tone: 'thinking', toneClass: 'tone-yellow' };
   // Stopping, it says so, whatever call is still open (the terminal's rule).
   const stopping = Boolean(live?.stopping);
   const status = turnStatus({
@@ -79,4 +82,50 @@ export function foldedSummary(activities: readonly Activity[]): string {
     return index ? said.charAt(0).toLowerCase() + said.slice(1) : said;
   }).join(' · ');
   return titleCase(text);
+}
+
+/** The line a finished turn ends on, the same live and on reopen, or nothing.
+ * A trace with no clock of its own (a turn saved before the worker kept how
+ * long it took) invents none: a stopped one says only "Stopped", and the rest
+ * say only what they changed, never a made-up "Worked for 1s". */
+export function traceSummaryLine(
+  trace: Pick<TurnTrace, 'startedAt' | 'endedAt' | 'stopped' | 'activities'>, diffs: ReadonlyArray<readonly FileDiff[]>,
+): string | undefined {
+  if (trace.endedAt > 0) {
+    const ms = trace.endedAt - trace.startedAt;
+    if (!trace.stopped && !endsWithSummary(ms, trace.activities.length)) return undefined;
+    return turnSummary({ ms, diffs, ...(trace.stopped ? { stopped: true } : {}) });
+  }
+  if (trace.stopped) return 'Stopped';
+  // No clock: only what was changed.
+  const said = turnSummary({ ms: 0, diffs });
+  const at = said.indexOf(' · ');
+  return at < 0 ? undefined : said.slice(at + 3);
+}
+
+/** A run's groups as rows, with keys that survive the merge points. A call
+ * that only looks around (a read, a search) is an "Explored" row from its
+ * first frame, so a second one joining it changes that row, never swaps one
+ * component for another (which destroyed the DOM: selection, open state,
+ * scroll). Everything else is a call row under its own key. */
+export function runGroupView<T extends Activity>(groups: ReadonlyArray<{ rows: T[]; explore: boolean }>): Array<{ key: string; kind: 'explored' | 'call'; rows: T[] }> {
+  return groups.map((group) => (group.explore || explores(group.rows[0]!)
+    ? { key: `e${group.rows[0]!.key}`, kind: 'explored' as const, rows: group.rows }
+    : { key: group.rows[0]!.key, kind: 'call' as const, rows: group.rows }));
+}
+
+/** The log's follow-the-bottom state after a scroll event. Scrolling UP is
+ * the reader leaving the bottom -- however small, a streaming delta must not
+ * pull them back -- unless the log merely got shorter (a turn folding),
+ * which the browser reports as a smaller scrollTop too. Coming back within
+ * `threshold` px of the bottom follows again. */
+export function followsBottom(
+  previous: { follow: boolean; top: number; height: number },
+  now: { top: number; height: number; client: number },
+  threshold = 80,
+): { follow: boolean; top: number; height: number } {
+  const leftBottom = now.top < previous.top && now.height >= previous.height;
+  const distance = now.height - now.top - now.client;
+  const follow = leftBottom ? false : distance < threshold ? true : previous.follow;
+  return { follow, top: now.top, height: now.height };
 }

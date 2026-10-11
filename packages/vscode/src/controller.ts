@@ -12,7 +12,7 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, conversationAttention, emptyModel, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -313,10 +313,10 @@ export class ClikCodeController implements vscode.Disposable {
         setTimeout(() => { if (!this.disposed && !this.bridge) void this.ensureStarted(); }, 500);
         return;
       }
-      this.setModel({
-        ...this.model, connection: 'stopped', running: false, live: undefined, approvals: [],
+      this.setModel(connectionLost(this.model, {
+        connection: 'stopped',
         connectionError: code === 0 ? 'ClikCode stopped.' : `ClikCode stopped unexpectedly (${signal ?? `exit ${code}`}). See the log for details.`,
-      });
+      }));
     });
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('ClikCode did not start within 60 seconds. See the log for details.')), 60_000);
@@ -689,7 +689,11 @@ export class ClikCodeController implements vscode.Disposable {
     // user's message before any of that I/O, just as the terminal does.
     const prompt = text.trim();
     const ordinary = Boolean(prompt && !/^[!/]/.test(prompt));
-    if (ordinary && !this.model.running) this.setModel(submittingPrompt(this.model, prompt));
+    // Sent again while the first is still being prepared, it is a message to
+    // that turn (steered or queued once it runs), never a second bubble.
+    const during = this.model.running || preparing(this.model);
+    if (ordinary && !during) this.setModel(submittingPrompt(this.model, prompt));
+    const epoch = this.prepareEpoch;
     try { await this.ensureStarted(); }
     catch (error) {
       this.setModel(rejectedPrompt(this.model));
@@ -704,12 +708,26 @@ export class ClikCodeController implements vscode.Disposable {
       this.note('ClikCode is not connected.', 'error');
       return;
     }
+    // Stop was pressed while this was being prepared: it is not sent.
+    if (epoch !== this.prepareEpoch) return;
     for (const path of this.images.keys()) if (text.includes(path)) this.images.set(path, true);
-    if (this.model.running && !/^[/!]/.test(text.trim())) this.setModel(typedDuringTurn(this.model, id, text.trim()));
+    if ((during || this.model.running) && !/^[/!]/.test(text.trim())) this.setModel(typedDuringTurn(this.model, id, text.trim()));
     bridge.send({ type: 'send', text, id });
   }
 
+  /** Bumped by a Stop pressed before a turn exists: a send still being
+   * prepared sees it and does not go out. */
+  private prepareEpoch = 0;
+
   cancel(restoreDraft = true): void {
+    if (preparing(this.model)) {
+      // No turn yet: the prompt goes back to the composer and the send in
+      // flight is dropped, so Stop works from the moment of sending.
+      const text = this.model.pendingPrompt!;
+      this.prepareEpoch += 1;
+      this.setModel({ ...rejectedPrompt(this.model), submissions: [] });
+      if (restoreDraft) this.post({ type: 'setDraft', text });
+    }
     this.bridge?.send({ type: 'cancel', restoreDraft });
     this.setModel(stoppingTurn(this.model));
   }

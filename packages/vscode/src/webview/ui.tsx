@@ -1,7 +1,7 @@
 /** Shared pieces: codicons, the logo, and a keyboard-driven list used by every
  * menu and picker in the panel. */
-import type { ComponentChildren, JSX } from 'preact';
-import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
+import { createContext, type ComponentChildren, type JSX } from 'preact';
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
 import { waitingSpinnerGlyph } from '../../../../src/harness/protocol/activity-view';
 import { slowWaitGate } from '../../../../src/harness/protocol/slow-wait-gate';
 import { useSpinFrame } from './clock';
@@ -10,12 +10,17 @@ export function Icon({ name, label, spin }: { name: string; label?: string; spin
   return <i class={`codicon codicon-${name}${spin ? ' codicon-modifier-spin' : ''}`} {...(label ? { 'aria-label': label, role: 'img' } : { 'aria-hidden': 'true' })} />;
 }
 
+/** False while nothing is happening that should move -- the bridge is
+ * reconnecting (standard section 9): every spinner under it holds still. */
+export const Animating = createContext(true);
+
 /** The terminal's spinner, the same braille frames at the same rate: a
  * command's in yellow, a sub-agent's in cyan, the turn's own still and
  * yellow when nothing is arriving. Every spinner on the page steps on the
  * page's one clock; still under reduced motion and while hidden. */
 export function Spinner({ tone = '', still = false }: { tone?: string; still?: boolean }): JSX.Element {
-  const frame = useSpinFrame(!still);
+  const allowed = useContext(Animating);
+  const frame = useSpinFrame(!still && allowed);
   return <span class={`spinner ${tone}`} aria-hidden="true">{waitingSpinnerGlyph(frame)}</span>;
 }
 
