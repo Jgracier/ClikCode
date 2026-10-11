@@ -14,6 +14,7 @@ import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnMark } from '../session/model.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
+import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import { isApprovalWaitPhase } from '../harness/protocol/turn-flow.js';
 import { savedTurnRanks } from '../tui/render/turn-mark-rows.js';
 
@@ -29,6 +30,8 @@ export interface JoinedTurn {
   thought?: LiveThought;
   phase?: string;
   usage?: TurnUsage;
+  /** What the vendor says runs in the background, by kind (a level). */
+  background?: BackgroundWork;
 }
 
 /** The part of the terminal prompter a joined turn is drawn through. */
@@ -40,6 +43,8 @@ export interface JoinedTurnSurface {
   setPlan(entries: readonly PlanEntry[]): void;
   phase(message: string): void;
   setTurnUsage(usage: TurnUsage): void;
+  /** Optional: a surface with no footer indicator has nothing to draw. */
+  setBackgroundWork?(work: BackgroundWork | undefined): void;
 }
 
 export function drawJoinedTurn(rl: JoinedTurnSurface, turn: JoinedTurn): void {
@@ -61,4 +66,5 @@ export function drawJoinedTurn(rl: JoinedTurnSurface, turn: JoinedTurn): void {
   if (turn.plan.length) rl.setPlan(turn.plan);
   if (turn.phase && !isApprovalWaitPhase(turn.phase)) rl.phase(turn.phase);
   if (turn.usage) rl.setTurnUsage(turn.usage);
+  if (turn.background) rl.setBackgroundWork?.(turn.background);
 }

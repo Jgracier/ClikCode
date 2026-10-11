@@ -2,7 +2,7 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
-import { answerWriting, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, liveTokenTarget, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { answerWriting, backgroundTerminalsLabel, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, liveTokenTarget, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { shimmerCycleMs, SPIN_MS } from '../../../../src/harness/protocol/timings';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
@@ -87,22 +87,31 @@ export function foldedSummary(activities: readonly Activity[]): string {
   return titleCase(text);
 }
 
+/** The working line's background-terminals indicator (`2 background
+ * terminals running`) while any run, else nothing. It is not part of the
+ * turn's closing line. */
+export function workingIndicator(live: Pick<LiveTurn, 'background'> | undefined): string | undefined {
+  return backgroundTerminalsLabel(live?.background?.terminals);
+}
+
 /** The line a finished turn ends on, the same live and on reopen, or nothing.
  * A trace with no clock of its own (a turn saved before the worker kept how
  * long it took) invents none: a stopped one says only "Stopped", and the rest
  * say only what they changed, never a made-up "Worked for 1s". */
 export function traceSummaryLine(
-  trace: Pick<TurnTrace, 'startedAt' | 'endedAt' | 'stopped' | 'activities'> & Partial<Pick<TurnTrace, 'usage' | 'pendingBackground'>>,
+  trace: Pick<TurnTrace, 'startedAt' | 'endedAt' | 'stopped' | 'activities'> & Partial<Pick<TurnTrace, 'usage' | 'pendingBackground' | 'pendingWorkflows'>>,
   diffs: ReadonlyArray<readonly FileDiff[]>,
 ): string | undefined {
   if (trace.endedAt > 0) {
     const ms = trace.endedAt - trace.startedAt;
     const background = trace.pendingBackground ?? 0;
-    if (!trace.stopped && !background && !endsWithSummary(ms, trace.activities.length)) return undefined;
+    const workflows = trace.pendingWorkflows ?? 0;
+    if (!trace.stopped && !background && !workflows && !endsWithSummary(ms, trace.activities.length)) return undefined;
     // What it spent, in the terminal's own words (formatTurnUsage, brief).
     const usage = formatTurnUsage(trace.usage, { brief: true });
     return turnSummary({
       ms, diffs, ...(trace.stopped ? { stopped: true } : {}), ...(usage ? { usage } : {}), ...(background ? { pendingBackground: background } : {}),
+      ...(workflows ? { pendingWorkflows: workflows } : {}),
     });
   }
   if (trace.stopped) return 'Stopped';
