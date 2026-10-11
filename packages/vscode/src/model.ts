@@ -12,14 +12,17 @@
 import { chatCostLabel, composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { enterAgainSends, STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
-import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, resumeTurnClock, sameCall, stoppedCall, turnElapsedMs, withChildTool, type OpenTool, type Thought, type TurnClock } from '../../../src/harness/protocol/activity-view';
+import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, orderMarks, resumeTurnClock, sameCall, stoppedCall, turnElapsedMs, withChildTool, type OpenTool, type Thought, type TurnClock } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessQuestionRequest, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
+import type { TurnUsage } from '../../../src/harness/protocol/turn-usage';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
-import { endsWithSummary } from '../../../src/harness/protocol/turn-flow';
+import { endsWithSummary, isApprovalWaitPhase, reasoningHeading, type Decision } from '../../../src/harness/protocol/turn-flow';
+import { readTurnMarks } from '../../../src/turn/turn-marks';
+import { CHILDREN_SHOWN } from '../../../src/tui/render/child-rows';
 import { failureLine } from '../../../src/harness/protocol/stderr-line';
 import { pendingPromptText } from '../../../src/tui/render/pending-prompt';
 
@@ -42,6 +45,11 @@ export interface Activity extends Pick<HarnessActivityEvent,
   /** When it came among the turn's calls and thoughts: their order where no
    * text came between them. */
   seq?: number;
+  /** What the user decided at this call's approval, when the vendor named the
+   * call: the row says `✓ approved` instead of a second row (standard 8). */
+  decision?: Decision;
+  /** A sub-agent's own calls, in the order they began (standard 5). */
+  children?: Activity[];
 }
 
 export interface Note {
@@ -57,6 +65,9 @@ export interface Note {
   turn?: number;
   offset?: number;
   seq?: number;
+  /** The worker's mark id, so a notice that came as an event and again in a
+   * snapshot is one row. */
+  markId?: string;
 }
 
 export interface Approval {
@@ -66,6 +77,11 @@ export interface Approval {
   rule?: string;
   /** What the call would change, file by file. */
   diff?: FileDiff[];
+  /** Where the request was asked (the worker's order and place), and the call
+   * it is about when the vendor named one: the decision settles that row. */
+  seq?: number;
+  offset?: number;
+  callId?: string;
   /** Set when a harness asks a question rather than a yes or no: it queues
    * with the approvals (one at a time, the turn's clock stopped, the chat
    * marked waiting) and is drawn as a QuestionCard. */
@@ -94,6 +110,14 @@ export interface TurnTrace {
   planAt?: PlanAt;
   startedAt: number;
   endedAt: number;
+  /** Notices and the user's decisions at the turn's approvals, where they
+   * were, from the worker's marks (this window's own notes are in `notes`). */
+  notices?: Array<{ id: string; text: string; offset: number; seq: number }>;
+  decisions?: DecisionEntry[];
+  /** What the turn reported it spent, and the background agents it left
+   * running: the closing line says them. */
+  usage?: TurnUsage;
+  pendingBackground?: number;
   /** The calls and text are the saved turn's, not this window's. */
   saved?: boolean;
   /** The turn was stopped: it ends on "Stopped after", not "Worked for". */
@@ -106,7 +130,17 @@ export interface TurnTrace {
  * and its place in the order of the turn's rows. */
 export interface PlanAt { offset: number; seq: number }
 
-export interface ThoughtEntry { text: string; offset: number; ms: number; seq: number }
+export interface ThoughtEntry {
+  text: string; offset: number; ms: number; seq: number;
+  /** The model's own `**heading**`, when the worker's mark carried one (the
+   * text may be capped or absent; the heading and the duration are not). */
+  heading?: string;
+}
+
+/** What the user decided at an approval or question, where it was asked
+ * (standard 8): drawn as a settled row, or on the call's own row when the
+ * vendor named the call (`callId`). */
+export interface DecisionEntry { id: string; decision: Decision; offset: number; seq: number; callId?: string }
 
 export interface LiveTurn {
   text: string;
@@ -131,12 +165,18 @@ export interface LiveTurn {
   steers: Array<{ text: string; offset: number; seq?: number }>;
   /** Where the turn's plan first appeared. */
   planAt?: PlanAt;
+  /** The approvals and questions of this turn the user has settled. */
+  decisions?: DecisionEntry[];
   startedAt: number;
   /** When the model last went back to thinking -- the turn began, or its
    * last open call closed. Not moved by the answer's deltas. */
   thinkingSince: number;
-  /** When answer text last arrived: the working line says "writing". */
+  /** When answer text last arrived, and when the turn's last call began: the
+   * working line says "writing" while text is the later of the two
+   * (answerWriting), however long the pause. Ordered stamps, not wall time:
+   * see `stampAfter`. */
   writingAt?: number;
+  callAt?: number;
   /** When the turn last did anything (a word, a thought, a call) or an
    * approval was answered: quiet past turn-pace's threshold and the working
    * line's spinner turns yellow, as the terminal's does. */
@@ -222,6 +262,120 @@ export interface ChatModel {
  * of the user there: an approval waiting, or a turn that finished while
  * nobody looked. The conversations list marks it, as that tab's title does. */
 
+/** A stamp for `writingAt` / `callAt`: the clock, but strictly after `other`,
+ * so two events in one millisecond keep the order they came in (answerWriting
+ * compares them). */
+function stampAfter(other: number | undefined): number {
+  return Math.max(Date.now(), (other ?? Number.NEGATIVE_INFINITY) + 1);
+}
+
+/** A turn's durable marks (what a snapshot carries as `live.marks`, a saved
+ * answer as `marks`) as the rows this window draws. Anything malformed is
+ * skipped (readTurnMarks). */
+export interface MarkRows {
+  reasoning: ThoughtEntry[];
+  plan?: { entries: ChatModel['plan']; at: PlanAt };
+  notices: Array<{ id: string; text: string; offset: number; seq: number }>;
+  decisions: DecisionEntry[];
+}
+
+export function marksToRows(value: unknown): MarkRows {
+  const rows: MarkRows = { reasoning: [], notices: [], decisions: [] };
+  for (const mark of readTurnMarks(value)) {
+    switch (mark.kind) {
+      case 'thought':
+        rows.reasoning.push({
+          text: mark.text ? stripAnsi(mark.text) : '', offset: mark.responseOffset, ms: mark.durationMs, seq: mark.seq,
+          ...(mark.heading ? { heading: stripAnsi(mark.heading) } : {}),
+        });
+        break;
+      case 'plan':
+        rows.plan = {
+          entries: mark.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })),
+          at: { offset: mark.responseOffset, seq: mark.seq },
+        };
+        break;
+      case 'notice':
+        rows.notices.push({ id: mark.id, text: stripAnsi(mark.message), offset: mark.responseOffset, seq: mark.seq });
+        break;
+      case 'outcome': {
+        const label = stripAnsi(mark.label);
+        rows.decisions.push({
+          id: mark.id, offset: mark.responseOffset, seq: mark.seq,
+          decision: mark.outcome === 'approved' ? { kind: 'approved', label } : mark.outcome === 'answered' ? { kind: 'answered', label } : { kind: 'denied', label },
+        });
+        break;
+      }
+    }
+  }
+  return rows;
+}
+
+/** The worker's settled thoughts into the window's own. A row both hold is
+ * one (same seq): the worker's duration, heading and place are authoritative,
+ * and the window keeps its own text when it is longer (the worker's is
+ * capped). Rows only one of them has stay. */
+function mergeReasoning(held: ThoughtEntry[], incoming: ThoughtEntry[]): ThoughtEntry[] {
+  if (!incoming.length) return held;
+  const merged = [...held];
+  for (const entry of incoming) {
+    const at = merged.findIndex((item) => item.seq === entry.seq);
+    if (at < 0) { merged.push(entry); continue; }
+    const prior = merged[at]!;
+    merged[at] = {
+      ...prior, ...entry, text: prior.text.length > entry.text.length ? prior.text : entry.text,
+      ...(entry.heading || prior.heading ? { heading: entry.heading ?? prior.heading! } : {}),
+    };
+  }
+  return merged;
+}
+
+function mergeDecisions(held: DecisionEntry[] | undefined, incoming: DecisionEntry[]): DecisionEntry[] | undefined {
+  if (!incoming.length) return held;
+  const merged = [...(held ?? [])];
+  for (const entry of incoming) {
+    const at = merged.findIndex((item) => item.id === entry.id);
+    if (at < 0) merged.push(entry);
+    else {
+      // The worker's row is authoritative for place; this window's own
+      // knowledge of how it was answered (told, always) is not taken back.
+      const prior = merged[at]!;
+      const keep = prior.decision.kind === 'told' || prior.decision.kind === 'declined'
+        || (prior.decision.kind === 'approved' && prior.decision.always && entry.decision.kind === 'approved');
+      merged[at] = { ...prior, ...entry, decision: keep ? prior.decision : entry.decision, ...(prior.callId ? { callId: prior.callId } : {}) };
+    }
+  }
+  return merged;
+}
+
+/** The thought the worker is having now, as this window continues it. What
+ * the window holds wins when it is the same thought or a newer one; a thought
+ * the window never saw begin takes the worker's place and start time, and what
+ * the window held is settled where it was. A thought already settled (a row
+ * of the turn) is never reopened. */
+function withWorkerThought(live: LiveTurn, open: { id?: string; text: string; seq: number; responseOffset: number; startedAt: number } | undefined): LiveTurn {
+  if (!open || !open.text.trim() || live.reasoning.some((entry) => entry.seq === open.seq)) return live;
+  const held = live.thoughtStart;
+  if (live.thought && held && held.seq >= open.seq) {
+    return held.seq === open.seq && open.text.length > live.thought.text.length
+      ? { ...live, thought: { ...live.thought, text: stripAnsi(open.text) } } : live;
+  }
+  const before = live.thought ? settled(live) : live;
+  return {
+    ...before, thought: { ...(open.id === undefined ? {} : { id: open.id }), text: stripAnsi(open.text) },
+    thoughtStart: { offset: open.responseOffset, at: open.startedAt, seq: open.seq }, seen: Math.max(before.seen, open.seq),
+  };
+}
+
+/** A row's place in the turn's order (standard 1.2): the worker's `seq` where
+ * it sent one, else the next number of this window's own counter. The counter
+ * first rises past everything the worker numbered, so a row that has none is
+ * never mixed in among the worker's own numbers. */
+function takeSeq(live: Pick<LiveTurn, 'seen'>, given?: number): { seq: number; seen: number } {
+  if (typeof given === 'number' && Number.isFinite(given)) return { seq: given, seen: Math.max(live.seen, given) };
+  return { seq: live.seen + 1, seen: live.seen + 1 };
+}
+
 /** A live turn without the phase a report set before the vendor answered. */
 function withoutPhase<T extends { phase?: string }>(live: T): T {
   if (live.phase === undefined) return live;
@@ -294,10 +448,14 @@ export function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel
   // arrived, in order among the rows, so it neither trails the live turn nor
   // jumps above the answer when the turn ends (standard sections 1, 11).
   const live = during ? model.live : undefined;
-  const seen = live ? live.seen + 1 : undefined;
-  const placed: Note = { ...note, after, ...(live ? { turn: model.turnUserIndex!, offset: live.text.length, seq: seen! } : {}) };
+  // Where the worker placed it, when it said (WorkerEvent `note`).
+  const taken = live ? takeSeq(live, note.seq) : undefined;
+  const placed: Note = {
+    ...note, after,
+    ...(live ? { turn: model.turnUserIndex!, offset: Math.min(note.offset ?? live.text.length, live.text.length), seq: taken!.seq } : {}),
+  };
   return {
-    ...model, ...(live ? { live: { ...live, seen: seen! } } : {}),
+    ...model, ...(live ? { live: { ...live, seen: taken!.seen } } : {}),
     notes: [...model.notes, placed].slice(-MAX_NOTES),
   };
 }
@@ -399,11 +557,13 @@ function sameMessages(previous: ChatModel['messages'], next: ChatModel['messages
  * as done, as the terminal draws it. Kept open, it span and its clock
  * counted on every reopen. */
 function settledCalls(activities: Activity[], stopped: boolean): Activity[] {
-  if (!activities.some((activity) => activity.kind === 'tool-start')) return activities;
+  const open = (rows: readonly Activity[]): boolean => rows.some((activity) => activity.kind === 'tool-start' || open(activity.children ?? []));
+  if (!open(activities)) return activities;
   return activities.map((activity) => {
-    if (activity.kind !== 'tool-start') return activity;
+    const children = activity.children ? { children: settledCalls(activity.children, stopped) } : {};
+    if (activity.kind !== 'tool-start') return { ...activity, ...children };
     const { child: _child, ...rest } = activity;
-    return stopped ? stoppedCall(rest) : { ...rest, kind: 'tool-done' as const };
+    return { ...(stopped ? stoppedCall(rest) : { ...rest, kind: 'tool-done' as const }), ...children };
   });
 }
 
@@ -420,22 +580,48 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     const saved = readTurnActivities(message.activities, message.content.length);
     // The worker's own record of how the turn ended: what the live window
     // said ("Worked for 1m 2s", "Stopped after 3s"), said again on reopen.
-    const end = (message as { turnEnd?: { ms: number; stopped?: true } }).turnEnd;
-    const ended = end ? { startedAt: 0, endedAt: Math.max(0, end.ms), ...(end.stopped ? { stopped: true as const } : {}) } : undefined;
+    const end = message.turnEnd;
+    const background = (end as { pendingBackground?: unknown } | undefined)?.pendingBackground;
+    const pendingBackground = typeof background === 'number' && background > 0 ? background : 0;
+    const ended = end ? {
+      startedAt: 0, endedAt: Math.max(0, end.ms), ...(end.stopped ? { stopped: true as const } : {}),
+      ...(end.usage ? { usage: end.usage } : {}), ...(pendingBackground ? { pendingBackground } : {}),
+    } : undefined;
+    // The worker's durable marks: thoughts, plan, notices, decisions.
+    const rows = marksToRows(message.marks);
+    const hasMarks = rows.reasoning.length > 0 || Boolean(rows.plan) || rows.notices.length > 0 || rows.decisions.length > 0;
     // A turn with no calls has a trace only to carry its closing line.
-    if (!saved.length && !(ended && (ended.stopped || endsWithSummary(ended.endedAt, 0)))) return;
+    if (!saved.length && !hasMarks && !(ended && (ended.stopped || ended.pendingBackground || endsWithSummary(ended.endedAt, 0)))) return;
     // Folded by the same upsert live frames go through.
-    const activities = settledCalls(saved.filter((item) => !item.event.parentId).reduce<LiveTurn>(
+    const activities = settledCalls(saved.reduce<LiveTurn>(
       (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
-    ).activities.map(({ startedAt: _startedAt, ...activity }) => activity), false);
+    ).activities.map(withoutClock), false);
     const prior = byUser.get(index - 1);
     const stopped = ended?.stopped || activities.some((activity) => activity.stopped);
-    const next: TurnTrace = { startedAt: 0, endedAt: 0, ...ended, ...prior, userIndex: index - 1, activities, text: message.content, saved: true, ...(stopped ? { stopped: true } : {}) };
+    // The worker's marks are authoritative for the rows they carry; what only
+    // this window recorded (a longer reasoning text) stays.
+    const reasoning = rows.reasoning.length ? mergeReasoning(prior?.reasoning ?? [], rows.reasoning) : prior?.reasoning;
+    const decisions = mergeDecisions(prior?.decisions, rows.decisions);
+    const next: TurnTrace = {
+      startedAt: 0, endedAt: 0, ...ended, ...prior, userIndex: index - 1, activities, text: message.content, saved: true, ...(stopped ? { stopped: true } : {}),
+      ...(reasoning?.length ? { reasoning } : {}),
+      ...(rows.plan ? { plan: rows.plan.entries, planAt: rows.plan.at } : {}),
+      ...(rows.notices.length ? { notices: rows.notices } : {}),
+      ...(decisions?.length ? { decisions } : {}),
+    };
     if (prior && JSON.stringify(prior) === JSON.stringify(next)) return;
     byUser.set(index - 1, next);
     changed = true;
   });
   return changed ? [...byUser.values()].sort((left, right) => left.userIndex - right.userIndex).slice(-MAX_TRACES) : traces;
+}
+
+/** A saved turn's row without this window's clock (a saved call is not
+ * running: no seconds to count, and nothing that differs between two reads of
+ * the same turn). */
+function withoutClock(activity: Activity): Activity {
+  const { startedAt: _startedAt, ...rest } = activity;
+  return activity.children ? { ...rest, children: activity.children.map(withoutClock) } : rest;
 }
 
 function cleanEvent(event: HarnessActivityEvent): HarnessActivityEvent {
@@ -458,6 +644,73 @@ function asActivity(key: string, event: HarnessActivityEvent, extra: Partial<Act
   return { ...fields, key, ...extra } as Activity;
 }
 
+/** Children kept under one sub-agent row. */
+const MAX_CHILDREN = 200;
+
+/** A sub-agent's frame into the row of its parent (anywhere in the tree):
+ * its words, and -- for a call -- a child row of its own, merged by id like
+ * any call, in the order the children began (standard 5). The parent's count
+ * is of unique child call ids (withChildTool), never of frames. Returns the
+ * rows unchanged when nothing changed, undefined when the parent is not here. */
+function placeChild(rows: Activity[], event: HarnessActivityEvent, offset: number): Activity[] | undefined {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]!;
+    if (row.key !== event.parentId) {
+      const inner = row.children?.length ? placeChild(row.children, event, offset) : undefined;
+      if (!inner) continue;
+      if (inner === row.children) return rows;
+      const next = [...rows];
+      next[index] = { ...row, children: inner };
+      return next;
+    }
+    const says = childActivity(row.child, event);
+    let parent = withChildTool(row, event);
+    let children = row.children;
+    if (event.kind !== 'thinking') {
+      const held = row.children ?? [];
+      const at = held.findIndex((entry) => sameCall(entry, event));
+      if (at >= 0) {
+        const merged = mergeActivity(held[at]!, event);
+        const prior = held[at]!;
+        children = [...held];
+        children[at] = asActivity(prior.key, merged, {
+          ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
+          ...(prior.offset !== undefined ? { offset: prior.offset } : {}),
+          ...(prior.seq !== undefined ? { seq: prior.seq } : {}),
+          ...(prior.children ? { children: prior.children } : {}),
+        });
+      } else {
+        const key = event.id ?? `${row.key}>#${held.length + 1}`;
+        children = [...held, asActivity(key, event, { startedAt: Date.now(), offset, ...(event.seq !== undefined ? { seq: event.seq } : {}) })].slice(-MAX_CHILDREN);
+      }
+      // Counted from the unique ids it holds while it runs; a finished
+      // parent's number is what the harness reported, else what was counted.
+      if (row.kind === 'tool-start') parent = { ...parent, childTools: Math.max(parent.childTools ?? 0, children.length) };
+    }
+    if (says === row.child && parent === row && children === row.children) return rows;
+    const next = [...rows];
+    next[index] = { ...parent, ...(children ? { children } : {}), ...(says ? { child: says } : { child: undefined }) };
+    return next;
+  }
+  return undefined;
+}
+
+/** A running sub-agent's live children for drawing: the last few that are
+ * still running, each its own line (one finishing never clears another's).
+ * `beside`: it began no later than the parent's row, so it sits directly
+ * under it; one that began after more of the answer was written sits at its
+ * own place below that text (never above text emitted before it). `newest`
+ * carries the parent's count. */
+export interface LiveChild { parent: Activity; child: Activity; beside: boolean; newest: boolean }
+
+export function liveChildren(parent: Activity, shown = CHILDREN_SHOWN): LiveChild[] {
+  if (parent.kind !== 'tool-start' || !parent.children?.length) return [];
+  const running = parent.children.filter((entry) => entry.kind === 'tool-start').slice(-shown);
+  return running.map((child, rank) => ({
+    parent, child, beside: (child.offset ?? 0) <= (parent.offset ?? 0), newest: rank === running.length - 1,
+  }));
+}
+
 /** A tool frame into the turn's rows, by the terminal's rules: a later frame
  * of the same call (by id, or the open row with its label) merges into it --
  * never reopening a finished call -- and a sub-agent's frames say what it is
@@ -466,15 +719,12 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
   if (raw.kind === 'thinking' && !raw.parentId) return live;
   const event = cleanEvent(raw);
   if (event.parentId) {
-    const index = live.activities.findIndex((item) => item.key === event.parentId);
-    if (index < 0) return live;
-    const parent = live.activities[index]!;
-    const child = childActivity(parent.child, event);
-    const counted = withChildTool(parent, event);
-    if (child === parent.child && counted === parent) return live;
-    const activities = [...live.activities];
-    activities[index] = { ...counted, ...(child ? { child } : { child: undefined }) };
-    return { ...live, activities };
+    const placed = placeChild(live.activities, event, offset);
+    if (placed === live.activities) return live;
+    if (placed) return { ...live, activities: placed };
+    // Its parent was never seen (or is gone): its reasoning is nothing to
+    // draw, its call is a row of its own rather than lost.
+    if (event.kind === 'thinking') return live;
   }
   for (let index = live.activities.length - 1; index >= 0; index -= 1) {
     const prior = live.activities[index]!;
@@ -485,13 +735,16 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
       ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
       ...(prior.offset !== undefined ? { offset: prior.offset } : {}),
       ...(prior.seq !== undefined ? { seq: prior.seq } : {}),
+      ...(prior.children ? { children: prior.children } : {}),
       ...(prior.child && merged.kind === 'tool-start' ? { child: prior.child } : {}),
     });
     return { ...live, activities };
   }
-  const seen = live.seen + 1;
-  const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now(), offset, seq: seen });
-  return { ...live, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
+  const { seq, seen } = takeSeq(live, event.seq);
+  const row = asActivity(event.id ?? `#${seq}`, event, { startedAt: Date.now(), offset, seq });
+  // A call began: answer text after it is a new response (answerWriting).
+  const began = event.kind === 'tool-start' ? { callAt: stampAfter(live.writingAt) } : {};
+  return { ...live, ...began, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
 }
 
 /** The terminal's rule: the thought being had accumulates (appendThought);
@@ -507,7 +760,8 @@ function withThought(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
   const before = fresh ? settled(live) : live;
   // A thought takes its place in the order when it begins, not when it is
   // settled -- the call it led to is settled after it.
-  return { ...before, thought: next, ...(fresh ? { seen: before.seen + 1, thoughtStart: { offset: live.text.length, at: Date.now(), seq: before.seen + 1 } } : {}) };
+  const taken = takeSeq(before, event.seq);
+  return { ...before, thought: next, ...(fresh ? { seen: taken.seen, thoughtStart: { offset: live.text.length, at: Date.now(), seq: taken.seq } } : {}) };
 }
 
 /** The thought being had, settled in its place: a tool started, the answer
@@ -562,6 +816,18 @@ function turnReasoning(live: LiveTurn | undefined): ThoughtEntry[] | undefined {
   return kept.length ? kept : undefined;
 }
 
+/** The turn's notices the worker kept, added to the window's own as notes at
+ * their offsets. One the window already has -- the same mark, the same seq, or
+ * the same words at the same place -- is not added again. */
+function withNoticeMarks(notes: Note[], turn: number, notices: MarkRows['notices']): Note[] {
+  const fresh = notices.filter((notice) => !notes.some((note) => note.turn === turn
+    && (note.markId === notice.id || note.seq === notice.seq || (note.text === notice.text && note.offset === notice.offset))));
+  if (!fresh.length) return notes;
+  return [...notes, ...fresh.map((notice): Note => ({
+    kind: 'notice', level: noticeLevel(notice.text), text: notice.text, after: turn + 1, turn, offset: notice.offset, seq: notice.seq, markId: notice.id,
+  }))].slice(-MAX_NOTES);
+}
+
 export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
   if (model.sessionId && sessionId !== model.sessionId) return model;
   switch (event.type) {
@@ -582,14 +848,27 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const replayed = event.live.activities
         ? event.live.activities.reduce<LiveTurn>((live, item) => withToolPhase(upsertActivity(live, item.event, item.responseOffset), item.event), base)
         : base;
+      // What the worker holds that a window cannot have seen: its settled
+      // thoughts, the plan, the notices and decisions in their own order, and
+      // the thought being had. The worker's rows are authoritative for the
+      // rows they carry; what only this window held stays.
+      const rows = marksToRows(event.live.marks);
+      const folded = withWorkerThought({
+        ...replayed, reasoning: mergeReasoning(replayed.reasoning, rows.reasoning),
+        ...(mergeDecisions(replayed.decisions, rows.decisions) ? { decisions: mergeDecisions(replayed.decisions, rows.decisions)! } : {}),
+        ...(rows.plan ? { planAt: rows.plan.at } : {}),
+        seen: Math.max(replayed.seen, ...rows.reasoning.map((entry) => entry.seq), ...rows.decisions.map((entry) => entry.seq), rows.plan?.at.seq ?? 0, ...rows.notices.map((entry) => entry.seq)),
+      }, event.live.thought);
       // Steers are the turn's own record, so every window shows them.
       // Each takes its place in the order when it was acknowledged: the
       // worker's `seq` where it sends one, else the order this window first
       // saw it in (the earlier window's, kept).
-      let seen = replayed.seen;
+      let seen = folded.seen;
       const held = model.live?.steers ?? [];
       const steers = (event.session.pendingTurn?.steers ?? []).map((steer, index) => {
-        const seq = (steer as { seq?: number }).seq ?? held[index]?.seq ?? ++seen;
+        const given = (steer as { seq?: number }).seq;
+        const seq = given ?? held[index]?.seq ?? ++seen;
+        seen = Math.max(seen, seq);
         return { text: steer.text, offset: steer.responseOffset ?? event.live!.text.length, seq };
       });
       // The plan the worker says the turn has is placed where this window
@@ -597,15 +876,30 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // before). `planOffset` is read defensively: a worker that records it
       // sends where it really was.
       const planOffset = (event.live as { planOffset?: number }).planOffset;
-      const planAt = replayed.planAt ?? (event.live.plan?.length ? { offset: planOffset ?? 0, seq: ++seen } : undefined);
+      const planAt = folded.planAt ?? (event.live.plan?.length ? { offset: planOffset ?? 0, seq: ++seen } : undefined);
+      // Joined mid-answer: text that came after the turn's last call is
+      // being written; the window did not see it arrive, so it says so now.
+      const lastCall = folded.activities.reduce((last, item) => Math.max(last, item.offset ?? 0), 0);
+      const answering = event.live.text.length > 0 && event.live.text.length > lastCall;
+      const grew = event.live.text.length > (model.live?.text.length ?? 0);
+      const writing = answering && (folded.writingAt === undefined || grew) ? { writingAt: stampAfter(folded.callAt) } : {};
+      // The turn's phase, only while it has not begun to answer, and never the
+      // adapters' "waiting for your approval" (stale once it is answered).
+      const reported = event.live.phase ? stripAnsi(event.live.phase) : undefined;
+      const phase = folded.phase ?? (reported && !event.live.text && !isApprovalWaitPhase(reported) ? reported : undefined);
+      const turnIndex = next.turnUserIndex ?? next.messages.length;
       return {
         ...next,
         running: true,
-        turnUserIndex: next.turnUserIndex ?? next.messages.length,
+        turnUserIndex: turnIndex,
+        notes: withNoticeMarks(next.notes, turnIndex, rows.notices),
         live: {
-          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}),
+          ...folded, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}), ...writing,
+          ...(phase ? { phase } : {}),
         },
-        ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
+        ...(event.live.usage ? { turnUsage: { ...event.live.usage, ...next.turnUsage } } : {}),
+        ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) }
+          : rows.plan && !next.plan.length ? { plan: rows.plan.entries } : {}),
       };
     }
     case 'waiting-start':
@@ -631,19 +925,22 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const notes = event.mode === 'replace' && model.notes.some((note) => note.turn !== undefined && note.turn === model.turnUserIndex)
         ? model.notes.map((note) => (note.turn !== undefined && note.turn === model.turnUserIndex ? rebaseOffsets([note], live.text, text)[0]! : note))
         : model.notes;
-      return { ...model, notes, live: { ...after, ...placed, ...planAt, text, activeAt: Date.now(), ...(event.text ? { writingAt: Date.now() } : {}) } };
+      return { ...model, notes, live: { ...after, ...placed, ...planAt, text, activeAt: Date.now(), ...(event.text ? { writingAt: stampAfter(after.callAt) } : {}) } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
       return { ...model, live: { ...applyActivity(withoutPhase(live), event.event), activeAt: Date.now() } };
     }
     case 'phase':
-      return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
+      // The adapters' own "waiting for your approval" is what the approval
+      // card says; kept as the status it would outlast the answer.
+      return model.live && !isApprovalWaitPhase(event.message) ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
     case 'plan': {
       const plan = event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) }));
       // One plan row per turn: placed where it first appeared, updated in place.
+      const taken = model.live ? takeSeq(model.live, event.seq) : undefined;
       const live = model.live && !model.live.planAt && plan.length
-        ? { ...model.live, seen: model.live.seen + 1, planAt: { offset: model.live.text.length, seq: model.live.seen + 1 } }
+        ? { ...model.live, seen: taken!.seen, planAt: { offset: Math.min(event.responseOffset ?? model.live.text.length, model.live.text.length), seq: taken!.seq } }
         : model.live;
       return { ...model, plan, ...(live ? { live } : {}) };
     }
@@ -665,6 +962,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
           id: event.id, title: stripAnsi(event.title),
           ...(event.detail ? { detail: stripAnsi(event.detail) } : {}),
           ...(event.rule ? { rule: event.rule } : {}),
+          ...askedAt(model, event),
           ...(asFileDiffs(event.preview?.diff)?.length ? { diff: cleanDiff(asFileDiffs(event.preview?.diff)!) } : {}),
         }],
       };
@@ -673,16 +971,23 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return {
         ...model,
         ...(model.live && model.live.pausedAt === undefined ? { live: { ...model.live, pausedAt: Date.now() } } : {}),
-        approvals: [...model.approvals, { id: event.id, title: stripAnsi(event.request.title), question: event.request }],
+        approvals: [...model.approvals, { id: event.id, title: stripAnsi(event.request.title), question: event.request, ...askedAt(model, event) }],
       };
     case 'request-closed':
       // Answered in another window, withdrawn by the vendor, or the turn ended.
-      return model.approvals.some((item) => item.id === event.id) ? answeredApproval(model, event.id) : model;
+      // Decided (by any window): the settled row it becomes, once.
+      return model.approvals.some((item) => item.id === event.id) || event.outcome
+        ? answeredApproval(model, event.id, event.outcome ? { outcome: event.outcome, ...(event.label ? { label: stripAnsi(event.label) } : {}) } : undefined)
+        : model;
     case 'notice':
     case 'note':
       // The terminal colours its notes: yellow for an account switch or a
       // limit, red for a failure. The colour is the level.
-      return withNote(model, { kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message) });
+      return withNote(model, {
+        kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message),
+        ...(event.type === 'note' && event.seq !== undefined ? { seq: event.seq } : {}),
+        ...(event.type === 'note' && event.responseOffset !== undefined ? { offset: event.responseOffset } : {}),
+      });
     case 'turn-error': {
       const msg = failureLine(stripAnsi(event.message));
       // Exhaustion is an outcome, not a fault — show it as informational chat
@@ -714,11 +1019,13 @@ function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
   // The saved turn's calls, when its snapshot came first, win over the ones
   // this window watched (see withSavedTraces).
   const saved = model.traces.find((trace) => trace.userIndex === model.turnUserIndex && trace.saved);
-  const traces = (activities.length || reasoning || plan || turnNotes || (asked && model.live?.text)) && model.turnUserIndex !== undefined
+  const decisions = model.live?.decisions?.length ? model.live.decisions : undefined;
+  const traces = (activities.length || reasoning || plan || turnNotes || decisions || (asked && model.live?.text)) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
-      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
+      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(decisions ? { decisions } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
       // Completed steers are materialized as user messages in session.messages.
       // Keeping the live badges in the finished trace displayed each prompt twice.
+      ...(model.turnUsage ? { usage: model.turnUsage } : {}),
       text: model.live?.text ?? '',
       // Less the time approvals waited, as the terminal's summary counts.
       startedAt: model.live ? Date.now() - liveElapsedMs(model.live, Date.now()) : Date.now(), endedAt: Date.now(),
@@ -830,12 +1137,55 @@ export function stoppingTurn(model: ChatModel): ChatModel {
   return { ...model, live: { ...(model.live ?? freshLive('thinking')), stopping: true } };
 }
 
-export function answeredApproval(model: ChatModel, id: string): ChatModel {
+/** Where a request was asked, from what the worker sent with it and the
+ * vendor's call it names, if any (read defensively: not every worker says). */
+function askedAt(model: ChatModel, event: { seq?: number; responseOffset?: number }): Partial<Pick<Approval, 'seq' | 'offset' | 'callId'>> {
+  const callId = (event as { callId?: unknown }).callId;
+  return {
+    ...(typeof event.seq === 'number' ? { seq: event.seq } : {}),
+    ...(typeof event.responseOffset === 'number' ? { offset: event.responseOffset } : {}),
+    ...(typeof callId === 'string' && callId ? { callId } : {}),
+  };
+}
+
+/** What became of an approval or question: the outcome the worker names or
+ * this window's own answer; `always` and `told` are only known to the window
+ * that answered. */
+export type Decided = { outcome: 'approved' | 'denied' | 'answered' | 'declined'; label?: string; always?: boolean; told?: string };
+
+export function answeredApproval(model: ChatModel, id: string, decided?: Decided): ChatModel {
+  const approval = model.approvals.find((item) => item.id === id);
   const approvals = model.approvals.filter((item) => item.id !== id);
+
   // Time spent on the user's answer is not the turn going quiet, and not
   // the turn's time: the clock runs again once none is waiting.
   const live = model.live && { ...model.live, activeAt: Date.now(), ...(approvals.length || model.signIn ? {} : resumed(model.live)) };
-  return { ...model, approvals, ...(live ? { live } : {}) };
+  const settled = live && decided ? withDecision(live, id, approval, decided) : live;
+  return { ...model, approvals, ...(settled ? { live: settled } : {}) };
+}
+
+/** The decision recorded as a row of the turn, under the id the worker's own
+ * `outcome` mark has, so the two are one row. */
+function withDecision(live: LiveTurn, id: string, approval: Approval | undefined, decided: Decided): LiveTurn {
+  const entryId = `outcome:${id}`;
+  const held = live.decisions?.find((entry) => entry.id === entryId);
+  const label = decided.label ?? approval?.title ?? (held && 'label' in held.decision ? held.decision.label : undefined) ?? 'request';
+  const decision: Decision = decided.told ? { kind: 'told', text: decided.told }
+    : decided.outcome === 'approved' ? { kind: 'approved', label, ...(decided.always || (held?.decision.kind === 'approved' && held.decision.always) ? { always: true } : {}) }
+      : decided.outcome === 'answered' ? { kind: 'answered', label }
+        : decided.outcome === 'declined' ? { kind: 'declined', label } : { kind: 'denied', label };
+  if (held) {
+    // Told and declined are this window's own knowledge: the worker's plain
+    // "denied" does not take them back.
+    const keep = held.decision.kind === 'told' || held.decision.kind === 'declined';
+    return { ...live, decisions: live.decisions!.map((entry) => (entry.id === entryId ? { ...entry, decision: keep ? entry.decision : decision } : entry)) };
+  }
+  const taken = takeSeq(live, approval?.seq);
+  const entry: DecisionEntry = {
+    id: entryId, decision, offset: Math.min(approval?.offset ?? live.text.length, live.text.length), seq: taken.seq,
+    ...(approval?.callId ? { callId: approval.callId } : {}),
+  };
+  return { ...live, seen: taken.seen, decisions: [...(live.decisions ?? []), entry] };
 }
 
 /** The clock running again after an approval: the pause added up. */
@@ -860,7 +1210,27 @@ export function typedDuringTurn(model: ChatModel, id: string, text: string): Cha
 
 export type TurnMark = {
   offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string; steerIndex?: number; plan?: true; note?: Note;
+  /** A decision that is a row of its own (not settled on a call's row). */
+  decision?: DecisionEntry;
+  /** A running sub-agent's live child that sits below text (not beside its
+   * parent's row). */
+  child?: LiveChild;
 };
+
+/** A turn's notices for drawing: the window's own notes of the turn plus the
+ * worker's saved ones, a notice both have drawn once (same mark, same seq, or
+ * the same words at the same place). */
+export function turnNoticeNotes(notes: readonly Note[] | undefined, trace: Pick<TurnTrace, 'notices' | 'userIndex'>): Note[] {
+  const held = [...(notes ?? [])];
+  for (const notice of trace.notices ?? []) {
+    if (held.some((note) => note.markId === notice.id || note.seq === notice.seq || (note.text === notice.text && note.offset === notice.offset))) continue;
+    held.push({
+      kind: 'notice', level: noticeLevel(notice.text), text: notice.text, after: trace.userIndex + 1, turn: trace.userIndex,
+      offset: notice.offset, seq: notice.seq, markId: notice.id,
+    });
+  }
+  return held;
+}
 
 /** A turn's calls, thoughts, plan, notices and steered messages in the order
  * they happened (standard section 1): by where in the answer they came, then
@@ -869,14 +1239,32 @@ export type TurnMark = {
  * already at its place. */
 export function turnMarks(
   text: string, activities: readonly Activity[], thoughts: readonly ThoughtEntry[], steers: ReadonlyArray<{ text: string; offset: number; seq?: number }>,
-  extra: { plan?: PlanAt; notes?: ReadonlyArray<{ offset: number; seq: number; note: Note }> } = {},
+  extra: { plan?: PlanAt; notes?: ReadonlyArray<{ offset: number; seq: number; note: Note }>; decisions?: readonly DecisionEntry[] } = {},
 ): TurnMark[] {
   const at = (offset: number): number => Math.min(offset, text.length);
-  return [
+  // A decision the vendor tied to a call settles that call's row; the others
+  // are rows of their own at the place they were asked.
+  const onCall = new Map<string, Decision>();
+  const alone: DecisionEntry[] = [];
+  for (const entry of extra.decisions ?? []) {
+    if (entry.callId && activities.some((activity) => activity.key === entry.callId)) onCall.set(entry.callId, entry.decision);
+    else alone.push(entry);
+  }
+  // One comparator for every surface (activity-view.ts orderMarks): the CLI
+  // and the extension cannot disagree about where a row sits.
+  return orderMarks([
     ...thoughts.map((thought) => ({ offset: at(thought.offset), seq: thought.seq, thought })),
-    ...activities.map((activity, index) => ({ offset: at(activity.offset ?? 0), seq: activity.seq ?? index, activity })),
+    ...activities.map((activity, index) => ({
+      offset: at(activity.offset ?? 0), seq: activity.seq ?? index, activity: onCall.has(activity.key) ? { ...activity, decision: onCall.get(activity.key)! } : activity,
+    })),
+    ...alone.map((entry) => ({ offset: at(entry.offset), seq: entry.seq, decision: entry })),
+    // Live children that began after more answer was written: a row of their
+    // own under that text, in the order they began, just after their parent.
+    ...activities.flatMap((activity, index) => liveChildren(activity).flatMap((live, rank) => (live.beside ? [] : [{
+      offset: at(live.child.offset ?? 0), seq: live.child.seq ?? (activity.seq ?? index) + (rank + 1) / 1000, child: live,
+    }]))),
     ...steers.map((steer, steerIndex) => ({ offset: at(steer.offset), seq: steer.seq ?? Number.MAX_SAFE_INTEGER, steer: steer.text, steerIndex })),
     ...(extra.plan ? [{ offset: at(extra.plan.offset), seq: extra.plan.seq, plan: true as const }] : []),
     ...(extra.notes ?? []).map(({ offset, seq, note }) => ({ offset: at(offset), seq, note })),
-  ].sort((left, right) => left.offset - right.offset || left.seq - right.seq);
+  ], (mark) => ({ responseOffset: mark.offset, seq: mark.seq }));
 }
