@@ -103,8 +103,10 @@ for the whole block, the block degrades (fewer option rows), it is never
 omitted while the status still says "waiting for you". A decision leaves a
 settled outcome (`approved`, `denied`, `answered`, and `told`/`declined` where
 the answering window knows them) at its place in order. **One event is one
-row**: the decision carries the call id and settles that call's row; it
-stands alone only when the vendor reports no call for it.
+row**: the decision carries the call id (on the live `approval-request`, on
+`request-closed`, and on the journaled `outcome` mark) and settles that call's
+row, live, in a joined window and on reopen; it stands alone only when the
+vendor reports no call for it (a mark saved before the id was kept).
 
 ## 9. Status and animation
 
@@ -134,6 +136,13 @@ changed`, `Stopped after 3s`, or `Waiting for N background agents`. Per-turn
 usage (tokens, cost, context) is shown by every surface, not only the
 extension.
 
+N is the vendor's own count at the turn's end (`onBackgroundAgents`; Claude
+Code's `system/background_tasks_changed` level and `turn_duration.
+pendingBackgroundAgentCount`, forwarded by claude-agent-acp as
+`_claude/sdkMessage`), kept on the saved answer's `turnEnd.pendingBackground`
+and on the live turn. A harness whose vendor publishes no count declares
+`backgroundAgents: false`; the line never guesses one.
+
 ## 11. Replay parity
 
 Anything drawn live is drawn on reopen, in the same order: thought rows, the
@@ -151,3 +160,10 @@ whenever the vendor exposes it. Plan updates whenever the vendor emits them.
 Usage whenever the vendor reports it. A vendor that cannot supply one of these
 is marked in the harness catalog (`src/harness/catalog`), and the surfaces
 degrade to nothing -- never to a wrong row, never to a guessed one.
+
+The catalog's `capabilities` (childActivity, thinking, plan, usage, toolOutput,
+backgroundAgents) are held per harness by
+`src/harness/protocol/turn-flow-conformance.vitest.test.ts`: a `true` must be
+produced, through the real adapter, by a fixture of the wire shape that
+harness publishes. A CLI parser that reads reasoning is only wired when the
+turn argv asks for it (opencode/kilo `run --thinking`).
