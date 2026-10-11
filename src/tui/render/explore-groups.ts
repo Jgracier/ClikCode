@@ -10,7 +10,9 @@
  * another kind of call, or the answer's prose -- or the turn ends, and only
  * then settles; from that moment it is sealed, and a later read starts a row
  * of its own. Membership is remembered, never recomputed: a row's place in a
- * group cannot change once the group has been drawn. */
+ * group cannot change once the group has been drawn. The one exception is a
+ * call first seen as a bare name: the first frame that says what it is decides
+ * it, once (standard section 6). */
 
 import chalk from 'chalk';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
@@ -34,13 +36,21 @@ export type TurnGroup<T extends GroupRow> = {
 /** Reads and searches; a failed one still belongs to the group it was in. */
 const looking = (event: HarnessActivityEvent): boolean => !event.agent && (event.category === 'read' || event.category === 'search');
 
+/** A start frame that carries a name and nothing else: what kind of call it
+ * is has not been said yet. */
+const unclassified = (event: HarnessActivityEvent): boolean => !event.agent && event.category === undefined;
+
 export class ExploreGrouping {
   private readonly groupOf = new Map<string, string>();
   private readonly sealed = new Set<string>();
+  /** Calls first seen before they could be classified: the first frame that
+   * carries a category decides their membership, once. */
+  private readonly undecided = new Set<string>();
 
   reset(): void {
     this.groupOf.clear();
     this.sealed.clear();
+    this.undecided.clear();
   }
 
   /** `rows` in the order they happened; `ended` the turn is over; `prose`
@@ -51,19 +61,28 @@ export class ExploreGrouping {
     const byKey = new Map<string, TurnGroup<T>>();
     for (const row of rows) {
       const assigned = this.groupOf.get(row.key);
-      const known = assigned === undefined ? undefined : byKey.get(assigned);
+      // Membership is decided on the first frame that carries the category.
+      // A call that began as a bare name takes a row of its own meanwhile
+      // (the place it holds does not move); once it can be classified it may
+      // still join the run it follows, if that run is open.
+      const reassess = assigned === row.key && this.undecided.has(row.key) && !unclassified(row.event);
+      if (reassess) this.undecided.delete(row.key);
+      const settledAt = reassess ? undefined : assigned;
+      const known = settledAt === undefined ? undefined : byKey.get(settledAt);
       if (known) { known.members.push(row); continue; }
       const last = groups[groups.length - 1];
       const tail = last?.members[last.members.length - 1];
       // Joins the row before it only when both only look around, no prose
       // came between them (the same offset into the answer), and that row's
       // group is still the open tail.
-      if (assigned === undefined && last && tail && explores(row.event) && last.members.every((member) => looking(member.event))
+      if (settledAt === undefined && last && tail && explores(row.event) && last.members.every((member) => looking(member.event))
         && !this.sealed.has(last.key) && tail.responseOffset !== undefined && tail.responseOffset === row.responseOffset) {
         last.members.push(row);
+        for (const [member, group] of this.groupOf) if (group === row.key) this.groupOf.set(member, last.key);
         this.groupOf.set(row.key, last.key);
         continue;
       }
+      if (assigned === undefined && unclassified(row.event)) this.undecided.add(row.key);
       const key = assigned ?? row.key;
       const group: TurnGroup<T> = { key, members: [row], merged: false, done: false };
       groups.push(group);
@@ -74,7 +93,11 @@ export class ExploreGrouping {
       group.merged = group.members.length > 1;
       const finished = group.members.every((member) => member.event.kind !== 'tool-start');
       const last = group.members[group.members.length - 1]!;
-      const followed = index < groups.length - 1 || (last.responseOffset !== undefined && prose > last.responseOffset);
+      // A call still only a name could yet join this run, so it does not
+      // close it; anything that has said what it is does.
+      const undecidedGroup = (other: TurnGroup<T>): boolean => other.members.length === 1
+        && unclassified(other.members[0]!.event) && other.members[0]!.event.kind === 'tool-start';
+      const followed = groups.slice(index + 1).some((other) => !undecidedGroup(other)) || (last.responseOffset !== undefined && prose > last.responseOffset);
       // A lone call that is not looking around settles when it finishes, as
       // every row always has; one that is could still become a merged row.
       const open = group.members.every((member) => looking(member.event)) && !this.sealed.has(group.key) && !followed;
