@@ -24,7 +24,7 @@ describe('Gateway turn startup', () => {
   it('starts without a model-list network request for a text turn', async () => {
     catalog.saved.mockResolvedValue(undefined);
     catalog.fresh.mockClear();
-    const client = await modelClientForSession(session(), {} as never);
+    const client = await modelClientForSession(session(), { get: () => undefined } as never);
     expect(client).toBeDefined();
     expect(catalog.fresh).not.toHaveBeenCalled();
   });
@@ -32,7 +32,7 @@ describe('Gateway turn startup', () => {
   it('fetches missing vision facts when an image needs them', async () => {
     catalog.saved.mockResolvedValue(undefined);
     catalog.fresh.mockResolvedValue({ automatic: 'vision-model', models: [{ id: 'vision-model', vision: true, contextWindow: 100_000 }] });
-    const client = await modelClientForSession(session(['/tmp/shot.png']), {} as never);
+    const client = await modelClientForSession(session(["/tmp/shot.png"]), { get: () => undefined } as never);
     expect(catalog.fresh).toHaveBeenCalledOnce();
     expect(client.acceptsImages).toBe(true);
     expect(client.contextHints?.contextWindow).toBe(100_000);

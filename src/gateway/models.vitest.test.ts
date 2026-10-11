@@ -58,6 +58,24 @@ describe('the Gateway\'s model list', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  // The super admin's switch (subscriptions.ts): sent as asked, its state read back only when the
+  // Gateway reports it -- which it does for the super admin alone -- and each position its own list.
+  it('sends the subscription switch, reads back its state, and keeps one list per position', async () => {
+    let on = true;
+    const config = { get: (key: string) => (key === 'gatewaySubscriptions' ? on : undefined) } as never;
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => reply({
+      ...WIRE, clikcode: { subscriptions: (init.headers as Record<string, string>)['x-clikcode-subscriptions'] === 'on' },
+    }));
+    expect((await gatewayModels({ fetchImpl: fetchImpl as never, config })).subscriptions).toBe(true);
+    on = false;
+    const off = await gatewayModels({ fetchImpl: fetchImpl as never, config });
+    expect(off.subscriptions).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(((fetchImpl.mock.calls[1] as unknown as [string, RequestInit])[1].headers as Record<string, string>)['x-clikcode-subscriptions']).toBe('off');
+    // A customer's list carries no switch.
+    expect(await gatewayModels({ fetchImpl: (async () => reply(WIRE)) as never, config, fresh: true })).not.toHaveProperty('subscriptions');
+  });
+
   it('says so when the Gateway predates model choice', async () => {
     await expect(gatewayModels({ fetchImpl: (async () => new Response('nope', { status: 404 })) as never }))
       .rejects.toThrow('this Gateway does not offer a model choice yet');

@@ -12,6 +12,7 @@ import { dirname, join } from 'node:path';
 import { stateDirectory } from '../session/store/paths.js';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
+import { gatewaySubscriptionsOn, subscriptionsHeader } from './subscriptions.js';
 
 export interface GatewayModel {
   id: string;
@@ -51,6 +52,9 @@ export interface GatewayModelList {
   /** What the Gateway picks when nothing is chosen. */
   automatic: string | null;
   models: GatewayModel[];
+  /** The super admin's subscription switch (subscriptions.ts), as the list was asked for. Absent for
+   * everyone else: its presence is what shows the switch. */
+  subscriptions?: boolean;
 }
 
 /** One row's detail: the model's token price, then what it can do beyond
@@ -77,7 +81,7 @@ export function gatewayPriceLabel(price: GatewayModelPrice): string {
 }
 
 const TTL_MS = 60_000;
-let cached: { baseUrl: string; auth: string; at: number; list: GatewayModelList } | undefined;
+let cached: { baseUrl: string; auth: string; subscriptions: boolean; at: number; list: GatewayModelList } | undefined;
 
 /** The model list includes account-specific access and prices. Keep a digest,
  * never the credential itself, beside its cache entry. */
@@ -93,20 +97,23 @@ function diskCachePath(): string {
 
 /** The last list received from `baseUrl`, however old, or undefined. */
 export async function savedGatewayModels(options: { config?: Conf } = {}): Promise<GatewayModelList | undefined> {
-  const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
+  const config = options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
+  const { baseUrl, apiKey } = gatewayConnection(config);
   try {
-    const saved = JSON.parse(await readFile(diskCachePath(), 'utf8')) as { baseUrl?: string; auth?: string; list?: GatewayModelList };
-    return saved.baseUrl === baseUrl && saved.auth === authDigest(apiKey) && Array.isArray(saved.list?.models) ? saved.list : undefined;
+    const saved = JSON.parse(await readFile(diskCachePath(), 'utf8')) as { baseUrl?: string; auth?: string; subscriptions?: boolean; list?: GatewayModelList };
+    // A list asked for with the other switch position is another list (subscription models or not).
+    const sameSwitch = (saved.subscriptions ?? true) === gatewaySubscriptionsOn(config);
+    return saved.baseUrl === baseUrl && saved.auth === authDigest(apiKey) && sameSwitch && Array.isArray(saved.list?.models) ? saved.list : undefined;
   } catch {
     // fail-open-ok: no saved list (first use, or unreadable) means the picker waits for the Gateway, as before.
     return undefined;
   }
 }
 
-async function saveGatewayModels(baseUrl: string, auth: string, list: GatewayModelList): Promise<void> {
+async function saveGatewayModels(baseUrl: string, auth: string, subscriptions: boolean, list: GatewayModelList): Promise<void> {
   const file = diskCachePath();
   await mkdir(dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ baseUrl, auth, at: Date.now(), list }), { mode: 0o600 });
+  await writeFile(file, JSON.stringify({ baseUrl, auth, subscriptions, at: Date.now(), list }), { mode: 0o600 });
 }
 
 /** Words that mean "let the Gateway choose" rather than a model id. */
@@ -144,13 +151,15 @@ export function isAutomaticModelWord(value: string): boolean {
 export async function gatewayModels(
   options: { config?: Conf; fetchImpl?: typeof fetch; fresh?: boolean } = {},
 ): Promise<GatewayModelList> {
-  const { baseUrl, apiKey } = gatewayConnection(options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 }));
+  const config = options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
+  const { baseUrl, apiKey } = gatewayConnection(config);
   const auth = authDigest(apiKey);
-  if (!options.fresh && cached && cached.baseUrl === baseUrl && cached.auth === auth && Date.now() - cached.at < TTL_MS) return cached.list;
+  const subscriptions = gatewaySubscriptionsOn(config);
+  if (!options.fresh && cached && cached.baseUrl === baseUrl && cached.auth === auth && cached.subscriptions === subscriptions && Date.now() - cached.at < TTL_MS) return cached.list;
   const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/v1/models`, {
-    headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT },
+    headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT, ...subscriptionsHeader(subscriptions) },
   });
-  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown } | undefined;
+  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown; clikcode?: { subscriptions?: unknown } } | undefined;
   if (!response.ok || !Array.isArray(body?.data)) {
     // A Gateway that predates its OpenAI-compatible API answers 404.
     const error = body?.error;
@@ -158,10 +167,11 @@ export async function gatewayModels(
     const reason = message ?? (response.status === 404 ? 'this Gateway does not offer a model choice yet' : `HTTP ${response.status}`);
     throw Object.assign(new Error(`ClikDeploy Gateway models: ${reason}`), { statusCode: response.status });
   }
-  const list = fromOpenAIModelList(body.data);
-  cached = { baseUrl, auth, at: Date.now(), list };
+  const switchState = body.clikcode?.subscriptions;
+  const list = { ...fromOpenAIModelList(body.data), ...(typeof switchState === 'boolean' ? { subscriptions: switchState } : {}) };
+  cached = { baseUrl, auth, subscriptions, at: Date.now(), list };
   // fail-open-ok: a list that cannot be saved still answers this request; only the next instant open is lost.
-  await saveGatewayModels(baseUrl, auth, list).catch(() => undefined);
+  await saveGatewayModels(baseUrl, auth, subscriptions, list).catch(() => undefined);
   return list;
 }
 
