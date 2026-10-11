@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  activityResult, answerWriting, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
+  activityResult, answerWriting, decisionRow, isApprovalWaitPhase, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -114,5 +114,23 @@ describe('how a turn reads', () => {
     expect(tokenMeterLabel(1234)).toBe('↓ 1.2k tokens');
     expect(tokenMeterLabel(42)).toBe('↓ 42 tokens');
     expect(tokenMeterLabel(0)).toBeUndefined();
+  });
+
+  it('words what a decision leaves behind, and never shows a secret answer', () => {
+    expect(decisionRow({ kind: 'approved', label: 'make build' })).toEqual({ text: '✓ approved make build', tone: 'ok' });
+    expect(decisionRow({ kind: 'approved', label: 'make build', always: true }).text).toBe('✓ approved (always) make build');
+    expect(decisionRow({ kind: 'denied', label: 'make clean' })).toEqual({ text: '✗ denied make clean', tone: 'no' });
+    expect(decisionRow({ kind: 'told', text: 'use pnpm\ninstead' })).toEqual({ text: '↳ told: use pnpm instead', tone: 'told' });
+    expect(decisionRow({ kind: 'answered', label: 'Which database?', values: ['MySQL'] }).text).toBe('✓ answered Which database?: MySQL');
+    expect(decisionRow({ kind: 'answered', label: 'API key' }).text).toBe('✓ answered API key');
+    expect(decisionRow({ kind: 'declined', label: 'Which database?' }).text).toBe('✗ declined Which database?');
+  });
+
+  it('knows the adapters\' approval phase, which is stale once the approval is answered', () => {
+    expect(isApprovalWaitPhase('waiting for your approval: make clean')).toBe(true);
+    expect(isApprovalWaitPhase('waiting for your answer')).toBe(true);
+    expect(isApprovalWaitPhase('waiting for reset')).toBe(false);
+    expect(isApprovalWaitPhase('reading files')).toBe(false);
+    expect(isApprovalWaitPhase(undefined)).toBe(false);
   });
 });
