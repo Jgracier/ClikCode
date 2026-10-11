@@ -27,7 +27,7 @@ import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon, Spinner } from './ui';
-import { foldedGroupCount, foldedSummary, traceSummaryLine, workingStatus } from './flow';
+import { foldedGroupCount, foldedSummary, runGroupView, traceSummaryLine, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
@@ -69,11 +69,13 @@ const AssistantMessage = memo(({ cacheKey, text }: { cacheKey: string; text: str
  * separate nodes, so a delta replaces only the last block's HTML. */
 function LiveMarkdown({ text }: { text: string }): JSX.Element {
   const render = useRef(createStreamingMarkdown());
-  const { stable, tail } = render.current(text);
+  const { parts, tail } = render.current(text);
+  // One node per settled chunk, keyed by its place: a chunk is final, so
+  // growing the answer adds nodes and leaves the earlier ones' DOM alone.
   return (
     <div class="markdown">
-      <div class="md-part" dangerouslySetInnerHTML={{ __html: stable }} />
-      <div class="md-part" dangerouslySetInnerHTML={{ __html: tail }} />
+      {parts.map((html, index) => <div key={index} class="md-part" dangerouslySetInnerHTML={{ __html: html }} />)}
+      <div class="md-part tail" dangerouslySetInnerHTML={{ __html: tail }} />
     </div>
   );
 }
@@ -313,9 +315,9 @@ function FoldedRun({ activities, workspace, userIndex }: { activities: Activity[
 function RunGroups({ groups, workspace, userIndex }: { groups: ReadonlyArray<{ rows: Activity[]; explore: boolean }>; workspace?: string; userIndex?: number }): JSX.Element {
   return (
     <>
-      {groups.map((group) => (group.explore
-        ? <ExploredRow key={`e${group.rows[0]!.key}`} activities={group.rows} workspace={workspace} userIndex={userIndex} />
-        : <ActivityRow key={group.rows[0]!.key} activity={group.rows[0]!} workspace={workspace} userIndex={userIndex} />))}
+      {runGroupView(groups).map((group) => (group.kind === 'explored'
+        ? <ExploredRow key={group.key} activities={group.rows} workspace={workspace} userIndex={userIndex} />
+        : <ActivityRow key={group.key} activity={group.rows[0]!} workspace={workspace} userIndex={userIndex} />))}
     </>
   );
 }
@@ -405,8 +407,13 @@ function TurnFlow(props: {
     const piece = text.slice(at, end);
     if (!piece.trim()) return;
     flushRun();
-    const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(piece);
-    parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
+    // Live, every block of text is the same kind of node under the same key
+    // as it grows and as a call starts after it: its DOM survives.
+    if (props.live) parts.push(<LiveMarkdown key={`t${at}`} text={piece} />);
+    else {
+      const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(piece);
+      parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
+    }
     at = end;
   };
   for (const mark of marks) {
@@ -420,7 +427,7 @@ function TurnFlow(props: {
   }
   flushRun();
   if (props.live) {
-    if (text.slice(at)) parts.push(<LiveMarkdown key={`${props.live.startedAt}-${at}`} text={text.slice(at)} />);
+    if (text.slice(at).trim()) parts.push(<LiveMarkdown key={`t${at}`} text={text.slice(at)} />);
   } else paragraph(text.length);
   return <>{parts}</>;
 }

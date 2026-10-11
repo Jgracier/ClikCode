@@ -2,7 +2,7 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
-import { endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnStatus, turnSummary, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { endsWithSummary, exploreRuns, explores, exploreSummary, tensedLabel, turnStatus, turnSummary, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import type { FileDiff } from '../protocol';
@@ -99,4 +99,15 @@ export function traceSummaryLine(
   const said = turnSummary({ ms: 0, diffs });
   const at = said.indexOf(' · ');
   return at < 0 ? undefined : said.slice(at + 3);
+}
+
+/** A run's groups as rows, with keys that survive the merge points. A call
+ * that only looks around (a read, a search) is an "Explored" row from its
+ * first frame, so a second one joining it changes that row, never swaps one
+ * component for another (which destroyed the DOM: selection, open state,
+ * scroll). Everything else is a call row under its own key. */
+export function runGroupView<T extends Activity>(groups: ReadonlyArray<{ rows: T[]; explore: boolean }>): Array<{ key: string; kind: 'explored' | 'call'; rows: T[] }> {
+  return groups.map((group) => (group.explore || explores(group.rows[0]!)
+    ? { key: `e${group.rows[0]!.key}`, kind: 'explored' as const, rows: group.rows }
+    : { key: group.rows[0]!.key, kind: 'call' as const, rows: group.rows }));
 }

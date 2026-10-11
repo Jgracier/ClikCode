@@ -1,8 +1,10 @@
 /** The turn-flow standard (docs/TURN_FLOW_STANDARD.md) as the extension's
  * model and page logic hold it. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
 import { applyEvent, connectionLost, emptyModel, preparing, rejectedPrompt, submittingPrompt, turnMarks, type ChatModel } from '../../src/model';
-import { traceSummaryLine } from '../../src/webview/flow';
+import { createStreamingMarkdown } from '../../src/webview/markdown';
+import { runGroupView, traceSummaryLine } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -223,5 +225,33 @@ describe('the prepare window (V11)', () => {
   it('a second send does not overwrite the first bubble', () => {
     const sent = submittingPrompt(submittingPrompt(opened(), 'first'), 'second');
     expect(sent.pendingPrompt).toBe('first');
+  });
+});
+
+describe('stable keys across merge points (V7)', () => {
+  const read = (key: string) => ({ key, kind: 'tool-done' as const, label: `Read ${key}`, category: 'read' as const });
+
+  it('a lone read and the group it grows into are the same row', () => {
+    const lone = runGroupView(exploreRuns([read('a')]));
+    const grown = runGroupView(exploreRuns([read('a'), read('b')]));
+    expect(lone).toHaveLength(1);
+    expect(grown).toHaveLength(1);
+    expect(grown[0]!.key).toBe(lone[0]!.key);
+    expect(grown[0]!.kind).toBe(lone[0]!.kind);
+  });
+
+  it('a command stays a call row', () => {
+    const view = runGroupView(exploreRuns([{ key: 'c', kind: 'tool-start' as const, label: '$ ls', category: 'run' as const }]));
+    expect(view[0]).toMatchObject({ key: 'c', kind: 'call' });
+  });
+
+  it('live markdown keeps earlier settled blocks as the same strings while it grows', () => {
+    const render = createStreamingMarkdown();
+    const one = render('first paragraph\n\nsecond paragraph\n\nthird');
+    const two = render('first paragraph\n\nsecond paragraph\n\nthird paragraph\n\nfourth');
+    expect(one.parts.length).toBeGreaterThan(0);
+    expect(two.parts.length).toBeGreaterThan(one.parts.length);
+    one.parts.forEach((part, index) => expect(two.parts[index]).toBe(part));
+    expect(two.parts.join('')).toBe(two.stable);
   });
 });
