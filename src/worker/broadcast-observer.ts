@@ -10,6 +10,7 @@
  * drift from it, which is the entire point of this architecture (see
  * clikcode-worker-client-split project memory for why that matters).
  */
+import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
 import { setUserWaiting } from '../turn/user-wait.js';
 import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
@@ -62,6 +63,7 @@ export class BroadcastObserver implements TurnObserver {
    * whoever was attached at that moment: a turn waiting on an approval with
    * nobody watching waited forever, and reattaching showed nothing to answer. */
   private readonly pendingApprovals = new Map<string, { resolve: (approved: boolean | 'always') => void; event: WorkerEvent }>();
+  private readonly pendingQuestions = new Map<string, { resolve: (result: HarnessQuestionResult) => void; event: WorkerEvent }>();
   private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent }>();
 
   /** Told when the oldest approval still waiting changes (undefined: none
@@ -75,15 +77,15 @@ export class BroadcastObserver implements TurnObserver {
 
   /** Approvals and sign-ins open: the turn waits on the user while any is. */
   private userWaitChanged(): void {
-    if (this.sessionId) setUserWaiting(this.sessionId, this.pendingApprovals.size + this.pendingSignIns.size > 0);
+    if (this.sessionId) setUserWaiting(this.sessionId, this.pendingApprovals.size + this.pendingQuestions.size + this.pendingSignIns.size > 0);
   }
   private awaitingSince = new Map<string, string>();
 
   private announceAwaiting(): Promise<void> | void {
-    const first = this.pendingApprovals.entries().next();
+    const first = this.pendingApprovals.entries().next().done ? this.pendingQuestions.entries().next() : this.pendingApprovals.entries().next();
     if (first.done) return this.onAwaitingApproval?.(undefined);
     const [id, pending] = first.value;
-    const title = pending.event.type === 'approval-request' ? pending.event.title : 'approval';
+    const title = pending.event.type === 'approval-request' ? pending.event.title : pending.event.type === 'question-request' ? pending.event.request.title : 'approval';
     return this.onAwaitingApproval?.({ title, since: this.awaitingSince.get(id) ?? new Date().toISOString() });
   }
 
@@ -93,11 +95,11 @@ export class BroadcastObserver implements TurnObserver {
 
   /** Sent to a client that just attached, after its snapshot. */
   reofferPending(socket: Socket): void {
-    for (const pending of [...this.pendingApprovals.values(), ...this.pendingSignIns.values()]) sendEvent(socket, pending.event);
+    for (const pending of [...this.pendingApprovals.values(), ...this.pendingQuestions.values(), ...this.pendingSignIns.values()]) sendEvent(socket, pending.event);
   }
 
   get pendingRequestCount(): number {
-    return this.pendingApprovals.size + this.pendingSignIns.size;
+    return this.pendingApprovals.size + this.pendingQuestions.size + this.pendingSignIns.size;
   }
 
   detach(socket: Socket): void {
@@ -134,13 +136,30 @@ export class BroadcastObserver implements TurnObserver {
     this.userWaitChanged();
     pending.resolve(approved);
     this.announceAwaiting();
+    // Answered in one window: the others close their copy.
+    this.broadcast({ type: 'request-closed', id });
+  }
+
+  resolveQuestion(id: string, result: HarnessQuestionResult): void {
+    const pending = this.pendingQuestions.get(id);
+    if (!pending) return;
+    this.pendingQuestions.delete(id);
+    this.awaitingSince.delete(id);
+    this.userWaitChanged();
+    pending.resolve(result);
+    this.announceAwaiting();
+    // The others see it answered: their prompt closes.
+    this.broadcast({ type: 'request-closed', id });
   }
 
   /** A turn's end, whatever it was: nobody is left to answer what it asked. */
   private dropPending(): void {
-    const hadApprovals = this.pendingApprovals.size > 0;
+    const hadApprovals = this.pendingApprovals.size > 0 || this.pendingQuestions.size > 0;
+    for (const id of [...this.pendingApprovals.keys(), ...this.pendingQuestions.keys()]) this.broadcast({ type: 'request-closed', id });
     for (const pending of this.pendingApprovals.values()) pending.resolve(false);
     this.pendingApprovals.clear();
+    for (const pending of this.pendingQuestions.values()) pending.resolve({ kind: 'cancelled' });
+    this.pendingQuestions.clear();
     this.awaitingSince.clear();
     if (hadApprovals) this.announceAwaiting();
     for (const pending of this.pendingSignIns.values()) pending.reject(new Error('the turn ended'));
@@ -195,8 +214,10 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'usage', usage });
   }
 
-  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'> {
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal): Promise<boolean | 'always'> {
     const id = randomUUID();
+    if (signal?.aborted) return Promise.resolve(false);
+    signal?.addEventListener('abort', () => { if (this.pendingApprovals.has(id)) { this.resolveApproval(id, false); } }, { once: true });
     const event: WorkerEvent = { type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}) };
     return new Promise((resolveApproval) => {
       this.pendingApprovals.set(id, { resolve: resolveApproval, event });
@@ -206,6 +227,21 @@ export class BroadcastObserver implements TurnObserver {
       // the record already says the turn waits on it.
       const recorded = this.announceAwaiting();
       if (recorded instanceof Promise) void recorded.then(() => { if (this.pendingApprovals.has(id)) this.broadcast(event); });
+      else this.broadcast(event);
+    });
+  }
+
+  askQuestions(request: HarnessQuestionRequest, signal?: AbortSignal): Promise<HarnessQuestionResult> {
+    const id = randomUUID();
+    if (signal?.aborted) return Promise.resolve({ kind: 'cancelled' });
+    const event: WorkerEvent = { type: 'question-request', id, request };
+    signal?.addEventListener('abort', () => { if (this.pendingQuestions.has(id)) this.resolveQuestion(id, { kind: 'cancelled' }); }, { once: true });
+    return new Promise((resolveQuestion) => {
+      this.pendingQuestions.set(id, { resolve: resolveQuestion, event });
+      this.awaitingSince.set(id, new Date().toISOString());
+      this.userWaitChanged();
+      const recorded = this.announceAwaiting();
+      if (recorded instanceof Promise) void recorded.then(() => { if (this.pendingQuestions.has(id)) this.broadcast(event); });
       else this.broadcast(event);
     });
   }

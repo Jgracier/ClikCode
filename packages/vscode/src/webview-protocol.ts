@@ -87,6 +87,8 @@ export type FromWebview =
    * take (a message already steered in stays sent, as in the terminal). */
   | { type: 'unqueue'; id: string; edit?: boolean }
   | { type: 'approve'; id: string; approved: boolean | 'always' }
+  /** A harness question answered (or dismissed: cancelled). */
+  | { type: 'answerQuestion'; id: string; result: import('./protocol').HarnessQuestionResult }
   | { type: 'viewDiff'; id: string }
   /** A change a tool call made: shown in the diff editor, or undone.
    * `userIndex` names the finished turn it is in; none, the running one. */

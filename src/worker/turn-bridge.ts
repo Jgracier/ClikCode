@@ -11,6 +11,7 @@
  * single-process model. rl cannot tell the difference (see turn/observer.ts
  * for why that is true by construction, not by care taken here).
  */
+import type { HarnessQuestionResult } from '../harness/events/question.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
@@ -99,8 +100,10 @@ function track(sessionId: string, client: WorkerClient): void {
     } else if (event.type === 'waiting-stop') {
       tracker.running = false;
       tracker.unanswered = [];
-    } else if (event.type === 'approval-request' || event.type === 'sign-in-request') {
+    } else if (event.type === 'approval-request' || event.type === 'question-request' || event.type === 'sign-in-request') {
       if (!tracker.driving) tracker.unanswered.push(event);
+    } else if (event.type === 'request-closed') {
+      tracker.unanswered = tracker.unanswered.filter((held) => !('id' in held && held.id === event.id));
     } else if (event.type === 'snapshot') {
       if (event.live) joinLive(event.live);
     } else if (event.type === 'delta') {
@@ -337,6 +340,8 @@ async function driveWorkerTurn(
         client.off('close', onClose);
         fn();
       };
+      /** Approvals and questions this window has open, closed by `request-closed`. */
+      const openPrompts = new Map<string, AbortController>();
       const onEvent = (event: WorkerEvent): void => {
         switch (event.type) {
           case 'snapshot':
@@ -373,10 +378,31 @@ async function driveWorkerTurn(
           // recorded on the session (lastUsage) by the worker.
           case 'usage':
             return;
-          case 'approval-request':
-            void rl.approval(event.title, event.detail, event.preview, event.rule).then((approved) => {
-              client.send({ type: 'approval-response', id: event.id, approved });
+          case 'approval-request': {
+            const closing = new AbortController();
+            openPrompts.set(event.id, closing);
+            void rl.approval(event.title, event.detail, event.preview, event.rule, closing.signal).then((approved) => {
+              openPrompts.delete(event.id);
+              if (!closing.signal.aborted) client.send({ type: 'approval-response', id: event.id, approved });
             });
+            return;
+          }
+          case 'question-request': {
+            const closing = new AbortController();
+            openPrompts.set(event.id, closing);
+            // A terminal with no question surface cancels it, visibly: the worker's vendor never waits.
+            const asked = rl.askQuestions ? rl.askQuestions(event.request, closing.signal)
+              : Promise.resolve<HarnessQuestionResult>({ kind: 'cancelled' }).then((result) => { rl.activity?.(`A question was declined because this screen cannot show it: ${event.request.title}`); return result; });
+            void asked.catch((): HarnessQuestionResult => ({ kind: 'cancelled' })).then((result) => {
+              openPrompts.delete(event.id);
+              if (!closing.signal.aborted) client.send({ type: 'question-response', id: event.id, result });
+            });
+            return;
+          }
+          case 'request-closed':
+            // Answered in another window, withdrawn by the vendor, or the turn ended.
+            openPrompts.get(event.id)?.abort();
+            openPrompts.delete(event.id);
             return;
           case 'sign-in-request': {
             // The worker has no terminal; this window does. The vendor's own

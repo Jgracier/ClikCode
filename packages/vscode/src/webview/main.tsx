@@ -9,7 +9,7 @@ import { applyModelPatch } from '../model-patch';
 import type { IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
 import { command, listen, post, request, save, uid } from './bus';
-import { ApprovalCard, Transcript } from './chat';
+import { ApprovalCard, QuestionCard, Transcript } from './chat';
 import { Composer, type ComposerHandle } from './composer';
 import { tildePath } from './format';
 import { choose } from './picker';
@@ -384,13 +384,18 @@ function App(): JSX.Element {
         {model.approvals[0] ? (
           // One at a time, as the terminal asks: the rest wait their turn.
           <div class="approvals">
-            <ApprovalCard key={model.approvals[0].id} approval={model.approvals[0]} workspace={model.workspace} position={1} total={model.approvals.length}
-              onAnswer={(value, note) => {
-                post({ type: 'approve', id: model.approvals[0]!.id, approved: value });
-                // Denied with a note: the note goes into the running turn, as
-                // a message typed during it does (a steer).
-                if (note) post({ type: 'send', text: note, id: uid() });
-              }} />
+            {model.approvals[0].question ? (
+              <QuestionCard key={model.approvals[0].id} approval={model.approvals[0]} position={1} total={model.approvals.length}
+                onAnswer={(result) => post({ type: 'answerQuestion', id: model.approvals[0]!.id, result })} />
+            ) : (
+              <ApprovalCard key={model.approvals[0].id} approval={model.approvals[0]} workspace={model.workspace} position={1} total={model.approvals.length}
+                onAnswer={(value, note) => {
+                  post({ type: 'approve', id: model.approvals[0]!.id, approved: value });
+                  // Denied with a note: the note goes into the running turn, as
+                  // a message typed during it does (a steer).
+                  if (note) post({ type: 'send', text: note, id: uid() });
+                }} />
+            )}
           </div>
         ) : null}
         {search ? <SearchBar focus={search} /> : null}

@@ -8,3 +8,4 @@ export type {
 export type { HarnessSession } from '../../../src/session/model.js';
 export type { HarnessActivityEvent } from '../../../src/harness/prompter.js';
 export type { DiffLine, FileDiff } from '../../../src/agent/line-diff.js';
+export type { HarnessQuestion, HarnessQuestionRequest, HarnessQuestionResult } from '../../../src/harness/events/question.js';

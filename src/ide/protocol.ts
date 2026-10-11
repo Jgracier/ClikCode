@@ -62,6 +62,8 @@ export type IdeRequest =
   /** Take a queued message back before its turn (see the worker's `unqueue`). */
   | { type: 'unqueue'; id: string }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
+  /** The answer to a `question-request` worker event (cancelled: dismissed). */
+  | { type: 'question-response'; id: string; result: import('../harness/events/question.js').HarnessQuestionResult }
   | { type: 'ui-response'; id: string; result: IdeUiResult }
   | { type: 'sign-in-result'; id: string; error?: string }
   /** Stop the link sign-in a `sign-in-link` event is showing. */

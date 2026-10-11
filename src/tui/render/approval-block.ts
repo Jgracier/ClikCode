@@ -22,6 +22,11 @@ export type ApprovalPreview = {
 export type ApprovalRequest = {
   title: string; detail?: string; preview?: ApprovalPreview; rule?: string;
   resolve: (accepted: boolean | 'always') => void;
+  /** Set when this is a harness's question (question-block.ts) rather than a
+   * yes or no: it is drawn and keyed as one, and shares the queue so a
+   * question and an approval never overlap. `done` takes the values chosen
+   * (empty: skipped) or undefined for cancelled. */
+  question?: { state: import('./question-block.js').QuestionPromptState; done: (values: string[] | undefined) => void };
 };
 
 const APPROVAL_DIFF_PREVIEW_LINES = 8;

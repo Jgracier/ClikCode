@@ -227,3 +227,57 @@ describe('a turn waiting on the user, for its closing line', () => {
   });
 });
 
+
+describe('a harness question', () => {
+  const request = { title: 'Codex asks', questions: [{ id: 'a', prompt: 'Which?', options: [{ label: 'x' }, { label: 'y' }] }] };
+
+  it('reaches a window, is re-offered to a late one, and carries the answer back', async () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking');
+    const answered = observer.askQuestions(request);
+    const late = fakeClient();
+    observer.attach(late.socket);
+    observer.reofferPending(late.socket);
+    const asked = late.frames.find((frame) => frame.type === 'question-request') as { id: string };
+    expect(asked).toMatchObject({ request });
+    expect(observer.pendingRequestCount).toBe(1);
+    observer.resolveQuestion(asked.id, { kind: 'answered', answers: { a: ['y'] } });
+    await expect(answered).resolves.toEqual({ kind: 'answered', answers: { a: ['y'] } });
+    expect(observer.pendingRequestCount).toBe(0);
+  });
+
+  it('closes in every window when the vendor withdraws it, and is cancelled', async () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking');
+    const controller = new AbortController();
+    const answered = observer.askQuestions(request, controller.signal);
+    const asked = client.frames.find((frame) => frame.type === 'question-request') as { id: string };
+    controller.abort();
+    await expect(answered).resolves.toEqual({ kind: 'cancelled' });
+    expect(client.frames).toContainEqual({ type: 'request-closed', id: asked.id });
+  });
+
+  it('closes an approval the same way', async () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking');
+    const controller = new AbortController();
+    const approved = observer.approval('Run make?', undefined, undefined, undefined, controller.signal);
+    const asked = client.frames.find((frame) => frame.type === 'approval-request') as { id: string };
+    controller.abort();
+    await expect(approved).resolves.toBe(false);
+    expect(client.frames).toContainEqual({ type: 'request-closed', id: asked.id });
+  });
+
+  it('is cancelled when its turn ends, so nothing is left waiting', async () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking');
+    const answered = observer.askQuestions(request);
+    observer.stopWaiting();
+    await expect(answered).resolves.toEqual({ kind: 'cancelled' });
+    expect(observer.pendingRequestCount).toBe(0);
+  });
+});

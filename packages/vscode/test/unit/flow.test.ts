@@ -126,6 +126,25 @@ describe('an approval stops the turn\'s clock, as in the terminal', () => {
   });
 });
 
+describe('a harness question waits with the approvals', () => {
+  const request = { title: 'Codex asks', questions: [{ id: 'a', prompt: 'Which?', options: [{ label: 'x' }] }] };
+
+  it('queues, stops the clock, and closes when the harness withdraws it', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const asking = applyEvent(begin(), worker({ type: 'question-request', id: 'q', request }));
+    expect(asking.approvals).toEqual([{ id: 'q', title: 'Codex asks', question: request }]);
+    expect(asking.live!.pausedAt).toBeDefined();
+    expect(workingStatus(asking.live, true, Date.now())).toMatchObject({ label: 'Waiting for you…', tone: 'asking' });
+    // The same request again is the same question.
+    expect(applyEvent(asking, worker({ type: 'question-request', id: 'q', request })).approvals).toHaveLength(1);
+    const closed = applyEvent(asking, worker({ type: 'request-closed', id: 'q' }));
+    expect(closed.approvals).toEqual([]);
+    expect(closed.live!.pausedAt).toBeUndefined();
+    vi.useRealTimers();
+  });
+});
+
 describe('a finished turn has no call still running', () => {
   const opened = (): ChatModel => run([
     activity({ kind: 'tool-start', id: 'r', label: 'Read a.ts', category: 'read' }),
