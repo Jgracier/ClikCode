@@ -68,6 +68,36 @@ function mergeRecord<T extends object>(baseline: T, working: T, disk: T): T {
   return mergeFields(baseline ?? ({} as T), working ?? ({} as T), disk ?? ({} as T));
 }
 
+type QueuedTurns = NonNullable<HarnessSession['queuedTurns']>;
+
+/** The queue is a set of messages, each added and taken out on its own, by
+ * whichever process is acting (the running turn adds a held steer; a window
+ * or the worker takes one back). Merged as a whole list the writer that
+ * added one also wrote back every message it still remembered -- including
+ * one another process had taken out, which then ran as a turn the user had
+ * taken back. So: what the writer removed is removed, what it added is
+ * added, and everything else is the disk's. */
+export function mergeQueuedTurns(
+  baseline: QueuedTurns | undefined, working: QueuedTurns | undefined, disk: QueuedTurns | undefined,
+): QueuedTurns {
+  const was = new Set((baseline ?? []).map((item) => item.id));
+  const has = new Set((working ?? []).map((item) => item.id));
+  const merged = (disk ?? []).filter((item) => !(was.has(item.id) && !has.has(item.id)));
+  for (const item of working ?? []) {
+    if (!was.has(item.id) && !merged.some((entry) => entry.id === item.id)) merged.push(item);
+  }
+  return merged;
+}
+
+function mergeSessionMeta(baseline: SessionMeta | undefined, working: SessionMeta, disk: SessionMeta | undefined): SessionMeta {
+  const merged = mergeFields(baseline, working, disk);
+  if (!disk || merged === working) return merged;
+  const queue = mergeQueuedTurns(baseline?.queuedTurns, working.queuedTurns, disk.queuedTurns);
+  if (queue.length) merged.queuedTurns = queue;
+  else delete merged.queuedTurns;
+  return merged;
+}
+
 export function splitSession(session: HarnessSession): { meta: SessionMeta; transcript: SessionTranscript; claim: HarnessSession['claim'] } {
   const { messages: _messages, pendingTurn: _pendingTurn, claim, ...meta } = session;
   return { meta, transcript: transcriptOf(session), claim };
@@ -219,7 +249,7 @@ export function mergedIndex(baseline: StateBaselineData, state: HarnessState, di
     sessions: mergeById(
       [...baseline.sessions.values()].map((entry) => entry.meta),
       (state.sessions ?? []).map((session) => splitSession(session).meta),
-      disk.sessions ?? [], mergeFields,
+      disk.sessions ?? [], mergeSessionMeta,
       drafts && new Map([...drafts].map(([id, entry]) => [id, entry.meta])),
     ),
     invocations: mergeById(baseline.invocations, state.invocations ?? [], disk.invocations ?? []),
