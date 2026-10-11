@@ -4,7 +4,7 @@
 import { COPIED_MS, NOTICE_MS } from '../../../../src/harness/protocol/timings';
 import { Component, render, type ComponentChildren, type JSX } from 'preact';
 import { useEffect, useLayoutEffect, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, turnHasAnswer, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, preparing, turnHasAnswer, type ChatModel } from '../model';
 import { applyModelPatch } from '../model-patch';
 import type { IdePickItem, IdeSearchFocus, IdeUiResult } from '../protocol';
 import type { ToWebview, WebviewMenu } from '../webview-protocol';
@@ -229,7 +229,7 @@ function App(): JSX.Element {
   const log = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const runningRef = useRef(false);
-  runningRef.current = Boolean(model?.running);
+  runningRef.current = Boolean(model && (model.running || preparing(model)));
   const stoppingRef = useRef(false);
   stoppingRef.current = Boolean(model?.live?.stopping);
   const approvalRef = useRef<string>();
