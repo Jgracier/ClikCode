@@ -5,7 +5,7 @@ import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
 import { thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { answeredApproval, applyEvent, emptyModel, liveChildren, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
 import { activityOutcome } from '../../../../src/harness/protocol/activity-view';
-import { decisionBadge, liveMeter, shimmerStyle, traceSummaryLine, workingDetail, workingStatus } from '../../src/webview/flow';
+import { decisionBadge, liveMeter, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -522,6 +522,49 @@ describe('adjacent read, search and list calls are one group (X9)', () => {
       { key: 'd', kind: 'tool-start' as const, label: '$ ls', category: 'run' as const },
     ];
     expect(exploreRuns(rows).map((group) => [group.explore, group.rows.map((row) => row.key)])).toEqual([[true, ['a', 'b', 'c']], [false, ['d']]]);
+  });
+});
+
+describe('background work by kind: workflows on the end line, terminals on the working line (standard 10)', () => {
+  it('a workflow count rides the event into the trace and the end line says it in Claude Code\'s words', () => {
+    const model = run([
+      delta('Started them.'),
+      worker({ type: 'background', pending: 2, work: { agents: 2, workflows: 1, terminals: 3 } }),
+      worker({ type: 'waiting-stop' }),
+    ], begin());
+    const trace = model.traces[0]!;
+    expect(trace).toMatchObject({ pendingBackground: 2, pendingWorkflows: 1 });
+    // A terminal is never part of the end line.
+    expect(traceSummaryLine({ ...trace, endedAt: 5_000, startedAt: 0 }, [])).toBe('Waiting for 2 background agents and 1 dynamic workflow');
+  });
+
+  it('terminals alone leave no end-line wait and no trace of their own', () => {
+    const model = run([delta('x'), worker({ type: 'background', pending: 0, work: { terminals: 2 } }), worker({ type: 'waiting-stop' })], begin());
+    expect(model.traces[0]?.pendingBackground).toBeUndefined();
+    expect(model.traces[0]?.pendingWorkflows).toBeUndefined();
+  });
+
+  it('the working line carries the terminals indicator while any run, singular and plural, nothing at zero', () => {
+    const live = (work: Record<string, number> | undefined) => run([worker({ type: 'background', pending: 0, ...(work ? { work } : {}) })], begin()).live!;
+    expect(workingIndicator(live({ terminals: 1 }))).toBe('1 background terminal running');
+    expect(workingIndicator(live({ terminals: 3 }))).toBe('3 background terminals running');
+    expect(workingIndicator(live(undefined))).toBeUndefined();
+    expect(workingIndicator(undefined)).toBeUndefined();
+  });
+
+  it('a window joining mid-turn takes every kind from the snapshot, and the later event replaces it', () => {
+    const joined = applyEvent(begin(), worker({ type: 'snapshot', session: session(), live: { text: 'abc', waitingLabel: 'thinking', pendingBackground: 1, background: { agents: 1, terminals: 2 } } }));
+    expect(workingIndicator(joined.live)).toBe('2 background terminals running');
+    const after = applyEvent(joined, worker({ type: 'background', pending: 1, work: { agents: 1 } }));
+    expect(workingIndicator(after.live)).toBeUndefined();
+    expect(after.live!.pendingBackground).toBe(1);
+  });
+
+  it('a saved turn says its workflows on reopen', () => {
+    const reopened = applyEvent(emptyModel(), { type: 'session', session: session({ messages: [{ role: 'user', content: 'go' }, {
+      role: 'assistant', content: 'ok', turnEnd: { ms: 20_000, pendingBackground: 1, background: { agents: 1, workflows: 2 } } } as never] }) });
+    expect(reopened.traces[0]).toMatchObject({ pendingBackground: 1, pendingWorkflows: 2 });
+    expect(traceSummaryLine(reopened.traces[0]!, [])).toBe('Waiting for 1 background agent and 2 dynamic workflows');
   });
 });
 

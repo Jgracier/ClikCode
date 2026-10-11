@@ -11,6 +11,7 @@
  * single-process model. rl cannot tell the difference (see turn/observer.ts
  * for why that is true by construction, not by care taken here).
  */
+import { backgroundWorkOf, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
@@ -78,6 +79,8 @@ interface WorkerTracker {
   thought?: LiveThought;
   phase?: string;
   usage?: TurnUsage;
+  /** What the vendor says runs in the background, by kind (a level). */
+  background?: BackgroundWork;
   wake?: (reason: 'turn' | 'queue') => void;
   /** Counts queue-changed events, so a change that lands between the loop
    * reading the queue and its prompt opening is not missed (workerQueueMark). */
@@ -109,6 +112,7 @@ function track(sessionId: string, client: WorkerClient): void {
       // The snapshot is the whole truth about these: what it lacks, the turn
       // has not got.
       marks: live.marks ? [...live.marks] : [], unsequenced: [], thought: live.thought, phase: live.phase, usage: live.usage,
+      background: backgroundWorkOf(live),
     });
   };
   const initial = client.initialEvent;
@@ -119,7 +123,7 @@ function track(sessionId: string, client: WorkerClient): void {
     if (event.type === 'waiting-start') {
       Object.assign(tracker, {
         running: true, prompt: event.prompt, liveText: '', activities: [], plan: [], marks: [], unsequenced: [],
-        thought: undefined, phase: undefined, usage: undefined,
+        thought: undefined, phase: undefined, usage: undefined, background: undefined,
       });
       tracker.wake?.('turn');
     } else if (event.type === 'waiting-stop') {
@@ -151,6 +155,8 @@ function track(sessionId: string, client: WorkerClient): void {
       if (tracker.running) tracker.phase = event.message;
     } else if (event.type === 'usage') {
       if (tracker.running) tracker.usage = event.usage;
+    } else if (event.type === 'background') {
+      if (tracker.running) tracker.background = backgroundWorkOf({ background: event.work, pendingBackground: event.pending });
     } else if (event.type === 'queue-changed') {
       tracker.queueVersion++;
       tracker.wake?.('queue');
@@ -431,8 +437,11 @@ async function driveWorkerTurn(
           case 'usage':
             rl.setTurnUsage(event.usage);
             return;
-          // The end line says it from the saved turn (turnEnd.pendingBackground).
+          // The end line says agents and workflows from the saved turn
+          // (turnEnd.background); a background terminal is a footer
+          // indicator, drawn from here while any runs.
           case 'background':
+            rl.setBackgroundWork?.(backgroundWorkOf({ background: event.work, pendingBackground: event.pending }));
             return;
           case 'approval-request': {
             const closing = new AbortController();

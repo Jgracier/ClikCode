@@ -19,6 +19,7 @@ import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
 import type { TurnUsage } from '../../../src/harness/protocol/turn-usage';
+import { backgroundWorkOf, type BackgroundWork } from '../../../src/harness/protocol/background-agents';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
 import { endsWithSummary, isApprovalWaitPhase, reasoningHeading, type Decision } from '../../../src/harness/protocol/turn-flow';
 import { readTurnMarks } from '../../../src/turn/turn-marks';
@@ -118,6 +119,8 @@ export interface TurnTrace {
    * running: the closing line says them. */
   usage?: TurnUsage;
   pendingBackground?: number;
+  /** Dynamic workflows it left running: the closing line says them too. */
+  pendingWorkflows?: number;
   /** The calls and text are the saved turn's, not this window's. */
   saved?: boolean;
   /** The turn was stopped: it ends on "Stopped after", not "Worked for". */
@@ -169,6 +172,9 @@ export interface LiveTurn {
   decisions?: DecisionEntry[];
   /** Background agents the vendor says are still running (a level). */
   pendingBackground?: number;
+  /** Every kind the vendor says runs in the background (a level): agents and
+   * workflows for the closing line, terminals for the working line. */
+  background?: BackgroundWork;
   startedAt: number;
   /** When the model last went back to thinking -- the turn began, or its
    * last open call closed. Not moved by the answer's deltas. */
@@ -569,6 +575,12 @@ function settledCalls(activities: Activity[], stopped: boolean): Activity[] {
   });
 }
 
+/** A level of background work as the live turn holds it: every kind, and the
+ * agents again as the number older readers take. */
+function liveBackground(work: BackgroundWork | undefined): { background?: BackgroundWork; pendingBackground?: number } {
+  return work ? { background: work, ...(work.agents ? { pendingBackground: work.agents } : {}) } : {};
+}
+
 /** The calls each saved turn kept, as the traces the transcript draws them
  * from. The saved copy wins over this window's own record of the same turn
  * -- its calls and the text they are placed in -- while the reasoning and
@@ -583,16 +595,19 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     // The worker's own record of how the turn ended: what the live window
     // said ("Worked for 1m 2s", "Stopped after 3s"), said again on reopen.
     const end = message.turnEnd;
-    const pendingBackground = end?.pendingBackground && end.pendingBackground > 0 ? end.pendingBackground : 0;
+    const work = backgroundWorkOf(end);
+    const pendingBackground = work?.agents ?? 0;
+    const pendingWorkflows = work?.workflows ?? 0;
     const ended = end ? {
       startedAt: 0, endedAt: Math.max(0, end.ms), ...(end.stopped ? { stopped: true as const } : {}),
       ...(end.usage ? { usage: end.usage } : {}), ...(pendingBackground ? { pendingBackground } : {}),
+      ...(pendingWorkflows ? { pendingWorkflows } : {}),
     } : undefined;
     // The worker's durable marks: thoughts, plan, notices, decisions.
     const rows = marksToRows(message.marks);
     const hasMarks = rows.reasoning.length > 0 || Boolean(rows.plan) || rows.notices.length > 0 || rows.decisions.length > 0;
     // A turn with no calls has a trace only to carry its closing line.
-    if (!saved.length && !hasMarks && !(ended && (ended.stopped || ended.pendingBackground || endsWithSummary(ended.endedAt, 0)))) return;
+    if (!saved.length && !hasMarks && !(ended && (ended.stopped || ended.pendingBackground || ended.pendingWorkflows || endsWithSummary(ended.endedAt, 0)))) return;
     // Folded by the same upsert live frames go through.
     const activities = settledCalls(saved.reduce<LiveTurn>(
       (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
@@ -895,7 +910,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         live: {
           ...folded, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}), ...writing,
           ...(phase ? { phase } : {}),
-          ...(event.live.pendingBackground ? { pendingBackground: event.live.pendingBackground } : {}),
+          ...liveBackground(backgroundWorkOf(event.live)),
         },
         ...(event.live.usage ? { turnUsage: { ...event.live.usage, ...next.turnUsage } } : {}),
         ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) }
@@ -932,10 +947,10 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return { ...model, live: { ...applyActivity(withoutPhase(live), event.event), activeAt: Date.now() } };
     }
     case 'background': {
-      // A level: the vendor's own count of agents still running.
+      // A level: the vendor's own count of what still runs, by kind.
       const live = model.live ?? freshLive('thinking');
-      const { pendingBackground: _held, ...rest } = live;
-      return { ...model, live: { ...rest, ...(event.pending > 0 ? { pendingBackground: Math.floor(event.pending) } : {}) } };
+      const { pendingBackground: _held, background: _work, ...rest } = live;
+      return { ...model, live: { ...rest, ...liveBackground(backgroundWorkOf({ background: event.work, pendingBackground: event.pending })) } };
     }
     case 'phase':
       // The adapters' own "waiting for your approval" is what the approval
@@ -1026,13 +1041,14 @@ function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
   // this window watched (see withSavedTraces).
   const saved = model.traces.find((trace) => trace.userIndex === model.turnUserIndex && trace.saved);
   const decisions = model.live?.decisions?.length ? model.live.decisions : undefined;
-  const traces = (activities.length || reasoning || plan || turnNotes || decisions || model.live?.pendingBackground || (asked && model.live?.text)) && model.turnUserIndex !== undefined
+  const traces = (activities.length || reasoning || plan || turnNotes || decisions || model.live?.pendingBackground || model.live?.background?.workflows || (asked && model.live?.text)) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
       userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(decisions ? { decisions } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
       // Completed steers are materialized as user messages in session.messages.
       // Keeping the live badges in the finished trace displayed each prompt twice.
       ...(model.turnUsage ? { usage: model.turnUsage } : {}),
       ...(model.live?.pendingBackground ? { pendingBackground: model.live.pendingBackground } : {}),
+      ...(model.live?.background?.workflows ? { pendingWorkflows: model.live.background.workflows } : {}),
       text: model.live?.text ?? '',
       // Less the time approvals waited, as the terminal's summary counts.
       startedAt: model.live ? Date.now() - liveElapsedMs(model.live, Date.now()) : Date.now(), endedAt: Date.now(),

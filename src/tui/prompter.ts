@@ -38,7 +38,7 @@ import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/act
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { answerWriting, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, reasoningHeading, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { answerWriting, backgroundTerminalsLabel, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, reasoningHeading, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
 import { waitStalled } from '../harness/protocol/turn-pace.js';
@@ -51,6 +51,7 @@ import { ApprovalPreview, ApprovalRequest, approvalBlockRows } from './render/ap
 import { APPROVAL_GUARD_MS, approvalKeyAction } from './render/approval-keys.js';
 import { questionBlockRows, questionKeyAction, questionRows, questionValues, startsTyping, type QuestionPromptState } from './render/question-block.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
+import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './render/frame-budget.js';
 import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
 import { runOptionPicker, type OptionPickerHost, type PaletteLayout } from './option-picker.js';
@@ -176,6 +177,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The turn (or other wait) in flight: see WaitingTurn. */
   private turn?: WaitingTurn;
   private waitingFrame = 0;
+  /** Background terminals the vendor says are running (the footer indicator). */
+  private backgroundTerminals = 0;
   /** Orders answer text against call starts for answerWriting: a counter, so
    * two events in one millisecond keep their order. */
   private statusOrder = 0;
@@ -1482,6 +1485,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (this.turn) this.turn.usage = usage;
   }
 
+  /** What the vendor says runs in the background, by kind (standard section
+   * 10). Only the terminals are drawn live, as one dim row under the status
+   * (`2 background terminals running`); agents and workflows are the end
+   * line's, from the saved turn. */
+  setBackgroundWork(work: BackgroundWork | undefined): void {
+    const terminals = work?.terminals && work.terminals > 0 ? Math.floor(work.terminals) : 0;
+    if (this.backgroundTerminals === terminals) return;
+    this.backgroundTerminals = terminals;
+    this.schedulePaint();
+  }
+
   /** The turn waits on the user (an approval, a sign-in): its clock stops,
    * and the time is not the turn going quiet. */
   private pauseClock(): void {
@@ -1562,6 +1576,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
     }
     this.turn = undefined;
+    this.backgroundTerminals = 0;
     this.thought = undefined;
     this.thoughtStart = undefined;
     // Anything typed during the turn and not submitted is still the user's
@@ -2162,10 +2177,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // rewritten under the eye is the thing that made reading impossible.
     const notice = this.mentionFocus?.status ?? this.transientNotice ?? this.currentNotice;
     const noticeShown = notice ? noticeLines(notice, inner) : [];
+    const indicatorText = this.turn ? backgroundTerminalsLabel(this.backgroundTerminals) : undefined;
     const budget = frameRowBudget({
       targetHeight, waiting: Boolean(this.turn), notice: noticeShown.length, requestedPaletteCapacity,
+      indicator: indicatorText !== undefined,
     });
-    const { waitingRows, noticeRows, paletteRows } = budget;
+    const { waitingRows, noticeRows, paletteRows, indicatorRows } = budget;
     const paletteCapacity = paletteRows;
     let optionalRows = budget.optionalRows;
     const composerWidth = Math.max(8, inner - terminalCellWidth(prompt));
@@ -2218,7 +2235,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       panelRows = shown.rows;
     }
     const maxComposerRows = Math.max(
-      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length,
+      1, targetHeight - 3 - paletteRows - noticeRows - waitingRows - indicatorRows - approvalRows.length - thoughtRows.length - signInRows.length - planRows.length - panelRows.length,
     );
     const composerRows = composerLayout(composer, cursor, composerWidth, maxComposerRows);
     // -------------------------------------------------------------------
@@ -2627,6 +2644,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const statusRow = this.turn ? `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
     if (statusBlank !== undefined) footer.push(statusBlank);
     if (statusRow !== undefined) footer.push(statusRow);
+    // Background terminals the vendor runs: one dim row under the status,
+    // not drawn at zero, and the first row a short terminal gives up.
+    const indicatorRow = indicatorRows && indicatorText !== undefined
+      ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : undefined;
+    if (indicatorRow !== undefined) footer.push(indicatorRow);
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. A spent window replaces the percentage with the reset
     // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
@@ -2660,6 +2682,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (approvalRows.length && footer.length > targetHeight) {
       const fitted = fitFooterForApproval({
         above: footer.slice(0, aboveApproval), approval: approvalRows, mid: midRows, blank: statusBlank, status: statusRow,
+        indicator: indicatorRow,
         usageRule, composer: composerFooter, titleRule, meta: metaRow, height: targetHeight,
       });
       footer.splice(0, footer.length, ...fitted.rows);
