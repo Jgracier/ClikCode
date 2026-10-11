@@ -9,12 +9,12 @@ import { writeState } from '../../session/state/write.js';
 import type { HarnessSession } from '../../session/model.js';
 
 vi.mock('../../gateway/agents.js', () => ({ gatewayAgents: async () => [{ id: 'silas', name: 'Silas' }] }));
-vi.mock('../../gateway/models.js', () => ({
+// Only the network reads are replaced; the module's pure helpers (labels, model-word matching) are
+// its own, so a helper the code starts using is never missing from the mock.
+vi.mock('../../gateway/models.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../gateway/models.js')>()),
   savedGatewayModels: async () => ({ automatic: 'gpt', models: [{ id: 'gpt' }] }),
   gatewayModels: async () => ({ automatic: 'gpt', models: [{ id: 'gpt' }] }),
-  gatewayModelDetail: () => '',
-  gatewayModelLabel: (model: { id: string; access?: string }) => (model.access ? `${model.id} (${model.access})` : model.id),
-  isAutomaticModelWord: (word: string) => word === 'auto',
 }));
 vi.mock('../../runtime/lazy-bridge.js', async (importOriginal) => {
   const router = await import('@clikcode/router/ai-local-harness') as Record<string, unknown>;
@@ -32,14 +32,25 @@ afterEach(async () => {
 });
 
 describe('Gateway agents in /model', () => {
-  it('lists local models first and distinguishes remote agents', () => {
+  it('lists the account\'s own agents first, then the models', () => {
     const list = { automatic: 'gpt', models: [{ id: 'gpt' }] };
     const agents = [{ id: 'silas', name: 'Silas' }, { id: 'cliknet', name: 'ClikNet' }];
     const rows = gatewayPickerRows(list, agents, 'gpt', 'silas');
-    expect(rows.map((row) => row.label)).toEqual(['Agent default', 'gpt', 'No agent', '✓ Silas', 'ClikNet']);
-    expect(rows.map((row) => row.group)).toEqual(['Models', 'Models', 'Platform agents (remote)', 'Platform agents (remote)', 'Platform agents (remote)']);
-    expect(rows[3]!.value).toEqual({ kind: 'agent', id: 'silas' });
-    expect(rows[1]!.value).toEqual({ kind: 'model', id: 'gpt' });
+    expect(rows.map((row) => row.label)).toEqual(['No agent', '✓ Silas', 'ClikNet', 'Agent default', 'gpt']);
+    expect(rows.map((row) => row.group)).toEqual(['Your agents (remote)', 'Your agents (remote)', 'Your agents (remote)', 'Models', 'Models']);
+    expect(rows[1]!.value).toEqual({ kind: 'agent', id: 'silas' });
+    expect(rows[4]!.value).toEqual({ kind: 'model', id: 'gpt' });
+  });
+
+  it('puts the subscription switch above everything, and only when the Gateway reports it (the super admin)', () => {
+    const agents = [{ id: 'silas', name: 'Silas' }];
+    const customer = gatewayPickerRows({ automatic: 'gpt', models: [{ id: 'gpt' }] }, agents, 'gpt');
+    expect(customer.some((row) => row.value.kind === 'subscriptions')).toBe(false);
+    const on = gatewayPickerRows({ automatic: 'gpt', models: [{ id: 'gpt' }], subscriptions: true }, agents, 'gpt');
+    expect(on[0]).toMatchObject({ label: '✓ Use subscriptions', value: { kind: 'subscriptions' }, group: 'Gateway' });
+    expect(on.map((row) => row.group)).toEqual(['Gateway', 'Your agents (remote)', 'Your agents (remote)', 'Models', 'Models']);
+    const off = gatewayPickerRows({ automatic: 'gpt', models: [{ id: 'gpt' }], subscriptions: false }, agents, 'gpt');
+    expect(off[0]).toMatchObject({ label: '○ Use subscriptions', value: { kind: 'subscriptions' } });
   });
 
   it('persists the agent per Gateway session and sheds it on a local route', async () => {

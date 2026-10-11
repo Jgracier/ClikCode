@@ -8,6 +8,7 @@
 import type Conf from 'conf';
 import type { ModelClient } from '../model-client.js';
 import { OpenAIModelClient } from './openai-client.js';
+import { gatewaySubscriptionsOn, subscriptionsHeader } from '../../gateway/subscriptions.js';
 import { STREAM_IDLE_TIMEOUT_MS } from './gateway-client.js';
 import { gatewayStepOptions } from '../../gateway/options.js';
 import { ensureLocalModel, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
@@ -81,6 +82,8 @@ export function gatewayErrorMessage(error: { status?: number; code?: string; mes
 export function gatewayModelClient(input: {
   baseUrl: string; apiKey: string; sessionId?: string; model?: string; contextWindow?: number; maxOutput?: number;
   vision?: boolean; options?: Readonly<Record<string, unknown>>; fetchImpl?: typeof fetch;
+  /** The super admin's subscription switch (gateway/subscriptions.ts); the Gateway ignores it for anyone else. */
+  subscriptions?: boolean;
 }): OpenAIModelClient {
   return new OpenAIModelClient({
     baseUrl: input.baseUrl.replace(/\/+$/, ''),
@@ -88,7 +91,10 @@ export function gatewayModelClient(input: {
     model: input.model ?? 'auto',
     label: 'ClikDeploy Gateway',
     hosted: true,
-    headers: { 'x-client': `clikcode/${CLIKCODE_VERSION}`, ...(input.sessionId ? { 'x-session-id': input.sessionId } : {}) },
+    headers: {
+      'x-client': `clikcode/${CLIKCODE_VERSION}`, ...(input.sessionId ? { 'x-session-id': input.sessionId } : {}),
+      ...subscriptionsHeader(input.subscriptions ?? true),
+    },
     errorCodes: GATEWAY_ERROR_CODES,
     // A hosted model starts answering in seconds: the long first-chunk wait
     // is for a CPU reading a deep prompt, not for a stalled connection. The
@@ -149,7 +155,7 @@ export async function modelClientForSession(session: HarnessSession, config: Con
     const { id: modelId, ...facts } = await gatewayModelFacts(session, config);
     return gatewayModelClient({
       baseUrl, apiKey, sessionId: session.id, ...(session.model ? { model: session.model } : {}), ...facts,
-      options: gatewayStepOptions(session, modelId),
+      options: gatewayStepOptions(session, modelId), subscriptions: gatewaySubscriptionsOn(config),
     });
   }
   if (session.route === 'clikcode-local') {

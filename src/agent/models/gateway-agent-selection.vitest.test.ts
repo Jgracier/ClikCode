@@ -16,7 +16,7 @@ describe('a selected platform agent before agent execution is wired', () => {
       id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: 'gpt', gatewayAgentId: 'silas', effort: 'platform-managed',
 createdAt: now, updatedAt: now, status: 'active',
     };
-    const client = await modelClientForSession(session, {} as never);
+    const client = await modelClientForSession(session, { get: () => undefined } as never);
     const fetchImpl = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
       'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
       { status: 200, headers: { 'content-type': 'text/event-stream' } },
@@ -28,6 +28,26 @@ createdAt: now, updatedAt: now, status: 'active',
       const body = JSON.parse(String(init.body)) as Record<string, unknown>;
       expect(body.model).toBe('gpt');
       expect(body).not.toHaveProperty('agent_id');
+      // The subscription switch rides every step: on unless it was turned off (gateway/subscriptions.ts).
+      expect((init.headers as Record<string, string>)['x-clikcode-subscriptions']).toBe('on');
+    } finally { fetchImpl.mockRestore(); }
+  });
+
+  it('sends the subscription switch as turned off', async () => {
+    const now = new Date().toISOString();
+    const session: HarnessSession = {
+      id: 'gw', route: 'gateway', accountId: null, provider: 'gateway', model: 'gpt', effort: 'platform-managed',
+      createdAt: now, updatedAt: now, status: 'active',
+    };
+    const client = await modelClientForSession(session, { get: (key: string) => (key === 'gatewaySubscriptions' ? false : undefined) } as never);
+    const fetchImpl = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => new Response(
+      'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n',
+      { status: 200, headers: { 'content-type': 'text/event-stream' } },
+    ));
+    try {
+      await client.step({ system: 'test', items: [], tools: [], onTextDelta: () => undefined } as never);
+      const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+      expect((init.headers as Record<string, string>)['x-clikcode-subscriptions']).toBe('off');
     } finally { fetchImpl.mockRestore(); }
   });
 });

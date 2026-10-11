@@ -1,3 +1,4 @@
+import Conf from 'conf';
 /** Choosing a model from the active harness's catalog. */
 
 import { freePlanModels } from '../../harness/accounts/free-plan.js';
@@ -6,6 +7,7 @@ import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
 import { gatewayModelDetail, gatewayModelLabel, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
 import { gatewayAgents, type GatewayAgent } from '../../gateway/agents.js';
+import { gatewaySubscriptionsOn, setGatewaySubscriptions } from '../../gateway/subscriptions.js';
 import type { GatewayModelList } from '../../gateway/models.js';
 import { modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { sessionOrProviderHarness } from '../slash/context.js';
@@ -189,11 +191,32 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
 
 /** A Gateway conversation's picker. Models run ClikCode locally; selected
  * platform agents run on ClikDeploy with their own tools. */
-type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string };
+type GatewayChoice = { kind: 'agent'; id?: string } | { kind: 'model'; id: string } | { kind: 'subscriptions' };
 
-/** Choosing a model closes the picker. */
+/** Top to bottom: the super admin's subscription switch (only when the Gateway reports it, which it
+ * does for the super admin alone), the account's own agents, then the models. Choosing a model
+ * closes the picker; the switch and an agent keep it open. */
 export function gatewayPickerRows(list: GatewayModelList, agents: readonly GatewayAgent[], current: string | null, currentAgent?: string): PickerOption<GatewayChoice>[] {
+  const subscriptions: PickerOption<GatewayChoice>[] = list.subscriptions === undefined ? [] : [{
+    label: `${list.subscriptions ? '✓' : '○'} Use subscriptions`,
+    detail: list.subscriptions
+      ? '· on: your ClikCode turns may use the platform\'s subscriptions · enter turns off'
+      : '· off: your ClikCode turns use customer accounts only · enter turns on',
+    value: { kind: 'subscriptions' as const },
+    group: 'Gateway',
+  }];
+  const agentRows: PickerOption<GatewayChoice>[] = [
+    ...(agents.length || currentAgent ? [{ label: currentAgent ? 'No agent' : '✓ No agent', detail: '· use ClikCode with the Gateway model', value: { kind: 'agent' as const }, group: 'Your agents (remote)' }] : []),
+    ...agents.map((agent) => ({
+      label: `${agent.id === currentAgent ? '✓ ' : ''}${agent.name}`,
+      detail: `· runs on ClikDeploy${agent.description ? ` · ${agent.description}` : ''}`,
+      value: { kind: 'agent' as const, id: agent.id },
+      group: 'Your agents (remote)',
+    })),
+  ];
   return [
+    ...subscriptions,
+    ...agentRows,
     { label: currentAgent ? 'Agent default' : 'Automatic', detail: currentAgent
       ? `${current ? '' : '· current '}· use this agent's configured pin or router`
       : `${current ? '' : '· current '}· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}`,
@@ -207,13 +230,6 @@ export function gatewayPickerRows(list: GatewayModelList, agents: readonly Gatew
         group: 'Models',
       };
     }),
-    ...(agents.length || currentAgent ? [{ label: currentAgent ? 'No agent' : '✓ No agent', detail: '· use ClikCode with the Gateway model', value: { kind: 'agent' as const }, group: 'Platform agents (remote)' }] : []),
-    ...agents.map((agent) => ({
-      label: `${agent.id === currentAgent ? '✓ ' : ''}${agent.name}`,
-      detail: `· runs on ClikDeploy${agent.description ? ` · ${agent.description}` : ''}`,
-      value: { kind: 'agent' as const, id: agent.id },
-      group: 'Platform agents (remote)',
-    })),
   ];
 }
 
@@ -239,6 +255,20 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   for (;;) {
     const selected = await chooseOption(rl, 'Choose an agent or ClikDeploy Gateway model', options(), undefined, { refreshedOptions: options, refresh: fresh });
     if (!selected) return;
+    if (selected.kind === 'subscriptions') {
+      // The super admin's switch: flipped, then the list as the Gateway serves it in the new position.
+      const config = new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
+      const on = !gatewaySubscriptionsOn(config);
+      setGatewaySubscriptions(config, on);
+      const waiting = TERMINAL.active === rl ? TERMINAL.active : undefined;
+      try {
+        list = await withSlowWait(waiting, 'finding ClikDeploy Gateway models…', () => gatewayModels({ fresh: true, config }));
+      } catch (error) {
+        rl.notice?.(`Could not refresh the Gateway models: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      rl.notice?.(on ? 'Subscriptions on: your ClikCode turns may use the platform\'s subscriptions.' : 'Subscriptions off: your ClikCode turns use customer accounts only.');
+      continue;
+    }
     if (selected.kind === 'agent') {
       currentAgent = selected.id === currentAgent ? undefined : selected.id;
       await selectGatewayAgent(id, currentAgent, agents.find((agent) => agent.id === currentAgent)?.name);
