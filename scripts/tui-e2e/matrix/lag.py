@@ -69,9 +69,10 @@ def summarize(values):
 
 
 def turn_pid(records):
-    """The vendor process that received the prompt, and its records."""
+    """The vendor process that received the typed prompt (`matched`: the
+    fake saw the rig's own prompt text in it, not a probe or a title)."""
     for record in records:
-        if record.get('ev') == 'recv': return record['pid']
+        if record.get('ev') == 'recv' and record.get('matched', True): return record['pid']
     return None
 
 
@@ -83,7 +84,7 @@ def spawn_marks(records, submit_ms):
     pid = turn_pid(records)
     if pid is None: return {'prewarmed': None, 'submit_to_spawn_ms': None, 'spawn_to_prompt_ms': None, 'submit_to_prompt_ms': None}
     started = next((r for r in records if r.get('ev') == 'start' and r.get('pid') == pid), None)
-    prompt = next((r for r in records if r.get('ev') == 'recv' and r.get('pid') == pid), None)
+    prompt = next((r for r in records if r.get('ev') == 'recv' and r.get('pid') == pid and r.get('matched', True)), None)
     spawn = started['execAt'] if started else None
     prewarmed = spawn is not None and spawn < submit_ms
     return {
