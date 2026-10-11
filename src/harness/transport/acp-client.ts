@@ -26,11 +26,6 @@ type Json = Record<string, any>;
  * only these; everything else still reaches the user. */
 const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'think', 'fetch']);
 const DETAIL_LINE_CAP = 12;
-/** How long an agent that said it is retrying a rate-limited call gets to
- * make progress before the turn is given up as throttled. Vibe backs off for
- * minutes after one `_session/retrying`, with nothing on the wire meanwhile;
- * handing the turn to the next account beats waiting that out. */
-export const ACP_RATE_LIMIT_GRACE_MS = 30_000;
 /** How long an agent may take to answer before the wait is named. */
 const START_NOTICE_MS = 1_000;
 
@@ -38,7 +33,19 @@ const START_NOTICE_MS = 1_000;
  * code as `_meta.terminal_output` / `_meta.terminal_exit` (claude-agent-acp's
  * terminal extension, as codex-acp does) rather than a fenced text block with
  * no exit code. An agent that does not know the key ignores it. */
-const ACP_CLIENT_CAPABILITIES = { _meta: { terminal_output: true } };
+const ACP_CLIENT_CAPABILITIES = {
+  _meta: { terminal_output: true },
+  // claude-agent-acp (0.84) sends a vendor warning as a structured `notice`
+  // update when the client advertises `session.notices`, instead of appending
+  // it to the answer as a bold line. Handled in `deliver` (onNotice).
+  // Deliberately NOT advertised: `elicitation.form` (AskUserQuestion and
+  // ExitPlanMode as forms) -- ClikCode has no multi-field question prompt, so
+  // advertising it would leave the agent waiting on a form nobody shows; and
+  // the AIR `sessionFailure`/`asyncTasks`/`nativeSubagentSessions` opt-ins,
+  // which need the jetbrains.air identity and replace the raw error text the
+  // failover classifier reads.
+  session: { notices: {} },
+};
 
 export interface AcpTurnInput extends HarnessTurnObserver {
   binary: string;
@@ -84,8 +91,6 @@ export interface AcpTurnInput extends HarnessTurnObserver {
    *  mode and effort -- and stop before the prompt: the next turn on this
    *  session then starts at the prompt (a failover's standby account). */
   prepareOnly?: boolean;
-  /** Override ACP_RATE_LIMIT_GRACE_MS. */
-  rateLimitGraceMs?: number;
   signal?: AbortSignal;
 }
 
@@ -259,6 +264,25 @@ export function acpApprovalDetail(toolCall: Json | undefined): string | undefine
   return lines.length > DETAIL_LINE_CAP ? [...lines.slice(0, DETAIL_LINE_CAP), '...'].join('\n') : lines.join('\n');
 }
 
+/** Cursor's fallback for a client without `cursor/ask_question` (cursor-agent
+ * 2026.09.26, read from its bundle): each question is asked as a
+ * session/request_permission with one `allow_once` option per ANSWER, a
+ * `reject_once` Skip whose id is this, and a toolCallId `<call>_q<n>`. Approving
+ * "allow_once" there is not consent to a tool: it is picking an answer. */
+const CURSOR_QUESTION_SKIP_ID = '__ask_question_skip__';
+
+/** A permission request that is really a question to the user. */
+export function acpQuestionPermission(params: Json): { skipOptionId: string; prompt: string; answers: string[] } | undefined {
+  const options: Json[] = Array.isArray(params.options) ? params.options : [];
+  const skip = options.find((option) => option?.optionId === CURSOR_QUESTION_SKIP_ID);
+  if (!skip) return undefined;
+  return {
+    skipOptionId: CURSOR_QUESTION_SKIP_ID,
+    prompt: String(params.toolCall?.title ?? params.toolCall?.content?.[0]?.content?.text ?? 'a question'),
+    answers: options.filter((option) => option !== skip && typeof option?.name === 'string').map((option) => String(option.name)),
+  };
+}
+
 interface AcpPermissionPlan {
   /** `allow` answers without the user; `ask` must go through onApproval. */
   action: 'allow' | 'ask';
@@ -355,6 +379,18 @@ async function acpImageBlock(path: string): Promise<Json> {
 }
 
 
+/** The config option an agent uses for its modes when it has no `modes` object. */
+export function acpModeConfigOption(options: readonly Json[] | undefined): Json | undefined {
+  return options?.find((option) => option?.category === 'mode') ?? options?.find((option) => (option?.id ?? option?.configId) === 'mode');
+}
+
+/** Every value a select option offers, grouped or flat. */
+export function acpConfigValues(option: Json): string[] {
+  const entries: Json[] = Array.isArray(option?.options) ? option.options : [];
+  return entries.flatMap((entry) => Array.isArray(entry?.options) ? entry.options : [entry])
+    .map((entry) => entry?.value).filter((value): value is string => typeof value === 'string');
+}
+
 interface LiveAgent {
   peer: JsonRpcPeer;
   key: string;
@@ -422,8 +458,6 @@ interface ActiveTurn extends Stream {
   sessionId?: string;
   prompt?: Promise<unknown>;
   fail: (error: Error) => void;
-  /** Running while the agent retries a rate-limited call; progress stops it. */
-  throttled?: NodeJS.Timeout;
   /** Messages waiting to be steered in, oldest first. */
   held: HeldSteer[];
   /** The `_session/steering` requests being sent now, one at a time. */
@@ -484,7 +518,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         if (!this.pendingTools.size) this.dropLive(error);
       },
       ended: () => {
-        if (turn.throttled) clearTimeout(turn.throttled);
         input.onSteerReady?.(undefined);
         this.releaseSteers(turn);
         this.live?.peer.rejectPending(new Error(`${input.command} ACP turn ended`), (method) => method !== 'session/prompt');
@@ -539,6 +572,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         onNotification: (method, params) => {
           if (method === 'session/update') this.update(params);
           else if (method === '_session/retrying') this.retrying(params);
+          else if (method.startsWith('_') && method !== '_kiro.dev/metadata') this.extension(method, params);
           else if (method === '_kiro.dev/metadata') this.kiroMetadata(params);
         },
       },
@@ -701,12 +735,27 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     const planning = Boolean(input.planMode && planModeId);
     const modeId = planning ? planModeId : permissionModeIds?.[input.permissionMode];
-    if (modeId && live.modes?.currentModeId !== modeId) {
+    if (modeId) {
       const available: Json[] = Array.isArray(live.modes?.availableModes) ? live.modes.availableModes : [];
-      if (!available.some((mode) => mode.id === modeId)) throw new Error(`${input.command} ACP does not offer ${planning ? 'plan' : 'permission'} mode ${modeId}`);
-      await startingRequest('session/set_mode', { sessionId: turn.sessionId, modeId });
-      stillRunning();
-      live.modes = { ...live.modes, currentModeId: modeId };
+      // Goose, Devin, OpenCode, Kilo, Qwen and Cline publish their modes as a
+      // config option (`category: "mode"`) and no `modes` object.
+      const modeOption = available.length ? undefined : acpModeConfigOption(live.configOptions);
+      if (modeOption) {
+        if (modeOption.currentValue !== modeId) {
+          if (!acpConfigValues(modeOption).includes(modeId)) throw new Error(`${input.command} ACP does not offer ${planning ? 'plan' : 'permission'} mode ${modeId}`);
+          const updated = await startingRequest('session/set_config_option', { sessionId: turn.sessionId, configId: modeOption.id ?? modeOption.configId, value: modeId });
+          stillRunning();
+          live.configOptions = Array.isArray(updated?.configOptions)
+            ? updated.configOptions
+            : live.configOptions?.map((option) => option === modeOption ? { ...option, currentValue: modeId } : option);
+          live.models = { ...live.models, configOptions: live.configOptions };
+        }
+      } else if (live.modes?.currentModeId !== modeId) {
+        if (!available.some((mode) => mode.id === modeId)) throw new Error(`${input.command} ACP does not offer ${planning ? 'plan' : 'permission'} mode ${modeId}`);
+        await startingRequest('session/set_mode', { sessionId: turn.sessionId, modeId });
+        stillRunning();
+        live.modes = { ...live.modes, currentModeId: modeId };
+      }
     }
     if (input.effort && effortConfigId) {
       const effortOption = live.configOptions?.find((option) => (option.id ?? option.configId) === effortConfigId);
@@ -880,6 +929,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const planModeId = turn?.input.acp?.planModeId;
       if (turn?.promptStarted && planModeId && before === planModeId && update.currentModeId !== planModeId) turn.input.onPlanModeExit?.();
     }
+    // The agent's option list as it stands now (a model change drops options).
+    if (update.sessionUpdate === 'config_option_update' && Array.isArray(update.configOptions) && this.live) {
+      // Plan mode kept as a config option: the agent leaving it is its plan approved.
+      const planModeId = turn?.input.acp?.planModeId;
+      const was = acpModeConfigOption(this.live.configOptions)?.currentValue;
+      const now = acpModeConfigOption(update.configOptions)?.currentValue;
+      if (turn?.promptStarted && planModeId && was === planModeId && now !== undefined && now !== planModeId) turn.input.onPlanModeExit?.();
+      this.live.configOptions = update.configOptions;
+      this.live.models = { ...this.live.models, configOptions: update.configOptions };
+    }
     // Running totals are the session's, whoever is listening: taken during a
     // session/load replay (the baseline) and after a prompt was answered.
     const totals = acpSessionTotals(update);
@@ -903,6 +962,45 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       // bookkeeping arrived.
       const settledLastTool = update.sessionUpdate === 'tool_call_update' && toolSettled(update);
       if (settledLastTool || TURN_BOOKKEEPING_UPDATES.has(String(update.sessionUpdate))) this.finishBackground('completed');
+    }
+  }
+
+  /** Updates that are the agent's status, not its content: shown as the
+   * waiting line (a warning as a notice) so a turn emitting only these is
+   * seen to be working. The watchdog was reset by the caller. */
+  private statusUpdate(input: HarnessTurnObserver, update: Json): boolean {
+    const name = (value: unknown, fallback: string): string => typeof value === 'string' && value.trim() ? value.trim().slice(0, 80) : fallback;
+    switch (update.sessionUpdate) {
+      case 'notice': {
+        // A structured warning (client capability `session.notices`).
+        const title = typeof update.title === 'string' ? update.title.trim() : '';
+        const description = typeof update.description === 'string' ? update.description.trim() : '';
+        const text = [title, description].filter(Boolean).join(': ');
+        if (text) input.onNotice?.(text);
+        return true;
+      }
+      case 'compaction_update': {
+        const status = String(update.status ?? '');
+        if (status === 'completed') input.onNotice?.('Conversation compacted to fit the context window');
+        else if (status !== 'cancelled' && status !== 'failed') input.onPhase?.('compacting the conversation');
+        return true;
+      }
+      case 'compaction_summary_chunk':
+        input.onPhase?.('compacting the conversation');
+        return true;
+      case 'async_task_spawned':
+      case 'async_task_progress':
+      case 'async_task_state_update':
+        input.onPhase?.(`background task: ${name(update.name ?? update.description, String(update.asyncTaskId ?? 'running'))}`);
+        return true;
+      case 'subagent_spawned':
+      case 'subagent_state_update':
+        input.onPhase?.(`sub-agent: ${name(update.name ?? update.description ?? update.title, 'working')}`);
+        return true;
+      case 'config_option_update':
+        return true;
+      default:
+        return false;
     }
   }
 
@@ -933,11 +1031,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (share && update.sessionUpdate !== 'usage_update') input.onUsage?.(share);
     const commands = acpAvailableCommands(update);
     if (commands) return input.onAvailableCommands?.(commands);
-    const turn = target === this.turn ? this.turn : undefined;
-    if (turn?.throttled && update.sessionUpdate !== 'usage_update' && update.sessionUpdate !== 'user_message_chunk') {
-      clearTimeout(turn.throttled);
-      turn.throttled = undefined;
-    }
     // A sub-agent's prose and thinking (claude-agent-acp stamps each with the
     // Agent call it belongs to). It is not the answer: appended to it, the
     // sub-agent's words read as Claude's own. It shows under its Agent row.
@@ -994,6 +1087,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     const plan = acpPlanEntries(update);
     if (plan) return input.onPlan?.(plan);
+    if (this.statusUpdate(input, update)) return;
     // `usage_update` {used, size, cost}: the context the session occupies,
     // its window, and what it has cost -- live, while the turn runs.
     // claude-agent-acp forwards each rate_limit_event's info here: the 5-hour
@@ -1030,28 +1124,55 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   /** The agent's own notice that it is retrying a failed model call
    * (`_session/retrying`, Vibe: `{category:"rate_limited", detail:"HTTP 429"}`).
-   * A rate limit is shown, and if nothing else arrives within the grace the
-   * turn fails as a 429 -- which failover reads as throttled and moves on. */
+   * Shown as a phase, nothing more: the agent retries by its own backoff and
+   * may well succeed, so ClikCode keeps no clock on it. Its final failure or
+   * stop reason ends the turn; the idle watchdog (reset by each notice) is
+   * the ceiling for an agent that goes quiet for good. */
   private retrying(params: Json): void {
-    const turn = this.turn;
-    if (!turn || turn.done || !turn.promptStarted) return;
-    if (typeof params.sessionId === 'string' && turn.sessionId && params.sessionId !== turn.sessionId) return;
-    turn.watchdog?.activity();
-    const category = typeof params.category === 'string' ? params.category : '';
+    const target = this.liveTarget(params);
+    if (!target) return;
+    const command = this.turn?.input.command ?? 'the agent';
     const detail = typeof params.detail === 'string' ? params.detail : '';
-    turn.input.onPhase?.(`${turn.input.command} is retrying${detail ? ` (${detail})` : ''}`);
-    if (!/rate|limit|quota|throttl/i.test(category) || turn.throttled) return;
-    const status = Number(/\b(4\d\d|5\d\d)\b/.exec(detail)?.[1] ?? 429);
-    const grace = turn.input.rateLimitGraceMs ?? ACP_RATE_LIMIT_GRACE_MS;
-    turn.throttled = setTimeout(() => {
-      turn.throttled = undefined;
-      if (turn.done) return;
-      turn.fail(Object.assign(
-        new Error(`${turn.input.command}: rate limited${detail ? ` (${detail})` : ''}, still retrying after ${Math.round(grace / 1000)}s`),
-        { statusCode: status },
-      ));
-    }, grace);
-    turn.throttled.unref?.();
+    target.observer.onPhase?.(`${command} is retrying${detail ? ` (${detail})` : ''}`);
+  }
+
+  /** Where a session-scoped extension notification goes: the user's turn, or
+   * the background turn. Its arrival is the agent being alive, so the
+   * watchdog is reset here. A notice for another session is not ours. */
+  private liveTarget(params: Json): Stream | undefined {
+    const expected = this.turn?.sessionId ?? this.sessionId;
+    if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) return undefined;
+    const target: Stream | undefined = this.turn ? (this.turn.done || !this.turn.promptStarted ? undefined : this.turn) : this.background;
+    target?.watchdog?.activity();
+    return target;
+  }
+
+  /** Extension notifications the agent sends beside session/update. None is
+   * content, but each is proof of life, and some say something worth showing. */
+  private extension(method: string, params: Json): void {
+    if (method === '_auth/status_update') return this.authStatus(params);
+    const target = this.liveTarget(params);
+    if (!target) return;
+    if (method === '_session/goal') target.observer.onPhase?.('goal updated');
+    else if (method === '_session/steering') target.observer.onPhase?.('message taken into the turn');
+    // `_claude/sdkMessage` (raw SDK frames) and `_claude/rateLimit` are
+    // activity only: the structured readings ride session/update's _meta.
+  }
+
+  /** claude-agent-acp pushes the identity it runs as (`_auth/status_update`
+   * {authStatus:{kind,label}}). `none` is a known sign-out -- "cannot
+   * determine" is silence -- so the turn ends now with the sign-in path
+   * rather than waiting for the vendor to fail the prompt itself. */
+  private authStatus(params: Json): void {
+    const status = params.authStatus;
+    if (!status || typeof status !== 'object' || status.kind !== 'none') return;
+    const turn = this.turn;
+    if (!turn || turn.done) return;
+    const command = turn.input.command;
+    turn.fail(Object.assign(
+      new Error(`${command} is not signed in${typeof status.label === 'string' && status.label ? ` (${status.label})` : ''}: sign in with \`${command} auth login\` or your account's sign-in`),
+      { rpcCode: ACP_AUTH_REQUIRED_CODE, statusCode: 401, acpSignedOut: true },
+    ));
   }
 
   private async permission(params: Json): Promise<Json> {
@@ -1060,6 +1181,13 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Out of turn the agent still asks -- through the background turn.
     const stream: Stream | undefined = turn ?? (this.turn ? undefined : this.background ?? this.openBackground());
     if (!stream) return cancelled;
+    // A question, not a tool: no permission mode may pick an answer for the
+    // user, and ClikCode has no way to put the choice to them. Skip it, and say so.
+    const question = acpQuestionPermission(params);
+    if (question) {
+      stream.observer.onNotice?.(`${turn?.input.command ?? 'The agent'} asked "${question.prompt}"${question.answers.length ? ` (${question.answers.join(' / ')})` : ''} and it was skipped: ClikCode cannot show agent questions yet`);
+      return turn?.done ? cancelled : { outcome: { outcome: 'selected', optionId: question.skipOptionId } };
+    }
     const plan = acpPermissionPlan(turn?.input.permissionMode ?? 'ask', params);
     let accepted = plan.action === 'allow';
     // The call being asked about is open from here, whether or not the agent
@@ -1110,6 +1238,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
  * own store lost the thread (chat de679bc3 failed six turns in a row on it, 2026-10-08, each
  * classified `other`). The thread is gone, not the account, so the turn starts a fresh one and
  * retells ClikCode's transcript (failover.ts `native-thread-invalid`). */
+/** JSON-RPC -32000: ACP's "authentication required". */
+const ACP_AUTH_REQUIRED_CODE = -32000;
+
 export function markMissingThread(error: unknown, wanted: string): unknown {
   if (!(error instanceof Error)) return error;
   const code = (error as { rpcCode?: unknown }).rpcCode;

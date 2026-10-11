@@ -1,0 +1,164 @@
+/** What an ACP agent says beside its answer: structured notices, status
+ * updates, extension notifications, sign-out, questions asked as permissions,
+ * and modes kept as a config option. Driven by a real child speaking ACP. */
+import { describe, expect, it } from 'vitest';
+import { createAcpSession } from './acp-client.js';
+
+type Step = { after?: number; send?: Record<string, unknown>; request?: Record<string, unknown> };
+
+/** After session/prompt the fake plays `steps`, then answers with what it
+ * saw (initialize params, requests it received, replies to its requests). */
+function agent(opts: { steps?: Step[]; initResult?: Record<string, unknown>; sessionResult?: Record<string, unknown>; newError?: Record<string, unknown> } = {}): string {
+  return `
+    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+    const o = ${JSON.stringify(opts)}; const seen = { requests: [], replies: {} };
+    let buf = '';
+    const play = async (m) => {
+      for (const [i, step] of (o.steps ?? []).entries()) {
+        if (step.after) await new Promise((r) => setTimeout(r, step.after));
+        if (step.send) send(step.send);
+        if (step.request) { send({ id: 500 + i, ...step.request }); await new Promise((r) => { seen.wait = r; }); }
+      }
+      send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(seen) } } } });
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+    };
+    process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+      if (m.id >= 500 && !m.method) { seen.replies[m.id - 500] = m.result ?? m.error; seen.wait?.(); continue; }
+      if (m.method) seen.requests.push({ method: m.method, params: m.params });
+      if (m.method === 'initialize') { seen.init = m.params; send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, ...(o.initResult ?? {}) } }); }
+      else if (m.method === 'session/new') send(o.newError ? { id: m.id, error: o.newError } : { id: m.id, result: { sessionId: 's1', ...(o.sessionResult ?? {}) } });
+      else if (m.method === 'session/set_config_option') send({ id: m.id, result: {} });
+      else if (m.method === 'session/prompt') play(m);
+    } });
+  `;
+}
+
+interface Seen { init: any; requests: Array<{ method: string; params: any }>; replies: Record<string, any> }
+
+async function run(opts: Parameters<typeof agent>[0], extra: Record<string, unknown> = {}, sessionOptions: { idleMs?: number } = {}) {
+  const session = createAcpSession(sessionOptions);
+  const notices: string[] = [];
+  const phases: string[] = [];
+  try {
+    const result = await session.runTurn({
+      binary: process.execPath, command: 'fake', argv: ['-e', agent(opts)], cwd: process.cwd(), prompt: 'go',
+      environment: {}, permissionMode: 'ask', onNotice: (m: string) => notices.push(m), onPhase: (p: string) => phases.push(p), ...extra,
+    } as never);
+    return { seen: JSON.parse(result.text) as Seen, notices, phases };
+  } finally { await session.close(); }
+}
+
+const update = (u: Record<string, unknown>) => ({ send: { method: 'session/update', params: { sessionId: 's1', update: u } } });
+
+describe('ACP client capabilities', () => {
+  it('opts in to structured notices only', async () => {
+    const { seen } = await run({});
+    expect(seen.init.clientCapabilities.session).toEqual({ notices: {} });
+    expect(seen.init.clientCapabilities.elicitation).toBeUndefined();
+    expect(seen.init.clientCapabilities._meta).toEqual({ terminal_output: true });
+  });
+});
+
+describe('ACP status updates and extension notifications', () => {
+  it('shows notices, compaction, background tasks and sub-agents instead of dropping them', async () => {
+    const { notices, phases } = await run({ steps: [
+      update({ sessionUpdate: 'notice', severity: 'warning', title: 'Rate limit near', description: '80% of the window' }),
+      update({ sessionUpdate: 'compaction_update', compactionId: 'c', status: 'in_progress' }),
+      update({ sessionUpdate: 'compaction_summary_chunk', compactionId: 'c', content: { type: 'text', text: 'x' } }),
+      update({ sessionUpdate: 'compaction_update', compactionId: 'c', status: 'completed' }),
+      update({ sessionUpdate: 'async_task_spawned', asyncTaskId: 't', name: 'dev server' }),
+      update({ sessionUpdate: 'subagent_spawned', name: 'reviewer' }),
+      update({ sessionUpdate: 'config_option_update', configOptions: [] }),
+    ] });
+    expect(notices).toEqual(['Rate limit near: 80% of the window', 'Conversation compacted to fit the context window']);
+    expect(phases).toEqual(['compacting the conversation', 'compacting the conversation', 'background task: dev server', 'sub-agent: reviewer']);
+  });
+
+  it('counts extension notifications as proof of life for the idle watchdog', async () => {
+    const quiet = (method: string) => ({ after: 150, send: { method, params: { sessionId: 's1' } } });
+    // 4 x 150ms of nothing but extension traffic against a 400ms budget.
+    const { seen } = await run({ steps: ['_claude/sdkMessage', '_session/goal', '_claude/rateLimit', '_session/steering'].map(quiet) }, {}, { idleMs: 400 });
+    expect(seen.requests.some((r) => r.method === 'session/prompt')).toBe(true);
+  });
+
+  it('fails a signed-out agent at once with the sign-in path', async () => {
+    const session = createAcpSession();
+    try {
+      await expect(session.runTurn({
+        binary: process.execPath, command: 'fake', argv: ['-e', agent({ steps: [
+          { send: { method: '_auth/status_update', params: { authStatus: { kind: 'none', label: 'Not logged in' } } } },
+          { after: 5000 },
+        ] })], cwd: process.cwd(), prompt: 'go', environment: {}, permissionMode: 'ask',
+      })).rejects.toMatchObject({ message: expect.stringContaining('not signed in'), rpcCode: -32000, statusCode: 401 });
+    } finally { await session.close(); }
+  });
+
+  it('ignores a signed-in status', async () => {
+    const { seen } = await run({ steps: [{ send: { method: '_auth/status_update', params: { authStatus: { kind: 'subscription' } } } }] });
+    expect(seen.requests.length).toBeGreaterThan(0);
+  });
+});
+
+describe('a vendor error keeps its JSON-RPC code and data', () => {
+  it('attaches rpcCode and data for the classifier', async () => {
+    const session = createAcpSession();
+    try {
+      await expect(session.runTurn({
+        binary: process.execPath, command: 'fake', argv: ['-e', agent({ newError: { code: -32000, message: 'Authentication required', data: { authMethods: ['x'] } } })],
+        cwd: process.cwd(), prompt: 'go', environment: {}, permissionMode: 'ask',
+      })).rejects.toMatchObject({ rpcCode: -32000, data: { authMethods: ['x'] } });
+    } finally { await session.close(); }
+  });
+});
+
+describe('a question asked as a permission request (Cursor)', () => {
+  const question = {
+    request: {
+      method: 'session/request_permission',
+      params: {
+        sessionId: 's1',
+        toolCall: { toolCallId: 'ask_1_q0', title: 'Which database?', kind: 'other', status: 'pending' },
+        options: [
+          { optionId: 'pg', name: 'Postgres', kind: 'allow_once' },
+          { optionId: 'my', name: 'MySQL', kind: 'allow_once' },
+          { optionId: '__ask_question_skip__', name: 'Skip', kind: 'reject_once' },
+        ],
+      },
+    },
+  };
+
+  it('is skipped, never answered for the user, even in bypass', async () => {
+    for (const mode of ['bypass', 'auto', 'ask'] as const) {
+      const asked: string[] = [];
+      const { seen, notices } = await run({ steps: [question] }, { permissionMode: mode, onApproval: async (title: string) => { asked.push(title); return true; } });
+      expect(seen.replies[0], mode).toEqual({ outcome: { outcome: 'selected', optionId: '__ask_question_skip__' } });
+      expect(asked, mode).toEqual([]);
+      expect(notices.join(), mode).toContain('Which database?');
+    }
+  });
+
+  it('leaves an ordinary permission request on its plan', async () => {
+    const ordinary = { request: { method: 'session/request_permission', params: { sessionId: 's1', toolCall: { toolCallId: 't', title: 'Run ls', kind: 'execute' }, options: [{ optionId: 'ok', name: 'Allow', kind: 'allow_once' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }] } } };
+    const { seen } = await run({ steps: [ordinary] }, { permissionMode: 'bypass' });
+    expect(seen.replies[0]).toEqual({ outcome: { outcome: 'selected', optionId: 'ok' } });
+  });
+});
+
+describe('modes kept as a config option', () => {
+  const configOptions = [
+    { id: 'mode', category: 'mode', type: 'select', currentValue: 'code', options: [{ value: 'code', name: 'Code' }, { value: 'plan', name: 'Plan' }] },
+  ];
+
+  it('plan mode goes through session/set_config_option when the agent has no modes object', async () => {
+    const { seen } = await run({ sessionResult: { configOptions } }, {
+      planMode: true, acp: { permissionModeIds: { ask: 'code' }, planModeId: 'plan' },
+    });
+    const set = seen.requests.filter((r) => r.method === 'session/set_config_option' || r.method === 'session/set_mode');
+    expect(set).toEqual([{ method: 'session/set_config_option', params: { sessionId: 's1', configId: 'mode', value: 'plan' } }]);
+  });
+
+  it('sets nothing when the option already holds the mode', async () => {
+    const { seen } = await run({ sessionResult: { configOptions } }, { acp: { permissionModeIds: { ask: 'code' } } });
+    expect(seen.requests.filter((r) => r.method.startsWith('session/set_'))).toEqual([]);
+  });
+});
