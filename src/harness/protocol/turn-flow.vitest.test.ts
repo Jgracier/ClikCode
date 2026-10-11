@@ -111,8 +111,12 @@ describe('how a turn reads', () => {
   it('counts a running turn\'s tokens: the vendor\'s figure, else length / 4, never going down', () => {
     expect(estimateTokens(4000)).toBe(1000);
     expect(estimateTokens(0)).toBe(0);
-    // Reported output wins where the turn's usage so far has it.
-    expect(liveTokenTarget({ usage: { output: 340 }, responseChars: 4000 })).toBe(340);
+    // The larger of the vendor's figure and the written length: a figure
+    // read once, early, must not hold the meter on one number.
+    expect(liveTokenTarget({ usage: { output: 340 }, responseChars: 4000 })).toBe(1000);
+    expect(liveTokenTarget({ usage: { output: 5000 }, responseChars: 4000 })).toBe(5000);
+    // Reasoning is written too.
+    expect(liveTokenTarget({ usage: { output: 340 }, responseChars: 400, thoughtChars: 3600 })).toBe(1000);
     expect(liveTokenTarget({ usage: { input: 900 }, responseChars: 4000 })).toBe(1000);
     expect(liveTokenTarget({ responseChars: 0 })).toBe(0);
     // The shown number steps toward the target, and never back.
