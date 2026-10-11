@@ -100,3 +100,41 @@ it('reads the parent call of a sub-agent update from every shape an ACP agent pu
   // Nothing published, nothing invented: the call's own input is not a parent.
   expect(acpActivityEvent(call({ rawInput: { parentToolCallId: 'x' }, _meta: { terminal_output: true } }))?.parentId).toBeUndefined();
 });
+
+it("draws a Cursor sub-agent's own session as children of the call that spawned it", async () => {
+  // cursor-agent's ACP runs a sub-agent as a session of its own: the parent
+  // is told with `subagent_spawned` {subagentSessionId, _meta.cursor.toolCallId},
+  // and the child's updates then arrive under that session id.
+  const script = `
+    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+    const update = (sessionId, u) => send({ method: 'session/update', params: { sessionId, update: u } });
+    let buf = '';
+    process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+      if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+      else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
+      else if (m.method === 'session/prompt') {
+        update('s1', { sessionUpdate: 'tool_call', toolCallId: 'task1', title: 'Task', kind: 'other', status: 'in_progress', rawInput: { subagent_type: 'explore', description: 'look around' } });
+        update('s1', { sessionUpdate: 'subagent_spawned', subagentSessionId: 's1.1', name: 'explore', task: 'look around', capabilities: {}, _meta: { cursor: { toolCallId: 'task1', agentId: 'a1' } } });
+        update('s1.1', { sessionUpdate: 'tool_call', toolCallId: 'grep1', title: 'grep TODO', kind: 'search', status: 'in_progress', rawInput: { pattern: 'TODO' } });
+        update('s1.1', { sessionUpdate: 'tool_call_update', toolCallId: 'grep1', status: 'completed' });
+        update('s1.1', { sessionUpdate: 'usage_update', used: 9999, size: 10000 });
+        update('s1.1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'CHILD PROSE' } });
+        update('s1', { sessionUpdate: 'tool_call_update', toolCallId: 'task1', status: 'completed' });
+        update('s1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } });
+        send({ id: m.id, result: { stopReason: 'end_turn' } });
+      }
+    } });
+  `;
+  const session = createAcpSession();
+  const events: HarnessActivityEvent[] = [];
+  let answer = '';
+  try {
+    await session.runTurn({
+      binary: process.execPath, command: 'cursor', argv: ['-e', script], cwd: process.cwd(), prompt: 'go',
+      environment: {}, permissionMode: 'ask', onActivity: (event) => events.push(event), onResponseDelta: (delta) => { answer += delta; },
+    });
+  } finally { await session.close(); }
+  expect(answer).toBe('Done.');
+  expect(events.filter((event) => event.id === 'grep1').map((event) => [event.kind, event.parentId])).toEqual([['tool-start', 'task1'], ['tool-done', 'task1']]);
+  expect(events.filter((event) => event.id === 'task1').every((event) => event.parentId === undefined)).toBe(true);
+});
