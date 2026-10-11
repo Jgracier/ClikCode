@@ -294,6 +294,9 @@ export async function startTurnCheckpoint(
   state: HarnessState, session: HarnessSession, prompt: string, run: TurnRunOptions,
 ): Promise<DurableTurnCheckpoint> {
   const checkpoint = await DurableTurnCheckpoint.start(state, session, prompt, run.queuedTurnId);
+  // What the observer sees that no driver reports to the journal (a plan, a
+  // notice, a thought, an approval's outcome) is kept with the turn.
+  run.prompter?.bindJournal?.(checkpoint);
   if (run.recorder) {
     run.recorder.start();
     checkpoint.record(run.recorder);
