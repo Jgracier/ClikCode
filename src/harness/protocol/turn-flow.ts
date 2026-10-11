@@ -104,6 +104,18 @@ export function reasoningBody(thought: string): string {
   return thought.replace(/\*\*([^*\n]{3,80})\*\*/, '').replace(/^\s*\*\*[^*\n]*$/, '').replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/** Whether the status line says "writing": answer text has arrived in THIS
+ * response and no call has started since. It holds through any pause -- a
+ * slow model, an ACP stall -- until a call starts or the turn ends, so
+ * half-printed text is never labelled "thinking" (standard section 9).
+ * `callAt` is when the latest call started: a call after the text begins a
+ * new response, which is "thinking" again until text arrives. Timestamps
+ * from any monotonic counter work; the terminal and the webview each keep
+ * `writingAt` (last text) and `callAt` (last call start). */
+export function answerWriting(state: { writingAt?: number; callAt?: number }): boolean {
+  return state.writingAt !== undefined && (state.callAt === undefined || state.writingAt > state.callAt);
+}
+
 export type StatusTone = 'thinking' | 'tool' | 'asking';
 
 /** What the status line says and how it looks: waiting on the user, else the

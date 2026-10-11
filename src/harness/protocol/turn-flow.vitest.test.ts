@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  activityResult, endsWithSummary, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
+  activityResult, answerWriting, endsWithSummary, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -46,6 +46,19 @@ describe('how a turn reads', () => {
     expect(turnStatus({ phase: 'thinking', writing: true }).label).toBe('writing');
     expect(turnStatus({ phase: 'thinking', writing: true, toolPhase: 'running git' }).label).toBe('running git');
     expect(reasoningHeading('no heading here')).toBeUndefined();
+  });
+
+  it('keeps saying writing for as long as the answer is mid-stream, however long the pause', () => {
+    // Text arrived at t=1000 and nothing since: a slow model, an ACP pause.
+    // Under half-printed text the status must not fall back to "thinking".
+    expect(answerWriting({ writingAt: 1000 })).toBe(true);
+    // A call started after the text: the call's verb takes the line, and
+    // once it ends with no new text the next response is "thinking" again.
+    expect(answerWriting({ writingAt: 1000, callAt: 2000 })).toBe(false);
+    // Text after that call: this response is being written.
+    expect(answerWriting({ writingAt: 3000, callAt: 2000 })).toBe(true);
+    expect(answerWriting({})).toBe(false);
+    expect(answerWriting({ callAt: 5 })).toBe(false);
   });
 
   it('shows the reasoning under the status line without its heading or emphasis', () => {
