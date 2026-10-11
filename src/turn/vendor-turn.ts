@@ -448,6 +448,16 @@ export async function sendVendorTurn(input: {
    * deliberate default, not a forgotten one. */
   const sharedObserver = {
     onActivity, onThought, onUsage: noteUsage,
+    // The vendor's own count of agents still running: carried to the turn's
+    // end line (checkpoint turnEnd) and shown to the windows following it.
+    onBackgroundAgents: (pending: number): void => {
+      if (session.pendingTurn) {
+        if (pending > 0) session.pendingTurn.pendingBackground = pending;
+        else delete session.pendingTurn.pendingBackground;
+        checkpoint.touch();
+      }
+      prompter?.setPendingBackground?.(pending);
+    },
     onResponseDelta: sink.response,
     onPhase: (phase: string) => prompter?.phase(phase),
     onNotice: (message: string) => prompter?.activity(chalk.yellow(message)),

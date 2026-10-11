@@ -88,6 +88,11 @@ export type LiveTurn = {
    * `activities` never carries one -- a window that took only that lost its
    * reasoning at every mid-turn snapshot. */
   thought?: LiveThought; marks?: TurnMark[]; phase?: string; usage?: TurnUsage;
+  /** Background agents the vendor says are still running (standard section 10). */
+  pendingBackground?: number;
+  /** Where in the answer the turn's plan row began (its mark's
+   * `responseOffset`), for a window that reads `plan` and not `marks`. */
+  planOffset?: number;
 };
 
 /** The thought being had, as a joining window continues it. `text` is its
@@ -117,6 +122,9 @@ export type WorkerEvent =
   /** `seq`/`responseOffset`: where the plan row began (it updates in place). */
   | { type: 'plan'; entries: readonly PlanEntry[]; seq?: number; responseOffset?: number }
   | { type: 'usage'; usage: TurnUsage }
+  /** Background agents the vendor says are still running, as a level (0 =
+   * none): the turn ends on `Waiting for N background agents`. */
+  | { type: 'background'; pending: number }
   | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string; callId?: string; seq?: number; responseOffset?: number }
   /** A harness asks the user a question (options, several questions, free
    * text); answered with `question-response`. */
@@ -125,8 +133,10 @@ export type WorkerEvent =
    * the turn ended): every window closes its prompt. */
   /** `outcome`/`label`: the user decided it -- the settled row the request
    * becomes where it was asked (TurnMark `outcome`). Absent when it was
-   * withdrawn or the turn ended under it. */
-  | { type: 'request-closed'; id: string; outcome?: 'approved' | 'denied' | 'answered'; label?: string }
+   * withdrawn or the turn ended under it. `callId`: the call the request was
+   * about (as on `approval-request`), so a window that never saw the request
+   * settles that call's row with the decision. */
+  | { type: 'request-closed'; id: string; outcome?: 'approved' | 'denied' | 'answered'; label?: string; callId?: string }
   /** A turn has started. `prompt` (additive) is its text: a client that did
    * not send it -- another window's turn, or one the worker started itself
    * for a finished background shell -- follows it from here to waiting-stop

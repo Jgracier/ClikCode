@@ -27,8 +27,7 @@ export function turnEndLine(messages: readonly Message[], index: number): string
   const stopped = Boolean(end.stopped) || events.some((event) => event.stopped);
   // Background agents still running when the turn ended: the adapters and
   // the journal publish a count; absent is none.
-  const pending = (end as { pendingBackground?: unknown }).pendingBackground;
-  const pendingBackground = typeof pending === 'number' && pending > 0 ? pending : 0;
+  const pendingBackground = end.pendingBackground && end.pendingBackground > 0 ? end.pendingBackground : 0;
   if (!stopped && !pendingBackground && !endsWithSummary(end.ms, events.length)) return undefined;
   const usage = formatTurnUsage(end.usage, { brief: true });
   return turnSummary({

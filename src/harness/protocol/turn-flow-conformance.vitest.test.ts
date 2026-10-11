@@ -15,6 +15,13 @@
  *     `capabilities` may not claim more than the adapter can produce. A
  *     vendor that publishes less says so with `false`.
  *
+ * Then every one of the catalog's harnesses is held to its OWN fixtures
+ * (PROOFS): each capability it declares true must be produced, through the
+ * real adapter, by a fixture of the wire shape that harness publishes (its
+ * own parser, or the ACP shape variant -- sub-agent meta, usage source --
+ * the vendor uses). A declaration no fixture proves is a claim without
+ * evidence: correct the catalog to false rather than leave it.
+ *
  * Fixtures are crafted from the shapes each vendor's own source/protocol
  * defines (cited per fixture); they are not live runs (AGENTS.md: never test
  * against a real vendor).
@@ -35,10 +42,12 @@ import { upsertActivityEvent } from '../../tui/render/activity-log.js';
 
 type Json = Record<string, unknown>;
 type Capability = keyof AiHarnessFlowCapabilities;
-const CAPABILITIES: readonly Capability[] = ['childActivity', 'thinking', 'plan', 'usage', 'toolOutput'];
+const CAPABILITIES: readonly Capability[] = ['childActivity', 'thinking', 'plan', 'usage', 'toolOutput', 'backgroundAgents'];
 
-interface Observed { events: HarnessActivityEvent[]; plans: number; usage: boolean; notices: string[] }
+interface Observed { events: HarnessActivityEvent[]; plans: number; usage: boolean; notices: string[]; background: number[] }
 interface Fixture {
+  /** Its key in PROOFS. */
+  id: string;
   /** What the fixture is, and where its shapes come from. */
   name: string;
   run: () => Promise<Observed>;
@@ -50,31 +59,32 @@ interface Fixture {
   thoughtFrames?: Readonly<Record<string, number>>;
 }
 
-const caps = (childActivity: boolean, thinking: boolean, plan: boolean, usage: boolean, toolOutput: boolean): AiHarnessFlowCapabilities =>
-  ({ childActivity, thinking, plan, usage, toolOutput });
+const caps = (childActivity: boolean, thinking: boolean, plan: boolean, usage: boolean, toolOutput: boolean, backgroundAgents = false): AiHarnessFlowCapabilities =>
+  ({ childActivity, thinking, plan, usage, toolOutput, backgroundAgents });
 
 // ---------------------------------------------------------------- runners
 
 function recorder(): { observed: Observed; observer: HarnessTurnObserver } {
-  const observed: Observed = { events: [], plans: 0, usage: false, notices: [] };
+  const observed: Observed = { events: [], plans: 0, usage: false, notices: [], background: [] };
   return {
     observed,
     observer: {
       onActivity: (event) => { observed.events.push(event); },
       onPlan: () => { observed.plans += 1; },
-      onUsage: (usage) => { if (usage.input || usage.output || usage.totalTokens || usage.costUsd || usage.contextUsed) observed.usage = true; },
+      onUsage: (usage) => { if (usage.input || usage.output || usage.totalTokens || usage.costUsd || usage.contextUsed || usage.contextPercent || usage.credits) observed.usage = true; },
       onNotice: (notice) => { observed.notices.push(notice); },
+      onBackgroundAgents: (pending) => { observed.background.push(pending); },
     },
   };
 }
 
 /** A structured CLI's stdout lines through the real line reader. */
 function cliFixture(
-  name: string, harness: Partial<AiLocalHarnessDefinition> & { command: string; parser: string },
+  id: string, name: string, harness: Partial<AiLocalHarnessDefinition> & { command: string; parser: string },
   records: Array<Json | string>, extra: Omit<Fixture, 'name' | 'run'>,
 ): Fixture {
   return {
-    name, ...extra,
+    id, name, ...extra,
     run: async () => {
       const { observed, observer } = recorder();
       const state = createStreamState();
@@ -104,6 +114,7 @@ function codexServer(steps: Json[]): string {
 }
 
 const codexFixture: Fixture = {
+  id: 'codex-app-server',
   name: 'codex app-server (item/*, turn/plan/updated, thread/tokenUsage/updated, sub-agent threads; codex-cli 0.155 schema)',
   expected: caps(true, true, true, true, true),
   parents: ['agent:C'],
@@ -144,40 +155,81 @@ const codexFixture: Fixture = {
 /** The ACP client against a fake agent. `shape` is how the agent says an update
  * belongs to a sub-agent's call: Claude's bridge (_meta.claudeCode), Qwen Code
  * (_meta.parentToolCallId + subagentType, from its own conformance fixture), or
- * cursor-agent (a session of its own, announced by subagent_spawned). */
-function acpFixture(shape: 'claude' | 'qwen' | 'cursor'): Fixture {
-  const childMeta = { claude: { claudeCode: { parentToolUseId: 'task1' } }, qwen: { parentToolCallId: 'task1', subagentType: 'explore' }, cursor: undefined }[shape];
-  const script = `
-    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
-    const update = (u, sessionId = 's1') => send({ method: 'session/update', params: { sessionId, update: u } });
-    const childSession = ${JSON.stringify(shape === 'cursor' ? 's1.1' : 's1')};
-    const meta = ${JSON.stringify(childMeta ?? null)};
-    let buf = '';
-    process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
-      if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
-      else if (m.method === 'session/new') send({ id: m.id, result: { sessionId: 's1' } });
-      else if (m.method === 'session/prompt') {
+ * cursor-agent (a session of its own, announced by subagent_spawned); `plain`
+ * has no sub-agent at all. `usage` is where the agent puts the turn's tokens:
+ *   - update:  standard `usage_update` + the prompt result's `usage`;
+ *   - none:    nothing (the body of an agent whose usage a variant supplies);
+ *   - quota:   the prompt result's `_meta.quota.token_count` (Gemini CLI);
+ *   - context: the prompt result's `_meta.totalTokens` (Grok Build; no usage_update);
+ *   - kiro:    `_kiro.dev/metadata` {contextUsagePercentage, meteringUsage} (kiro-cli 2.23);
+ *   - meta:    token totals in an update's `_meta` (Vibe `{promptTokens, completionTokens}`,
+ *              OpenHands `{"openhands.dev/metrics": {...}}`).
+ * `body: 'usage'` runs only the usage part (no calls), so a harness is proven
+ * its usage source by the variant it publishes and not by the generic shape. */
+type AcpShape = 'claude' | 'qwen' | 'cursor' | 'plain';
+type AcpUsage = 'update' | 'none' | 'quota' | 'context' | 'kiro' | 'meta';
+function acpFixture(options: { id: string; shape: AcpShape; usage: AcpUsage; body?: 'full' | 'usage' }): Fixture {
+  const { id, shape, usage, body = 'full' } = options;
+  const childMeta = { claude: { claudeCode: { parentToolUseId: 'task1' } }, qwen: { parentToolCallId: 'task1', subagentType: 'explore' }, cursor: undefined, plain: undefined }[shape];
+  const children = shape !== 'plain';
+  const usageStep = {
+    update: `update({ sessionUpdate: 'usage_update', used: 1200, size: 200000 });`,
+    none: '', quota: '', context: '',
+    kiro: `send({ method: '_kiro.dev/metadata', params: { sessionId: 's1', contextUsagePercentage: 12, meteringUsage: [{ value: 0.5, unit: 'credit' }] } });`,
+    meta: `update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' }, _meta: { promptTokens: 100, completionTokens: 20, totalTokens: 120 } });`,
+  }[usage];
+  const result = {
+    update: `{ stopReason: 'end_turn', usage: { inputTokens: 1000, outputTokens: 200 } }`,
+    none: `{ stopReason: 'end_turn' }`,
+    quota: `{ stopReason: 'end_turn', _meta: { quota: { token_count: { input_tokens: 1000, output_tokens: 200 } } } }`,
+    context: `{ stopReason: 'end_turn', _meta: { totalTokens: 1200, modelId: 'grok-build' } }`,
+    kiro: `{ stopReason: 'end_turn' }`, meta: `{ stopReason: 'end_turn' }`,
+  }[usage];
+  const callsBody = body === 'usage' ? '' : `
         update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'Look at ' } });
         update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'the repo' } });
         update({ sessionUpdate: 'tool_call', toolCallId: 'read1', title: 'Read a.ts', kind: 'read', status: 'in_progress', rawInput: { file_path: 'a.ts' } });
         update({ sessionUpdate: 'tool_call_update', toolCallId: 'read1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'export const a = 1;' } }] });
         update({ sessionUpdate: 'plan', entries: [{ content: 'Read', status: 'completed', priority: 'medium' }] });
-        update({ sessionUpdate: 'tool_call', toolCallId: 'task1', title: 'Task', kind: 'other', status: 'in_progress', rawInput: { description: 'explore', subagent_type: 'explore' } });
-        if (meta === null) update({ sessionUpdate: 'subagent_spawned', subagentSessionId: 's1.1', name: 'explore', task: 'explore', capabilities: {}, _meta: { cursor: { toolCallId: 'task1', agentId: 'a1' } } });
-        update({ sessionUpdate: 'tool_call', toolCallId: 'child1', title: 'grep TODO', kind: 'search', status: 'in_progress', rawInput: { pattern: 'TODO' }, ...(meta ? { _meta: meta } : {}) }, childSession);
-        update({ sessionUpdate: 'tool_call_update', toolCallId: 'child1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'a.ts: TODO' } }], ...(meta ? { _meta: meta } : {}) }, childSession);
-        update({ sessionUpdate: 'tool_call_update', toolCallId: 'task1', status: 'completed' });
-        update({ sessionUpdate: 'usage_update', used: 1200, size: 200000 });
+        if (children) {
+          update({ sessionUpdate: 'tool_call', toolCallId: 'task1', title: 'Task', kind: 'other', status: 'in_progress', rawInput: { description: 'explore', subagent_type: 'explore' } });
+          if (meta === null) update({ sessionUpdate: 'subagent_spawned', subagentSessionId: 's1.1', name: 'explore', task: 'explore', capabilities: {}, _meta: { cursor: { toolCallId: 'task1', agentId: 'a1' } } });
+          update({ sessionUpdate: 'tool_call', toolCallId: 'child1', title: 'grep TODO', kind: 'search', status: 'in_progress', rawInput: { pattern: 'TODO' }, ...(meta ? { _meta: meta } : {}) }, childSession);
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 'child1', status: 'completed', content: [{ type: 'content', content: { type: 'text', text: 'a.ts: TODO' } }], ...(meta ? { _meta: meta } : {}) }, childSession);
+          update({ sessionUpdate: 'tool_call_update', toolCallId: 'task1', status: 'completed' });
+        }
+        // claude-agent-acp forwards raw SDK frames only when session/new asked for them
+        // (_meta.claudeCode.emitRawSDKMessages, a type/subtype filter).
+        if (${shape === 'claude'} && Array.isArray(asked) && asked.some((f) => f.type === 'system' && f.subtype === 'background_tasks_changed')) {
+          send({ method: '_claude/sdkMessage', params: { sessionId: 's1', message: { type: 'system', subtype: 'background_tasks_changed',
+            tasks: [{ task_id: 'bg1', task_type: 'local_agent', description: 'review the diff' }] } } });
+        }`;
+  const script = `
+    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+    const update = (u, sessionId = 's1') => send({ method: 'session/update', params: { sessionId, update: u } });
+    const childSession = ${JSON.stringify(shape === 'cursor' ? 's1.1' : 's1')};
+    const meta = ${JSON.stringify(childMeta ?? null)};
+    const children = ${JSON.stringify(children)};
+    let asked;
+    let buf = '';
+    process.stdin.on('data', (d) => { buf += d; let i; while ((i = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, i)); buf = buf.slice(i + 1);
+      if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+      else if (m.method === 'session/new') { asked = m.params && m.params._meta && m.params._meta.claudeCode && m.params._meta.claudeCode.emitRawSDKMessages; send({ id: m.id, result: { sessionId: 's1' } }); }
+      else if (m.method === 'session/prompt') {${callsBody}
+        ${usageStep}
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Done.' } });
-        send({ id: m.id, result: { stopReason: 'end_turn', usage: { inputTokens: 1000, outputTokens: 200 } } });
+        send({ id: m.id, result: ${result} });
       }
     } });
   `;
+  const full = body === 'full';
+  const shapeName = { claude: "Claude's bridge (_meta.claudeCode.parentToolUseId)", qwen: 'Qwen Code (_meta.parentToolCallId)', cursor: 'cursor-agent (subagent_spawned + own session)', plain: 'an agent with no sub-agents' }[shape];
   return {
-    name: `ACP, sub-agent as ${{ claude: "Claude's bridge (_meta.claudeCode.parentToolUseId)", qwen: "Qwen Code (_meta.parentToolCallId)", cursor: "cursor-agent (subagent_spawned + own session)" }[shape]}`,
-    expected: caps(true, true, true, true, true),
-    parents: ['task1'],
-    thoughtFrames: { 'thought-1': 2 },
+    id,
+    name: `ACP, ${shapeName}${full ? '' : ' (usage only)'}, usage ${usage}`,
+    expected: caps(full && children, full, full, usage !== 'none', full, full && shape === 'claude'),
+    ...(full && children ? { parents: ['task1'] } : {}),
+    ...(full ? { thoughtFrames: { 'thought-1': 2 } } : {}),
     run: async () => {
       const session = createAcpSession();
       const { observed, observer } = recorder();
@@ -195,8 +247,10 @@ function acpFixture(shape: 'claude' | 'qwen' | 'cursor'): Fixture {
 
 // --------------------------------------------------------------- fixtures
 
-/** Claude Code stream-json (SDKAssistantMessage / SDKUserMessage / SDKResultMessage). */
-const claudeStreamJson = cliFixture('claude stream-json', { command: 'claude', parser: 'claude-stream-json' }, [
+/** Claude Code stream-json (SDKAssistantMessage / SDKUserMessage / SDKResultMessage;
+ * SDKBackgroundTasksChangedMessage `system/background_tasks_changed`, and the CLI's own
+ * `system/turn_duration` record with `pendingBackgroundAgentCount`). */
+const claudeStreamJson = cliFixture('claude-stream-json', 'claude stream-json', { command: 'claude', parser: 'claude-stream-json' }, [
   { type: 'assistant', message: { id: 'msg_1', content: [
     { type: 'thinking', thinking: 'Need to look at the file' },
     { type: 'tool_use', id: 'read1', name: 'Read', input: { file_path: 'a.ts' } },
@@ -208,11 +262,13 @@ const claudeStreamJson = cliFixture('claude stream-json', { command: 'claude', p
   { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'task1', content: 'found one' }] }, tool_use_result: { totalToolUseCount: 1, totalTokens: 900, totalDurationMs: 1200 } },
   { type: 'assistant', message: { id: 'msg_3', content: [{ type: 'tool_use', id: 'todo1', name: 'TodoWrite', input: { todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }] } }] } },
   { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'todo1', content: 'ok' }] } },
+  { type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'bg1', task_type: 'local_agent', description: 'review the diff' }], session_id: 's' },
+  { type: 'system', subtype: 'turn_duration', durationMs: 1200, messageCount: 6, pendingBackgroundAgentCount: 1 },
   { type: 'result', subtype: 'success', is_error: false, result: 'Done.', total_cost_usd: 0.01, usage: { input_tokens: 100, output_tokens: 20 } },
-], { expected: caps(true, true, true, true, true), parents: ['task1'] });
+], { expected: caps(true, true, true, true, true, true), parents: ['task1'] });
 
 /** opencode `run --format json` (tool_use parts, reasoning part, step_finish tokens). */
-const opencodeJson = cliFixture('opencode run --format json', { command: 'opencode', parser: 'opencode-json' }, [
+const opencodeJson = cliFixture('opencode-json', 'opencode run --format json', { command: 'opencode', parser: 'opencode-json' }, [
   { type: 'reasoning', part: { id: 'prt_r', type: 'reasoning', text: 'Weigh the options' } },
   { type: 'tool_use', part: { id: 'prt_t', callID: 'call_1', tool: 'bash', state: { status: 'running', input: { command: 'ls' } } } },
   { type: 'tool_use', part: { id: 'prt_t', callID: 'call_1', tool: 'bash', state: { status: 'completed', input: { command: 'ls' }, output: 'a.ts\nb.ts' } } },
@@ -220,7 +276,7 @@ const opencodeJson = cliFixture('opencode run --format json', { command: 'openco
 ], { expected: caps(false, true, false, true, true) });
 
 /** Goose `--output-format stream-json`: toolRequest / toolResponse content parts. */
-const gooseJson = cliFixture('goose stream-json', { command: 'goose', parser: 'goose' }, [
+const gooseJson = cliFixture('goose', 'goose stream-json', { command: 'goose', parser: 'goose' }, [
   { type: 'message', message: { id: 'g1', role: 'assistant', content: [
     { type: 'thinking', thinking: 'Plan the change' },
     { type: 'toolRequest', id: 'req1', toolCall: { status: 'success', value: { name: 'developer__shell', arguments: { command: 'ls' } } } },
@@ -232,7 +288,7 @@ const gooseJson = cliFixture('goose stream-json', { command: 'goose', parser: 'g
 ], { expected: caps(false, true, false, true, true) });
 
 /** Cline `--json` (crafted from ClineSay; see events/cline.vitest.test.ts). */
-const clineJson = cliFixture('cline --json', { command: 'cline', parser: 'cline-json' }, [
+const clineJson = cliFixture('cline-json', 'cline --json', { command: 'cline', parser: 'cline-json' }, [
   { type: 'say', say: 'reasoning', ts: 1, text: 'Check config' },
   { type: 'say', say: 'tool', ts: 2, text: JSON.stringify({ tool: 'readFile', path: 'a.ts' }) },
   { type: 'say', say: 'command', ts: 3, text: 'npm test' },
@@ -241,7 +297,7 @@ const clineJson = cliFixture('cline --json', { command: 'cline', parser: 'cline-
 ], { expected: caps(false, true, false, false, true) });
 
 /** Pi's JSON event stream (packages/coding-agent/docs/json.md). */
-const piJson = cliFixture('pi --mode json', { command: 'pi', parser: 'pi-json' }, [
+const piJson = cliFixture('pi-json', 'pi --mode json', { command: 'pi', parser: 'pi-json' }, [
   { type: 'message_update', assistantMessageEvent: { type: 'thinking_start', contentIndex: 0, partial: { content: [{ type: 'thinking', thinking: '' }] } } },
   { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: 'Look', partial: { content: [{ type: 'thinking', thinking: 'Look' }] } } },
   { type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: 0, delta: ' around', partial: { content: [{ type: 'thinking', thinking: 'Look around' }] } } },
@@ -251,7 +307,7 @@ const piJson = cliFixture('pi --mode json', { command: 'pi', parser: 'pi-json' }
 ], { expected: caps(false, true, false, true, true), thoughtFrames: { 'thinking:pi-1': 2 } });
 
 /** cursor-agent `--output-format stream-json`. */
-const cursorJson = cliFixture('cursor-agent stream-json', { command: 'cursor', parser: 'cursor-stream-json' }, [
+const cursorJson = cliFixture('cursor-stream-json', 'cursor-agent stream-json', { command: 'cursor', parser: 'cursor-stream-json' }, [
   { type: 'thinking', subtype: 'delta', text: 'Look ' },
   { type: 'thinking', subtype: 'delta', text: 'around' },
   { type: 'thinking', subtype: 'completed' },
@@ -261,14 +317,14 @@ const cursorJson = cliFixture('cursor-agent stream-json', { command: 'cursor', p
 ], { expected: caps(false, true, false, true, true), thoughtFrames: { 'thinking:cursor-1': 2 } });
 
 /** agy `--output-format stream-json` (verified against agy 1.2.7 in tools.ts). */
-const antigravityJson = cliFixture('antigravity stream-json', { command: 'antigravity', parser: 'antigravity' }, [
+const antigravityJson = cliFixture('antigravity', 'antigravity stream-json', { command: 'antigravity', parser: 'antigravity' }, [
   { event: 'step_update', step_update: { step_type: 'tool', step_index: 1, state: 'ACTIVE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'ls' } } } },
   { event: 'step_update', step_update: { step_type: 'tool', step_index: 1, state: 'DONE', tool_name: 'run_command', tool_info: { parameters: { CommandLine: 'ls' } } } },
   { event: 'result', result: { status: 'SUCCESS', response: 'Done.', usage: { input_tokens: 100, output_tokens: 20 } } },
 ], { expected: caps(false, false, false, true, false) });
 
 /** The shape-matching reader every generic-json harness is read by. */
-const genericJson = cliFixture('generic json-lines (item.* envelopes)', { command: 'generic', parser: 'generic-json' }, [
+const genericJson = cliFixture('generic-json', 'generic json-lines (item.* envelopes)', { command: 'generic', parser: 'generic-json' }, [
   { type: 'item.completed', item: { id: 'rs1', type: 'reasoning', summary: ['Weighing'] } },
   { type: 'item.started', item: { id: 'cmd1', type: 'command_execution', command: 'ls' } },
   { type: 'item.completed', item: { id: 'cmd1', type: 'command_execution', command: 'ls', aggregated_output: 'a.ts', exit_code: 0 } },
@@ -276,32 +332,83 @@ const genericJson = cliFixture('generic json-lines (item.* envelopes)', { comman
 ], { expected: caps(false, true, false, true, true) });
 
 /** Aider: plain text with a `Tokens:` footer. */
-const aiderText = cliFixture('aider text', { command: 'aider', parser: 'aider', turn: { output: 'text' } as never }, [
+const aiderText = cliFixture('aider', 'aider text', { command: 'aider', parser: 'aider', turn: { output: 'text' } as never }, [
   'Aider v0.86.0', 'Here is the answer.', 'Tokens: 1.2k sent, 45 received.',
 ], { expected: caps(false, false, false, true, false) });
 
 /** A text-only CLI (Continue `cn`): nothing structured at all. */
-const plainText = cliFixture('plain text CLI', { command: 'cn', parser: 'text', turn: { output: 'text' } as never }, ['Hello', 'World'],
+const plainText = cliFixture('plain-text', 'plain text CLI', { command: 'cn', parser: 'text', turn: { output: 'text' } as never }, ['Hello', 'World'],
   { expected: caps(false, false, false, false, false) });
 
+const acpClaude = acpFixture({ id: 'acp-claude', shape: 'claude', usage: 'update' });
+const acpQwen = acpFixture({ id: 'acp-qwen', shape: 'qwen', usage: 'update' });
+const acpCursor = acpFixture({ id: 'acp-cursor', shape: 'cursor', usage: 'update' });
+/** The generic ACP body (thought, read, plan, tool output) with no usage of its own. */
+const acpPlain = acpFixture({ id: 'acp-plain', shape: 'plain', usage: 'none' });
+const acpUsage = {
+  update: acpFixture({ id: 'acp-usage-update', shape: 'plain', usage: 'update', body: 'usage' }),
+  quota: acpFixture({ id: 'acp-usage-quota', shape: 'plain', usage: 'quota', body: 'usage' }),
+  context: acpFixture({ id: 'acp-usage-context', shape: 'plain', usage: 'context', body: 'usage' }),
+  kiro: acpFixture({ id: 'acp-usage-kiro', shape: 'plain', usage: 'kiro', body: 'usage' }),
+  meta: acpFixture({ id: 'acp-usage-meta', shape: 'plain', usage: 'meta', body: 'usage' }),
+};
+
 /** The fixtures a family is named by. `exact`: a harness reaching it must declare
- * exactly what it produced; otherwise the declaration is bounded by it. */
-interface Family { fixtures: readonly Fixture[]; exact: boolean }
+ * exactly what it produced (but for `bounded`, which only caps the claim);
+ * otherwise the declaration is bounded by it. */
+interface Family { fixtures: readonly Fixture[]; exact: boolean; bounded?: readonly Capability[] }
 const FAMILIES: Readonly<Record<string, Family>> = {
-  'claude-stream-json': { fixtures: [claudeStreamJson], exact: true },
+  // `backgroundAgents` is a count only some vendors' streams carry: a ceiling, not a mirror.
+  'claude-stream-json': { fixtures: [claudeStreamJson], exact: true, bounded: ['backgroundAgents'] },
   'codex-items': { fixtures: [codexFixture], exact: true },
   'pi-json': { fixtures: [piJson], exact: true },
   antigravity: { fixtures: [antigravityJson], exact: true },
   aider: { fixtures: [aiderText], exact: true },
   text: { fixtures: [plainText], exact: true },
   // Ceilings: what the adapter can produce; the vendor decides what it sends.
-  acp: { fixtures: [acpFixture('claude'), acpFixture('qwen'), acpFixture('cursor')], exact: false },
+  acp: { fixtures: [acpClaude, acpQwen, acpCursor, acpPlain, ...Object.values(acpUsage)], exact: false },
   'generic-json': { fixtures: [genericJson], exact: false },
   // Own-parser families a harness reaches only as a fallback transport.
   'opencode-json': { fixtures: [opencodeJson], exact: false },
   goose: { fixtures: [gooseJson], exact: false },
   'cline-json': { fixtures: [clineJson], exact: false },
   'cursor-stream-json': { fixtures: [cursorJson], exact: false },
+};
+
+/** The fixtures that prove each catalog harness, by id. For a harness that
+ * declares a capability true, one of these must PRODUCE it. An ACP agent gets
+ * the shape variant it publishes: the sub-agent meta it nests children by,
+ * and the place its usage is reported (acpFixture). */
+const PROOFS: Readonly<Record<string, readonly string[]>> = {
+  claude: ['acp-claude'],
+  grok: ['acp-plain', 'acp-usage-context'],
+  gemini: ['acp-plain', 'acp-usage-quota'],
+  codex: ['codex-app-server'],
+  opencode: ['acp-plain', 'acp-usage-update'],
+  copilot: ['acp-plain'],
+  aider: ['aider'],
+  goose: ['acp-plain', 'acp-usage-update'],
+  amp: ['claude-stream-json'],
+  antigravity: ['antigravity'],
+  pi: ['pi-json'],
+  droid: ['acp-plain'],
+  kiro: ['acp-plain', 'acp-usage-kiro'],
+  qwen: ['acp-qwen'],
+  cline: ['acp-plain', 'acp-usage-update'],
+  kilo: ['acp-plain', 'acp-usage-update'],
+  cursor: ['acp-cursor'],
+  hermes: ['acp-plain', 'acp-usage-update'],
+  openclaw: ['generic-json'],
+  command: ['acp-plain'],
+  kimi: ['acp-plain', 'acp-usage-update'],
+  auggie: ['acp-plain', 'acp-usage-update'],
+  vibe: ['acp-plain', 'acp-usage-meta'],
+  openhands: ['acp-plain', 'acp-usage-meta'],
+  cn: ['plain-text'],
+  dcode: ['acp-plain'],
+  devin: ['acp-plain'],
+  junie: ['acp-plain'],
+  mcode: ['acp-plain'],
 };
 
 /** The family a harness's PRIMARY transport reaches, from what the catalog
@@ -366,18 +473,28 @@ function produced(observed: Observed): AiHarnessFlowCapabilities {
     plan: observed.plans > 0,
     usage: observed.usage,
     toolOutput: observed.events.some((event) => (event.kind === 'tool-done' || event.kind === 'tool-error') && (event.output?.length ?? 0) > 0),
+    backgroundAgents: observed.background.some((pending) => pending > 0),
   };
 }
 
 // ----------------------------------------------------------------- tests
 
-const observedByFamily = new Map<string, AiHarnessFlowCapabilities>();
+const NONE = caps(false, false, false, false, false);
+const union = (list: readonly AiHarnessFlowCapabilities[]): AiHarnessFlowCapabilities =>
+  Object.fromEntries(CAPABILITIES.map((capability) => [capability, list.some((item) => item[capability])])) as unknown as AiHarnessFlowCapabilities;
+
+const ALL_FIXTURES = new Map<string, Fixture>(Object.values(FAMILIES).flatMap((family) => family.fixtures.map((fixture) => [fixture.id, fixture] as const)));
+const runs = new Map<string, Promise<Observed>>();
+const runOnce = (fixture: Fixture): Promise<Observed> => {
+  if (!runs.has(fixture.id)) runs.set(fixture.id, fixture.run());
+  return runs.get(fixture.id)!;
+};
 
 describe('every family\'s fixture meets the standard, and supplies exactly what it is declared to', () => {
   for (const [family, { fixtures }] of Object.entries(FAMILIES)) {
     for (const fixture of fixtures) {
       it(`${family}: ${fixture.name}`, async () => {
-        const observed = await fixture.run();
+        const observed = await runOnce(fixture);
         const label = `conformance[${family}: ${fixture.name}]`;
         assertStandard(label, fixture, observed);
         const got = produced(observed);
@@ -385,15 +502,13 @@ describe('every family\'s fixture meets the standard, and supplies exactly what 
           check(label, got[capability] === fixture.expected[capability],
             `produced ${capability}=${got[capability]} but the family is declared to supply ${capability}=${fixture.expected[capability]}`);
         }
-        const merged = observedByFamily.get(family) ?? caps(false, false, false, false, false);
-        observedByFamily.set(family, Object.fromEntries(CAPABILITIES.map((capability) => [capability, merged[capability] || got[capability]])) as unknown as AiHarnessFlowCapabilities);
       });
     }
   }
 });
 
 describe('every catalog harness declares what its adapter supplies', () => {
-  it('has a declaration for all five, on every harness', () => {
+  it('has a declaration for all six, on every harness', () => {
     for (const harness of AI_LOCAL_HARNESSES) {
       const declared = harness.capabilities;
       check(`conformance[${harness.command}]`, Boolean(declared), 'catalog: no `capabilities` declared (section 12: a vendor that cannot supply one is marked in the catalog)');
@@ -408,14 +523,48 @@ describe('every catalog harness declares what its adapter supplies', () => {
       const family = familyOf(harness);
       const label = `conformance[${harness.command}]`;
       check(label, family in FAMILIES, `its primary transport reaches family "${family}", which has no conformance fixture`);
-      const { fixtures, exact } = FAMILIES[family]!;
-      const supplied = fixtures.reduce((merged, fixture) => Object.fromEntries(CAPABILITIES.map((capability) => [capability, merged[capability] || fixture.expected[capability]])) as unknown as AiHarnessFlowCapabilities,
-        caps(false, false, false, false, false));
+      const { fixtures, exact, bounded = [] } = FAMILIES[family]!;
+      const supplied = union(fixtures.map((fixture) => fixture.expected));
       for (const capability of CAPABILITIES) {
         const declared = harness.capabilities?.[capability] === true;
         if (declared) check(label, supplied[capability], `declares ${capability} but its adapter family "${family}" cannot produce it`);
-        else if (exact) check(label, !supplied[capability], `declares no ${capability} but its adapter family "${family}" produces it (a hidden capability: declare it, or stop reading it)`);
+        else if (exact && !bounded.includes(capability)) check(label, !supplied[capability], `declares no ${capability} but its adapter family "${family}" produces it (a hidden capability: declare it, or stop reading it)`);
       }
     }
   });
+});
+
+describe('every harness is proven by the fixtures of the wire shape it publishes', () => {
+  it('has an entry, and no entry is for a harness the catalog lacks', () => {
+    expect(Object.keys(PROOFS).sort()).toEqual(AI_LOCAL_HARNESSES.map((harness) => harness.command).sort());
+  });
+
+  it('names fixtures of the family its primary transport reaches', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      const label = `conformance[${harness.command}]`;
+      const family = FAMILIES[familyOf(harness)]!;
+      const ids = PROOFS[harness.command] ?? [];
+      check(label, ids.length > 0, 'no fixture maps to this harness');
+      for (const id of ids) {
+        check(label, family.fixtures.some((fixture) => fixture.id === id), `fixture "${id}" is not of its family "${familyOf(harness)}"`);
+      }
+    }
+  });
+
+  for (const harness of AI_LOCAL_HARNESSES) {
+    it(`${harness.command}: every capability it declares is produced through its adapter, and an exact family hides none`, async () => {
+      const label = `conformance[${harness.command}]`;
+      const familyName = familyOf(harness);
+      const family = FAMILIES[familyName]!;
+      const fixtures = (PROOFS[harness.command] ?? []).map((id) => ALL_FIXTURES.get(id)!);
+      const observed = await Promise.all(fixtures.map(runOnce));
+      for (const [index, fixture] of fixtures.entries()) assertStandard(`${label} via ${fixture.id}`, fixture, observed[index]!);
+      const got = union(observed.map(produced));
+      for (const capability of CAPABILITIES) {
+        const declared = harness.capabilities?.[capability] === true;
+        if (declared) check(label, got[capability], `declares ${capability}=true but none of its fixtures [${fixtures.map((f) => f.id).join(', ')}] produced it: correct the catalog, or add the fixture of the shape the vendor publishes`);
+        else if (family.exact && !(family.bounded ?? []).includes(capability)) check(label, !got[capability], `declares ${capability}=false but its adapter produced it (a hidden capability)`);
+      }
+    });
+  }
 });
