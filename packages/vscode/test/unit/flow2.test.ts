@@ -2,8 +2,8 @@
  * thought, phase, usage) wired into the extension's model and page logic. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { thoughtRow } from '../../../../src/harness/protocol/turn-flow';
-import { applyEvent, emptyModel, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
-import { workingStatus } from '../../src/webview/flow';
+import { answeredApproval, applyEvent, emptyModel, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
+import { decisionBadge, shimmerStyle, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -273,5 +273,81 @@ describe('the thought row (X5)', () => {
     expect(thoughtRow({ durationMs: 3_400 })).toBe('Thought for 3s');
     expect(thoughtRow({ durationMs: 120 })).toBe('Thought for 1s');
     expect(thoughtRow({ durationMs: 3_400, heading: 'Reading the parser' })).toBe('Thought for 3s · Reading the parser');
+  });
+});
+
+describe('an approval decision settles where it was asked (X8)', () => {
+  const asked = (extra: Record<string, unknown> = {}): ChatModel => run([
+    delta('abc'),
+    worker({ type: 'approval-request', id: 'ap1', title: 'make clean', seq: 9, responseOffset: 3, ...extra }),
+  ], begin());
+
+  it('is one settled row at the place the request was asked', () => {
+    const model = applyEvent(asked(), worker({ type: 'request-closed', id: 'ap1', outcome: 'approved', label: 'make clean' }));
+    expect(model.approvals).toEqual([]);
+    expect(model.live!.decisions).toEqual([{ id: 'outcome:ap1', offset: 3, seq: 9, decision: { kind: 'approved', label: 'make clean' } }]);
+  });
+
+  it('a request withdrawn without a decision leaves no row', () => {
+    const model = applyEvent(asked(), worker({ type: 'request-closed', id: 'ap1' }));
+    expect(model.live!.decisions ?? []).toEqual([]);
+  });
+
+  it('answered here, it is drawn at once and the worker\'s outcome is the same row', () => {
+    let model = answeredApproval(asked(), 'ap1', { outcome: 'approved', always: true });
+    expect(model.live!.decisions).toEqual([{ id: 'outcome:ap1', offset: 3, seq: 9, decision: { kind: 'approved', label: 'make clean', always: true } }]);
+    model = applyEvent(model, worker({ type: 'request-closed', id: 'ap1', outcome: 'approved', label: 'make clean' }));
+    expect(model.live!.decisions).toHaveLength(1);
+    expect(model.live!.decisions![0]!.decision).toMatchObject({ kind: 'approved', always: true });
+  });
+
+  it('denied with a note says what it was told', () => {
+    const model = answeredApproval(asked(), 'ap1', { outcome: 'denied', told: 'use pnpm instead' });
+    expect(model.live!.decisions![0]!.decision).toEqual({ kind: 'told', text: 'use pnpm instead' });
+    const closed = applyEvent(model, worker({ type: 'request-closed', id: 'ap1', outcome: 'denied', label: 'make clean' }));
+    expect(closed.live!.decisions![0]!.decision).toEqual({ kind: 'told', text: 'use pnpm instead' });
+  });
+
+  it('is not duplicated by the snapshot\'s outcome mark', () => {
+    const closed = applyEvent(asked(), worker({ type: 'request-closed', id: 'ap1', outcome: 'denied', label: 'make clean' }));
+    const model = applyEvent(closed, worker({ type: 'snapshot', session: session(), live: { text: 'abc', waitingLabel: 'thinking',
+      marks: [{ kind: 'outcome', id: 'outcome:ap1', seq: 9, responseOffset: 3, outcome: 'denied', label: 'make clean' }] } }));
+    expect(model.live!.decisions).toHaveLength(1);
+  });
+
+  it('settles the call row of the same call id, instead of a second row', () => {
+    const model = run([
+      activity({ kind: 'tool-start', id: 'call-1', label: '$ make clean', category: 'run', seq: 8 }),
+      worker({ type: 'approval-request', id: 'ap1', title: 'make clean', callId: 'call-1', seq: 9, responseOffset: 0 }),
+      worker({ type: 'request-closed', id: 'ap1', outcome: 'denied', label: 'make clean' }),
+    ], begin());
+    const rows = turnMarks(model.live!.text, model.live!.activities, model.live!.reasoning, model.live!.steers, { decisions: model.live!.decisions! });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.activity!.decision).toEqual({ kind: 'denied', label: 'make clean' });
+  });
+
+  it('is a row of its own where the vendor reports no call', () => {
+    const model = applyEvent(asked(), worker({ type: 'request-closed', id: 'ap1', outcome: 'denied', label: 'make clean' }));
+    const rows = turnMarks(model.live!.text, model.live!.activities, [], [], { decisions: model.live!.decisions! });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.decision!.decision).toEqual({ kind: 'denied', label: 'make clean' });
+  });
+
+  it('goes with the turn into its trace', () => {
+    const model = run([worker({ type: 'request-closed', id: 'ap1', outcome: 'approved', label: 'make clean' }), worker({ type: 'waiting-stop' })], asked());
+    expect(model.traces[0]!.decisions).toHaveLength(1);
+  });
+});
+
+describe('spinners on one clock (X7)', () => {
+  it('the shimmer moves a cell a step on the terminal\'s cadence', () => {
+    // 10 characters + a band either side, one cell per 100 ms step.
+    expect(shimmerStyle('Reading it')).toBe('--shimmer-cycle: 1800ms; --shimmer-steps: 18');
+  });
+
+  it('a decision on a call row names the decision, not the call again', () => {
+    expect(decisionBadge({ kind: 'approved', label: 'make clean' })).toEqual({ text: '✓ approved', tone: 'ok' });
+    expect(decisionBadge({ kind: 'denied', label: 'make clean' })).toEqual({ text: '✗ denied', tone: 'no' });
+    expect(decisionBadge({ kind: 'told', text: 'use pnpm' })).toEqual({ text: '↳ told: use pnpm', tone: 'told' });
   });
 });

@@ -2,7 +2,8 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
-import { answerWriting, endsWithSummary, exploreRuns, explores, exploreSummary, tensedLabel, turnStatus, turnSummary, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { answerWriting, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, tensedLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { shimmerCycleMs, SPIN_MS } from '../../../../src/harness/protocol/timings';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import type { FileDiff } from '../protocol';
@@ -127,4 +128,19 @@ export function followsBottom(
   const distance = now.height - now.top - now.client;
   const follow = leftBottom ? false : distance < threshold ? true : previous.follow;
   return { follow, top: now.top, height: now.height };
+}
+
+/** What a decision says on the call's own row, where the call's label already
+ * names what was decided: `✓ approved`, `✗ denied`, `↳ told: use pnpm`. */
+export function decisionBadge(decision: Decision): { text: string; tone: 'ok' | 'no' | 'told' } {
+  const row = 'label' in decision ? decisionRow({ ...decision, label: '' }) : decisionRow(decision);
+  return { text: row.text.trim(), tone: row.tone };
+}
+
+/** The label shimmer's timing as inline style: one sweep takes as long as
+ * the terminal's (a cell per spinner step, shimmerCycleMs), and `steps` makes
+ * the highlight jump a cell at a time rather than glide. */
+export function shimmerStyle(label: string): string {
+  const cycle = shimmerCycleMs(label.length);
+  return `--shimmer-cycle: ${cycle}ms; --shimmer-steps: ${Math.max(1, Math.round(cycle / SPIN_MS))}`;
 }

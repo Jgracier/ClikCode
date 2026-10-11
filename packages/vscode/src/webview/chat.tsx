@@ -10,12 +10,8 @@ import {
 import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
 import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
-import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
-import { useNow, useSpinFrame } from './clock';
-
-/** The shimmer sweeps a label at the terminal's pace: the same characters a
- * step, so a longer label takes longer, as it does there. */
-const shimmerStyle = (label: string): string => `--shimmer-cycle: ${shimmerCycleMs(label.length)}ms`;
+import { COPIED_MS } from '../../../../src/harness/protocol/timings';
+import { useNow } from './clock';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
@@ -27,7 +23,7 @@ import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Animating, Icon, Spinner } from './ui';
-import { foldedGroupCount, foldedSummary, runGroupView, traceSummaryLine, workingStatus } from './flow';
+import { decisionBadge, foldedGroupCount, foldedSummary, runGroupView, shimmerStyle, traceSummaryLine, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
@@ -261,6 +257,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
         </span>
         <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
+        {activity.decision ? <span class={`activity-outcome activity-decision ${decisionBadge(activity.decision).tone}`}>{decisionBadge(activity.decision).text}</span> : null}
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {result ? <span class="activity-outcome activity-result">{result}</span> : null}

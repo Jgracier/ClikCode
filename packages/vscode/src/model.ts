@@ -76,6 +76,11 @@ export interface Approval {
   rule?: string;
   /** What the call would change, file by file. */
   diff?: FileDiff[];
+  /** Where the request was asked (the worker's order and place), and the call
+   * it is about when the vendor named one: the decision settles that row. */
+  seq?: number;
+  offset?: number;
+  callId?: string;
   /** Set when a harness asks a question rather than a yes or no: it queues
    * with the approvals (one at a time, the turn's clock stopped, the chat
    * marked waiting) and is drawn as a QuestionCard. */
@@ -330,7 +335,14 @@ function mergeDecisions(held: DecisionEntry[] | undefined, incoming: DecisionEnt
   for (const entry of incoming) {
     const at = merged.findIndex((item) => item.id === entry.id);
     if (at < 0) merged.push(entry);
-    else merged[at] = { ...merged[at]!, ...entry };
+    else {
+      // The worker's row is authoritative for place; this window's own
+      // knowledge of how it was answered (told, always) is not taken back.
+      const prior = merged[at]!;
+      const keep = prior.decision.kind === 'told' || prior.decision.kind === 'declined'
+        || (prior.decision.kind === 'approved' && prior.decision.always && entry.decision.kind === 'approved');
+      merged[at] = { ...prior, ...entry, decision: keep ? prior.decision : entry.decision, ...(prior.callId ? { callId: prior.callId } : {}) };
+    }
   }
   return merged;
 }
@@ -874,6 +886,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
           id: event.id, title: stripAnsi(event.title),
           ...(event.detail ? { detail: stripAnsi(event.detail) } : {}),
           ...(event.rule ? { rule: event.rule } : {}),
+          ...askedAt(model, event),
           ...(asFileDiffs(event.preview?.diff)?.length ? { diff: cleanDiff(asFileDiffs(event.preview?.diff)!) } : {}),
         }],
       };
@@ -882,11 +895,14 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return {
         ...model,
         ...(model.live && model.live.pausedAt === undefined ? { live: { ...model.live, pausedAt: Date.now() } } : {}),
-        approvals: [...model.approvals, { id: event.id, title: stripAnsi(event.request.title), question: event.request }],
+        approvals: [...model.approvals, { id: event.id, title: stripAnsi(event.request.title), question: event.request, ...askedAt(model, event) }],
       };
     case 'request-closed':
       // Answered in another window, withdrawn by the vendor, or the turn ended.
-      return model.approvals.some((item) => item.id === event.id) ? answeredApproval(model, event.id) : model;
+      // Decided (by any window): the settled row it becomes, once.
+      return model.approvals.some((item) => item.id === event.id) || event.outcome
+        ? answeredApproval(model, event.id, event.outcome ? { outcome: event.outcome, ...(event.label ? { label: stripAnsi(event.label) } : {}) } : undefined)
+        : model;
     case 'notice':
     case 'note':
       // The terminal colours its notes: yellow for an account switch or a
@@ -1044,12 +1060,55 @@ export function stoppingTurn(model: ChatModel): ChatModel {
   return { ...model, live: { ...(model.live ?? freshLive('thinking')), stopping: true } };
 }
 
-export function answeredApproval(model: ChatModel, id: string): ChatModel {
+/** Where a request was asked, from what the worker sent with it and the
+ * vendor's call it names, if any (read defensively: not every worker says). */
+function askedAt(model: ChatModel, event: { seq?: number; responseOffset?: number }): Partial<Pick<Approval, 'seq' | 'offset' | 'callId'>> {
+  const callId = (event as { callId?: unknown }).callId;
+  return {
+    ...(typeof event.seq === 'number' ? { seq: event.seq } : {}),
+    ...(typeof event.responseOffset === 'number' ? { offset: event.responseOffset } : {}),
+    ...(typeof callId === 'string' && callId ? { callId } : {}),
+  };
+}
+
+/** What became of an approval or question: the outcome the worker names or
+ * this window's own answer; `always` and `told` are only known to the window
+ * that answered. */
+export type Decided = { outcome: 'approved' | 'denied' | 'answered' | 'declined'; label?: string; always?: boolean; told?: string };
+
+export function answeredApproval(model: ChatModel, id: string, decided?: Decided): ChatModel {
+  const approval = model.approvals.find((item) => item.id === id);
   const approvals = model.approvals.filter((item) => item.id !== id);
+
   // Time spent on the user's answer is not the turn going quiet, and not
   // the turn's time: the clock runs again once none is waiting.
   const live = model.live && { ...model.live, activeAt: Date.now(), ...(approvals.length || model.signIn ? {} : resumed(model.live)) };
-  return { ...model, approvals, ...(live ? { live } : {}) };
+  const settled = live && decided ? withDecision(live, id, approval, decided) : live;
+  return { ...model, approvals, ...(settled ? { live: settled } : {}) };
+}
+
+/** The decision recorded as a row of the turn, under the id the worker's own
+ * `outcome` mark has, so the two are one row. */
+function withDecision(live: LiveTurn, id: string, approval: Approval | undefined, decided: Decided): LiveTurn {
+  const entryId = `outcome:${id}`;
+  const held = live.decisions?.find((entry) => entry.id === entryId);
+  const label = decided.label ?? approval?.title ?? (held && 'label' in held.decision ? held.decision.label : undefined) ?? 'request';
+  const decision: Decision = decided.told ? { kind: 'told', text: decided.told }
+    : decided.outcome === 'approved' ? { kind: 'approved', label, ...(decided.always || (held?.decision.kind === 'approved' && held.decision.always) ? { always: true } : {}) }
+      : decided.outcome === 'answered' ? { kind: 'answered', label }
+        : decided.outcome === 'declined' ? { kind: 'declined', label } : { kind: 'denied', label };
+  if (held) {
+    // Told and declined are this window's own knowledge: the worker's plain
+    // "denied" does not take them back.
+    const keep = held.decision.kind === 'told' || held.decision.kind === 'declined';
+    return { ...live, decisions: live.decisions!.map((entry) => (entry.id === entryId ? { ...entry, decision: keep ? entry.decision : decision } : entry)) };
+  }
+  const taken = takeSeq(live, approval?.seq);
+  const entry: DecisionEntry = {
+    id: entryId, decision, offset: Math.min(approval?.offset ?? live.text.length, live.text.length), seq: taken.seq,
+    ...(approval?.callId ? { callId: approval.callId } : {}),
+  };
+  return { ...live, seen: taken.seen, decisions: [...(live.decisions ?? []), entry] };
 }
 
 /** The clock running again after an approval: the pause added up. */
