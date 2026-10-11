@@ -20,6 +20,7 @@ import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
 import { failureLine } from '../../../src/harness/protocol/stderr-line';
+import { pendingPromptText } from '../../../src/tui/render/pending-prompt';
 
 /** One tool call, as the terminal's activity log keeps it: the harness's own
  * event fields (cleaned of escapes), merged frame by frame with the CLI's
@@ -306,7 +307,26 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     // A send is drawn before the bridge prepares a worker. A snapshot taken
     // during that preparation has no pendingTurn yet; keep the local prompt
     // until the worker acknowledges it or the send is rejected.
-    pendingPrompt: pending?.prompt ?? (model.running || model.ownTurn ? model.pendingPrompt : undefined),
+    // The durable copy wins, and the sticky one goes once the transcript
+    // holds it (the TUI's pendingPromptText): drawn on top of it, the
+    // prompt showed twice.
+    pendingPrompt: pendingPromptText({
+      ...(pending?.prompt ? { durable: pending.prompt } : {}),
+      ...((model.running || model.ownTurn) && model.pendingPrompt ? { sticky: model.pendingPrompt } : {}),
+      // Where this turn's prompt lands: the message there, not the last
+      // (an answered turn ends on the assistant's reply).
+      lastMessage: session.messages?.[model.turnUserIndex ?? model.messages.length],
+    }),
+  };
+}
+
+/** The bridge went away and did not come back: nothing is running on this
+ * screen any more, and the prompt this window was showing as pending is not
+ * pending (the next snapshot's transcript, or its absence, says what became
+ * of it). */
+export function connectionLost(model: ChatModel, patch: Partial<ChatModel> = {}): ChatModel {
+  return {
+    ...model, ...patch, running: false, live: undefined, approvals: [], ownTurn: undefined, pendingPrompt: undefined, turnUserIndex: undefined,
   };
 }
 

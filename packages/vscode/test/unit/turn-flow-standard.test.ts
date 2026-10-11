@@ -1,7 +1,7 @@
 /** The turn-flow standard (docs/TURN_FLOW_STANDARD.md) as the extension's
  * model and page logic hold it. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, type ChatModel } from '../../src/model';
+import { applyEvent, connectionLost, emptyModel, submittingPrompt, type ChatModel } from '../../src/model';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -46,5 +46,22 @@ describe('a mid-turn snapshot (V1)', () => {
     expect(model.live!.thought?.text).toBe('weighing options');
     expect(model.live!.activities.map((item) => item.key)).toEqual(['x']);
     expect(model.live!.text).toBe('ab');
+  });
+});
+
+describe('the sticky prompt (V2)', () => {
+  it('is dropped once the durable record holds it', () => {
+    const lost = connectionLost(begin());
+    expect(lost.running).toBe(false);
+    expect(lost.pendingPrompt).toBeUndefined();
+    expect(lost.ownTurn).toBeUndefined();
+    const sent = submittingPrompt(run([{ type: 'session', session: session() }]), 'hi');
+    const after = applyEvent(sent, { type: 'session', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'ok' }] }) });
+    expect(after.pendingPrompt).toBeUndefined();
+  });
+
+  it('still shows while the worker has not written it yet', () => {
+    const sent = submittingPrompt(run([{ type: 'session', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'ok' }] }) }]), 'hi again');
+    expect(applyEvent(sent, { type: 'session', session: session({ messages: [{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'ok' }] }) }).pendingPrompt).toBe('hi again');
   });
 });
