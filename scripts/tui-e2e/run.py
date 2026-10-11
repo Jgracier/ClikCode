@@ -950,6 +950,138 @@ SCENARIOS = {
         'snap_contains': {'taken-back': ['running sleep']},
         'never': ['Steered in: also run the linter.', 'Queued turn answered.', 'stopping', 'Stopped'],
     },
+    # Esc takes the message back and the SAME text is sent again: it is drawn
+    # once, the whole way, and is not lost between the take-back and the send.
+    'esc-then-resubmit-steer': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 6000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
+            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
+            ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5), ('snap', 'taken-back'),
+            ('keys', '\r'), ('wait_for', 'sending at the next pause', 10), ('snap', 'resent'),
+            ('wait_for', 'The build passed.', 40), ('settle', 3),
+        ],
+        'watch': ['start the build', 'The build passed.'],
+        'ever': ['sent into the turn'],
+        'snap_once': {'resent': ['› also run the linter']},
+        'final_once': ['› also run the linter'],
+    },
+    # The same, in a queue (`/send queue`): taken back, edited, sent again.
+    'esc-then-resubmit-queue': {
+        'cols': 80, 'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 5000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
+            ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
+            ('type', 'also run the linter'), ('wait_for', 'queued for next turn', 10), ('settle', 0.5),
+            ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5),
+            ('keys', ' please'), ('keys', '\r'), ('wait_for', 'queued for next turn', 10), ('snap', 'resent'),
+            ('wait_for', 'Queued turn answered.', 60), ('settle', 3),
+        ],
+        'watch': ['start the build', 'Queued turn answered.'],
+        'snap_once': {'resent': ['also run the linter please']},
+        'final_once': ['also run the linter please'],
+    },
+    # Two messages typed one after the other while a call runs: each is one
+    # row, in the order typed, and each reaches the agent.
+    'two-steers-in-a-row': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 6000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
+            ('type', 'first extra thing'), ('wait_for', 'sending at the next pause', 10),
+            ('type', 'second extra thing'), ('settle', 1),
+            ('wait_for', 'The build passed.', 40), ('settle', 4),
+        ],
+        'watch': ['start the build', 'The build passed.'],
+        'dup_ok': ['↳ sent into the turn', 'Steered in:'],
+        'final_once': ['› first extra thing', '› second extra thing'],
+        'final_in_order': ['› first extra thing', '› second extra thing'],
+    },
+    # Enter again puts the waiting message in the chat at the FIRST Enter,
+    # and it is drawn once.
+    'enter-again-first-press': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '300'},
+        'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']},
+                  {'blocks': ['The queued one answered now.']}],
+        'steps': [
+            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
+            ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
+            ('type', 'then do this'), ('wait_for', 'enter again send into the chat', 10),
+            ('keys', '\r'), ('wait_for', 'Steered in: then do this.', 20), ('settle', 3),
+        ],
+        'watch': ['start the long job'],
+        'final_once': ['› then do this'],
+    },
+    # An agent that takes no steering: two messages typed during the turn are
+    # two queued rows, run one after the other, each drawn once.
+    'two-queued-no-steering': {
+        'env': {'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 3000, 'blocks': ['The build passed.']},
+                  {'blocks': ['First queued answered.']}, {'blocks': ['Second queued answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
+            ('type', 'queued message one'), ('wait_for', 'queued', 10),
+            ('type', 'queued message two'), ('settle', 0.5),
+            ('wait_for', 'First queued answered.', 60), ('wait_for', 'Second queued answered.', 60), ('settle', 3),
+        ],
+        'watch': ['start the build'],
+        'dup_ok': ['↳ queued for next turn'],
+        'final_once': ['› queued message one', '› queued message two'],
+        'final_in_order': ['› queued message one', 'First queued answered.', '› queued message two', 'Second queued answered.'],
+    },
+    # A message sent into a turn that ends in the same moment: one row, one run.
+    'steer-as-turn-ends': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '100'},
+        'turns': [{'blocks': ['Step one of the job.', 'The job is finished.']}, {'blocks': ['Late one answered.']}],
+        'steps': [
+            ('type', 'start the job'), ('wait_for', 'The job is finished.', 30),
+            ('type', 'late message'), ('wait_for', 'Late one answered.', 30), ('settle', 3),
+        ],
+        'watch': ['start the job'],
+        'final_once': ['› late message'],
+    },
+    # Taken back twice and sent: only the last send is a message, drawn once.
+    'esc-resubmit-twice': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 7000, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
+            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
+            ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5),
+            ('keys', '\r'), ('wait_for', 'esc edit', 10), ('settle', 0.5),
+            ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5),
+            ('keys', '\r'), ('wait_for', 'esc edit', 10), ('snap', 'sent'),
+            ('wait_for', 'The build passed.', 40), ('settle', 3),
+        ],
+        'watch': ['start the build', 'The build passed.'],
+        'snap_once': {'sent': ['› also run the linter']},
+        'final_once': ['› also run the linter'],
+        'never': ['Queued turn answered.'],
+        'dup_ok': ['Steered in:'],
+    },
+    # Taken back and the turn ends before it is sent: the text is in the
+    # composer, and Enter sends it as the next message, drawn once.
+    'esc-then-turn-ends-then-enter': {
+        'env': {'FAKE_STEERING': '1', 'FAKE_DELAY_MS': '150'},
+        'turns': [{'intro': 'Starting the long build.', 'hold_ms': 2500, 'blocks': ['The build passed.']},
+                  {'blocks': ['Queued turn answered.']}],
+        'steps': [
+            ('type', 'start the build'), ('wait_for', 'sleep 30', 30),
+            ('type', 'also run the linter'), ('wait_for', 'esc edit', 10), ('settle', 0.3),
+            ('keys', '\x1b'), ('wait_for', '› also run the linter', 10),
+            ('wait_for', 'Worked for', 40), ('settle', 1), ('keys', '\r'),
+            ('wait_for', 'Queued turn answered.', 30), ('settle', 3),
+        ],
+        'watch': ['start the build'],
+        'final_once': ['› also run the linter', 'Queued turn answered.'],
+        'never': ['Steered in:'],
+    },
     # Ctrl+C stops a turn, at any point.
     'ctrl-c-stops-turn': {
         'env': {'FAKE_DELAY_MS': '300'},
