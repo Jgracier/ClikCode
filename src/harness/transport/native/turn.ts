@@ -9,6 +9,7 @@ import { ensureNativeHarness } from './inspect.js';
 import { firstUsefulLine } from '../../protocol/stderr-line.js';
 import { LineBuffer } from '../../protocol/json-lines.js';
 import { createTurnWatchdog, type TurnWatchdog } from '../turn-watchdog.js';
+import { interactiveLoginPrompt } from '../../../turn/failover.js';
 
 interface NativeHarnessTurnOutput {
   stdout: string;
@@ -176,10 +177,10 @@ class NativeHarnessTurnError extends Error {
   stdoutTail: string;
   exitCode?: number;
   signalName?: string;
-  reason: 'exit' | 'idle-timeout' | 'output-limit';
+  reason: 'exit' | 'idle-timeout' | 'output-limit' | 'login-prompt';
   constructor(message: string, detail: {
     stderrTail: string; stdoutTail: string; exitCode?: number; signalName?: string;
-    reason: 'exit' | 'idle-timeout' | 'output-limit';
+    reason: 'exit' | 'idle-timeout' | 'output-limit' | 'login-prompt';
   }) {
     super(message);
     this.name = 'NativeHarnessTurnError';
@@ -234,6 +235,13 @@ export async function captureNativeHarnessTurn(
     let closeGraceTimer: NodeJS.Timeout | undefined;
     let timedOut = false;
     let timedOutAfterMs = 0;
+    // A vendor with no sign-in starts its own browser login and waits for ever
+    // on a stdin ClikCode closed (amp, aider: verified). That prompt is printed
+    // before any work, so only the head of each stream is read for it -- model
+    // text later in a turn can never trip it.
+    let loginPrompt: string | undefined;
+    const loginHead = { stdout: '', stderr: '' };
+    const LOGIN_HEAD_LIMIT = 8_192;
     const controller = options.idleController as BoundIdleController | undefined;
     const tailLimit = TURN_OUTPUT_TAIL_LIMIT;
     const forward = (signal: NodeJS.Signals): void => killProcessTreePortable(child, signal, true);
@@ -259,6 +267,11 @@ export async function captureNativeHarnessTurn(
     child.stderr!.setEncoding('utf8');
     const collect = (target: 'stdout' | 'stderr', chunk: string): void => {
       watchdog.activity();
+      if (!loginPrompt && loginHead[target].length < LOGIN_HEAD_LIMIT) {
+        loginHead[target] = (loginHead[target] + chunk).slice(0, LOGIN_HEAD_LIMIT);
+        loginPrompt = interactiveLoginPrompt(loginHead[target]);
+        if (loginPrompt) { forward('SIGTERM'); later(2_000, 'SIGKILL'); }
+      }
       const callback = target === 'stdout' ? options.onStdoutLine : undefined;
       if (target === 'stdout') stdout += chunk;
       else stderr += chunk;
@@ -339,6 +352,9 @@ export async function captureNativeHarnessTurn(
       if (onReleasedExit) {
         try { onReleasedExit({ ...exit, timedOut }); } catch { /* fail-open-ok: the owner's bookkeeping */ }
         return;
+      }
+      if (loginPrompt && !interrupted) {
+        return reject(new NativeHarnessTurnError(`${spec.displayName} needs you to sign in: ${loginPrompt}`, { ...tails(), stderrTail: loginPrompt, ...exit, reason: 'login-prompt' }));
       }
       if (exceededLimit) {
         return reject(new NativeHarnessTurnError(`${spec.displayName} turn output exceeded 16 MiB`, { ...tails(), ...exit, reason: 'output-limit' }));
