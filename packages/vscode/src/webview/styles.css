@@ -227,6 +227,16 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 }
 .more-steps:hover, .trace-toggle:hover { color: var(--vscode-foreground); }
 .trace { margin: 2px 0 6px; }
+.trace-toggle.static { cursor: default; }
+.trace-toggle.static:hover { color: var(--muted); }
+/* What the user decided at an approval, where it was asked. */
+.decision-row { margin: 2px 0 4px; font-size: 0.93em; }
+.decision-ok > span::first-letter { color: var(--ok); }
+.decision-no > span::first-letter { color: var(--err); }
+.decision-told > span::first-letter { color: var(--vscode-terminal-ansiCyan, #29b8db); }
+.activity-decision { white-space: nowrap; }
+.activity-decision.ok { color: var(--ok); }
+.activity-decision.no { color: var(--err); }
 /* A run of reads and searches as one row, its newest calls dimmed beneath. */
 .explored { font-size: 0.93em; }
 .explored-toggle { max-width: 100%; font-size: 1em; }
@@ -577,7 +587,7 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   background-size: 300% 100%;
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer var(--shimmer-cycle, 2s) linear infinite;
+  animation: shimmer var(--shimmer-cycle, 2s) steps(var(--shimmer-steps, 16)) infinite;
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
 /* A running sub-agent or swarm agent: its name sweeps like the working line
@@ -587,7 +597,7 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   background-size: 300% 100%;
   -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent;
-  animation: shimmer var(--shimmer-cycle, 2s) linear infinite;
+  animation: shimmer var(--shimmer-cycle, 2s) steps(var(--shimmer-steps, 16)) infinite;
 }
 @media (prefers-reduced-motion: reduce) {
   .working .working-label, .activity.running .live-name { background: none; -webkit-text-fill-color: currentColor; animation: none; }

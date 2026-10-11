@@ -1,7 +1,8 @@
 /** The turn-flow standard, second wave: what the worker now sends (seq, marks,
  * thought, phase, usage) wired into the extension's model and page logic. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, turnMarks, type ChatModel } from '../../src/model';
+import { thoughtRow } from '../../../../src/harness/protocol/turn-flow';
+import { applyEvent, emptyModel, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
 import { workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -199,5 +200,78 @@ describe('a window that attaches mid-turn draws what the worker holds (X4)', () 
   it('carries the usage so far', () => {
     const model = joined({ usage: { output: 840, input: 2_000 } });
     expect(model.turnUsage).toMatchObject({ output: 840 });
+  });
+});
+
+describe('a reopened turn draws the worker\'s marks (X5)', () => {
+  const marks = [
+    { kind: 'thought', id: 'thought:r1', seq: 1, responseOffset: 0, durationMs: 3_400, heading: 'Reading the parser', text: 'let me look' },
+    { kind: 'plan', id: 'plan', seq: 3, responseOffset: 5, entries: [{ content: 'one', status: 'completed' }] },
+    { kind: 'notice', id: 'notice:4', seq: 4, responseOffset: 5, message: 'Switched to work' },
+    { kind: 'outcome', id: 'outcome:ap1', seq: 5, responseOffset: 5, outcome: 'denied', label: 'make clean' },
+  ];
+  const saved = (patch: Record<string, unknown> = {}, activities = true): HarnessSession => session({
+    messages: [{ role: 'user', content: 'go' }, {
+      role: 'assistant', content: 'hello world', turnEnd: { ms: 20_000 }, marks,
+      ...(activities ? { activities: [{ event: { kind: 'tool-done', id: 'a', label: 'Read a.ts', category: 'read', seq: 2 }, responseOffset: 0 }] } : {}),
+      ...patch,
+    } as never],
+  });
+  const reopened = (value: HarnessSession) => applyEvent(emptyModel(), { type: 'session', session: value });
+
+  it('keeps the settled thought with its heading and duration', () => {
+    const trace = reopened(saved()).traces[0]!;
+    expect(trace.reasoning).toEqual([{ text: 'let me look', heading: 'Reading the parser', offset: 0, ms: 3_400, seq: 1 }]);
+  });
+
+  it('keeps the plan once, at its offset, with every step done', () => {
+    const trace = reopened(saved()).traces[0]!;
+    expect(trace.plan).toEqual([{ content: 'one', status: 'completed' }]);
+    expect(trace.planAt).toEqual({ offset: 5, seq: 3 });
+  });
+
+  it('keeps notices and decisions at their offsets', () => {
+    const trace = reopened(saved()).traces[0]!;
+    expect(trace.notices).toEqual([{ id: 'notice:4', text: 'Switched to work', offset: 5, seq: 4 }]);
+    expect(trace.decisions).toEqual([{ id: 'outcome:ap1', offset: 5, seq: 5, decision: { kind: 'denied', label: 'make clean' } }]);
+  });
+
+  it('lays them out in (offset, seq) order with the saved calls', () => {
+    const trace = reopened(saved()).traces[0]!;
+    const rows = turnMarks('hello world', trace.activities, trace.reasoning ?? [], [], {
+      ...(trace.plan ? { plan: trace.planAt! } : {}),
+      notes: trace.notices!.map((notice) => ({ offset: notice.offset, seq: notice.seq, note: { kind: 'notice' as const, text: notice.text, after: 1 } })),
+      decisions: trace.decisions!,
+    });
+    expect(rows.map((row) => (row.thought ? 'thought' : row.activity ? 'call' : row.plan ? 'plan' : row.note ? 'notice' : 'decision')))
+      .toEqual(['thought', 'call', 'plan', 'notice', 'decision']);
+  });
+
+  it('a turn saved before marks renders as it did', () => {
+    const trace = reopened(session({ messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'ok', turnEnd: { ms: 20_000 },
+      activities: [{ event: { kind: 'tool-done', id: 'a', label: 'Read a.ts', category: 'read' }, responseOffset: 0 }] } as never] })).traces[0]!;
+    expect(trace.reasoning).toBeUndefined();
+    expect(trace.plan).toBeUndefined();
+    expect(trace.notices).toBeUndefined();
+    expect(trace.decisions).toBeUndefined();
+  });
+
+  it('a turn with marks and no calls still has a trace to draw them from', () => {
+    expect(reopened(saved({}, false)).traces).toHaveLength(1);
+  });
+
+  it('a notice the window watched is not drawn a second time', () => {
+    const watched = { kind: 'notice' as const, text: 'Switched to work', after: 1, turn: 0, offset: 5, seq: 4 };
+    const trace = reopened(saved()).traces[0]!;
+    expect(turnNoticeNotes([watched], trace)).toHaveLength(1);
+    expect(turnNoticeNotes(undefined, trace)).toHaveLength(1);
+  });
+});
+
+describe('the thought row (X5)', () => {
+  it('says how long, and the heading when the model wrote one', () => {
+    expect(thoughtRow({ durationMs: 3_400 })).toBe('Thought for 3s');
+    expect(thoughtRow({ durationMs: 120 })).toBe('Thought for 1s');
+    expect(thoughtRow({ durationMs: 3_400, heading: 'Reading the parser' })).toBe('Thought for 3s · Reading the parser');
   });
 });
