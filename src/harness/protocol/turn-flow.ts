@@ -249,10 +249,13 @@ export function endsWithSummary(ms: number, calls: number): boolean {
  * (`usage`, already worded by formatTurnUsage's brief form, so the terminal
  * and the extension say the same). A turn that left background agents
  * running says `Waiting for 2 background agents` where it would say
- * "Worked for" (standard section 10); `pendingBackground` absent or 0 is
- * none. */
+ * "Worked for" (standard section 10), and `and 1 dynamic workflow` after
+ * them as Claude Code words it (`pendingWorkflows`); either absent or 0 is
+ * none. Background terminals are never part of this line: see
+ * backgroundTerminalsLabel. */
 export function turnSummary(state: {
   ms: number; diffs?: ReadonlyArray<readonly FileDiff[]>; stopped?: boolean; usage?: string; pendingBackground?: number;
+  pendingWorkflows?: number;
 }): string {
   const files = new Map<string, { additions: number; removals: number }>();
   for (const diff of state.diffs ?? []) {
@@ -266,9 +269,25 @@ export function turnSummary(state: {
   const removals = [...files.values()].reduce((sum, file) => sum + file.removals, 0);
   const changed = files.size ? ` · ${plural(files.size, 'file')} changed${additions ? ` +${additions}` : ''}${removals ? ` −${removals}` : ''}` : '';
   const spent = state.usage ? ` · ${state.usage}` : '';
-  const background = state.pendingBackground && state.pendingBackground > 0 ? Math.floor(state.pendingBackground) : 0;
-  if (background) return `Waiting for ${plural(background, 'background agent')}${changed}${spent}`;
+  const count = (value: number | undefined): number => (value && value > 0 ? Math.floor(value) : 0);
+  const agents = count(state.pendingBackground);
+  const workflows = count(state.pendingWorkflows);
+  // Claude Code's own words (its turn-duration row): agents, then `and`,
+  // then dynamic workflows.
+  if (agents || workflows) {
+    const waiting = [...(agents ? [plural(agents, 'background agent')] : []), ...(workflows ? [plural(workflows, 'dynamic workflow')] : [])].join(' and ');
+    return `Waiting for ${waiting}${changed}${spent}`;
+  }
   // A stopped turn says so where it ends: "Stopped" is otherwise only a
   // passing notice, and "Worked for" read as a turn that finished.
   return `${state.stopped ? 'Stopped after' : 'Worked for'} ${formatElapsed(Math.max(1000, state.ms))}${changed}${spent}`;
+}
+
+/** The footer indicator for background terminals (standard section 10), as
+ * Codex words it: `1 background terminal running` / `3 background terminals
+ * running`. Nothing at zero or unknown. It is a footer row, never a part of
+ * the turn's end line. */
+export function backgroundTerminalsLabel(count: number | undefined): string | undefined {
+  const terminals = count && count > 0 ? Math.floor(count) : 0;
+  return terminals ? `${plural(terminals, 'background terminal')} running` : undefined;
 }

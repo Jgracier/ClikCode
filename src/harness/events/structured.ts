@@ -20,7 +20,8 @@
 import { parseHarnessLine, type StreamState } from './adapters.js';
 import { MENTIONS_TASK_TOOL, MENTIONS_TODO_TOOL, planFromRecord } from '../protocol/plan-events.js';
 import { parseJsonRecord, type JsonRecord } from '../protocol/json-lines.js';
-import { backgroundAgentCount } from '../protocol/background-agents.js';
+import { backgroundWork, type BackgroundWorkUpdate } from '../protocol/background-agents.js';
+import { vendorBackgroundEvent } from '../transport/native/background-task.js';
 import { nativeSelfReportFromValue, type NativeSelfReport } from '../protocol/turn-usage.js';
 import type { HarnessTurnObserver } from './turn-observer.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
@@ -40,6 +41,22 @@ interface StructuredLineOutcome {
   result?: 'success' | 'error';
   /** The line changed the turn's usage. */
   usage?: boolean;
+}
+
+/** Background terminals of a stream that announces them as edges: a shell
+ * call that says `isBackground` and the `task_notification` that ends it
+ * (Cursor; Claude's `task_started`/`task_notification` pair is its level,
+ * read by backgroundWork). Undefined when the count did not change. */
+function backgroundShellWork(record: JsonRecord, turn: StreamState): BackgroundWorkUpdate | undefined {
+  const event = record.type === 'tool_call' || (record.type === 'system' && record.subtype === 'task_notification')
+    ? vendorBackgroundEvent(record) : undefined;
+  if (!event) return undefined;
+  const shells = turn.backgroundShells ??= new Set<string>();
+  if (event.kind === 'started') {
+    if (record.type !== 'tool_call' || shells.has(event.id)) return undefined;
+    shells.add(event.id);
+  } else if (!shells.delete(event.id)) return undefined;
+  return { terminals: shells.size };
 }
 
 /** Report one stdout line. Returns only what the turn loop still has to do
@@ -65,8 +82,8 @@ export function reportStructuredLine(
   if (parsed.usage) observer.onUsage?.(parsed.usage);
   for (const event of parsed.activities ?? []) observer.onActivity?.(event);
   if (!record) return outcome;
-  const background = backgroundAgentCount(record);
-  if (background !== undefined) observer.onBackgroundAgents?.(background);
+  const background = backgroundWork(record) ?? backgroundShellWork(record, turn);
+  if (background) observer.onBackgroundWork?.(background);
   // A structured CLI writes its todo list with a tool (TodoWrite, write_todos, ...); show it as the plan.
   // Claude Code's task tools build it a call at a time; the turn's tracker keeps the list.
   // A sub-agent's own list (Claude's parent_tool_use_id) is not the session's plan.

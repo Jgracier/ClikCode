@@ -387,12 +387,19 @@ describe('worker-assigned order and a window joining mid-turn (standards 1, 4, 7
     const client = fakeClient();
     observer.attach(client.socket);
     observer.startTurn('thinking', 'go');
-    observer.setPendingBackground(2);
-    expect(frames(client, 'background')[0]).toMatchObject({ pending: 2 });
+    observer.setBackgroundWork({ agents: 2, terminals: 1, workflows: 1 });
+    expect(frames(client, 'background')[0]).toMatchObject({ pending: 2, work: { agents: 2, terminals: 1, workflows: 1 } });
     expect(observer.liveSnapshot()!.pendingBackground).toBe(2);
-    observer.setPendingBackground(0);
+    expect(observer.liveSnapshot()!.background).toEqual({ agents: 2, terminals: 1, workflows: 1 });
+    // Only a terminal: the agents' number older windows read is absent, the indicator is not.
+    observer.setBackgroundWork({ terminals: 2 });
+    expect(frames(client, 'background').at(-1)).toMatchObject({ pending: 0, work: { terminals: 2 } });
     expect(observer.liveSnapshot()!.pendingBackground).toBeUndefined();
-    observer.setPendingBackground(1);
+    expect(observer.liveSnapshot()!.background).toEqual({ terminals: 2 });
+    observer.setBackgroundWork(undefined);
+    expect(frames(client, 'background').at(-1)).toEqual({ type: 'background', pending: 0 });
+    expect(observer.liveSnapshot()!.background).toBeUndefined();
+    observer.setBackgroundWork({ agents: 1 });
     observer.stopWaiting();
     observer.startTurn('thinking', 'again');
     expect(observer.liveSnapshot()!.pendingBackground).toBeUndefined();

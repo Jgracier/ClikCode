@@ -6,6 +6,7 @@
 import type { HarnessSession } from '../../session/model.js';
 import { readTurnActivities } from '../../turn/turn-activities.js';
 import { endsWithSummary, turnSummary } from '../../harness/protocol/turn-flow.js';
+import { backgroundWorkOf } from '../../harness/protocol/background-agents.js';
 import { formatTurnUsage } from './usage-line.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
@@ -27,11 +28,15 @@ export function turnEndLine(messages: readonly Message[], index: number): string
   const stopped = Boolean(end.stopped) || events.some((event) => event.stopped);
   // Background agents still running when the turn ended: the adapters and
   // the journal publish a count; absent is none.
-  const pendingBackground = end.pendingBackground && end.pendingBackground > 0 ? end.pendingBackground : 0;
-  if (!stopped && !pendingBackground && !endsWithSummary(end.ms, events.length)) return undefined;
+  // Agents and dynamic workflows (a background terminal is a footer
+  // indicator, never on this line).
+  const work = backgroundWorkOf(end);
+  const pendingBackground = work?.agents ?? 0;
+  const pendingWorkflows = work?.workflows ?? 0;
+  if (!stopped && !pendingBackground && !pendingWorkflows && !endsWithSummary(end.ms, events.length)) return undefined;
   const usage = formatTurnUsage(end.usage, { brief: true });
   return turnSummary({
     ms: end.ms, stopped, diffs: events.flatMap((event) => (event.diff?.length ? [event.diff] : [])),
-    ...(usage ? { usage } : {}), ...(pendingBackground ? { pendingBackground } : {}),
+    ...(usage ? { usage } : {}), ...(pendingBackground ? { pendingBackground } : {}), ...(pendingWorkflows ? { pendingWorkflows } : {}),
   });
 }

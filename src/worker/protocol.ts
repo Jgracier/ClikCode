@@ -5,6 +5,7 @@
  * partial one for the next chunk -- a socket delivers bytes, not messages,
  * and JSON has no self-delimiting end marker of its own.
  */
+import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
 import { StringDecoder } from 'node:string_decoder';
 import { LineBuffer } from '../harness/protocol/json-lines.js';
@@ -88,8 +89,11 @@ export type LiveTurn = {
    * `activities` never carries one -- a window that took only that lost its
    * reasoning at every mid-turn snapshot. */
   thought?: LiveThought; marks?: TurnMark[]; phase?: string; usage?: TurnUsage;
-  /** Background agents the vendor says are still running (standard section 10). */
+  /** Background agents the vendor says are still running (standard section
+   * 10); `background` is the same by kind, with workflows and the terminals
+   * that are a footer indicator. */
   pendingBackground?: number;
+  background?: BackgroundWork;
   /** Where in the answer the turn's plan row began (its mark's
    * `responseOffset`), for a window that reads `plan` and not `marks`. */
   planOffset?: number;
@@ -122,9 +126,10 @@ export type WorkerEvent =
   /** `seq`/`responseOffset`: where the plan row began (it updates in place). */
   | { type: 'plan'; entries: readonly PlanEntry[]; seq?: number; responseOffset?: number }
   | { type: 'usage'; usage: TurnUsage }
-  /** Background agents the vendor says are still running, as a level (0 =
-   * none): the turn ends on `Waiting for N background agents`. */
-  | { type: 'background'; pending: number }
+  /** Background work the vendor says is still running, as a level (0 =
+   * none): the turn ends on `Waiting for N background agents`. `pending` is
+   * the agents (what older windows read); `work` is every kind. */
+  | { type: 'background'; pending: number; work?: BackgroundWork }
   | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string; callId?: string; seq?: number; responseOffset?: number }
   /** A harness asks the user a question (options, several questions, free
    * text); answered with `question-response`. */
