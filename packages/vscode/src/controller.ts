@@ -13,7 +13,7 @@ import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { answeredApproval, applyEvent, conversationAttention, emptyModel, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
-import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, WorkerEvent } from './protocol';
+import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { applyHunks, fileHunks, turnChanges, unwindChanges } from './text';
@@ -513,6 +513,20 @@ export class ClikCodeController implements vscode.Disposable {
   }
 
   private onWorkerEvent(event: WorkerEvent): void {
+    if (event.type === 'request-closed') {
+      if (this.shownDiffs.has(event.id)) void this.host.diffs.close(event.id);
+      this.forgetDiff(event.id);
+      return;
+    }
+    if (event.type === 'question-request') {
+      // A chat out of sight says so in a toast; the question itself is in the chat.
+      if (!this.visible) {
+        void vscode.window.showInformationMessage(`ClikCode asks: ${event.request.title}`, 'Show').then((choice) => {
+          if (choice) void this.host.reveal(this);
+        });
+      }
+      return;
+    }
     if (event.type === 'approval-request') {
       // One file opens beside the chat without the keyboard (preserveFocus).
       // Several open VS Code's multi-file changes editor, which always takes
@@ -700,7 +714,19 @@ export class ClikCodeController implements vscode.Disposable {
     this.setModel(stoppingTurn(this.model));
   }
 
+  /** A question answered, or dismissed (cancelled). */
+  answerQuestion(id: string, result: HarnessQuestionResult): void {
+    this.bridge?.send({ type: 'question-response', id, result });
+    this.setModel(answeredApproval(this.model, id));
+  }
+
   approve(id: string, approved: boolean | 'always'): void {
+    // Esc and the keyboard commands name the first waiting item; for a
+    // question that is a dismissal, never an answer.
+    if (this.model.approvals.find((item) => item.id === id)?.question) {
+      if (approved === false) this.answerQuestion(id, { kind: 'cancelled' });
+      return;
+    }
     this.bridge?.send({ type: 'approval-response', id, approved });
     this.setModel(answeredApproval(this.model, id));
     if (this.shownDiffs.has(id)) void this.host.diffs.close(id);
@@ -822,6 +848,9 @@ export class ClikCodeController implements vscode.Disposable {
       }
       case 'approve':
         this.approve(message.id, message.approved);
+        return;
+      case 'answerQuestion':
+        this.answerQuestion(message.id, message.result);
         return;
       case 'viewDiff':
         void this.viewDiff(message.id);

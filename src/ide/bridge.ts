@@ -157,6 +157,9 @@ export class IdeBridge {
       case 'approval-response':
         this.worker?.client.send({ type: 'approval-response', id: request.id, approved: request.approved });
         return;
+      case 'question-response':
+        this.worker?.client.send({ type: 'question-response', id: request.id, result: request.result });
+        return;
       case 'ui-response':
         this.prompter.answer(request.id, request.result);
         return;

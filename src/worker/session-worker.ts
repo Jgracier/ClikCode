@@ -643,6 +643,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       return;
     }
     if (command.type === 'approval-response') { observer.resolveApproval(command.id, command.approved); return; }
+    if (command.type === 'question-response') { observer.resolveQuestion(command.id, command.result); return; }
     if (command.type === 'sign-in-response') { observer.resolveSignIn(command.id, command.error); return; }
     if (command.type === 'refresh') {
       // What the window changed may be a turn parked for the reset.

@@ -306,6 +306,14 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 }
 .approval-note-input:focus { outline: 1px solid var(--focus); outline-offset: -1px; }
 
+/* ---- harness questions ---- */
+.question-item { border: 0; margin: 10px 0 0; padding: 0; min-width: 0; }
+.question-header { font-weight: 600; padding: 0; }
+.question-prompt { margin: 2px 0 6px; white-space: pre-wrap; word-break: break-word; }
+.question-option { display: flex; gap: 8px; align-items: flex-start; padding: 2px 0; cursor: pointer; }
+.question-option input { margin-top: 3px; }
+.question-text { width: 100%; box-sizing: border-box; margin-top: 4px; }
+
 /* ---- composer ---- */
 .composer-wrap { padding: 2px var(--gap) 8px; flex: none; display: flex; flex-direction: column; gap: 4px; container: composer-wrap / inline-size; }
 .composer-box {

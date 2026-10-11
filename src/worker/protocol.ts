@@ -5,6 +5,7 @@
  * partial one for the next chunk -- a socket delivers bytes, not messages,
  * and JSON has no self-delimiting end marker of its own.
  */
+import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
 import { StringDecoder } from 'node:string_decoder';
 import { LineBuffer } from '../harness/protocol/json-lines.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -36,6 +37,8 @@ export type ClientCommand =
    *  turn at its next pause. The turn is not cancelled. */
   | { type: 'send-queued' }
   | { type: 'approval-response'; id: string; approved: boolean | 'always' }
+  /** The answer to a `question-request` (cancelled when the user dismissed it). */
+  | { type: 'question-response'; id: string; result: HarnessQuestionResult }
   /** The vendor sign-in a `sign-in-request` asked for has finished, on the
    * client's own terminal; `error` when it failed. */
   | { type: 'sign-in-response'; id: string; error?: string }
@@ -102,6 +105,12 @@ export type WorkerEvent =
   | { type: 'plan'; entries: readonly PlanEntry[] }
   | { type: 'usage'; usage: TurnUsage }
   | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string }
+  /** A harness asks the user a question (options, several questions, free
+   * text); answered with `question-response`. */
+  | { type: 'question-request'; id: string; request: HarnessQuestionRequest }
+  /** An approval or question is no longer wanted (the vendor withdrew it, or
+   * the turn ended): every window closes its prompt. */
+  | { type: 'request-closed'; id: string }
   /** A turn has started. `prompt` (additive) is its text: a client that did
    * not send it -- another window's turn, or one the worker started itself
    * for a finished background shell -- follows it from here to waiting-stop

@@ -13,7 +13,7 @@ import { chatCostLabel, composerUsageLabel } from '../../../src/tui/render/usage
 import { enterAgainSends, STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
 import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, resumeTurnClock, sameCall, stoppedCall, turnElapsedMs, withChildTool, type OpenTool, type Thought, type TurnClock } from '../../../src/harness/protocol/activity-view';
-import type { FileDiff, HarnessActivityEvent, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
+import type { FileDiff, HarnessActivityEvent, HarnessQuestionRequest, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
@@ -58,6 +58,10 @@ export interface Approval {
   rule?: string;
   /** What the call would change, file by file. */
   diff?: FileDiff[];
+  /** Set when a harness asks a question rather than a yes or no: it queues
+   * with the approvals (one at a time, the turn's clock stopped, the chat
+   * marked waiting) and is drawn as a QuestionCard. */
+  question?: HarnessQuestionRequest;
 }
 
 /** A finished turn's tool activity, kept beside the answer it produced. Its
@@ -569,6 +573,16 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
           ...(asFileDiffs(event.preview?.diff)?.length ? { diff: cleanDiff(asFileDiffs(event.preview?.diff)!) } : {}),
         }],
       };
+    case 'question-request':
+      if (model.approvals.some((item) => item.id === event.id)) return model;
+      return {
+        ...model,
+        ...(model.live && model.live.pausedAt === undefined ? { live: { ...model.live, pausedAt: Date.now() } } : {}),
+        approvals: [...model.approvals, { id: event.id, title: stripAnsi(event.request.title), question: event.request }],
+      };
+    case 'request-closed':
+      // Answered in another window, withdrawn by the vendor, or the turn ended.
+      return model.approvals.some((item) => item.id === event.id) ? answeredApproval(model, event.id) : model;
     case 'notice':
     case 'note':
       // The terminal colours its notes: yellow for an account switch or a
