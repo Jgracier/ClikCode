@@ -179,3 +179,24 @@ describe('the failure a failed turn is classified by', () => {
     expect(kind(result)).toBe('quota-exhausted');
   });
 });
+
+describe('pi failed model calls', () => {
+  const pi = { ...codex, command: 'pi', displayName: 'pi', turn: { ...codex.turn, output: 'json-lines' as const } };
+  const failed = [
+    JSON.stringify({ type: 'agent_start' }),
+    JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429 {"error":{"message":"You exceeded your current quota"}}' } }),
+  ].join('\n');
+  it('reads stopReason:error as the turn failing, with the provider message', () => {
+    const result = nativeTurnResult(pi, failed, { exitCode: 0 });
+    expect(result.isError).toBe(true);
+    expect(result.errorMessage).toMatch(/exceeded your current quota/);
+  });
+  it('classifies it from the vendor message', () => {
+    const { failure, isResultError } = nativeTurnFailure(pi, nativeTurnResult(pi, failed, { exitCode: 0 }));
+    expect(classifyAccountFailure(failure, { isResultError })).toBe('quota-exhausted');
+  });
+  it('keeps a retried success successful', () => {
+    const ok = [failed, JSON.stringify({ type: 'message_end', message: { role: 'assistant', content: [{ type: 'text', text: 'done' }], stopReason: 'stop' } })].join('\n');
+    expect(nativeTurnResult(pi, ok, { exitCode: 0 }).text).toBe('done');
+  });
+});

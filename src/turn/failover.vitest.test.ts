@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, isTransientStartFailure, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, interactiveLoginPrompt, isTransientStartFailure, quotaRetryHint } from './failover';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -341,5 +341,42 @@ describe('a start that failed for a moment', () => {
     expect(isTransientStartFailure(new Error('Internal error: Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.'))).toBe(true);
     expect(isTransientStartFailure(new Error('Selected model is at capacity. Please try a different model.'))).toBe(false);
     expect(isTransientStartFailure(new Error('spawn ENOENT'))).toBe(false);
+  });
+});
+
+describe('structured signals outrank wording', () => {
+  const rpc = (message: string, extra: Record<string, unknown>): Error => Object.assign(new Error(message), extra);
+  it('reads claude-agent-acp errorKind data, whatever the message says', () => {
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'authentication_failed' }))).toBe('authentication-required');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'auth_required' }))).toBe('authentication-required');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'budget_exhausted' }))).toBe('quota-exhausted');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'billing_error' }))).toBe('quota-exhausted');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'access_denied' }))).toBe('account-ineligible');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'verification_required' }))).toBe('account-ineligible');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'bad_request' }))).toBe('request-invalid');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'rate_limit' }))).toBe('temporarily-throttled');
+    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'usageLimitExceeded' }))).toBe('quota-exhausted');
+  });
+  it('treats ACP -32000 as a required sign-in', () => {
+    expect(classifyAccountFailure(rpc('Authentication required', { rpcCode: -32000 }))).toBe('authentication-required');
+    expect(classifyAccountFailure(rpc('Internal error', { rpcCode: -32000 }))).toBe('authentication-required');
+    expect(classifyAccountFailure(rpc('Internal error', { rpcCode: -32603 }))).toBe('other');
+  });
+  it('never reads a transport timeout as quota', () => {
+    expect(classifyAccountFailure(rpc('agent session/prompt timed out after 600s', { rpcCode: -32603 }))).toBe('other');
+  });
+});
+
+describe('interactive login hangs fail fast as a sign-in', () => {
+  it('recognises amp and aider waiting for a browser', () => {
+    const amp = 'No API key found. Starting login flow...\nWaiting for confirmation in the browser...';
+    const aider = 'Login to OpenRouter or create a free account? (Y)es/(N)o [Yes]:\nWaiting up to 5 minutes for you to finish in the browser';
+    expect(interactiveLoginPrompt(amp)).toMatch(/login flow|API key/i);
+    expect(interactiveLoginPrompt(aider)).toBeTruthy();
+    expect(classifyAccountFailure(new Error('x'), { stderrText: 'Starting login flow... Waiting for confirmation in the browser...' })).toBe('authentication-required');
+    expect(classifyAccountFailure(new Error('x'), { stderrText: aider })).toBe('authentication-required');
+  });
+  it('ignores ordinary output', () => {
+    expect(interactiveLoginPrompt('Waiting for the build to finish')).toBeUndefined();
   });
 });

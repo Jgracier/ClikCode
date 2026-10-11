@@ -35,6 +35,25 @@ interface AccountFailureSignals {
 // "No API key found for provider …" and "No route-compatible authentication
 // source is configured for openai." are OpenClaw's (2026.9.6); "No access
 // token found for Nous Portal login." is Hermes's.
+// A vendor that cannot find a credential and, with no terminal to answer, starts
+// an interactive login and waits for a browser (amp: "No API key found.
+// Starting login flow... Waiting for confirmation in the browser..."; aider
+// with a missing key: "Login to OpenRouter... (Y)es/(N)o ... Waiting up to 5
+// minutes"). The process never exits, so these phrases are what fail the turn
+// fast with the sign-in path (see interactiveLoginPrompt).
+const INTERACTIVE_LOGIN_TEXT = /(?:starting login flow|waiting for (?:confirmation|authori[sz]ation|login|sign-?in)[^\n]{0,40}\bbrowser|open (?:this|the following) (?:url|link) in your browser to (?:log|sign) ?in|(?:log|sign) ?in to \w[\w .-]{0,30}\?\s*\(?y(?:es)?\)?\W{0,3}(?:\/|or)?\W{0,3}\(?n(?:o)?\)?|\(y\)es\/\(n\)o[^\n]{0,80}(?:log|sign) ?in|(?:log|sign) ?in[^\n]{0,80}\(y\)es\/\(n\)o|waiting up to \d+ minutes? for [^\n]{0,40}(?:log|sign|auth|browser))/i;
+
+/** The vendor-printed phrase that says it has stopped to wait for an interactive
+ * login, or undefined. For callers watching a live stdout/stderr: kill the
+ * process and fail the turn with this line as the error (it classifies as
+ * authentication-required). */
+export function interactiveLoginPrompt(text: string): string | undefined {
+  const match = INTERACTIVE_LOGIN_TEXT.exec(text);
+  if (!match) return undefined;
+  const line = text.split('\n').find((candidate) => INTERACTIVE_LOGIN_TEXT.test(candidate));
+  return (line ?? match[0]).replace(/\s+/g, ' ').trim().slice(0, 300);
+}
+
 const AUTH_TEXT = /(?:not authenticated|authentication (?:is )?(?:required|failed|error)|login required|not logged in|unauthorized|invalid (?:api[ _-]?key|credentials|token)|(?:token|session|credentials?) (?:has |have )?expired|oauth token (?:has )?(?:expired|been revoked)|no auth type is selected|headless mode requires existing settings|no (?:api[ _-]?key|access token) found|no (?:route-compatible )?authentication source is configured|authentication[_ ]?error|incorrect api[ _-]?key|(?:invalid or )?missing api[ _-]?key|api key required|no api key (?:for|found)|no credentials (?:are )?(?:configured|found)|not signed in|no longer authenticated|please authenticate|needs authentication|re-?authenticate|authori[sz]ation (?:with .{0,40})?failed|invalid or expired|run [`'"]?[\w-]+ login\b|run \/(?:login|auth)\b|no [\w ]{0,30}auth token found|\bPAID_MODEL_AUTH_REQUIRED\b)/i;
 // Loose enough to sit in a quota refusal too -- "Your free trial has
 // expired", "Quota exceeded ... Please sign in to Google AI Studio" -- so
@@ -96,8 +115,16 @@ const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|ver
  * model or plan entitlement problem, which IS account-specific. */
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
+/** JSON-RPC code ACP agents answer with when the user must sign in. */
+export const ACP_AUTH_REQUIRED_CODE = -32000;
+
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
   if (errorKind === 'model_not_on_plan') return 'account-ineligible';
+  // claude-agent-acp's session failure kinds (raw SDK kinds and its categories):
+  // access the user must fix at the console, not by signing in again.
+  if (/^(?:access_denied|verification_required|cloud_credential_error|permission_error|forbidden)$/i.test(errorKind)) return 'account-ineligible';
+  if (/^(?:budget_exhausted|account_on_hold|quota_exhausted|billing_error)$/i.test(errorKind)) return 'quota-exhausted';
+  if (/^(?:bad_request|invalid_request|model_not_found|badRequest)$/i.test(errorKind)) return 'request-invalid';
   if (/auth|unauthori[sz]ed|invalid_?api_?key|invalid_?(?:token|credentials|grant)|token_?expired|login/i.test(errorKind)) return 'authentication-required';
   if (/quota|billing|credit|payment|usage_?limit|limit_?(?:reached|exceeded)$/i.test(errorKind) && !/rate/i.test(errorKind)) return 'quota-exhausted';
   if (/rate_?limit|too_?many_?requests|throttl/i.test(errorKind)) return 'temporarily-throttled';
@@ -314,6 +341,7 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
     return code !== undefined && code >= 400 && code < 600 ? code : undefined;
   };
   const errorKind = signals.errorKind ?? (typeof carried.errorKind === 'string' ? carried.errorKind : undefined);
+  const rpcCode = (error as { rpcCode?: unknown } | null | undefined)?.rpcCode;
   const rateLimitStatus = signals.rateLimitStatus ?? (typeof carried.rateLimitStatus === 'string' ? carried.rateLimitStatus : undefined);
   const message = error instanceof Error ? error.message : String(error ?? '');
   // An error that carries its streams separately is classified by stderr alone:
@@ -329,6 +357,8 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   if (/subscription:[\w-]*usage-exhausted/i.test(text)) return 'quota-exhausted';
   const fromKind = errorKind ? kindFromErrorKind(errorKind) : undefined;
   if (fromKind) return fromKind;
+  // ACP's AUTH_REQUIRED, a code the protocol reserves for exactly this.
+  if (rpcCode === ACP_AUTH_REQUIRED_CODE && status === undefined) return 'authentication-required';
   // Status embedded in the vendor's own diagnostic text. Not in `message`
   // once streams exist: that string can carry the model's stdout, and a
   // sentence about a 402 is not the account running out.
@@ -342,7 +372,7 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // prefixes an individual-account shutdown with client wording. Re-login
   // cannot fix either, so these explicit eligibility denials take precedence.
   if (INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
-  if (AUTH_TEXT.test(text)) return 'authentication-required';
+  if (AUTH_TEXT.test(text) || INTERACTIVE_LOGIN_TEXT.test(text)) return 'authentication-required';
   if (rateLimitStatus === 'rejected' || (QUOTA_TEXT.test(text) && !CONTEXT_TEXT.test(text))) return 'quota-exhausted';
   if (AUTH_LOOSE_TEXT.test(text)) return 'authentication-required';
   if (effectiveStatus === 429 || THROTTLE_TEXT.test(text)) return 'temporarily-throttled';
