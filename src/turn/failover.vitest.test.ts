@@ -28,6 +28,12 @@ describe('ClikCode account failover', () => {
     expect(classifyAccountFailure(new Error('thread/resume failed: no rollout found for thread id x'))).toBe('native-thread-invalid');
   });
 
+  it('reads a 402 that says there is no subscription as ineligible, not as spent quota', () => {
+    const error = Object.assign(new Error('No active subscription found. Subscribe to start using Droid.'), { statusCode: 402 });
+    expect(classifyAccountFailure(error)).toBe('account-ineligible');
+    expect(classifyAccountFailure(Object.assign(new Error('payment required'), { statusCode: 402 }))).toBe('quota-exhausted');
+  });
+
   it('classifies authentication separately', () => {
     expect(classifyAccountFailure(Object.assign(new Error('unauthorized'), { statusCode: 401 }))).toBe('authentication-required');
   });
