@@ -22,7 +22,7 @@ export interface TurnObserver {
   activity(message: string): void;
   activityEvent(event: HarnessActivityEvent): void;
   phase(message: string): void;
-  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal): Promise<boolean | 'always'>;
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<boolean | 'always'>;
   /** A vendor's question (options, several questions, free text). Absent where
    * the surface cannot ask: the turn then cancels the question with a notice. */
   askQuestions?(request: import('../harness/events/question.js').HarnessQuestionRequest, signal?: AbortSignal): Promise<import('../harness/events/question.js').HarnessQuestionResult>;

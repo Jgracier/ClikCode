@@ -1535,7 +1535,6 @@ SCENARIOS = {
     # 8: a declined approval leaves a settled row where it was asked, and the
     # status never goes blank between the question and the next thing.
     'approval-denied-row': {
-        'expect_fail': 'core',  # a declined approval leaves a failed call row, no `denied` outcome (8)
         'turns': [{'emits': [
             {'op': 'text', 'text': 'About to run a command.\n\n'},
             {'op': 'permission', 'id': 'ap1', 'command': 'rm -rf build'}],

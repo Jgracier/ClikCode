@@ -32,9 +32,9 @@ import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
-import { ActivityEntry, collapseToolRuns, commonPrefixLength, rebaseActivityOffsets, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
+import { ActivityEntry, collapseToolRuns, commonPrefixLength, entryLines, rebaseActivityOffsets, settleDecisionEntry, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/activity-view.js';
-import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
+import { outputPreviewRows } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { answerWriting, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, reasoningHeading, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
@@ -632,7 +632,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // and a call that was denied or approved leaves no other trace.
     this.settleDecision(settled ?? (answer
       ? { kind: 'approved', label: pending.title, ...(answer === 'always' ? { always: true } : {}) }
-      : { kind: 'denied', label: pending.title }));
+      : { kind: 'denied', label: pending.title }), pending.callId);
     this.approvalsAnswered += 1;
     pending.resolve(answer);
     if (!this.presentNextApproval()) {
@@ -643,22 +643,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
   }
 
-  /** A decision's settled row, appended at the answer's current place in the
-   * turn like any note (and never merged with an identical earlier one: two
-   * denials of the same command are two decisions). */
-  private settleDecision(decision: Parameters<typeof decisionRow>[0]): void {
+  /** A decision's settled row. On the row of the call it was about when the
+   * vendor named one (a refusal replaces the call's own failure line, an
+   * approval is said on the call that runs): one event, one row. Else at the
+   * answer's current place like any note, and never merged with an identical
+   * earlier one: two denials of the same command are two decisions. */
+  private settleDecision(decision: Parameters<typeof decisionRow>[0], callId?: string): void {
     if (!this.turn) return;
-    const { text, tone } = decisionRow(decision);
-    const row = tone === 'ok' ? chalk.green(text.slice(0, 1)) + chalk.dim(text.slice(1))
-      : tone === 'no' ? chalk.red(text.slice(0, 1)) + chalk.dim(text.slice(1))
-      : chalk.cyan(text.slice(0, 1)) + chalk.dim(text.slice(1));
-    this.activityEntries = [...this.activityEntries, {
+    this.activityEntries = settleDecisionEntry(this.activityEntries, {
       anchor: this.activityAnchor, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
-      // A settled thought's own shape: a row of the turn that is not a call
-      // (it is counted as none) and is retired in its place like any other.
-      event: { kind: 'thinking', label: text },
-      lines: [sanitizeTerminalText(row, { keepSgr: true, singleLine: true })],
-    }];
+      ...(callId === undefined ? {} : { callId }), decision,
+    });
   }
 
   /** The draft set aside for "tell it instead", back in the composer. */
@@ -1041,7 +1036,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
           const parent = entry.event;
           if (!parent || parent.id !== event.parentId) return entry;
           const counted = withChildTool(parent, event);
-          return { ...entry, event: counted, lines: renderActivityLine(counted).map((line) => line.trim()) };
+          return { ...entry, event: counted, lines: entryLines(counted, entry.decision) };
         });
       }
       this.schedulePaint();
@@ -1630,14 +1625,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
-  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal): Promise<boolean | 'always'> {
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<boolean | 'always'> {
     lifecycle('window.approval.ask', { title: title.slice(0, 80) });
     if (signal?.aborted) return Promise.resolve(false);
     return new Promise<boolean | 'always'>((resolveApproval) => {
       if (!this.pendingApproval) this.approvalRestoreLabel = isApprovalWaitPhase(this.turn?.label) ? '' : this.turn?.label ?? '';
       const request: ApprovalRequest = {
         title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }),
-        ...(rule === undefined ? {} : { rule }), resolve: resolveApproval,
+        ...(rule === undefined ? {} : { rule }), ...(callId === undefined ? {} : { callId }), resolve: resolveApproval,
       };
       this.approvalQueue.push(request);
       // The vendor withdrew it (answered elsewhere, the turn ended): the prompt closes.
@@ -2238,9 +2233,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
      * live region, spinner instead of the settled glyph, so finishing it
      * changes the glyph rather than moving the row. At the end of the turn
      * a tool that never reported completion settles anyway. */
+    const refused = (entry: ActivityEntry): boolean => entry.decision !== undefined && entry.decision.kind !== 'approved';
     const toolRow = (entry: ActivityEntry, ended: boolean): SettlingTool => {
       const id = entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`;
-      const running = !ended && entry.event?.kind === 'tool-start';
+      // A refused call is over, whatever the vendor has yet to say about it.
+      const running = !ended && entry.event?.kind === 'tool-start' && !refused(entry);
       const order = { ...(entry.sequence === undefined ? {} : { seq: entry.sequence }), ...(entry.event?.agent ? { agent: true } : {}) };
       if (!running) {
         return {
@@ -2279,12 +2276,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
      * row as always, except that a finished read or search waits in the live
      * region while it is the tail: the next one may merge with it. */
     const groupedRows = (entries: readonly ActivityEntry[], ended: boolean, grouping: ExploreGrouping): SettlingTool[] => {
-      const rows = entries.flatMap((entry) => (entry.event ? [{ ...entry, event: entry.event, key: entry.event.id ?? `activity#${entry.sequence ?? entry.responseOffset}` }] : []));
-      return grouping.group(rows, ended, ended ? Number.POSITIVE_INFINITY : this.liveResponse.length).map((group) => {
+      // A call that is a row of its own: a note (lines and no event, from
+      // activity()) or a call the user refused, whose row says so. Neither
+      // can join a run of looking-around calls.
+      const alone = (entry: ActivityEntry): boolean => !entry.event || refused(entry);
+      const rows = entries.flatMap((entry) => (entry.event && !alone(entry) ? [{ ...entry, event: entry.event, key: entry.event.id ?? `activity#${entry.sequence ?? entry.responseOffset}` }] : []));
+      const grouped = grouping.group(rows, ended, ended ? Number.POSITIVE_INFINITY : this.liveResponse.length).map((group) => {
         if (group.merged) return groupRow(group, ended);
         const row = toolRow(group.members[0]!, ended);
         return row.done && !group.done ? { ...row, done: false } : row;
       });
+      return [...grouped, ...entries.filter(alone).map((entry) => toolRow(entry, ended))];
     };
     /** The running turn's own tool calls: anchored at the message count when
      * it began, which is at or before the index its answer lands at. */
