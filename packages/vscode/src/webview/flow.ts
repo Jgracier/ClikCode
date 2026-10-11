@@ -113,3 +113,19 @@ export function runGroupView<T extends Activity>(groups: ReadonlyArray<{ rows: T
     ? { key: `e${group.rows[0]!.key}`, kind: 'explored' as const, rows: group.rows }
     : { key: group.rows[0]!.key, kind: 'call' as const, rows: group.rows }));
 }
+
+/** The log's follow-the-bottom state after a scroll event. Scrolling UP is
+ * the reader leaving the bottom -- however small, a streaming delta must not
+ * pull them back -- unless the log merely got shorter (a turn folding),
+ * which the browser reports as a smaller scrollTop too. Coming back within
+ * `threshold` px of the bottom follows again. */
+export function followsBottom(
+  previous: { follow: boolean; top: number; height: number },
+  now: { top: number; height: number; client: number },
+  threshold = 80,
+): { follow: boolean; top: number; height: number } {
+  const leftBottom = now.top < previous.top && now.height >= previous.height;
+  const distance = now.height - now.top - now.client;
+  const follow = leftBottom ? false : distance < threshold ? true : previous.follow;
+  return { follow, top: now.top, height: now.height };
+}
