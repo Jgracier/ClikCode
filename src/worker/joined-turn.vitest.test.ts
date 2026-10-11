@@ -15,6 +15,7 @@ function surface(): JoinedTurnSurface & { calls: string[] } {
     setPlan: (entries) => { calls.push(`plan:${entries.length}`); },
     phase: (message) => { calls.push(`phase:${message}`); },
     setTurnUsage: () => { calls.push('usage'); },
+    setBackgroundWork: (work) => { calls.push(`background:${work?.terminals ?? 0}`); },
   };
 }
 const thought = (id: string, seq: number, responseOffset: number): TurnMark => ({ kind: 'thought', id, seq, responseOffset, durationMs: 3000 });
@@ -52,5 +53,11 @@ describe('drawing a joined turn', () => {
     const rl = surface();
     drawJoinedTurn(rl, base({ phase: 'waiting for your approval: make clean' }));
     expect(rl.calls.some((call) => call.startsWith('phase'))).toBe(false);
+  });
+
+  it('draws the background terminals the turn had running, last', () => {
+    const rl = surface();
+    drawJoinedTurn(rl, base({ usage: { output: 12 } as never, background: { agents: 1, terminals: 2 } }));
+    expect(rl.calls.slice(-2)).toEqual(['usage', 'background:2']);
   });
 });

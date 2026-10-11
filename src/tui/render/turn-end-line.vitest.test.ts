@@ -40,6 +40,11 @@ describe('the line a saved turn ends on', () => {
   it('says it is waiting for background agents, even for a quick answer', () => {
     const quick = [{ role: 'user' as const, content: 'go' }, { role: 'assistant' as const, content: 'Launched.', turnEnd: { ms: 900, pendingBackground: 2 } }];
     expect(turnEndLine(quick as never, 1)).toBe('Waiting for 2 background agents');
+    // By kind: workflows after agents, in Claude Code's words; a terminal is never on this line.
+    const work = (background: Record<string, number>) => [{ role: 'user' as const, content: 'go' }, { role: 'assistant' as const, content: 'Launched.', turnEnd: { ms: 900, background } }];
+    expect(turnEndLine(work({ agents: 2, workflows: 1, terminals: 3 }) as never, 1)).toBe('Waiting for 2 background agents and 1 dynamic workflow');
+    expect(turnEndLine(work({ workflows: 1 }) as never, 1)).toBe('Waiting for 1 dynamic workflow');
+    expect(turnEndLine(work({ terminals: 2 }) as never, 1)).toBeUndefined();
   });
 
   it('says a stopped turn stopped, however short', () => {

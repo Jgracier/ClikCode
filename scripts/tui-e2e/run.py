@@ -1620,6 +1620,43 @@ SCENARIOS = {
         'watch': [],
         'final_once': ['First paragraph streams', 'Second paragraph follows', 'Third ENDMARK paragraph closes it.'],
     },
+    # The vendor's background level carries a shell: one dim row under the
+    # status says `1 background terminal running` (singular), `2 ... terminals`
+    # (plural) as the level changes, and it is gone when the level empties --
+    # while the turn goes on. A terminal is never on the end line.
+    'background-terminals-indicator': {
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Starting the dev server.\n\n'},
+            {'op': 'background', 'tasks': [{'type': 'local_bash', 'description': 'npm run dev'}]},
+            {'op': 'tool', 'id': 'b1', 'title': 'echo first', 'ms': 3500, 'result': 'first'},
+            {'op': 'background', 'tasks': [{'type': 'local_bash'}, {'type': 'local_bash'}]},
+            {'op': 'tool', 'id': 'b2', 'title': 'echo second', 'ms': 3500, 'result': 'second'},
+            {'op': 'background', 'tasks': []},
+            {'op': 'tool', 'id': 'b3', 'title': 'echo third', 'ms': 3500, 'result': 'third'},
+            {'op': 'text', 'text': 'Everything finished.'}]}],
+        'steps': [('type', 'run the server'), ('wait_for', '1 background terminal running', 30), ('settle', 1),
+                  ('wait_for', '2 background terminals running', 30), ('settle', 1),
+                  ('wait_for', 'echo third', 30), ('settle', 1), ('snap', 'cleared'),
+                  ('wait_for', 'Everything finished.', 40), ('settle', 3)],
+        'watch': [], 'ever': ['1 background terminal running', '2 background terminals running'],
+        'snap_lacks': {'cleared': ['background terminal']},
+        'final_contains': ['Everything finished.'], 'never': ['Waiting for'],
+    },
+    # A terminal the vendor leaves running outlives its turn: the indicator
+    # stays (the worker holds the vendor and follows its level), and goes when
+    # the shell ends. The turn's own end line does not wait on it.
+    'background-terminal-outlives-turn': {
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'The dev server is started.'},
+            {'op': 'background', 'tasks': [{'type': 'local_bash', 'description': 'npm run dev'}]}],
+            'after': [{'op': 'sleep', 'ms': 6000}, {'op': 'background', 'tasks': []}]}],
+        'steps': [('type', 'start the server'), ('wait_for', 'The dev server is started.', 30),
+                  ('wait_for', '1 background terminal running', 15), ('settle', 1), ('snap', 'running'),
+                  ('settle', 9), ('snap', 'gone')],
+        'watch': [], 'ever': ['1 background terminal running'], 'never': ['Waiting for'],
+        'snap_contains': {'running': ['1 background terminal running'], 'gone': ['The dev server is started.']},
+        'snap_lacks': {'gone': ['background terminal']},
+    },
     # No alternate screen: the first message still signs in, on the plain
     # terminal (login.ts plainSignInScreen), then answers.
     'classic-fallback': {

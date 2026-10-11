@@ -132,16 +132,46 @@ One status line per turn, by priority: waiting for you > the open call's verb
 ## 10. End of turn
 
 One summary line, the same live and replayed: `Worked for 1m 2s · 2 files
-changed`, `Stopped after 3s`, or `Waiting for N background agents`. Per-turn
-usage (tokens, cost, context) is shown by every surface, not only the
-extension.
+changed`, `Stopped after 3s`, or `Waiting for N background agents` (`and N
+dynamic workflows` after them). Per-turn usage (tokens, cost, context) is
+shown by every surface, not only the extension.
 
-N is the vendor's own count at the turn's end (`onBackgroundAgents`; Claude
-Code's `system/background_tasks_changed` level and `turn_duration.
-pendingBackgroundAgentCount`, forwarded by claude-agent-acp as
-`_claude/sdkMessage`), kept on the saved answer's `turnEnd.pendingBackground`
-and on the live turn. A harness whose vendor publishes no count declares
-`backgroundAgents: false`; the line never guesses one.
+Background work is THREE things, kept apart by kind (`BackgroundWork`
+`{agents, terminals, workflows}`, `onBackgroundWork`; zero kinds absent):
+
+- **Agents** are on the end line: `Waiting for N background agents`. N is the
+  vendor's own count (Claude Code's `system/background_tasks_changed` level --
+  `local_agent` tasks that are not `ambient`, not the backgrounded main
+  session -- and `turn_duration.pendingBackgroundAgentCount`, forwarded by
+  claude-agent-acp as `_claude/sdkMessage`), kept on the saved answer's
+  `turnEnd.pendingBackground` (agents, as older readers took it) and
+  `turnEnd.background`, and on the live turn.
+- **Workflows** are on the end line, after the agents, in Claude Code's own
+  words (its turn-duration row: `N background agents and N dynamic
+  workflows`): `local_workflow` tasks and `turn_duration.pendingWorkflowCount`.
+  Evidence: the Claude Code 2.1.296 bundle (`pendingWorkflowCount`, the
+  `Waiting for ... and ... dynamic workflow(s)` row, and `lIe`'s separate
+  agent / workflow sets); no recorded session had one, the declared shape is
+  the SDK's `SDKBackgroundTasksChangedMessage`.
+- **Terminals** are a footer indicator and NEVER on the end line: one dim row
+  under the status, `1 background terminal running` / `N background terminals
+  running`, drawn while any run and gone at zero, the first row a short
+  terminal gives up (frame budget: before an approval block or the spinner).
+  In VS Code the same words sit on the working line. Claude Code's own turn
+  count leaves shells out (turns that only backgrounded a Bash recorded count
+  0) and Codex counts "background terminals" apart from the turn. A terminal
+  can outlive its turn: while the worker holds the vendor the indicator keeps
+  following the vendor's level and clears when it empties. Sources: Claude's
+  `local_bash` tasks without a `parent_task_id` (monitors -- `monitor_mcp`,
+  `monitor_ws` -- are not terminals; a Monitor-tool shell is a `local_bash` on
+  the wire and cannot be told apart), Codex's `commandExecution` items with
+  `source: unifiedExecStartup` once the model came back to the process
+  (`item/commandExecution/terminalInteraction`) or the turn ended with it
+  running, Cursor's `isBackground` shell call until its `task_notification`.
+
+A harness whose vendor publishes no such count declares the capability
+`false` (`backgroundAgents`, `backgroundTerminals`, `workflows`); a surface
+never guesses one.
 
 ## 11. Replay parity
 
@@ -162,7 +192,7 @@ is marked in the harness catalog (`src/harness/catalog`), and the surfaces
 degrade to nothing -- never to a wrong row, never to a guessed one.
 
 The catalog's `capabilities` (childActivity, thinking, plan, usage, toolOutput,
-backgroundAgents) are held per harness by
+backgroundAgents, backgroundTerminals, workflows) are held per harness by
 `src/harness/protocol/turn-flow-conformance.vitest.test.ts`: a `true` must be
 produced, through the real adapter, by a fixture of the wire shape that
 harness publishes. A CLI parser that reads reasoning is only wired when the

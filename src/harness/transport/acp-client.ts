@@ -21,7 +21,7 @@ import { BackgroundTurnChannel } from './background-turn.js';
 import { configuredIdleMs, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
-import { backgroundAgentCount } from '../protocol/background-agents.js';
+import { backgroundWork, mergeBackgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 
 type Json = Record<string, any>;
 
@@ -569,6 +569,9 @@ const CONTENT_UPDATES: ReadonlySet<string> = new Set(['agent_message_chunk', 'ag
  * turn with no tool left running this is the end marker. */
 const TURN_BOOKKEEPING_UPDATES: ReadonlySet<string> = new Set(['usage_update', 'session_info_update']);
 
+/** The watchdog's name for the vendor's background level while it is above zero. */
+const LEVEL_WATCH = 'background-level';
+
 const toolRunning = (update: Json): boolean => update.status === 'pending' || update.status === 'in_progress' || update.status === undefined;
 const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
 
@@ -577,6 +580,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * background turn that is receiving updates. */
   private readonly pendingTools = new Map<string, string>();
   private readonly pendingAgents = new Set<string>();
+  /** The background work the vendor's level says is running (claude-agent-acp's
+   * `_claude/sdkMessage` background_tasks_changed). Kept between turns: it
+   * holds the worker while anything runs, tells the next turn and the
+   * background turn what is going on, and ends the background turn when it
+   * empties. A level is per vendor process: it resets with the live child. */
+  private backgroundLevel?: BackgroundWork;
   private sessionId?: string;
   private lastCumulativeChunks = false;
   /** The agent's `_session/retrying` category and how many times in a row, with no content between. */
@@ -603,6 +612,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       held: [], approvals: 0,
     };
     this.retryStreak = undefined;
+    // What already runs (a terminal an earlier turn started) is the new
+    // turn's indicator from its first frame.
+    if (this.backgroundLevel) input.onBackgroundWork?.(this.fullLevel());
     return this.runActive(turn, input.signal, failure, () => this.flow(turn, argv).catch((error: unknown) => {
       if (!(error as { acpStaleTurn?: boolean } | null)?.acpStaleTurn || turn.done) throw error;
       // The prompt went to the cancelled turn's process, which is gone now:
@@ -629,7 +641,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         // An unsettled tool call belongs to the still-live vendor, even
         // after its parent request ends. Route its later events into the
         // worker's background turn and keep the process alive until it ends.
-        if (this.live && this.pendingTools.size && this.openBackground('background-work')) return;
+        if (this.live && (this.pendingTools.size || this.backgroundLevel)) {
+          const run = this.openBackground('background-work');
+          if (run) {
+            // What runs now is the background turn's indicator from its first frame.
+            if (this.backgroundLevel) run.observer.onBackgroundWork?.(this.fullLevel());
+            return;
+          }
+        }
         this.clearPending();
       },
     });
@@ -638,14 +657,23 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   protected clearPending(): void {
     this.pendingTools.clear();
     this.pendingAgents.clear();
+    this.backgroundLevel = undefined;
+  }
+
+  /** The level with every kind named (a zero is "none", not unknown). */
+  private fullLevel(): { agents: number; terminals: number; workflows: number } {
+    const level = this.backgroundLevel ?? {};
+    return { agents: level.agents ?? 0, terminals: level.terminals ?? 0, workflows: level.workflows ?? 0 };
   }
 
   protected hasActiveSubagents(): boolean { return this.pendingAgents.size > 0; }
 
   protected pendingCount(): number {
     // Cleared at each answer (see `ended` above): between turns only tools a
-    // background turn is following count.
-    return this.background ? this.pendingTools.size : 0;
+    // background turn is following count, and the work the vendor's own
+    // level says still runs.
+    const level = this.backgroundLevel;
+    return this.background ? this.pendingTools.size + (level ? (level.agents ?? 0) + (level.terminals ?? 0) + (level.workflows ?? 0) : 0) : 0;
   }
 
   protected interrupt(turn: ActiveTurn, live: LiveAgent): boolean {
@@ -664,7 +692,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     return this.openBackgroundRun(() => {
       const channel = new BackgroundTurnChannel('acp', reason);
       return { channel, observer: channel.observer, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
-    }, (watchdog) => { for (const id of this.pendingTools.keys()) watchdog.toolStarted(id); });
+    }, (watchdog) => {
+      for (const id of this.pendingTools.keys()) watchdog.toolStarted(id);
+      // Work the vendor says runs is silent for as long as it runs: the
+      // running-tool budget, not the ordinary one.
+      if (this.backgroundLevel) watchdog.toolStarted(LEVEL_WATCH);
+    });
   }
 
   private ensureLive(input: AcpTurnInput, argv: readonly string[]): LiveAgent {
@@ -1305,17 +1338,42 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
    * content, but each is proof of life, and some say something worth showing. */
   private extension(method: string, params: Json): void {
     if (method === '_auth/status_update') return this.authStatus(params);
+    // `_claude/sdkMessage` (raw SDK frames, only the ones asked for in
+    // ACP_SESSION_META) carries the background-task level; the rest and
+    // `_claude/rateLimit` are activity only: the structured readings ride
+    // session/update's _meta.
+    const update = method === '_claude/sdkMessage' && params.message && typeof params.message === 'object'
+      ? backgroundWork(params.message as Json) : undefined;
+    if (update) return this.backgroundWorkChanged(params, update);
     const target = this.liveTarget(params);
     if (!target) return;
     if (method === '_session/goal') target.observer.onPhase?.('goal updated');
     else if (method === '_session/steering') target.observer.onPhase?.('message taken into the turn');
-    // `_claude/sdkMessage` (raw SDK frames, only the ones asked for in
-    // ACP_RAW_SDK_MESSAGES) carries the background-task level; the rest and
-    // `_claude/rateLimit` are activity only: the structured readings ride
-    // session/update's _meta.
-    if (method === '_claude/sdkMessage' && params.message && typeof params.message === 'object') {
-      const count = backgroundAgentCount(params.message as Json);
-      if (count !== undefined) target.observer.onBackgroundAgents?.(count);
+  }
+
+  /** The vendor's level changed. Remembered whoever is listening; told to
+   * the user's turn, or to the background turn -- opened for it when work
+   * runs and nothing else is following (a terminal outliving its turn), and
+   * ended when the level empties and no tool is left. */
+  private backgroundWorkChanged(params: Json, update: BackgroundWork): void {
+    const before = this.backgroundLevel;
+    this.backgroundLevel = mergeBackgroundWork(before, update);
+    let target = this.liveTarget(params);
+    let opened = false;
+    const expected = this.turn?.sessionId ?? this.sessionId;
+    const ours = typeof params.sessionId !== 'string' || !expected || params.sessionId === expected;
+    if (!target && ours && !this.turn && this.backgroundLevel && this.live) {
+      target = this.openBackground('background-work');
+      opened = Boolean(target);
+    }
+    // What a freshly opened run is told is the whole level.
+    if (target) target.observer.onBackgroundWork?.(opened ? this.fullLevel() : update);
+    const run = this.background;
+    if (!run || run.channel.done) return;
+    if (this.backgroundLevel) run.watchdog?.toolStarted(LEVEL_WATCH);
+    else {
+      run.watchdog?.toolFinished(LEVEL_WATCH);
+      if (target === run && this.pendingTools.size === 0) this.finishBackground('completed');
     }
   }
 

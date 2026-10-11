@@ -8,6 +8,7 @@ import { createCodexSession } from './codex-app-server.js';
 import type { VendorBackgroundTurn } from './background-turn.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { TurnUsage } from '../protocol/turn-usage.js';
+import type { BackgroundWorkUpdate } from '../protocol/background-agents.js';
 
 type Step = { after?: number; send?: Record<string, unknown>; approve?: string };
 
@@ -266,6 +267,66 @@ describe('work a Codex turn leaves running', () => {
     await codex.runTurn(input());
     await codex.close();
     expect(await turns[0]!.finished).toEqual({ text: '', ended: 'closed' });
+  });
+});
+
+describe('background terminals (unified exec processes the turn leaves running)', () => {
+  /** Codex 0.155's commandExecution item for a unified-exec process: `source`
+   * unifiedExecStartup and the PTY's `processId` (app-server schema v2). */
+  const exec = (id: string, done: boolean, source = 'unifiedExecStartup', processId: string | null = 'p-1') => ({
+    method: done ? 'item/completed' : 'item/started',
+    params: { threadId: 'T', turnId: '{{turn}}', item: { type: 'commandExecution', id, command: 'npm run dev', source, processId, status: done ? 'completed' : 'inProgress', ...(done ? { aggregatedOutput: '', exitCode: 0 } : {}) } },
+  });
+  const interaction = (itemId: string, processId: string) => ({ method: 'item/commandExecution/terminalInteraction', params: { threadId: 'T', turnId: '{{turn}}', itemId, processId, stdin: '' } });
+  const kinds = (seen: BackgroundWorkUpdate[]) => seen.map((work) => work.terminals);
+
+  it('counts none for a command that finished within its turn, or one the model never came back to', async () => {
+    const codex = session([[
+      { send: exec('quick', false) }, { send: exec('quick', true) },
+      { send: exec('agentcmd', false, 'agent', null) },
+      { send: exec('shell', false, 'userShell', null) },
+      { send: exec('agentcmd', true, 'agent', null) }, { send: exec('shell', true, 'userShell', null) },
+      { send: agentMessage('T', '{{turn}}', 'done') }, { send: turnCompleted('T', '{{turn}}') },
+    ]]);
+    const seen: BackgroundWorkUpdate[] = [];
+    try {
+      await codex.runTurn(input([], { onBackgroundWork: (work: BackgroundWorkUpdate) => seen.push(work) }));
+      expect(seen).toEqual([]);
+    } finally { await codex.close(); }
+  });
+
+  it('counts a process the model went back to (terminalInteraction) while the turn still runs, and drops it when it exits', async () => {
+    const codex = session([[
+      { send: exec('dev', false) },
+      { after: 20, send: interaction('dev', 'p-1') },
+      { after: 20, send: exec('dev', true) },
+      { send: agentMessage('T', '{{turn}}', 'done') }, { send: turnCompleted('T', '{{turn}}') },
+    ]]);
+    const seen: BackgroundWorkUpdate[] = [];
+    try {
+      await codex.runTurn(input([], { onBackgroundWork: (work: BackgroundWorkUpdate) => seen.push(work) }));
+      expect(kinds(seen)).toEqual([1, 0]);
+    } finally { await codex.close(); }
+  });
+
+  it('keeps reporting after the turn ended while a process runs, and ends the background turn when it exits', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const codex = session([[
+      { send: exec('dev', false) }, { send: agentMessage('T', '{{turn}}', 'Started the server.') }, { send: turnCompleted('T', '{{turn}}') },
+      { after: 400, send: exec('dev', true, 'unifiedExecStartup', 'p-1') },
+    ]], { backgroundTurns: (turn) => turns.push(turn) });
+    const during: BackgroundWorkUpdate[] = [];
+    try {
+      await codex.runTurn(input([], { onBackgroundWork: (work: BackgroundWorkUpdate) => during.push(work) }));
+      // At the turn's end the process outlived it: the turn's own observer is told, and so is the background turn.
+      expect(kinds(during).at(-1)).toBe(1);
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      const after: BackgroundWorkUpdate[] = [];
+      turns[0]!.attach({ onBackgroundWork: (work) => after.push(work) });
+      expect(await codex.backgroundWorkRunning()).toBe(true);
+      expect(await turns[0]!.finished).toMatchObject({ ended: 'completed' });
+      expect(kinds(after)).toEqual([1, 0]);
+    } finally { await codex.close(); }
   });
 });
 

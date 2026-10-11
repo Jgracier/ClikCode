@@ -10,6 +10,7 @@
  * drift from it, which is the entire point of this architecture (see
  * clikcode-worker-client-split project memory for why that matters).
  */
+import { mergeBackgroundWork, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
 import { setUserWaiting } from '../turn/user-wait.js';
 import { randomUUID } from 'node:crypto';
@@ -73,7 +74,7 @@ export class BroadcastObserver implements TurnObserver {
   private liveThought: OpenThought | undefined;
   private livePhase: string | undefined;
   private liveUsage: TurnUsage | undefined;
-  private livePendingBackground = 0;
+  private liveBackground: BackgroundWork | undefined;
   /** The turn's one counter: rows are numbered once, when first seen
    * (turn/turn-marks.ts). The journal's own once it is bound, so a row has
    * the same number on the screen and in the saved turn. */
@@ -145,7 +146,7 @@ export class BroadcastObserver implements TurnObserver {
       ...(this.liveThought ? { thought: liveThought(this.liveThought) } : {}),
       ...(this.livePhase ? { phase: this.livePhase } : {}),
       ...(this.liveUsage ? { usage: this.liveUsage } : {}),
-      ...(this.livePendingBackground ? { pendingBackground: this.livePendingBackground } : {}),
+      ...(this.liveBackground ? { background: { ...this.liveBackground }, ...(this.liveBackground.agents ? { pendingBackground: this.liveBackground.agents } : {}) } : {}),
     };
   }
 
@@ -343,10 +344,10 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'plan', entries, ...(place ? { seq: place.seq, responseOffset: place.responseOffset } : {}) });
   }
 
-  setPendingBackground(pending: number): void {
-    const count = Number.isFinite(pending) && pending > 0 ? Math.floor(pending) : 0;
-    if (this.waitingLabel) this.livePendingBackground = count;
-    this.broadcast({ type: 'background', pending: count });
+  setBackgroundWork(work: BackgroundWork | undefined): void {
+    const level = mergeBackgroundWork(undefined, work ?? {});
+    if (this.waitingLabel) this.liveBackground = level;
+    this.broadcast({ type: 'background', pending: level?.agents ?? 0, ...(level ? { work: level } : {}) });
   }
 
   setTurnUsage(usage: TurnUsage): void {
@@ -438,7 +439,7 @@ export class BroadcastObserver implements TurnObserver {
     this.liveThought = undefined;
     this.livePhase = undefined;
     this.liveUsage = undefined;
-    this.livePendingBackground = 0;
+    this.liveBackground = undefined;
     this.journal = undefined;
     this.sequencer = new MarkSequencer();
   }

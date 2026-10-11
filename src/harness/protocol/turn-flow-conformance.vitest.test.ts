@@ -34,6 +34,7 @@ import type { AiHarnessFlowCapabilities, AiLocalHarnessDefinition } from '../def
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessTurnObserver } from '../events/turn-observer.js';
 import { createStreamState } from '../events/adapters.js';
+import type { BackgroundWorkUpdate } from './background-agents.js';
 import { reportStructuredLine } from '../events/structured.js';
 import { createAcpSession } from '../transport/acp-client.js';
 import { createCodexSession } from '../transport/codex-app-server.js';
@@ -42,9 +43,9 @@ import { upsertActivityEvent } from '../../tui/render/activity-log.js';
 
 type Json = Record<string, unknown>;
 type Capability = keyof AiHarnessFlowCapabilities;
-const CAPABILITIES: readonly Capability[] = ['childActivity', 'thinking', 'plan', 'usage', 'toolOutput', 'backgroundAgents'];
+const CAPABILITIES: readonly Capability[] = ['childActivity', 'thinking', 'plan', 'usage', 'toolOutput', 'backgroundAgents', 'backgroundTerminals', 'workflows'];
 
-interface Observed { events: HarnessActivityEvent[]; plans: number; usage: boolean; notices: string[]; background: number[] }
+interface Observed { events: HarnessActivityEvent[]; plans: number; usage: boolean; notices: string[]; background: BackgroundWorkUpdate[] }
 interface Fixture {
   /** Its key in PROOFS. */
   id: string;
@@ -59,8 +60,10 @@ interface Fixture {
   thoughtFrames?: Readonly<Record<string, number>>;
 }
 
-const caps = (childActivity: boolean, thinking: boolean, plan: boolean, usage: boolean, toolOutput: boolean, backgroundAgents = false): AiHarnessFlowCapabilities =>
-  ({ childActivity, thinking, plan, usage, toolOutput, backgroundAgents });
+const caps = (
+  childActivity: boolean, thinking: boolean, plan: boolean, usage: boolean, toolOutput: boolean,
+  backgroundAgents = false, backgroundTerminals = false, workflows = false,
+): AiHarnessFlowCapabilities => ({ childActivity, thinking, plan, usage, toolOutput, backgroundAgents, backgroundTerminals, workflows });
 
 // ---------------------------------------------------------------- runners
 
@@ -73,7 +76,7 @@ function recorder(): { observed: Observed; observer: HarnessTurnObserver } {
       onPlan: () => { observed.plans += 1; },
       onUsage: (usage) => { if (usage.input || usage.output || usage.totalTokens || usage.costUsd || usage.contextUsed || usage.contextPercent || usage.credits) observed.usage = true; },
       onNotice: (notice) => { observed.notices.push(notice); },
-      onBackgroundAgents: (pending) => { observed.background.push(pending); },
+      onBackgroundWork: (work) => { observed.background.push({ ...work }); },
     },
   };
 }
@@ -116,7 +119,7 @@ function codexServer(steps: Json[]): string {
 const codexFixture: Fixture = {
   id: 'codex-app-server',
   name: 'codex app-server (item/*, turn/plan/updated, thread/tokenUsage/updated, sub-agent threads; codex-cli 0.155 schema)',
-  expected: caps(true, true, true, true, true),
+  expected: caps(true, true, true, true, true, false, true),
   parents: ['agent:C'],
   thoughtFrames: { r1: 2 },
   run: async () => {
@@ -135,6 +138,11 @@ const codexFixture: Fixture = {
         item('item/completed', 'C', 'CU1', { type: 'commandExecution', id: 'child1', command: 'grep -r TODO .', status: 'completed', aggregatedOutput: 'a.ts: TODO\n', exitCode: 0 }),
         { method: 'turn/completed', params: { threadId: 'C', turn: { id: 'CU1', status: 'completed' } } },
         { method: 'thread/tokenUsage/updated', params: { threadId: 'T', turnId: '{{turn}}', tokenUsage: { total: { totalTokens: 120, inputTokens: 100, outputTokens: 20 }, last: { totalTokens: 120, inputTokens: 100, outputTokens: 20 }, modelContextWindow: 200000 } } },
+        // A unified-exec process the model went back to (app-server schema v2: commandExecution
+        // `source` unifiedExecStartup + `processId`, then item/commandExecution/terminalInteraction).
+        item('item/started', 'T', '{{turn}}', { type: 'commandExecution', id: 'dev1', command: 'npm run dev', source: 'unifiedExecStartup', processId: 'p1', status: 'inProgress' }),
+        { method: 'item/commandExecution/terminalInteraction', params: { threadId: 'T', turnId: '{{turn}}', itemId: 'dev1', processId: 'p1', stdin: '' } },
+        item('item/completed', 'T', '{{turn}}', { type: 'commandExecution', id: 'dev1', command: 'npm run dev', source: 'unifiedExecStartup', processId: 'p1', status: 'completed', aggregatedOutput: 'ready\n', exitCode: 0 }),
         item('item/completed', 'T', '{{turn}}', { type: 'agentMessage', id: 'm1', text: 'Done.' }),
         { method: 'turn/completed', params: { threadId: 'T', turn: { id: '{{turn}}', status: 'completed' } } },
       ])], options),
@@ -202,7 +210,11 @@ function acpFixture(options: { id: string; shape: AcpShape; usage: AcpUsage; bod
         // (_meta.claudeCode.emitRawSDKMessages, a type/subtype filter).
         if (${shape === 'claude'} && Array.isArray(asked) && asked.some((f) => f.type === 'system' && f.subtype === 'background_tasks_changed')) {
           send({ method: '_claude/sdkMessage', params: { sessionId: 's1', message: { type: 'system', subtype: 'background_tasks_changed',
-            tasks: [{ task_id: 'bg1', task_type: 'local_agent', description: 'review the diff' }] } } });
+            tasks: [
+              { task_id: 'bg1', task_type: 'local_agent', description: 'review the diff' },
+              { task_id: 'sh1', task_type: 'local_bash', description: 'npm run dev' },
+              { task_id: 'wf1', task_type: 'local_workflow', description: 'spec' },
+            ] } } });
         }`;
   const script = `
     const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
@@ -227,7 +239,7 @@ function acpFixture(options: { id: string; shape: AcpShape; usage: AcpUsage; bod
   return {
     id,
     name: `ACP, ${shapeName}${full ? '' : ' (usage only)'}, usage ${usage}`,
-    expected: caps(full && children, full, full, usage !== 'none', full, full && shape === 'claude'),
+    expected: caps(full && children, full, full, usage !== 'none', full, full && shape === 'claude', full && shape === 'claude', full && shape === 'claude'),
     ...(full && children ? { parents: ['task1'] } : {}),
     ...(full ? { thoughtFrames: { 'thought-1': 2 } } : {}),
     run: async () => {
@@ -262,10 +274,17 @@ const claudeStreamJson = cliFixture('claude-stream-json', 'claude stream-json', 
   { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'task1', content: 'found one' }] }, tool_use_result: { totalToolUseCount: 1, totalTokens: 900, totalDurationMs: 1200 } },
   { type: 'assistant', message: { id: 'msg_3', content: [{ type: 'tool_use', id: 'todo1', name: 'TodoWrite', input: { todos: [{ content: 'Read', status: 'completed', activeForm: 'Reading' }] } }] } },
   { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'todo1', content: 'ok' }] } },
-  { type: 'system', subtype: 'background_tasks_changed', tasks: [{ task_id: 'bg1', task_type: 'local_agent', description: 'review the diff' }], session_id: 's' },
-  { type: 'system', subtype: 'turn_duration', durationMs: 1200, messageCount: 6, pendingBackgroundAgentCount: 1 },
+  // The live level: an agent (claude-background-agent recording), a backgrounded Bash
+  // (`local_bash`, claude-background-bash recording) and a dynamic workflow (`local_workflow`:
+  // SDKBackgroundTasksChangedMessage task_type, claude 2.1.296 bundle).
+  { type: 'system', subtype: 'background_tasks_changed', session_id: 's', tasks: [
+    { task_id: 'bg1', task_type: 'local_agent', description: 'review the diff' },
+    { task_id: 'sh1', task_type: 'local_bash', description: 'npm run dev' },
+    { task_id: 'wf1', task_type: 'local_workflow', description: 'spec' },
+  ] },
+  { type: 'system', subtype: 'turn_duration', durationMs: 1200, messageCount: 6, pendingBackgroundAgentCount: 1, pendingWorkflowCount: 1 },
   { type: 'result', subtype: 'success', is_error: false, result: 'Done.', total_cost_usd: 0.01, usage: { input_tokens: 100, output_tokens: 20 } },
-], { expected: caps(true, true, true, true, true, true), parents: ['task1'] });
+], { expected: caps(true, true, true, true, true, true, true, true), parents: ['task1'] });
 
 /** opencode `run --format json` (tool_use parts, reasoning part, step_finish tokens). */
 const opencodeJson = cliFixture('opencode-json', 'opencode run --format json', { command: 'opencode', parser: 'opencode-json' }, [
@@ -313,8 +332,13 @@ const cursorJson = cliFixture('cursor-stream-json', 'cursor-agent stream-json', 
   { type: 'thinking', subtype: 'completed' },
   { type: 'tool_call', subtype: 'started', call_id: 'c1', tool_call: { shellToolCall: { args: { command: 'ls' } } } },
   { type: 'tool_call', subtype: 'completed', call_id: 'c1', tool_call: { shellToolCall: { args: { command: 'ls' }, result: { success: { stdout: 'a.ts\n', exitCode: 0 } } } } },
+  // A shell started with isBackground, ended by its task_notification (cursor-agent 2026.09 recording,
+  // transport/native/fixtures/cursor-background-shell.jsonl).
+  { type: 'tool_call', subtype: 'started', call_id: 'c2', tool_call: { shellToolCall: { args: { command: 'sleep 20', isBackground: true } } } },
+  { type: 'tool_call', subtype: 'completed', call_id: 'c2', tool_call: { shellToolCall: { args: { command: 'sleep 20', isBackground: true }, result: { success: { shellId: 484640 } } } } },
+  { type: 'system', subtype: 'task_notification', task_id: '484640', status: 'success' },
   { type: 'result', subtype: 'success', result: 'Done.', usage: { inputTokens: 100, outputTokens: 20 } },
-], { expected: caps(false, true, false, true, true), thoughtFrames: { 'thinking:cursor-1': 2 } });
+], { expected: caps(false, true, false, true, true, false, true), thoughtFrames: { 'thinking:cursor-1': 2 } });
 
 /** agy `--output-format stream-json` (verified against agy 1.2.7 in tools.ts). */
 const antigravityJson = cliFixture('antigravity', 'antigravity stream-json', { command: 'antigravity', parser: 'antigravity' }, [
@@ -358,8 +382,8 @@ const acpUsage = {
  * otherwise the declaration is bounded by it. */
 interface Family { fixtures: readonly Fixture[]; exact: boolean; bounded?: readonly Capability[] }
 const FAMILIES: Readonly<Record<string, Family>> = {
-  // `backgroundAgents` is a count only some vendors' streams carry: a ceiling, not a mirror.
-  'claude-stream-json': { fixtures: [claudeStreamJson], exact: true, bounded: ['backgroundAgents'] },
+  // The background counts are what only some vendors' streams carry: a ceiling, not a mirror.
+  'claude-stream-json': { fixtures: [claudeStreamJson], exact: true, bounded: ['backgroundAgents', 'backgroundTerminals', 'workflows'] },
   'codex-items': { fixtures: [codexFixture], exact: true },
   'pi-json': { fixtures: [piJson], exact: true },
   antigravity: { fixtures: [antigravityJson], exact: true },
@@ -473,7 +497,9 @@ function produced(observed: Observed): AiHarnessFlowCapabilities {
     plan: observed.plans > 0,
     usage: observed.usage,
     toolOutput: observed.events.some((event) => (event.kind === 'tool-done' || event.kind === 'tool-error') && (event.output?.length ?? 0) > 0),
-    backgroundAgents: observed.background.some((pending) => pending > 0),
+    backgroundAgents: observed.background.some((work) => (work.agents ?? 0) > 0),
+    backgroundTerminals: observed.background.some((work) => (work.terminals ?? 0) > 0),
+    workflows: observed.background.some((work) => (work.workflows ?? 0) > 0),
   };
 }
 
@@ -508,7 +534,7 @@ describe('every family\'s fixture meets the standard, and supplies exactly what 
 });
 
 describe('every catalog harness declares what its adapter supplies', () => {
-  it('has a declaration for all six, on every harness', () => {
+  it('has a declaration for every capability, on every harness', () => {
     for (const harness of AI_LOCAL_HARNESSES) {
       const declared = harness.capabilities;
       check(`conformance[${harness.command}]`, Boolean(declared), 'catalog: no `capabilities` declared (section 12: a vendor that cannot supply one is marked in the catalog)');
