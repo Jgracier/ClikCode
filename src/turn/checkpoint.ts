@@ -5,9 +5,11 @@ import { resetUserWait, userWaitedMs } from './user-wait.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
-import type { HarnessSession, MessageOrigin } from '../session/model.js';
+import type { HarnessSession, MessageOrigin, OpenThought, TurnMark } from '../session/model.js';
 import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
-import { activitiesBetween, readTurnActivities, recordTurnActivity, runningTurnActivity, stopOpenActivities } from './turn-activities.js';
+import { orderMarks } from '../harness/protocol/activity-view.js';
+import { activitiesBetween, marksBetween, readTurnActivities, recordTurnActivity, runningTurnActivity, stopOpenActivities } from './turn-activities.js';
+import { readTurnMarks, settledThought, upsertMark } from './turn-marks.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
 
@@ -83,7 +85,7 @@ export function touchedFilesFromActivity(event: HarnessActivityEvent): string[] 
  *     hearing the steer (a vendor's "final answer only" result), so the steer
  *     precedes it. It is never placed after the reply: a transcript ending in
  *     a user message reads as an unanswered prompt to the next provider. */
-function remapOffset(streamed: string, final: string, offset: number): number {
+export function remapOffset(streamed: string, final: string, offset: number): number {
   const clamped = Math.max(0, Math.min(streamed.length, offset));
   if (streamed === final || clamped === 0) return Math.min(clamped, final.length);
   let shared = 0;
@@ -98,12 +100,17 @@ function remapOffset(streamed: string, final: string, offset: number): number {
   return 0;
 }
 
-/** Steers and calls both sit at an offset into the streamed answer; a
- * replacement text moves them with it (remapOffset). */
+/** Steers, calls and marks all sit at an offset into the streamed answer; a
+ * replacement text moves them with it (remapOffset). The live copies a worker
+ * keeps for a window joining mid-turn are moved by the same rule
+ * (BroadcastObserver.response), so both agree (standard 1.6). */
 function remapPendingOffsets(pending: NonNullable<HarnessSession['pendingTurn']>, streamed: string, final: string): void {
   if (pending.steers?.length) {
     pending.steers = pending.steers.map((steer) => ({ ...steer, responseOffset: remapOffset(streamed, final, steer.responseOffset ?? 0) }));
   }
+  const marks = readTurnMarks(pending.marks);
+  if (marks.length) pending.marks = marks.map((mark) => ({ ...mark, responseOffset: remapOffset(streamed, final, mark.responseOffset) }));
+  if (pending.thought) pending.thought = { ...pending.thought, responseOffset: remapOffset(streamed, final, pending.thought.responseOffset) };
   const activities = readTurnActivities(pending.activities, streamed.length);
   if (activities.length) {
     pending.activities = activities.map((activity) => ({ ...activity, responseOffset: remapOffset(streamed, final, activity.responseOffset) }));
@@ -138,25 +145,36 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   // splits the answer into messages, and a call's offset is re-anchored to
   // the message it lands in.
   const activities = readTurnActivities(pending.activities, response.length);
+  const marks = readTurnMarks(pending.marks);
   let first = true;
-  const assistant = (start: number, end: number | undefined): Message | undefined => {
-    const text = response.slice(start, end);
+  type Boundary = { offset: number; seq?: number };
+  const assistant = (from: Boundary, to: Boundary | undefined): Message | undefined => {
+    const text = response.slice(from.offset, to?.offset);
     const content = text.trim() ? text : '';
-    const own = activitiesBetween(activities, start, end, content.length, first);
+    const own = activitiesBetween(activities, from.offset, to?.offset, content.length, first, from.seq, to?.seq);
+    const ownMarks = marksBetween(marks, from.offset, to?.offset, content.length, first, from.seq, to?.seq);
     first = false;
     if (!content && !own.length) return undefined;
     // The journal is this session's own turn, so this session produced it.
-    return { role: 'assistant', content, ...(own.length ? { activities: own } : {}), origin: messageOrigin(session) };
+    return {
+      role: 'assistant', content, ...(own.length ? { activities: own } : {}), ...(ownMarks.length ? { marks: ownMarks } : {}),
+      origin: messageOrigin(session),
+    };
   };
-  let responseOffset = 0;
-  for (const steer of [...(pending.steers ?? [])].sort((left, right) => (left.responseOffset ?? 0) - (right.responseOffset ?? 0))) {
-    const steerOffset = Math.max(responseOffset, Math.min(response.length, steer.responseOffset ?? 0));
-    const before = assistant(responseOffset, steerOffset);
+  // A steer is a row like any other: placed by (offset, seq), so what began
+  // before it is above it and what began after is below.
+  let from: Boundary = { offset: 0 };
+  for (const steer of orderMarks(pending.steers ?? [], (item) => ({ responseOffset: item.responseOffset ?? 0, ...(item.seq === undefined ? {} : { seq: item.seq }) }))) {
+    const at: Boundary = {
+      offset: Math.max(from.offset, Math.min(response.length, steer.responseOffset ?? 0)),
+      ...(steer.seq === undefined ? {} : { seq: steer.seq }),
+    };
+    const before = assistant(from, at);
     if (before) messages.push(before);
-    messages.push({ role: 'user', content: steer.text, ...(steer.id ? { id: steer.id } : {}) });
-    responseOffset = steerOffset;
+    messages.push({ role: 'user', content: steer.text, ...(steer.id ? { id: steer.id } : {}), ...(steer.seq === undefined ? {} : { seq: steer.seq }) });
+    from = at;
   }
-  const remaining = assistant(responseOffset, undefined);
+  const remaining = assistant(from, undefined);
   if (remaining) messages.push(remaining);
   return messages;
 }
@@ -271,15 +289,43 @@ export function recordPendingActivity(session: HarnessSession, event: HarnessAct
   pending.updatedAt = now;
 }
 
+/** `seq`: the order of its acknowledgement, from the turn's one counter
+ * (MarkSequencer) -- what places it among the rows that share its offset. */
 export function recordPendingSteer(
-  session: HarnessSession, text: string, submittedAt: string, responseOffset: number, now: string, id?: string,
+  session: HarnessSession, text: string, submittedAt: string, responseOffset: number, now: string, id?: string, seq?: number,
 ): void {
   const pending = session.pendingTurn;
   if (!pending || !text.trim()) return;
   pending.steers = [...(pending.steers ?? []), {
     text: text.trim(), submittedAt, responseOffset: Math.max(0, responseOffset), ...(id ? { id } : {}),
+    ...(seq === undefined ? {} : { seq }),
   }];
   pending.updatedAt = now;
+}
+
+/** A thought, plan, notice or approval outcome, kept with the turn. A mark
+ * with an id already kept updates that row in place (the plan). */
+export function recordPendingMark(session: HarnessSession, mark: TurnMark, now: string): void {
+  const pending = session.pendingTurn;
+  if (!pending) return;
+  pending.marks = upsertMark(readTurnMarks(pending.marks), mark);
+  pending.updatedAt = now;
+}
+
+/** The thought being had, so a turn stopped inside it keeps it. */
+export function setPendingThought(session: HarnessSession, thought: OpenThought | undefined, now: string): void {
+  const pending = session.pendingTurn;
+  if (!pending) return;
+  if (thought) pending.thought = thought;
+  else delete pending.thought;
+  pending.updatedAt = now;
+}
+
+/** The thought still open settles where it began (`Thought for Ns`). */
+function settleOpenThought(pending: NonNullable<HarnessSession['pendingTurn']>, nowMs: number): void {
+  if (!pending.thought) return;
+  pending.marks = upsertMark(readTurnMarks(pending.marks), settledThought(pending.thought, nowMs));
+  delete pending.thought;
 }
 
 /** Queue a turn. A notification identical to one still waiting is not
@@ -334,6 +380,7 @@ export function durableAnswer(streamed: string, reported: string): string {
 
 export function finishPendingTurn(session: HarnessSession, response: string | undefined, now: string, stopped = false): void {
   if (!session.pendingTurn) return;
+  settleOpenThought(session.pendingTurn, Date.parse(now));
   const before = session.messages?.length ?? 0;
   const startedAt = Date.parse(session.pendingTurn.startedAt);
   const { accountSwitch, signedInTo } = session.pendingTurn;
@@ -361,10 +408,12 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
 
 /** The turn was stopped: a call still open did not finish, and the saved
  * turn says so. Settled as finished, a stopped turn read as a completed one. */
-export function stopPendingCalls(session: HarnessSession): void {
+export function stopPendingCalls(session: HarnessSession, nowMs = Date.now()): void {
   const pending = session.pendingTurn;
   const activities = readTurnActivities(pending?.activities, pending?.response?.length ?? 0);
   if (pending && activities.length) pending.activities = stopOpenActivities(activities);
+  // A thought the turn was stopped inside is a thought that was had.
+  if (pending) settleOpenThought(pending, nowMs);
 }
 
 export function discardPendingTurn(session: HarnessSession, prompt?: string): boolean {

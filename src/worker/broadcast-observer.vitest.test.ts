@@ -1,5 +1,6 @@
 import type { Socket } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { MarkSequencer } from '../turn/turn-marks';
 import { BroadcastObserver } from './broadcast-observer';
 
 function fakeClient(): { socket: Socket; frames: Record<string, unknown>[] } {
@@ -97,7 +98,8 @@ describe('a notice about the turn', () => {
     observer.attach(client.socket);
     observer.startTurn('thinking');
     observer.activity('The answer was cut off: the model reached its output limit.');
-    expect(client.frames.at(-1)).toEqual({ type: 'note', message: 'The answer was cut off: the model reached its output limit.' });
+    // `seq`/`responseOffset` are additive: where the notice sits in the turn.
+    expect(client.frames.at(-1)).toMatchObject({ type: 'note', message: 'The answer was cut off: the model reached its output limit.', seq: 1, responseOffset: 0 });
     expect(observer.turnOutputStarted).toBe(true);
   });
 });
@@ -125,14 +127,16 @@ describe('a window joining a running turn', () => {
     observer.response(' Then fixing.');
     observer.activityEvent({ kind: 'tool-done', id: 't1', label: 'Bash(npm test)' });
     observer.setPlan([{ content: 'fix it', status: 'in_progress' }]);
-    expect(observer.liveSnapshot()).toEqual({
+    expect(observer.liveSnapshot()).toMatchObject({
       text: 'Looking first. Then fixing.', waitingLabel: 'thinking', prompt: 'fix the build',
-      // A thought is never a transcript row, so it is not one here either.
+      // A thought is never an activity row, so it is not one here either
+      // (it is a mark: see `marks`). Each row carries the worker's seq.
       activities: [
-        { event: { kind: 'tool-start', id: 't1', label: 'Bash(npm test)' }, responseOffset: 14 },
-        { event: { kind: 'tool-done', id: 't1', label: 'Bash(npm test)' }, responseOffset: 27 },
+        { event: { kind: 'tool-start', id: 't1', label: 'Bash(npm test)', seq: 2 }, responseOffset: 14 },
+        { event: { kind: 'tool-done', id: 't1', label: 'Bash(npm test)', seq: 2 }, responseOffset: 27 },
       ],
       plan: [{ content: 'fix it', status: 'in_progress' }],
+      marks: [{ kind: 'thought', seq: 1, responseOffset: 14 }, { kind: 'plan', seq: 3 }],
     });
     // The next turn starts from nothing.
     observer.stopWaiting();
@@ -279,5 +283,116 @@ describe('a harness question', () => {
     observer.stopWaiting();
     await expect(answered).resolves.toEqual({ kind: 'cancelled' });
     expect(observer.pendingRequestCount).toBe(0);
+  });
+});
+
+describe('worker-assigned order and a window joining mid-turn (standards 1, 4, 7, 8, 11)', () => {
+  const frames = (client: ReturnType<typeof fakeClient>, type: string) => client.frames.filter((frame) => frame.type === type);
+
+  it('numbers each row once, in the order the worker first saw it, and every frame of a call carries it', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking', 'go');
+    observer.activityEvent({ kind: 'tool-start', label: 'Read a', id: 'a' });
+    observer.activityEvent({ kind: 'tool-start', label: 'Read b', id: 'b' });
+    observer.activityEvent({ kind: 'tool-done', label: 'tool', id: 'b' });
+    observer.activityEvent({ kind: 'tool-done', label: 'tool', id: 'a' });
+    expect(frames(client, 'activity').map((frame) => (frame.event as { seq: number }).seq)).toEqual([1, 2, 2, 1]);
+    observer.activity('Switched to another account');
+    observer.setPlan([{ content: 'one', status: 'pending' }]);
+    expect(frames(client, 'note')[0]).toMatchObject({ seq: 3, responseOffset: 0 });
+    expect(frames(client, 'plan')[0]).toMatchObject({ seq: 4, responseOffset: 0 });
+  });
+
+  it('shows a window that joins mid-turn what an attached one shows: thought, settled thoughts, plan, notices, phase, usage', () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking', 'go');
+    observer.response('Hello. ');
+    observer.activityEvent({ kind: 'thinking', label: '**Checking the cache** first', id: 'r1' });
+    observer.activityEvent({ kind: 'tool-start', label: 'Read a', id: 'a' });
+    observer.activityEvent({ kind: 'thinking', label: 'then this', id: 'r2' });
+    observer.activity('Cut off at its limit');
+    observer.setPlan([{ content: 'one', status: 'in_progress' }]);
+    observer.phase('compacting');
+    observer.setTurnUsage({ input: 10, output: 20 });
+    const live = observer.liveSnapshot()!;
+    expect(live.marks!.map((mark) => mark.kind)).toEqual(['thought', 'notice', 'plan']);
+    expect(live.marks![0]).toMatchObject({ id: 'thought:r1', responseOffset: 7, heading: 'Checking the cache' });
+    expect(live.thought).toMatchObject({ id: 'r2', text: 'then this', responseOffset: 7 });
+    expect(live.phase).toBe('compacting');
+    expect(live.usage).toMatchObject({ input: 10, output: 20 });
+    expect(live.plan).toEqual([{ content: 'one', status: 'in_progress' }]);
+  });
+
+  it('does not open a second thought when the vendor repeats a settled one after the answer began', () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking', 'go');
+    observer.activityEvent({ kind: 'thinking', label: 'considering the options', id: 'r1' });
+    observer.response('The answer.');
+    observer.activityEvent({ kind: 'thinking', label: 'considering the options and deciding', id: 'r1' });
+    const live = observer.liveSnapshot()!;
+    expect(live.thought).toBeUndefined();
+    expect(live.marks).toHaveLength(1);
+    expect(live.marks![0]).toMatchObject({ kind: 'thought', responseOffset: 0, text: 'considering the options and deciding' });
+  });
+
+  it('rebases the live rows when the answer is replaced, as the journal does', () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking', 'go');
+    observer.response('Alpha beta ');
+    observer.activityEvent({ kind: 'tool-start', label: 'early', id: 'e' });
+    observer.activity('early note');
+    observer.response('gamma delta');
+    observer.activityEvent({ kind: 'tool-start', label: 'late', id: 'l' });
+    observer.activity('late note');
+    // The vendor's final text keeps the opening and rewrites the rest.
+    observer.response('Alpha beta SOMETHING ELSE ENTIRELY', 'replace');
+    const live = observer.liveSnapshot()!;
+    expect(live.activities!.map((row) => row.responseOffset)).toEqual([11, 0]);
+    expect(live.marks!.map((mark) => mark.responseOffset)).toEqual([11, 0]);
+  });
+
+  it('records an approval\'s outcome where it was asked, and says so to every window', async () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking', 'go');
+    observer.response('Before. ');
+    const approved = observer.approval('Run npm test?');
+    const asked = frames(client, 'approval-request')[0] as { id: string; seq: number; responseOffset: number };
+    expect(asked).toMatchObject({ seq: 1, responseOffset: 8 });
+    observer.response('Waiting.');
+    observer.resolveApproval(asked.id, true);
+    await approved;
+    expect(frames(client, 'request-closed')[0]).toMatchObject({ id: asked.id, outcome: 'approved', label: 'Run npm test?' });
+    expect(observer.liveSnapshot()!.marks![0]).toMatchObject({ kind: 'outcome', outcome: 'approved', seq: 1, responseOffset: 8 });
+  });
+
+  it('keeps no outcome for a request the turn ended under', async () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking', 'go');
+    const approved = observer.approval('Run it?');
+    const marksBefore = observer.liveSnapshot()!.marks ?? [];
+    observer.stopWaiting();
+    await expect(approved).resolves.toBe(false);
+    expect(marksBefore).toEqual([]);
+  });
+
+  it('shares the journal\'s counter and hands it every mark', () => {
+    const observer = new BroadcastObserver();
+    const marks: unknown[] = [];
+    const thoughts: unknown[] = [];
+    const sequencer = new MarkSequencer();
+    sequencer.raiseTo(40);
+    observer.startTurn('thinking', 'go');
+    observer.bindJournal({ sequencer, recordMark: (mark) => marks.push(mark), setThought: (thought) => thoughts.push(thought), steerOrder: () => undefined });
+    observer.activityEvent({ kind: 'tool-start', label: 'x', id: 'x' });
+    observer.activity('hello');
+    observer.activityEvent({ kind: 'thinking', label: 'hmm', id: 'r' });
+    observer.activityEvent({ kind: 'tool-start', label: 'y', id: 'y' });
+    expect(observer.liveSnapshot()!.activities![0]!.event.seq).toBe(41);
+    expect(marks).toMatchObject([{ kind: 'notice', seq: 42 }, { kind: 'thought', seq: 43, id: 'thought:r' }]);
+    expect(thoughts).toMatchObject([{ id: 'r', text: 'hmm' }, undefined]);
   });
 });

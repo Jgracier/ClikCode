@@ -87,6 +87,27 @@ describe('runGatewayHarnessTurn', () => {
     expect(persisted.map((item) => item.type)).toEqual(['text', 'text', 'tool_call', 'tool_result', 'tool_call', 'tool_result', 'text']);
   });
 
+  it('settles a step\'s reasoning once, at its place: nothing re-opens it below the answer', async () => {
+    const order: string[] = [];
+    const h = harness([{
+      before: (request) => {
+        request.onReasoningDelta?.('Weighing the options. ');
+        request.onReasoningDelta?.('Choosing the first.');
+        request.onTextDelta('The answer.');
+      },
+      text: 'The answer.',
+    }], {
+      onActivity: (event) => { if (event.kind === 'thinking') order.push(`thinking:${event.id}`); },
+      onResponseDelta: (text) => { order.push(`text:${text}`); },
+    });
+    await runGatewayHarnessTurn(h.input);
+    const firstText = order.findIndex((item) => item.startsWith('text:'));
+    // Every reasoning frame of the item came before the answer's first word,
+    // and under one id (a client merges them into one row).
+    expect(order.slice(firstText).filter((item) => item.startsWith('thinking:'))).toEqual([]);
+    expect(new Set(order.filter((item) => item.startsWith('thinking:'))).size).toBe(1);
+  });
+
   it('treats tool work with no prose as success', async () => {
     const h = harness([{ toolCalls: [{ name: 'list_dir', args: {} }] }, {}]);
     const result = await runGatewayHarnessTurn(h.input);

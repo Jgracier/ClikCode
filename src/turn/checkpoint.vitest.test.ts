@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer,
-  runningActivityLabel, sessionTranscriptMessages, settledTranscriptMessages, updatePendingResponse, type PendingTurnWithHints,
+  recordPendingMark, runningActivityLabel, sessionTranscriptMessages, setPendingThought, settledTranscriptMessages, stopPendingCalls,
+  updatePendingResponse, type PendingTurnWithHints,
 } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
@@ -420,5 +421,64 @@ describe('joining a turn another window is running', () => {
     expect(resumed.messages).toEqual([
       { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half', ...by, turnEnd: { ms: 2_000 } },
     ]);
+  });
+});
+
+describe('the turn\'s durable marks and order (standards 1, 4, 7, 8, 11)', () => {
+  it('draws a row the steer caused after the steer, though both sit at one offset', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', stamp(0));
+    updatePendingResponse(target, 'Looking. ', 'append', stamp(1));
+    recordPendingActivity(target, { kind: 'tool-done', label: '$ before', id: 'a', seq: 1 }, stamp(2));
+    recordPendingSteer(target, 'use bun', stamp(3), 9, stamp(3), 'steer-1', 2);
+    recordPendingActivity(target, { kind: 'tool-done', label: '$ caused', id: 'b', seq: 3 }, stamp(4));
+    finishPendingTurn(target, undefined, stamp(5));
+    const [before, steer, after] = target.messages!.slice(-3);
+    expect(before!.activities!.map((call) => call.event.id)).toEqual(['a']);
+    expect(steer).toMatchObject({ role: 'user', content: 'use bun', seq: 2 });
+    expect(after!.activities!.map((call) => call.event.id)).toEqual(['b']);
+    expect(after!.activities![0]!.responseOffset).toBe(0);
+  });
+
+  it('keeps the settled thought, plan, notice and approval outcome with the turn, each where it began', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', stamp(0));
+    updatePendingResponse(target, 'First. ', 'append', stamp(1));
+    recordPendingMark(target, { kind: 'thought', id: 'thought:t1', seq: 1, responseOffset: 7, durationMs: 4200, heading: 'Inspecting the parser', text: 'x' }, stamp(2));
+    recordPendingMark(target, { kind: 'plan', id: 'plan', seq: 2, responseOffset: 7, entries: [{ content: 'one', status: 'pending' }] }, stamp(2));
+    recordPendingMark(target, { kind: 'plan', id: 'plan', seq: 9, responseOffset: 99, entries: [{ content: 'one', status: 'completed' }] }, stamp(3));
+    updatePendingResponse(target, 'Second.', 'append', stamp(4));
+    recordPendingMark(target, { kind: 'notice', id: 'notice:3', seq: 3, responseOffset: 14, message: 'Switched account' }, stamp(4));
+    recordPendingMark(target, { kind: 'outcome', id: 'outcome:q', seq: 4, responseOffset: 14, outcome: 'approved', label: 'Run npm test?' }, stamp(5));
+    finishPendingTurn(target, undefined, stamp(6));
+    const answer = target.messages!.at(-1)!;
+    expect(answer.marks!.map((mark) => [mark.kind, mark.seq, mark.responseOffset])).toEqual([
+      ['thought', 1, 7], ['plan', 2, 7], ['notice', 3, 14], ['outcome', 4, 14],
+    ]);
+    // The plan updated in place and was kept after every step was done.
+    expect(answer.marks![1]).toMatchObject({ kind: 'plan', entries: [{ content: 'one', status: 'completed' }] });
+    expect(answer.marks![0]).toMatchObject({ heading: 'Inspecting the parser', durationMs: 4200 });
+  });
+
+  it('settles a thought still open when the turn is stopped, so it is not lost', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', stamp(0));
+    updatePendingResponse(target, 'Hello. ', 'append', stamp(1));
+    setPendingThought(target, { id: 'r1', text: '**Checking the cache** then reading', seq: 4, responseOffset: 7, startedAtMs: Date.parse(stamp(2)), heading: 'Checking the cache' }, stamp(2));
+    stopPendingCalls(target, Date.parse(stamp(5)));
+    expect(target.pendingTurn!.thought).toBeUndefined();
+    expect(target.pendingTurn!.marks).toEqual([
+      { kind: 'thought', id: 'thought:r1', seq: 4, responseOffset: 7, durationMs: 3000, heading: 'Checking the cache', text: '**Checking the cache** then reading' },
+    ]);
+  });
+
+  it('moves marks with a replaced answer, as it moves calls and steers', () => {
+    const target = session();
+    beginPendingTurn(target, 'Work', stamp(0));
+    updatePendingResponse(target, 'Alpha beta gamma delta epsilon.', 'append', stamp(1));
+    recordPendingMark(target, { kind: 'notice', id: 'notice:1', seq: 1, responseOffset: 5, message: 'early' }, stamp(2));
+    recordPendingMark(target, { kind: 'notice', id: 'notice:2', seq: 2, responseOffset: 31, message: 'late' }, stamp(2));
+    updatePendingResponse(target, 'Alpha  beta gamma delta epsilon.', 'replace', stamp(3));
+    expect(target.pendingTurn!.marks!.map((mark) => mark.responseOffset)).toEqual([5, 0]);
   });
 });
