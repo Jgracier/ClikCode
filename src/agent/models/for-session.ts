@@ -112,17 +112,19 @@ export function gatewayModelClient(input: {
 async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise<{ id?: string; contextWindow?: number; maxOutput?: number; vision?: boolean }> {
   try {
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
-    const { savedGatewayModels, gatewayModels } = await import('../../gateway/models.js');
+    const { savedGatewayModels, gatewayModels, sameGatewayModel } = await import('../../gateway/models.js');
     // Model facts tune the local loop; the Gateway resolves the actual model.
     // A turn must not wait for a catalogue request before its first model step.
     let list = await savedGatewayModels({ config });
     const id = session.model ?? list?.automatic;
-    let model = list?.models.find((entry) => entry.id === id);
+    // However the id is spelled (an agent's own pin is `claude-opus-5-5`, the list `claude-opus-5.5`).
+    let model = id ? list?.models.find((entry) => sameGatewayModel(entry.id, id)) : undefined;
     // An image requires a vision-capable model. Only this case needs a fresh
     // catalogue when the current account has no facts for the selected model.
     if (!model && session.attachments?.some((file) => /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|avif)$/i.test(file))) {
       list = await gatewayModels({ config });
-      model = list.models.find((entry) => entry.id === (session.model ?? list?.automatic));
+      const wanted = session.model ?? list?.automatic;
+      model = wanted ? list.models.find((entry) => sameGatewayModel(entry.id, wanted)) : undefined;
     }
     return {
       ...(id ? { id } : {}),
