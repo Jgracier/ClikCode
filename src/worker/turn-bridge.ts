@@ -382,7 +382,7 @@ async function driveWorkerTurn(
           case 'approval-request': {
             const closing = new AbortController();
             openPrompts.set(event.id, closing);
-            void rl.approval(event.title, event.detail, event.preview, event.rule, closing.signal).then((approved) => {
+            void rl.approval(event.title, event.detail, event.preview, event.rule, closing.signal, event.callId).then((approved) => {
               openPrompts.delete(event.id);
               if (!closing.signal.aborted) client.send({ type: 'approval-response', id: event.id, approved });
             });

@@ -9,6 +9,7 @@ import { renderActivityLine } from '../../harness/protocol/activity-line.js';
 import { mergeActivity, sameCall, stoppedCall } from '../../harness/protocol/activity-view.js';
 import type { HarnessActivityEvent } from '../../harness/prompter.js';
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
+import { decisionRow, type Decision } from '../../harness/protocol/turn-flow.js';
 
 /** One rendered activity row and where it belongs: the message index it was
  * reported under, and -- for a row produced inside a turn -- the response
@@ -16,8 +17,63 @@ import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.
  * `startedAt` is when the call was first seen, for its running timer. */
 export type ActivityEntry = {
   anchor: number; responseOffset?: number; sequence?: number; startedAt?: number;
+  /** Absent for a note: a row that is only its `lines` (activity()). */
   event?: HarnessActivityEvent; lines: string[];
+  /** What the user decided about this call (standard section 8). It is the
+   * call's row that says so, not a second row: a refusal replaces the call's
+   * own failure line, an approval is said once on the call that then runs. */
+  decision?: EntryDecision;
+  /** A decision row that stands alone because nothing had been reported for
+   * the call it was about. A later frame of that call is absorbed into it. */
+  decisionFor?: string;
 };
+
+/** A decision, worded and styled once. */
+export type EntryDecision = {
+  kind: Decision['kind'];
+  /** The whole settled row: `✗ denied rm -rf build`. */
+  row: string;
+  /** What an approved call's own first line carries instead. */
+  suffix: string;
+};
+
+const paintDecision = (text: string, tone: 'ok' | 'no' | 'told'): string => {
+  const glyph = tone === 'ok' ? chalk.green : tone === 'no' ? chalk.red : chalk.cyan;
+  return sanitizeTerminalText(glyph(text.slice(0, 1)) + chalk.dim(text.slice(1)), { keepSgr: true, singleLine: true });
+};
+
+/** A call's rows, with the user's decision on it where there was one. */
+export function entryLines(event: HarnessActivityEvent, decision?: EntryDecision): string[] {
+  const lines = renderActivityLine(event).map((line) => line.trim());
+  if (!decision) return lines;
+  if (decision.kind !== 'approved') return [decision.row];
+  return lines.length ? [`${lines[0]}${decision.suffix}`, ...lines.slice(1)] : [decision.row];
+}
+
+/** Settle a decision where it belongs: on the row of the call it was about
+ * when there is one (kept where the call began), else as a row of its own at
+ * the answer's current place. One event is one row. */
+export function settleDecisionEntry(entries: readonly ActivityEntry[], at: {
+  anchor: number; responseOffset?: number; sequence: number; callId?: string; decision: Decision;
+}): ActivityEntry[] {
+  const { text, tone } = decisionRow(at.decision);
+  const decision: EntryDecision = {
+    kind: at.decision.kind, row: paintDecision(text, tone),
+    suffix: chalk.dim(` · approved${at.decision.kind === 'approved' && at.decision.always ? ' (always)' : ''}`),
+  };
+  const next = [...entries];
+  const index = at.callId === undefined ? -1 : next.findIndex((entry) => entry.anchor === at.anchor && entry.event?.id === at.callId);
+  if (index >= 0) {
+    const prior = next[index]!;
+    next[index] = { ...prior, decision, lines: entryLines(prior.event!, decision) };
+    return next;
+  }
+  next.push({
+    anchor: at.anchor, ...(at.responseOffset === undefined ? {} : { responseOffset: at.responseOffset }), sequence: at.sequence,
+    lines: [decision.row], decision, ...(at.callId === undefined ? {} : { decisionFor: at.callId }),
+  });
+  return next;
+}
 
 /** One provider may publish pending/running/progress frames for the same tool.
  * They describe one lifecycle, not separate calls. Upsert by native id, or by
@@ -57,11 +113,18 @@ export function upsertActivityEvent(
   if (matchIndex >= 0) {
     const prior = next[matchIndex]!;
     const effective = mergeActivity(prior.event!, normalized);
-    next[matchIndex] = { ...prior, event: effective, lines: renderActivityLine(effective).map((line) => line.trim()) };
+    next[matchIndex] = { ...prior, event: effective, lines: entryLines(effective, prior.decision) };
   } else {
+    // A refusal made before the call was reported stands alone, and the
+    // call's failure frame that follows is the same event: absorbed, since
+    // the standalone row is most likely already in scrollback. An approval
+    // that stood alone is said already; the call that then runs is its own row.
+    const early = normalized.id === undefined ? undefined
+      : next.find((entry) => entry.anchor === anchor && entry.decisionFor === normalized.id);
+    if (early?.decision && early.decision.kind !== 'approved') return next;
     next.push({
       anchor, ...(responseOffset === undefined ? {} : { responseOffset }), ...(sequence === undefined ? {} : { sequence }),
-      startedAt: now, event: normalized, lines: renderActivityLine(normalized).map((line) => line.trim()),
+      startedAt: now, event: normalized, lines: entryLines(normalized),
     });
   }
   // Do not evict old entries here. Some may already be immutable native
@@ -80,7 +143,7 @@ export function stopEntries(entries: readonly ActivityEntry[], stops: (entry: Ac
     if (entry.event?.kind !== 'tool-start' || !stops(entry)) return entry;
     changed = true;
     const event = stoppedCall(entry.event);
-    return { ...entry, event, lines: renderActivityLine(event).map((line) => line.trim()) };
+    return { ...entry, event, lines: entryLines(event, entry.decision) };
   });
   return changed ? next : entries as ActivityEntry[];
 }
