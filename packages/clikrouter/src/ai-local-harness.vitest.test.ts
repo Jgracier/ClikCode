@@ -517,7 +517,7 @@ describe('local harness catalog', () => {
   it('guards an argv prompt that begins with a dash', () => {
     expect(maxPromptArgvBytes).toBe(96 * 1024);
     // Positional prompt on a parser that honors `--`.
-    expect(nativeHarnessTurnArgv(localHarnessForCommand('opencode')!, { prompt: '--help me' })).toEqual(['run', '--format', 'json', '--', '--help me']);
+    expect(nativeHarnessTurnArgv(localHarnessForCommand('opencode')!, { prompt: '--help me' })).toEqual(['run', '--format', 'json', '--thinking', '--', '--help me']);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('cursor')!, { prompt: '-f' }).slice(-2)).toEqual(['--', '-f']);
     // A prompt that is a FLAG VALUE can never take `--`; it gets the space guard.
     expect(nativeHarnessTurnArgv(localHarnessForCommand('gemini')!, { prompt: '--yolo' }).slice(-2)).toEqual(['--prompt', ' --yolo']);

@@ -682,7 +682,7 @@ const OPENCODE_FAMILY = {
   // ("permission requested: edit ...; auto-rejecting"); over ACP the request reaches ClikCode as session/request_permission.
   permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, permissionEnv: { ask: { OPENCODE_PERMISSION: '{"edit":"ask","bash":"ask"}' } }, normalizedPermissionOptionIds: ['auto-approve'],
   imageArgvPrefix: ['--file'],
-  turn: { promptGuard: 'double-dash', startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] },
+  turn: { promptGuard: 'double-dash', startArgv: ['run', '--format', 'json', '--thinking'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] },
   session: { resumeIdPrefix: ['--session'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' },
 } as const satisfies Partial<AiLocalHarnessDefinition>;
 // OpenCode-only declarations a fork must not inherit by accident.
