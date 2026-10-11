@@ -528,7 +528,8 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const next = applySession(model, event.session, event.account);
       // The worker attaches `live` to every snapshot while a turn runs, so
       // one without it says nothing is running there.
-      if (!event.live) return model.live ? endTurn({ ...next, pendingPrompt: undefined }) : next;
+      // `stopped`: another window or the CLI stopped it -- ended as stopped.
+      if (!event.live) return model.live ? endTurn({ ...next, pendingPrompt: undefined }, event.stopped === true) : next;
       // The running turn's tool rows and plan come with it (from ClikCode
       // builds that send them), so a panel opened mid-turn shows them too.
       // Joined mid-turn, the clock starts where the turn really did.
@@ -559,7 +560,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         turnUsage: undefined,
       };
     case 'waiting-stop':
-      return { ...endTurn(model), pendingPrompt: undefined, approvals: [], submissions: [] };
+      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], submissions: [] };
     case 'delta': {
       const live = model.live ?? freshLive('thinking');
       const text = event.mode === 'replace' ? event.text : live.text + event.text;
@@ -638,15 +639,15 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
 }
 
 /** The turn is over: its tool rows are kept beside the answer. */
-function endTurn(model: ChatModel): ChatModel {
-  const asked = Boolean(model.live?.stopping);
+function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
+  const asked = Boolean(model.live?.stopping) || stoppedElsewhere;
   const activities = settledCalls(model.live?.activities ?? [], asked);
   const reasoning = turnReasoning(model.live);
   const plan = model.plan.length ? model.plan : undefined;
   // The saved turn's calls, when its snapshot came first, win over the ones
   // this window watched (see withSavedTraces).
   const saved = model.traces.find((trace) => trace.userIndex === model.turnUserIndex && trace.saved);
-  const traces = (activities.length || reasoning || plan) && model.turnUserIndex !== undefined
+  const traces = (activities.length || reasoning || plan || (asked && model.live?.text)) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
       userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan } : {}),
       // Completed steers are materialized as user messages in session.messages.
