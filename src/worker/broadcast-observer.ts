@@ -73,6 +73,7 @@ export class BroadcastObserver implements TurnObserver {
   private liveThought: OpenThought | undefined;
   private livePhase: string | undefined;
   private liveUsage: TurnUsage | undefined;
+  private livePendingBackground = 0;
   /** The turn's one counter: rows are numbered once, when first seen
    * (turn/turn-marks.ts). The journal's own once it is bound, so a row has
    * the same number on the screen and in the saved turn. */
@@ -139,11 +140,18 @@ export class BroadcastObserver implements TurnObserver {
     return {
       text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}),
       activities: [...this.liveActivities], plan: [...this.livePlan],
+      ...(this.livePlan.length ? this.planOffset() : {}),
       ...(this.liveMarks.length ? { marks: [...this.liveMarks] } : {}),
       ...(this.liveThought ? { thought: liveThought(this.liveThought) } : {}),
       ...(this.livePhase ? { phase: this.livePhase } : {}),
       ...(this.liveUsage ? { usage: this.liveUsage } : {}),
+      ...(this.livePendingBackground ? { pendingBackground: this.livePendingBackground } : {}),
     };
+  }
+
+  private planOffset(): { planOffset: number } | {} {
+    const plan = this.liveMarks.find((mark) => mark.kind === 'plan');
+    return plan ? { planOffset: plan.responseOffset } : {};
   }
 
   /** The whole conversation, and the turn in flight if there is one, for one
@@ -164,7 +172,8 @@ export class BroadcastObserver implements TurnObserver {
     this.userWaitChanged();
     pending.resolve(approved);
     this.announceAwaiting();
-    const outcome = decided && pending.place ? this.recordOutcome(pending.place, approved === false ? 'denied' : 'approved', id) : undefined;
+    const callId = pending.event.type === 'approval-request' ? pending.event.callId : undefined;
+    const outcome = decided && pending.place ? this.recordOutcome(pending.place, approved === false ? 'denied' : 'approved', id, callId) : undefined;
     // Answered in one window: the others close their copy.
     this.broadcast({ type: 'request-closed', id, ...(outcome ?? {}) });
   }
@@ -183,9 +192,10 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   /** The settled row of a decided request, kept at the place it was asked. */
-  private recordOutcome(place: Place, outcome: 'approved' | 'denied' | 'answered', id: string): { outcome: 'approved' | 'denied' | 'answered'; label: string } {
-    this.putMark({ kind: 'outcome', id: `outcome:${id}`, seq: place.seq, responseOffset: place.responseOffset, outcome, label: place.label });
-    return { outcome, label: place.label };
+  private recordOutcome(place: Place, outcome: 'approved' | 'denied' | 'answered', id: string, callId?: string): { outcome: 'approved' | 'denied' | 'answered'; label: string; callId?: string } {
+    const call = callId ? { callId } : {};
+    this.putMark({ kind: 'outcome', id: `outcome:${id}`, seq: place.seq, responseOffset: place.responseOffset, outcome, label: place.label, ...call });
+    return { outcome, label: place.label, ...call };
   }
 
   /** Where a request being asked now sits in the turn. */
@@ -333,6 +343,12 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'plan', entries, ...(place ? { seq: place.seq, responseOffset: place.responseOffset } : {}) });
   }
 
+  setPendingBackground(pending: number): void {
+    const count = Number.isFinite(pending) && pending > 0 ? Math.floor(pending) : 0;
+    if (this.waitingLabel) this.livePendingBackground = count;
+    this.broadcast({ type: 'background', pending: count });
+  }
+
   setTurnUsage(usage: TurnUsage): void {
     if (this.waitingLabel) this.liveUsage = { ...this.liveUsage, ...usage };
     this.broadcast({ type: 'usage', usage });
@@ -422,6 +438,7 @@ export class BroadcastObserver implements TurnObserver {
     this.liveThought = undefined;
     this.livePhase = undefined;
     this.liveUsage = undefined;
+    this.livePendingBackground = 0;
     this.journal = undefined;
     this.sequencer = new MarkSequencer();
   }

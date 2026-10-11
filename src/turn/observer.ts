@@ -28,6 +28,11 @@ export interface TurnObserver {
   askQuestions?(request: import('../harness/events/question.js').HarnessQuestionRequest, signal?: AbortSignal): Promise<import('../harness/events/question.js').HarnessQuestionResult>;
   setPlan(entries: readonly PlanEntry[]): void;
   setTurnUsage(usage: TurnUsage): void;
+  /** Background agents the vendor says are still running (the level, 0 =
+   * none): the turn's end says `Waiting for N background agents` from it.
+   * Optional: a surface that draws the end line from the saved turn alone
+   * has nothing to do with it live. */
+  setPendingBackground?(pending: number): void;
   startWaiting(
     message: string,
     onCancel?: (restoreDraft: boolean) => void,

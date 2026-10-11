@@ -21,6 +21,7 @@ import { BackgroundTurnChannel } from './background-turn.js';
 import { configuredIdleMs, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { backgroundAgentCount } from '../protocol/background-agents.js';
 
 type Json = Record<string, any>;
 
@@ -30,6 +31,15 @@ const READ_LIKE_TOOL_KINDS: ReadonlySet<string> = new Set(['read', 'search', 'th
 const DETAIL_LINE_CAP = 12;
 /** How long an agent may take to answer before the wait is named. */
 const START_NOTICE_MS = 1_000;
+
+/** The raw SDK frames claude-agent-acp is asked to forward as
+ * `_claude/sdkMessage` (`_meta.claudeCode.emitRawSDKMessages`, a type/subtype
+ * filter, claude-agent-acp 0.84): only the background-task level, which says
+ * how many background agents are still running when the turn ends. An agent
+ * that does not know the key ignores it. */
+const ACP_SESSION_META = {
+  claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'background_tasks_changed' }] },
+} as const;
 
 /** What this client can show. `terminal_output`: a command's output and exit
  * code as `_meta.terminal_output` / `_meta.terminal_exit` (claude-agent-acp's
@@ -735,7 +745,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (directories.length && !capabilities.sessionCapabilities?.additionalDirectories) {
       throw new Error(`${input.command} ACP does not accept additional directories (/add-dir); remove them or start from a common parent directory`);
     }
-    const sessionParams = { cwd: input.cwd, mcpServers, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
+    const sessionParams = { cwd: input.cwd, mcpServers, _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });
@@ -1299,8 +1309,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (!target) return;
     if (method === '_session/goal') target.observer.onPhase?.('goal updated');
     else if (method === '_session/steering') target.observer.onPhase?.('message taken into the turn');
-    // `_claude/sdkMessage` (raw SDK frames) and `_claude/rateLimit` are
-    // activity only: the structured readings ride session/update's _meta.
+    // `_claude/sdkMessage` (raw SDK frames, only the ones asked for in
+    // ACP_RAW_SDK_MESSAGES) carries the background-task level; the rest and
+    // `_claude/rateLimit` are activity only: the structured readings ride
+    // session/update's _meta.
+    if (method === '_claude/sdkMessage' && params.message && typeof params.message === 'object') {
+      const count = backgroundAgentCount(params.message as Json);
+      if (count !== undefined) target.observer.onBackgroundAgents?.(count);
+    }
   }
 
   /** claude-agent-acp pushes the identity it runs as (`_auth/status_update`

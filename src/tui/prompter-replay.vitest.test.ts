@@ -66,6 +66,23 @@ describe('a reopened conversation draws the turn\'s durable marks', () => {
     expect(order.every((at, position) => at >= 0 && (position === 0 || at > order[position - 1]!))).toBe(true);
   });
 
+  it('settles the denied call\'s own row with the decision: one event is one row (standard 8)', () => {
+    const rows = reopened(turn({
+      activities: [{ event: { kind: 'tool-error', label: '$ make clean', id: 'c2', category: 'run', seq: 2 }, responseOffset: first.length }],
+      marks: [{ kind: 'outcome', id: 'outcome:ap1', seq: 3, responseOffset: first.length, outcome: 'denied', label: 'make clean', callId: 'c2' }],
+    }));
+    expect(rows.match(/make clean/g), rows).toHaveLength(1);
+    expect(rows).toContain('✗ denied make clean');
+  });
+
+  it('a decision with no call id stays a row of its own beside the call (legacy marks)', () => {
+    const rows = reopened(turn({
+      activities: [{ event: { kind: 'tool-error', label: '$ make clean', id: 'c2', category: 'run', seq: 2 }, responseOffset: first.length }],
+      marks: [{ kind: 'outcome', id: 'outcome:ap1', seq: 3, responseOffset: first.length, outcome: 'denied', label: 'make clean' }],
+    }));
+    expect(rows.match(/make clean/g)).toHaveLength(2);
+  });
+
   it('draws a legacy message with no marks exactly as before', () => {
     const withMarks = reopened(turn({ activities }));
     expect(withMarks).not.toContain('Thought for');
@@ -119,6 +136,16 @@ describe('a window joining a running turn', () => {
     });
     expect(screen.match(/Thought for 5s · Reading the parser/g)).toHaveLength(1);
     expect(screen).toContain('Switched to work');
+  });
+
+  it('a decision another window made settles the call row it names, not a second row', () => {
+    const screen = joined((rl) => {
+      rl.response('Looking at it. ', 'replace');
+      rl.activityEvent({ kind: 'tool-start', label: '$ make clean', id: 'c2', category: 'run', seq: 1 } as never, { index: 0, responseOffset: 15 });
+      rl.joinMark({ kind: 'outcome', id: 'outcome:ap1', seq: 2, responseOffset: 15, outcome: 'denied', label: 'make clean', callId: 'c2' });
+    });
+    expect(screen.match(/make clean/g), screen).toHaveLength(1);
+    expect(screen).toContain('✗ denied make clean');
   });
 
   it('draws nothing again for a row its own live path already drew', () => {

@@ -318,7 +318,7 @@ function recordDecision(tracker: WorkerTracker, event: Extract<WorkerEvent, { ty
   const id = `outcome:${event.id}`;
   const existing = tracker.marks.find((mark) => mark.id === id);
   if (existing) return undefined;
-  const mark: TurnMark = { kind: 'outcome', id, seq: 0, responseOffset: tracker.liveText.length, outcome: event.outcome, label: event.label };
+  const mark: TurnMark = { kind: 'outcome', id, seq: 0, responseOffset: tracker.liveText.length, outcome: event.outcome, label: event.label, ...(event.callId ? { callId: event.callId } : {}) };
   tracker.marks = [...tracker.marks, mark];
   tracker.unsequenced.push(id);
   return mark;
@@ -430,6 +430,9 @@ async function driveWorkerTurn(
           // far; the worker records it on the session (lastUsage) too.
           case 'usage':
             rl.setTurnUsage(event.usage);
+            return;
+          // The end line says it from the saved turn (turnEnd.pendingBackground).
+          case 'background':
             return;
           case 'approval-request': {
             const closing = new AbortController();
