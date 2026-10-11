@@ -123,6 +123,22 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (this.turn) this.cancelTurn(this.turn);
   }
 
+  /** The prompts a vendor request has open on the user's screen (an approval,
+   * a question). Each is aborted when the vendor withdraws it, the turn ends
+   * or the child goes: the prompt closes instead of outliving what asked it. */
+  private readonly openPrompts = new Set<AbortController>();
+
+  protected openPrompt(): { signal: AbortSignal; abort: () => void; release: () => void } {
+    const controller = new AbortController();
+    this.openPrompts.add(controller);
+    return { signal: controller.signal, abort: () => controller.abort(), release: () => { this.openPrompts.delete(controller); } };
+  }
+
+  protected closePrompts(): void {
+    for (const controller of this.openPrompts) controller.abort();
+    this.openPrompts.clear();
+  }
+
   async close(): Promise<void> {
     this.isClosed = true;
     if (this.turn) this.cancelTurn(this.turn);
@@ -168,6 +184,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
       throw failureError;
     } finally {
       turn.done = true;
+      this.closePrompts();
       turn.watchdog?.stop();
       signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
@@ -179,6 +196,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected cancelTurn(turn: T, reason?: unknown): void {
     if (turn.done) return;
     turn.done = true;
+    this.closePrompts();
     const live = this.live;
     const error = turnCancelledError();
     // Mid-setup there is nothing to cancel politely.
@@ -201,6 +219,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.live = undefined;
     this.finishBackground('closed');
     this.clearPending();
+    this.closePrompts();
     live.peer.rejectPending(error);
     void live.peer.shutdown();
   }

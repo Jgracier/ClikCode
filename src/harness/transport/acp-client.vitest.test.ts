@@ -365,3 +365,45 @@ describe('the models a session offers', () => {
     expect(seen).toEqual([['a', true], ['b', false]]);
   });
 });
+
+describe('session setup has no clock', () => {
+  const agent = (newDelayMs: number, dies = false) => `
+    const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
+    let buf = '';
+    process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
+      const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
+      if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
+      else if (m.method === 'session/new') setTimeout(() => { if (${dies}) process.exit(3); send({ id: m.id, result: { sessionId: 's1' } }); }, ${newDelayMs});
+      else if (m.method === 'session/prompt') {
+        send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'up' } } } });
+        send({ id: m.id, result: { stopReason: 'end_turn' } });
+      }
+    } });
+  `;
+  const turn = (script: string, extra: Record<string, unknown> = {}) => runAcpTurn({
+    binary: process.execPath, command: 'agent', argv: ['-e', script], cwd: process.cwd(), prompt: 'go', environment: {}, permissionMode: 'ask', ...extra,
+  } as never);
+
+  it('waits for a slow session/new past the old idle window', async () => {
+    const before = process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS;
+    process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS = '200';
+    try {
+      const phases: string[] = [];
+      const result = await turn(agent(700), { onPhase: (p: string) => phases.push(p) });
+      expect(result.text).toBe('up');
+    } finally {
+      if (before === undefined) delete process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS; else process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS = before;
+    }
+  });
+
+  it('a child that dies during setup rejects the turn', async () => {
+    await expect(turn(agent(50, true))).rejects.toThrow(/exited 3|closed|agent ACP/);
+  });
+
+  it('Esc rejects a setup that never answers', async () => {
+    const controller = new AbortController();
+    const pending = turn(agent(60_000), { signal: controller.signal });
+    setTimeout(() => controller.abort(), 150);
+    await expect(pending).rejects.toThrow();
+  });
+});

@@ -45,6 +45,7 @@ async function run(requests: Array<{ method: string; params: Record<string, unkn
   } finally { await codex.close(); }
 }
 
+let answersToggle = 0;
 describe('Codex server requests', () => {
   it('answers a permissions request with a GrantedPermissionProfile, not a decision', async () => {
     const permissions = { network: { enabled: true } };
@@ -71,13 +72,72 @@ describe('Codex server requests', () => {
       { method: 'account/chatgptAuthTokens/refresh', params: { reason: 'unauthorized' } },
       { method: 'attestation/generate', params: {} },
     ]);
+    // No question surface here: cancelled, said so, never invented.
     expect(answers[0]).toEqual({ answers: {} });
-    expect(answers[1]).toEqual({ action: 'decline', content: null });
+    expect(answers[1]).toEqual({ action: 'cancel', content: null });
     expect(answers[2]).toMatchObject({ success: false, contentItems: [{ type: 'inputText' }] });
     expect(answers[3].error.code).toBe(-32603);
     expect(answers[4].error.code).toBe(-32603);
     expect(JSON.stringify(answers)).not.toContain('32601');
     expect(notices.join('\n')).toContain('docs');
+    expect(notices.join('\n')).toContain('cannot show');
+  });
+
+  it('puts request_user_input to the user and answers in the schema\'s terms', async () => {
+    const seen: any[] = [];
+    const { answers } = await run([
+      { method: 'item/tool/requestUserInput', params: { itemId: 'q', isBlocking: true, questions: [
+        { id: 'db', header: 'DB', question: 'Which?', isOther: true, options: [{ label: 'pg', description: 'Postgres' }, { label: 'my', description: 'MySQL' }] },
+        { id: 'tok', header: 'Token', question: 'Your token?', isSecret: true },
+      ] } },
+    ], { permissionMode: 'bypass', onQuestion: async (request: any) => { seen.push(request); return { kind: 'answered', answers: { db: ['pg'], tok: ['s3cret'] } }; } });
+    expect(answers[0]).toEqual({ answers: { db: { answers: ['pg'] }, tok: { answers: ['s3cret'] } } });
+    expect(seen[0].questions[0]).toMatchObject({ id: 'db', prompt: 'Which?', header: 'DB', allowFreeText: true, options: [{ label: 'pg', description: 'Postgres' }, { label: 'my', description: 'MySQL' }] });
+    expect(seen[0].questions[1]).toMatchObject({ id: 'tok', secret: true, allowFreeText: true, options: [] });
+  });
+
+  it('answers a dismissed question with no answers', async () => {
+    const { answers } = await run([{ method: 'item/tool/requestUserInput', params: { itemId: 'q', isBlocking: true, questions: [{ id: 'a', header: 'h', question: 'Which?' }] } }],
+      { onQuestion: async () => ({ kind: 'cancelled' }) });
+    expect(answers[0]).toEqual({ answers: {} });
+  });
+
+  it('answers an MCP form elicitation with its content, and a url elicitation with the user\'s choice', async () => {
+    const schema = { type: 'object', properties: { name: { type: 'string', title: 'Name' }, tier: { type: 'string', title: 'Tier', enum: ['free', 'pro'] }, n: { type: 'integer', title: 'Seats' }, ok: { type: 'boolean', title: 'Agree' } }, required: ['name'] };
+    const { answers } = await run([
+      { method: 'mcpServer/elicitation/request', params: { serverName: 'docs', mode: 'form', message: 'Sign up', requestedSchema: schema } },
+      { method: 'mcpServer/elicitation/request', params: { serverName: 'docs', mode: 'url', message: 'Authorize', url: 'https://example.com/auth', elicitationId: 'e1' } },
+      { method: 'mcpServer/elicitation/request', params: { serverName: 'docs', mode: 'url', message: 'Authorize', url: 'https://example.com/auth', elicitationId: 'e2' } },
+    ], {
+      onQuestion: async (request: any) => {
+        if (request.url) return { kind: 'answered', answers: { link: [request.questions[0].prompt === 'Authorize' && answersToggle++ === 0 ? 'Continue (I opened the link)' : 'Decline'] } };
+        return { kind: 'answered', answers: { name: ['Ada'], tier: ['pro'], n: ['3'], ok: ['Yes'] } };
+      },
+    });
+    expect(answers[0]).toEqual({ action: 'accept', content: { name: 'Ada', tier: 'pro', n: 3, ok: true } });
+    expect(answers[1]).toEqual({ action: 'accept', content: null });
+    expect(answers[2]).toEqual({ action: 'decline', content: null });
+  });
+
+  it('closes a question prompt when Codex resolves the request elsewhere', async () => {
+    let aborted = false;
+    const { answers } = await run(
+      [{ method: 'item/tool/requestUserInput', params: { itemId: 'q', isBlocking: true, questions: [{ id: 'a', header: 'h', question: 'Which?' }] } }],
+      { onQuestion: (_request: any, signal?: AbortSignal) => new Promise((resolve) => { signal?.addEventListener('abort', () => { aborted = true; resolve({ kind: 'cancelled' }); }); }) },
+      [{ method: 'serverRequest/resolved', params: { threadId: 'T', requestId: 100 } }],
+    );
+    expect(aborted).toBe(true);
+    expect(answers[0]).toEqual({ answers: {} });
+  });
+
+  it('gives an approval an abort signal that fires when it is resolved elsewhere', async () => {
+    let aborted = false;
+    await run(
+      [{ method: 'item/commandExecution/requestApproval', params: { itemId: 'c', command: 'make' } }],
+      { onApproval: (_t: string, _d: unknown, _p: unknown, signal?: AbortSignal) => new Promise<boolean>((resolve) => { signal?.addEventListener('abort', () => { aborted = true; resolve(false); }); }) },
+      [{ method: 'serverRequest/resolved', params: { threadId: 'T', requestId: 100 } }],
+    );
+    expect(aborted).toBe(true);
   });
 
   it('ends the wait for an approval answered elsewhere', async () => {

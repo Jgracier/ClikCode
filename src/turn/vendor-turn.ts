@@ -450,7 +450,10 @@ export async function sendVendorTurn(input: {
     // remember on its behalf -- and with no rule offered the prompter never
     // returns 'always' anyway. Collapsed to a boolean here so that boundary
     // is stated rather than implied.
-    onApproval: async (title: string, detail?: string, preview?: ApprovalPreview) => (await prompter?.approval(title, detail, preview)) === true,
+    onApproval: async (title: string, detail?: string, preview?: ApprovalPreview, signal?: AbortSignal) => (await prompter?.approval(title, detail, preview, undefined, signal)) === true,
+    // Only where the screen can ask: a missing member is how a transport
+    // learns to cancel the question with a notice instead of hanging on it.
+    ...(prompter?.askQuestions ? { onQuestion: (request, signal) => prompter.askQuestions!(request, signal) } : {}),
     onAvailableCommands: (commands: readonly HarnessAvailableCommand[]) => { nativeAvailableCommands.set(session.id, commands); },
   } satisfies HarnessTurnObserver;
   let activeTransport: ReturnType<typeof sessionTurnTransport> | undefined;
