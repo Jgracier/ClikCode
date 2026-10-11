@@ -217,7 +217,7 @@ async function storeKey(
   const found = await keyVariableFor(harness, key, signal);
   if (!found) throw new Error(`${harness.displayName} does not accept that key -- check it was copied whole`);
   if (harness.loginKeyStdinArgv) {
-    await captureNativeHarnessOutput(spec, harness.loginKeyStdinArgv, env, 30_000, undefined, `${key}\n`);
+    await captureNativeHarnessOutput(spec, harness.loginKeyStdinArgv, env, undefined, undefined, `${key}\n`);
     return;
   }
   const profile = harness.profileEnv ? env[harness.profileEnv] : undefined;
@@ -247,7 +247,7 @@ async function signInWithKey(
   spec: NativeHarnessSpec, command: NonNullable<NativeHarnessSpec['loginKeyCommand']>,
   env: Readonly<Record<string, string>>, screen: SignInScreen, routed?: { provider: string; key: string },
 ): Promise<void> {
-  const set = (provider: string, key: string) => captureNativeHarnessOutput(spec, command.setArgv.map((part) => part.replace('{provider}', provider)), env, 30_000, undefined, `${key}\n`);
+  const set = (provider: string, key: string) => captureNativeHarnessOutput(spec, command.setArgv.map((part) => part.replace('{provider}', provider)), env, undefined, undefined, `${key}\n`);
   if (routed) { await set(routed.provider, routed.key); return; }
   const cancelled = (): Error => new Error(`sign-in to ${spec.displayName} was cancelled`);
   const listed = await captureNativeHarnessOutput(spec, command.providersArgv, env);
@@ -365,12 +365,12 @@ async function acceptsKey(
   const auth = provider?.header ? { [provider.header]: key } : { authorization: `Bearer ${key}` };
   try {
     const response = provider
-      ? await fetch(provider.probe, { headers: { ...auth, ...provider.headers }, signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]) })
+      ? await fetch(provider.probe, { headers: { ...auth, ...provider.headers }, signal })
       : await fetch((route as { url: string }).url, {
         method: 'POST',
         headers: { ...auth, 'content-type': 'application/json' },
         body: JSON.stringify({ model: 'probe', messages: [] }),
-        signal: AbortSignal.any([signal, AbortSignal.timeout(15_000)]),
+        signal,
       });
     await response.body?.cancel();
     return provider ? response.ok : response.status !== 401 && response.status !== 403;

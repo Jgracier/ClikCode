@@ -13,6 +13,6 @@ export async function nativeManagerListing(state: HarnessState, session: Harness
   if (!manager) throw new Error(`${harness.displayName} does not publish a ${name} manager.`);
   if (!manager.listArgv) throw new Error(`${harness.displayName} manages ${manager.label} only in its own interactive UI; open it from the interactive ClikCode session.`);
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  const text = await captureNativeHarnessOutput(harness, manager.listArgv, turnEnvironment(harness, account), 15_000, session.workspace);
+  const text = await captureNativeHarnessOutput(harness, manager.listArgv, turnEnvironment(harness, account), undefined, session.workspace);
   return { label: manager.label, text: text.trim() || 'No entries.' };
 }
