@@ -125,3 +125,79 @@ describe('the worker\'s seq is the order (X3)', () => {
     expect(marks.map((mark) => mark.activity?.key ?? (mark.thought ? 'thought' : 'steer'))).toEqual(['a', 'thought', 'steer', 'b']);
   });
 });
+
+describe('a window that attaches mid-turn draws what the worker holds (X4)', () => {
+  const snapshot = (live: Record<string, unknown>, pendingTurn: Record<string, unknown> = {}): IdeEvent => worker({
+    type: 'snapshot', session: session({ pendingTurn: { prompt: 'hi', startedAt: '', ...pendingTurn } as never }),
+    live: { text: 'abcdefgh', waitingLabel: 'thinking', ...live },
+  });
+  const thoughtMark = { kind: 'thought', id: 'thought:r1', seq: 3, responseOffset: 2, durationMs: 4_200, heading: 'Reading the parser', text: 'looking at it' };
+  const joined = (live: Record<string, unknown>): ChatModel => run([snapshot(live)], begin());
+
+  it('shows the open thought', () => {
+    const model = joined({ thought: { id: 'r2', text: 'weighing the options', seq: 5, responseOffset: 4, startedAt: 1_000 } });
+    expect(model.live!.thought).toEqual({ id: 'r2', text: 'weighing the options' });
+    expect(model.live!.thoughtStart).toEqual({ offset: 4, at: 1_000, seq: 5 });
+  });
+
+  it('shows settled thoughts with their heading and duration, in the worker\'s order', () => {
+    const model = joined({ marks: [thoughtMark] });
+    expect(model.live!.reasoning).toEqual([{ text: 'looking at it', heading: 'Reading the parser', offset: 2, ms: 4_200, seq: 3 }]);
+  });
+
+  it('puts the plan where the worker says it first appeared', () => {
+    const model = joined({ marks: [{ kind: 'plan', id: 'plan', seq: 4, responseOffset: 5, entries: [{ content: 'one', status: 'in_progress' }] }] });
+    expect(model.live!.planAt).toEqual({ offset: 5, seq: 4 });
+    expect(model.plan).toEqual([{ content: 'one', status: 'in_progress' }]);
+  });
+
+  it('shows notices at their offsets, once however many snapshots come', () => {
+    const notice = { kind: 'notice', id: 'notice:6', seq: 6, responseOffset: 3, message: 'Switched to work' };
+    const model = run([snapshot({ marks: [notice] }), snapshot({ marks: [notice] })], begin());
+    expect(model.notes.filter((note) => note.text === 'Switched to work')).toHaveLength(1);
+    expect(model.notes[0]).toMatchObject({ turn: 0, offset: 3, seq: 6 });
+  });
+
+  it('is not a second copy of a notice the window already watched arrive', () => {
+    const model = run([
+      delta('abc'), worker({ type: 'note', message: 'Switched to work', seq: 6, responseOffset: 3 }),
+      snapshot({ marks: [{ kind: 'notice', id: 'notice:6', seq: 6, responseOffset: 3, message: 'Switched to work' }] }),
+    ], begin());
+    expect(model.notes).toHaveLength(1);
+  });
+
+  it('takes the worker\'s duration for a thought the window also held, keeping its longer text', () => {
+    const model = run([
+      activity({ kind: 'thinking', id: 'r1', label: 'looking at it and then some more words', seq: 3 }),
+      activity({ kind: 'tool-start', id: 't', label: 'Read a.ts', category: 'read', seq: 4 }),
+      snapshot({ marks: [thoughtMark] }),
+    ], begin());
+    expect(model.live!.reasoning).toHaveLength(1);
+    expect(model.live!.reasoning[0]).toMatchObject({ ms: 4_200, heading: 'Reading the parser', text: 'looking at it and then some more words', seq: 3 });
+  });
+
+  it('keeps what the window held when the snapshot carries none of it', () => {
+    const model = run([
+      activity({ kind: 'thinking', id: 'r1', label: 'first thought', seq: 3 }),
+      activity({ kind: 'tool-start', id: 't', label: 'Read a.ts', category: 'read', seq: 4 }),
+      snapshot({}),
+    ], begin());
+    expect(model.live!.reasoning).toHaveLength(1);
+  });
+
+  it('shows the worker\'s phase only before any answer, and never an approval wait', () => {
+    expect(joined({ text: '', phase: 'switching to claude-opus' }).live!.phase).toBe('switching to claude-opus');
+    expect(joined({ phase: 'switching to claude-opus' }).live!.phase).toBeUndefined();
+    expect(joined({ text: '', phase: 'waiting for your approval: make clean' }).live!.phase).toBeUndefined();
+  });
+
+  it('a phase event of an approval wait is not kept as the status', () => {
+    const model = run([worker({ type: 'phase', message: 'waiting for your approval: make clean' })], begin());
+    expect(model.live!.phase).toBeUndefined();
+  });
+
+  it('carries the usage so far', () => {
+    const model = joined({ usage: { output: 840, input: 2_000 } });
+    expect(model.turnUsage).toMatchObject({ output: 840 });
+  });
+});

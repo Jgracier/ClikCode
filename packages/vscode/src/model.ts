@@ -19,7 +19,8 @@ import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
-import { endsWithSummary } from '../../../src/harness/protocol/turn-flow';
+import { endsWithSummary, isApprovalWaitPhase, reasoningHeading, type Decision } from '../../../src/harness/protocol/turn-flow';
+import { readTurnMarks } from '../../../src/turn/turn-marks';
 import { failureLine } from '../../../src/harness/protocol/stderr-line';
 import { pendingPromptText } from '../../../src/tui/render/pending-prompt';
 
@@ -57,6 +58,9 @@ export interface Note {
   turn?: number;
   offset?: number;
   seq?: number;
+  /** The worker's mark id, so a notice that came as an event and again in a
+   * snapshot is one row. */
+  markId?: string;
 }
 
 export interface Approval {
@@ -106,7 +110,17 @@ export interface TurnTrace {
  * and its place in the order of the turn's rows. */
 export interface PlanAt { offset: number; seq: number }
 
-export interface ThoughtEntry { text: string; offset: number; ms: number; seq: number }
+export interface ThoughtEntry {
+  text: string; offset: number; ms: number; seq: number;
+  /** The model's own `**heading**`, when the worker's mark carried one (the
+   * text may be capped or absent; the heading and the duration are not). */
+  heading?: string;
+}
+
+/** What the user decided at an approval or question, where it was asked
+ * (standard 8): drawn as a settled row, or on the call's own row when the
+ * vendor named the call (`callId`). */
+export interface DecisionEntry { id: string; decision: Decision; offset: number; seq: number; callId?: string }
 
 export interface LiveTurn {
   text: string;
@@ -131,6 +145,8 @@ export interface LiveTurn {
   steers: Array<{ text: string; offset: number; seq?: number }>;
   /** Where the turn's plan first appeared. */
   planAt?: PlanAt;
+  /** The approvals and questions of this turn the user has settled. */
+  decisions?: DecisionEntry[];
   startedAt: number;
   /** When the model last went back to thinking -- the turn began, or its
    * last open call closed. Not moved by the answer's deltas. */
@@ -231,6 +247,97 @@ export interface ChatModel {
  * compares them). */
 function stampAfter(other: number | undefined): number {
   return Math.max(Date.now(), (other ?? Number.NEGATIVE_INFINITY) + 1);
+}
+
+/** A turn's durable marks (what a snapshot carries as `live.marks`, a saved
+ * answer as `marks`) as the rows this window draws. Anything malformed is
+ * skipped (readTurnMarks). */
+export interface MarkRows {
+  reasoning: ThoughtEntry[];
+  plan?: { entries: ChatModel['plan']; at: PlanAt };
+  notices: Array<{ id: string; text: string; offset: number; seq: number }>;
+  decisions: DecisionEntry[];
+}
+
+export function marksToRows(value: unknown): MarkRows {
+  const rows: MarkRows = { reasoning: [], notices: [], decisions: [] };
+  for (const mark of readTurnMarks(value)) {
+    switch (mark.kind) {
+      case 'thought':
+        rows.reasoning.push({
+          text: mark.text ? stripAnsi(mark.text) : '', offset: mark.responseOffset, ms: mark.durationMs, seq: mark.seq,
+          ...(mark.heading ? { heading: stripAnsi(mark.heading) } : {}),
+        });
+        break;
+      case 'plan':
+        rows.plan = {
+          entries: mark.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })),
+          at: { offset: mark.responseOffset, seq: mark.seq },
+        };
+        break;
+      case 'notice':
+        rows.notices.push({ id: mark.id, text: stripAnsi(mark.message), offset: mark.responseOffset, seq: mark.seq });
+        break;
+      case 'outcome': {
+        const label = stripAnsi(mark.label);
+        rows.decisions.push({
+          id: mark.id, offset: mark.responseOffset, seq: mark.seq,
+          decision: mark.outcome === 'approved' ? { kind: 'approved', label } : mark.outcome === 'answered' ? { kind: 'answered', label } : { kind: 'denied', label },
+        });
+        break;
+      }
+    }
+  }
+  return rows;
+}
+
+/** The worker's settled thoughts into the window's own. A row both hold is
+ * one (same seq): the worker's duration, heading and place are authoritative,
+ * and the window keeps its own text when it is longer (the worker's is
+ * capped). Rows only one of them has stay. */
+function mergeReasoning(held: ThoughtEntry[], incoming: ThoughtEntry[]): ThoughtEntry[] {
+  if (!incoming.length) return held;
+  const merged = [...held];
+  for (const entry of incoming) {
+    const at = merged.findIndex((item) => item.seq === entry.seq);
+    if (at < 0) { merged.push(entry); continue; }
+    const prior = merged[at]!;
+    merged[at] = {
+      ...prior, ...entry, text: prior.text.length > entry.text.length ? prior.text : entry.text,
+      ...(entry.heading || prior.heading ? { heading: entry.heading ?? prior.heading! } : {}),
+    };
+  }
+  return merged;
+}
+
+function mergeDecisions(held: DecisionEntry[] | undefined, incoming: DecisionEntry[]): DecisionEntry[] | undefined {
+  if (!incoming.length) return held;
+  const merged = [...(held ?? [])];
+  for (const entry of incoming) {
+    const at = merged.findIndex((item) => item.id === entry.id);
+    if (at < 0) merged.push(entry);
+    else merged[at] = { ...merged[at]!, ...entry };
+  }
+  return merged;
+}
+
+/** The thought the worker is having now, as this window continues it. What
+ * the window holds wins when it is the same thought or a newer one; a thought
+ * the window never saw begin takes the worker's place and start time, and what
+ * the window held is settled where it was. A thought already settled (a row
+ * of the turn) is never reopened. */
+function withWorkerThought(live: LiveTurn, open: { id?: string; text: string; seq: number; responseOffset: number; startedAt: number } | undefined): LiveTurn {
+  if (!open || !open.text.trim() || live.reasoning.some((entry) => entry.seq === open.seq)) return live;
+  const held = live.thoughtStart;
+  if (live.thought && held && held.seq >= open.seq) {
+    return held.seq === open.seq && open.text.length > live.thought.text.length
+      ? { ...live, thought: { ...live.thought, text: stripAnsi(open.text) } } : live;
+  }
+  const before = live.thought ? settled(live) : live;
+  return {
+    ...before, thought: { ...(open.id === undefined ? {} : { id: open.id }), text: stripAnsi(open.text) },
+    thoughtStart: { offset: open.responseOffset, at: open.startedAt, seq: open.seq }, seen: Math.max(before.seen, open.seq),
+  };
 }
 
 /** A row's place in the turn's order (standard 1.2): the worker's `seq` where
@@ -589,6 +696,18 @@ function turnReasoning(live: LiveTurn | undefined): ThoughtEntry[] | undefined {
   return kept.length ? kept : undefined;
 }
 
+/** The turn's notices the worker kept, added to the window's own as notes at
+ * their offsets. One the window already has -- the same mark, the same seq, or
+ * the same words at the same place -- is not added again. */
+function withNoticeMarks(notes: Note[], turn: number, notices: MarkRows['notices']): Note[] {
+  const fresh = notices.filter((notice) => !notes.some((note) => note.turn === turn
+    && (note.markId === notice.id || note.seq === notice.seq || (note.text === notice.text && note.offset === notice.offset))));
+  if (!fresh.length) return notes;
+  return [...notes, ...fresh.map((notice): Note => ({
+    kind: 'notice', level: noticeLevel(notice.text), text: notice.text, after: turn + 1, turn, offset: notice.offset, seq: notice.seq, markId: notice.id,
+  }))].slice(-MAX_NOTES);
+}
+
 export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
   if (model.sessionId && sessionId !== model.sessionId) return model;
   switch (event.type) {
@@ -609,11 +728,22 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const replayed = event.live.activities
         ? event.live.activities.reduce<LiveTurn>((live, item) => withToolPhase(upsertActivity(live, item.event, item.responseOffset), item.event), base)
         : base;
+      // What the worker holds that a window cannot have seen: its settled
+      // thoughts, the plan, the notices and decisions in their own order, and
+      // the thought being had. The worker's rows are authoritative for the
+      // rows they carry; what only this window held stays.
+      const rows = marksToRows(event.live.marks);
+      const folded = withWorkerThought({
+        ...replayed, reasoning: mergeReasoning(replayed.reasoning, rows.reasoning),
+        ...(mergeDecisions(replayed.decisions, rows.decisions) ? { decisions: mergeDecisions(replayed.decisions, rows.decisions)! } : {}),
+        ...(rows.plan ? { planAt: rows.plan.at } : {}),
+        seen: Math.max(replayed.seen, ...rows.reasoning.map((entry) => entry.seq), ...rows.decisions.map((entry) => entry.seq), rows.plan?.at.seq ?? 0, ...rows.notices.map((entry) => entry.seq)),
+      }, event.live.thought);
       // Steers are the turn's own record, so every window shows them.
       // Each takes its place in the order when it was acknowledged: the
       // worker's `seq` where it sends one, else the order this window first
       // saw it in (the earlier window's, kept).
-      let seen = replayed.seen;
+      let seen = folded.seen;
       const held = model.live?.steers ?? [];
       const steers = (event.session.pendingTurn?.steers ?? []).map((steer, index) => {
         const given = (steer as { seq?: number }).seq;
@@ -626,21 +756,30 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // before). `planOffset` is read defensively: a worker that records it
       // sends where it really was.
       const planOffset = (event.live as { planOffset?: number }).planOffset;
-      const planAt = replayed.planAt ?? (event.live.plan?.length ? { offset: planOffset ?? 0, seq: ++seen } : undefined);
+      const planAt = folded.planAt ?? (event.live.plan?.length ? { offset: planOffset ?? 0, seq: ++seen } : undefined);
       // Joined mid-answer: text that came after the turn's last call is
       // being written; the window did not see it arrive, so it says so now.
-      const lastCall = replayed.activities.reduce((last, item) => Math.max(last, item.offset ?? 0), 0);
+      const lastCall = folded.activities.reduce((last, item) => Math.max(last, item.offset ?? 0), 0);
       const answering = event.live.text.length > 0 && event.live.text.length > lastCall;
       const grew = event.live.text.length > (model.live?.text.length ?? 0);
-      const writing = answering && (replayed.writingAt === undefined || grew) ? { writingAt: stampAfter(replayed.callAt) } : {};
+      const writing = answering && (folded.writingAt === undefined || grew) ? { writingAt: stampAfter(folded.callAt) } : {};
+      // The turn's phase, only while it has not begun to answer, and never the
+      // adapters' "waiting for your approval" (stale once it is answered).
+      const reported = event.live.phase ? stripAnsi(event.live.phase) : undefined;
+      const phase = folded.phase ?? (reported && !event.live.text && !isApprovalWaitPhase(reported) ? reported : undefined);
+      const turnIndex = next.turnUserIndex ?? next.messages.length;
       return {
         ...next,
         running: true,
-        turnUserIndex: next.turnUserIndex ?? next.messages.length,
+        turnUserIndex: turnIndex,
+        notes: withNoticeMarks(next.notes, turnIndex, rows.notices),
         live: {
-          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}), ...writing,
+          ...folded, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}), ...writing,
+          ...(phase ? { phase } : {}),
         },
-        ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
+        ...(event.live.usage ? { turnUsage: { ...event.live.usage, ...next.turnUsage } } : {}),
+        ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) }
+          : rows.plan && !next.plan.length ? { plan: rows.plan.entries } : {}),
       };
     }
     case 'waiting-start':
@@ -673,7 +812,9 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return { ...model, live: { ...applyActivity(withoutPhase(live), event.event), activeAt: Date.now() } };
     }
     case 'phase':
-      return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
+      // The adapters' own "waiting for your approval" is what the approval
+      // card says; kept as the status it would outlast the answer.
+      return model.live && !isApprovalWaitPhase(event.message) ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
     case 'plan': {
       const plan = event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) }));
       // One plan row per turn: placed where it first appeared, updated in place.
