@@ -8,7 +8,7 @@ import {
   outputPreview, previewLinesFor, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
-import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
+import { activityResult, exploreRuns, exploreSummary, tensedLabel } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
 import { useNow, useSpinFrame } from './clock';
@@ -27,7 +27,7 @@ import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon, Spinner } from './ui';
-import { foldedGroupCount, foldedSummary, workingStatus } from './flow';
+import { foldedGroupCount, foldedSummary, traceSummaryLine, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
@@ -420,17 +420,14 @@ function TurnFlow(props: {
  * Cursor's files edited), and, when it changed files, all of them to review
  * at once or undo together. */
 function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element | null {
-  // A stopped turn always says so where it ends; "Stopped" is otherwise
-  // only a passing notice.
-  if (!trace.stopped && !endsWithSummary(trace.endedAt - trace.startedAt, trace.activities.length)) return null;
   const diffs = trace.activities.flatMap((activity) => (activity.kind === 'tool-done' && activity.diff?.length ? [activity.diff] : []));
   const changed = diffs.some((diff) => diff.some((file) => file.path));
+  const line = traceSummaryLine(trace, diffs);
+  if (line === undefined) return null;
   const act = (action: 'view' | 'revert') => (): void => post({ type: 'turnChanges', action, userIndex: trace.userIndex });
   return (
     <div class="turn-summary">
-      {/* A reopened turn's trace has no clock of its own: a stopped one
-          says only that, never a made-up "after 1s". */}
-      <span class="muted">{trace.stopped && !trace.endedAt ? 'Stopped' : turnSummary({ ms: trace.endedAt - trace.startedAt, diffs, ...(trace.stopped ? { stopped: true } : {}) })}</span>
+      <span class="muted">{line}</span>
       {changed ? (
         <>
           <button type="button" class="link small" data-turn-changes="view" title="Open every change this turn made in the diff editor" onClick={act('view')}><Icon name="diff-multiple" />Review changes</button>
