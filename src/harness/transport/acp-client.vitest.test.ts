@@ -333,7 +333,7 @@ describe('an agent that is retrying a rate-limited call', () => {
     });
     // Never takes the echoed prompt as the answer.
     expect(result.text).toBe('PONG');
-    expect(phases).toEqual(['vibe is retrying (HTTP 429)']);
+    expect(phases).toEqual(['vibe is retrying (rate limited: HTTP 429), attempt 1']);
   });
 });
 
