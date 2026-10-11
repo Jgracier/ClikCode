@@ -134,3 +134,24 @@ describe('how a turn reads', () => {
     expect(isApprovalWaitPhase(undefined)).toBe(false);
   });
 });
+
+import { categoryOf, toolLabel } from './tools.js';
+import { explores } from './turn-flow.js';
+
+describe('a list call is an explore-group member (standard section 6)', () => {
+  it.each(['list', 'List', 'list_directory', 'listDirectory', 'ls', 'list_files', 'read_dir'])('%s classifies as a looking-around call', (name) => {
+    const { category } = categoryOf(name, { path: 'src' });
+    expect(category).toBe('search');
+    expect(explores({ category, kind: 'tool-done' })).toBe(true);
+  });
+
+  it('one run of Read, Grep, Glob and List is one group', () => {
+    const rows = ['Read', 'Grep', 'Glob', 'list_directory'].map((name) => ({
+      kind: 'tool-done' as const, ...categoryOf(name, name === 'Grep' ? { pattern: 'x' } : { path: 'a' }), label: toolLabel(name, { path: 'a' }),
+    }));
+    const groups = exploreRuns(rows);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.explore).toBe(true);
+    expect(groups[0]!.rows).toHaveLength(4);
+  });
+});

@@ -117,7 +117,7 @@ export type WorkerEvent =
   /** `seq`/`responseOffset`: where the plan row began (it updates in place). */
   | { type: 'plan'; entries: readonly PlanEntry[]; seq?: number; responseOffset?: number }
   | { type: 'usage'; usage: TurnUsage }
-  | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string; seq?: number; responseOffset?: number }
+  | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string; callId?: string; seq?: number; responseOffset?: number }
   /** A harness asks the user a question (options, several questions, free
    * text); answered with `question-response`. */
   | { type: 'question-request'; id: string; request: HarnessQuestionRequest; seq?: number; responseOffset?: number }

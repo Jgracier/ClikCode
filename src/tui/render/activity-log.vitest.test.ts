@@ -80,3 +80,48 @@ describe('the activity log', () => {
     expect(transientAssistantRequired('', true, 3, [])).toBe(false);
   });
 });
+
+describe('a decision settles the call it was about (standard section 8)', () => {
+  const plain = (text: string): string => text.replace(/\u001b\[[0-9;]*m/g, '');
+  const rows = (entries: readonly { lines: string[] }[]): string[] => entries.flatMap((entry) => entry.lines.map(plain));
+  const call = { kind: 'tool-start' as const, id: 'ap1', label: 'rm -rf build', category: 'run' as const };
+
+  it('turns the call row itself into the denied row, and the vendor\'s failure does not bring it back', async () => {
+    const { settleDecisionEntry } = await import('./activity-log');
+    let entries = upsertActivityEvent([], 1, 10, call, 1);
+    entries = settleDecisionEntry(entries, { anchor: 1, responseOffset: 30, sequence: 2, callId: 'ap1', decision: { kind: 'denied', label: 'rm -rf build' } });
+    expect(entries).toHaveLength(1);
+    expect(rows(entries)).toEqual(['✗ denied rm -rf build']);
+    // Placed where the call began, not where it was decided.
+    expect(entries[0]).toMatchObject({ responseOffset: 10, sequence: 1 });
+    entries = upsertActivityEvent(entries, 1, 40, { kind: 'tool-error', id: 'ap1', label: 'rm -rf build', output: ['[rejected by user]'] }, 3);
+    expect(entries).toHaveLength(1);
+    expect(rows(entries)).toEqual(['✗ denied rm -rf build']);
+  });
+
+  it('says approved once, on the call that then runs', async () => {
+    const { settleDecisionEntry } = await import('./activity-log');
+    let entries = upsertActivityEvent([], 1, 10, call, 1);
+    entries = settleDecisionEntry(entries, { anchor: 1, responseOffset: 30, sequence: 2, callId: 'ap1', decision: { kind: 'approved', label: 'rm -rf build' } });
+    entries = upsertActivityEvent(entries, 1, 40, { kind: 'tool-done', id: 'ap1', label: 'rm -rf build', category: 'run' }, 3);
+    expect(entries).toHaveLength(1);
+    const text = rows(entries).join('\n');
+    expect(text.match(/approved/g)).toHaveLength(1);
+    expect(text).toContain('rm -rf build');
+  });
+
+  it('stands alone when nothing was reported for the call, and absorbs a later frame of it', async () => {
+    const { settleDecisionEntry } = await import('./activity-log');
+    let entries = settleDecisionEntry([], { anchor: 1, responseOffset: 30, sequence: 2, callId: 'ap1', decision: { kind: 'denied', label: 'rm -rf build' } });
+    expect(rows(entries)).toEqual(['✗ denied rm -rf build']);
+    expect(entries[0]!.event).toBeUndefined();
+    entries = upsertActivityEvent(entries, 1, 40, { kind: 'tool-error', id: 'ap1', label: 'rm -rf build' }, 3);
+    expect(rows(entries)).toEqual(['✗ denied rm -rf build']);
+  });
+
+  it('with no call id adds its own row', async () => {
+    const { settleDecisionEntry } = await import('./activity-log');
+    const entries = settleDecisionEntry([], { anchor: 1, responseOffset: 5, sequence: 1, decision: { kind: 'told', text: 'use pnpm' } });
+    expect(rows(entries)).toEqual(['↳ told: use pnpm']);
+  });
+});

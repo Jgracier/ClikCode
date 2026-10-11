@@ -1426,7 +1426,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       try {
         stream.observer.onPhase?.(`waiting for your approval: ${title}`);
         const diff = acpActivityEvent({ ...params.toolCall, sessionUpdate: 'tool_call' })?.diff;
-        accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail, diff?.length ? { diff } : undefined, prompt.signal) === true;
+        accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail, diff?.length ? { diff } : undefined, prompt.signal, callId) === true;
       } finally {
         if (id !== undefined) this.requestPrompts.delete(String(id));
         prompt.release();

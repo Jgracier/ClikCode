@@ -51,7 +51,8 @@ export function activityResult(event: Pick<HarnessActivityEvent, 'kind' | 'label
   return plural(lines, 'match', 'matches');
 }
 
-/** Calls that only look around -- reads and searches -- are one row while a
+/** Calls that only look around -- reads, searches and directory listings (a
+ * listing is category `search`; tools.ts) -- are one row while a
  * run of them goes on, as Codex's "Explored" and Cursor's merged reads are. */
 export function explores(event: Pick<HarnessActivityEvent, 'category' | 'agent' | 'kind'>): boolean {
   return !event.agent && event.kind !== 'tool-error' && (event.category === 'read' || event.category === 'search');
@@ -96,6 +97,15 @@ export function exploreRuns<T extends Pick<HarnessActivityEvent, 'category' | 'a
 export function reasoningHeading(thought: string | undefined): string | undefined {
   const heading = thought ? /\*\*([^*\n]{3,80})\*\*/.exec(thought)?.[1]?.trim() : undefined;
   return heading || undefined;
+}
+
+/** A thought once it is over (standard section 4): `✻ Thought for 3s`, plus
+ * the model's own heading when it wrote one -- `✻ Thought for 3s · Planning
+ * the approach`. Unstyled: the terminal dims it, the webview themes it, and
+ * replay uses the same function, so a thought reads alike everywhere. */
+export function thoughtRow(thought: { durationMs: number; heading?: string }): string {
+  const heading = thought.heading?.replace(/\s+/g, ' ').trim();
+  return `✻ Thought for ${formatElapsed(Math.max(1000, thought.durationMs))}${heading ? ` · ${heading}` : ''}`;
 }
 
 /** The reasoning under the status line: without the heading the status

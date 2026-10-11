@@ -627,7 +627,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         const diff = fileChange ? fileChangeActivity(params.changes ?? params.fileChanges ?? item?.changes).diff : undefined;
         const title = permissions ? 'Approve additional permissions' : fileChange ? 'Approve file changes' : 'Approve command';
         stream.observer.onPhase?.(`waiting for your approval: ${title}`);
-        const asked = Promise.resolve(stream.observer.onApproval?.(title, codexApprovalDetail(params, item), diff?.length ? { diff } : undefined, prompt.signal));
+        const asked = Promise.resolve(stream.observer.onApproval?.(title, codexApprovalDetail(params, item), diff?.length ? { diff } : undefined, prompt.signal,
+          typeof params.itemId === 'string' ? params.itemId : undefined));
         const outcome = await Promise.race([asked, elsewhere]);
         if (outcome === 'elsewhere') return answer(false, true);
         return turn?.done ? answer(false, true) : answer(outcome === true);
