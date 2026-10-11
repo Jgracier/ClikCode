@@ -21,8 +21,8 @@ import { stateDirectory } from '../session/store/paths.js';
 import { readState } from '../session/state/read.js';
 import { accountView } from '../session/state/views.js';
 import { writeState } from '../session/state/write.js';
-import { accountUsageLabel, accountUsageReading } from '../harness/accounts/account-usage.js';
-import { accountCanTakeTurn, usageResetLabel } from '../harness/accounts/usage-reading.js';
+import { accountUsageCanBeAsked, accountUsageLabel, accountUsageReading, probeInFlight } from '../harness/accounts/account-usage.js';
+import { USAGE_RECHECK_MS, accountCanTakeTurn, usageAskedAt, usageResetLabel } from '../harness/accounts/usage-reading.js';
 import type { AiHarnessAccount, AiHarnessAuthKind, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 import { deriveAccountLabel, matchingVendorAccount, nameAccount } from '../harness/accounts/labels.js';
@@ -45,20 +45,36 @@ export function setEmitHarnessOutput(fn: EmitHarnessOutput): void { emitHarnessO
 /** What happens at an account's limit, said once with the list. */
 export const ACCOUNT_LIMIT_NOTE = 'At an account\'s usage limit, ClikCode moves the chat to another account of the same provider that has usage left (`fallbacks`), and the turn carries on. With none left, it offers another provider.';
 
+/** How long the list waits for the probes it starts before it shows what it has. */
+const ACCOUNT_LIST_PROBE_WAIT_MS = 1_500;
+
 /** Each account and what is left on it -- what a person, or an agent
  * checking accounts, wants from this list. The model catalog is long and
  * rarely the question, so it comes only with `--models`. */
 export async function aiAccountsList(options: { models?: boolean } = {}): Promise<void> {
   const state = await readState({ transcripts: [] });
   const ready = (account: AiHarnessAccount): boolean => account.status === 'ready' && accountCanTakeTurn(account);
+  // Each account's probe runs on its own, behind its own cache entry
+  // (account-usage.ts). The list shows what was last read and waits only a
+  // moment for the probes it starts: one that never answers (a vendor CLI
+  // with no clock) shows as "checking…", it never holds the list.
+  const now = Date.now();
+  const asking = state.accounts.filter((account) => account.status === 'ready' && accountUsageCanBeAsked(account)
+    && now - usageAskedAt(account) >= USAGE_RECHECK_MS);
+  await Promise.race([
+    Promise.allSettled(asking.map((account) => accountUsageReading(account, state))),
+    new Promise<void>((resolve) => { setTimeout(resolve, ACCOUNT_LIST_PROBE_WAIT_MS).unref(); }),
+  ]);
   const accounts = await Promise.all(state.accounts.map(async (account) => {
-    const reading = await accountUsageReading(account, state);
+    const reading = await accountUsageReading(account, state, { cachedOnly: true });
+    const checking = !reading && account.status === 'ready' && accountUsageCanBeAsked(account)
+      && (probeInFlight(account) || (!account.usage && now - usageAskedAt(account) < USAGE_RECHECK_MS));
     const resets = usageResetLabel(reading?.windows);
     const { models: _models, nativeProfile: _profile, ...brief } = accountView(account);
     const fallbacks = state.accounts.filter((other) => other.id !== account.id && other.provider === account.provider && ready(other)).length;
     return {
       ...(options.models ? accountView(account) : brief),
-      usage: reading?.label ?? 'not reported',
+      usage: reading?.label ?? (checking ? 'checking…' : 'not reported'),
       ...(resets ? { resets } : {}),
       canTakeTurn: ready(account),
       fallbacks,

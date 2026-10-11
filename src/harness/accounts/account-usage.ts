@@ -33,13 +33,19 @@ function probeOnce(key: string, probe: () => Promise<UsageReading | undefined>):
   return asked;
 }
 
+/** Whether this process has a probe running for the account. */
+export function probeInFlight(account: AiHarnessAccount): boolean {
+  const harness = localHarnessForProvider(account.provider);
+  return Boolean(harness) && probesInFlight.has(usageCacheKey(harness!.command, account.id, undefined));
+}
+
 /** How long a paint (footer, list) waits for a probe before showing the last
  * known reading. UI only: the probe is never cancelled. */
 const USAGE_PAINT_WAIT_MS = 3_000;
 
 /** The structured reading behind nativeUsageLabel: same caching, same sharing. */
 export async function nativeUsageReading(
-  session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
+  session: HarnessSession, state: HarnessState, options: { network?: boolean; cachedOnly?: boolean } = {},
 ): Promise<UsageReading | undefined> {
   const probe = session.nativeHarness ? NATIVE_USAGE_PROBES[session.nativeHarness] : undefined;
   // A harness that reports on its own turn stream has a usage source even with
@@ -85,6 +91,12 @@ export async function nativeUsageReading(
   const askedAt = Math.max(entry?.at ?? Number.NEGATIVE_INFINITY, account ? usageAskedAt(account) : Number.NEGATIVE_INFINITY);
   const reusable = entry && Date.now() - askedAt < USAGE_RECHECK_MS && !turnSinceReading
     && (entry.failed || usageReadingIsCurrent(entry)) ? entry : undefined;
+  // `cachedOnly`: what was last read, as long as it still describes the
+  // account, and nothing is launched -- a list that must not wait on a vendor.
+  if (options.cachedOnly) {
+    const known = entry && entry.label !== undefined && (!entry.windows?.length || usageReadingIsCurrent(entry)) ? entry : undefined;
+    return shownReading(known?.label === undefined ? undefined : { windows: known.windows ?? [], label: known.label });
+  }
   if (reusable && !options.network) {
     nativeUsageCache.set(cacheKey, reusable);
     return shownReading(reusable.label === undefined ? undefined : { windows: reusable.windows ?? [], label: reusable.label });
@@ -96,6 +108,10 @@ export async function nativeUsageReading(
     return shownReading(entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
   }
   account.usageCheckedAt = new Date().toISOString();
+  // Written before the vendor is asked, not after it answers: a probe that
+  // never answers must still be seen as asked by every other process, or each
+  // list would start another one.
+  if (probe) await writeState(state).catch(() => undefined);
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const settle = async (reading: UsageReading | undefined): Promise<UsageReading | undefined> => {
     // Carry the last known figure through a failure rather than blanking it --
@@ -172,7 +188,7 @@ export async function accountUsageLabel(
 }
 
 export async function accountUsageReading(
-  account: AiHarnessAccount, state: HarnessState, options: { network?: boolean } = {},
+  account: AiHarnessAccount, state: HarnessState, options: { network?: boolean; cachedOnly?: boolean } = {},
 ): Promise<UsageReading | undefined> {
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
@@ -200,7 +216,7 @@ export function cachedAccountUsageLabel(account: AiHarnessAccount, state: Harnes
   return Date.now() - latest.at < USAGE_RECHECK_MS ? latest.label : undefined;
 }
 
-function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
+export function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
   let command: string | undefined;
   try { command = localHarnessForProvider(account.provider)?.command; } catch { command = undefined; }
   return Boolean(command && NATIVE_USAGE_PROBES[command]);
