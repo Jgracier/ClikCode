@@ -84,4 +84,12 @@ describe('a thought once it is over', () => {
     expect(plain([thoughtRow(3400)])).toEqual(['✻ Thought for 3s']);
     expect(plain([thoughtRow(120)])).toEqual(['✻ Thought for 1s']);
   });
+
+  it('carries the model\'s own heading, from the one shared formatter', async () => {
+    const { thoughtRow } = await import('./tool-rows.js');
+    const shared = await import('../../harness/protocol/turn-flow.js');
+    expect(shared.thoughtRow({ durationMs: 3400, heading: 'Planning the approach' })).toBe('✻ Thought for 3s · Planning the approach');
+    expect(shared.thoughtRow({ durationMs: 3400 })).toBe('✻ Thought for 3s');
+    expect(plain([thoughtRow(3400, 'Planning the approach')])).toEqual(['✻ Thought for 3s · Planning the approach']);
+  });
 });

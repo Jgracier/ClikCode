@@ -5,7 +5,7 @@
  * left as the command ended). */
 
 import chalk from 'chalk';
-import { formatElapsed } from '../../harness/protocol/format.js';
+import { thoughtRow as thoughtText } from '../../harness/protocol/turn-flow.js';
 import { visibleSlice } from './width.js';
 
 /** The call's own row. `width` is the transcript's. */
@@ -22,6 +22,6 @@ export function underCallRow(line: string, width: number): string {
 /** A thought once it is over, in the turn where it was had: how long it
  * went on, as Claude Code and VS Code say it. The live row above the
  * waiting line showed its words while it was had. */
-export function thoughtRow(ms: number): string {
-  return chalk.dim(chalk.italic(`✻ Thought for ${formatElapsed(Math.max(1000, ms))}`));
+export function thoughtRow(ms: number, heading?: string): string {
+  return chalk.dim(chalk.italic(thoughtText({ durationMs: ms, ...(heading ? { heading } : {}) })));
 }

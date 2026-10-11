@@ -21,6 +21,8 @@ export type ApprovalPreview = {
  *  would remember it. */
 export type ApprovalRequest = {
   title: string; detail?: string; preview?: ApprovalPreview; rule?: string;
+  /** The vendor's id of the call this asks about (see settleDecisionEntry). */
+  callId?: string;
   resolve: (accepted: boolean | 'always') => void;
   /** Set when this is a harness's question (question-block.ts) rather than a
    * yes or no: it is drawn and keyed as one, and shares the queue so a

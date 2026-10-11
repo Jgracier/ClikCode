@@ -347,13 +347,54 @@ describe('parallel calls keep the order they started in', () => {
     expect(step.finished).toEqual(['done early', 'done late']);
   });
 
-  it('lets a running sub-agent stay open without holding later calls back', () => {
+  // Changed (standard 1.3/1.4/5): these two asserted that an open agent row
+  // never holds anything, which is the bug -- prose and calls that began after
+  // it were retired above it. It gates like any call, within a bound.
+  it('keeps what began after a running sub-agent below it, in start order', () => {
     const step = new TurnTranscript().advance({
       content: '', tools: [t('agent', false, 0, { seq: 1, agent: true }), t('Y', true, 0, { seq: 2 })],
       turnEnded: false, renderBlocks: text,
     });
-    expect(step.finished).toEqual(['done Y']);
-    expect(step.live).toEqual(['run agent']);
+    expect(step.finished).toEqual([]);
+    expect(step.live).toEqual(['run agent', 'done Y']);
+  });
+
+  it('releases a running sub-agent as a running line, then what it held, when that would not fit', () => {
+    const agent = t('agent', false, 0, { seq: 1, agent: true, released: ['agent · running'], completed: ['✓ agent (3 tool uses)'] });
+    const transcript = new TurnTranscript();
+    const step = transcript.advance({
+      content: '', tools: [agent, t('X', true, 0, { seq: 2 }), t('Y', true, 0, { seq: 3 })],
+      turnEnded: false, renderBlocks: text, agentHoldRows: 1,
+    });
+    expect(step.finished).toEqual(['agent · running', 'done X', 'done Y']);
+    expect(step.live).toEqual([]);
+    // Still running: nothing is drawn again.
+    const same = transcript.advance({ content: '', tools: [agent, t('X', true, 0, { seq: 2 })], turnEnded: false, renderBlocks: text, agentHoldRows: 1 });
+    expect(same.finished).toEqual([]);
+    // Settled: one completion row, appended where it settled.
+    const done = transcript.advance({
+      content: '', tools: [{ ...agent, done: true }, t('X', true, 0, { seq: 2 })], turnEnded: false, renderBlocks: text, agentHoldRows: 1,
+    });
+    expect(done.finished).toEqual(['✓ agent (3 tool uses)']);
+  });
+
+  it('settles a sub-agent in place when nothing was written under it', () => {
+    const transcript = new TurnTranscript();
+    const agent = t('A', false, 0, { seq: 1, agent: true, released: ['A · running'], completed: ['✓ A'] });
+    expect(transcript.advance({ content: '', tools: [agent], turnEnded: false, renderBlocks: text, agentHoldRows: 1 }).finished).toEqual([]);
+    const done = transcript.advance({ content: '', tools: [{ ...agent, done: true, lines: ['done A'] }], turnEnded: false, renderBlocks: text, agentHoldRows: 1 });
+    expect(done.finished).toEqual(['done A']);
+  });
+
+  it('names a released agent over its live children', () => {
+    const agent = t('A', false, 0, { seq: 1, agent: true, released: ['A · running'], childHeader: ['  ↳ A'] });
+    const child = (id: string, seq: number) => ({ id, done: false, nested: true, parent: 'A', responseOffset: 0, seq, lines: [`    ${id}`] });
+    const step = new TurnTranscript().advance({
+      content: '', tools: [agent, t('X', true, 0, { seq: 2 }), t('Y', true, 0, { seq: 3 }), child('c1', 4), child('c2', 5)],
+      turnEnded: false, renderBlocks: text, agentHoldRows: 1,
+    });
+    expect(step.finished).toEqual(['A · running', 'done X', 'done Y']);
+    expect(step.live).toEqual(['  ↳ A', '    c1', '    c2']);
   });
 
   it('retires everything at the end of the turn, running or not', () => {
@@ -375,11 +416,15 @@ describe('parallel calls keep the order they started in', () => {
     expect(second.live).toEqual(['Tail']);
   });
 
-  it('does not hold prose behind a running sub-agent', () => {
-    const step = new TurnTranscript().advance({
-      content: 'Go.\n\nWhile it runs.\n\nTail', tools: [t('A', false, 3, { agent: true, seq: 1 })], turnEnded: false, renderBlocks: text,
-    });
-    expect(step.finished).toEqual(['Go.', 'While it runs.']);
+  it('holds prose behind a running sub-agent while that fits, and retires it in order when it does not', () => {
+    const content = 'Go.\n\nWhile it runs.\n\nTail';
+    const agent = t('A', false, 3, { agent: true, seq: 1, released: ['A · running'] });
+    const fits = new TurnTranscript().advance({ content, tools: [agent], turnEnded: false, renderBlocks: text, agentHoldRows: 5 });
+    expect(fits.finished).toEqual(['Go.']);
+    expect(fits.live).toEqual(['run A', 'While it runs.', 'Tail']);
+    const over = new TurnTranscript().advance({ content, tools: [agent], turnEnded: false, renderBlocks: text, agentHoldRows: 1 });
+    expect(over.finished).toEqual(['Go.', 'A · running', 'While it runs.']);
+    expect(over.live).toEqual(['Tail']);
   });
 });
 

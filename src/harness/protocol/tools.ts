@@ -126,7 +126,7 @@ const TOOL_NAME_CATEGORIES: ReadonlyArray<readonly [ToolCategory, RegExp]> = [
   ['edit', /^(edit|write|patch|applypatch|strreplace|strreplaceeditor|multiedit|createfile|updatefile|writefile|filewrite|notebookedit|insert|append)$/],
   ['read', /^(read|view|open|cat|readfile|getfile|fileread|viewfile|openfile|notebookread)$/],
   ['run', /^(bash|sh|shell|exec|execute|run|runcommand|runterminalcmd|terminal|command|process|localshell)$/],
-  ['search', /^(grep|glob|find|search|rg|ripgrep|listdir|ls|listfiles|codebasesearch|filesearch|searchfiles|findfiles|todoread)$/],
+  ['search', /^(grep|glob|find|search|rg|ripgrep|listdir|listdirectory|listdirectories|listfolder|readdir|list|ls|listfiles|codebasesearch|filesearch|searchfiles|findfiles|todoread)$/],
   ['fetch', /^(fetch|request|download)$/],
 ];
 

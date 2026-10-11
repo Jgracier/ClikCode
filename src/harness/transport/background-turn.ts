@@ -85,10 +85,10 @@ export class BackgroundTurnChannel implements VendorBackgroundTurn {
       onAvailableCommands: (commands) => forward((observer) => observer.onAvailableCommands?.(commands)),
       // A vendor turn nobody is watching yet still gets its answer once the
       // owner attaches; an owner with no approval surface refuses.
-      onApproval: (title, detail, preview, signal) => new Promise<boolean>((resolve) => {
+      onApproval: (title, detail, preview, signal, callId) => new Promise<boolean>((resolve) => {
         if (this.settled || signal?.aborted) return resolve(false);
         const ask: Call = (observer) => {
-          const answer = observer.onApproval?.(title, detail, preview, signal);
+          const answer = observer.onApproval?.(title, detail, preview, signal, callId);
           if (!answer) return resolve(false);
           answer.then((accepted) => resolve(accepted === true), () => resolve(false));
         };

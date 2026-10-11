@@ -338,7 +338,7 @@ export class BroadcastObserver implements TurnObserver {
     this.broadcast({ type: 'usage', usage });
   }
 
-  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal): Promise<boolean | 'always'> {
+  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<boolean | 'always'> {
     const id = randomUUID();
     if (signal?.aborted) return Promise.resolve(false);
     // Withdrawn by the vendor, not decided by the user: no outcome row.
@@ -346,6 +346,7 @@ export class BroadcastObserver implements TurnObserver {
     const place = this.placeOf(title);
     const event: WorkerEvent = {
       type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}),
+      ...(callId ? { callId } : {}),
       ...(place ? { seq: place.seq, responseOffset: place.responseOffset } : {}),
     };
     return new Promise((resolveApproval) => {

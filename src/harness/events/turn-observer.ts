@@ -76,7 +76,10 @@ export interface HarnessTurnObserver {
   /** A tool or command needing a yes or no before it runs. `signal` aborts
    * when the vendor withdraws the request (answered elsewhere, the turn
    * ended): the prompt closes and the promise settles `false`. */
-  onApproval?: (title: string, detail?: string, preview?: import('../../tui/render/approval-block.js').ApprovalPreview, signal?: AbortSignal) => Promise<boolean>;
+  onApproval?: (title: string, detail?: string, preview?: import('../../tui/render/approval-block.js').ApprovalPreview, signal?: AbortSignal,
+    /** The vendor's id of the call being asked about, where it has one: the
+     * decision settles that call's row instead of adding a second. */
+    callId?: string) => Promise<boolean>;
   /** A real question from the harness: options, several questions, free text.
    * Absent on a surface that cannot ask; the transport then cancels the
    * question with a notice (askHarnessQuestion). Never answered for the user. */
