@@ -214,15 +214,17 @@ describe('local harness catalog', () => {
     const fullThreeTier = new Set(['codex', 'claude', 'grok', 'gemini', 'cursor', 'qwen', 'droid', 'command', 'kimi', 'vibe', 'goose']);
     const askAndAuto = new Set(['kilo', 'dcode']);
     const bypassAndAuto = new Set(['openhands']);
+    // Aider has no ask (it applies edits unprompted); only --yes-always.
+    const bypassOnly = new Set(['aider']);
     const askAndBypass = new Set([
-      'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'cline',
+      'opencode', 'copilot', 'antigravity', 'kiro', 'cline',
       'hermes', 'cn',
     ]);
     // Devin carries all three as ACP session modes (permissionModeIds), no flag.
     fullThreeTier.add('devin');
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(harnessSupportsPermissionMode(harness, 'ask'), `${harness.command} ask`).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || askAndAuto.has(harness.command));
-      expect(harnessSupportsPermissionMode(harness, 'bypass'), `${harness.command} bypass`).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || bypassAndAuto.has(harness.command));
+      expect(harnessSupportsPermissionMode(harness, 'bypass'), `${harness.command} bypass`).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || bypassAndAuto.has(harness.command) || bypassOnly.has(harness.command));
       expect(harnessSupportsPermissionMode(harness, 'auto'), `${harness.command} auto`).toBe(fullThreeTier.has(harness.command) || askAndAuto.has(harness.command) || bypassAndAuto.has(harness.command));
     }
   });
@@ -447,7 +449,7 @@ describe('local harness catalog', () => {
   it('builds the ACP spawn contract from declarations only', () => {
     // Droid's `exec --output-format acp` validates but ignores -m/-r/--auto: its session is set over the protocol.
     expect(harnessAcpLaunch(localHarnessForCommand('droid')!, { model: 'gpt-5', effort: 'high', permissionMode: 'auto' }))
-      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: [], optionPlacement: 'before' });
+      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: [], optionPlacement: 'before', env: {} });
     expect(harnessAcpLaunch(localHarnessForCommand('copilot')!, { model: 'gpt-5', effort: 'high', permissionMode: 'bypass' }))
       .toMatchObject({ binary: 'copilot', argv: ['--model', 'gpt-5', '--effort', 'high', '--allow-all', '--acp', '--stdio'] });
     expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { effort: 'low', permissionMode: 'bypass' }))
@@ -486,8 +488,8 @@ describe('local harness catalog', () => {
   });
 
   it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
-    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, ...opencode } = localHarnessForCommand('opencode')!;
-    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, ...kilo } = localHarnessForCommand('kilo')!;
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, permissionEnv: _pe, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, permissionEnv: _kpe, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
     // Only OpenCode's free models were proven to answer signed out.
@@ -673,5 +675,24 @@ describe('harness modes read from the installed vendors (2026-10-10)', () => {
     expect(harnessSupportsPermissionMode(byCommand('devin'), 'auto')).toBe(true);
     expect(localHarnessCapabilityManifest(byCommand('dcode')).options.find((option) => option.id === 'permissions')?.values).toEqual(['ask', 'auto']);
     expect(localHarnessCapabilityManifest(byCommand('amp')).options.some((option) => option.id === 'permissions')).toBe(false);
+  });
+  it('enforces ask only where the vendor has a real way to', () => {
+    const byCommand = (command: string) => localHarnessForCommand(command)!;
+    expect(byCommand('opencode').permissionEnv?.ask?.OPENCODE_PERMISSION).toContain('"edit":"ask"');
+    expect(byCommand('kilo').permissionEnv?.ask?.KILO_PERMISSION).toContain('"bash":"ask"');
+    expect(harnessSupportsPermissionMode(byCommand('aider'), 'ask')).toBe(false);
+    expect(harnessSupportsPermissionMode(byCommand('aider'), 'bypass')).toBe(true);
+  });
+
+  it('spawns Goose with the provider and model of the selected model', () => {
+    const goose = localHarnessForCommand('goose')!;
+    expect(harnessAcpLaunch(goose, { model: 'anthropic/claude-sonnet-4' })?.env).toEqual({ GOOSE_PROVIDER: 'anthropic', GOOSE_MODEL: 'claude-sonnet-4' });
+    expect(harnessAcpLaunch(goose, {})?.env).toEqual({});
+  });
+
+  it('sends no effort to a model that refuses it', () => {
+    const auggie = localHarnessForCommand('auggie')!;
+    expect(nativeHarnessTurnArgv(auggie, { prompt: 'hi', model: 'haiku4.5', effort: 'medium' })).not.toContain('--reasoning-effort');
+    expect(nativeHarnessTurnArgv(auggie, { prompt: 'hi', model: 'sonnet4.6', effort: 'medium' })).toContain('--reasoning-effort');
   });
 });

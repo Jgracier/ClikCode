@@ -71,6 +71,13 @@ export interface AiHarnessAcpDefinition {
    * permission mode's; the agent leaving it (its plan approved) turns it off.
    * Only with live proof the agent switches: claude-agent-acp `plan`. */
   planModeId?: string;
+  /** Environment the agent must be SPAWNED with to open a session at all, built
+   * from the selected model: `{provider}` and `{model}` are the two halves of
+   * a `provider<separator>model` id. Goose's `session/new` fails with
+   * "Configuration value not found: GOOSE_PROVIDER" unless both are in its
+   * environment at launch (live, goose 1.51.0); the model is otherwise only
+   * set after session/new. Surfaced as `harnessAcpLaunch().env`. */
+  modelEnv?: Readonly<Record<string, string>>;
   /** Only when the ACP mode accepts an effort flag the one-shot mode lacks. */
   effortArgvPrefix?: readonly string[];
   /** Only when ACP needs a different mapping than `permissionArgv`. `ask` is
@@ -515,6 +522,12 @@ export interface AiLocalHarnessDefinition {
   modelDiscoveryArgv?: readonly string[];
   workspaceArgvPrefix?: readonly string[];
   effortArgvPrefix?: readonly string[];
+  /** Regular-expression sources (matched against the model id) of models that
+   * REFUSE the effort flag though the harness has one: no effort argument is
+   * sent for them, whatever the session holds. Auggie answers HTTP 400 to
+   * `--reasoning-effort` on haiku4.5, and `auggie model list` publishes no
+   * per-model capability to read instead. */
+  effortUnsupportedModels?: readonly string[];
   /** Vendor config key used when effort is expressed as --config key=value. */
   effortConfigKey?: string;
   /** Canonical permission modes this vendor CLI actually maps to a real flag.
@@ -641,7 +654,10 @@ const OPENCODE_FAMILY = {
   }),
   authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json', contains: '"type"' }], modelProviderSeparator: '/', modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models', '--verbose'], workspaceArgvPrefix: ['--dir'],
   effortArgvPrefix: ['--variant'], effortValues: ['minimal', 'low', 'medium', 'high', 'max'],
-  permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, normalizedPermissionOptionIds: ['auto-approve'],
+  // `ask` is the vendor's own `permission` config set by OPENCODE_PERMISSION (Kilo: KILO_PERMISSION): left unset, opencode/kilo write files and run
+  // shell without asking (live 1.18.32 / 7.7.6: hello.txt created). With edit+bash "ask" the same prompt was refused at the permission request
+  // ("permission requested: edit ...; auto-rejecting"); over ACP the request reaches ClikCode as session/request_permission.
+  permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--auto'] } }, permissionEnv: { ask: { OPENCODE_PERMISSION: '{"edit":"ask","bash":"ask"}' } }, normalizedPermissionOptionIds: ['auto-approve'],
   imageArgvPrefix: ['--file'],
   turn: { promptGuard: 'double-dash', startArgv: ['run', '--format', 'json'], resumeIdPrefix: ['--session'], output: 'json-lines', responseFields: ['text', 'content'] },
   session: { resumeIdPrefix: ['--session'], discoverArgv: ['session', 'list', '--format', 'json'], discoverFormat: 'json' },
@@ -727,6 +743,8 @@ export interface AiKeyProvider {
 const HERMES_AUTH_FILES = [
   { path: '${HERMES_HOME:-~/.hermes}/auth.json', contains: '"access_token"' },
   { path: '${HERMES_HOME:-~/.hermes}/.env', contains: '_API_KEY=' },
+  // A credential alone is not a usable setup: with auth.json and .env but no model block here, `hermes acp` ends "No LLM provider configured".
+  { path: '${HERMES_HOME:-~/.hermes}/config.yaml', contains: 'model:\n  default:' },
 ] as const;
 
 export const KEY_PROVIDERS = {
@@ -892,11 +910,11 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // over ACP with its history, and `--session-id` on an ACP thread continues
   // it; each recalled a word the other was told.
   { command: 'copilot', freePlan: { listed: true }, provider: 'github-copilot', displayName: 'GitHub Copilot', planMode: { option: 'plan', value: true }, tier: 'primary', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['--acp', '--stdio'], effortArgvPrefix: ['--effort'], sharedSessions: true, probeDisableMcpPrefix: ['--disable-mcp-server'] }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'], retiredOptionIds: ['allow-all'], replyErrorPatterns: COPILOT_REPLY_ERRORS, localAuth: ['oauth', 'vendor-cli'], binary: 'copilot', npmPackage: '@github/copilot', loginRemoteArgv: ['login', '--device-code'], loginArgv: ['login'], authFiles: [{ path: '${COPILOT_HOME:-~/.copilot}/config.json', contains: '"loggedInUsers": [\n' }], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['-C'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--allow-all'] } }, imageArgvPrefix: ['--attachment'], profileEnv: 'COPILOT_HOME', turn: { startArgv: ['-s'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'], promptArgvPrefix: ['-p'], output: 'text' }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--session-id'] } },
-  { command: 'aider', freePlan: { suffix: ':free' }, loginAccountChoose: ['Yes'], provider: 'aider', displayName: 'Aider', titleSource: 'none', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'aider', memoryFile: 'CONVENTIONS.md', nativeSlashPassthrough: false, localAuth: ['api-key', 'vendor-cli'], binary: 'aider', installer: HARNESS_INSTALLERS.aider, loginArgv: ['--no-git', '--exit'], authFiles: [{ path: '~/.aider/oauth-keys.env' }], authEnv: ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'VERTEXAI_PROJECT'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--yes-always'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: ['--no-show-model-warnings', '--no-check-update', '--no-show-release-notes', '--no-analytics', '--no-pretty', '--no-fancy-input', '--no-detect-urls'], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text', outsideRepoArgv: ['--no-git'] }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'] } },
+  { command: 'aider', freePlan: { suffix: ':free' }, loginAccountChoose: ['Yes'], provider: 'aider', displayName: 'Aider', titleSource: 'none', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'aider', memoryFile: 'CONVENTIONS.md', nativeSlashPassthrough: false, localAuth: ['api-key', 'vendor-cli'], binary: 'aider', installer: HARNESS_INSTALLERS.aider, loginArgv: ['--no-git', '--exit'], authFiles: [{ path: '~/.aider/oauth-keys.env' }], authEnv: ['OPENROUTER_API_KEY', 'ANTHROPIC_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY', 'GEMINI_API_KEY', 'VERTEXAI_PROJECT'], modelArgvPrefix: ['--model'], permissionModes: ['bypass'], permissionArgv: { bypass: { argv: ['--yes-always'] } }, imageArgvPrefix: ['--file'], turn: { startArgv: ['--no-show-model-warnings', '--no-check-update', '--no-show-release-notes', '--no-analytics', '--no-pretty', '--no-fancy-input', '--no-detect-urls'], createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'], resumeIdSuffix: ['--restore-chat-history'], promptArgvPrefix: ['--message'], output: 'text', outsideRepoArgv: ['--no-git'] }, session: { idKind: 'history-file', createIdPrefix: ['--chat-history-file'], resumeIdPrefix: ['--chat-history-file'] } },
   // Goose effort is the ACP session option `thinking_effort`; its values are
   // read from the session (effort-choices.ts). effortValues, the fallback, are
   // the levels its own `goose configure` prompt offers (off/low/medium/high/max).
-  { command: 'goose', freePlan: { suffix: ':free' }, provider: 'goose', displayName: 'Goose', replyErrorPatterns: GOOSE_REPLY_ERRORS, tier: 'more', transport: 'acp', integration: 'structured', parser: 'goose', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], inheritCliOptions: false, providerConfigId: 'provider', effortConfigId: 'thinking_effort', permissionModeIds: { ask: 'approve', auto: 'smart_approve', bypass: 'auto' }, sharedSessions: true }, effortValues: ['off', 'low', 'medium', 'high', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', installer: HARNESS_INSTALLERS.goose, loginArgv: ['configure'], loginSteps: [{ when: 'Share anonymous usage data', send: '{right}{enter}' }],
+  { command: 'goose', freePlan: { suffix: ':free' }, provider: 'goose', displayName: 'Goose', replyErrorPatterns: GOOSE_REPLY_ERRORS, tier: 'more', transport: 'acp', integration: 'structured', parser: 'goose', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], inheritCliOptions: false, providerConfigId: 'provider', effortConfigId: 'thinking_effort', modelEnv: { GOOSE_PROVIDER: '{provider}', GOOSE_MODEL: '{model}' }, permissionModeIds: { ask: 'approve', auto: 'smart_approve', bypass: 'auto' }, sharedSessions: true }, effortValues: ['off', 'low', 'medium', 'high', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'goose', installer: HARNESS_INSTALLERS.goose, loginArgv: ['configure'], loginSteps: [{ when: 'Share anonymous usage data', send: '{right}{enter}' }],
     loginKeyRoutes: providerKeyRoutes(['Manual Configuration'], {
       anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: ['OpenAI', 'Yes'], google: 'Google Gemini (API Key)', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
       fireworks: 'Fireworks AI', mistral: 'Mistral AI', deepseek: 'DeepSeek', moonshot: 'Moonshot', zai: 'Z.AI', minimax: 'MiniMax', together: 'Together AI',
@@ -994,7 +1012,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // and --output-format stream-json ("JSON Lines on stdout", which implies
   // --no-interactive). Everything here was already right except --model,
   // which the CLI has and this entry did not.
-  { command: 'kiro', freePlan: { listed: true }, provider: 'kiro', displayName: 'Kiro CLI', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], optionPlacement: 'after' }, effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginRemoteArgv: ['login', '--license', 'free', '--use-device-flow'], loginArgv: ['login'], logoutArgv: ['logout'], statusArgv: ['whoami'], binary: 'kiro-cli', installer: HARNESS_INSTALLERS.kiro, modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--trust-all-tools'] } }, turn: { promptGuard: 'double-dash', startArgv: ['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json'], resumeIdPrefix: ['--resume-id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['chat', '--resume-id'], discoverArgv: ['chat', '--list-sessions', '--format', 'json'], discoverFormat: 'json' } },
+  { command: 'kiro', freePlan: { listed: true }, provider: 'kiro', displayName: 'Kiro CLI', tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], optionPlacement: 'after' }, effortValues: ['low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], loginRemoteArgv: ['login', '--license', 'free', '--use-device-flow'], loginArgv: ['login'], logoutArgv: ['logout'], statusArgv: ['whoami'], binary: 'kiro-cli', authFiles: [{ path: '~/.local/share/kiro-cli/data.sqlite3', contains: 'kirocli:social:token' }, { path: '~/.local/share/kiro-cli/data.sqlite3', contains: 'kirocli:odic:token' }], installer: HARNESS_INSTALLERS.kiro, modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--trust-all-tools'] } }, turn: { promptGuard: 'double-dash', startArgv: ['chat', '--no-interactive', '--agent-engine', 'v3', '--output-format', 'stream-json'], resumeIdPrefix: ['--resume-id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, session: { resumeIdPrefix: ['chat', '--resume-id'], discoverArgv: ['chat', '--list-sessions', '--format', 'json'], discoverFormat: 'json' } },
   // Sign-in (2026-10-03, real qwen 0.24 signed out): its provider menus and
   // key/model boxes are read on ClikCode's screen; once configured it sits in
   // its chat, which the step quits.
@@ -1027,8 +1045,8 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
     anthropic: 'Anthropic', openrouter: 'OpenRouter', openai: 'OpenAI', google: 'Google Gemini', xai: 'xAI', groq: 'Groq', cerebras: 'Cerebras', huggingface: 'Hugging Face',
     fireworks: 'Fireworks AI', mistral: 'Mistral', deepseek: 'DeepSeek', moonshot: 'Moonshot AI', 'moonshot-cn': 'Moonshot AI (China)', zai: 'Z.AI', minimax: 'MiniMax (minimax.io)', together: 'Together AI',
   }), modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--thinking'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--auto-approve', 'false'] }, bypass: { argv: ['--auto-approve', 'true'] } }, turn: { startArgv: ['--json'], resumeIdPrefix: ['--id'], output: 'json-lines', responseFields: ['text', 'content', 'result'] }, turnEnv: { CLINE_SESSION_BACKEND_MODE: 'local' }, session: { resumeIdPrefix: ['--id'] } },
-  { ...OPENCODE_FORK_BASE, command: 'kilo', freePlan: { suffix: ':free' }, loginAccountChoose: ['Kilo Gateway'], provider: 'kilo', displayName: 'Kilo Code CLI', tier: 'more', binary: 'kilo', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }], npmPackage: '@kilocode/cli', permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } } },
-  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', planMode: { option: 'mode', value: 'plan' }, tier: 'primary', transport: 'acp', acp: { argv: ['acp'], inheritCliOptions: false, listsModels: true }, integration: 'structured', parser: 'cursor-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.cursor/commands', '~/.cursor/commands'], normalizedPermissionOptionIds: ['auto-review', 'force'], replyErrorPatterns: CURSOR_REPLY_ERRORS, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cursor-agent', installer: HARNESS_INSTALLERS.cursor, loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { promptGuard: 'double-dash', startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'] } },
+  { ...OPENCODE_FORK_BASE, command: 'kilo', freePlan: { suffix: ':free' }, loginAccountChoose: ['Kilo Gateway'], provider: 'kilo', displayName: 'Kilo Code CLI', tier: 'more', binary: 'kilo', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/kilo/auth.json', contains: '"type"' }], npmPackage: '@kilocode/cli', permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['--auto'] } }, permissionEnv: { ask: { KILO_PERMISSION: '{"edit":"ask","bash":"ask"}' } } },
+  { command: 'cursor', provider: 'cursor', displayName: 'Cursor Agent', planMode: { option: 'mode', value: 'plan' }, tier: 'primary', transport: 'acp', acp: { argv: ['acp'], inheritCliOptions: false, listsModels: true }, integration: 'structured', parser: 'cursor-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.cursor/commands', '~/.cursor/commands'], normalizedPermissionOptionIds: ['auto-review', 'force'], replyErrorPatterns: CURSOR_REPLY_ERRORS, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cursor-agent', authFiles: [{ path: '~/.config/cursor/auth.json', contains: '"accessToken"' }], installer: HARNESS_INSTALLERS.cursor, loginArgv: ['login'], statusArgv: ['status', '--format', 'json'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: [] }, bypass: { argv: ['--force'] }, auto: { argv: ['--auto-review'] } }, turn: { promptGuard: 'double-dash', startArgv: ['-p', '--output-format', 'stream-json', '--stream-partial-output'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { createSessionArgv: ['create-chat'], resumeIdPrefix: ['--resume'] } },
   // Hermes 0.20.5, read from hermes_cli/main.py (cmd_acp) and acp_adapter/{server,session}.py: `hermes acp` takes only --accept-hooks/--check/--setup,
   // and cmd_acp never reads the top-level --model/--provider/--reasoning, so they are not passed (inheritCliOptions false). The model is chosen with
   // session/set_model over the `provider:model` list session/new publishes. ACP has NO effort control: _make_agent builds AIAgent with no
@@ -1075,7 +1093,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // shares the CLI's session files, but offers and accepts only Command
   // Code's gateway models -- a BYOK model (`mock/mock-model` from
   // providers.json) is "Unknown model" over ACP, while the CLI runs it.
-  { command: 'command', provider: 'command-code', displayName: 'Command Code', planMode: { option: 'plan', value: true }, tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: COMMAND_CODE_ACP, effortValues: ['off', 'low', 'medium', 'high', 'xhigh', 'max'], profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cmdc', npmPackage: 'command-code', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'standard'] }, bypass: { argv: ['--yolo'] }, auto: { argv: ['--permission-mode', 'auto-accept'] } }, profileEnv: 'HOME', turn: { startArgv: ['--print', '--output-format', 'json', '--skip-onboarding', '--no-auto-update'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'] } },
+  { command: 'command', provider: 'command-code', displayName: 'Command Code', planMode: { option: 'plan', value: true }, tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: COMMAND_CODE_ACP, effortValues: ['off', 'low', 'medium', 'high', 'xhigh', 'max'], profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cmdc', authFiles: [{ path: '~/.commandcode/auth.json', contains: '"apiKey"' }], npmPackage: 'command-code', loginArgv: ['login'], statusArgv: ['status'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['--list-models'], effortArgvPrefix: ['--effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'standard'] }, bypass: { argv: ['--yolo'] }, auto: { argv: ['--permission-mode', 'auto-accept'] } }, profileEnv: 'HOME', turn: { startArgv: ['--print', '--output-format', 'json', '--skip-onboarding', '--no-auto-update'], resumeIdPrefix: ['--resume'], output: 'json-lines', responseFields: ['result', 'response', 'text'] }, session: { resumeIdPrefix: ['--resume'] } },
   // ---- Added from vendor documentation; none of these binaries was available
   // to run live, so every one-shot contract below is `experimental` and only
   // flags the vendor documents are declared. No session selectors are claimed:
@@ -1115,7 +1133,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // same session_id and appended its request to that `<id>.json` as the
   // second exchange (one file, chatHistory 1 -> 2) -- the file is the history
   // auggie sends. The account was out of usage, so the model's recall is unproved.
-  { command: 'auggie', provider: 'augment', displayName: 'Augment Auggie', replyErrorPatterns: AUGGIE_REPLY_ERRORS, planMode: { option: 'ask', value: true }, tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.augment/commands', '~/.augment/commands'], acp: { argv: ['--acp'] }, experimental: true, localAuth: ['oauth', 'vendor-cli'], binary: 'auggie', npmPackage: '@augmentcode/auggie', statusArgv: ['account', 'status'], loginArgv: ['login', '--headless'], logoutArgv: ['logout'], modelDiscoveryArgv: ['model', 'list'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace-root'], effortValues: ['low', 'medium', 'high'], effortArgvPrefix: ['--reasoning-effort'], imageArgvPrefix: ['--image'], turn: { startArgv: ['--print', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'], quotaSignals: ['You have run out of usage for', 'run out of usage'] }, session: { resumeIdPrefix: ['--resume'] } },
+  { command: 'auggie', provider: 'augment', displayName: 'Augment Auggie', replyErrorPatterns: AUGGIE_REPLY_ERRORS, planMode: { option: 'ask', value: true }, tier: 'more', transport: 'acp', integration: 'structured', parser: 'generic-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, customCommandDirs: ['.augment/commands', '~/.augment/commands'], acp: { argv: ['--acp'] }, experimental: true, localAuth: ['oauth', 'vendor-cli'], binary: 'auggie', npmPackage: '@augmentcode/auggie', statusArgv: ['account', 'status'], loginArgv: ['login', '--headless'], logoutArgv: ['logout'], modelDiscoveryArgv: ['model', 'list'], modelArgvPrefix: ['--model'], workspaceArgvPrefix: ['--workspace-root'], effortValues: ['low', 'medium', 'high'], effortArgvPrefix: ['--reasoning-effort'], effortUnsupportedModels: ['^haiku4\\.5$'], imageArgvPrefix: ['--image'], turn: { startArgv: ['--print', '--output-format', 'json'], resumeIdPrefix: ['--resume'], output: 'json', responseFields: ['result', 'response', 'text'], quotaSignals: ['You have run out of usage for', 'run out of usage'] }, session: { resumeIdPrefix: ['--resume'] } },
   // Mistral Vibe ships ACP as a SEPARATE executable, `vibe-acp`, with no argv.
   // `vibe --prompt` is its documented programmatic mode (plain text).
   // Read from mistral-vibe on a real install (pip/uv, not npm, so there is no
@@ -1163,14 +1181,14 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // own models through ClikCode's normal path.
   // dcode 0.x `--help`: `-y, --auto-approve` = "classifier-backed Auto mode (TUI or ACP); ignored with a warning in headless mode", so only `auto` is
   // mapped; Ask is its unflagged default (permission requests over ACP). It has no bypass switch (`-S all` is a shell allow-list, not file edits).
-  { command: 'dcode', provider: 'deepagents-code', displayName: 'Deep Agents Code', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp'], optionPlacement: 'after' }, permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['-y'] } }, localAuth: ['api-key', 'vendor-cli'], binary: 'dcode', installer: HARNESS_INSTALLERS.dcode, loginArgv: [], loginKeyCommand: { providersArgv: ['auth', 'list'], setArgv: ['auth', 'set', '{provider}'] },
+  { command: 'dcode', provider: 'deepagents-code', displayName: 'Deep Agents Code', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp'], optionPlacement: 'after' }, permissionModes: ['ask', 'auto'], permissionArgv: { ask: { argv: [] }, auto: { argv: ['-y'] } }, localAuth: ['api-key', 'vendor-cli'], binary: 'dcode', authFiles: [{ path: '~/.deepagents/.state/auth.json', contains: '"type":' }], installer: HARNESS_INSTALLERS.dcode, loginArgv: [], loginKeyCommand: { providersArgv: ['auth', 'list'], setArgv: ['auth', 'set', '{provider}'] },
     // Its provider names (`dcode auth list`), for the key's provider.
     loginKeyRoutes: providerKeyRoutes([], { anthropic: 'anthropic', openai: 'openai', google: 'google_genai' }), authEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY'], modelArgvPrefix: ['--model'] },
   // devin 3000.11.3 session/new: starts in `accept-edits` (workspace edits auto-approved) and offers
   // modes accept-edits|smart|ask|plan|bypass (configOptions id `mode`, category `mode`). `ask` is its
   // read-only Q&A mode, the strict end of ClikCode's ask.
-  { command: 'devin', freePlan: { listed: true }, loginAccountChoose: ['Log in with browser'], provider: 'devin', displayName: 'Devin CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'], optionPlacement: 'after', permissionModeIds: { ask: 'ask', auto: 'smart', bypass: 'bypass' }, planModeId: 'plan' }, permissionModes: ['ask', 'auto', 'bypass'], localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'devin', installer: HARNESS_INSTALLERS.devin, loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], authEnv: ['WINDSURF_API_KEY'], modelArgvPrefix: ['--model'] },
-  { command: 'junie', provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'] }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
+  { command: 'devin', freePlan: { listed: true }, loginAccountChoose: ['Log in with browser'], provider: 'devin', displayName: 'Devin CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'], optionPlacement: 'after', permissionModeIds: { ask: 'ask', auto: 'smart', bypass: 'bypass' }, planModeId: 'plan' }, permissionModes: ['ask', 'auto', 'bypass'], localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'devin', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/devin/credentials.toml', contains: 'api_key' }], installer: HARNESS_INSTALLERS.devin, loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], authEnv: ['WINDSURF_API_KEY'], modelArgvPrefix: ['--model'] },
+  { command: 'junie', provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'] }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', authFiles: [{ path: '~/.junie/secure_credentials.json', contains: 'jb-account-stored' }], installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
   // Sign-in evidence: the OAuth record `mcode login` writes under
   // ~/.minimax/auth/prod/<region>/<client>/auth.json (vendor-identity.ts
   // reads the same record for the account's email).
@@ -1775,6 +1793,11 @@ export function modelProvider(harness: AiLocalHarnessDefinition, model: string):
 
 /** The model flag, plus the provider flag when the harness takes the provider
  * separately and the id names one. */
+/** Whether this model takes the harness's effort flag (see `effortUnsupportedModels`). */
+export function harnessModelAcceptsEffort(harness: AiLocalHarnessDefinition, model: string | null | undefined): boolean {
+  return !(model && harness.effortUnsupportedModels?.some((source) => new RegExp(source, 'i').test(model)));
+}
+
 export function modelSelectorArgv(harness: AiLocalHarnessDefinition, model: string): string[] {
   if (!harness.modelArgvPrefix?.length) return [];
   const split = harness.modelProviderArgvPrefix ? splitHarnessModel(harness, model) : undefined;
@@ -1888,7 +1911,7 @@ export function nativeHarnessTurnArgv(harness: AiLocalHarnessDefinition, input: 
   }
   if (input.model) argv.push(...modelSelectorArgv(harness, input.model));
   if (input.workspace && harness.workspaceArgvPrefix && (!resumed || harness.turn.resumeSupportsWorkspaceSelector !== false)) argv.push(...harness.workspaceArgvPrefix, input.workspace);
-  if (input.effort && harness.effortArgvPrefix) argv.push(...harness.effortArgvPrefix, harness.effortConfigKey ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
+  if (input.effort && harness.effortArgvPrefix && harnessModelAcceptsEffort(harness, input.model)) argv.push(...harness.effortArgvPrefix, harness.effortConfigKey ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   if (input.permissionMode && harness.permissionModes?.includes(input.permissionMode)) {
     const mapping = harness.permissionArgv?.[input.permissionMode];
     // Goose carries its mode in GOOSE_MODE (turnEnvironment), not in argv.
@@ -1952,6 +1975,16 @@ export interface AiHarnessAcpLaunch {
   /** Model / effort / permission flags alone, for a client that places them itself. */
   optionArgv: string[];
   optionPlacement: 'before' | 'after';
+  /** Environment to spawn with, from `acp.modelEnv` and the selected model. Empty when the harness declares none. */
+  env: Record<string, string>;
+}
+
+/** `acp.modelEnv` filled in for one model. A model that does not name its provider yields nothing: the harness then starts as it always did. */
+function acpModelEnv(harness: AiLocalHarnessDefinition, model: string | null | undefined): Record<string, string> {
+  const template = harness.acp?.modelEnv;
+  const split = template && model ? splitHarnessModel(harness, model) : undefined;
+  if (!template || !split) return {};
+  return Object.fromEntries(Object.entries(template).map(([name, value]) => [name, value.replace('{provider}', split.provider).replace('{model}', split.model)]));
 }
 
 export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHarnessAcpLaunchInput = {}): AiHarnessAcpLaunch | undefined {
@@ -1966,7 +1999,7 @@ export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHar
   const sameProgram = (!acp.binary || acp.binary === harness.binary) && acp.inheritCliOptions !== false;
   if (input.model && sameProgram) options.push(...modelSelectorArgv(harness, input.model));
   const effortPrefix = acp.effortArgvPrefix ?? (sameProgram ? harness.effortArgvPrefix : undefined);
-  if (input.effort && effortPrefix) options.push(...effortPrefix, harness.effortConfigKey && !acp.effortArgvPrefix ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
+  if (input.effort && effortPrefix && harnessModelAcceptsEffort(harness, input.model)) options.push(...effortPrefix, harness.effortConfigKey && !acp.effortArgvPrefix ? `${harness.effortConfigKey}="${input.effort}"` : input.effort);
   if (input.permissionMode === 'bypass' || input.permissionMode === 'auto') {
     options.push(...(acp.permissionArgv?.[input.permissionMode]
       ?? (sameProgram && harness.permissionModes?.includes(input.permissionMode) ? harness.permissionArgv?.[input.permissionMode]?.argv : undefined) ?? []));
@@ -1976,6 +2009,7 @@ export function harnessAcpLaunch(harness: AiLocalHarnessDefinition, input: AiHar
     binary: acp.binary ?? harness.binary,
     argv: optionPlacement === 'after' ? [...acp.argv, ...options] : [...options, ...acp.argv],
     modeArgv: [...acp.argv], optionArgv: options, optionPlacement,
+    env: acpModelEnv(harness, input.model),
   };
 }
 

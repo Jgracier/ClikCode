@@ -8,9 +8,9 @@ Checked against the ClikCode catalog on 2026-10-10 (rows changed that day: Codex
 | Grok Build | Vendor CLI | Yes (minimal to max) | Ask, bypass, auto | Plan's own list | Direct probe (ACP extension call) |
 | Gemini CLI | ACP when available | No declared control | Ask, bypass, auto | - | Learned after refusals |
 | Codex | Vendor model cache (the server's `model/list` is declared, not yet read) | Yes, per model | Ask, bypass, auto | Plan's own list | Direct probe |
-| OpenCode | Vendor CLI | Yes | Ask, bypass; plan mode | Zero-price models in its list | Learned after refusals |
+| OpenCode | Vendor CLI | Yes | Ask (`OPENCODE_PERMISSION` edit/bash = ask), bypass; plan mode | Zero-price models in its list | Learned after refusals |
 | Copilot | Its own server, for this account (`models.list`); public models.dev catalog only when that fails | Yes, over ACP (levels from `copilot --help`) | Ask, bypass | Plan's own list | Direct probe (`account.getQuota`) |
-| Aider | Configured providers and their caches | No declared control | Ask, bypass | `:free` models | Learned after refusals |
+| Aider | Configured providers and their caches | No declared control | Bypass only (`--yes-always`); no ask (see below) | `:free` models | Learned after refusals |
 | Goose | Configured providers and ACP | Yes, over ACP (levels from its `thinking_effort` option) | Ask, bypass, auto | `:free` models | Learned after refusals |
 | Amp | No model selector; `--mode low/medium/high/ultra` is an option row (model tier) | No declared control | None: Inert (see below) | - | Credit balance (`amp usage`) |
 | Antigravity | Vendor CLI | No declared control | Ask, bypass | Plan's own list | Direct probe (quota pools) |
@@ -19,13 +19,13 @@ Checked against the ClikCode catalog on 2026-10-10 (rows changed that day: Codex
 | Kiro | ACP when available | Yes | Ask, bypass | Plan's own list | Direct probe (its `/usage` over ACP) |
 | Qwen Code | ACP when available | Yes, from its session's `reasoning_effort` option (per model) | Ask, bypass, auto, over ACP; plan mode | - | Learned after refusals |
 | Cline | ACP when available | Yes (`--thinking`; its ACP session has no effort option) | Ask, bypass (its ACP modes are plan and act); plan mode | `:free` models | Credit balance, advisory (`:free` models still run when it is spent) |
-| Kilo | Vendor CLI | Yes | Ask, auto; plan mode | `:free` models, and the ones its list marks free | Credit balance (`kilo profile`) |
+| Kilo | Vendor CLI | Yes | Ask (`KILO_PERMISSION` edit/bash = ask), auto; plan mode | `:free` models, and the ones its list marks free | Credit balance (`kilo profile`) |
 | Cursor Agent | ACP when available | No declared control | Ask, bypass, auto | Auto (the models it does not count as named) | Direct probe |
 | Hermes | Provider inventory and cache; chosen over ACP | Yes, but only on a one-shot CLI turn: `hermes acp` has no effort control | Ask, bypass (`--yolo`) | `:free` models | Direct probe (Nous Portal credits) |
 | OpenClaw | Vendor configuration and provider inventory | Yes | No declared modes | - | Learned after refusals |
 | Command Code | Vendor CLI list (ACP lists the same 84) | Yes, per model over ACP | Ask, bypass, auto over ACP modes; plan mode | - | Direct probe |
 | Kimi CLI | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe |
-| Auggie | Vendor CLI | Yes | No declared modes | - | Credit balance (`auggie account status`) |
+| Auggie | Vendor CLI | Yes (not sent for haiku4.5, which answers HTTP 400) | No declared modes | - | Credit balance (`auggie account status`) |
 | Mistral Vibe | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe (a key whose plan allows no requests reads spent) |
 | OpenHands | ACP when available | No declared control | Bypass, auto | - | Learned after refusals |
 | Continue | Saved account models (no `--model`: `cn --model` adds a hub model) | No declared control | Ask, bypass | - | Learned after refusals |
@@ -47,6 +47,13 @@ Checked against the ClikCode catalog on 2026-10-10 (rows changed that day: Codex
 - Hermes 0.20.5 (source): `hermes acp` accepts none of `--model`, `--provider`, `--reasoning`; the model is set with `session/set_model`. It builds the agent with no reasoning config, so an ACP turn cannot honour effort: a non-default effort moves a new chat to `hermes chat --quiet --reasoning`, and an existing ACP chat runs that turn at the vendor default with a notice. `--yolo` is the one flag that works. Its modes (`default`, `accept-edits`, `dont-ask`) are edit-approval policies, not mapped.
 - Codex 0.155.1 (generated protocol schema): `turn/start` takes `approvalPolicy`, `sandboxPolicy`, `approvalsReviewer`, `effort`, `model`, `summary` per turn; `thread/compact/start`, `model/list` and `thread/list` exist. The catalog declares them (`nativeOperations`) and `src/harness/transport/codex-native-methods.ts` holds the helpers; the transport sends the permission mode with every `turn/start` (a change restarts nothing), `/compact` calls `compactThread` on the live app-server and waits for `thread/compacted` (summary path when no server is live), and the model list comes from `model/list` of the running server with `models_cache.json` as the fallback. Not run live. `thread/list` does not replace the on-disk thread scan (it needs a running server per profile).
 - Antigravity: `--mode accept-edits|plan` shares one flag with its Plan mode row, so accept-edits is not mapped to Auto; effort is in the model id (`agy` rejects `--effort`).
+
+### Ask, checked live on 2026-10-10
+
+- OpenCode 1.18.32 and Kilo 7.7.6 write files and run shell without asking when nothing is configured (`hello.txt` was created). Their own `permission` config is the control, carried by the environment: `OPENCODE_PERMISSION` / `KILO_PERMISSION` = `{"edit":"ask","bash":"ask"}`. With it the same prompt stopped at "permission requested: edit ...; auto-rejecting" under `run`; over ACP the request is a `session/request_permission` ClikCode answers. Declared as `permissionEnv.ask`.
+- Aider 0.86.2 has no ask. It applies edits to files in the chat without a question, and its only confirmations (create a file, run a command) read stdin, which on EOF answers the default `y` (`io.py` `confirm_ask`). `--yes-always` is the one flag, so only Bypass is offered and `--permissions ask` is refused.
+- Amp offers none (above): its `permissions` live in a settings file, so ClikCode declares no modes and refuses `--permissions ask`.
+- Command Code `dont-ask` has no ClikCode equivalent (ClikCode's modes are ask, auto, bypass) and is left unmapped.
 
 ### Inert: the vendor offers no per-run control ClikCode can use
 
