@@ -365,6 +365,13 @@ export function submittingPrompt(model: ChatModel, prompt: string): ChatModel {
   return { ...model, ownTurn: true, pendingPrompt: prompt };
 }
 
+/** The turn is still on screen but the bridge that feeds it is being
+ * restarted (the worker keeps the turn going): nothing animates, and the
+ * working line says it is reconnecting (standard section 9). */
+export function reconnecting(model: Pick<ChatModel, 'running' | 'connection'>): boolean {
+  return model.running && model.connection !== 'ready';
+}
+
 /** This client sent a prompt and no turn has started yet (the bridge is
  * preparing a worker): Stop and Esc already apply. */
 export function preparing(model: Pick<ChatModel, 'running' | 'ownTurn' | 'pendingPrompt'>): boolean {

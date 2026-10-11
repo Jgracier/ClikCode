@@ -2,9 +2,9 @@
  * model and page logic hold it. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
-import { applyEvent, connectionLost, emptyModel, preparing, rejectedPrompt, submittingPrompt, turnMarks, type ChatModel } from '../../src/model';
+import { applyEvent, connectionLost, emptyModel, preparing, reconnecting, rejectedPrompt, submittingPrompt, turnMarks, type ChatModel } from '../../src/model';
 import { createStreamingMarkdown } from '../../src/webview/markdown';
-import { runGroupView, traceSummaryLine } from '../../src/webview/flow';
+import { runGroupView, traceSummaryLine, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -253,5 +253,20 @@ describe('stable keys across merge points (V7)', () => {
     expect(two.parts.length).toBeGreaterThan(one.parts.length);
     one.parts.forEach((part, index) => expect(two.parts[index]).toBe(part));
     expect(two.parts.join('')).toBe(two.stable);
+  });
+});
+
+describe('nothing animates while the bridge reconnects (V8)', () => {
+  it('a running turn on a bridge that is not ready is reconnecting', () => {
+    const live = begin();
+    expect(reconnecting(live)).toBe(false);
+    expect(reconnecting({ ...live, connection: 'starting' })).toBe(true);
+    expect(reconnecting({ ...emptyModel(), connection: 'starting' })).toBe(false);
+  });
+
+  it('the working line says so instead of a verb', () => {
+    const live = begin().live!;
+    expect(workingStatus(live, false, Date.now(), true).label).toBe('Reconnecting…');
+    expect(workingStatus(live, false, Date.now()).label).not.toBe('Reconnecting…');
   });
 });
