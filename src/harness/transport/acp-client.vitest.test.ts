@@ -182,7 +182,7 @@ describe('shared ACP adapter contract', () => {
       binary: process.execPath, command: 'claude', argv: ['-e', agent], cwd: process.cwd(),
       // Long enough for node to start the fake agent on a loaded machine;
       // the model change takes well past it.
-      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'opus', setupTimeoutMs: 1000,
+      prompt: 'check', environment: {}, permissionMode: 'ask', model: 'opus',
       acp: { inheritCliOptions: false }, onPhase: (phase) => phases.push(phase),
     });
     expect(result.text).toBe('ready');

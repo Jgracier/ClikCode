@@ -8,7 +8,6 @@ import { LineBuffer } from '../protocol/json-lines.js';
 
 type JsonRpcMessage = Record<string, any>;
 
-export const JSONRPC_SETUP_TIMEOUT_MS = 20_000;
 const NOISE_LIMIT = 8000;
 
 /** What a Rust panic report on stderr says went wrong ("The application
