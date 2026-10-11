@@ -19,9 +19,9 @@ import { asFileDiffs } from '../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import {
   ACTIVITY_PREVIEW_LINES, COMMAND_HEAD_LINES, COMMAND_TAIL_LINES, DIFF_PREVIEW_FILES, DIFF_PREVIEW_LINES,
-  mergeActivity, sameCall, stoppedCall, withChildTool,
+  markBefore, mergeActivity, sameCall, stoppedCall, withChildTool,
 } from '../harness/protocol/activity-view.js';
-import type { TranscriptMessage, TurnActivity } from '../session/model.js';
+import type { TranscriptMessage, TurnActivity, TurnMark } from '../session/model.js';
 
 /** Characters of a call's label kept. */
 const MAX_LABEL_CHARS = 400;
@@ -123,30 +123,66 @@ function sizeOf(activity: TurnActivity): number {
   return size;
 }
 
-/** The list within MAX_TURN_ACTIVITY_BYTES: oldest calls trimmed to their
- * row's preview first, then to the row alone, and only then dropped. The
- * newest call is never trimmed by this: it is the one still on screen. */
+/** Calls a sub-agent keeps under its row: the last of them. How many there
+ * were is the parent's `childTools`, which the cap never touches. A
+ * sub-agent can make thousands of calls; they must not push out the turn's
+ * own rows (standard 5). */
+export const MAX_CHILDREN_PER_PARENT = 40;
+
+/** The list within MAX_TURN_ACTIVITY_BYTES. A sub-agent's calls are the
+ * first to give: their detail trimmed to the row's preview, then to the row
+ * alone; then the turn's own rows the same; and only then calls dropped,
+ * oldest first -- a sub-agent's before any row of the turn, so a parent or a
+ * main row is never evicted to make room for a child. The newest call is
+ * never trimmed by this: it is the one still on screen. */
 export function boundTurnActivities(activities: TurnActivity[], limit = MAX_TURN_ACTIVITY_BYTES): TurnActivity[] {
   // Each record, plus the comma or bracket around it.
   let total = activities.reduce((sum, activity) => sum + sizeOf(activity) + 1, 1);
   if (total <= limit) return activities;
   const next = [...activities];
-  for (const bare of [false, true]) {
+  const isChild = (activity: TurnActivity): boolean => Boolean(activity.event.parentId);
+  const trim = (children: boolean, bare: boolean): void => {
     for (let index = 0; index < next.length - 1 && total > limit; index += 1) {
+      if (isChild(next[index]!) !== children) continue;
       const before = sizeOf(next[index]!);
       next[index] = shrink(next[index]!, bare);
       total += sizeOf(next[index]!) - before;
     }
+  };
+  for (const children of [true, false]) {
+    for (const bare of [false, true]) trim(children, bare);
+  }
+  for (let index = 0; index < next.length - 1 && total > limit;) {
+    if (isChild(next[index]!)) total -= sizeOf(next.splice(index, 1)[0]!) + 1;
+    else index += 1;
   }
   while (total > limit && next.length > 1) total -= sizeOf(next.shift()!) + 1;
   return next;
 }
 
+/** `activities` with at most MAX_CHILDREN_PER_PARENT of `parentId`'s calls:
+ * the oldest settled ones go first (an open call is still being drawn). */
+function capChildren(activities: TurnActivity[], parentId: string): TurnActivity[] {
+  let count = 0;
+  for (const activity of activities) if (activity.event.parentId === parentId) count += 1;
+  if (count <= MAX_CHILDREN_PER_PARENT) return activities;
+  const next = [...activities];
+  let drop = count - MAX_CHILDREN_PER_PARENT;
+  for (const settledOnly of [true, false]) {
+    for (let index = 0; index < next.length && drop > 0;) {
+      const event = next[index]!.event;
+      if (event.parentId === parentId && (!settledOnly || event.kind !== 'tool-start')) { next.splice(index, 1); drop -= 1; } else index += 1;
+    }
+  }
+  return next;
+}
+
 /** One more frame of the turn, into its calls: a later frame of a call
  * (same id, or the open row with its label) merges into it and keeps where
- * it began; a sub-agent's calls remain in the journal for recovery while
- * counting toward its visible row; a thought is
- * never a row. Returns the same list when nothing changed. */
+ * it began -- and the sequence it was first given; a sub-agent's calls remain
+ * in the journal for recovery (the last MAX_CHILDREN_PER_PARENT of each)
+ * while counting, by unique call id, toward its visible row; a thought is
+ * not a call (turn-marks.ts keeps it). */
 export function recordTurnActivity(
   activities: readonly TurnActivity[], event: HarnessActivityEvent, responseOffset: number,
 ): TurnActivity[] {
@@ -167,7 +203,8 @@ export function recordTurnActivity(
     next[index] = { responseOffset: prior.responseOffset, event: boundEvent(mergeActivity(prior.event, bounded)) };
     return boundTurnActivities(next);
   }
-  return boundTurnActivities([...current, { event: bounded, responseOffset: Math.max(0, responseOffset) }]);
+  const added = [...current, { event: bounded, responseOffset: Math.max(0, responseOffset) }];
+  return boundTurnActivities(bounded.parentId ? capChildren(added, bounded.parentId) : added);
 }
 
 /** Calls as stored, whatever wrote them: a list of records now, one-line
@@ -220,17 +257,40 @@ export function runningTurnActivity(activities: readonly TurnActivity[]): Harnes
 }
 
 /** One message's share of a turn whose text a steer split into several:
- * the calls after `start` up to and including `end` (to the end when `end`
- * is undefined; from `start` itself for the first message), re-anchored to
- * `start`. A call at a steer's own offset goes before the steer, the order
- * every live view draws them in. */
+ * the calls after the segment's start boundary up to and including its end
+ * boundary, re-anchored to `start`. A boundary is a steer's place: its
+ * offset and, when it has one, its `seq` (standard 1.5) -- so a call that
+ * began after the steer was acknowledged goes after it even at the same
+ * offset. Without a seq on either side a call at a steer's own offset goes
+ * before the steer, the order saved turns were always drawn in. `first`: the
+ * segment starts at `start` itself, with no boundary before it. */
 export function activitiesBetween(
   activities: readonly TurnActivity[], start: number, end: number | undefined, length: number, first: boolean,
+  startSeq?: number, endSeq?: number,
 ): TurnActivity[] {
-  return activities
-    .filter((activity) => (first ? activity.responseOffset >= start : activity.responseOffset > start)
-      && (end === undefined || activity.responseOffset <= end))
+  return betweenSteers(activities, (activity) => activity.event.seq, start, end, length, first, startSeq, endSeq)
     .map((activity) => ({ ...activity, responseOffset: Math.min(length, Math.max(0, activity.responseOffset - start)) }));
+}
+
+/** The marks of the same segment, with offsets re-anchored the same way. */
+export function marksBetween(
+  marks: readonly TurnMark[], start: number, end: number | undefined, length: number, first: boolean,
+  startSeq?: number, endSeq?: number,
+): TurnMark[] {
+  return betweenSteers(marks, (mark) => mark.seq, start, end, length, first, startSeq, endSeq)
+    .map((mark) => ({ ...mark, responseOffset: Math.min(length, Math.max(0, mark.responseOffset - start)) }));
+}
+
+function betweenSteers<T extends { responseOffset: number }>(
+  items: readonly T[], seqOf: (item: T) => number | undefined, start: number, end: number | undefined, _length: number,
+  first: boolean, startSeq: number | undefined, endSeq: number | undefined,
+): T[] {
+  return items.filter((item) => {
+    const place = { responseOffset: item.responseOffset, seq: seqOf(item) };
+    const afterStart = first ? item.responseOffset >= start : !markBefore(place, { responseOffset: start, seq: startSeq });
+    const beforeEnd = end === undefined || markBefore(place, { responseOffset: end, seq: endSeq });
+    return afterStart && beforeEnd;
+  });
 }
 
 /** The turn was stopped: every call still open is closed as stopped
