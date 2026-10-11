@@ -80,3 +80,22 @@ describe('a structured CLI\'s todo list', () => {
     expect(plans).toEqual([[{ content: 'step', status: 'in_progress' }]]);
   });
 });
+
+describe('a Claude-shaped stream compacting its context', () => {
+  it('says so through onNotice at the boundary, once, and shows the wait while it compacts', () => {
+    const notices: string[] = [];
+    const phases: string[] = [];
+    const observer: HarnessTurnObserver = { onNotice: (message) => notices.push(message), onPhase: (phase) => phases.push(phase) };
+    const state = createStreamState();
+    // Shapes of claude-code's stream-json (SDKStatusMessage, SDKCompactBoundaryMessage).
+    reportStructuredLine(harness, '{"type":"system","subtype":"status","status":"compacting","session_id":"s"}', observer, state);
+    expect(phases).toContain('compacting the conversation');
+    expect(notices).toEqual([]);
+    reportStructuredLine(harness, '{"type":"system","subtype":"compact_boundary","session_id":"s","compact_metadata":{"trigger":"auto","pre_tokens":167000}}', observer, state);
+    expect(notices).toEqual(['Conversation compacted to fit the context window']);
+    // Another harness speaking Claude's stream (grok, qwen, gemini, amp) is read the same.
+    const qwen = { command: 'qwen', parser: 'claude-stream-json' } as unknown as AiLocalHarnessDefinition;
+    reportStructuredLine(qwen, '{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual"}}', observer, createStreamState());
+    expect(notices).toHaveLength(2);
+  });
+});
