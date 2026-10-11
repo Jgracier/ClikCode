@@ -10,6 +10,7 @@ import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failove
 import { orderMarks } from '../harness/protocol/activity-view.js';
 import { activitiesBetween, marksBetween, readTurnActivities, recordTurnActivity, runningTurnActivity, stopOpenActivities } from './turn-activities.js';
 import { readTurnMarks, settledThought, upsertMark } from './turn-marks.js';
+import { steerTextOffset } from './steer-place.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
 
@@ -147,14 +148,18 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   const activities = readTurnActivities(pending.activities, response.length);
   const marks = readTurnMarks(pending.marks);
   let first = true;
-  type Boundary = { offset: number; seq?: number };
+  // `offset`/`seq` are the steer's own place among the rows (standard 1.5);
+  // `text` is where the answer is cut: the end of the block it fell inside,
+  // where the live view drew it (steer-place.ts).
+  type Boundary = { offset: number; seq?: number; text: number };
   const assistant = (from: Boundary, to: Boundary | undefined): Message | undefined => {
-    const text = response.slice(from.offset, to?.offset);
+    const text = response.slice(from.text, to?.text);
     const content = text.trim() ? text : '';
-    const own = activitiesBetween(activities, from.offset, to?.offset, content.length, first, from.seq, to?.seq);
-    const ownMarks = marksBetween(marks, from.offset, to?.offset, content.length, first, from.seq, to?.seq);
+    // Rows are cut by their own place and anchored to where this text began.
+    const own = activitiesBetween(activities, from.offset, to?.offset, content.length, first, from.seq, to?.seq, from.text);
+    const ownMarks = marksBetween(marks, from.offset, to?.offset, content.length, first, from.seq, to?.seq, from.text);
     first = false;
-    if (!content && !own.length) return undefined;
+    if (!content && !own.length && !ownMarks.length) return undefined;
     // The journal is this session's own turn, so this session produced it.
     return {
       role: 'assistant', content, ...(own.length ? { activities: own } : {}), ...(ownMarks.length ? { marks: ownMarks } : {}),
@@ -163,10 +168,11 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   };
   // A steer is a row like any other: placed by (offset, seq), so what began
   // before it is above it and what began after is below.
-  let from: Boundary = { offset: 0 };
+  let from: Boundary = { offset: 0, text: 0 };
   for (const steer of orderMarks(pending.steers ?? [], (item) => ({ responseOffset: item.responseOffset ?? 0, ...(item.seq === undefined ? {} : { seq: item.seq }) }))) {
+    const raw = Math.max(from.offset, Math.min(response.length, steer.responseOffset ?? 0));
     const at: Boundary = {
-      offset: Math.max(from.offset, Math.min(response.length, steer.responseOffset ?? 0)),
+      offset: raw, text: Math.max(from.text, steerTextOffset(response, raw)),
       ...(steer.seq === undefined ? {} : { seq: steer.seq }),
     };
     const before = assistant(from, at);
