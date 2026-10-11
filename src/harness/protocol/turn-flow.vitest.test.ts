@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  activityResult, answerWriting, endsWithSummary, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
+  activityResult, answerWriting, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -87,5 +87,27 @@ describe('how a turn reads', () => {
     expect(endsWithSummary(5_000, 0)).toBe(false);
     expect(endsWithSummary(5_000, 1)).toBe(true);
     expect(endsWithSummary(12_000, 0)).toBe(true);
+  });
+
+  it('counts a running turn\'s tokens: the vendor\'s figure, else length / 4, never going down', () => {
+    expect(estimateTokens(4000)).toBe(1000);
+    expect(estimateTokens(0)).toBe(0);
+    // Reported output wins where the turn's usage so far has it.
+    expect(liveTokenTarget({ usage: { output: 340 }, responseChars: 4000 })).toBe(340);
+    expect(liveTokenTarget({ usage: { input: 900 }, responseChars: 4000 })).toBe(1000);
+    expect(liveTokenTarget({ responseChars: 0 })).toBe(0);
+    // The shown number steps toward the target, and never back.
+    const a = smoothTokens(0, 1000);
+    expect(a).toBeGreaterThan(0);
+    expect(a).toBeLessThan(1000);
+    expect(smoothTokens(a, 1000)).toBeGreaterThan(a);
+    expect(smoothTokens(500, 100)).toBe(500);
+    expect(smoothTokens(999, 1000)).toBe(1000);
+  });
+
+  it('words the meter as Claude Code does, only once there is something to count', () => {
+    expect(tokenMeterLabel(1234)).toBe('↓ 1.2k tokens');
+    expect(tokenMeterLabel(42)).toBe('↓ 42 tokens');
+    expect(tokenMeterLabel(0)).toBeUndefined();
   });
 });

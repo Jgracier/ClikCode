@@ -37,7 +37,7 @@ import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/act
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { answerWriting, reasoningBody, tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { answerWriting, liveTokenTarget, reasoningBody, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
 import { waitStalled } from '../harness/protocol/turn-pace.js';
@@ -65,6 +65,7 @@ import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
 import { isClikCodeNotice } from '../session/clikcode-notice.js';
 import { reducedMotion } from './capabilities.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
@@ -129,6 +130,10 @@ type WaitingTurn = {
   writingAt?: number;
   /** When the latest call started (a statusOrder tick). */
   callAt?: number;
+  /** The usage this turn has reported so far, and the token count the
+   * status line shows (stepped toward it each tick, never down). */
+  usage?: TurnUsage;
+  tokens?: number;
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
@@ -1351,12 +1356,27 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.timer = undefined;
       if (this.turn !== turn || this.closed) return;
       if (this.waitingTickFast) this.waitingFrame++;
+      this.stepTokens(turn);
       // A tick that changes only the clock costs that one row: the frame
       // writes only the rows that differ from the last.
       this.updateWaiting();
       this.scheduleWaitingTick();
     }, delay);
     turn.timer.unref();
+  }
+
+  /** The status line's token count takes a step toward what the turn has
+   * produced (see smoothTokens). Stepped on the tick, not on paint, so the
+   * speed does not depend on how many frames were drawn. */
+  private stepTokens(turn: WaitingTurn): void {
+    const target = liveTokenTarget({ ...(turn.usage ? { usage: turn.usage } : {}), responseChars: this.liveResponse.length });
+    turn.tokens = smoothTokens(turn.tokens ?? 0, target);
+  }
+
+  /** The usage the vendor has reported for the running turn (a running
+   * total). It feeds the status line's meter; nothing is drawn for it here. */
+  setTurnUsage(usage: TurnUsage): void {
+    if (this.turn) this.turn.usage = usage;
   }
 
   /** The turn waits on the user (an approval, a sign-in): its clock stops,
@@ -1819,7 +1839,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const asking = this.waitingOnUser();
     // What the agent is doing is essential and stays at full contrast; the
     // clock is dimmed. Waiting on the user stops the clock, so it is not shown.
-    const rest = asking ? '' : ` · ${elapsed}`;
+    const meter = asking ? undefined : tokenMeterLabel(turn.tokens ?? 0);
+    const rest = asking ? '' : ` · ${elapsed}${meter ? ` · ${meter}` : ''}`;
     // One spinner, one motion, for every harness and every tool, the label
     // shimmering with it. An approval is the turn waiting on the user, not
     // working: a still dot, and no clock (it is stopped).
