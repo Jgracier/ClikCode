@@ -508,9 +508,11 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // Joined mid-turn, the clock starts where the turn really did.
       const startedAt = Date.parse(event.session.pendingTurn?.startedAt ?? '') || undefined;
       const base = next.live ?? freshLive('', startedAt);
+      // A snapshot adds and updates; it does not erase what only this window
+      // held (the thoughts -- never in a snapshot -- and each running call's
+      // clock). Calls merge by id, so a finished one is never reopened.
       const replayed = event.live.activities
-        ? event.live.activities.reduce<LiveTurn>((live, item) => applyActivity(live, item.event, item.responseOffset),
-          { ...base, activities: [], reasoning: [], thought: undefined, thoughtStart: undefined, seen: 0, openTools: [], toolPhase: undefined })
+        ? event.live.activities.reduce<LiveTurn>((live, item) => withToolPhase(upsertActivity(live, item.event, item.responseOffset), item.event), base)
         : base;
       // Steers are the turn's own record, so every window shows them.
       const steers = (event.session.pendingTurn?.steers ?? []).map((steer) => ({ text: steer.text, offset: steer.responseOffset ?? event.live!.text.length }));
