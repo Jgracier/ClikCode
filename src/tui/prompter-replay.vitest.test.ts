@@ -2,7 +2,7 @@
  * reopened, in the same order. */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TerminalHarnessPrompter } from './prompter.js';
-import type { HarnessSession, TranscriptMessage } from '../session/model.js';
+import type { HarnessSession, TranscriptMessage, TurnMark } from '../session/model.js';
 
 const strip = (text: string): string => text.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
 const realTty = process.stdout.isTTY;
@@ -79,5 +79,54 @@ describe('a reopened conversation draws the turn\'s durable marks', () => {
       { role: 'assistant', content: '', marks: [{ kind: 'thought', id: 't', seq: 1, responseOffset: 0, durationMs: 7000, heading: 'Reading the code' }] },
     ]);
     expect(index(rows, '✻ Thought for 7s · Reading the code')).toBeGreaterThanOrEqual(0);
+  });
+});
+
+describe('a window joining a running turn', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.assign(process.stdout, { isTTY: realTty });
+    process.stdout.write = realWrite;
+  });
+
+  function joined(draw: (rl: TerminalHarnessPrompter) => void): string {
+    const written: string[] = [];
+    Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 40 });
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      for (const arg of rest) if (typeof arg === 'function') (arg as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+    const rl = new TerminalHarnessPrompter();
+    try {
+      rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
+      rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
+      draw(rl);
+      vi.advanceTimersByTime(400);
+      return strip(written.join('')).replace(/\s+/g, ' ');
+    } finally { rl.close(); }
+  }
+
+  const settled: TurnMark = { kind: 'thought', id: 'thought:r1', seq: 1, responseOffset: 0, durationMs: 5000, heading: 'Reading the parser' };
+
+  it('draws the settled thoughts of the turn so far, once however often the snapshot repeats', () => {
+    const screen = joined((rl) => {
+      rl.response('Looking at it. ', 'replace');
+      rl.joinMark(settled);
+      rl.joinMark(settled);
+      rl.joinMark({ kind: 'notice', id: 'notice:2', seq: 2, responseOffset: 15, message: 'Switched to work' });
+    });
+    expect(screen.match(/Thought for 5s · Reading the parser/g)).toHaveLength(1);
+    expect(screen).toContain('Switched to work');
+  });
+
+  it('draws nothing again for a row its own live path already drew', () => {
+    const screen = joined((rl) => {
+      rl.response('Looking at it. ', 'replace');
+      rl.markDrawn('notice:2');
+      rl.joinMark({ kind: 'notice', id: 'notice:2', seq: 2, responseOffset: 15, message: 'Switched to work' });
+    });
+    expect(screen).not.toContain('Switched to work');
   });
 });

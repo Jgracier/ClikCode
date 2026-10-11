@@ -57,8 +57,11 @@ export function turnMarkLines(mark: TurnMark): string[] {
  * (the local counter is only the fallback, never mixed with the worker's). */
 export function savedTurnRanks(
   activities: ReadonlyArray<Pick<TurnActivity, 'responseOffset'> & { event: { seq?: number } }>, marks: readonly TurnMark[],
+  /** False when some mark's seq is not the worker's (a row learned of by
+   * another route): then no seq is used at all. */
+  options: { marksHaveSeq?: boolean } = {},
 ): { activities: number[]; marks: number[] } {
-  const bySeq = activities.every((activity) => activity.event.seq !== undefined);
+  const bySeq = options.marksHaveSeq !== false && activities.every((activity) => activity.event.seq !== undefined);
   const rows = [
     ...activities.map((activity, index) => ({ kind: 'a' as const, index, responseOffset: activity.responseOffset, ...(bySeq ? { seq: activity.event.seq! } : {}) })),
     ...marks.map((mark, index) => ({ kind: 'm' as const, index, responseOffset: mark.responseOffset, ...(bySeq ? { seq: mark.seq } : {}) })),
