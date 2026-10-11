@@ -43,19 +43,55 @@ export function activityOutput(text: string, options: { tail?: boolean } = {}): 
   };
 }
 
+/** The scalar a JSON tool result carries for a human: the first of these keys
+ * holding a non-empty string (an `error` first: a failure's reason is what the
+ * row is for), looking one object deeper (`{"error":{"message":..}}`,
+ * `{"result":{"text":..}}`). */
+const HUMAN_KEYS = ['error', 'output', 'stdout', 'message', 'text', 'result', 'response', 'content'] as const;
+
+function jsonHumanSummary(value: unknown, depth = 0): string | undefined {
+  if (Array.isArray(value)) return `${value.length} items`;
+  const record = asRecord(value);
+  if (!record) return undefined;
+  for (const key of HUMAN_KEYS) {
+    const field = record[key];
+    if (typeof field === 'string' && field.trim()) return field;
+    if (Array.isArray(field)) {
+      const text = blockText(field);
+      if (text.trim()) return text;
+    } else if (depth < 2 && asRecord(field)) {
+      const nested = jsonHumanSummary(field, depth + 1);
+      if (nested && !/^\d+ items$/.test(nested)) return nested;
+    }
+  }
+  // A result that is a list: how big, under the name it was given.
+  const lists = Object.entries(record).filter(([, field]) => Array.isArray(field));
+  if (lists.length === 1) {
+    const [key, list] = lists[0]!;
+    return `${(list as unknown[]).length} ${(HUMAN_KEYS as readonly string[]).includes(key) ? 'items' : key}`;
+  }
+  return undefined;
+}
+
 function cappedActivityOutput(text: string): Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail'> {
   const normalized = withoutHarnessNotes(text).trim();
   if (!normalized) return {};
   // Machine-readable tool output belongs to the native event protocol, not
   // the human transcript. Printing JSON/JSONL here was the reason a working
   // turn looked like a wall of tool-call envelopes until the final response
-  // replaced it. Keep the useful tool label/status and omit its raw payload.
+  // replaced it. The raw envelope is never shown; what a person would read in
+  // it (an `output`, a `message`, an `error`, how long a list is) is.
   const records = normalized.split(/\r?\n/).filter(Boolean);
-  const isJson = (candidate: string): boolean => {
-    if (!/^(?:\{|\[)/.test(candidate.trim())) return false;
-    try { JSON.parse(candidate); return true; } catch { return false; }
+  const parse = (candidate: string): { value: unknown } | undefined => {
+    if (!/^(?:\{|\[)/.test(candidate.trim())) return undefined;
+    try { return { value: JSON.parse(candidate) }; } catch { return undefined; }
   };
-  if (isJson(normalized) || (records.length > 0 && records.every(isJson))) return {};
+  const whole = parse(normalized);
+  if (whole) {
+    const summary = jsonHumanSummary(whole.value);
+    return summary ? activityOutput(summary) : {};
+  }
+  if (records.length > 0 && records.every((record) => parse(record))) return {};
   return activityOutput(normalized);
 }
 
