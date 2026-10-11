@@ -16,7 +16,16 @@ const out = (record) => process.stdout.write(`${JSON.stringify(record)}\n`);
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // FAKE_TURNS is a list, one entry per turn: the Nth invocation replays the
 // Nth, counted in FAKE_STATE so consecutive turns can say different things.
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+// The matrix rig (matrix/fake-vendor.mjs) reuses this ACP agent for every
+// harness that rides the shared ACP client. FAKE_EMIT_LOG: every update is
+// logged with Date.now() at the moment it is written to the pipe, and the
+// prompt's arrival too. FAKE_ACP_PROFILE: what the catalog entry says this
+// vendor's agent offers (models, modes, config options, how a sub-agent's
+// calls name their parent). Both are off unless set.
+const emitLog = process.env.FAKE_EMIT_LOG;
+const logEmit = (record) => { if (emitLog) appendFileSync(emitLog, `${JSON.stringify({ t: Date.now(), pid: process.pid, ...record })}\n`); };
+const profile = JSON.parse(process.env.FAKE_ACP_PROFILE ?? 'null') ?? {};
 const turns = JSON.parse(process.env.FAKE_TURNS ?? 'null') ?? [
   { blocks: ['Checking the workspace first.', 'The final commit is live.'] },
 ];
@@ -90,7 +99,14 @@ if (argv[0] === 'mcp') {
 // to ACP. Same recorded turns, as session/update notifications.
 if (argv[0] === 'agent' && argv.includes('stdio')) {
   const send = (message) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`);
-  const models = { currentModelId: 'grok-4', availableModels: [{ modelId: 'grok-4', name: 'Grok 4' }, { modelId: 'grok-4-fast', name: 'Grok 4 Fast' }] };
+  const models = 'models' in profile ? profile.models : { currentModelId: 'grok-4', availableModels: [{ modelId: 'grok-4', name: 'Grok 4' }, { modelId: 'grok-4-fast', name: 'Grok 4 Fast' }] };
+  // What session/new and session/load answer with, as the catalog entry's
+  // vendor shapes it: `models`, `modes` (a modes object) and/or config options.
+  const sessionShape = () => ({
+    ...(models ? { models } : {}),
+    ...(profile.modes ? { modes: profile.modes } : {}),
+    ...(profile.configOptions ? { configOptions: profile.configOptions } : {}),
+  });
   let sessionId;
   let cancelled = false;
   // FAKE_STEERING: advertise `_session/steering` the way claude-agent-acp
@@ -108,12 +124,19 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     asked.set(id, resolve);
     send({ id, method, params });
   });
-  const update = (value) => send({ method: 'session/update', params: { sessionId, update: value } });
+  const update = (value, onSession = sessionId) => {
+    logEmit({ ev: 'update', update: value });
+    send({ method: 'session/update', params: { sessionId: onSession, update: value } });
+  };
   const prompt = async (id, params) => {
     // What was sent, for `{received}`: whether a long paste reached it whole.
     const said = (params?.prompt ?? []).map((part) => (part?.type === 'text' ? part.text : '')).join('\n');
+    // The matrix rig plays its script only for the prompt it typed; any other
+    // prompt ClikCode sends on its own (a title, a probe) just gets an answer.
+    const matched = !profile.promptMatch || said.includes(profile.promptMatch);
+    logEmit({ ev: 'recv', what: 'session/prompt', matched });
     const received = /pasted row 1\n[\s\S]*pasted row 12/.test(said) && !said.includes('[Pasted text') ? 'whole' : 'missing';
-    const turn = nextTurn();
+    const turn = matched ? nextTurn() : { blocks: ['ok'] };
     cancelled = false;
     // `refuse`: the vendor turns the prompt away with this message (a quota
     // refusal, say), as an error answer to session/prompt.
@@ -250,7 +273,16 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
       }
     };
-    const metaFor = (parent) => (parent ? { _meta: { claudeCode: { parentToolUseId: parent } } } : {});
+    // How this vendor's agent says "this call belongs to that sub-agent":
+    // claude-agent-acp stamps `_meta.claudeCode.parentToolUseId`, Qwen Code
+    // `_meta.parentToolCallId` (+ subagentType); cursor-agent runs the child in
+    // a session of its own, announced by `subagent_spawned` (see childSession).
+    const shape = profile.parentShape ?? 'claude';
+    const metaFor = (parent) => {
+      if (!parent || shape === 'cursor') return {};
+      return shape === 'qwen' ? { _meta: { parentToolCallId: parent, subagentType: 'explore' } } : { _meta: { claudeCode: { parentToolUseId: parent } } };
+    };
+    const childSession = () => (shape === 'cursor' ? `${sessionId}.1` : sessionId);
     const done = (id, result, status, parent) => update({
       sessionUpdate: 'tool_call_update', toolCallId: id, status: status ?? 'completed',
       ...(result === undefined ? {} : { content: [{ type: 'content', content: { type: 'text', text: result } }] }), ...metaFor(parent),
@@ -279,13 +311,17 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
           open.add(event.id);
           update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: event.title, kind: 'think', status: 'in_progress',
             rawInput: { description: event.description ?? event.title, subagent_type: 'general-purpose' } });
+          if (shape === 'cursor') update({ sessionUpdate: 'subagent_spawned', subagentSessionId: childSession(), name: 'explore', task: event.title, capabilities: {}, _meta: { cursor: { toolCallId: event.id, agentId: 'a1' } } });
           break;
         case 'agent-end': if (open.delete(event.id)) done(event.id, event.result ?? 'agent done'); break;
         case 'child-start':
           update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: event.title, kind: event.kind ?? 'read', status: 'in_progress',
-            rawInput: event.input ?? { file_path: `/tmp/${event.title.split(' ').pop()}` }, ...metaFor(event.parent) });
+            rawInput: event.input ?? { file_path: `/tmp/${event.title.split(' ').pop()}` }, ...metaFor(event.parent) }, event.parent ? childSession() : sessionId);
           break;
-        case 'child-end': done(event.id, event.result ?? 'ok', undefined, event.parent); break;
+        case 'child-end':
+          update({ sessionUpdate: 'tool_call_update', toolCallId: event.id, status: 'completed',
+            content: [{ type: 'content', content: { type: 'text', text: event.result ?? 'ok' } }], ...metaFor(event.parent) }, event.parent ? childSession() : sessionId);
+          break;
         case 'permission': {
           open.add(event.id);
           update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: event.command, kind: 'execute', status: 'pending', rawInput: { command: event.command } });
@@ -325,7 +361,8 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     }
     await sleep(300);
     running = false;
-    send({ id, result: { stopReason: cancelled ? 'cancelled' : 'end_turn' } });
+    logEmit({ ev: 'end' });
+    send({ id, result: { stopReason: cancelled ? 'cancelled' : 'end_turn', ...(profile.promptUsage ? { usage: profile.promptUsage } : {}) } });
     // `after`: what the vendor says once the turn is answered -- a background
     // task it left running ending ({ op: 'sleep' } and { op: 'background' }).
     for (const event of turn.after ?? []) {
@@ -355,12 +392,18 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       const message = JSON.parse(line);
       const { id, method, params } = message;
       if (!method && asked.has(id)) { asked.get(id)(message.result); asked.delete(id); }
-      else if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false } }, authMethods: [], ...(steering ? { _meta: { steering: { supported: true } } } : {}) } });
+      else if (method === 'initialize') send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: true, promptCapabilities: { image: false }, ...(profile.agentCapabilities ?? {}) }, authMethods: [], ...(steering ? { _meta: { steering: { supported: true } } } : {}) } });
       else if (method === '_session/steering' && steering) steer(id, params);
-      else if (method === 'session/new') { sessionId = randomUUID(); send({ id, result: { sessionId, models } }); }
-      else if (method === 'session/load' || method === 'session/resume') { sessionId = params.sessionId; send({ id, result: { models } }); }
-      else if (method === 'session/set_model') { models.currentModelId = params.modelId; send({ id, result: {} }); }
-      else if (method === 'session/set_mode' || method === 'session/set_config_option') send({ id, result: {} });
+      else if (method === 'session/new') { sessionId = randomUUID(); send({ id, result: { sessionId, ...sessionShape() } }); }
+      else if (method === 'session/load' || method === 'session/resume') { sessionId = params.sessionId; send({ id, result: sessionShape() }); }
+      else if (method === 'session/set_model') { if (models) models.currentModelId = params.modelId; send({ id, result: {} }); }
+      else if (method === 'session/set_mode') { if (profile.modes) profile.modes.currentModeId = params.modeId; send({ id, result: {} }); }
+      else if (method === 'session/set_config_option') {
+        // As agents answer it: the option list as it now stands.
+        const option = (profile.configOptions ?? []).find((item) => (item.id ?? item.configId) === params.configId);
+        if (option) option.currentValue = params.value;
+        send({ id, result: profile.configOptions ? { configOptions: profile.configOptions } : {} });
+      }
       else if (method === 'session/prompt') void prompt(id, params);
       else if (method === 'session/cancel') cancelled = true;
       else if (id !== undefined) send({ id, error: { code: -32601, message: `fake grok: ${method}` } });
