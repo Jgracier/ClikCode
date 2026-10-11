@@ -98,3 +98,29 @@ describe('a reopened turn says what the live one said (V3)', () => {
     expect(traceSummaryLine(model.traces[0]!, [])).toBe('Worked for 1m 30s');
   });
 });
+
+describe('a stop from another window (V4)', () => {
+  const running = (): ChatModel => run([
+    activity({ kind: 'tool-start', id: 't1', label: '$ sleep 60', category: 'run' }),
+    worker({ type: 'delta', text: 'working', mode: 'append' }),
+  ], begin());
+
+  it('waiting-stop with stopped ends the turn as stopped, its open call closed as stopped', () => {
+    const ended = applyEvent(running(), worker({ type: 'waiting-stop', stopped: true }));
+    expect(ended.running).toBe(false);
+    expect(ended.traces[0]).toMatchObject({ stopped: true });
+    expect(ended.traces[0]!.activities[0]).toMatchObject({ id: 't1', stopped: true });
+  });
+
+  it('a snapshot with stopped and no live does the same', () => {
+    const ended = applyEvent(running(), worker({ type: 'snapshot', session: session(), stopped: true }));
+    expect(ended.running).toBe(false);
+    expect(ended.traces[0]).toMatchObject({ stopped: true });
+    expect(ended.traces[0]!.activities[0]).toMatchObject({ stopped: true });
+  });
+
+  it('a finished turn is not marked stopped', () => {
+    const ended = applyEvent(running(), worker({ type: 'waiting-stop' }));
+    expect(ended.traces[0]!.stopped).toBeUndefined();
+  });
+});
