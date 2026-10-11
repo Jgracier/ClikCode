@@ -240,7 +240,8 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     //   { op: 'usage', used, size, cost? }   { op: 'plan', entries: [{content, status}] }
     // A steer injected while the script runs is answered at the end, as above.
     const words = async (text, ms) => {
-      for (const piece of text.match(/\S+\s*/g) ?? []) {
+      // Leading blanks stay with the first word: a script continues a sentence.
+      for (const piece of text.match(/\s*\S+\s*|\s+$/g) ?? []) {
         if (cancelled) return;
         await sleep(ms ?? Number(process.env.FAKE_DELAY_MS ?? 120));
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
