@@ -18,7 +18,7 @@ import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planWindow } from '../../../../src/tui/render/plan-window';
-import { liveElapsedMs, reconnecting, turnMarks, turnNoticeNotes, type Activity, type Approval, type ChatModel, type DecisionEntry, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
+import { liveChildren, liveElapsedMs, reconnecting, turnMarks, turnNoticeNotes, type Activity, type Approval, type ChatModel, type DecisionEntry, type LiveChild, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff, HarnessQuestion, HarnessQuestionResult } from '../protocol';
 import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
@@ -222,6 +222,17 @@ function Clock({ since }: { since: number }): JSX.Element | null {
   return now - since >= 1000 ? <span class="activity-outcome">{formatElapsed(now - since)}</span> : null;
 }
 
+/** One running child of a sub-agent, on its own line with its own spinner;
+ * the newest carries the parent's count (as the terminal's row does). */
+function ChildLine({ live }: { live: LiveChild }): JSX.Element {
+  const uses = live.newest ? live.parent.childTools : undefined;
+  return (
+    <div class="activity-child" title={live.child.label}>
+      <Spinner tone="tone-cyan" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
+    </div>
+  );
+}
+
 function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
   const id = rowId(activity);
   const [open, setOpenState] = useState(openRows.has(id));
@@ -235,7 +246,10 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const ends = activity.category === 'run' && status !== 'running' ? commandOutputPreview(activity) : undefined;
   const preview = !ends && activity.output?.length && budget > 0 ? outputPreview(activity, budget) : undefined;
   const hasMore = Boolean((activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
-    || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines));
+    || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines) || activity.children?.length);
+  // Its own live children directly under it (those that began after more
+  // text was written are drawn lower, by the turn: turnMarks).
+  const beside = status === 'running' ? liveChildren(activity).filter((entry) => entry.beside) : [];
   // What it found ("42 lines"), then the exceptions (a failure, a long run).
   const result = activityResult(activity);
   const outcome = activityOutcome(activity);
@@ -262,7 +276,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {result ? <span class="activity-outcome activity-result">{result}</span> : null}
-        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{outcome.parts.join(' · ')}</span> : null}
+        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{activity.children?.length || activity.childTools ? `(${outcome.parts.join(' · ')})` : outcome.parts.join(' · ')}</span> : null}
         {activity.diff?.length && status !== 'running' ? (
           <span class="activity-actions">
             <button type="button" class="icon-button tiny" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={change('view')}><Icon name="diff" /></button>
@@ -275,7 +289,13 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
           </button>
         ) : null}
       </div>
-      {status === 'running' && activity.child ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {beside.map((entry) => <ChildLine key={entry.child.key} live={entry} />)}
+      {/* A harness that sent no child calls, only what it is doing now. */}
+      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {/* The children stay available once it settles, one click away. */}
+      {open && activity.children?.length ? (
+        <div class="activities nested">{activity.children.map((child) => <ActivityRow key={child.key} activity={child} workspace={workspace} userIndex={userIndex} />)}</div>
+      ) : null}
       {/* A running call shows what it has printed so far, newest last -- a
           long build is visibly working instead of a bare timer. */}
       {status === 'running' && !open && activity.output?.length ? <OutputView activity={{ ...activity, outputTail: true }} budget={LIVE_OUTPUT_LINES} /> : null}
@@ -439,6 +459,7 @@ function TurnFlow(props: {
     if (mark.thought) parts.push(<ThoughtRow key={`h${mark.thought.seq}`} thought={mark.thought} />);
     else if (mark.plan && props.plan) parts.push(<Plan key="plan" plan={props.plan.entries} folded={!props.live} running={Boolean(props.live)} />);
     else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
+    else if (mark.child) parts.push(<div key={`c${mark.child.child.key}`} class="activities"><ChildLine live={mark.child} /></div>);
     else if (mark.decision) parts.push(<DecisionRow key={`d${mark.decision.id}`} entry={mark.decision} />);
     else parts.push(<div key={`s${mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
   }

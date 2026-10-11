@@ -2,7 +2,8 @@
  * thought, phase, usage) wired into the extension's model and page logic. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { thoughtRow } from '../../../../src/harness/protocol/turn-flow';
-import { answeredApproval, applyEvent, emptyModel, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
+import { answeredApproval, applyEvent, emptyModel, liveChildren, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
+import { activityOutcome } from '../../../../src/harness/protocol/activity-view';
 import { decisionBadge, liveMeter, shimmerStyle, traceSummaryLine, workingDetail, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -399,5 +400,92 @@ describe('the token meter and the summary (X2)', () => {
     }) });
     expect(opened.traces[0]).toMatchObject({ usage: { output: 164 }, pendingBackground: 1 });
     expect(traceSummaryLine(opened.traces[0]!, [])).toBe('Waiting for 1 background agent · ↓ 164 tokens');
+  });
+});
+
+describe('sub-agents: children under their parent (X6)', () => {
+  const agent = { kind: 'tool-start', id: 'a1', label: 'Agent explore', agent: true };
+  const child = (id: string, kind: string, extra: Record<string, unknown> = {}) => activity({ kind, id, parentId: 'a1', label: `Read ${id}`, category: 'read', ...extra });
+  const parentOf = (model: ChatModel) => model.live!.activities[0]!;
+
+  it('nests each child under its parent in the order they began, and adds no top-level row', () => {
+    const model = run([activity(agent), child('c1', 'tool-start'), child('c2', 'tool-start')], begin());
+    expect(model.live!.activities).toHaveLength(1);
+    expect(parentOf(model).children!.map((row) => [row.key, row.kind])).toEqual([['c1', 'tool-start'], ['c2', 'tool-start']]);
+  });
+
+  it('counts unique child call ids, however many frames one call sends', () => {
+    const model = run([
+      activity(agent),
+      child('c1', 'tool-start'), child('c1', 'tool-start', { label: 'Read c1 with input' }), child('c1', 'tool-done'),
+      child('c2', 'tool-done'),
+    ], begin());
+    expect(parentOf(model).children).toHaveLength(2);
+    expect(parentOf(model).childTools).toBe(2);
+  });
+
+  it('one child finishing never clears another\'s live line', () => {
+    const model = run([activity(agent), child('c1', 'tool-start'), child('c2', 'tool-start'), child('c1', 'tool-done')], begin());
+    expect(liveChildren(parentOf(model)).map((row) => row.child.key)).toEqual(['c2']);
+  });
+
+  it('shows the last three running children', () => {
+    const model = run([activity(agent), ...['c1', 'c2', 'c3', 'c4', 'c5'].map((id) => child(id, 'tool-start'))], begin());
+    const rows = liveChildren(parentOf(model));
+    expect(rows.map((row) => row.child.key)).toEqual(['c3', 'c4', 'c5']);
+    expect(rows.map((row) => row.newest)).toEqual([false, false, true]);
+  });
+
+  it('a child that began after answer text sits below it, at its own place', () => {
+    const model = run([activity(agent), child('c1', 'tool-start'), delta('and then some text'), child('c2', 'tool-start')], begin());
+    const rows = liveChildren(parentOf(model));
+    expect(rows.map((row) => [row.child.key, row.beside])).toEqual([['c1', true], ['c2', false]]);
+    const marks = turnMarks(model.live!.text, model.live!.activities, [], []);
+    expect(marks.map((mark) => mark.activity?.key ?? mark.child?.child.key)).toEqual(['a1', 'c2']);
+    expect(marks[1]!.offset).toBe(18);
+  });
+
+  it('the settled row says what the harness reported, else what was counted', () => {
+    const counted = run([activity(agent), child('c1', 'tool-start'), child('c2', 'tool-start'), activity({ ...agent, kind: 'tool-done' })], begin());
+    expect(activityOutcome(parentOf(counted))?.parts).toEqual(['2 tool uses']);
+    const reported = run([activity(agent), child('c1', 'tool-start'),
+      activity({ ...agent, kind: 'tool-done', childTools: 7, childTokens: 12_000, durationMs: 5_000 })], begin());
+    expect(activityOutcome(parentOf(reported))?.parts).toEqual(['7 tool uses', '12k tokens', '5.0s']);
+  });
+
+  it('the children stay on the settled row, with nothing left running', () => {
+    const model = run([activity(agent), child('c1', 'tool-start'), activity({ ...agent, kind: 'tool-done' }), worker({ type: 'waiting-stop' })], begin());
+    expect(model.traces[0]!.activities[0]!.children!.map((row) => row.kind)).toEqual(['tool-done']);
+  });
+
+  it('a reopened turn nests them too', () => {
+    const opened = applyEvent(emptyModel(), { type: 'session', session: session({
+      messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'ok', activities: [
+        { event: { kind: 'tool-done', id: 'a1', label: 'Agent explore', agent: true, childTools: 2 }, responseOffset: 0 },
+        { event: { kind: 'tool-done', id: 'c1', parentId: 'a1', label: 'Read c1', category: 'read' }, responseOffset: 0 },
+        { event: { kind: 'tool-done', id: 'c2', parentId: 'a1', label: 'Read c2', category: 'read' }, responseOffset: 0 },
+      ] } as never],
+    }) });
+    const [row, ...rest] = opened.traces[0]!.activities;
+    expect(rest).toEqual([]);
+    expect(row!.children!.map((entry) => entry.key)).toEqual(['c1', 'c2']);
+    expect(row!.childTools).toBe(2);
+  });
+
+  it('reading the same saved turn again changes nothing (no clock on a saved child)', () => {
+    const saved = session({
+      messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'ok', activities: [
+        { event: { kind: 'tool-done', id: 'a1', label: 'Agent explore', agent: true }, responseOffset: 0 },
+        { event: { kind: 'tool-done', id: 'c1', parentId: 'a1', label: 'Read c1', category: 'read' }, responseOffset: 0 },
+      ] } as never],
+    });
+    const first = applyEvent(emptyModel(), { type: 'session', session: saved });
+    const again = applyEvent(first, { type: 'session', session: saved });
+    expect(again.traces).toBe(first.traces);
+  });
+
+  it('a child whose parent was never seen is a row of its own, not dropped', () => {
+    const model = run([child('c9', 'tool-start')], begin());
+    expect(model.live!.activities.map((row) => row.key)).toEqual(['c9']);
   });
 });
