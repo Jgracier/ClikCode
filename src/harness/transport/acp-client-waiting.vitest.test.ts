@@ -6,8 +6,9 @@ import { createAcpSession } from './acp-client.js';
 import type { VendorBackgroundTurn } from './background-turn.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { TurnUsage } from '../protocol/turn-usage.js';
+import type { BackgroundWorkUpdate } from '../protocol/background-agents.js';
 
-type Step = { after?: number; update?: Record<string, unknown>; answer?: true | Record<string, unknown>; error?: { code: number; message: string }; permission?: true };
+type Step = { after?: number; update?: Record<string, unknown>; notify?: { method: string; params: Record<string, unknown> }; answer?: true | Record<string, unknown>; error?: { code: number; message: string }; permission?: true };
 
 /** `prompts[n]` is what the agent does for the nth session/prompt. */
 function agent(prompts: Step[][]): string {
@@ -19,6 +20,7 @@ function agent(prompts: Step[][]): string {
       for (const step of steps) {
         if (step.after) await new Promise((r) => setTimeout(r, step.after));
         if (step.update) send({ method: 'session/update', params: { sessionId: 's1', update: step.update } });
+        if (step.notify) send({ method: step.notify.method, params: { sessionId: 's1', ...step.notify.params } });
         if (step.permission) send({ id: 500 + n, method: 'session/request_permission', params: { sessionId: 's1', toolCall: { toolCallId: 't', title: 'Run make', kind: 'execute' }, options: [{ optionId: 'y', kind: 'allow_once' }, { optionId: 'n', kind: 'reject_once' }] } });
         if (step.answer) send({ id, result: step.answer === true ? { stopReason: 'end_turn' } : step.answer });
         if (step.error) send({ id, error: step.error });
@@ -173,6 +175,74 @@ describe('updates an ACP agent sends between prompts', () => {
       expect((await session.runTurn(prompts)).text).toBe('two');
       expect(await turns[0]!.finished).toEqual({ text: '', ended: 'superseded' });
       expect(activity.map((event) => `${event.kind} ${event.id}`)).toEqual(['tool-done bg']);
+    } finally { await session.close(); }
+  });
+});
+
+describe('the background level an ACP agent publishes (claude-agent-acp _claude/sdkMessage)', () => {
+  const level = (...tasks: Array<Record<string, unknown>>) => ({
+    notify: { method: '_claude/sdkMessage', params: { message: { type: 'system', subtype: 'background_tasks_changed', tasks } } },
+  });
+  const shell = { task_id: 'sh1', task_type: 'local_bash', description: 'npm run dev' };
+  const agentTask = { task_id: 'ag1', task_type: 'local_agent', description: 'review' };
+
+  it('reaches the running turn by kind', async () => {
+    const session = createAcpSession();
+    const seen: BackgroundWorkUpdate[] = [];
+    try {
+      await session.runTurn(input([[level(shell, agentTask), level(agentTask), { update: chunk('ok') }, { answer: true }]], { onBackgroundWork: (work: BackgroundWorkUpdate) => seen.push(work) }));
+      expect(seen[0]).toEqual({ agents: 1, terminals: 1, workflows: 0 });
+      expect(seen[1]).toEqual({ agents: 1, terminals: 0, workflows: 0 });
+    } finally { await session.close(); }
+  });
+
+  it('keeps reporting after the turn ended, while the vendor still runs a terminal, and ends when the level empties', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
+    try {
+      await session.runTurn(input([[
+        level(shell), { update: chunk('Started it.') }, { answer: true },
+        // After the answer: the shell still runs (a level change), then it ends.
+        { after: 100, ...level(shell, agentTask) },
+        { after: 600, ...level() },
+      ]]));
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      expect(turns[0]!.reason).toBe('background-work');
+      const seen: BackgroundWorkUpdate[] = [];
+      turns[0]!.attach({ onBackgroundWork: (work) => seen.push(work) });
+      expect(await session.backgroundWorkRunning()).toBe(true);
+      expect(await turns[0]!.finished).toEqual({ text: '', ended: 'completed' });
+      expect(seen[0]).toEqual({ agents: 0, terminals: 1, workflows: 0 });
+      expect(seen.at(-1)).toEqual({ agents: 0, terminals: 0, workflows: 0 });
+      expect(seen.some((work) => work.agents === 1 && work.terminals === 1)).toBe(true);
+      expect(await session.backgroundWorkRunning()).toBe(false);
+    } finally { await session.close(); }
+  });
+
+  it('opens nothing for an empty level after the turn', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
+    try {
+      await session.runTurn(input([[{ update: chunk('ok') }, { answer: true }, { after: 50, ...level() }]]));
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(turns).toHaveLength(0);
+    } finally { await session.close(); }
+  });
+
+  it('tells the next turn what already runs, so its indicator does not go dark', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
+    const seen: BackgroundWorkUpdate[] = [];
+    try {
+      const prompts = input([
+        [level(shell), { update: chunk('one') }, { answer: true }],
+        [{ update: chunk('two') }, { answer: true }],
+      ], { onBackgroundWork: (work: BackgroundWorkUpdate) => seen.push(work) });
+      await session.runTurn(prompts);
+      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
+      seen.length = 0;
+      await session.runTurn(prompts);
+      expect(seen[0]).toEqual({ agents: 0, terminals: 1, workflows: 0 });
     } finally { await session.close(); }
   });
 });

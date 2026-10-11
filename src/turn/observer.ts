@@ -10,6 +10,7 @@
  */
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
+import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
@@ -28,11 +29,12 @@ export interface TurnObserver {
   askQuestions?(request: import('../harness/events/question.js').HarnessQuestionRequest, signal?: AbortSignal): Promise<import('../harness/events/question.js').HarnessQuestionResult>;
   setPlan(entries: readonly PlanEntry[]): void;
   setTurnUsage(usage: TurnUsage): void;
-  /** Background agents the vendor says are still running (the level, 0 =
-   * none): the turn's end says `Waiting for N background agents` from it.
+  /** Background work the vendor says is still running, by kind, as the whole
+   * level (undefined = none): agents and workflows are what the turn's end
+   * line says it waits for; terminals are a footer indicator while any run.
    * Optional: a surface that draws the end line from the saved turn alone
-   * has nothing to do with it live. */
-  setPendingBackground?(pending: number): void;
+   * has nothing to do live. */
+  setBackgroundWork?(work: BackgroundWork | undefined): void;
   startWaiting(
     message: string,
     onCancel?: (restoreDraft: boolean) => void,

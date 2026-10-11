@@ -9,6 +9,7 @@
  * at a time, and never beside a user turn: a user turn supersedes it (the
  * transport ends it and hands the vendor to that turn), and one that arrives
  * while a user turn is still finishing starts right after. */
+import { mergeBackgroundWork, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
@@ -97,6 +98,8 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     deps.changed();
     const { observer } = deps;
     const finished: string[] = [];
+    /** The background level this run has been told so far (the transport sends each kind it names). */
+    let level: BackgroundWork | undefined;
     // A turn of its own for /undo: edits a vendor made in the background are
     // not the user turn's before or after it.
     const recorder = new TurnRecorder(BACKGROUND_TURN_LABEL, 'reported');
@@ -114,7 +117,10 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       },
       onThought: (text, id) => observer.activityEvent({ kind: 'thinking', label: thoughtLabel(text), ...(id ? { id } : {}) }),
       onUsage: (usage) => observer.setTurnUsage(usage),
-      onBackgroundAgents: (pending) => observer.setPendingBackground?.(pending),
+      onBackgroundWork: (update) => {
+        level = mergeBackgroundWork(level, update);
+        observer.setBackgroundWork?.(level);
+      },
       onPhase: (phase) => observer.phase(phase),
       onPlan: (entries) => observer.setPlan(entries),
       onApproval: async (title, detail, preview, signal, callId) => (await observer.approval(title, detail, preview, undefined, signal, callId)) !== false,

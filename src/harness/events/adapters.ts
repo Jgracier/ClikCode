@@ -61,6 +61,10 @@ export interface StreamState {
   readonly tasks: TaskListTracker;
   /** Cline's one open call, which no record of its stream completes. */
   cline?: ClineState;
+  /** Background shells a stream announces by call and ends by notification
+   * (Cursor's `shellToolCall` with `isBackground`, then `task_notification`
+   * naming its shell id): background terminals, by shell id. */
+  backgroundShells?: Set<string>;
 }
 
 /** A fresh state for one turn attempt. */

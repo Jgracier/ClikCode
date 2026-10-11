@@ -1,6 +1,7 @@
 /** What a session and the state file around it are: the conversation, the
  * harness and account it is attached to, and the defaults it inherits. */
 
+import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute } from '../harness/definition.js';
 import type { ShellNote } from '../commands/ai/shell-run.js';
 import type { ConversationSummary, PreviousNativeThread } from './conversation-summary.js';
@@ -71,8 +72,10 @@ export type TranscriptMessage = {
    * `usage` is what the turn reported it spent, when it reported any: the
    * closing line adds tokens and cost from it. */
   /** `pendingBackground`: background agents the vendor said were still
-   * running when the turn ended (standard section 10); absent is none. */
-  turnEnd?: { ms: number; stopped?: true; usage?: TurnUsage; pendingBackground?: number };
+   * running when the turn ended (standard section 10); absent is none.
+   * `background` is the same by kind (agents and workflows; a background
+   * terminal is never part of the end line). */
+  turnEnd?: { ms: number; stopped?: true; usage?: TurnUsage; pendingBackground?: number; background?: BackgroundWork };
   /** On the answer a turn ended on: the account it moved to on the way,
    * from which, and why ("Switched to work: personal is out of usage"). */
   accountSwitch?: AccountSwitch;
@@ -241,8 +244,10 @@ export interface HarnessSession {
     /** A sign-in this turn needed and got, carried onto its answer too. */
     signedInTo?: string;
     /** Background agents the vendor says are still running: carried onto
-     * the answer's `turnEnd` when the turn ends. */
+     * the answer's `turnEnd` when the turn ends (`background`: the same,
+     * with workflows). */
     pendingBackground?: number;
+    background?: BackgroundWork;
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */

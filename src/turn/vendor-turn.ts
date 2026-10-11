@@ -60,6 +60,7 @@ import { recordInvocation, recordUnfinishedInvocation, showStopReason, turnSink 
 import { swarmIsOn } from '../swarm/policy.js';
 import { swarmProvisionEntry, swarmRidesTurn } from '../swarm/publish.js';
 import { openSwarmTurn } from '../swarm/store.js';
+import { mergeBackgroundWork, type BackgroundWork, type BackgroundWorkUpdate } from '../harness/protocol/background-agents.js';
 import { emptySwarmFold, foldSwarmActivity, type SwarmFold } from '../swarm/fold.js';
 import { watchSwarmActivity } from '../swarm/spool.js';
 
@@ -446,17 +447,24 @@ export async function sendVendorTurn(input: {
    * for it (codex's rate limits and steering, the structured CLI's own idle
    * bookkeeping) -- so a member absent from a transport's literal is a
    * deliberate default, not a forgotten one. */
+  let backgroundNow: BackgroundWork | undefined;
   const sharedObserver = {
     onActivity, onThought, onUsage: noteUsage,
-    // The vendor's own count of agents still running: carried to the turn's
-    // end line (checkpoint turnEnd) and shown to the windows following it.
-    onBackgroundAgents: (pending: number): void => {
+    // The vendor's own count of what still runs in the background, by kind:
+    // agents and workflows are carried to the turn's end line (checkpoint
+    // turnEnd), terminals only live; shown to the windows following it.
+    onBackgroundWork: (update: BackgroundWorkUpdate): void => {
+      backgroundNow = mergeBackgroundWork(backgroundNow, update);
       if (session.pendingTurn) {
-        if (pending > 0) session.pendingTurn.pendingBackground = pending;
-        else delete session.pendingTurn.pendingBackground;
+        // Terminals stay live-only: a saved turn must not claim one is
+        // still running on the next open.
+        const { terminals: _live, ...ends } = backgroundNow ?? {};
+        const kept = mergeBackgroundWork(undefined, ends);
+        if (kept) session.pendingTurn.background = kept; else delete session.pendingTurn.background;
+        if (kept?.agents) session.pendingTurn.pendingBackground = kept.agents; else delete session.pendingTurn.pendingBackground;
         checkpoint.touch();
       }
-      prompter?.setPendingBackground?.(pending);
+      prompter?.setBackgroundWork?.(backgroundNow);
     },
     onResponseDelta: sink.response,
     onPhase: (phase: string) => prompter?.phase(phase),

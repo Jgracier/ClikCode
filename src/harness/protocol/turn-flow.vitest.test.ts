@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   activityResult, answerWriting, decisionRow, isApprovalWaitPhase, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
+  backgroundTerminalsLabel,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -89,6 +90,19 @@ describe('how a turn reads', () => {
     expect(turnSummary({ ms: 3000, pendingBackground: 2 })).toBe('Waiting for 2 background agents');
     expect(turnSummary({ ms: 3000, pendingBackground: 1 })).toBe('Waiting for 1 background agent');
     expect(turnSummary({ ms: 3000, pendingBackground: 0 })).toBe('Worked for 3s');
+    // Claude Code's own words: `N background agents and N dynamic workflows`.
+    expect(turnSummary({ ms: 3000, pendingBackground: 2, pendingWorkflows: 1 })).toBe('Waiting for 2 background agents and 1 dynamic workflow');
+    expect(turnSummary({ ms: 3000, pendingWorkflows: 2 })).toBe('Waiting for 2 dynamic workflows');
+    expect(turnSummary({ ms: 3000, pendingWorkflows: 0, pendingBackground: 0 })).toBe('Worked for 3s');
+    expect(turnSummary({ ms: 3000, pendingBackground: 1, pendingWorkflows: 1, usage: '↓ 12 tokens' })).toBe('Waiting for 1 background agent and 1 dynamic workflow · ↓ 12 tokens');
+  });
+
+  it('says background terminals as a footer indicator, singular and plural, nothing at zero; never on the end line', () => {
+    expect(backgroundTerminalsLabel(1)).toBe('1 background terminal running');
+    expect(backgroundTerminalsLabel(3)).toBe('3 background terminals running');
+    expect(backgroundTerminalsLabel(0)).toBeUndefined();
+    expect(backgroundTerminalsLabel(undefined)).toBeUndefined();
+    expect(turnSummary({ ms: 3000, backgroundTerminals: 2 } as never)).toBe('Worked for 3s');
     expect(endsWithSummary(5_000, 0)).toBe(false);
     expect(endsWithSummary(5_000, 1)).toBe(true);
     expect(endsWithSummary(12_000, 0)).toBe(true);

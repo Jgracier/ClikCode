@@ -41,6 +41,16 @@ describe('a turn that left background agents running', () => {
     finishPendingTurn(none, 'Done.', stamp(9));
     expect(none.messages!.at(-1)!.turnEnd).not.toHaveProperty('pendingBackground');
   });
+
+  it('carries the work by kind (agents, workflows) onto the answer, for the end line', () => {
+    const left = session();
+    beginPendingTurn(left, 'go', stamp(1));
+    updatePendingResponse(left, 'Started them.');
+    left.pendingTurn!.pendingBackground = 2;
+    left.pendingTurn!.background = { agents: 2, workflows: 1 };
+    finishPendingTurn(left, 'Started them.', stamp(9));
+    expect(left.messages!.at(-1)!.turnEnd).toMatchObject({ pendingBackground: 2, background: { agents: 2, workflows: 1 } });
+  });
 });
 
 describe('durable turn checkpoints', () => {
