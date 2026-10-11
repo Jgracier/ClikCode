@@ -326,6 +326,22 @@ describe('a session worker waits for what it should', () => {
     await processExit(pid, 10_000);
   }, 30_000);
 
+  it('leaves when its home was deleted and then recreated as a different directory', async () => {
+    process.env.CLIKCODE_WORKER_BUILD_WATCH_MS = '100';
+    const session = await gatewaySession('ask');
+    const client = await attach(session.id);
+    const pid = workerPids[0]!;
+    const asked = eventsUntil(client, 'approval-request');
+    client.send({ type: 'submit', text: 'write it', echo: true });
+    (await gateway!.next()).respond(call('bash', { command: 'touch made-by-test' }));
+    await asked;
+    client.close();
+    clients.splice(0);
+    await rm(process.env.CLIKCODE_HOME!, { recursive: true, force: true });
+    await mkdir(process.env.CLIKCODE_HOME!, { recursive: true });
+    await processExit(pid, 10_000);
+  }, 30_000);
+
   it('idle-exits when its window vanished without saying goodbye', async () => {
     const session = await gatewaySession('bypass', 1_000);
     const client = await attach(session.id);
