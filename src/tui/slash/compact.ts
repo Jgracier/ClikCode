@@ -40,10 +40,10 @@ export async function compactConversation(
   // or a transport without the method, the summary path below is the fallback.
   if (harness?.nativeOperations?.includes('compact') && session.nativeSessionId) {
     const live = persistentTransports.get(id);
-    const compactor = live?.transport === 'codex-app-server' ? (live.session as unknown as { compactThread?: (threadId: string) => Promise<void> }) : undefined;
+    const compactor = live?.transport === 'codex-app-server' ? (live.session as unknown as { compactThread?: (threadId: string) => Promise<boolean> }) : undefined;
     if (compactor?.compactThread) {
-      await compactor.compactThread(session.nativeSessionId);
-      return;
+      // False: no live server holds the thread, so the summary path below does it.
+      if (await compactor.compactThread(session.nativeSessionId)) return;
     }
   }
   await send(id, `${COMPACT_PROMPT}${focus ? `\nPay particular attention to: ${focus}` : ''}`);

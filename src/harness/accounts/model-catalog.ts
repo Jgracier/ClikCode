@@ -157,6 +157,8 @@ function serverModelList(harness: AiLocalHarnessDefinition): boolean {
  * nor one that picks a provider first (Goose), whose session lists only
  * that provider's models. */
 function listsModelsLive(harness: AiLocalHarnessDefinition): boolean {
+  // Codex: its running app-server answers `model/list` (transport/codex-app-server.ts).
+  if (harness.command === 'codex') return true;
   return Boolean(harness.acp && harness.acp.listsModels !== false && !harness.acp.providerConfigId && !harness.modelDiscoveryArgv);
 }
 
@@ -520,12 +522,18 @@ async function nativeModelCatalogUncached(
       const config = await readFile(join(profileRoot, 'config.toml'), 'utf8');
       configured = /^\s*model\s*=\s*["']([^"']+)["']/m.exec(config)?.[1]?.trim();
     } catch { /* Codex will choose its own default when no config exists. */ }
-    try {
-      const cache = JSON.parse(await readFile(join(profileRoot, 'models_cache.json'), 'utf8')) as { models?: Array<{ slug?: unknown; visibility?: unknown }> };
-      for (const model of cache.models ?? []) {
-        if (typeof model.slug === 'string' && model.slug.trim() && model.visibility !== 'hide') models.add(model.slug.trim());
-      }
-    } catch { /* The cache is optional and vendor-owned. */ }
+    if (liveListed?.models.length) {
+      // The running app-server's own `model/list`: the cache file is only the fallback below.
+      liveListed.models.forEach((model) => models.add(model));
+      labels = { ...labels, ...liveListed.labels };
+    } else {
+      try {
+        const cache = JSON.parse(await readFile(join(profileRoot, 'models_cache.json'), 'utf8')) as { models?: Array<{ slug?: unknown; visibility?: unknown }> };
+        for (const model of cache.models ?? []) {
+          if (typeof model.slug === 'string' && model.slug.trim() && model.visibility !== 'hide') models.add(model.slug.trim());
+        }
+      } catch { /* The cache is optional and vendor-owned. */ }
+    }
   } else if (profileRoot && harness.command === 'claude') {
     try {
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown };
