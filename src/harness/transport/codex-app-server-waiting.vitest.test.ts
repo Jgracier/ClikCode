@@ -107,6 +107,37 @@ describe('a Codex turn waits for its own thread', () => {
   });
 });
 
+describe('a Codex sub-agent thread\'s own tool calls', () => {
+  const childCommand = (id: string, done: boolean) => ({
+    method: done ? 'item/completed' : 'item/started',
+    params: { threadId: 'C', turnId: 'CU1', item: { type: 'commandExecution', id, command: 'ls src', status: done ? 'completed' : 'inProgress', ...(done ? { aggregatedOutput: 'a.ts\n', exitCode: 0 } : {}) } },
+  });
+
+  it('are child rows of the sub-agent row (standard section 5), never top-level rows', async () => {
+    const codex = session([[
+      { send: { method: 'item/started', params: { threadId: 'T', turnId: '{{turn}}', item: { type: 'subAgentActivity', id: 'call_1', kind: 'started', agentThreadId: 'C', agentPath: '/root/run_tests' } } } },
+      { send: turnStarted('C', 'CU1') },
+      { send: childCommand('c1', false) },
+      { send: childCommand('c1', true) },
+      { send: { method: 'item/completed', params: { threadId: 'C', turnId: 'CU1', item: { type: 'reasoning', id: 'r1', summary: ['child thought'] } } } },
+      { after: 50, send: turnCompleted('C', 'CU1') },
+      { after: 100, send: agentMessage('T', '{{turn}}', 'PARENT DONE') },
+      { send: turnCompleted('T', '{{turn}}') },
+    ]]);
+    const activity: HarnessActivityEvent[] = [];
+    try {
+      await codex.runTurn(input(activity));
+      const children = activity.filter((event) => event.id === 'c1');
+      expect(children.map((event) => [event.kind, event.parentId])).toEqual([['tool-start', 'agent:C'], ['tool-done', 'agent:C']]);
+      expect(children[1]!.output).toEqual(['a.ts']);
+      // The thread's own row is the parent, and is the only agent row.
+      expect(activity.filter((event) => event.agent).every((event) => event.id === 'agent:C' && event.parentId === undefined)).toBe(true);
+      // A child's reasoning is its own: it is not the turn's thought.
+      expect(activity.some((event) => event.kind === 'thinking')).toBe(false);
+    } finally { await codex.close(); }
+  });
+});
+
 describe('the idle watchdog on a Codex turn', () => {
   it('fails a silent turn as an idle timeout', async () => {
     const codex = session([[]], { idleMs: 200 });

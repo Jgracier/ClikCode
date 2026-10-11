@@ -134,12 +134,33 @@ function acpThoughtDelta(update: Json): string | undefined {
     ? update.content.text : undefined;
 }
 
-/** The tool call a sub-agent's update belongs to: claude-agent-acp's
- * `_meta.claudeCode.parentToolUseId` (stamped on the sub-agent's tool calls,
- * prose and thinking). */
+/** The field names agents use for "this update belongs to that tool call":
+ * claude-agent-acp's `claudeCode.parentToolUseId`, Qwen Code's
+ * `_meta.parentToolCallId` (+ `subagentType`), and the snake_case forms of
+ * both. Read from the update itself, its `_meta`, or one vendor namespace
+ * inside `_meta` -- never from `rawInput`, which is the call's own argument. */
+const PARENT_KEYS = ['parentToolUseId', 'parentToolCallId', 'parent_tool_use_id', 'parent_tool_call_id'] as const;
+
+function parentIn(record: unknown): string | undefined {
+  if (!record || typeof record !== 'object') return undefined;
+  for (const key of PARENT_KEYS) {
+    const value = (record as Json)[key];
+    if (typeof value === 'string' && value) return value;
+  }
+  return undefined;
+}
+
+/** The tool call a sub-agent's update belongs to (stamped on the sub-agent's
+ * tool calls, prose and thinking), whichever agent says so. */
 export function acpParentToolId(update: Json): string | undefined {
-  const parent = update?._meta?.claudeCode?.parentToolUseId;
-  return typeof parent === 'string' && parent ? parent : undefined;
+  const meta = update?._meta && typeof update._meta === 'object' ? update._meta as Json : undefined;
+  const direct = parentIn(update) ?? parentIn(meta);
+  if (direct || !meta) return direct;
+  for (const namespace of Object.values(meta)) {
+    const nested = parentIn(namespace);
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 export function acpActivityEvent(update: Json): HarnessActivityEvent | undefined {
@@ -529,6 +550,8 @@ interface BackgroundRun extends Stream {
 
 /** Updates that carry the agent's work and so can open a background turn.
  * Session bookkeeping (usage, titles, modes, command palettes) never does. */
+/** What a sub-agent's session contributes to the turn it runs under. */
+const CHILD_SESSION_UPDATES: ReadonlySet<string> = new Set(['tool_call', 'tool_call_update', 'agent_message_chunk', 'agent_thought_chunk']);
 const CONTENT_UPDATES: ReadonlySet<string> = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan']);
 /** What agents publish as a prompt winds up (cline and hermes send
  * `session_info_update`, kimi and hermes `usage_update`). ACP has no
@@ -1003,11 +1026,31 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     return CONTENT_UPDATES.has(String(update.sessionUpdate)) ? this.openBackground() : undefined;
   }
 
+  /** Sessions an agent runs a sub-agent in (cursor-agent: `subagent_spawned`
+   * names `subagentSessionId` and, in `_meta.cursor.toolCallId`, the call that
+   * spawned it) -> that call. Their updates arrive under their own session id. */
+  private readonly childSessions = new Map<string, string>();
+
   private update(params: Json): void {
-    const update: Json = params.update ?? {};
+    let update: Json = params.update ?? {};
     const turn = this.turn && !this.turn.done ? this.turn : undefined;
     const expected = turn?.sessionId ?? this.sessionId;
-    if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) return;
+    if (update.sessionUpdate === 'subagent_spawned' && typeof update.subagentSessionId === 'string') {
+      const spawner = update._meta?.cursor?.toolCallId;
+      if (typeof spawner === 'string' && spawner) {
+        // A sub-agent's own sub-agent hangs off the call in its session, itself a child.
+        this.childSessions.set(update.subagentSessionId, spawner);
+      }
+    }
+    let ofChild = false;
+    if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) {
+      // A sub-agent's session: its calls, prose and thoughts are children of
+      // the call that spawned it. Its plan, usage totals and commands are its own.
+      const parent = this.childSessions.get(params.sessionId);
+      if (!parent || !CHILD_SESSION_UPDATES.has(String(update.sessionUpdate))) return;
+      update = { ...update, _meta: { ...(update._meta && typeof update._meta === 'object' ? update._meta : {}), parentToolCallId: parent } };
+      ofChild = true;
+    }
     // The agent changed its own mode: leaving plan mode is its plan approved.
     if (update.sessionUpdate === 'current_mode_update' && typeof update.currentModeId === 'string' && this.live) {
       const before = this.live.modes?.currentModeId;
@@ -1027,7 +1070,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     // Running totals are the session's, whoever is listening: taken during a
     // session/load replay (the baseline) and after a prompt was answered.
-    const totals = acpSessionTotals(update);
+    const totals = ofChild ? undefined : acpSessionTotals(update);
     if (totals) this.sessionTotals = { ...this.sessionTotals, ...totals };
     // session/load replays the old conversation as ordinary updates. Nothing
     // before our own prompt belongs to this turn -- but command palettes are

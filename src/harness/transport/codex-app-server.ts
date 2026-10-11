@@ -337,6 +337,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private readonly pendingWork = new Map<string, PendingWork>();
   /** Approval prompts open, by JSON-RPC request id: released by serverRequest/resolved. */
   private readonly openApprovals = new Map<string, () => void>();
+  /** An open item of a sub-agent's thread -> the sub-agent row it belongs to
+   * (`agent:<thread id>`), so its output progress is a child row too. */
+  private readonly childParent = new Map<string, string>();
   private turnCompletedWaiter?: () => void;
   /** A native compaction waiting for `thread/compacted`; rejected when the server goes away. */
   private compactWaiter?: { done: () => void; fail: (error: Error) => void };
@@ -769,7 +772,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     } else this.workFinished(key, target);
   }
 
-  /** A sub-agent thread: one row per sub-agent, open while it works. */
+  /** A sub-agent thread: one row per sub-agent, open while it works, and its
+   * own tool calls as that row's children (`parentId`). A child's prose and
+   * reasoning are its own: neither is the turn's answer or thought. */
   private otherThread(target: Stream | undefined, method: string, params: JsonObject, threadId: string): void {
     const key = `agent:${threadId}`;
     if (method === 'turn/started') {
@@ -784,6 +789,32 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         const failed = ((params.turn as JsonObject | undefined) ?? {}).status === 'failed';
         target?.observer.onActivity?.({ kind: failed ? 'tool-error' : 'tool-done', label: known.label, agent: true, id: key });
       }
+    } else if (target && (method === 'item/started' || method === 'item/completed')) {
+      const item = (params.item as JsonObject) ?? {};
+      const completed = method === 'item/completed';
+      if (item.type === 'subAgentActivity') {
+        // A sub-agent's own sub-agent: a child row of its parent, and the
+        // parent row of what that one does (`agent:<its thread>`).
+        if (typeof item.agentThreadId !== 'string') return;
+        const id = `agent:${item.agentThreadId}`;
+        const label = subAgentLabel(item.agentPath);
+        if (item.kind === 'started' && !completed) target.observer.onActivity?.({ kind: 'tool-start', label, agent: true, id, parentId: key });
+        else if (item.kind === 'completed') target.observer.onActivity?.({ kind: 'tool-done', label, agent: true, id, parentId: key });
+        return;
+      }
+      if (typeof item.id !== 'string') return;
+      if (completed) {
+        this.childParent.delete(item.id);
+        target.items.delete(item.id);
+        target.output.delete(item.id);
+      } else {
+        this.childParent.set(item.id, key);
+        target.items.set(item.id, item);
+      }
+      const activity = codexActivityForItem(item, completed);
+      if (activity && activity.kind !== 'thinking') target.observer.onActivity?.({ ...activity, parentId: key });
+    } else if (target && /^item\/(commandExecution|fileChange)\/outputDelta$/.test(method) && typeof params.delta === 'string') {
+      this.outputDelta(target, String(params.itemId ?? ''), params.delta);
     }
   }
 
@@ -953,6 +984,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       kind: 'tool-start', label: activity?.label ?? 'command', id: itemId, ...output,
       ...(activity?.category ? { category: activity.category } : {}),
       ...(activity?.agent ? { agent: activity.agent } : {}),
+      ...(this.childParent.has(itemId) ? { parentId: this.childParent.get(itemId)! } : {}),
     });
   }
 

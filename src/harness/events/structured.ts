@@ -60,6 +60,7 @@ export function reportStructuredLine(
   if (parsed.sessionId) void observer.onSessionId?.(parsed.sessionId);
   if (parsed.response) observer.onResponseDelta?.(parsed.response.text, parsed.response.mode);
   if (parsed.phase) observer.onPhase?.(parsed.phase);
+  if (parsed.notice) observer.onNotice?.(parsed.notice);
   if (parsed.usage) observer.onUsage?.(parsed.usage);
   for (const event of parsed.activities ?? []) observer.onActivity?.(event);
   if (!record) return outcome;

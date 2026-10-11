@@ -2,8 +2,9 @@
  * consume only normalized response updates, never vendor JSON shapes. */
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { aiderLine } from './aider.js';
+import { CLINE_ANSWER_KINDS, clineLine, type ClineState } from './cline.js';
 import { ClaudeBlocks } from './claude-stream.js';
-import { parseNativeActivityEventsFromValue, type NativeActivityEvent } from '../protocol/activity-events.js';
+import { parseNativeActivityEventsFromValue, thoughtLabel, type NativeActivityEvent } from '../protocol/activity-events.js';
 import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
 import { claudeShaped, parseJsonRecord } from '../protocol/json-lines.js';
 import { TaskListTracker } from '../protocol/plan-events.js';
@@ -52,15 +53,21 @@ export interface StreamState {
    * synthesized for it (Pi builds that omit `toolCallId`). */
   readonly anonymousCalls: string[];
   anonymousCallCount: number;
+  /** Thoughts a stream with no ids of its own (Pi, Cursor) has had, and the
+   * one in flight: each gets one stable id and a text that grows. */
+  thoughtCount: number;
+  thoughtText: string;
   /** The turn's task list (Claude Code's task tools build it a call at a time). */
   readonly tasks: TaskListTracker;
+  /** Cline's one open call, which no record of its stream completes. */
+  cline?: ClineState;
 }
 
 /** A fresh state for one turn attempt. */
 export function createStreamState(): StreamState {
   return {
     hasText: false, sawDeltas: false, segment: '', needsSeparator: false,
-    usage: new StreamUsageTally(), anonymousCalls: [], anonymousCallCount: 0, tasks: new TaskListTracker(),
+    usage: new StreamUsageTally(), anonymousCalls: [], anonymousCallCount: 0, thoughtCount: 0, thoughtText: '', tasks: new TaskListTracker(),
   };
 }
 
@@ -170,7 +177,10 @@ export const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
     const update = cursorRecord(value, state);
     return prefix ? { text: `${prefix}${update?.text ?? ''}`, mode: 'append' } : update;
   },
+  // Only its words are the answer: a `tool` or `command` message's text is the
+  // call (cline.ts), never prose. A record with no `say` kind is plain text.
   'cline-json': (value) => value.type === 'say' && typeof value.text === 'string' && value.text
+    && (value.say === undefined || CLINE_ANSWER_KINDS.has(String(value.say)))
     ? { text: value.text, mode: 'replace' } : undefined,
   'pi-json': (value) => {
     const event = value.type === 'message_update' ? object(value.assistantMessageEvent) : undefined;
@@ -265,7 +275,9 @@ interface ParsedHarnessLine {
   activity?: NativeActivityEvent;
   /** Every activity on the line; a Claude message can carry several tool calls. */
   activities?: NativeActivityEvent[];
-  phase?: 'generating response';
+  phase?: string;
+  /** Something the user is told beside the answer (the context was compacted). */
+  notice?: string;
   /** The turn's usage so far, when this line changed it. */
   usage?: TurnUsage;
   sessionId?: string;
@@ -315,11 +327,13 @@ export function parseHarnessLine(
 /** parseHarnessLine for a record the caller has already parsed. */
 function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn: StreamState): ParsedHarnessLine {
   const response = nativeResponseUpdateFromValue(harness, value, turn);
-  const activities = pairAnonymousCalls(harness, turn, value, [
+  const activities = stampThoughts(harness, turn, value, pairAnonymousCalls(harness, turn, value, [
     ...(claudeShaped(harness) ? (turn.claudeBlocks ??= new ClaudeBlocks(harness.command)).note(value) : []),
+    ...(harness.parser === 'cline-json' ? clineLine(value, turn, harness.command) : []),
     ...parseNativeActivityEventsFromValue(harness, value),
-  ]);
-  const phase = nativeActivityPhaseFromValue(harness, value);
+  ]));
+  const compaction = claudeShaped(harness) ? claudeCompaction(value) : undefined;
+  const phase = compaction?.phase ?? nativeActivityPhaseFromValue(harness, value);
   // The terminal record's own totals, else the running sum of per-message usage.
   const usage = nativeUsageFromValue(value) ?? turn.usage.note(value);
   const error = lineError(value);
@@ -332,9 +346,20 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
     ...(result ? { result } : {}),
     ...(response ? { response } : {}),
     ...(activities.length ? { activity: activities[0], activities } : {}),
-    ...(phase ? { phase } : {}), ...(usage ? { usage } : {}),
+    ...(phase ? { phase } : {}), ...(compaction?.notice ? { notice: compaction.notice } : {}), ...(usage ? { usage } : {}),
     ...(sessionId ? { sessionId } : {}), ...(error ? { error } : {}),
   };
+}
+
+/** Claude Code's stream-json says when it compacts the conversation:
+ * `system/status` with `status: "compacting"` while it works, and
+ * `system/compact_boundary` (with `compact_metadata`) at the point the
+ * history was replaced by a summary. Read for every Claude-shaped harness. */
+function claudeCompaction(value: Json): { phase?: string; notice?: string } | undefined {
+  if (value.type !== 'system' || typeof value.parent_tool_use_id === 'string') return undefined;
+  if (value.subtype === 'compact_boundary') return { notice: 'Conversation compacted to fit the context window' };
+  if (value.subtype === 'status' && value.status === 'compacting') return { phase: 'compacting the conversation' };
+  return undefined;
 }
 
 /** A tool call a harness reports with no id is given one, and its completion
@@ -353,6 +378,38 @@ function pairAnonymousCalls(harness: AiLocalHarnessDefinition, turn: StreamState
     }
     const id = turn.anonymousCalls.shift();
     return id ? { ...event, id } : event;
+  });
+}
+
+/** Pi and Cursor name no thought: a thought is a run of deltas, and gets the
+ * id of its place in the turn (`thinking:<family>-N`) -- one row per thought,
+ * the same id for every frame of it and for its settled form. Pi's frames
+ * carry the thought so far; Cursor's carry fragments, joined here. */
+function stampThoughts(harness: AiLocalHarnessDefinition, turn: StreamState, value: Json, events: NativeActivityEvent[]): NativeActivityEvent[] {
+  const pi = harness.parser === 'pi-json';
+  const cursor = harness.parser === 'cursor-stream-json';
+  if (!pi && !cursor) return events;
+  const family = pi ? 'pi' : 'cursor';
+  if (pi) {
+    const inner = value.type === 'message_update' ? object(value.assistantMessageEvent) : undefined;
+    if (inner?.type === 'thinking_start') turn.thoughtCount += 1;
+    return events.map((event) => event.kind === 'thinking' && !event.id
+      ? { ...event, id: `thinking:pi-${Math.max(turn.thoughtCount, 1)}` } : event);
+  }
+  if (value.type === 'thinking' && value.subtype === 'completed') {
+    turn.thoughtCount += 1;
+    turn.thoughtText = '';
+    return events;
+  }
+  if (value.type !== 'thinking') {
+    // Anything else in the stream ends the thought in progress.
+    if (turn.thoughtText) { turn.thoughtCount += 1; turn.thoughtText = ''; }
+    return events;
+  }
+  return events.map((event) => {
+    if (event.kind !== 'thinking') return event;
+    turn.thoughtText += typeof value.text === 'string' ? value.text : '';
+    return { ...event, label: thoughtLabel(turn.thoughtText), id: `thinking:${family}-${turn.thoughtCount + 1}` };
   });
 }
 
