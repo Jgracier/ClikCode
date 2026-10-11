@@ -75,6 +75,9 @@ export function mergeActivity(prior: HarnessActivityEvent, next: HarnessActivity
     ...(next.diff ? {} : prior.diff ? { diff: prior.diff } : {}),
     ...(next.call ? {} : prior.call ? { call: prior.call } : {}),
     ...(next.childTools !== undefined || prior.childTools === undefined ? {} : { childTools: prior.childTools }),
+    ...(next.childCallIds || !prior.childCallIds ? {} : { childCallIds: prior.childCallIds }),
+    // A row is placed once: the first sequence it was given stays.
+    ...(prior.seq === undefined ? {} : { seq: prior.seq }),
     ...(next.childTokens !== undefined || prior.childTokens === undefined ? {} : { childTokens: prior.childTokens }),
     ...(next.durationMs !== undefined || prior.durationMs === undefined ? {} : { durationMs: prior.durationMs }),
     ...(next.exitCode !== undefined || prior.exitCode === undefined ? {} : { exitCode: prior.exitCode }),
@@ -219,9 +222,49 @@ export function toolUses(count: number): string {
   return `${count} tool use${count === 1 ? '' : 's'}`;
 }
 
-/** The parent row's count once one of its sub-agent's calls starts. */
-export function withChildTool<T extends Pick<HarnessActivityEvent, 'childTools'>>(parent: T, child: Pick<HarnessActivityEvent, 'kind'>): T {
-  return child.kind === 'tool-start' ? { ...parent, childTools: (parent.childTools ?? 0) + 1 } : parent;
+/** The ids of the child calls a parent row has counted. It exists so the
+ * count can be exact while a turn is live; what is saved and sent is only the
+ * number (a property whose toJSON gives undefined is left out). */
+class CallIdSet extends Set<string> {
+  toJSON(): undefined { return undefined; }
+}
+
+/** The parent row's count once one of its sub-agent's calls starts: unique
+ * child call ids, never frames (standard 5). One call reaches the display as
+ * several start frames (Claude: the block's start, its stop with the input,
+ * the completed record), so counting frames ran it about 3x. A frame with no
+ * id cannot be told from another call and counts as one. */
+export function withChildTool<T extends Pick<HarnessActivityEvent, 'childTools' | 'childCallIds'>>(
+  parent: T, child: Pick<HarnessActivityEvent, 'kind'> & { id?: string },
+): T {
+  if (child.kind !== 'tool-start') return parent;
+  if (!child.id) return { ...parent, childTools: (parent.childTools ?? 0) + 1 };
+  if (parent.childCallIds?.has(child.id)) return parent;
+  return { ...parent, childCallIds: new CallIdSet([...(parent.childCallIds ?? []), child.id]), childTools: (parent.childTools ?? 0) + 1 };
+}
+
+/** What every surface orders a turn's rows by (standard 1): `responseOffset`
+ * -- how much of the answer had been written -- then `seq`, the order the
+ * worker first saw them in. Completion never decides it; a steer is a row
+ * like any other, with the seq of its acknowledgement. */
+export type OrderedMark = { responseOffset: number; seq?: number };
+
+/** `marks` in turn order. A row with no `seq` (a turn saved before they were
+ * kept) takes its position in `marks` as its sequence, and the sort is
+ * stable, so such a turn reads exactly as it was recorded. */
+export function orderMarks<T>(marks: readonly T[], of: (mark: T) => OrderedMark): T[] {
+  return marks
+    .map((mark, index) => ({ mark, index, ...of(mark) }))
+    .sort((a, b) => a.responseOffset - b.responseOffset || (a.seq ?? a.index) - (b.seq ?? b.index) || a.index - b.index)
+    .map((entry) => entry.mark);
+}
+
+/** Whether `mark` happened before `boundary` (a steer, say) in turn order.
+ * Without a seq on either side the boundary comes last at its offset, the
+ * order a turn saved before sequences was always drawn in. */
+export function markBefore(mark: OrderedMark, boundary: OrderedMark): boolean {
+  if (mark.responseOffset !== boundary.responseOffset) return mark.responseOffset < boundary.responseOffset;
+  return mark.seq === undefined || boundary.seq === undefined || mark.seq < boundary.seq;
 }
 
 /** What a sub-agent is doing now, for its parent's row: the label of its
