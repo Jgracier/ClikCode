@@ -55,7 +55,12 @@ export type LiveSubmission = {
 /** A steer already folded into the conversation by the transcript reader. */
 export type DurableSteer = { text: string; responseOffset?: number; id?: string };
 
-export type SteerRow = { id: string; done: true; responseOffset: number; lines: string[] };
+/** A steer's row. `steer` marks it for TurnTranscript (not a call: it does not
+ *  close the prose before it). `text` and `steerId` are what the saved
+ *  user message that replaces it is matched by (liveTurnSpan). */
+export type SteerRow = {
+  id: string; done: true; responseOffset: number; lines: string[]; steer: true; text: string; steerId?: string;
+};
 
 /** A timed-out steer can be shown as queued before the provider accepts it.
  * Its durable steer then replaces that provisional row under the same id. */
@@ -79,17 +84,59 @@ export function steerTranscriptRows(input: {
   render: (text: string) => string[];
 }): SteerRow[] {
   const durable = input.materializedPendingTurn ? [] : input.durable;
-  const rows: SteerRow[] = durable.map((item, index) => ({
-    id: `steer#${item.responseOffset ?? 0}#${index}`, done: true,
-    responseOffset: item.responseOffset ?? 0, lines: input.render(item.text),
-  }));
-  for (const item of input.live) {
-    if (item.state !== 'steered') continue;
+  const steered = input.live.filter((item) => item.state === 'steered');
+  const claimed = new Set<number>();
+  const rows: SteerRow[] = durable.map((item, index) => {
+    // The live copy may already have been retired under its own id, and a
+    // row is retired once, by id. The durable copy -- which wins, and carries
+    // the offset the worker acknowledged it at -- takes that id, so it is the
+    // same row whichever of the two arrived first.
+    const live = steered.find((candidate) => !claimed.has(candidate.sequence) && hasDurableSteer(candidate, [item]));
+    if (live) claimed.add(live.sequence);
+    return {
+      id: live ? `steer#${live.sequence}` : `steer#${item.responseOffset ?? 0}#${index}`, done: true,
+      responseOffset: item.responseOffset ?? 0, lines: input.render(item.text), steer: true, text: item.text,
+      ...(item.id ? { steerId: item.id } : {}),
+    };
+  });
+  for (const item of steered) {
     // Already drawn from the durable side -- by identity where both carry
     // one, so two steers that say the same thing are still two steers.
-    if (hasDurableSteer(item, durable)) continue;
+    if (claimed.has(item.sequence) || hasDurableSteer(item, durable)) continue;
     if (input.materializedPendingTurn && input.retiredThisSession.has(item.id ?? item.text)) continue;
-    rows.push({ id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: input.render(item.text) });
+    rows.push({
+      id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: input.render(item.text),
+      steer: true, text: item.text, ...(item.id ? { steerId: item.id } : {}),
+    });
   }
   return rows;
+}
+
+/** How far a turn drawn live reaches into the saved list.
+ *
+ * A steer splits the saved answer: [assistant, steer, assistant, ...]. The
+ * live turn drew all of it -- one answer with the steers placed in it -- so
+ * the saved messages after the first assistant are copies of what is already
+ * on screen, and writing them again put every steer and everything after it
+ * on screen twice. They are recognised by identity: the steers this window
+ * drew (`drawn`, by id where both carry one, else by text), and the answer
+ * that follows each. Returns the index of the last message the live turn
+ * owns (`start` when it owns no more than the one). A steer this window
+ * never drew ends the span there: it is written as the message it is. */
+export function liveTurnSpan(
+  messages: readonly { role: string; content: string; id?: string }[], start: number,
+  drawn: readonly { text: string; steerId?: string }[],
+): number {
+  const remaining = [...drawn];
+  let end = start;
+  for (let index = start + 1; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (message.role === 'assistant' && messages[index - 1]!.role === 'user') { end = index; continue; }
+    if (message.role !== 'user') break;
+    const at = remaining.findIndex((steer) => (steer.steerId && message.id ? steer.steerId === message.id : steer.text.trim() === message.content.trim()));
+    if (at < 0) break;
+    remaining.splice(at, 1);
+    end = index;
+  }
+  return end;
 }

@@ -319,3 +319,33 @@ describe('a streamed answer lays out as its saved copy does', () => {
     });
   }
 });
+
+describe('a steer acknowledged inside a block', () => {
+  // The observed bug: a steer's offset was the length of the prose so far, so
+  // it closed the block still being written and the block was retired
+  // truncated ("Step one of the long"); its tail then never appeared live and
+  // was written again, under a second copy of the steer, when the turn ended.
+  const renderBlocks = (blocks: readonly MessageBlock[]): string[] => text(blocks);
+  const steer = (offset: number) => ({ id: 'steer#1', done: true, steer: true, responseOffset: offset, lines: ['> steer'] });
+
+  it('does not close the block it fell inside, and waits for it', () => {
+    const transcript = new TurnTranscript();
+    const first = transcript.advance({ content: 'Step one of the long', tools: [steer(20)], turnEnded: false, renderBlocks });
+    expect(first.finished).toEqual([]);
+    expect(first.live).toContain('> steer');
+    const second = transcript.advance({ content: 'Step one of the long job.\n\nStep two', tools: [steer(20)], turnEnded: false, renderBlocks });
+    expect(second.finished, 'the block is retired whole, then the steer').toEqual(['Step one of the long job.', '> steer']);
+    const third = transcript.advance({ content: 'Step one of the long job.\n\nStep two.', tools: [steer(20)], turnEnded: true, renderBlocks });
+    expect(third.finished).toEqual(['Step two.']);
+  });
+
+  it('is placed at once when it fell at a block boundary', () => {
+    const step = new TurnTranscript().advance({ content: 'One.\n\n', tools: [steer(6)], turnEnded: false, renderBlocks });
+    expect(step.finished).toEqual(['One.', '> steer']);
+  });
+
+  it('still settles when the turn ends inside the block', () => {
+    const step = new TurnTranscript().advance({ content: 'Cut off mid', tools: [steer(5)], turnEnded: true, renderBlocks });
+    expect(step.finished).toEqual(['Cut off mid', '> steer']);
+  });
+});
