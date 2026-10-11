@@ -2,12 +2,11 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
-import { endsWithSummary, exploreRuns, explores, exploreSummary, tensedLabel, turnStatus, turnSummary, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { answerWriting, endsWithSummary, exploreRuns, explores, exploreSummary, tensedLabel, turnStatus, turnSummary, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import type { FileDiff } from '../protocol';
 import type { Activity, LiveTurn, TurnTrace } from '../model';
-import { WRITING_MS } from '../../../../src/harness/protocol/timings';
 import { titleCase } from './format';
 
 export interface WorkingStatus {
@@ -32,7 +31,7 @@ export function workingStatus(live: LiveTurn | undefined, asking: boolean, now: 
     ...(live?.toolPhase && !stopping ? { toolPhase: live.toolPhase } : {}),
     ...(live?.thought && !stopping ? { thought: live.thought.text } : {}),
     asking,
-    writing: live?.writingAt !== undefined && now - live.writingAt < WRITING_MS,
+    writing: answerWriting({ writingAt: live?.writingAt, callAt: live?.callAt }),
   });
   const open = live?.openTools[live.openTools.length - 1]?.[1];
   const toneClass = status.tone === 'asking' ? 'tone-permission'
