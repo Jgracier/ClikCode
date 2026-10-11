@@ -277,6 +277,12 @@ describe('clikcode send --harness clikcode-local', () => {
     await expect(startOrResumeChat({ harness: 'clikcode-local', permissions: 'yolo' })).rejects.toThrow(/permission modes/);
   });
 
+  it('refuses --model for a harness that has no model selector, recording nothing', async () => {
+    await stored(session({ id: 'bbbbbbbb-2222', route: 'local', nativeHarness: 'cn', provider: 'cn', model: null } as Partial<HarnessSession>));
+    await expect(startOrResumeChat({ chat: 'bbbbbbbb-2222', model: 'gpt-5' })).rejects.toThrow(/does not publish a model selector/);
+    expect((await readState()).sessions.find((item) => item.id === 'bbbbbbbb-2222')!.model).toBeNull();
+  });
+
   it('continues a chat only on the route it is on', async () => {
     await stored(session({ id: 'aaaaaaaa-1111', route: 'gateway', messages: [{ role: 'user', content: 'hi' }] } as Partial<HarnessSession>));
     await expect(startOrResumeChat({ harness: 'clikcode-local', chat: 'aaaaaaaa-1111' })).rejects.toThrow(/runs on ClikDeploy Gateway/);

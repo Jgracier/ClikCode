@@ -12,7 +12,7 @@ import type { HarnessSession } from '../../session/model.js';
 import { hermesTurboFitInstalled, installHermesTurboFit, registerHermesTurboFitProvider, restoreHermesPluginScan } from '../../harness/accounts/hermes-discovery.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
-import { localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { readState } from '../../session/state/read.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
@@ -282,6 +282,8 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
     const session = state.sessions.find((item) => item.id === id);
     const harness = session?.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
     if (session && harness) {
+      // A vendor that ignores --model would be recorded as running a model it never used.
+      if (!harnessSupportsModelSelection(harness)) throw new Error(`${harness.displayName} does not publish a model selector, so --model ${options.model} would be ignored; leave it out to use ${harness.displayName}'s own model.`);
       // Typed as the lists show it; no catalog is consulted here.
       session.model = modelIdFromLabel(harness, [], options.model);
       await writeState(state);
