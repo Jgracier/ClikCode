@@ -26,6 +26,7 @@ import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
+import { readTurnMarks } from '../turn/turn-marks.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
@@ -72,6 +73,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTer
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
+import { savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
@@ -2294,12 +2296,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
      * upsert the running turn's events go through, and grouped and drawn by
      * the same functions, so a reopened turn looks as it did live. */
     const savedTools = (message: TranscriptMessage, index: number): SettlingTool[] => {
-      const saved = readTurnActivities(message.activities, message.content.length);
-      if (!saved.length) return [];
+      const calls = readTurnActivities(message.activities, message.content.length).filter((activity) => !activity.event.parentId);
+      const marks = readTurnMarks(message.marks);
+      if (!calls.length && !marks.length) return [];
+      // Calls and the turn's durable marks (a thought, the plan, a notice, an
+      // approval's outcome) are drawn in one order (turn-mark-rows.ts), and a
+      // mark is an entry like the settled thought is live, so it breaks a run
+      // of reads the way it did while the turn ran.
+      const ranks = savedTurnRanks(calls, marks);
+      const at = (offset: number): number => Math.min(offset, message.content.length);
       let entries: ActivityEntry[] = [];
-      for (const [position, activity] of saved.entries()) {
-        if (activity.event.parentId) continue;
-        entries = upsertActivityEvent(entries, index, Math.min(activity.responseOffset, message.content.length), activity.event, position + 1, 0);
+      for (const [position, activity] of calls.entries()) {
+        entries = upsertActivityEvent(entries, index, at(activity.responseOffset), activity.event, ranks.activities[position]!, 0);
+      }
+      for (const [position, mark] of marks.entries()) {
+        const lines = turnMarkLines(mark);
+        if (!lines.length) continue;
+        entries.push({
+          anchor: index, responseOffset: at(mark.responseOffset), sequence: ranks.marks[position]!,
+          event: { kind: 'thinking', label: mark.id, id: mark.id }, lines,
+        });
       }
       return groupedRows(entries, true, new ExploreGrouping());
     };
