@@ -135,8 +135,12 @@ export interface LiveTurn {
   /** When the model last went back to thinking -- the turn began, or its
    * last open call closed. Not moved by the answer's deltas. */
   thinkingSince: number;
-  /** When answer text last arrived: the working line says "writing". */
+  /** When answer text last arrived, and when the turn's last call began: the
+   * working line says "writing" while text is the later of the two
+   * (answerWriting), however long the pause. Ordered stamps, not wall time:
+   * see `stampAfter`. */
   writingAt?: number;
+  callAt?: number;
   /** When the turn last did anything (a word, a thought, a call) or an
    * approval was answered: quiet past turn-pace's threshold and the working
    * line's spinner turns yellow, as the terminal's does. */
@@ -221,6 +225,13 @@ export interface ChatModel {
 /** What a conversation open in another chat (a tab, or the side bar) asks
  * of the user there: an approval waiting, or a turn that finished while
  * nobody looked. The conversations list marks it, as that tab's title does. */
+
+/** A stamp for `writingAt` / `callAt`: the clock, but strictly after `other`,
+ * so two events in one millisecond keep the order they came in (answerWriting
+ * compares them). */
+function stampAfter(other: number | undefined): number {
+  return Math.max(Date.now(), (other ?? Number.NEGATIVE_INFINITY) + 1);
+}
 
 /** A live turn without the phase a report set before the vendor answered. */
 function withoutPhase<T extends { phase?: string }>(live: T): T {
@@ -491,7 +502,9 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
   }
   const seen = live.seen + 1;
   const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now(), offset, seq: seen });
-  return { ...live, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
+  // A call began: answer text after it is a new response (answerWriting).
+  const began = event.kind === 'tool-start' ? { callAt: stampAfter(live.writingAt) } : {};
+  return { ...live, ...began, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
 }
 
 /** The terminal's rule: the thought being had accumulates (appendThought);
@@ -598,12 +611,18 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // sends where it really was.
       const planOffset = (event.live as { planOffset?: number }).planOffset;
       const planAt = replayed.planAt ?? (event.live.plan?.length ? { offset: planOffset ?? 0, seq: ++seen } : undefined);
+      // Joined mid-answer: text that came after the turn's last call is
+      // being written; the window did not see it arrive, so it says so now.
+      const lastCall = replayed.activities.reduce((last, item) => Math.max(last, item.offset ?? 0), 0);
+      const answering = event.live.text.length > 0 && event.live.text.length > lastCall;
+      const grew = event.live.text.length > (model.live?.text.length ?? 0);
+      const writing = answering && (replayed.writingAt === undefined || grew) ? { writingAt: stampAfter(replayed.callAt) } : {};
       return {
         ...next,
         running: true,
         turnUserIndex: next.turnUserIndex ?? next.messages.length,
         live: {
-          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}),
+          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}), ...writing,
         },
         ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
       };
@@ -631,7 +650,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const notes = event.mode === 'replace' && model.notes.some((note) => note.turn !== undefined && note.turn === model.turnUserIndex)
         ? model.notes.map((note) => (note.turn !== undefined && note.turn === model.turnUserIndex ? rebaseOffsets([note], live.text, text)[0]! : note))
         : model.notes;
-      return { ...model, notes, live: { ...after, ...placed, ...planAt, text, activeAt: Date.now(), ...(event.text ? { writingAt: Date.now() } : {}) } };
+      return { ...model, notes, live: { ...after, ...placed, ...planAt, text, activeAt: Date.now(), ...(event.text ? { writingAt: stampAfter(after.callAt) } : {}) } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
