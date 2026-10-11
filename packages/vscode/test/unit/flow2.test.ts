@@ -1,7 +1,7 @@
 /** The turn-flow standard, second wave: what the worker now sends (seq, marks,
  * thought, phase, usage) wired into the extension's model and page logic. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, emptyModel, type ChatModel } from '../../src/model';
+import { applyEvent, emptyModel, turnMarks, type ChatModel } from '../../src/model';
 import { workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -73,5 +73,55 @@ describe('writing holds until a call starts (X1)', () => {
       worker({ type: 'snapshot', session: session(), live: { text: 'half an answ', waitingLabel: 'thinking' } }),
     ], begin());
     expect(label(model, Date.now() + 60_000)).toBe('Writing…');
+  });
+});
+
+describe('the worker\'s seq is the order (X3)', () => {
+  it('a call keeps the seq the worker gave it, not this window\'s count', () => {
+    const model = run([activity({ kind: 'tool-start', id: 't1', label: 'Read a.ts', category: 'read', seq: 41 })], begin());
+    expect(model.live!.activities[0]!.seq).toBe(41);
+  });
+
+  it('a row with none is numbered past everything the worker numbered', () => {
+    const model = run([
+      activity({ kind: 'tool-start', id: 't1', label: 'Read a.ts', category: 'read', seq: 41 }),
+      activity({ kind: 'tool-start', id: 't2', label: 'Read b.ts', category: 'read' }),
+    ], begin());
+    expect(model.live!.activities.map((item) => item.seq)).toEqual([41, 42]);
+  });
+
+  it('a thought takes its place by the worker\'s seq', () => {
+    const model = run([
+      activity({ kind: 'thinking', id: 'r1', label: 'weighing', seq: 7 }),
+      activity({ kind: 'tool-start', id: 't1', label: 'Read a.ts', category: 'read', seq: 8 }),
+    ], begin());
+    expect(model.live!.reasoning[0]!.seq).toBe(7);
+    expect(model.live!.activities[0]!.seq).toBe(8);
+  });
+
+  it('a note and a plan take the seq and offset they were sent with', () => {
+    const model = run([
+      delta('abcdef'),
+      worker({ type: 'note', message: 'Switched to work', seq: 12, responseOffset: 2 }),
+      worker({ type: 'plan', entries: [{ content: 'one' }], seq: 13, responseOffset: 4 }),
+    ], begin());
+    expect(model.notes[0]).toMatchObject({ offset: 2, seq: 12, turn: 0 });
+    expect(model.live!.planAt).toEqual({ offset: 4, seq: 13 });
+  });
+
+  it('a steer in a snapshot takes the seq the worker gave it', () => {
+    const model = run([worker({
+      type: 'snapshot', live: { text: 'abc', waitingLabel: 'thinking' },
+      session: session({ pendingTurn: { prompt: 'hi', startedAt: '', steers: [{ text: 'one', responseOffset: 1, seq: 30 }] } as never }),
+    })], begin());
+    expect(model.live!.steers[0]).toMatchObject({ seq: 30, offset: 1 });
+  });
+
+  it('turnMarks orders by (offset, seq) with the shared comparator, whatever the kind', () => {
+    const marks = turnMarks('abcdef',
+      [{ key: 'b', kind: 'tool-done', label: 'y', offset: 3, seq: 20 }, { key: 'a', kind: 'tool-done', label: 'x', offset: 0, seq: 30 }],
+      [{ text: 't', offset: 3, ms: 1000, seq: 10 }],
+      [{ text: 's', offset: 3, seq: 15 }]);
+    expect(marks.map((mark) => mark.activity?.key ?? (mark.thought ? 'thought' : 'steer'))).toEqual(['a', 'thought', 'steer', 'b']);
   });
 });
