@@ -43,8 +43,11 @@ export function buildTurn(harness) {
   const ops = [];
   const expect = []; // {marker, kind, persists, group}, in emission order
   const see = (marker, kind, persists = true, extra = {}) => expect.push({ marker, kind, persists, ...extra });
-  const text = (value, marker) => { ops.push({ op: 'text', text: value }); see(marker, 'text'); };
-  text(`Starting the work ${MARK.text1} now.`, MARK.text1);
+  // A one-document harness (OpenClaw `agent --json`) writes ONE reply at the end: only the closing text
+  // can ever be on screen, so the opening text is not expected of it (it is still scripted, and the
+  // fake keeps only the last, as the vendor does).
+  const text = (value, marker, expected = true) => { ops.push({ op: 'text', text: value }); if (expected) see(marker, 'text'); };
+  text(`Starting the work ${MARK.text1} now.`, MARK.text1, ability.live);
   if (caps.thinking && ability.live) {
     ops.push({ op: 'thought', heading: MARK.head, text: `Weighing the options ${MARK.think} carefully.`, ms: 20 });
     see(MARK.head, 'thought', true);

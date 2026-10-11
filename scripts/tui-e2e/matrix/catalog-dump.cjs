@@ -5,4 +5,5 @@ console.log(JSON.stringify(harnesses.map((h) => ({
   capabilities: h.capabilities ?? null, authEnv: h.authEnv ?? [], authFiles: h.authFiles ?? [], statusArgv: h.statusArgv ?? null,
   signInOptional: Boolean(h.signInOptional), localAuth: h.localAuth ?? [], profileEnv: h.profileEnv ?? null,
   displayName: h.displayName, output: h.turn?.output ?? null,
+  providerConfigId: h.acp?.providerConfigId ?? null,
 }))));
