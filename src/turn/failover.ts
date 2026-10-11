@@ -302,7 +302,7 @@ export function accountSwitchNotice(kind: AccountFailureKind, to: string): strin
  * (ineligible, or the Gateway switched off for it), which signing in again cannot fix. */
 export function agentTurnFailureKind(result: { text: string; statusCode?: number; retryAfter?: number }): AccountFailureKind {
   const status = result.statusCode;
-  if (status === 402) return 'quota-exhausted';
+  if (status === 402) return INELIGIBLE_TEXT.test(result.text) ? 'account-ineligible' : 'quota-exhausted';
   if (status === 429) return result.retryAfter !== undefined ? 'temporarily-throttled' : 'quota-exhausted';
   if (status === 401 || status === 403) {
     if (/gateway_disabled|turned off/i.test(result.text)) return 'other';
@@ -364,6 +364,10 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // sentence about a 402 is not the account running out.
   const effectiveStatus = status ?? (text ? embeddedStatus(text) : undefined);
   if (effectiveStatus === 401) return 'authentication-required';
+  // A 402 that says the plan is absent (Droid: "No active subscription found") is the
+  // account's eligibility, not a spent quota: another account may be fine, and this
+  // one is not "exhausted".
+  if (effectiveStatus === 402 && INELIGIBLE_TEXT.test(text)) return 'account-ineligible';
   if (effectiveStatus === 402) return 'quota-exhausted';
   // 403 is also "this model is not on your plan", "region blocked", a WAF, or
   // a content policy refusal. Marking the account needs_login for those sends
