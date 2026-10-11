@@ -4,6 +4,7 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { LiveTurnSubmission } from './live-input.js';
 import type { TurnRunOptions } from './session-turn.js';
+import { lifecycle } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState, writeTranscriptCheckpoint } from '../session/state/write.js';
 import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, stopPendingCalls, updatePendingResponse } from './checkpoint.js';
@@ -106,7 +107,9 @@ export class DurableTurnCheckpoint {
     if (queuedTurnId && !consumeSessionTurn(session, queuedTurnId)) throw queuedTurnAlreadyRunError(queuedTurnId);
     const checkpoint = new DurableTurnCheckpoint(state, session);
     beginPendingTurn(session, prompt, new Date().toISOString());
-    await checkpoint.enqueue();
+    // A state file that cannot be written must not stop the vendor from running:
+    // the turn proceeds in memory and every later write retries (`dirty`).
+    await checkpoint.enqueue().catch((error: unknown) => checkpoint.persistFailed('start', error));
     return checkpoint;
   }
 
@@ -159,14 +162,22 @@ export class DurableTurnCheckpoint {
   async complete(response: string): Promise<void> {
     finishPendingTurn(this.session, response, new Date().toISOString());
     this.dirty = true;
-    await this.flush();
-    // A turn that streamed perfectly but never reached disk is not a turn
-    // that succeeded, and this is the first point with a caller to tell.
+    // The vendor's answer exists and is shown whether or not ClikCode could
+    // save it: a failed save is logged and retried by the next write, never
+    // allowed to end the turn or hide the reply.
+    await this.flush().catch((error: unknown) => this.persistFailed('complete', error));
     if (this.writeError) {
       const error = this.writeError;
       this.writeError = undefined;
-      throw error;
+      this.persistFailed('complete', error);
     }
+  }
+
+  /** The turn's state could not be written. Kept dirty so the next write
+   *  carries everything, and recorded where a person can find it. */
+  private persistFailed(stage: string, error: unknown): void {
+    this.dirty = true;
+    lifecycle('turn.persist-failed', { stage, session: this.session.id, error: error instanceof Error ? error.message : String(error) });
   }
 
   async flush(): Promise<void> {
