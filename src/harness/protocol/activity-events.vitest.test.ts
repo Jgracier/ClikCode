@@ -149,3 +149,18 @@ describe('a tool result that is JSON', () => {
     expect(done?.output).toEqual(['a.ts']);
   });
 });
+
+describe('Pi tool results', () => {
+  it('carry the result text on the completion', () => {
+    const pi = { ...codex, command: 'pi', parser: 'pi-json' } as AiLocalHarnessDefinition;
+    const done = parseNativeActivityEvent(pi, JSON.stringify({
+      type: 'tool_execution_end', toolCallId: 'p1', toolName: 'bash', isError: false,
+      result: { content: [{ type: 'text', text: 'a.ts\nb.ts' }] },
+    }));
+    expect(done).toMatchObject({ kind: 'tool-done', id: 'p1', output: ['a.ts', 'b.ts'] });
+    const failed = parseNativeActivityEvent(pi, JSON.stringify({
+      type: 'tool_execution_end', toolCallId: 'p2', toolName: 'bash', isError: true, result: { content: [{ type: 'text', text: 'command not found' }] },
+    }));
+    expect(failed).toMatchObject({ kind: 'tool-error', output: ['command not found'] });
+  });
+});

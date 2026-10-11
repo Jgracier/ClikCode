@@ -561,7 +561,12 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       return text.trim() ? { kind: 'thinking', label: thoughtLabel(text) } : undefined;
     }
     if (type === 'tool_execution_start') return piTool(value, true);
-    if (type === 'tool_execution_end') return { ...piTool(value, false), kind: value.isError === true || value.error ? 'tool-error' : 'tool-done' };
+    if (type === 'tool_execution_end') {
+      // The result's own text (`result.content[]`), or the error's.
+      const result = asRecord(value.result);
+      const said = blockText(result?.content) || (typeof value.error === 'string' ? value.error : '') || (typeof result?.error === 'string' ? result.error : '');
+      return { ...piTool(value, false), kind: value.isError === true || value.error ? 'tool-error' : 'tool-done', ...cappedActivityOutput(said) };
+    }
     const event = type === 'message_update' ? asRecord(value.assistantMessageEvent) : undefined;
     if (event?.type === 'toolcall_start') {
       const content = asRecord(event.partial)?.content;
