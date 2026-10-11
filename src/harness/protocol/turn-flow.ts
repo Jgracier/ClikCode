@@ -99,15 +99,6 @@ export function reasoningHeading(thought: string | undefined): string | undefine
   return heading || undefined;
 }
 
-/** A thought once it is over (standard section 4): `✻ Thought for 3s`, plus
- * the model's own heading when it wrote one -- `✻ Thought for 3s · Planning
- * the approach`. Unstyled: the terminal dims it, the webview themes it, and
- * replay uses the same function, so a thought reads alike everywhere. */
-export function thoughtRow(thought: { durationMs: number; heading?: string }): string {
-  const heading = thought.heading?.replace(/\s+/g, ' ').trim();
-  return `✻ Thought for ${formatElapsed(Math.max(1000, thought.durationMs))}${heading ? ` · ${heading}` : ''}`;
-}
-
 /** The reasoning under the status line: without the heading the status
  * line already shows, and without its markdown emphasis. */
 export function reasoningBody(thought: string): string {
@@ -166,15 +157,6 @@ export function decisionRow(decision: Decision): { text: string; tone: 'ok' | 'n
     }
     case 'declined': return { text: `✗ declined ${oneLine(decision.label, 80)}`, tone: 'no' };
   }
-}
-
-/** The settled row a thought leaves at its place in the turn: `✻ Thought
- * for 4s`, and `· <heading>` when the model titled it (standards 4 and 11).
- * Live and reopened say it the same way: the duration is never shorter than
- * a second, as Claude Code words it. No styling (the webview bundles this). */
-export function thoughtRow(thought: { durationMs: number; heading?: string }): string {
-  const heading = thought.heading?.replace(/\s+/g, ' ').trim();
-  return `✻ Thought for ${formatElapsed(Math.max(1000, thought.durationMs))}${heading ? ` · ${heading}` : ''}`;
 }
 
 /** The adapters' own phase while an approval is up ("waiting for your

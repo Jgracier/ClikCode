@@ -9,8 +9,8 @@ const thought = (seq: number, responseOffset: number): TurnMark => ({ kind: 'tho
 
 describe('the shared thought row', () => {
   it('says the duration, and the heading when the model wrote one', () => {
-    expect(thoughtRow({ durationMs: 4200 })).toBe('✻ Thought for 4s');
-    expect(thoughtRow({ durationMs: 300, heading: 'Inspecting the parser' })).toBe('✻ Thought for 1s · Inspecting the parser');
+    expect(thoughtRow({ durationMs: 4200 })).toBe('Thought for 4s');
+    expect(thoughtRow({ durationMs: 300, heading: 'Inspecting the parser' })).toBe('Thought for 1s · Inspecting the parser');
   });
 });
 

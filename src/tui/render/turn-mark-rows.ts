@@ -21,7 +21,7 @@ export function turnMarkLines(mark: TurnMark): string[] {
   const clean = (text: string): string => sanitizeTerminalText(text, { singleLine: true }).trim();
   switch (mark.kind) {
     case 'thought':
-      return [chalk.dim(chalk.italic(clean(thoughtRow({ durationMs: mark.durationMs, ...(mark.heading ? { heading: mark.heading } : {}) }))))];
+      return [chalk.dim(chalk.italic(clean(`✻ ${thoughtRow({ durationMs: mark.durationMs, ...(mark.heading ? { heading: mark.heading } : {}) })}`)))];
     case 'notice':
       return clean(mark.message) ? [chalk.dim(clean(mark.message))] : [];
     case 'outcome': {
