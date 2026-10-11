@@ -70,7 +70,9 @@ export type TranscriptMessage = {
    * opened again -- not only in the window that watched the turn end.
    * `usage` is what the turn reported it spent, when it reported any: the
    * closing line adds tokens and cost from it. */
-  turnEnd?: { ms: number; stopped?: true; usage?: TurnUsage };
+  /** `pendingBackground`: background agents the vendor said were still
+   * running when the turn ended (standard section 10); absent is none. */
+  turnEnd?: { ms: number; stopped?: true; usage?: TurnUsage; pendingBackground?: number };
   /** On the answer a turn ended on: the account it moved to on the way,
    * from which, and why ("Switched to work: personal is out of usage"). */
   accountSwitch?: AccountSwitch;
@@ -238,6 +240,9 @@ export interface HarnessSession {
     accountSwitch?: AccountSwitch;
     /** A sign-in this turn needed and got, carried onto its answer too. */
     signedInTo?: string;
+    /** Background agents the vendor says are still running: carried onto
+     * the answer's `turnEnd` when the turn ends. */
+    pendingBackground?: number;
   };
   /** User messages submitted while a provider without active steering was
    * running. Persisted independently so process exit cannot discard them. */

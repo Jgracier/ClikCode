@@ -524,3 +524,38 @@ describe('adjacent read, search and list calls are one group (X9)', () => {
     expect(exploreRuns(rows).map((group) => [group.explore, group.rows.map((row) => row.key)])).toEqual([[true, ['a', 'b', 'c']], [false, ['d']]]);
   });
 });
+
+describe('background agents the vendor left running (standard 10)', () => {
+  it('the worker\'s count is kept live and goes with the turn into its trace, so the end line says it', () => {
+    const model = run([
+      delta('Started them.'),
+      worker({ type: 'background', pending: 2 }),
+      worker({ type: 'waiting-stop' }),
+    ], begin());
+    const trace = model.traces[0]!;
+    expect(trace.pendingBackground).toBe(2);
+    expect(traceSummaryLine({ ...trace, endedAt: 5_000, startedAt: 0 }, [])).toBe('Waiting for 2 background agents');
+  });
+
+  it('a count that fell back to none says nothing', () => {
+    const model = run([worker({ type: 'background', pending: 2 }), worker({ type: 'background', pending: 0 }), delta('x'), worker({ type: 'waiting-stop' })], begin());
+    expect(model.traces[0]?.pendingBackground).toBeUndefined();
+  });
+
+  it('a window joining mid-turn takes the count from the snapshot', () => {
+    const model = applyEvent(begin(), worker({ type: 'snapshot', session: session(), live: { text: 'abc', waitingLabel: 'thinking', pendingBackground: 1 } }));
+    expect(model.live!.pendingBackground).toBe(1);
+  });
+
+  it('a saved turn says it on reopen', () => {
+    const reopened = applyEvent(emptyModel(), { type: 'session', session: session({ messages: [{ role: 'user', content: 'go' }, {
+      role: 'assistant', content: 'ok', turnEnd: { ms: 20_000, pendingBackground: 3 } } as never] }) });
+    expect(reopened.traces[0]!.pendingBackground).toBe(3);
+  });
+
+  it('a snapshot\'s plan is placed where the worker says it began', () => {
+    const model = applyEvent(emptyModel(), worker({ type: 'snapshot', session: session(), live: {
+      text: 'Before. After.', waitingLabel: 'thinking', plan: [{ content: 'one', status: 'in_progress' }], planOffset: 8 } }));
+    expect(model.live!.planAt).toMatchObject({ offset: 8 });
+  });
+});

@@ -114,6 +114,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       },
       onThought: (text, id) => observer.activityEvent({ kind: 'thinking', label: thoughtLabel(text), ...(id ? { id } : {}) }),
       onUsage: (usage) => observer.setTurnUsage(usage),
+      onBackgroundAgents: (pending) => observer.setPendingBackground?.(pending),
       onPhase: (phase) => observer.phase(phase),
       onPlan: (entries) => observer.setPlan(entries),
       onApproval: async (title, detail, preview, signal, callId) => (await observer.approval(title, detail, preview, undefined, signal, callId)) !== false,

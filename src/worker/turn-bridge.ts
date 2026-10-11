@@ -431,6 +431,9 @@ async function driveWorkerTurn(
           case 'usage':
             rl.setTurnUsage(event.usage);
             return;
+          // The end line says it from the saved turn (turnEnd.pendingBackground).
+          case 'background':
+            return;
           case 'approval-request': {
             const closing = new AbortController();
             openPrompts.set(event.id, closing);

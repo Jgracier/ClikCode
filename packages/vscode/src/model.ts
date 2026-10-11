@@ -167,6 +167,8 @@ export interface LiveTurn {
   planAt?: PlanAt;
   /** The approvals and questions of this turn the user has settled. */
   decisions?: DecisionEntry[];
+  /** Background agents the vendor says are still running (a level). */
+  pendingBackground?: number;
   startedAt: number;
   /** When the model last went back to thinking -- the turn began, or its
    * last open call closed. Not moved by the answer's deltas. */
@@ -581,8 +583,7 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     // The worker's own record of how the turn ended: what the live window
     // said ("Worked for 1m 2s", "Stopped after 3s"), said again on reopen.
     const end = message.turnEnd;
-    const background = (end as { pendingBackground?: unknown } | undefined)?.pendingBackground;
-    const pendingBackground = typeof background === 'number' && background > 0 ? background : 0;
+    const pendingBackground = end?.pendingBackground && end.pendingBackground > 0 ? end.pendingBackground : 0;
     const ended = end ? {
       startedAt: 0, endedAt: Math.max(0, end.ms), ...(end.stopped ? { stopped: true as const } : {}),
       ...(end.usage ? { usage: end.usage } : {}), ...(pendingBackground ? { pendingBackground } : {}),
@@ -866,17 +867,15 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       let seen = folded.seen;
       const held = model.live?.steers ?? [];
       const steers = (event.session.pendingTurn?.steers ?? []).map((steer, index) => {
-        const given = (steer as { seq?: number }).seq;
-        const seq = given ?? held[index]?.seq ?? ++seen;
+        const seq = steer.seq ?? held[index]?.seq ?? ++seen;
         seen = Math.max(seen, seq);
         return { text: steer.text, offset: steer.responseOffset ?? event.live!.text.length, seq };
       });
       // The plan the worker says the turn has is placed where this window
       // first saw it (or, joining mid-turn, at the top, as it was drawn
-      // before). `planOffset` is read defensively: a worker that records it
-      // sends where it really was.
-      const planOffset = (event.live as { planOffset?: number }).planOffset;
-      const planAt = folded.planAt ?? (event.live.plan?.length ? { offset: planOffset ?? 0, seq: ++seen } : undefined);
+      // before). `planOffset` is where the worker says it really was (absent
+      // from an older worker).
+      const planAt = folded.planAt ?? (event.live.plan?.length ? { offset: event.live.planOffset ?? 0, seq: ++seen } : undefined);
       // Joined mid-answer: text that came after the turn's last call is
       // being written; the window did not see it arrive, so it says so now.
       const lastCall = folded.activities.reduce((last, item) => Math.max(last, item.offset ?? 0), 0);
@@ -896,6 +895,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         live: {
           ...folded, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}), ...writing,
           ...(phase ? { phase } : {}),
+          ...(event.live.pendingBackground ? { pendingBackground: event.live.pendingBackground } : {}),
         },
         ...(event.live.usage ? { turnUsage: { ...event.live.usage, ...next.turnUsage } } : {}),
         ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) }
@@ -930,6 +930,12 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
       return { ...model, live: { ...applyActivity(withoutPhase(live), event.event), activeAt: Date.now() } };
+    }
+    case 'background': {
+      // A level: the vendor's own count of agents still running.
+      const live = model.live ?? freshLive('thinking');
+      const { pendingBackground: _held, ...rest } = live;
+      return { ...model, live: { ...rest, ...(event.pending > 0 ? { pendingBackground: Math.floor(event.pending) } : {}) } };
     }
     case 'phase':
       // The adapters' own "waiting for your approval" is what the approval
@@ -1020,12 +1026,13 @@ function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
   // this window watched (see withSavedTraces).
   const saved = model.traces.find((trace) => trace.userIndex === model.turnUserIndex && trace.saved);
   const decisions = model.live?.decisions?.length ? model.live.decisions : undefined;
-  const traces = (activities.length || reasoning || plan || turnNotes || decisions || (asked && model.live?.text)) && model.turnUserIndex !== undefined
+  const traces = (activities.length || reasoning || plan || turnNotes || decisions || model.live?.pendingBackground || (asked && model.live?.text)) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
       userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(decisions ? { decisions } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
       // Completed steers are materialized as user messages in session.messages.
       // Keeping the live badges in the finished trace displayed each prompt twice.
       ...(model.turnUsage ? { usage: model.turnUsage } : {}),
+      ...(model.live?.pendingBackground ? { pendingBackground: model.live.pendingBackground } : {}),
       text: model.live?.text ?? '',
       // Less the time approvals waited, as the terminal's summary counts.
       startedAt: model.live ? Date.now() - liveElapsedMs(model.live, Date.now()) : Date.now(), endedAt: Date.now(),

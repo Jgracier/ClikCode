@@ -61,6 +61,11 @@ export interface HarnessTurnObserver {
   /** Something about the turn the user should be told beside the answer: the
    * vendor substituting another model, compacting the conversation. */
   onNotice?: (message: string) => void;
+  /** How many background agents the vendor says are still running, each time
+   * that changes (the level, not an edge; 0 is "none", see
+   * protocol/background-agents.ts). The turn's end says `Waiting for N
+   * background agents` from the last count (standard section 10). */
+  onBackgroundAgents?: (pending: number) => void;
   /** The agent's plan, republished whole each time it changes. */
   onPlan?: (entries: readonly HarnessPlanEntry[], explanation?: string) => void;
   /** The agent left its read-only plan mode during the turn: the user approved
