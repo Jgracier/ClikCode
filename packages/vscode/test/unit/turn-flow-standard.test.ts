@@ -1,7 +1,7 @@
 /** The turn-flow standard (docs/TURN_FLOW_STANDARD.md) as the extension's
  * model and page logic hold it. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, connectionLost, emptyModel, submittingPrompt, turnMarks, type ChatModel } from '../../src/model';
+import { applyEvent, connectionLost, emptyModel, preparing, rejectedPrompt, submittingPrompt, turnMarks, type ChatModel } from '../../src/model';
 import { traceSummaryLine } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -206,5 +206,22 @@ describe('a notice stays where it arrived (V9)', () => {
       worker({ type: 'delta', text: 'abXY', mode: 'replace' }),
     ], begin());
     expect(model.notes[0]!.offset).toBe(2);
+  });
+});
+
+describe('the prepare window (V11)', () => {
+  const opened = (): ChatModel => run([{ type: 'ready', version: '1', pid: 1 }, { type: 'session', session: session() }]);
+
+  it('is a pending prompt with no turn yet: Stop is available', () => {
+    expect(preparing(opened())).toBe(false);
+    const sent = submittingPrompt(opened(), 'first');
+    expect(preparing(sent)).toBe(true);
+    expect(preparing(applyEvent(sent, worker({ type: 'waiting-start', message: 'thinking' })))).toBe(false);
+    expect(preparing(rejectedPrompt(sent))).toBe(false);
+  });
+
+  it('a second send does not overwrite the first bubble', () => {
+    const sent = submittingPrompt(submittingPrompt(opened(), 'first'), 'second');
+    expect(sent.pendingPrompt).toBe('first');
   });
 });

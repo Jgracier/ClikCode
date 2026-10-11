@@ -359,7 +359,16 @@ export function connectionLost(model: ChatModel, patch: Partial<ChatModel> = {})
 /** Show a submitted prompt while the bridge prepares the turn. The worker's
  * turn-start and snapshot replace this temporary copy once they arrive. */
 export function submittingPrompt(model: ChatModel, prompt: string): ChatModel {
+  // A second send in the window is a message to the turn that is starting
+  // (the caller queues it), not a replacement for the first bubble.
+  if (preparing(model)) return model;
   return { ...model, ownTurn: true, pendingPrompt: prompt };
+}
+
+/** This client sent a prompt and no turn has started yet (the bridge is
+ * preparing a worker): Stop and Esc already apply. */
+export function preparing(model: Pick<ChatModel, 'running' | 'ownTurn' | 'pendingPrompt'>): boolean {
+  return !model.running && Boolean(model.ownTurn && model.pendingPrompt);
 }
 
 /** Preparation can fail before a worker turn exists. Give the composer its
