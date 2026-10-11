@@ -6,7 +6,7 @@ import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, enterAgainReady, providerDisplayName, queuedRowLabel, type ChatModel } from '../model';
+import { chatModelLabel, currentProvider, enterAgainReady, preparing, providerDisplayName, queuedRowLabel, type ChatModel } from '../model';
 import type { IdeSlashCommand } from '../protocol';
 import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
@@ -509,7 +509,7 @@ export function Composer(props: {
           <button type="button" class="icon-button" aria-label="Mention a file" title="Mention a file (@)" disabled={!connected}
             onClick={() => { const spacer = text && !/\s$/.test(text) ? ' ' : ''; update(`${text}${spacer}@`); }}><Icon name="mention" /></button>
           <button type="button" class="icon-button" aria-label="Commands" title="Commands (/)" disabled={!connected} onClick={() => update('/')}><span class="slash-glyph" aria-hidden="true">/</span></button>
-          {model.running ? (
+          {model.running || preparing(model) ? (
             <button type="button" id="stop-button" class="send stop" aria-label={model.live?.stopping ? 'Stopping' : 'Stop'} title={model.live?.stopping ? 'Stopping' : 'Stop'}
               disabled={Boolean(model.live?.stopping)} onClick={() => post({ type: 'cancel', restoreDraft: !text })}><Icon name="debug-stop" /></button>
           ) : null}

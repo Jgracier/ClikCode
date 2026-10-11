@@ -2,13 +2,13 @@
  * notices and approvals. */
 import type { JSX } from 'preact';
 import { memo } from 'preact/compat';
-import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
+import { useContext, useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import {
   ACTIVITY_PREVIEW_LINES, activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, liveWaitKind,
   outputPreview, previewLinesFor, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
-import { activityResult, endsWithSummary, exploreRuns, exploreSummary, tensedLabel, turnSummary } from '../../../../src/harness/protocol/turn-flow';
+import { activityResult, exploreRuns, exploreSummary, tensedLabel } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
 import { useNow, useSpinFrame } from './clock';
@@ -20,14 +20,14 @@ import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
-import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
-import { liveElapsedMs, turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type ThoughtEntry, type TurnTrace } from '../model';
+import { planWindow } from '../../../../src/tui/render/plan-window';
+import { liveElapsedMs, reconnecting, turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff, HarnessQuestion, HarnessQuestionResult } from '../protocol';
 import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
-import { Icon, Spinner } from './ui';
-import { foldedGroupCount, foldedSummary, workingStatus } from './flow';
+import { Animating, Icon, Spinner } from './ui';
+import { foldedGroupCount, foldedSummary, runGroupView, traceSummaryLine, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
@@ -69,11 +69,13 @@ const AssistantMessage = memo(({ cacheKey, text }: { cacheKey: string; text: str
  * separate nodes, so a delta replaces only the last block's HTML. */
 function LiveMarkdown({ text }: { text: string }): JSX.Element {
   const render = useRef(createStreamingMarkdown());
-  const { stable, tail } = render.current(text);
+  const { parts, tail } = render.current(text);
+  // One node per settled chunk, keyed by its place: a chunk is final, so
+  // growing the answer adds nodes and leaves the earlier ones' DOM alone.
   return (
     <div class="markdown">
-      <div class="md-part" dangerouslySetInnerHTML={{ __html: stable }} />
-      <div class="md-part" dangerouslySetInnerHTML={{ __html: tail }} />
+      {parts.map((html, index) => <div key={index} class="md-part" dangerouslySetInnerHTML={{ __html: html }} />)}
+      <div class="md-part tail" dangerouslySetInnerHTML={{ __html: tail }} />
     </div>
   );
 }
@@ -243,6 +245,7 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
   const agentRunning = status === 'running' && (Boolean(activity.swarm) || Boolean(activity.agent)
     || liveWaitKind({ kind: 'tool-start', label: activity.label, agent: activity.agent, category: activity.category }) === 'agent');
+  const animating = useContext(Animating);
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
     event.stopPropagation();
     post({ type: 'change', action, key: activity.key, ...(userIndex === undefined ? {} : { userIndex }) });
@@ -250,13 +253,13 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   return (
     <div class={`activity ${status}`}>
       <div class="activity-line">
-        {/* The working line moves for the turn. A running sub-agent or swarm
-            agent also keeps its own spinner here: that animation belongs on
-            its chat row, not only on the thinking line. */}
+        {/* Every running row spins for itself, in its category's colour, on
+            the page's one clock (the working line spins for the turn). */}
         <span class={`activity-status ${activity.swarm ? 'tone-cyan' : toneOf(activity)}`} aria-label={status}>
-          {status === 'error' ? <Icon name="error" /> : status === 'stopped' ? <Icon name="debug-stop" /> : agentRunning ? <Spinner tone="tone-cyan" /> : <Icon name={activityIcon(activity)} />}
+          {status === 'error' ? <Icon name="error" /> : status === 'stopped' ? <Icon name="debug-stop" />
+            : status === 'running' ? <Spinner tone={agentRunning ? 'tone-cyan' : toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}
         </span>
-        <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning} />
+        <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
@@ -313,9 +316,9 @@ function FoldedRun({ activities, workspace, userIndex }: { activities: Activity[
 function RunGroups({ groups, workspace, userIndex }: { groups: ReadonlyArray<{ rows: Activity[]; explore: boolean }>; workspace?: string; userIndex?: number }): JSX.Element {
   return (
     <>
-      {groups.map((group) => (group.explore
-        ? <ExploredRow key={`e${group.rows[0]!.key}`} activities={group.rows} workspace={workspace} userIndex={userIndex} />
-        : <ActivityRow key={group.rows[0]!.key} activity={group.rows[0]!} workspace={workspace} userIndex={userIndex} />))}
+      {runGroupView(groups).map((group) => (group.kind === 'explored'
+        ? <ExploredRow key={group.key} activities={group.rows} workspace={workspace} userIndex={userIndex} />
+        : <ActivityRow key={group.key} activity={group.rows[0]!} workspace={workspace} userIndex={userIndex} />))}
     </>
   );
 }
@@ -333,6 +336,7 @@ function ExploredRow({ activities, workspace, userIndex }: { activities: Activit
     <div class={`explored${running ? ' running' : ''}`}>
       <button type="button" class="trace-toggle explored-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
         <Icon name={open ? 'chevron-down' : 'chevron-right'} />
+        {running ? <Spinner tone="tone-blue" /> : null}
         <span class="explored-title">{running ? 'Exploring' : 'Explored'}</span>
         <span class="muted explored-summary">{exploreSummary(activities)}</span>
       </button>
@@ -342,7 +346,7 @@ function ExploredRow({ activities, workspace, userIndex }: { activities: Activit
             const result = activityResult(activity);
             return (
               <div key={activity.key} class="explored-call">
-                <span class={`activity-status ${toneOf(activity)}`}><Icon name={activityIcon(activity)} /></span>
+                <span class={`activity-status ${toneOf(activity)}`}>{activity.kind === 'tool-start' ? <Spinner tone={toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}</span>
                 <ActivityLabel label={activity.stopped ? activity.label : tensedLabel(activity.label, activity.kind === 'tool-start')} workspace={workspace} />
                 {activity.stopped ? <span class="activity-outcome stopped">stopped</span> : null}
                 {result ? <span class="activity-outcome activity-result">{result}</span> : null}
@@ -379,11 +383,18 @@ function Reasoning({ text }: { text: string }): JSX.Element {
  * finished, each run of calls folds to one line in its place, so nothing
  * moves when the turn ends. */
 function TurnFlow(props: {
-  text: string; activities: readonly Activity[]; thoughts: readonly ThoughtEntry[]; steers: ReadonlyArray<{ text: string; offset: number }>;
+  text: string; activities: readonly Activity[]; thoughts: readonly ThoughtEntry[]; steers: ReadonlyArray<{ text: string; offset: number; seq?: number }>;
   workspace?: string; live?: { startedAt: number }; cacheKey?: string; userIndex?: number;
+  /** The turn's one plan, drawn once at the offset it first appeared. */
+  plan?: { entries: ChatModel['plan']; at: PlanAt };
+  /** Notices that arrived during the turn, each where it did. */
+  notes?: ReadonlyArray<Note>;
 }): JSX.Element {
   const { text } = props;
-  const marks = turnMarks(text, props.activities, props.thoughts, props.steers);
+  const marks = turnMarks(text, props.activities, props.thoughts, props.steers, {
+    ...(props.plan?.entries.length ? { plan: props.plan.at } : {}),
+    ...(props.notes?.length ? { notes: props.notes.map((note, index) => ({ offset: note.offset ?? 0, seq: note.seq ?? index, note })) } : {}),
+  });
   const parts: JSX.Element[] = [];
   let at = 0;
   let run: Activity[] = [];
@@ -398,20 +409,27 @@ function TurnFlow(props: {
     const piece = text.slice(at, end);
     if (!piece.trim()) return;
     flushRun();
-    const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(piece);
-    parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
+    // Live, every block of text is the same kind of node under the same key
+    // as it grows and as a call starts after it: its DOM survives.
+    if (props.live) parts.push(<LiveMarkdown key={`t${at}`} text={piece} />);
+    else {
+      const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(piece);
+      parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
+    }
     at = end;
   };
   for (const mark of marks) {
     if (mark.offset > at) paragraph(mark.offset);
     if (mark.activity) { run.push(mark.activity); continue; }
     flushRun();
-    if (mark.thought) parts.push(<ThoughtRow key={`h${mark.offset}-${parts.length}`} thought={mark.thought} />);
-    else parts.push(<div key={`s${mark.offset}-${mark.steer}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
+    if (mark.thought) parts.push(<ThoughtRow key={`h${mark.thought.seq}`} thought={mark.thought} />);
+    else if (mark.plan && props.plan) parts.push(<Plan key="plan" plan={props.plan.entries} folded={!props.live} running={Boolean(props.live)} />);
+    else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
+    else parts.push(<div key={`s${mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
   }
   flushRun();
   if (props.live) {
-    if (text.slice(at)) parts.push(<LiveMarkdown key={`${props.live.startedAt}-${at}`} text={text.slice(at)} />);
+    if (text.slice(at).trim()) parts.push(<LiveMarkdown key={`t${at}`} text={text.slice(at)} />);
   } else paragraph(text.length);
   return <>{parts}</>;
 }
@@ -420,17 +438,14 @@ function TurnFlow(props: {
  * Cursor's files edited), and, when it changed files, all of them to review
  * at once or undo together. */
 function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element | null {
-  // A stopped turn always says so where it ends; "Stopped" is otherwise
-  // only a passing notice.
-  if (!trace.stopped && !endsWithSummary(trace.endedAt - trace.startedAt, trace.activities.length)) return null;
   const diffs = trace.activities.flatMap((activity) => (activity.kind === 'tool-done' && activity.diff?.length ? [activity.diff] : []));
   const changed = diffs.some((diff) => diff.some((file) => file.path));
+  const line = traceSummaryLine(trace, diffs);
+  if (line === undefined) return null;
   const act = (action: 'view' | 'revert') => (): void => post({ type: 'turnChanges', action, userIndex: trace.userIndex });
   return (
     <div class="turn-summary">
-      {/* A reopened turn's trace has no clock of its own: a stopped one
-          says only that, never a made-up "after 1s". */}
-      <span class="muted">{trace.stopped && !trace.endedAt ? 'Stopped' : turnSummary({ ms: trace.endedAt - trace.startedAt, diffs, ...(trace.stopped ? { stopped: true } : {}) })}</span>
+      <span class="muted">{line}</span>
       {changed ? (
         <>
           <button type="button" class="link small" data-turn-changes="view" title="Open every change this turn made in the diff editor" onClick={act('view')}><Icon name="diff-multiple" />Review changes</button>
@@ -444,15 +459,16 @@ function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element | null {
 /** A finished answer with how it was reached, in the order it happened.
  * Rows and thoughts land where they came in the answer as it streamed; one
  * whose place the saved answer no longer reads the same up to goes first. */
-const FinishedTurn = memo(({ text, trace, cacheKey, workspace }: { text: string; trace: TurnTrace; cacheKey: string; workspace?: string }): JSX.Element => {
+const FinishedTurn = memo(({ text, trace, cacheKey, workspace, notes }: { text: string; trace: TurnTrace; cacheKey: string; workspace?: string; notes?: Note[] }): JSX.Element => {
   const place = <T extends { offset?: number }>(item: T): T => {
     const offset = item.offset ?? 0;
     return offset <= text.length && text.slice(0, offset) === trace.text.slice(0, offset) ? item : { ...item, offset: 0 };
   };
   return (
     <div class="message assistant" role="article" aria-label="ClikCode">
-      {trace.plan ? <Plan plan={trace.plan} folded /> : null}
       <TurnFlow text={text} activities={trace.activities.map(place)} thoughts={(trace.reasoning ?? []).map(place)} steers={(trace.steers ?? []).map(place)}
+        {...(trace.plan ? { plan: { entries: trace.plan, at: place(trace.planAt ?? { offset: 0, seq: 0 }) } } : {})}
+        {...(notes?.length ? { notes: notes.map(place) } : {})}
         workspace={workspace} cacheKey={cacheKey} userIndex={trace.userIndex} />
       <TurnSummary trace={trace} />
       <div class="message-actions"><CopyAnswer text={text} /></div>
@@ -498,10 +514,11 @@ function Plan({ plan, folded = false, running = false }: { plan: ChatModel['plan
       <div class="plan-head"><Icon name="checklist" /><span>Plan</span><span class="muted">{done}/{plan.length}</span></div>
       {rows.map(({ entry, index }) => (
         <div key={index} class={`plan-entry ${entry.status ?? ''}`}>
-          {/* The step in progress moves with the turn, as the terminal's does. */}
-          {/* The step in progress is marked, still: the working line is
-              what moves. */}
-          <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'cancelled' ? 'circle-slash' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />
+          {/* The step in progress spins while its turn runs, on the shared
+              clock; settled, it is a still mark. */}
+          {entry.status === 'in_progress' && running
+            ? <Spinner tone="tone-blue" />
+            : <Icon name={entry.status === 'completed' ? 'pass-filled' : entry.status === 'cancelled' ? 'circle-slash' : entry.status === 'in_progress' ? 'circle-large-filled' : 'circle-large'} />}
           <span>{entry.content}</span>
         </div>
       ))}
@@ -520,24 +537,28 @@ const VISIBLE_ACTIVITIES = 6;
  * running sub-agent or swarm agent keeps its own spinner on its chat row.
  * The thought being had is this line's tooltip, and opens under it. Ticks
  * on its own. */
-function Working({ live, asking }: { live: LiveTurn | undefined; asking: boolean }): JSX.Element {
-  const now = useNow();
+function Working({ live, asking, reconnecting: away = false }: { live: LiveTurn | undefined; asking: boolean; reconnecting?: boolean }): JSX.Element {
+  const now = useNow(!away);
   const [open, setOpen] = useState(false);
-  const status = workingStatus(live, asking, now);
+  const status = workingStatus(live, asking, now, away);
+  // Not working: waiting on the user, or the bridge coming back. A still
+  // mark, no shimmer, no clock.
+  const held = asking || away;
   const thought = asking ? undefined : live?.thought?.text;
   return (
     <div class="working-wrap">
       <div class={`working status-${status.tone}`} role="status">
         {/* Waiting on the user is not working: a still dot, as the terminal
             shows it, and no clock -- it is stopped. */}
-        {asking ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
+        {held ? <span class={`spinner ${status.toneClass}`} aria-hidden="true">●</span>
           : <Spinner tone={live && turnStalled(now - live.activeAt) ? 'tone-yellow' : status.toneClass} />}
-        <span class={workingLabelClass(status.toneClass, asking)} style={asking ? undefined : shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
+        <span class={workingLabelClass(status.toneClass, held)} style={held ? undefined : shimmerStyle(status.label)} title={thought ? (thought.length > 600 ? `…${thought.slice(-600)}` : thought) : undefined}>{status.label}</span>
         {thought ? (
           <button type="button" class="icon-button tiny working-thought" aria-expanded={open} title={open ? 'Hide reasoning' : 'Show reasoning'} aria-label={open ? 'Hide reasoning' : 'Show reasoning'}
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
-        <span class="muted">{live && !asking ? formatElapsed(liveElapsedMs(live, now)) : ''}</span>
+        {/* Not announced: a clock changing every second would be read out. */}
+        <span class="muted" aria-hidden="true">{live && !held ? formatElapsed(liveElapsedMs(live, now)) : ''}</span>
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
@@ -574,10 +595,16 @@ function ActivityRun({ activities, workspace }: { activities: Activity[]; worksp
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
  * it, the newest still streaming; then the working line. */
-const LiveTurnView = memo(({ live, workspace, asking }: { live: LiveTurn | undefined; workspace?: string; asking: boolean }): JSX.Element => (
+const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away }: {
+  live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean;
+}): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
-    {live ? <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }} /> : null}
-    <Working live={live} asking={asking} />
+    {live ? (
+      <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
+        {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
+        {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
+    ) : null}
+    <Working live={live} asking={asking} reconnecting={away} />
   </div>
 ));
 
@@ -587,6 +614,13 @@ const WINDOW = 120;
 
 /** The settled conversation. Memoized on the fields it draws, which keep
  * their objects while a turn streams, so a delta does not redraw it. */
+/** The notices that arrived during one turn, or nothing (a stable value, so
+ * a turn without any is not redrawn when another's note arrives). */
+function turnNotes(notes: readonly Note[], userIndex: number): Note[] | undefined {
+  const found = notes.filter((note) => note.turn === userIndex);
+  return found.length ? found : undefined;
+}
+
 const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'> & { reveal?: number }): JSX.Element => {
   const byUser = useMemo(() => new Map(traces.map((trace) => [trace.userIndex, trace])), [traces]);
   // Each prompt's number as /redo counts them (ClikCode's own continuation
@@ -606,7 +640,8 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     );
   }
   const notesAt = (index: number): void => {
-    notes.forEach((note, position) => { if (note.after === index) parts.push(<NoteView key={`n${position}`} note={note} />); });
+    // A note from a turn with a trace is drawn in that turn, at its offset.
+    notes.forEach((note, position) => { if (note.after === index && !(note.turn !== undefined && byUser.has(note.turn))) parts.push(<NoteView key={`n${position}`} note={note} />); });
   };
   if (start === 0) notesAt(0);
   messages.forEach((message, index) => {
@@ -616,7 +651,7 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     parts.push(
       <div key={`m${index}`} class="message-anchor" data-message={index}>
         {message.role === 'user' ? <UserMessage text={message.content} {...(promptNumbers.has(index) ? { prompt: promptNumbers.get(index)! } : {})} />
-          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} />
+          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} notes={turnNotes(notes, index - 1)} />
             : <AssistantMessage cacheKey={`${sessionId}#${index}`} text={message.content} />}
       </div>,
     );
@@ -625,15 +660,37 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
   return <>{parts}</>;
 });
 
+/** What a screen reader hears of a turn: the working status line (its own
+ * live region) while it runs, and the finished answer once -- not every
+ * delta of the streaming text, nor the log's every redraw. */
+function FinalAnswer({ running, messages }: Pick<ChatModel, 'running' | 'messages'>): JSX.Element {
+  const owed = useRef(false);
+  const [said, setSaid] = useState('');
+  useEffect(() => {
+    if (running) { owed.current = true; setSaid(''); return; }
+    const last = messages[messages.length - 1];
+    if (owed.current && last?.role === 'assistant') {
+      owed.current = false;
+      setSaid(last.content.length > 1000 ? `${last.content.slice(0, 1000)}…` : last.content);
+    }
+  }, [running, messages]);
+  return <div class="visually-hidden" role="status" aria-live="polite">{said}</div>;
+}
+
 export function Transcript({ model, reveal }: { model: ChatModel; reveal?: number }): JSX.Element {
   const parts: JSX.Element[] = [];
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
-  // A plan is on screen while it has open steps; finished, it goes, and is
-  // kept with its turn (planStillNeeded, as the terminal decides).
-  if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} running={model.running} />);
-  if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} asking={waitingOnUser(model)} />);
-  // Notes from the running turn (an account switch, "Stopped") follow it.
-  model.notes.forEach((note, position) => { if (note.after > model.messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
+  // The plan and the turn's notices are rows of the turn, drawn once each
+  // where they first appeared (TurnFlow), not cards of their own.
+  const inTurn = model.live && model.turnUserIndex !== undefined ? model.turnUserIndex : undefined;
+  if (model.running) {
+    parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} asking={waitingOnUser(model)} plan={model.plan} notes={model.notes} away={reconnecting(model)}
+      {...(inTurn !== undefined ? { turn: inTurn } : {})} />);
+  }
+  // Notes from the running turn that could not be placed in it follow it.
+  model.notes.forEach((note, position) => {
+    if (note.after > model.messages.length && !(inTurn !== undefined && note.turn === inTurn)) parts.push(<NoteView key={`n${position}`} note={note} />);
+  });
   const queuedTexts = new Set(model.queued.map((item) => item.text));
   const steered = new Set(model.live?.steers.map((steer) => steer.text));
   for (const submission of model.submissions) {
@@ -644,10 +701,13 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
     parts.push(<div key={`s${submission.id}`} class="submission"><Icon name="arrow-small-right" /><span class="muted">{said}:</span> <span>{submission.text}</span></div>);
   }
   return (
-    <div class="transcript" role="log" aria-live="polite" aria-relevant="additions">
-      <History sessionId={model.sessionId} messages={model.messages} traces={model.traces} notes={model.notes} workspace={model.workspace} reveal={reveal} />
-      {parts}
-    </div>
+    <Animating.Provider value={!reconnecting(model)}>
+      <div class="transcript" role="log" aria-live="off" aria-relevant="additions">
+        <History sessionId={model.sessionId} messages={model.messages} traces={model.traces} notes={model.notes} workspace={model.workspace} reveal={reveal} />
+        {parts}
+        <FinalAnswer running={model.running} messages={model.messages} />
+      </div>
+    </Animating.Provider>
   );
 }
 
