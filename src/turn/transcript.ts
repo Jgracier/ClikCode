@@ -23,6 +23,8 @@ export function settledAnswerBlocks(
   content: string, alreadyEmitted: number, turnEnded: boolean, parsedBlocks?: readonly MessageBlock[],
   /** A tool call began after every character of `content`. */
   closedByTool = false,
+  /** At most this many blocks settle: later prose waits on an earlier call. */
+  holdCount = Number.POSITIVE_INFINITY,
 ): { settled: MessageBlock[]; live: MessageBlock[]; emitted: number } {
   // `parsedBlocks` lets a streaming caller supply its incrementally parsed
   // blocks; they are identical to splitIntoBlocks(content) by contract.
@@ -41,9 +43,10 @@ export function settledAnswerBlocks(
   // Not inside a fence still open: a blank line there is a line of code.
   const last = blocks[blocks.length - 1];
   const closedByBlankLine = blocks.length > 0 && /\n[ \t]*\n$/.test(content) && !(last?.kind === 'code' && last.open);
-  const settledCount = turnEnded || closedByBlankLine || closedByTool
+  const natural = turnEnded || closedByBlankLine || closedByTool
     ? blocks.length
     : Math.max(0, blocks.length - 1);
+  const settledCount = Math.min(natural, holdCount);
   const emitted = Math.min(alreadyEmitted, settledCount);
   return {
     settled: blocks.slice(emitted, settledCount),
@@ -59,7 +62,24 @@ export function settledAnswerBlocks(
  * append-only means. */
 export type SettlingTool = {
   id: string; done: boolean; lines: readonly string[]; responseOffset?: number;
+  /** When the row began, in the order the surface saw it (the standard's
+   * `seq`). Rows at one offset keep this order; absent, they keep the order
+   * they were passed in, after every row that has one. */
+  seq?: number;
+  /** A sub-agent, or something nested under one: long-lived by nature, so it
+   * never holds another row back (a background agent may run for minutes while
+   * the parent goes on working). */
+  agent?: boolean;
 };
+
+/** Start order: the response offset, then arrival. Completion never enters. */
+function startOrder(tools: readonly SettlingTool[]): SettlingTool[] {
+  const offset = (tool: SettlingTool): number => tool.responseOffset ?? Number.POSITIVE_INFINITY;
+  const seq = (tool: SettlingTool): number => tool.seq ?? Number.POSITIVE_INFINITY;
+  return tools.map((tool, index) => ({ tool, index }))
+    .sort((left, right) => offset(left.tool) - offset(right.tool) || seq(left.tool) - seq(right.tool) || left.index - right.index)
+    .map((entry) => entry.tool);
+}
 
 type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
 
@@ -70,9 +90,12 @@ type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) 
 function interleave(
   blocks: readonly MessageBlock[], tools: readonly SettlingTool[],
   render: BlockRenderer, startsMessage: boolean,
+  /** Prose up to here is already in scrollback: a row that began inside it
+   * comes first, rather than after the next block. */
+  writtenTo = 0,
 ): string[] {
   const offset = (tool: SettlingTool): number => tool.responseOffset ?? Number.POSITIVE_INFINITY;
-  const pending = [...tools].sort((left, right) => offset(left) - offset(right));
+  const pending = startOrder(tools);
   const out: string[] = [];
   let first = startsMessage;
   let run: MessageBlock[] = [];
@@ -85,7 +108,7 @@ function interleave(
   const take = (limit: number): void => {
     while (pending.length && offset(pending[0]!) <= limit) out.push(...pending.shift()!.lines);
   };
-  take(0);
+  take(writtenTo);
   for (const block of blocks) {
     run.push(block);
     if (pending.length && offset(pending[0]!) <= block.sourceEnd) {
@@ -159,13 +182,31 @@ export class TurnTranscript {
     // instead of under whatever sentence arrives next.
     const closedByTool = input.tools.some((tool) => tool.responseOffset !== undefined
       && tool.responseOffset >= input.content.length && input.content.length > 0);
-    const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, input.blocks, closedByTool);
     // Same rule as settledToolRows, kept grouped so a tool's rows can be
     // placed at the offset it started at rather than after all of the prose.
     const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
-    const owing = input.tools.filter((tool) => !this.emittedTools.has(tool.id));
-    const settledTools = owing.filter(isSettled);
-    const liveTools = owing.filter((tool) => !isSettled(tool));
+    const owing = startOrder(input.tools.filter((tool) => !this.emittedTools.has(tool.id)));
+    // Position is start order, never completion order. A call that finished
+    // while an earlier one is still running keeps its row in the live region
+    // until that one settles, and then everything retires in start order. A
+    // sub-agent is not a gate: it may run for minutes while the parent works.
+    const firstOpen = owing.findIndex((tool) => !tool.agent && !isSettled(tool));
+    const settledTools = owing.filter((tool, index) => isSettled(tool) && (firstOpen < 0 || index < firstOpen));
+    const liveTools = owing.filter((tool, index) => !isSettled(tool) || (firstOpen >= 0 && index > firstOpen));
+    const gate = firstOpen >= 0 ? owing[firstOpen]! : undefined;
+    const allBlocks = input.blocks ?? splitIntoBlocks(input.content);
+    // Prose generated after an unfinished call began belongs below that call's
+    // row, so it stays live (bounded by the call; the end of the turn settles
+    // everything). The block the call began inside may still retire above it:
+    // a tool lands after the first block its offset falls inside.
+    let holdCount = Number.POSITIVE_INFINITY;
+    if (gate && gate.responseOffset !== undefined) {
+      // Offset zero is before any prose at all (see interleave).
+      const inside = gate.responseOffset <= 0 ? -1 : allBlocks.findIndex((block) => block.sourceEnd >= gate.responseOffset!);
+      if (gate.responseOffset <= 0 || inside >= 0) holdCount = Math.max(this.emittedBlocks, inside + 1);
+    }
+    const proseHeld = holdCount < allBlocks.length;
+    const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, allBlocks, closedByTool, holdCount);
     const renderLive = input.renderLive ?? input.renderBlocks;
     /** Rows for `blocks` as they continue what is already written: without
      * the leading separator when it was written already (`joined`) or when
@@ -204,13 +245,14 @@ export class TurnTranscript {
     }
     if (head) { this.openProseRows = 0; this.openSeparated = false; }
 
+    const writtenTo = this.emittedBlocks > 0 ? (allBlocks[Math.min(this.emittedBlocks, allBlocks.length) - 1]?.sourceEnd ?? 0) : 0;
     let firstRun = true;
     finished.push(...interleave(settled, settledTools, (run, first) => {
       const rows = firstRun ? continuing(run, first, headJoined) : input.renderBlocks(run, first);
       firstRun = false;
       this.lastBlock = run[run.length - 1];
       return rows;
-    }, !this.started));
+    }, !this.started, writtenTo));
     if (finished.length) this.started = true;
     // Monotonic, for the same reason the message loop is: a row in scrollback
     // cannot be un-emitted. A turn that streams part of an answer, hits a
@@ -221,8 +263,27 @@ export class TurnTranscript {
     this.emittedBlocks = Math.max(this.emittedBlocks, answer.emitted);
     for (const tool of settledTools) this.emittedTools.add(tool.id);
 
+    // Where each live row sits. A call whose offset is already behind the live
+    // prose sits at the top of this region, directly under the scrollback it
+    // will join when it finishes; one ahead of the text is woven into it at
+    // the block its offset falls inside, or sits at the end. Appending every
+    // running call after the text is what made the row jump up the page when
+    // the checkmark was written.
+    const liveSourceStart = answer.emitted === 0 ? 0 : (allBlocks[answer.emitted - 1]?.sourceEnd ?? 0);
+    const before: string[] = [];
+    const ahead: SettlingTool[] = [];
+    for (const tool of liveTools) {
+      if ((tool.responseOffset ?? Number.POSITIVE_INFINITY) <= liveSourceStart) before.push(...tool.lines);
+      else ahead.push(tool);
+    }
+    const after: string[] = [];
+
     // An open fence retires every source line but the one still being typed.
-    const open = answer.live.length === 1 ? answer.live[0]! : undefined;
+    // Not while prose is held behind a running call: it is drawn whole, below
+    // that call's row. And never a table: its columns are as wide as its
+    // widest cell, so rows written before a wider one arrives would be
+    // narrower than the table ends up.
+    const open = answer.live.length === 1 && !proseHeld ? answer.live[0]! : undefined;
     let live: string[] = [];
     if (open?.kind === 'code' && open.lines.length > 1) {
       // A fence begins as a "```" paragraph, whose separator may be out already.
@@ -239,7 +300,7 @@ export class TurnTranscript {
         [{ ...open, lines: [open.lines[open.lines.length - 1]!], before: open.lines.slice(0, -1), ...(this.openCodeLines ? { headerless: true } : {}) }],
         !this.started, this.openSeparated, renderLive,
       );
-    } else if (open && open.kind !== 'code') {
+    } else if (open && open.kind !== 'code' && open.kind !== 'table') {
       // Everything but the row still being written is final.
       if (this.openProseRows === 0) this.openProseFirst = !this.started;
       // Still growing: drawn by the live renderer, which lays out only what
@@ -255,22 +316,30 @@ export class TurnTranscript {
       }
       live = rows.slice(keep);
     } else if (answer.live.length) {
-      live = continuing(answer.live, !this.started, this.openSeparated, renderLive);
+      // Several live blocks, a table, or prose held behind a call: drawn
+      // whole, each call woven in after the block it began inside.
+      const first = !this.started;
+      let runFirst = first;
+      let run: MessageBlock[] = [];
+      const flush = (): void => {
+        if (!run.length) return;
+        live.push(...(runFirst === first ? continuing(run, runFirst, this.openSeparated, renderLive) : renderLive(run, false)));
+        runFirst = false;
+        run = [];
+      };
+      const queue = [...ahead];
+      for (const block of answer.live) {
+        run.push(block);
+        if (queue.length && (queue[0]!.responseOffset ?? Number.POSITIVE_INFINITY) <= block.sourceEnd) {
+          flush();
+          while (queue.length && (queue[0]!.responseOffset ?? Number.POSITIVE_INFINITY) <= block.sourceEnd) live.push(...queue.shift()!.lines);
+        }
+      }
+      flush();
+      ahead.length = 0;
+      ahead.push(...queue);
     }
-    // A running call stays where it started. One whose offset is already
-    // behind the live prose sits at the top of this region, directly under
-    // the scrollback it will join when it finishes. One still ahead of the
-    // text sits at the end. Appending every running call after the text is
-    // what made the row jump up the page when the checkmark was written.
-    const blocks = input.blocks ?? splitIntoBlocks(input.content);
-    const liveSourceStart = answer.emitted === 0 ? 0 : (blocks[answer.emitted - 1]?.sourceEnd ?? 0);
-    const before: string[] = [];
-    const after: string[] = [];
-    for (const tool of [...liveTools].sort((left, right) => (left.responseOffset ?? Number.POSITIVE_INFINITY) - (right.responseOffset ?? Number.POSITIVE_INFINITY))) {
-      const offset = tool.responseOffset ?? Number.POSITIVE_INFINITY;
-      if (offset <= liveSourceStart) before.push(...tool.lines);
-      else after.push(...tool.lines);
-    }
+    for (const tool of ahead) after.push(...tool.lines);
     live = [...before, ...live, ...after];
     return { finished, live };
   }
