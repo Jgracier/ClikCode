@@ -37,7 +37,7 @@ import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/act
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { reasoningBody, tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { answerWriting, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
 import { waitStalled } from '../harness/protocol/turn-pace.js';
@@ -45,12 +45,12 @@ import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
-import { NOTICE_MS, PAINT_COALESCE_MS, WRITING_MS } from '../harness/protocol/timings.js';
+import { NOTICE_MS, PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
 import { ApprovalPreview, ApprovalRequest, approvalBlockRows } from './render/approval-block.js';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from './render/approval-keys.js';
 import { questionBlockRows, questionKeyAction, questionRows, questionValues, startsTyping, type QuestionPromptState } from './render/question-block.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
-import { frameRowBudget } from './render/frame-budget.js';
+import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './render/frame-budget.js';
 import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
 import { runOptionPicker, type OptionPickerHost, type PaletteLayout } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
@@ -66,6 +66,7 @@ import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
 import { isClikCodeNotice } from '../session/clikcode-notice.js';
 import { reducedMotion } from './capabilities.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
@@ -74,7 +75,7 @@ import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
-import { keyHint, keyHintFor } from '../harness/protocol/wording.js';
+import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js';
 import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
@@ -125,8 +126,15 @@ type WaitingTurn = {
    * approval was answered: quiet past turn-pace's threshold and the spinner
    * turns yellow, by the same rule as a stalled row in the conversation list. */
   activeAt: number;
-  /** When answer text last arrived: the status line says "writing". */
+  /** When answer text last arrived (a statusOrder tick): the status line says
+   * "writing" until a call starts after it (answerWriting). */
   writingAt?: number;
+  /** When the latest call started (a statusOrder tick). */
+  callAt?: number;
+  /** The usage this turn has reported so far, and the token count the
+   * status line shows (stepped toward it each tick, never down). */
+  usage?: TurnUsage;
+  tokens?: number;
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
@@ -166,6 +174,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The turn (or other wait) in flight: see WaitingTurn. */
   private turn?: WaitingTurn;
   private waitingFrame = 0;
+  /** Orders answer text against call starts for answerWriting: a counter, so
+   * two events in one millisecond keep their order. */
+  private statusOrder = 0;
   /** Whether the pending tick is the spinner's (true) or the clock's. */
   private waitingTickFast = false;
   private activityEntries: ActivityEntry[] = [];
@@ -352,7 +363,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\r') {
           const text = turn.draft.trim();
           if (!text) return;
-          this.answerApproval(pending, false);
+          this.answerApproval(pending, false, { kind: 'told', text });
           // After the denial is on its way: the answer's own send is queued
           // behind this resolve, and the steer must not overtake it.
           setImmediate(() => this.submitWaiting(text, false));
@@ -560,9 +571,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
     const localId = ++this.waitingSubmissionId;
     // A message gets a row, because the user needs to know where their words
-    // went. A command gets none: it either applies (and the status line it
-    // changed already shows that) or it runs at the turn boundary. A row
-    // saying so would be the announcement this is meant not to make.
+    // went. A command is acknowledged too -- `/model sonnet · applied`, or
+    // when it runs -- as a transient line once it has been taken: typed words
+    // that simply vanish read as ignored (Claude Code acknowledges them).
     if (!asCommand) {
       this.waitingSubmissions.push({
         localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
@@ -579,6 +590,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // (standard 1.5), not where it was typed.
         if (result.disposition === 'steered') item.ack = { sequence: ++this.timelineSequence, responseOffset: this.liveResponse.length };
         if (result.unsteered) item.unsteered = true;
+      } else if (asCommand && result.disposition === 'command') {
+        this.showTransientNotice(commandAck(line, result.commandOutcome), NOTICE_MS, () => this.updateWaiting());
+      } else if (asCommand) {
+        // The router decided the line was conversation after all: it is a
+        // message, with its row, as if it had never looked like a command.
+        this.waitingSubmissions.push({
+          localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
+          state: result.disposition, id: result.submission.id, ...(result.unsteered ? { unsteered: true } : {}),
+        });
       }
       this.updateWaiting();
     }).catch(() => {
@@ -597,9 +617,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** An approval answered: the next one waiting comes up, or the band goes
    * back to what the turn was doing. */
-  private answerApproval(pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always'): void {
+  private answerApproval(
+    pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always', settled?: Parameters<typeof decisionRow>[0],
+  ): void {
     lifecycle('window.approval.answer', { answer: answer === 'always' ? 'always' : answer ? 'allow' : 'deny' });
     this.pendingApproval = undefined;
+    // The decision stays on the page where it was made: the block is gone,
+    // and a call that was denied or approved leaves no other trace.
+    this.settleDecision(settled ?? (answer
+      ? { kind: 'approved', label: pending.title, ...(answer === 'always' ? { always: true } : {}) }
+      : { kind: 'denied', label: pending.title }));
     this.approvalsAnswered += 1;
     pending.resolve(answer);
     if (!this.presentNextApproval()) {
@@ -608,6 +635,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.resumeClock();
       this.updateWaiting();
     }
+  }
+
+  /** A decision's settled row, appended at the answer's current place in the
+   * turn like any note (and never merged with an identical earlier one: two
+   * denials of the same command are two decisions). */
+  private settleDecision(decision: Parameters<typeof decisionRow>[0]): void {
+    if (!this.turn) return;
+    const { text, tone } = decisionRow(decision);
+    const row = tone === 'ok' ? chalk.green(text.slice(0, 1)) + chalk.dim(text.slice(1))
+      : tone === 'no' ? chalk.red(text.slice(0, 1)) + chalk.dim(text.slice(1))
+      : chalk.cyan(text.slice(0, 1)) + chalk.dim(text.slice(1));
+    this.activityEntries = [...this.activityEntries, {
+      anchor: this.activityAnchor, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
+      // A settled thought's own shape: a row of the turn that is not a call
+      // (it is counted as none) and is retired in its place like any other.
+      event: { kind: 'thinking', label: text },
+      lines: [sanitizeTerminalText(row, { keepSgr: true, singleLine: true })],
+    }];
   }
 
   /** The draft set aside for "tell it instead", back in the composer. */
@@ -925,7 +970,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text: it settles where it was had.
-    if (text) { this.settleThought(); this.vendorAnswered(); if (this.turn) this.turn.activeAt = this.turn.writingAt = Date.now(); }
+    if (text) { this.settleThought(); this.vendorAnswered(); if (this.turn) { this.turn.activeAt = Date.now(); this.turn.writingAt = ++this.statusOrder; } }
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -1009,7 +1054,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.schedulePaint();
       return;
     }
-    if (event.kind === 'tool-start') this.settleThought();
+    if (event.kind === 'tool-start') { this.settleThought(); if (this.turn) this.turn.callAt = ++this.statusOrder; }
     if (event.id && (event.kind === 'tool-done' || event.kind === 'tool-error')) this.liveChildren.parentEnded(event.id);
     const anchor = this.turn ? this.activityAnchor : this.restingAnchor();
     const responseOffset = this.turn ? live?.responseOffset ?? this.liveResponse.length : undefined;
@@ -1355,12 +1400,27 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       turn.timer = undefined;
       if (this.turn !== turn || this.closed) return;
       if (this.waitingTickFast) this.waitingFrame++;
+      this.stepTokens(turn);
       // A tick that changes only the clock costs that one row: the frame
       // writes only the rows that differ from the last.
       this.updateWaiting();
       this.scheduleWaitingTick();
     }, delay);
     turn.timer.unref();
+  }
+
+  /** The status line's token count takes a step toward what the turn has
+   * produced (see smoothTokens). Stepped on the tick, not on paint, so the
+   * speed does not depend on how many frames were drawn. */
+  private stepTokens(turn: WaitingTurn): void {
+    const target = liveTokenTarget({ ...(turn.usage ? { usage: turn.usage } : {}), responseChars: this.liveResponse.length });
+    turn.tokens = smoothTokens(turn.tokens ?? 0, target);
+  }
+
+  /** The usage the vendor has reported for the running turn (a running
+   * total). It feeds the status line's meter; nothing is drawn for it here. */
+  setTurnUsage(usage: TurnUsage): void {
+    if (this.turn) this.turn.usage = usage;
   }
 
   /** The turn waits on the user (an approval, a sign-in): its clock stops,
@@ -1370,6 +1430,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!turn) return;
     turn.clock = pauseTurnClock(turn.clock, Date.now());
     turn.activeAt = Date.now();
+    // Blocked on the user: the frame stops now, not at the next spinner tick.
+    if (turn.timer) this.scheduleWaitingTick();
   }
 
   /** Whatever the turn waited on the user for has been answered (or the
@@ -1555,7 +1617,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!turn || turn.cancelled || turn.label === message) return;
     // The band says "waiting for approval" while one is up; remember the phase
     // for when it is answered instead of replacing that.
-    if (this.pendingApproval) { this.approvalRestoreLabel = message; return; }
+    if (this.pendingApproval) { if (!isApprovalWaitPhase(message)) this.approvalRestoreLabel = message; return; }
     turn.label = message;
     this.reportedPhase = message;
     this.updateWaiting();
@@ -1565,7 +1627,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     lifecycle('window.approval.ask', { title: title.slice(0, 80) });
     if (signal?.aborted) return Promise.resolve(false);
     return new Promise<boolean | 'always'>((resolveApproval) => {
-      if (!this.pendingApproval) this.approvalRestoreLabel = this.turn?.label ?? '';
+      if (!this.pendingApproval) this.approvalRestoreLabel = isApprovalWaitPhase(this.turn?.label) ? '' : this.turn?.label ?? '';
       const request: ApprovalRequest = {
         title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }),
         ...(rule === undefined ? {} : { rule }), resolve: resolveApproval,
@@ -1580,7 +1642,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Closes a prompt nobody answered: on screen it is answered `no` (which
    * brings up the next); queued it is simply dropped. */
   private withdrawApproval(request: ApprovalRequest): void {
-    if (this.pendingApproval === request) { this.answerApproval(this.pendingApproval, false); return; }
+    if (this.pendingApproval === request) { this.answerApproval(this.pendingApproval, false, { kind: 'declined', label: request.title }); return; }
     const at = this.approvalQueue.indexOf(request);
     if (at < 0) return;
     this.approvalQueue.splice(at, 1);
@@ -1650,7 +1712,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const rows = questionRows(state.question);
     const finish = (values: string[] | undefined): void => {
       pending.question!.done(values);
-      this.answerApproval(pending, values !== undefined);
+      const { question } = state;
+      const label = question.header ?? question.prompt;
+      this.answerApproval(pending, values !== undefined, values === undefined ? { kind: 'declined', label }
+        : { kind: 'answered', label, ...(values.length && !question.secret ? { values } : {}) });
     };
     const typeIn = (): void => {
       state.typing = true;
@@ -1815,13 +1880,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ...(!turn.cancelled && tool ? { toolPhase: tool.phase } : {}),
       ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
       asking: Boolean(this.pendingApproval),
-      writing: turn.writingAt !== undefined && now - turn.writingAt < WRITING_MS,
+      writing: answerWriting({ writingAt: turn.writingAt, callAt: turn.callAt }),
     });
     // An approval or a sign-in: the wait is on the user.
     const asking = this.waitingOnUser();
     // What the agent is doing is essential and stays at full contrast; the
     // clock is dimmed. Waiting on the user stops the clock, so it is not shown.
-    const rest = asking ? '' : ` · ${elapsed}`;
+    const meter = asking ? undefined : tokenMeterLabel(turn.tokens ?? 0);
+    const rest = asking ? '' : ` · ${elapsed}${meter ? ` · ${meter}` : ''}`;
     // One spinner, one motion, for every harness and every tool, the label
     // shimmering with it. An approval is the turn waiting on the user, not
     // working: a still dot, and no clock (it is stopped).
@@ -2048,12 +2114,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // shorter between two keystrokes. Bound the composer by what remains in
     // this exact frame so it can never create a physical terminal scroll.
     const approval = this.pendingApproval;
-    const approvalRows = approval?.question && optionalRows - paletteRows >= 2
-      ? questionBlockRows(approval.question.state, width, Math.min(optionalRows - paletteRows, Math.max(6, Math.floor(targetHeight * 0.6))), {
+    // Never omitted (standard section 8): short of room the block degrades to
+    // its question and keys (one row at the least), and the rows around it
+    // give way first (fitFooterForApproval, below).
+    const approvalSpace = Math.max(APPROVAL_MIN_ROWS, optionalRows - paletteRows);
+    const approvalRows = approval?.question
+      ? questionBlockRows(approval.question.state, width, Math.min(approvalSpace, Math.max(6, Math.floor(targetHeight * 0.6))), {
         guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS, needsFocus: approval.needsFocus, focused: approval.focused,
       })
-      : approval && optionalRows - paletteRows >= 2
-      ? approvalBlockRows(approval, width, Math.min(optionalRows - paletteRows, Math.max(6, Math.floor(targetHeight * 0.6))), {
+      : approval
+      ? approvalBlockRows(approval, width, Math.min(approvalSpace, Math.max(6, Math.floor(targetHeight * 0.6))), {
         guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS,
         needsFocus: approval.needsFocus, focused: approval.focused,
         position: this.approvalsAnswered + 1, total: this.approvalsAnswered + 1 + this.approvalQueue.length,
@@ -2425,33 +2495,54 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
       }));
     }
-    footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : []));
-    if (waitingRows && this.turn) {
-      footer.push('', `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}`);
-    }
+    footer.push(...panelRows, ...planRows);
+    const aboveApproval = footer.length;
+    const midRows = [...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : [])];
+    footer.push(...approvalRows, ...midRows);
+    // The generating band: a blank above the status where the height has the
+    // row for it. The status itself is always drawn while a turn runs.
+    const statusBlank = waitingRows >= 2 && this.turn ? '' : undefined;
+    const statusRow = this.turn ? `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
+    if (statusBlank !== undefined) footer.push(statusBlank);
+    if (statusRow !== undefined) footer.push(statusRow);
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. A spent window replaces the percentage with the reset
     // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
-    footer.push(paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel)));
-    const composerStart = footer.length;
+    const usageRule = paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel));
+    footer.push(usageRule);
+    let composerStart = footer.length;
+    const composerFooter: string[] = [];
     for (const [index, row] of composerRows.rows.entries()) {
       // The caret is drawn in the same foreground as the rules and the text
       // between them, so the whole composer reads as one field: white frame,
       // white prompt, white input.
-      footer.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+      composerFooter.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
     }
+    footer.push(...composerFooter);
     // The rule below the composer carries the chat's title at its right
     // edge instead of a plain dashed line -- dashes fill from the left up to
     // wherever the title starts, so a longer title just eats more of the
     // rule rather than needing a line of its own. Provider/model/directory
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
-    footer.push(paintTitleRule(rowWidth, session.name || undefined));
+    const titleRule = paintTitleRule(rowWidth, session.name || undefined);
+    footer.push(titleRule);
     // Provider, model, effort and directory are one statement -- what this
     // conversation is running as -- so they read as one line in one colour
     // rather than a bright word followed by a dimmer tail. Cyan is ClikCode's
     // own chrome, the same family as the caret above it.
-    footer.push(`  ${chalk.cyan(meta)}`);
+    const metaRow = `  ${chalk.cyan(meta)}`;
+    footer.push(metaRow);
+    // A short terminal with an approval up: the rows that are not the prompt
+    // go first, so it is never the prompt that is cut off the top.
+    if (approvalRows.length && footer.length > targetHeight) {
+      const fitted = fitFooterForApproval({
+        above: footer.slice(0, aboveApproval), approval: approvalRows, mid: midRows, blank: statusBlank, status: statusRow,
+        usageRule, composer: composerFooter, titleRule, meta: metaRow, height: targetHeight,
+      });
+      footer.splice(0, footer.length, ...fitted.rows);
+      composerStart = fitted.composerStart;
+    }
 
     // The live region is bounded by the viewport: it is erased and redrawn as
     // one block every frame, so it can never be taller than the terminal. A

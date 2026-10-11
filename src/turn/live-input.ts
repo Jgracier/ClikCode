@@ -21,6 +21,9 @@ export type TakeBackOutcome = 'removed' | 'running' | 'gone' | 'error';
 export interface LiveTurnInputResult {
   disposition: 'steered' | 'queued' | 'command';
   submission: LiveTurnSubmission;
+  /** For a `command`: it took effect at once (`applied`) or waits for the
+   * turn boundary (`later`). The composer acknowledges it either way. */
+  commandOutcome?: 'applied' | 'later';
   /** Queued while its steer is still running (held for a safe moment, or
    * slow): true once it was steered in after all and its queued copy is gone,
    * false if the queued copy stands. */

@@ -6,7 +6,7 @@ import type { FileDiff } from '../../agent/line-diff.js';
 import chalk from 'chalk';
 import { approvalHeading } from './approval-keys.js';
 import { sanitizeTerminalText } from './text.js';
-import { visibleSlice } from './width.js';
+import { terminalCellWidth, visibleSlice } from './width.js';
 import { wrapCodeLine, wrapWords } from './wrap.js';
 
 export type ApprovalPreview = {
@@ -52,7 +52,7 @@ export function approvalBlockRows(
   const inner = Math.max(8, width - 4);
   const clean = (text: string): string => sanitizeTerminalText(text);
   const count = state.total && state.total > 1 ? `Approval ${state.position ?? 1} of ${state.total} · ` : '';
-  const heading = approvalHeading(clean(request.title), request.detail);
+  const heading = maxRows <= 2 ? clean(request.title).replace(/\s+/g, ' ').trim() : approvalHeading(clean(request.title), request.detail);
   const title = wrapWords(`${count}${heading}`, inner - 2)
     .map((line, index) => `  ${index === 0 ? chalk.yellow('?') : ' '} ${chalk.bold(line)}`);
   const detail = request.detail === undefined ? []
@@ -75,12 +75,28 @@ export function approvalBlockRows(
       ? (width >= 72 ? `Draft kept. Press [tab] to answer, then ${keys}` : `[tab] to answer · ${keys}`)
       : `${lead}${keys}`;
   const answer = `  ${state.guarded ? chalk.dim(question) : chalk.bold(question)}`;
+  // Short of rows the detail below is the first thing to go, so the heading
+  // must say what is asked itself: the call's own title, not "Approve command"
+  // (which only introduced the detail that is no longer there).
+  // One row to give: what is asked, cut to what is left, then the keys in
+  // their short form. The keys are the part that cannot be lost -- they are
+  // how the turn goes on.
+  if (maxRows <= 1) {
+    const tail = state.telling || (state.needsFocus && !state.focused) ? question : keys;
+    const room = width - 1 - 4 - terminalCellWidth(tail) - 3;
+    const asked = room >= 6 ? `${chalk.yellow('?')} ${chalk.bold(visibleSlice(clean(request.title).replace(/\s+/g, ' '), room))} · ` : `${chalk.yellow('?')} `;
+    return [visibleSlice(`  ${asked}${state.guarded ? chalk.dim(tail) : chalk.bold(tail)}`, width - 1)];
+  }
   const body = [...detail, ...shownDiff];
   const room = Math.max(0, maxRows - title.length - 1);
   if (body.length > room) {
-    const kept = Math.max(0, room - 1);
+    // One row of room is the command itself, marked as cut: it is what is
+    // being approved, and a bare "… 2 more rows" says nothing about it.
+    const kept = room === 1 ? 1 : Math.max(0, room - 1);
     const hidden = body.length - kept;
-    body.splice(kept, body.length - kept, ...(room > 0 ? [`    ${chalk.dim(`… ${hidden} more row${hidden === 1 ? '' : 's'}`)}`] : []));
+    const first = body[0];
+    body.splice(kept, body.length - kept, ...(room > 1 ? [`    ${chalk.dim(`… ${hidden} more row${hidden === 1 ? '' : 's'}`)}`] : []));
+    if (room === 1 && first !== undefined) body[0] = `${first} ${chalk.dim(`(+${hidden})`)}`;
   }
   return [...title.slice(0, Math.max(1, maxRows - 1)), ...body, answer];
 }

@@ -6,6 +6,7 @@ import chalk from 'chalk';
 import type { HarnessQuestion, HarnessQuestionRequest } from '../../harness/events/question.js';
 import { APPROVAL_GUARD_MS } from './approval-keys.js';
 import { sanitizeTerminalText } from './text.js';
+import { visibleSlice } from './width.js';
 import { wrapWords } from './wrap.js';
 
 export interface QuestionPromptState {
@@ -109,6 +110,21 @@ export function questionBlockRows(
     : question.multiSelect ? '[↑↓] move  [space] tick  [enter] done  [esc] cancel' : '[↑↓] move  [enter] choose  [1-9] pick  [esc] cancel';
   const needs = flags.needsFocus && !flags.focused;
   const answer = `  ${flags.guarded || needs ? chalk.dim(needs ? `Draft kept. Press [tab] to answer · ${hint}` : hint) : chalk.bold(hint)}`;
+  // Too few rows for every option: the ones around the highlighted one, so
+  // what Enter would choose is always on screen. The prompt and the link go
+  // first, then the options' far ends (the keys row is never given up).
+  const listRows = Math.max(1, maxRows - head.length - 1);
+  if (maxRows <= head.length + 1) {
+    // No row for a list at all: the highlighted option rides on the question's
+    // own row, and the keys below it move and choose.
+    const on = rows[state.highlight];
+    const marked = on ? `${head[0]} ${chalk.cyan('›')} ${chalk.bold(clean(on.label))}` : head[0]!;
+    return [visibleSlice(marked, Math.max(8, width - 1)), answer];
+  }
+  if (list.length > listRows) {
+    const start = Math.min(Math.max(0, state.highlight - Math.floor((listRows - 1) / 2)), list.length - listRows);
+    list.splice(0, list.length, ...list.slice(start, start + listRows));
+  }
   const body = [...prompt, ...link];
   const room = Math.max(0, maxRows - head.length - list.length - 1);
   if (body.length > room) {

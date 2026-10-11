@@ -36,7 +36,10 @@ export function frameRowBudget(input: {
   // still being written is not flush against the spinner. Counted here
   // because this number IS the height budget -- reserve one row for a band
   // that draws two and the last line of the answer is pushed off the screen.
-  const waitingRows = input.waiting && input.targetHeight >= WAITING_BAND_MIN_HEIGHT ? 2 : 0;
+  // Too short for the blank, the status itself stays: one row. A status that
+  // vanishes with the room is a turn that looks stopped (or, with an approval
+  // up, blocked with no word on why).
+  const waitingRows = !input.waiting ? 0 : input.targetHeight >= WAITING_BAND_MIN_HEIGHT ? 2 : 1;
   let optionalRows = Math.max(0, input.targetHeight - FIXED_FOOTER_ROWS - waitingRows);
   const noticeRows = Math.min(input.notice, optionalRows);
   optionalRows -= noticeRows;
@@ -45,4 +48,45 @@ export function frameRowBudget(input: {
   // options, which reads as a broken frame rather than a short list.
   const paletteRows = available >= PALETTE_MIN_ROWS ? available : 0;
   return { waitingRows, noticeRows, paletteRows, optionalRows };
+}
+
+/** The least an approval or a question may be given: its question and its
+ * keys. The block degrades to this, never to nothing (standard section 8). */
+export const APPROVAL_MIN_ROWS = 2;
+
+/** The footer when an approval or question is up and the terminal is short:
+ * the rows that are not the prompt go first, so the turn is never blocked
+ * invisibly. In order, what is given up: everything above the prompt
+ * (notice, palette, panel, plan), the thought and sign-in rows, the blank
+ * over the status, the provider/model line, the composer's lower rule, and
+ * then the prompt's own leading rows -- never its last (the keys), the
+ * status, the composer's row or its upper rule while anything else is left.
+ * Returns the rows and where the composer's first row sits in them. */
+export function fitFooterForApproval(parts: {
+  above: readonly string[]; approval: readonly string[]; mid: readonly string[];
+  blank: string | undefined; status: string | undefined;
+  usageRule: string; composer: readonly string[]; titleRule: string; meta: string;
+  height: number;
+}): { rows: string[]; composerStart: number } {
+  let above = [...parts.above];
+  let approval = [...parts.approval];
+  let mid = [...parts.mid];
+  let blank = parts.blank;
+  let meta: string | undefined = parts.meta;
+  let titleRule: string | undefined = parts.titleRule;
+  const status = parts.status;
+  const total = (): number => above.length + approval.length + mid.length + (blank === undefined ? 0 : 1)
+    + (status === undefined ? 0 : 1) + 1 + parts.composer.length + (titleRule === undefined ? 0 : 1) + (meta === undefined ? 0 : 1);
+  const over = (): number => total() - parts.height;
+  if (over() > 0) above = [];
+  if (over() > 0) mid = [];
+  if (over() > 0) blank = undefined;
+  if (over() > 0) meta = undefined;
+  if (over() > 0) titleRule = undefined;
+  if (over() > 0) approval = approval.slice(Math.min(over(), Math.max(0, approval.length - 1)));
+  const head = [...above, ...approval, ...mid, ...(blank === undefined ? [] : [blank]), ...(status === undefined ? [] : [status])];
+  return {
+    rows: [...head, parts.usageRule, ...parts.composer, ...(titleRule === undefined ? [] : [titleRule]), ...(meta === undefined ? [] : [meta])],
+    composerStart: head.length + 1,
+  };
 }

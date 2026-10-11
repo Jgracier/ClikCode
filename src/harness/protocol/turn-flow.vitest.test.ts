@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  activityResult, endsWithSummary, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
+  activityResult, answerWriting, decisionRow, isApprovalWaitPhase, endsWithSummary, estimateTokens, liveTokenTarget, smoothTokens, tokenMeterLabel, exploreRuns, exploreSummary, pastePlaceholder, reasoningBody, reasoningHeading, shimmerLevels, tensedLabel, turnStatus, turnSummary,
 } from './turn-flow.js';
 
 describe('how a turn reads', () => {
@@ -48,6 +48,19 @@ describe('how a turn reads', () => {
     expect(reasoningHeading('no heading here')).toBeUndefined();
   });
 
+  it('keeps saying writing for as long as the answer is mid-stream, however long the pause', () => {
+    // Text arrived at t=1000 and nothing since: a slow model, an ACP pause.
+    // Under half-printed text the status must not fall back to "thinking".
+    expect(answerWriting({ writingAt: 1000 })).toBe(true);
+    // A call started after the text: the call's verb takes the line, and
+    // once it ends with no new text the next response is "thinking" again.
+    expect(answerWriting({ writingAt: 1000, callAt: 2000 })).toBe(false);
+    // Text after that call: this response is being written.
+    expect(answerWriting({ writingAt: 3000, callAt: 2000 })).toBe(true);
+    expect(answerWriting({})).toBe(false);
+    expect(answerWriting({ callAt: 5 })).toBe(false);
+  });
+
   it('shows the reasoning under the status line without its heading or emphasis', () => {
     expect(reasoningBody('**Inspecting the parser** I should look at the **lexer** first')).toBe('I should look at the lexer first');
     expect(reasoningBody('**Inspecting the parser**')).toBe('');
@@ -71,8 +84,53 @@ describe('how a turn reads', () => {
     const edit = (path: string, additions: number, removals: number) => [{ path, change: 'modify' as const, additions, removals, lines: [] }];
     expect(turnSummary({ ms: 62_000, diffs: [edit('a.ts', 10, 2), edit('b.ts', 3, 0), edit('a.ts', 1, 1)] })).toBe('Worked for 1m 2s · 2 files changed +14 −3');
     expect(turnSummary({ ms: 400 })).toBe('Worked for 1s');
+    expect(turnSummary({ ms: 62_000, usage: '↑ 1.2k ↓ 340 tokens · $0.02' })).toBe('Worked for 1m 2s · ↑ 1.2k ↓ 340 tokens · $0.02');
+    expect(turnSummary({ ms: 3000, stopped: true, usage: '↓ 12 tokens' })).toBe('Stopped after 3s · ↓ 12 tokens');
+    expect(turnSummary({ ms: 3000, pendingBackground: 2 })).toBe('Waiting for 2 background agents');
+    expect(turnSummary({ ms: 3000, pendingBackground: 1 })).toBe('Waiting for 1 background agent');
+    expect(turnSummary({ ms: 3000, pendingBackground: 0 })).toBe('Worked for 3s');
     expect(endsWithSummary(5_000, 0)).toBe(false);
     expect(endsWithSummary(5_000, 1)).toBe(true);
     expect(endsWithSummary(12_000, 0)).toBe(true);
+  });
+
+  it('counts a running turn\'s tokens: the vendor\'s figure, else length / 4, never going down', () => {
+    expect(estimateTokens(4000)).toBe(1000);
+    expect(estimateTokens(0)).toBe(0);
+    // Reported output wins where the turn's usage so far has it.
+    expect(liveTokenTarget({ usage: { output: 340 }, responseChars: 4000 })).toBe(340);
+    expect(liveTokenTarget({ usage: { input: 900 }, responseChars: 4000 })).toBe(1000);
+    expect(liveTokenTarget({ responseChars: 0 })).toBe(0);
+    // The shown number steps toward the target, and never back.
+    const a = smoothTokens(0, 1000);
+    expect(a).toBeGreaterThan(0);
+    expect(a).toBeLessThan(1000);
+    expect(smoothTokens(a, 1000)).toBeGreaterThan(a);
+    expect(smoothTokens(500, 100)).toBe(500);
+    expect(smoothTokens(999, 1000)).toBe(1000);
+  });
+
+  it('words the meter as Claude Code does, only once there is something to count', () => {
+    expect(tokenMeterLabel(1234)).toBe('↓ 1.2k tokens');
+    expect(tokenMeterLabel(42)).toBe('↓ 42 tokens');
+    expect(tokenMeterLabel(0)).toBeUndefined();
+  });
+
+  it('words what a decision leaves behind, and never shows a secret answer', () => {
+    expect(decisionRow({ kind: 'approved', label: 'make build' })).toEqual({ text: '✓ approved make build', tone: 'ok' });
+    expect(decisionRow({ kind: 'approved', label: 'make build', always: true }).text).toBe('✓ approved (always) make build');
+    expect(decisionRow({ kind: 'denied', label: 'make clean' })).toEqual({ text: '✗ denied make clean', tone: 'no' });
+    expect(decisionRow({ kind: 'told', text: 'use pnpm\ninstead' })).toEqual({ text: '↳ told: use pnpm instead', tone: 'told' });
+    expect(decisionRow({ kind: 'answered', label: 'Which database?', values: ['MySQL'] }).text).toBe('✓ answered Which database?: MySQL');
+    expect(decisionRow({ kind: 'answered', label: 'API key' }).text).toBe('✓ answered API key');
+    expect(decisionRow({ kind: 'declined', label: 'Which database?' }).text).toBe('✗ declined Which database?');
+  });
+
+  it('knows the adapters\' approval phase, which is stale once the approval is answered', () => {
+    expect(isApprovalWaitPhase('waiting for your approval: make clean')).toBe(true);
+    expect(isApprovalWaitPhase('waiting for your answer')).toBe(true);
+    expect(isApprovalWaitPhase('waiting for reset')).toBe(false);
+    expect(isApprovalWaitPhase('reading files')).toBe(false);
+    expect(isApprovalWaitPhase(undefined)).toBe(false);
   });
 });
