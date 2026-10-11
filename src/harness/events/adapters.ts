@@ -265,7 +265,9 @@ interface ParsedHarnessLine {
   activity?: NativeActivityEvent;
   /** Every activity on the line; a Claude message can carry several tool calls. */
   activities?: NativeActivityEvent[];
-  phase?: 'generating response';
+  phase?: string;
+  /** Something the user is told beside the answer (the context was compacted). */
+  notice?: string;
   /** The turn's usage so far, when this line changed it. */
   usage?: TurnUsage;
   sessionId?: string;
@@ -319,7 +321,8 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
     ...(claudeShaped(harness) ? (turn.claudeBlocks ??= new ClaudeBlocks(harness.command)).note(value) : []),
     ...parseNativeActivityEventsFromValue(harness, value),
   ]);
-  const phase = nativeActivityPhaseFromValue(harness, value);
+  const compaction = claudeShaped(harness) ? claudeCompaction(value) : undefined;
+  const phase = compaction?.phase ?? nativeActivityPhaseFromValue(harness, value);
   // The terminal record's own totals, else the running sum of per-message usage.
   const usage = nativeUsageFromValue(value) ?? turn.usage.note(value);
   const error = lineError(value);
@@ -332,9 +335,20 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
     ...(result ? { result } : {}),
     ...(response ? { response } : {}),
     ...(activities.length ? { activity: activities[0], activities } : {}),
-    ...(phase ? { phase } : {}), ...(usage ? { usage } : {}),
+    ...(phase ? { phase } : {}), ...(compaction?.notice ? { notice: compaction.notice } : {}), ...(usage ? { usage } : {}),
     ...(sessionId ? { sessionId } : {}), ...(error ? { error } : {}),
   };
+}
+
+/** Claude Code's stream-json says when it compacts the conversation:
+ * `system/status` with `status: "compacting"` while it works, and
+ * `system/compact_boundary` (with `compact_metadata`) at the point the
+ * history was replaced by a summary. Read for every Claude-shaped harness. */
+function claudeCompaction(value: Json): { phase?: string; notice?: string } | undefined {
+  if (value.type !== 'system' || typeof value.parent_tool_use_id === 'string') return undefined;
+  if (value.subtype === 'compact_boundary') return { notice: 'Conversation compacted to fit the context window' };
+  if (value.subtype === 'status' && value.status === 'compacting') return { phase: 'compacting the conversation' };
+  return undefined;
 }
 
 /** A tool call a harness reports with no id is given one, and its completion
