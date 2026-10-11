@@ -23,5 +23,5 @@ export function underCallRow(line: string, width: number): string {
  * went on, as Claude Code and VS Code say it. The live row above the
  * waiting line showed its words while it was had. */
 export function thoughtRow(ms: number, heading?: string): string {
-  return chalk.dim(chalk.italic(thoughtText({ durationMs: ms, ...(heading ? { heading } : {}) })));
+  return chalk.dim(chalk.italic(`✻ ${thoughtText({ durationMs: ms, ...(heading ? { heading } : {}) })}`));
 }
