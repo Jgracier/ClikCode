@@ -37,7 +37,7 @@ import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/act
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { answerWriting, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { answerWriting, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, reasoningHeading, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
 import { waitStalled } from '../harness/protocol/turn-pace.js';
@@ -1085,7 +1085,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.activityEntries = [...this.activityEntries, {
       anchor: this.activityAnchor, responseOffset: Math.min(start.offset, this.liveResponse.length), sequence: ++this.timelineSequence,
       event: { kind: 'thinking', label: thought.text },
-      lines: [thoughtRow(Date.now() - start.at)],
+      lines: [thoughtRow(Date.now() - start.at, reasoningHeading(thought.text))],
     }];
   }
 
