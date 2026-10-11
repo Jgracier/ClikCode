@@ -1518,7 +1518,6 @@ SCENARIOS = {
     # 4/11: each thought settles where it happened -- before the text, and the
     # second after it -- and neither doubles or moves.
     'thought-after-text': {
-        'expect_fail': 'core',  # settled thought rows lose their heading and are not durable (4)
         'turns': [{'emits': [
             {'op': 'thought', 'heading': 'Planning the approach', 'text': 'Considering which files matter first.'},
             {'op': 'sleep', 'ms': 900},

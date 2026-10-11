@@ -99,6 +99,15 @@ export function reasoningHeading(thought: string | undefined): string | undefine
   return heading || undefined;
 }
 
+/** A thought once it is over (standard section 4): `✻ Thought for 3s`, plus
+ * the model's own heading when it wrote one -- `✻ Thought for 3s · Planning
+ * the approach`. Unstyled: the terminal dims it, the webview themes it, and
+ * replay uses the same function, so a thought reads alike everywhere. */
+export function thoughtRow(thought: { durationMs: number; heading?: string }): string {
+  const heading = thought.heading?.replace(/\s+/g, ' ').trim();
+  return `✻ Thought for ${formatElapsed(Math.max(1000, thought.durationMs))}${heading ? ` · ${heading}` : ''}`;
+}
+
 /** The reasoning under the status line: without the heading the status
  * line already shows, and without its markdown emphasis. */
 export function reasoningBody(thought: string): string {
