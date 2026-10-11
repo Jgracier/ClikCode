@@ -301,7 +301,7 @@ export function marksToRows(value: unknown): MarkRows {
       case 'outcome': {
         const label = stripAnsi(mark.label);
         rows.decisions.push({
-          id: mark.id, offset: mark.responseOffset, seq: mark.seq,
+          id: mark.id, offset: mark.responseOffset, seq: mark.seq, ...(mark.callId ? { callId: mark.callId } : {}),
           decision: mark.outcome === 'approved' ? { kind: 'approved', label } : mark.outcome === 'answered' ? { kind: 'answered', label } : { kind: 'denied', label },
         });
         break;
@@ -977,7 +977,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // Answered in another window, withdrawn by the vendor, or the turn ended.
       // Decided (by any window): the settled row it becomes, once.
       return model.approvals.some((item) => item.id === event.id) || event.outcome
-        ? answeredApproval(model, event.id, event.outcome ? { outcome: event.outcome, ...(event.label ? { label: stripAnsi(event.label) } : {}) } : undefined)
+        ? answeredApproval(model, event.id, event.outcome ? { outcome: event.outcome, ...(event.label ? { label: stripAnsi(event.label) } : {}), ...(event.callId ? { callId: event.callId } : {}) } : undefined)
         : model;
     case 'notice':
     case 'note':
@@ -1138,20 +1138,19 @@ export function stoppingTurn(model: ChatModel): ChatModel {
 }
 
 /** Where a request was asked, from what the worker sent with it and the
- * vendor's call it names, if any (read defensively: not every worker says). */
-function askedAt(model: ChatModel, event: { seq?: number; responseOffset?: number }): Partial<Pick<Approval, 'seq' | 'offset' | 'callId'>> {
-  const callId = (event as { callId?: unknown }).callId;
+ * vendor's call it names, if any (an older worker sends neither). */
+function askedAt(model: ChatModel, event: { seq?: number; responseOffset?: number; callId?: string }): Partial<Pick<Approval, 'seq' | 'offset' | 'callId'>> {
   return {
     ...(typeof event.seq === 'number' ? { seq: event.seq } : {}),
     ...(typeof event.responseOffset === 'number' ? { offset: event.responseOffset } : {}),
-    ...(typeof callId === 'string' && callId ? { callId } : {}),
+    ...(event.callId ? { callId: event.callId } : {}),
   };
 }
 
 /** What became of an approval or question: the outcome the worker names or
  * this window's own answer; `always` and `told` are only known to the window
  * that answered. */
-export type Decided = { outcome: 'approved' | 'denied' | 'answered' | 'declined'; label?: string; always?: boolean; told?: string };
+export type Decided = { outcome: 'approved' | 'denied' | 'answered' | 'declined'; label?: string; always?: boolean; told?: string; callId?: string };
 
 export function answeredApproval(model: ChatModel, id: string, decided?: Decided): ChatModel {
   const approval = model.approvals.find((item) => item.id === id);
@@ -1183,7 +1182,7 @@ function withDecision(live: LiveTurn, id: string, approval: Approval | undefined
   const taken = takeSeq(live, approval?.seq);
   const entry: DecisionEntry = {
     id: entryId, decision, offset: Math.min(approval?.offset ?? live.text.length, live.text.length), seq: taken.seq,
-    ...(approval?.callId ? { callId: approval.callId } : {}),
+    ...(approval?.callId || decided.callId ? { callId: (approval?.callId ?? decided.callId)! } : {}),
   };
   return { ...live, seen: taken.seen, decisions: [...(live.decisions ?? []), entry] };
 }

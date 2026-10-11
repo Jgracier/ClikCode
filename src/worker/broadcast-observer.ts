@@ -164,7 +164,8 @@ export class BroadcastObserver implements TurnObserver {
     this.userWaitChanged();
     pending.resolve(approved);
     this.announceAwaiting();
-    const outcome = decided && pending.place ? this.recordOutcome(pending.place, approved === false ? 'denied' : 'approved', id) : undefined;
+    const callId = pending.event.type === 'approval-request' ? pending.event.callId : undefined;
+    const outcome = decided && pending.place ? this.recordOutcome(pending.place, approved === false ? 'denied' : 'approved', id, callId) : undefined;
     // Answered in one window: the others close their copy.
     this.broadcast({ type: 'request-closed', id, ...(outcome ?? {}) });
   }
@@ -183,9 +184,10 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   /** The settled row of a decided request, kept at the place it was asked. */
-  private recordOutcome(place: Place, outcome: 'approved' | 'denied' | 'answered', id: string): { outcome: 'approved' | 'denied' | 'answered'; label: string } {
-    this.putMark({ kind: 'outcome', id: `outcome:${id}`, seq: place.seq, responseOffset: place.responseOffset, outcome, label: place.label });
-    return { outcome, label: place.label };
+  private recordOutcome(place: Place, outcome: 'approved' | 'denied' | 'answered', id: string, callId?: string): { outcome: 'approved' | 'denied' | 'answered'; label: string; callId?: string } {
+    const call = callId ? { callId } : {};
+    this.putMark({ kind: 'outcome', id: `outcome:${id}`, seq: place.seq, responseOffset: place.responseOffset, outcome, label: place.label, ...call });
+    return { outcome, label: place.label, ...call };
   }
 
   /** Where a request being asked now sits in the turn. */

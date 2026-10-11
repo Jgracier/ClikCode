@@ -369,6 +369,19 @@ describe('worker-assigned order and a window joining mid-turn (standards 1, 4, 7
     expect(observer.liveSnapshot()!.marks![0]).toMatchObject({ kind: 'outcome', outcome: 'approved', seq: 1, responseOffset: 8 });
   });
 
+  it('carries the call the approval was about into request-closed and the journaled outcome', async () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking', 'go');
+    const denied = observer.approval('make clean', undefined, undefined, undefined, undefined, 'call-7');
+    const asked = frames(client, 'approval-request')[0] as { id: string };
+    observer.resolveApproval(asked.id, false);
+    await denied;
+    expect(frames(client, 'request-closed')[0]).toMatchObject({ id: asked.id, outcome: 'denied', callId: 'call-7' });
+    expect(observer.liveSnapshot()!.marks![0]).toMatchObject({ kind: 'outcome', outcome: 'denied', callId: 'call-7' });
+  });
+
   it('keeps no outcome for a request the turn ended under', async () => {
     const observer = new BroadcastObserver();
     observer.startTurn('thinking', 'go');

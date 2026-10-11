@@ -73,7 +73,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTer
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
-import { savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
+import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
@@ -1116,6 +1116,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const key = `${this.activityAnchor}:${mark.id}`;
     if (!lines.length || this.drawnMarks.has(key)) return;
     this.drawnMarks.add(key);
+    // A decision that names its call settles that call's row: one event, one row.
+    const on = callDecision(mark);
+    if (on) {
+      this.activityEntries = settleDecisionEntry(this.activityEntries, {
+        anchor: this.activityAnchor, responseOffset: Math.min(mark.responseOffset, this.liveResponse.length), sequence: ++this.timelineSequence, ...on,
+      });
+      this.schedulePaint();
+      return;
+    }
     this.activityEntries = [...this.activityEntries, {
       anchor: this.activityAnchor, responseOffset: Math.min(mark.responseOffset, this.liveResponse.length), sequence: ++this.timelineSequence,
       event: { kind: 'thinking', label: mark.id, id: mark.id }, lines,
@@ -2371,6 +2380,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         entries = upsertActivityEvent(entries, index, at(activity.responseOffset), activity.event, ranks.activities[position]!, 0);
       }
       for (const [position, mark] of marks.entries()) {
+        const on = callDecision(mark);
+        if (on) {
+          entries = settleDecisionEntry(entries, { anchor: index, responseOffset: at(mark.responseOffset), sequence: ranks.marks[position]!, ...on });
+          continue;
+        }
         const lines = turnMarkLines(mark);
         if (!lines.length) continue;
         entries.push({

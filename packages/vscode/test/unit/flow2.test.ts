@@ -328,6 +328,28 @@ describe('an approval decision settles where it was asked (X8)', () => {
     expect(rows[0]!.activity!.decision).toEqual({ kind: 'denied', label: 'make clean' });
   });
 
+  it('a decision from the worker names the call, so a window that never saw the request still settles the call row', () => {
+    const model = run([
+      activity({ kind: 'tool-start', id: 'call-1', label: '$ make clean', category: 'run', seq: 8 }),
+      worker({ type: 'request-closed', id: 'ap1', outcome: 'denied', label: 'make clean', callId: 'call-1' }),
+    ], begin());
+    const rows = turnMarks(model.live!.text, model.live!.activities, model.live!.reasoning, model.live!.steers, { decisions: model.live!.decisions! });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.activity!.decision).toEqual({ kind: 'denied', label: 'make clean' });
+  });
+
+  it('a saved outcome mark with a call id settles the call row on reopen', () => {
+    const value = session({ messages: [{ role: 'user', content: 'go' }, {
+      role: 'assistant', content: 'ok', turnEnd: { ms: 20_000 },
+      activities: [{ event: { kind: 'tool-error', id: 'call-1', label: '$ make clean', category: 'run', seq: 1 }, responseOffset: 0 }],
+      marks: [{ kind: 'outcome', id: 'outcome:ap1', seq: 2, responseOffset: 0, outcome: 'denied', label: 'make clean', callId: 'call-1' }],
+    } as never] });
+    const trace = applyEvent(emptyModel(), { type: 'session', session: value }).traces[0]!;
+    const rows = turnMarks('ok', trace.activities, [], [], { decisions: trace.decisions! });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.activity!.decision).toEqual({ kind: 'denied', label: 'make clean' });
+  });
+
   it('is a row of its own where the vendor reports no call', () => {
     const model = applyEvent(asked(), worker({ type: 'request-closed', id: 'ap1', outcome: 'denied', label: 'make clean' }));
     const rows = turnMarks(model.live!.text, model.live!.activities, [], [], { decisions: model.live!.decisions! });
