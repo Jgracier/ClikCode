@@ -382,6 +382,30 @@ describe('worker-assigned order and a window joining mid-turn (standards 1, 4, 7
     expect(observer.liveSnapshot()!.marks![0]).toMatchObject({ kind: 'outcome', outcome: 'denied', callId: 'call-7' });
   });
 
+  it('says how many background agents are running, live and to a joining window, and forgets it at the next turn', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('thinking', 'go');
+    observer.setPendingBackground(2);
+    expect(frames(client, 'background')[0]).toMatchObject({ pending: 2 });
+    expect(observer.liveSnapshot()!.pendingBackground).toBe(2);
+    observer.setPendingBackground(0);
+    expect(observer.liveSnapshot()!.pendingBackground).toBeUndefined();
+    observer.setPendingBackground(1);
+    observer.stopWaiting();
+    observer.startTurn('thinking', 'again');
+    expect(observer.liveSnapshot()!.pendingBackground).toBeUndefined();
+  });
+
+  it('sends where the plan row began, for a window that reads the plan and not the marks', () => {
+    const observer = new BroadcastObserver();
+    observer.startTurn('thinking', 'go');
+    observer.response('Before. ');
+    observer.setPlan([{ content: 'one', status: 'in_progress' }]);
+    expect(observer.liveSnapshot()!.planOffset).toBe(8);
+  });
+
   it('keeps no outcome for a request the turn ended under', async () => {
     const observer = new BroadcastObserver();
     observer.startTurn('thinking', 'go');

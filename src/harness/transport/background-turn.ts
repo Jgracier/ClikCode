@@ -80,6 +80,7 @@ export class BackgroundTurnChannel implements VendorBackgroundTurn {
       onPlan: (entries, explanation) => forward((observer) => observer.onPlan?.(entries, explanation)),
       onUsage: (usage) => forward((observer) => observer.onUsage?.(usage)),
       onNotice: (message) => forward((observer) => observer.onNotice?.(message)),
+      onBackgroundAgents: (pending) => forward((observer) => observer.onBackgroundAgents?.(pending)),
       onPhase: (phase) => forward((observer) => observer.onPhase?.(phase)),
       onRateLimits: (limits) => forward((observer) => observer.onRateLimits?.(limits)),
       onAvailableCommands: (commands) => forward((observer) => observer.onAvailableCommands?.(commands)),

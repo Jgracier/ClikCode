@@ -26,6 +26,23 @@ function session(): HarnessSession {
   };
 }
 
+describe('a turn that left background agents running', () => {
+  it('says so on the answer it ends on, once, and only when there were some', () => {
+    const left = session();
+    beginPendingTurn(left, 'go', stamp(1));
+    updatePendingResponse(left, 'Started them.');
+    left.pendingTurn!.pendingBackground = 2;
+    finishPendingTurn(left, 'Started them.', stamp(9));
+    expect(left.messages!.at(-1)!.turnEnd).toMatchObject({ pendingBackground: 2 });
+
+    const none = session();
+    beginPendingTurn(none, 'go', stamp(1));
+    updatePendingResponse(none, 'Done.');
+    finishPendingTurn(none, 'Done.', stamp(9));
+    expect(none.messages!.at(-1)!.turnEnd).not.toHaveProperty('pendingBackground');
+  });
+});
+
 describe('durable turn checkpoints', () => {
   it('saves a failed partial turn without listing its still-open worker as generating', async () => {
     const home = await mkdtemp(join(tmpdir(), 'clikcode-failed-turn-'));

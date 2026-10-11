@@ -20,6 +20,7 @@
 import { parseHarnessLine, type StreamState } from './adapters.js';
 import { MENTIONS_TASK_TOOL, MENTIONS_TODO_TOOL, planFromRecord } from '../protocol/plan-events.js';
 import { parseJsonRecord, type JsonRecord } from '../protocol/json-lines.js';
+import { backgroundAgentCount } from '../protocol/background-agents.js';
 import { nativeSelfReportFromValue, type NativeSelfReport } from '../protocol/turn-usage.js';
 import type { HarnessTurnObserver } from './turn-observer.js';
 import type { AiLocalHarnessDefinition } from '../definition.js';
@@ -64,6 +65,8 @@ export function reportStructuredLine(
   if (parsed.usage) observer.onUsage?.(parsed.usage);
   for (const event of parsed.activities ?? []) observer.onActivity?.(event);
   if (!record) return outcome;
+  const background = backgroundAgentCount(record);
+  if (background !== undefined) observer.onBackgroundAgents?.(background);
   // A structured CLI writes its todo list with a tool (TodoWrite, write_todos, ...); show it as the plan.
   // Claude Code's task tools build it a call at a time; the turn's tracker keeps the list.
   // A sub-agent's own list (Claude's parent_tool_use_id) is not the session's plan.
