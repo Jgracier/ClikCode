@@ -1476,7 +1476,6 @@ SCENARIOS = {
     # 1.4: completion order never decides position. Y finishes first and X
     # (which started first) stays above it, while running and once settled.
     'parallel-order': {
-        'expect_fail': 'order',  # settled rows follow completion order, not start order (1.4)
         'turns': [{'emits': [
             {'op': 'text', 'text': 'Running two checks at once.\n\n'},
             {'op': 'tool-start', 'id': 'px', 'title': 'sleep 2'},
@@ -1553,7 +1552,6 @@ SCENARIOS = {
     # 3: a table is held in the live region until it closes; no retired row is
     # narrower than a row that came after it.
     'table-stream': {
-        'expect_fail': 'order',  # table rows are retired line by line at the width of the rows so far (3)
         'env': {'FAKE_DELAY_MS': '200'},
         'turns': [{'emits': [
             {'op': 'text', 'text': 'Here is the matrix:\n\n| name | role |\n|---|---|\n| a | x |\n| b | y |\n'
@@ -1563,7 +1561,6 @@ SCENARIOS = {
     },
     # 9: `writing` holds for a pause in the middle of an answer.
     'status-writing': {
-        'expect_fail': 'motion',  # `thinking` returns after a pause mid-answer (9)
         'turns': [{'emits': [
             {'op': 'text', 'text': 'This answer begins here and continues,'},
             {'op': 'sleep', 'ms': 3200},
