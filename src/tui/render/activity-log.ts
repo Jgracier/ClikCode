@@ -89,12 +89,17 @@ export function stopEntries(entries: readonly ActivityEntry[], stops: (entry: Ac
  * unchanged prefix remain valid; offsets in rewritten text do not, so attach
  * those events at the divergence boundary instead of leaving them beyond or
  * inside unrelated prose. */
-export function rebaseActivityOffsets(
-  entries: readonly ActivityEntry[], anchor: number, previous: string, replacement: string,
-): ActivityEntry[] {
+export function commonPrefixLength(previous: string, replacement: string): number {
   let commonPrefix = 0;
   const shared = Math.min(previous.length, replacement.length);
   while (commonPrefix < shared && previous[commonPrefix] === replacement[commonPrefix]) commonPrefix += 1;
+  return commonPrefix;
+}
+
+export function rebaseActivityOffsets(
+  entries: readonly ActivityEntry[], anchor: number, previous: string, replacement: string,
+): ActivityEntry[] {
+  const commonPrefix = commonPrefixLength(previous, replacement);
   return entries.map((entry) => entry.anchor === anchor && entry.responseOffset !== undefined
     && entry.responseOffset > commonPrefix
     ? { ...entry, responseOffset: commonPrefix }

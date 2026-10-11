@@ -32,7 +32,7 @@ import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
-import { ActivityEntry, collapseToolRuns, rebaseActivityOffsets, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
+import { ActivityEntry, collapseToolRuns, commonPrefixLength, rebaseActivityOffsets, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
@@ -56,6 +56,7 @@ import { runOptionPicker, type OptionPickerHost, type PaletteLayout } from './op
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
+import { LiveChildren } from './render/child-rows.js';
 import { enterAgainSends, hasDurableSteer, STEER_WORDS, steerTranscriptRows, type WaitingMessage } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/search-focus.js';
@@ -181,9 +182,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
   /** The calls still open: the status line names the newest (toolStatus). */
   private activeTools = new Map<string, OpenTool>();
-  /** The latest call inside a running sub-agent, keyed by the parent tool id.
-   * Shown as one line under that agent, never as its own row. */
-  private childActivity = new Map<string, string>();
+  /** The calls inside running sub-agents, one live slot each
+   * (render/child-rows.ts). Drawn nested under the agent, never retired. */
+  private readonly liveChildren = new LiveChildren();
   /** Which of this turn's reads and searches share a row (explore-groups.ts). */
   private readonly exploreGrouping = new ExploreGrouping();
   private liveResponse = '';
@@ -213,7 +214,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private journal: JournalState = { running: true };
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
-  private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; state: 'sending' | 'queued' | 'steered' | 'error' | 'command'; unsteered?: boolean }> = [];
+  private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; ack?: { sequence: number; responseOffset: number }; state: 'sending' | 'queued' | 'steered' | 'error' | 'command'; unsteered?: boolean }> = [];
   private waitingSubmissionId = 0;
   private timelineSequence = 0;
   private readonly waitingSubmissionWrites = new Set<Promise<void>>();
@@ -573,6 +574,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (item) {
         item.state = result.disposition;
         item.id = result.submission.id;
+        // Its place in the turn is the moment it was acknowledged: rows that
+        // began before sort above it, rows that began after sort below
+        // (standard 1.5), not where it was typed.
+        if (result.disposition === 'steered') item.ack = { sequence: ++this.timelineSequence, responseOffset: this.liveResponse.length };
         if (result.unsteered) item.unsteered = true;
       }
       this.updateWaiting();
@@ -926,7 +931,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // move. After it, a replacement (a snapshot's copy of the finished
       // answer) would rebase them against an empty stream -- to offset zero,
       // above the prose they followed.
-      if (this.turn) this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
+      if (this.turn) {
+        this.activityEntries = rebaseActivityOffsets(this.activityEntries, this.activityAnchor, this.liveResponse, text);
+        this.liveChildren.rebase(commonPrefixLength(this.liveResponse, text));
+      }
       this.liveResponse = text;
     } else this.liveResponse += text;
     this.schedulePaint();
@@ -971,12 +979,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // A sub-agent's own calls stay inside the agent row, which keeps its
       // spinner. They are not separate messages, and they do not move the
       // status line. The step under the row is what animates.
-      // What it is doing (a call) or saying (its prose, its thinking) now.
-      if (event.kind === 'tool-start' || event.kind === 'thinking') this.childActivity.set(event.parentId, event.label);
-      else if (event.kind === 'tool-done' || event.kind === 'tool-error') this.childActivity.delete(event.parentId);
+      // What it is doing (a call) or saying (its prose, its thinking) now:
+      // a slot of its own, so one call finishing never clears another's.
+      const offset = live?.responseOffset ?? this.liveResponse.length;
+      const { counted } = this.liveChildren.apply(event, { offset, seq: ++this.timelineSequence });
       // And how much it has done, as Claude Code counts it: the agent row
-      // ends "(12 tool uses, 1m 5s)".
-      if (event.kind === 'tool-start') {
+      // ends "(12 tool uses, 1m 5s)". Once per call, not once per frame.
+      if (counted) {
         this.activityEntries = this.activityEntries.map((entry) => {
           const parent = entry.event;
           if (!parent || parent.id !== event.parentId) return entry;
@@ -1001,6 +1010,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     if (event.kind === 'tool-start') this.settleThought();
+    if (event.id && (event.kind === 'tool-done' || event.kind === 'tool-error')) this.liveChildren.parentEnded(event.id);
     const anchor = this.turn ? this.activityAnchor : this.restingAnchor();
     const responseOffset = this.turn ? live?.responseOffset ?? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
@@ -1274,7 +1284,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // starts owing everything it produces, and nothing from before it.
     if (!rejoined) {
       this.activeTools = new Map();
-      this.childActivity.clear();
+      this.liveChildren.reset();
       this.exploreGrouping.reset();
       this.liveActivitiesShown = -1;
       this.turnTranscript.reset();
@@ -2154,29 +2164,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const toolRow = (entry: ActivityEntry, ended: boolean): SettlingTool => {
       const id = entry.event?.id ?? `activity#${entry.sequence ?? entry.responseOffset}`;
       const running = !ended && entry.event?.kind === 'tool-start';
+      const order = { ...(entry.sequence === undefined ? {} : { seq: entry.sequence }), ...(entry.event?.agent ? { agent: true } : {}) };
       if (!running) {
         return {
-          id, done: true, responseOffset: entry.responseOffset,
+          id, done: true, responseOffset: entry.responseOffset, ...order,
           lines: activityRows(entry.lines, entry.event?.category),
         };
       }
       const kind = entry.event?.swarm ? 'swarm' as const : (liveWaitKind(entry.event!) ?? 'tool');
-      const child = entry.event?.id ? this.childActivity.get(entry.event.id) : undefined;
       const frame = this.reducedMotion ? 0 : this.waitingFrame;
       const row = runningChatLine(
         tensedLabel(entry.event?.label ?? '', true), frame, kind, entry.event?.category,
       ).trim();
-      // The agent's own step keeps a spinner under its row. Folding the call
-      // into that row does not replace it with the turn's thinking line.
-      const step = child
-        ? `    ${chalk.cyan(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child}${entry.event?.childTools ? ` · ${toolUses(entry.event.childTools)}` : ''}`)}`
-        : undefined;
       // What it has printed so far, newest last, under the spinner -- a long
       // build or test run is visibly working instead of a bare timer.
       const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES).map(underCall) : [];
       return {
-        id, done: false, responseOffset: entry.responseOffset,
-        lines: ['', `  ${row}`, ...(step ? [step] : []), ...live],
+        id, done: false, responseOffset: entry.responseOffset, ...order,
+        lines: ['', `  ${row}`, ...live],
       };
     };
     /** A run of reads and searches as one row (explore-groups.ts): the
@@ -2188,10 +2193,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const under = calls.map(underCall);
       if (running && !group.done) {
         const row = runningChatLine(summary, this.reducedMotion ? 0 : this.waitingFrame, 'tool', first.event?.category).trim();
-        return { id: group.key, done: false, responseOffset: first.responseOffset, lines: ['', `  ${row}`, ...under] };
+        return { id: group.key, done: false, responseOffset: first.responseOffset, ...(first.sequence === undefined ? {} : { seq: first.sequence }), lines: ['', `  ${row}`, ...under] };
       }
       const { line, category } = mergedExploreSummaryLine(group.members.map((member) => member.event), summary);
-      return { id: group.key, done: group.done, responseOffset: first.responseOffset, lines: [...activityRows([line], category), ...under] };
+      return { id: group.key, done: group.done, responseOffset: first.responseOffset, ...(first.sequence === undefined ? {} : { seq: first.sequence }), lines: [...activityRows([line], category), ...under] };
     };
     /** The turn's rows, looking-around runs merged. A lone call is its own
      * row as always, except that a finished read or search waits in the live
@@ -2227,6 +2232,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         // index when the previous one was never persisted. The turn that
         // produced an entry is what decides whether it belongs to this one.
         .filter((entry) => (entry.sequence ?? 0) > this.emitted.turnSequenceFloor), ended, this.exploreGrouping);
+      // A running agent's live calls, one row each, nested under it. They are
+      // never retired (the turn's end drops them with their parent) and never
+      // gate another row; where they sit is child-rows.ts's rule.
+      if (!ended) {
+        const open = turnEntries(this.activityAnchor).filter((entry) => entry.event?.kind === 'tool-start' && entry.event.id
+          && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor);
+        const frame = this.reducedMotion ? 0 : this.waitingFrame;
+        for (const child of this.liveChildren.rows(open.map((entry) => ({ id: entry.event!.id!, offset: entry.responseOffset, seq: entry.sequence })))) {
+          const uses = child.newest ? open.find((entry) => entry.event!.id === child.parentId)?.event?.childTools : undefined;
+          tools.push({
+            id: child.id, done: false, agent: true, responseOffset: child.offset, seq: child.seq,
+            lines: [`    ${chalk.cyan(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child.label}${uses ? ` · ${toolUses(uses)}` : ''}`)}`],
+          });
+        }
+      }
       // One row on each side, matching every other message: a steer is a
       // message the user wrote mid-answer.
       const steerRows = (text: string): string[] => [
