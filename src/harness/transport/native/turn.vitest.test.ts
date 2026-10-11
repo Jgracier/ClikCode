@@ -37,3 +37,21 @@ describe('captureNativeHarnessTurn idle budget', () => {
     })).rejects.toMatchObject({ reason: 'idle-timeout' });
   });
 });
+
+describe('captureNativeHarnessTurn interactive sign-in', () => {
+  it('stops a vendor that starts its own browser login and fails with the sign-in path', async () => {
+    const started = Date.now();
+    await expect(captureNativeHarnessTurn(node, lingering([
+      'No API key found. Starting login flow...',
+      'Waiting for confirmation in the browser...',
+    ]), {}, { idleTimeoutMs: 60_000, onStdoutLine: () => undefined }))
+      .rejects.toMatchObject({ reason: 'login-prompt', message: expect.stringContaining('sign in') });
+    expect(Date.now() - started).toBeLessThan(10_000);
+  });
+
+  it('does not read model text later in a turn as a login prompt', async () => {
+    const filler = 'x'.repeat(9_000);
+    const output = await captureNativeHarnessTurn(node, ['-e', `console.log(${JSON.stringify(filler)});console.log('Starting login flow... Waiting for confirmation in the browser');`], {}, { onStdoutLine: () => undefined });
+    expect(output.exitCode).toBe(0);
+  });
+});
