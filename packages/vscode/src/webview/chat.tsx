@@ -20,8 +20,8 @@ import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
-import { planStillNeeded, planWindow } from '../../../../src/tui/render/plan-window';
-import { liveElapsedMs, turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type ThoughtEntry, type TurnTrace } from '../model';
+import { planWindow } from '../../../../src/tui/render/plan-window';
+import { liveElapsedMs, turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff, HarnessQuestion, HarnessQuestionResult } from '../protocol';
 import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
@@ -379,11 +379,18 @@ function Reasoning({ text }: { text: string }): JSX.Element {
  * finished, each run of calls folds to one line in its place, so nothing
  * moves when the turn ends. */
 function TurnFlow(props: {
-  text: string; activities: readonly Activity[]; thoughts: readonly ThoughtEntry[]; steers: ReadonlyArray<{ text: string; offset: number }>;
+  text: string; activities: readonly Activity[]; thoughts: readonly ThoughtEntry[]; steers: ReadonlyArray<{ text: string; offset: number; seq?: number }>;
   workspace?: string; live?: { startedAt: number }; cacheKey?: string; userIndex?: number;
+  /** The turn's one plan, drawn once at the offset it first appeared. */
+  plan?: { entries: ChatModel['plan']; at: PlanAt };
+  /** Notices that arrived during the turn, each where it did. */
+  notes?: ReadonlyArray<Note>;
 }): JSX.Element {
   const { text } = props;
-  const marks = turnMarks(text, props.activities, props.thoughts, props.steers);
+  const marks = turnMarks(text, props.activities, props.thoughts, props.steers, {
+    ...(props.plan?.entries.length ? { plan: props.plan.at } : {}),
+    ...(props.notes?.length ? { notes: props.notes.map((note, index) => ({ offset: note.offset ?? 0, seq: note.seq ?? index, note })) } : {}),
+  });
   const parts: JSX.Element[] = [];
   let at = 0;
   let run: Activity[] = [];
@@ -406,8 +413,10 @@ function TurnFlow(props: {
     if (mark.offset > at) paragraph(mark.offset);
     if (mark.activity) { run.push(mark.activity); continue; }
     flushRun();
-    if (mark.thought) parts.push(<ThoughtRow key={`h${mark.offset}-${parts.length}`} thought={mark.thought} />);
-    else parts.push(<div key={`s${mark.offset}-${mark.steer}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
+    if (mark.thought) parts.push(<ThoughtRow key={`h${mark.thought.seq}`} thought={mark.thought} />);
+    else if (mark.plan && props.plan) parts.push(<Plan key="plan" plan={props.plan.entries} folded={!props.live} running={Boolean(props.live)} />);
+    else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
+    else parts.push(<div key={`s${mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
   }
   flushRun();
   if (props.live) {
@@ -441,15 +450,16 @@ function TurnSummary({ trace }: { trace: TurnTrace }): JSX.Element | null {
 /** A finished answer with how it was reached, in the order it happened.
  * Rows and thoughts land where they came in the answer as it streamed; one
  * whose place the saved answer no longer reads the same up to goes first. */
-const FinishedTurn = memo(({ text, trace, cacheKey, workspace }: { text: string; trace: TurnTrace; cacheKey: string; workspace?: string }): JSX.Element => {
+const FinishedTurn = memo(({ text, trace, cacheKey, workspace, notes }: { text: string; trace: TurnTrace; cacheKey: string; workspace?: string; notes?: Note[] }): JSX.Element => {
   const place = <T extends { offset?: number }>(item: T): T => {
     const offset = item.offset ?? 0;
     return offset <= text.length && text.slice(0, offset) === trace.text.slice(0, offset) ? item : { ...item, offset: 0 };
   };
   return (
     <div class="message assistant" role="article" aria-label="ClikCode">
-      {trace.plan ? <Plan plan={trace.plan} folded /> : null}
       <TurnFlow text={text} activities={trace.activities.map(place)} thoughts={(trace.reasoning ?? []).map(place)} steers={(trace.steers ?? []).map(place)}
+        {...(trace.plan ? { plan: { entries: trace.plan, at: place(trace.planAt ?? { offset: 0, seq: 0 }) } } : {})}
+        {...(notes?.length ? { notes: notes.map(place) } : {})}
         workspace={workspace} cacheKey={cacheKey} userIndex={trace.userIndex} />
       <TurnSummary trace={trace} />
       <div class="message-actions"><CopyAnswer text={text} /></div>
@@ -571,9 +581,15 @@ function ActivityRun({ activities, workspace }: { activities: Activity[]; worksp
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
  * it, the newest still streaming; then the working line. */
-const LiveTurnView = memo(({ live, workspace, asking }: { live: LiveTurn | undefined; workspace?: string; asking: boolean }): JSX.Element => (
+const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn }: {
+  live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number;
+}): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
-    {live ? <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }} /> : null}
+    {live ? (
+      <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
+        {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
+        {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
+    ) : null}
     <Working live={live} asking={asking} />
   </div>
 ));
@@ -584,6 +600,13 @@ const WINDOW = 120;
 
 /** The settled conversation. Memoized on the fields it draws, which keep
  * their objects while a turn streams, so a delta does not redraw it. */
+/** The notices that arrived during one turn, or nothing (a stable value, so
+ * a turn without any is not redrawn when another's note arrives). */
+function turnNotes(notes: readonly Note[], userIndex: number): Note[] | undefined {
+  const found = notes.filter((note) => note.turn === userIndex);
+  return found.length ? found : undefined;
+}
+
 const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'> & { reveal?: number }): JSX.Element => {
   const byUser = useMemo(() => new Map(traces.map((trace) => [trace.userIndex, trace])), [traces]);
   // Each prompt's number as /redo counts them (ClikCode's own continuation
@@ -603,7 +626,8 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     );
   }
   const notesAt = (index: number): void => {
-    notes.forEach((note, position) => { if (note.after === index) parts.push(<NoteView key={`n${position}`} note={note} />); });
+    // A note from a turn with a trace is drawn in that turn, at its offset.
+    notes.forEach((note, position) => { if (note.after === index && !(note.turn !== undefined && byUser.has(note.turn))) parts.push(<NoteView key={`n${position}`} note={note} />); });
   };
   if (start === 0) notesAt(0);
   messages.forEach((message, index) => {
@@ -613,7 +637,7 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     parts.push(
       <div key={`m${index}`} class="message-anchor" data-message={index}>
         {message.role === 'user' ? <UserMessage text={message.content} {...(promptNumbers.has(index) ? { prompt: promptNumbers.get(index)! } : {})} />
-          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} />
+          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} notes={turnNotes(notes, index - 1)} />
             : <AssistantMessage cacheKey={`${sessionId}#${index}`} text={message.content} />}
       </div>,
     );
@@ -625,12 +649,17 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
 export function Transcript({ model, reveal }: { model: ChatModel; reveal?: number }): JSX.Element {
   const parts: JSX.Element[] = [];
   if (model.pendingPrompt) parts.push(<UserMessage key="pending" text={model.pendingPrompt} />);
-  // A plan is on screen while it has open steps; finished, it goes, and is
-  // kept with its turn (planStillNeeded, as the terminal decides).
-  if (planStillNeeded(model.plan)) parts.push(<Plan key="plan" plan={model.plan} running={model.running} />);
-  if (model.running) parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} asking={waitingOnUser(model)} />);
-  // Notes from the running turn (an account switch, "Stopped") follow it.
-  model.notes.forEach((note, position) => { if (note.after > model.messages.length) parts.push(<NoteView key={`n${position}`} note={note} />); });
+  // The plan and the turn's notices are rows of the turn, drawn once each
+  // where they first appeared (TurnFlow), not cards of their own.
+  const inTurn = model.live && model.turnUserIndex !== undefined ? model.turnUserIndex : undefined;
+  if (model.running) {
+    parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} asking={waitingOnUser(model)} plan={model.plan} notes={model.notes}
+      {...(inTurn !== undefined ? { turn: inTurn } : {})} />);
+  }
+  // Notes from the running turn that could not be placed in it follow it.
+  model.notes.forEach((note, position) => {
+    if (note.after > model.messages.length && !(inTurn !== undefined && note.turn === inTurn)) parts.push(<NoteView key={`n${position}`} note={note} />);
+  });
   const queuedTexts = new Set(model.queued.map((item) => item.text));
   const steered = new Set(model.live?.steers.map((steer) => steer.text));
   for (const submission of model.submissions) {

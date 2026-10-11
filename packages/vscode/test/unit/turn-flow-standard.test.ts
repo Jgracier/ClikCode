@@ -1,7 +1,7 @@
 /** The turn-flow standard (docs/TURN_FLOW_STANDARD.md) as the extension's
  * model and page logic hold it. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { applyEvent, connectionLost, emptyModel, submittingPrompt, type ChatModel } from '../../src/model';
+import { applyEvent, connectionLost, emptyModel, submittingPrompt, turnMarks, type ChatModel } from '../../src/model';
 import { traceSummaryLine } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
@@ -122,5 +122,89 @@ describe('a stop from another window (V4)', () => {
   it('a finished turn is not marked stopped', () => {
     const ended = applyEvent(running(), worker({ type: 'waiting-stop' }));
     expect(ended.traces[0]!.stopped).toBeUndefined();
+  });
+});
+
+describe('one plan row, where it first appeared (V5)', () => {
+  it('records the offset and order of the first plan and keeps it through updates', () => {
+    vi.useFakeTimers();
+    const model = run([
+      worker({ type: 'delta', text: 'abc', mode: 'append' }),
+      worker({ type: 'plan', entries: [{ content: 'one', status: 'in_progress' }] }),
+      worker({ type: 'delta', text: 'defg', mode: 'append' }),
+      worker({ type: 'plan', entries: [{ content: 'one', status: 'completed' }] }),
+    ], begin());
+    expect(model.live!.planAt).toMatchObject({ offset: 3 });
+    expect(model.plan[0]!.status).toBe('completed');
+  });
+
+  it('ends in the trace at the same place, and the plan is not a second copy', () => {
+    const model = run([
+      worker({ type: 'delta', text: 'abc', mode: 'append' }),
+      worker({ type: 'plan', entries: [{ content: 'one', status: 'pending' }] }),
+      worker({ type: 'waiting-stop' }),
+    ], begin());
+    expect(model.traces[0]!.planAt).toMatchObject({ offset: 3 });
+    expect(model.plan).toEqual([]);
+  });
+
+  it('is a mark in the turn between the rows around it', () => {
+    const marks = turnMarks('abcdef', [{ key: 'a', kind: 'tool-done', label: 'x', offset: 3, seq: 1 }, { key: 'b', kind: 'tool-done', label: 'y', offset: 3, seq: 3 }], [], [],
+      { plan: { offset: 3, seq: 2 } });
+    expect(marks.map((mark) => (mark.activity ? mark.activity.key : 'plan'))).toEqual(['a', 'plan', 'b']);
+  });
+});
+
+describe('steers sort by acknowledgement (V10)', () => {
+  it('a steer goes between the rows that began before and after it', () => {
+    const marks = turnMarks('abcdef', [{ key: 'a', kind: 'tool-done', label: 'x', offset: 3, seq: 1 }, { key: 'b', kind: 'tool-start', label: 'y', offset: 3, seq: 5 }], [],
+      [{ text: 'steer', offset: 3, seq: 3 }]);
+    expect(marks.map((mark) => mark.activity?.key ?? 'steer')).toEqual(['a', 'steer', 'b']);
+  });
+
+  it('a steer first seen in a snapshot takes the order it arrived in, and keeps it', () => {
+    const live = (steers: Array<{ text: string; responseOffset: number }>) => worker({
+      type: 'snapshot', session: session({ pendingTurn: { prompt: 'hi', startedAt: '', steers } as never }), live: { text: 'abc', waitingLabel: 'thinking' },
+    });
+    let model = run([live([{ text: 'one', responseOffset: 1 }])], begin());
+    const first = model.live!.steers[0]!.seq;
+    expect(first).toEqual(expect.any(Number));
+    model = run([activity({ kind: 'tool-start', id: 'z', label: 'read', category: 'read' }), live([{ text: 'one', responseOffset: 1 }, { text: 'two', responseOffset: 2 }])], model);
+    expect(model.live!.steers[0]!.seq).toBe(first);
+    expect(model.live!.steers[1]!.seq!).toBeGreaterThan(model.live!.activities[0]!.seq!);
+  });
+});
+
+describe('a notice stays where it arrived (V9)', () => {
+  it('is anchored to the response offset of the running turn and keeps its turn at the end', () => {
+    const model = run([
+      worker({ type: 'delta', text: 'abc', mode: 'append' }),
+      worker({ type: 'notice', message: 'Switched to work' }),
+      worker({ type: 'delta', text: 'def', mode: 'append' }),
+    ], begin());
+    expect(model.notes[0]).toMatchObject({ turn: 0, offset: 3, text: 'Switched to work' });
+    const ended = applyEvent(model, worker({ type: 'waiting-stop' }));
+    expect(ended.notes[0]).toMatchObject({ turn: 0, offset: 3 });
+    expect(ended.traces.find((trace) => trace.userIndex === 0)).toBeTruthy();
+  });
+
+  it('is a mark in the turn at its offset', () => {
+    const marks = turnMarks('abcdef', [{ key: 'a', kind: 'tool-done', label: 'x', offset: 3, seq: 1 }], [], [],
+      { notes: [{ offset: 3, seq: 2, note: { kind: 'notice', text: 'n', after: 1 } }] });
+    expect(marks.map((mark) => mark.activity?.key ?? 'note')).toEqual(['a', 'note']);
+  });
+
+  it('a note outside a turn is not tied to one', () => {
+    const model = applyEvent(run([{ type: 'session', session: session() }]), worker({ type: 'notice', message: 'hello' }));
+    expect(model.notes[0]!.turn).toBeUndefined();
+  });
+
+  it('is rebased with the rows when the answer text is replaced', () => {
+    const model = run([
+      worker({ type: 'delta', text: 'abcdef', mode: 'append' }),
+      worker({ type: 'notice', message: 'n' }),
+      worker({ type: 'delta', text: 'abXY', mode: 'replace' }),
+    ], begin());
+    expect(model.notes[0]!.offset).toBe(2);
   });
 });
