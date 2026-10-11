@@ -4,6 +4,7 @@ import type { AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harne
 import type { HarnessDefaultSettings, HarnessSession, HarnessState, TranscriptMessage } from '../session/model.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { boundTurnActivities, readTurnActivities } from './turn-activities.js';
+import { readTurnMarks } from './turn-marks.js';
 import { ADOPTED_TRANSCRIPT_READERS } from '../session/discovery/registry.js';
 import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
@@ -131,6 +132,11 @@ export async function synchronizeNativeTranscript(state: HarnessState, session: 
         // retiring that checkpoint, including when the vendor quit on quota.
         const answer = session.messages[previousLength + answerIndex] as TranscriptMessage;
         const activities = readTurnActivities(session.pendingTurn.activities, session.pendingTurn.response?.length ?? 0);
+        // Likewise its thoughts, plan, notices and approval outcomes.
+        const marks = readTurnMarks(session.pendingTurn.marks);
+        if (marks.length) {
+          answer.marks = [...readTurnMarks(answer.marks), ...marks.map((mark) => ({ ...mark, responseOffset: Math.min(mark.responseOffset, answer.content.length) }))];
+        }
         if (activities.length) answer.activities = boundTurnActivities([
           ...readTurnActivities(answer.activities, answer.content.length),
           ...activities.map((activity) => ({ ...activity, responseOffset: Math.min(activity.responseOffset, answer.content.length) })),
