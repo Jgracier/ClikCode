@@ -55,7 +55,7 @@ Ask and Bypass do nothing for these, and ClikCode does not offer the control: Am
 ### Left
 
 - Claude ACP `additionalDirectories` is sent with `session/new|load|resume` for `/add-dir` (agents that advertise `sessionCapabilities.additionalDirectories`; others refuse the turn naming it). Not run live. `fork`, `list`, `delete` and `providers` are still unused.
-- Droid and Command Code efforts come from the session of the default model; the picker reads the vendor's list only for harnesses without an effort flag, so the per-model list is not shown yet.
+- Droid and Command Code efforts are asked of the agent per model (`session/set_config_option` model, then the effort option) on a reusable discovery session; `--help` is the fallback. Command Code's open ACP session also reports its model list (`liveModelList`), so no agent is started for it. Not run live.
 
 Effort levels come from the vendor wherever it states them: Codex's model cache per model, a harness's `--help` for its effort flag, or Goose's ACP session. The catalog's list is the fallback for harnesses that publish none.
 

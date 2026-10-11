@@ -161,6 +161,20 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
   return values.length ? values : undefined;
 }
 
+/** A per-model ACP answer is kept for as long as the binary is the same one: asking costs a
+ * short-lived agent process. A question the agent did not answer is not kept. */
+async function memoized(
+  key: string, harness: AiLocalHarnessDefinition, ask: () => Promise<{ values: string[]; default?: string } | undefined>,
+): Promise<{ values: string[]; default?: string } | undefined> {
+  const identity = await harnessBinaryIdentity(harness.binary) ?? 'unknown';
+  const kept = acpEfforts.get(key);
+  if (kept?.identity === identity) return kept.result;
+  const result = await ask().catch(() => undefined);
+  if (result) acpEfforts.set(key, { identity, result });
+  return result;
+}
+const acpEfforts = new Map<string, { identity: string; result: { values: string[]; default?: string } }>();
+
 export async function effortChoicesFor(
   harness: AiLocalHarnessDefinition,
   account?: AiHarnessAccount,
@@ -180,11 +194,18 @@ export async function effortChoicesFor(
       return result;
     }
   }
+  const { acpEffortPerModel, acpModelEffortChoices } = await import('./model-catalog.js');
+  // An agent that states effort only over ACP, per model (Droid, Command Code): its session
+  // answers for the model asked about, which --help's one list for every model cannot.
+  if (acpEffortPerModel(harness)) {
+    const stated = await memoized(`acp:${harness.command}:${account?.id ?? ''}:${model ?? ''}`, harness, () => acpModelEffortChoices(harness, account, model));
+    if (stated) return { ...stated, source: 'vendor-config' };
+  }
   const fromHelp = await helpChoices(harness);
   if (fromHelp) return { values: fromHelp, source: 'vendor-help' };
   // An agent whose effort is an ACP session option (Goose `thinking_effort`)
   // lists its values in the session discovery already reads for its models.
-  if (harness.acp?.effortConfigId && !harness.effortArgvPrefix) {
+  if (harness.acp?.effortConfigId) {
     const { nativeModelCatalog } = await import('./model-catalog.js');
     const offered = (await nativeModelCatalog(harness, account).catch(() => undefined))?.effortValues;
     if (offered?.length) return { values: [...offered], source: 'vendor-config' };
