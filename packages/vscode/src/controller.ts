@@ -12,7 +12,7 @@ import { isAbsolute, join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, conversationAttention, emptyModel, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -313,10 +313,10 @@ export class ClikCodeController implements vscode.Disposable {
         setTimeout(() => { if (!this.disposed && !this.bridge) void this.ensureStarted(); }, 500);
         return;
       }
-      this.setModel({
-        ...this.model, connection: 'stopped', running: false, live: undefined, approvals: [],
+      this.setModel(connectionLost(this.model, {
+        connection: 'stopped',
         connectionError: code === 0 ? 'ClikCode stopped.' : `ClikCode stopped unexpectedly (${signal ?? `exit ${code}`}). See the log for details.`,
-      });
+      }));
     });
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('ClikCode did not start within 60 seconds. See the log for details.')), 60_000);
