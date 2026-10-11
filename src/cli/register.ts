@@ -62,7 +62,14 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .action((mode?: string) => aiPermissions(mode));
   const accounts = program.command('accounts').alias('account').description('Manage local provider accounts');
   accounts.command('list').alias('ls').description('List local accounts and the usage left on each')
-    .option('--models', 'Include each account\'s model list').action((options: { models?: boolean }) => aiAccountsList(options));
+    .option('--models', 'Include each account\'s model list').action(async (options: { models?: boolean }) => {
+      await aiAccountsList(options);
+      // A vendor probe that never answers is a child process that would hold
+      // this one open for as long as it hangs; the account is asked again
+      // once its reading is older than the recheck window.
+      await new Promise<void>((resolve) => process.stdout.write('', () => resolve()));
+      process.exit(process.exitCode ?? 0);
+    });
   accounts.command('providers').description('List supported local harnesses and login kinds').action(aiAccountProviders);
   accounts.command('login <harness>').description('Install if necessary, then run the harness’s official local login flow')
     .option('--label <label>', 'Local account label')
