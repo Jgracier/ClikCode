@@ -3,7 +3,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { answeredApproval, applyEvent, emptyModel, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
-import { decisionBadge, shimmerStyle, workingStatus } from '../../src/webview/flow';
+import { decisionBadge, liveMeter, shimmerStyle, traceSummaryLine, workingDetail, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -349,5 +349,55 @@ describe('spinners on one clock (X7)', () => {
     expect(decisionBadge({ kind: 'approved', label: 'make clean' })).toEqual({ text: '✓ approved', tone: 'ok' });
     expect(decisionBadge({ kind: 'denied', label: 'make clean' })).toEqual({ text: '✗ denied', tone: 'no' });
     expect(decisionBadge({ kind: 'told', text: 'use pnpm' })).toEqual({ text: '↳ told: use pnpm', tone: 'told' });
+  });
+});
+
+describe('the token meter and the summary (X2)', () => {
+  it('estimates from the response until the vendor reports, and shows nothing at zero', () => {
+    expect(liveMeter({ shown: 0, responseChars: 0 })).toEqual({ tokens: 0 });
+    const first = liveMeter({ shown: 0, responseChars: 4_000 });
+    // A fifth of the gap to 1000, at least one.
+    expect(first).toEqual({ tokens: 200, label: '↓ 200 tokens' });
+  });
+
+  it('steps toward the vendor\'s reported output and never falls', () => {
+    let shown = 0;
+    for (let step = 0; step < 60; step += 1) shown = liveMeter({ shown, usage: { output: 1_200 }, responseChars: 40 }).tokens;
+    expect(shown).toBe(1_200);
+    expect(liveMeter({ shown, usage: { output: 900 }, responseChars: 40 }).tokens).toBe(1_200);
+    expect(liveMeter({ shown, usage: { output: 1_200 }, responseChars: 40 }).label).toBe('↓ 1.2k tokens');
+  });
+
+  it('the working line reads the clock then the meter, as the terminal\'s does', () => {
+    expect(workingDetail(62_000, '↓ 1.2k tokens')).toBe('1m 2s · ↓ 1.2k tokens');
+    expect(workingDetail(4_000, undefined)).toBe('4s');
+  });
+
+  it('a finished turn\'s line carries what it spent, live and on reopen', () => {
+    const trace = { startedAt: 0, endedAt: 62_000, activities: [{ key: 'a', kind: 'tool-done' as const, label: 'x' }], usage: { input: 18, output: 164, costUsd: 0.0237 } };
+    expect(traceSummaryLine(trace, [])).toBe('Worked for 1m 2s · ↑ 18 ↓ 164 tokens · $0.02');
+  });
+
+  it('says it is waiting on background agents instead of "Worked for"', () => {
+    const trace = { startedAt: 0, endedAt: 62_000, activities: [{ key: 'a', kind: 'tool-done' as const, label: 'x' }], pendingBackground: 2 };
+    expect(traceSummaryLine(trace, [])).toBe('Waiting for 2 background agents');
+  });
+
+  it('a turn ending keeps the usage it reported in its trace', () => {
+    const model = run([
+      activity({ kind: 'tool-start', id: 't', label: 'Read a.ts', category: 'read' }),
+      worker({ type: 'usage', usage: { input: 10, output: 20 } }),
+      worker({ type: 'waiting-stop' }),
+    ], begin());
+    expect(model.traces[0]!.usage).toMatchObject({ output: 20 });
+  });
+
+  it('reopened, the saved turn\'s usage and background count reach the trace', () => {
+    const opened = applyEvent(emptyModel(), { type: 'session', session: session({
+      messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'ok', turnEnd: { ms: 62_000, usage: { output: 164 }, pendingBackground: 1 },
+        activities: [{ event: { kind: 'tool-done', id: 'a', label: 'Read a.ts', category: 'read' }, responseOffset: 0 }] } as never],
+    }) });
+    expect(opened.traces[0]).toMatchObject({ usage: { output: 164 }, pendingBackground: 1 });
+    expect(traceSummaryLine(opened.traces[0]!, [])).toBe('Waiting for 1 background agent · ↓ 164 tokens');
   });
 });

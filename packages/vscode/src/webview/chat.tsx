@@ -11,7 +11,8 @@ import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/cl
 import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import { COPIED_MS } from '../../../../src/harness/protocol/timings';
-import { useNow } from './clock';
+import { useNow, useSpinFrame } from './clock';
+import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
@@ -23,7 +24,7 @@ import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Animating, Icon, Spinner } from './ui';
-import { decisionBadge, foldedGroupCount, foldedSummary, runGroupView, shimmerStyle, traceSummaryLine, workingStatus } from './flow';
+import { decisionBadge, foldedGroupCount, foldedSummary, liveMeter, runGroupView, shimmerStyle, traceSummaryLine, workingDetail, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
@@ -552,7 +553,21 @@ const VISIBLE_ACTIVITIES = 6;
  * running sub-agent or swarm agent keeps its own spinner on its chat row.
  * The thought being had is this line's tooltip, and opens under it. Ticks
  * on its own. */
-function Working({ live, asking, reconnecting: away = false }: { live: LiveTurn | undefined; asking: boolean; reconnecting?: boolean }): JSX.Element {
+/** The working line's clock and token meter. The count steps on the page's
+ * spinner clock, as the terminal's does on its tick, and never falls within a
+ * turn (liveMeter); the clock beside it reads once a second. */
+function WorkingDetail({ live, usage }: { live: LiveTurn; usage?: TurnUsage }): JSX.Element {
+  const now = useNow();
+  useSpinFrame();
+  const shown = useRef({ turn: live.startedAt, tokens: 0 });
+  // A new turn starts its count again.
+  if (shown.current.turn !== live.startedAt) shown.current = { turn: live.startedAt, tokens: 0 };
+  const meter = liveMeter({ shown: shown.current.tokens, usage, responseChars: live.text.length });
+  shown.current.tokens = meter.tokens;
+  return <span class="muted" aria-hidden="true">{workingDetail(liveElapsedMs(live, now), meter.label)}</span>;
+}
+
+function Working({ live, asking, usage, reconnecting: away = false }: { live: LiveTurn | undefined; asking: boolean; usage?: TurnUsage; reconnecting?: boolean }): JSX.Element {
   const now = useNow(!away);
   const [open, setOpen] = useState(false);
   const status = workingStatus(live, asking, now, away);
@@ -573,7 +588,7 @@ function Working({ live, asking, reconnecting: away = false }: { live: LiveTurn 
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
         {/* Not announced: a clock changing every second would be read out. */}
-        <span class="muted" aria-hidden="true">{live && !held ? formatElapsed(liveElapsedMs(live, now)) : ''}</span>
+        {live && !held ? <WorkingDetail live={live} usage={usage} /> : null}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
@@ -610,8 +625,8 @@ function ActivityRun({ activities, workspace }: { activities: Activity[]; worksp
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
  * it, the newest still streaming; then the working line. */
-const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away }: {
-  live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean;
+const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away, usage }: {
+  live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean; usage?: TurnUsage;
 }): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
     {live ? (
@@ -620,7 +635,7 @@ const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away }:
         {...(live.decisions?.length ? { decisions: live.decisions } : {})}
         {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
     ) : null}
-    <Working live={live} asking={asking} reconnecting={away} />
+    <Working live={live} asking={asking} reconnecting={away} {...(usage ? { usage } : {})} />
   </div>
 ));
 
@@ -707,6 +722,7 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
   const inTurn = model.live && model.turnUserIndex !== undefined ? model.turnUserIndex : undefined;
   if (model.running) {
     parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} asking={waitingOnUser(model)} plan={model.plan} notes={model.notes} away={reconnecting(model)}
+      {...(model.turnUsage ? { usage: model.turnUsage } : {})}
       {...(inTurn !== undefined ? { turn: inTurn } : {})} />);
   }
   // Notes from the running turn that could not be placed in it follow it.
