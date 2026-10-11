@@ -59,6 +59,12 @@ export function settledAnswerBlocks(
  * append-only means. */
 export type SettlingTool = {
   id: string; done: boolean; lines: readonly string[]; responseOffset?: number;
+  /** A message the user steered into the turn: not a call the model made.
+   * It never proves the prose before it is final (the model has not stopped
+   * writing; it was interrupted), and it waits for the block its offset falls
+   * inside to settle, so that block is retired whole and the steer lands
+   * after it -- never in the middle of a sentence. */
+  steer?: boolean;
 };
 
 type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
@@ -157,12 +163,19 @@ export class TurnTranscript {
     // final: the model stopped writing to call it. A call that is still
     // running closes that prose too, so its row can sit directly under it
     // instead of under whatever sentence arrives next.
-    const closedByTool = input.tools.some((tool) => tool.responseOffset !== undefined
+    const closedByTool = input.tools.some((tool) => !tool.steer && tool.responseOffset !== undefined
       && tool.responseOffset >= input.content.length && input.content.length > 0);
     const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, input.blocks, closedByTool);
+    const blocks = input.blocks ?? splitIntoBlocks(input.content);
     // Same rule as settledToolRows, kept grouped so a tool's rows can be
     // placed at the offset it started at rather than after all of the prose.
-    const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
+    // A steer acknowledged inside a block that is still open is held with the
+    // live rows until that block closes; it was drawn, truncated, otherwise,
+    // and the rest of the block was then written again under it.
+    const proseEnd = answer.emitted > 0 ? (blocks[answer.emitted - 1]?.sourceEnd ?? 0) : 0;
+    const insideOpenBlock = (tool: SettlingTool): boolean => Boolean(tool.steer) && !input.turnEnded
+      && (tool.responseOffset ?? 0) > proseEnd && (tool.responseOffset ?? 0) <= input.content.length;
+    const isSettled = (tool: SettlingTool): boolean => (tool.done || input.turnEnded) && !insideOpenBlock(tool);
     const owing = input.tools.filter((tool) => !this.emittedTools.has(tool.id));
     const settledTools = owing.filter(isSettled);
     const liveTools = owing.filter((tool) => !isSettled(tool));
@@ -262,7 +275,6 @@ export class TurnTranscript {
     // the scrollback it will join when it finishes. One still ahead of the
     // text sits at the end. Appending every running call after the text is
     // what made the row jump up the page when the checkmark was written.
-    const blocks = input.blocks ?? splitIntoBlocks(input.content);
     const liveSourceStart = answer.emitted === 0 ? 0 : (blocks[answer.emitted - 1]?.sourceEnd ?? 0);
     const before: string[] = [];
     const after: string[] = [];
