@@ -1679,8 +1679,11 @@ def run(name, spec, entry, keep):
     home, state, fakebin, workspace = (os.path.join(root, part) for part in ('home', 'state', 'bin', 'work'))
     for path in (home, state, fakebin, workspace): os.makedirs(path)
     binary = spec.get('harness', 'grok')
-    shutil.copy(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-grok.mjs'), os.path.join(fakebin, binary))
-    os.chmod(os.path.join(fakebin, binary), 0o755)
+    # `setup` (the matrix rig, matrix/matrix.py) installs its own fake vendors
+    # into fakebin; without it the one fake Grok is installed under `harness`.
+    if not spec.get('setup'):
+        shutil.copy(os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-grok.mjs'), os.path.join(fakebin, binary))
+        os.chmod(os.path.join(fakebin, binary), 0o755)
     node = os.path.realpath(shutil.which('node'))
     # Node, npm and npx alone, not the directory they live in: a vendor CLI
     # installed globally beside node (opencode, 2026-10-06) was on the
@@ -1707,6 +1710,7 @@ def run(name, spec, entry, keep):
         'SSH_CONNECTION': '127.0.0.1 1 127.0.0.1 22',
     }
     if spec.get('classic'): env['CLIKCODE_TUI'] = 'classic'
+    if spec.get('setup'): spec['setup']({'root': root, 'home': home, 'state': state, 'fakebin': fakebin, 'workspace': workspace, 'env': env})
     # The fake sign-in waits on the browser for as long as this file exists.
     sign_in_hold = os.path.join(root, 'login-hold')
     if spec.get('hold_sign_in'):
@@ -1728,6 +1732,9 @@ def run(name, spec, entry, keep):
     stream = ByteStream(screen)
     snaps = {}
     raw, frames = bytearray(), []
+    # When each chunk was read from the pty (time.time(), before it is fed to
+    # the emulator), parallel to `frames`: the matrix rig's clock.
+    chunk_at = []
     # Whether each frame was taken between synchronized updates (DEC 2026):
     # a frame cut mid-update is a half-drawn screen, not something shown.
     frame_complete = []
@@ -1741,6 +1748,7 @@ def run(name, spec, entry, keep):
     # A window whose process has gone (its pty hung up) is not read again.
     closed = {1: False, 2: False}
     start = time.time()
+    wall_start = start  # `start` is reused further down
 
     def pump(seconds, until=None, which=1):
         """Read both windows for `seconds`, or until `until` is on window
@@ -1755,6 +1763,7 @@ def run(name, spec, entry, keep):
                 n = 1 if ready_fd == fd else 2
                 try: chunk = os.read(ready_fd, 65536)
                 except OSError: chunk = b''
+                read_at = time.time()
                 if not chunk:
                     closed[n] = True
                     continue
@@ -1763,6 +1772,7 @@ def run(name, spec, entry, keep):
                     begun, ended = chunk.rfind(b'\x1b[?2026h'), chunk.rfind(b'\x1b[?2026l')
                     if begun >= 0 or ended >= 0: sync['open'] = begun > ended
                     frames.append((time.time() - start, '\n'.join(screen.display)))
+                    chunk_at.append(read_at)
                     frame_complete.append(not sync['open'])
                 else:
                     raw2.extend(chunk); stream2.feed(chunk)
@@ -1972,12 +1982,19 @@ def run(name, spec, entry, keep):
         try: os.close(fd2)
         except OSError: pass
         fd2, closed[2] = None, True
+    # Whether ClikCode ended by itself on the two Ctrl+C presses, and how.
+    exit_info = {'by_ctrl_c': False, 'status': None}
     for _ in range(2):
         try: os.write(fd, b'\x03')
         except OSError: pass
         pump(0.4)
-    try: os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError: pass
+    try:
+        reaped, status = os.waitpid(pid, os.WNOHANG)
+        if reaped == pid: exit_info = {'by_ctrl_c': True, 'status': status}; pid = -1
+    except ChildProcessError: pid = -1
+    if pid > 0:
+        try: os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError: pass
     # Session workers are spawned detached and outlive the TUI by their idle
     # timeout (30 minutes); every one this run started is stopped here.
     stopped = []
@@ -2196,6 +2213,10 @@ def run(name, spec, entry, keep):
         elif copies[-1] != spec['clipboard']: problems.append(f'clipboard got {copies[-1]!r}, expected {spec["clipboard"]!r}')
 
 
+    if spec.get('dump'):
+        json.dump({'start': wall_start, 'frames': frames, 'chunk_at': chunk_at, 'complete': frame_complete, 'typed_at': typed_at,
+                   'exit': exit_info, 'problems': problems, 'final': final, 'raw_errors': bool(re.search(rb'node:internal|Traceback|UnhandledPromiseRejection', bytes(raw)))},
+                  open(spec['dump'], 'w'))
     open(os.path.join(root, 'capture.bin'), 'wb').write(bytes(raw))
     open(os.path.join(root, 'final.txt'), 'w').write(final)
     if frames2: open(os.path.join(root, 'final2.txt'), 'w').write(final2)
