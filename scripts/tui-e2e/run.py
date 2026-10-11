@@ -1493,7 +1493,6 @@ SCENARIOS = {
     # 5: a child begun after text the parent wrote is drawn after that text,
     # and two concurrent children each have a slot at once.
     'child-order': {
-        'expect_fail': 'order',  # agent row after the text begun under it, and one child slot per parent (1.3, 5)
         'turns': [{'emits': [
             {'op': 'text', 'text': 'Starting the investigation.\n\n'},
             {'op': 'agent-start', 'id': 'ag1', 'title': 'Task: investigate'},
@@ -1514,6 +1513,28 @@ SCENARIOS = {
                          ('Notes written while the agent works.', 'child-alpha'), ('Notes written while the agent works.', 'child-bravo')],
         'ever_together': [('child-alpha', 'child-bravo')],
         'final_once': ['Notes written while the agent works.', 'The investigation is complete.'],
+    },
+    # 5: a sub-agent that outlasts what the live region can hold is retired
+    # as a running line IN ORDER, its held text follows, and nothing is ever
+    # drawn above text written before it; the completion is one row where it
+    # settled, and the live children sit under a `↳` line meanwhile.
+    'agent-release-order': {
+        'env': {'FAKE_DELAY_MS': '15'},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Opening the investigation.\n\n'},
+            {'op': 'agent-start', 'id': 'ag2', 'title': 'Task: audit'},
+            {'op': 'sleep', 'ms': 300},
+            {'op': 'text', 'text': 'Note one while it works.\n\nNote two while it works.\n\nNote three while it works.\n\nNote four while it works.\n\nNote five while it works.\n\nNote six while it works.\n\nNote seven while it works.\n\nNote eight while it works.\n\nNote nine while it works.\n\nNote ten while it works.\n\nNote eleven while it works.\n\nNote twelve while it works.\n\nNote thirteen while it works.\n\nNote fourteen while it works.\n\n'},
+            {'op': 'child-start', 'id': 'k1', 'parent': 'ag2', 'title': 'Read audit-one.ts'},
+            {'op': 'sleep', 'ms': 1500},
+            {'op': 'child-end', 'id': 'k1', 'parent': 'ag2'},
+            {'op': 'agent-end', 'id': 'ag2', 'result': 'audited'},
+            {'op': 'text', 'text': 'The audit is complete.'}]}],
+        'steps': [('type', 'audit it'), ('wait_for', 'The audit is complete.', 40), ('settle', 3)],
+        'watch': [],
+        'always_order': [('Agent Task: audit', 'Note one while it works.'), ('Note one while it works.', 'Note fourteen while it works.')],
+        'final_in_order': ['Opening the investigation.', 'Agent Task: audit', 'Note one while it works.', 'Note fourteen while it works.', 'The audit is complete.'],
+        'final_once': ['Note one while it works.', 'Note fourteen while it works.', 'The audit is complete.'],
     },
     # 4/11: each thought settles where it happened -- before the text, and the
     # second after it -- and neither doubles or moves.

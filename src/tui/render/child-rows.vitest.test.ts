@@ -44,7 +44,7 @@ describe('every concurrent child has its own slot', () => {
 
 describe('a child is never drawn above text emitted before it', () => {
   const asTool = (row: ReturnType<LiveChildren['rows']>[number]): SettlingTool =>
-    ({ id: row.id, done: false, agent: true, responseOffset: row.offset, seq: row.seq, lines: [`    child ${row.label}`] });
+    ({ id: row.id, done: false, nested: true, responseOffset: row.offset, seq: row.seq, lines: [`    child ${row.label}`] });
 
   it('puts a late child below the parent\'s later text, an early one directly under the parent', () => {
     const children = new LiveChildren();

@@ -34,7 +34,7 @@ import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock,
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, commonPrefixLength, entryLines, rebaseActivityOffsets, settleDecisionEntry, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/activity-view.js';
-import { outputPreviewRows } from '../harness/protocol/activity-line.js';
+import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { answerWriting, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, reasoningHeading, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
@@ -2253,8 +2253,21 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       // What it has printed so far, newest last, under the spinner -- a long
       // build or test run is visibly working instead of a bare timer.
       const live = entry.event ? outputPreviewRows({ ...entry.event, outputTail: true }, LIVE_OUTPUT_LINES).map(underCall) : [];
+      // A sub-agent that has to be retired while it still runs: the same text
+      // with a static glyph and `running`; when it settles one completion row
+      // is appended (`✓ <label> (N tool uses · ...)`), and its live children
+      // are named by a `↳ <label>` line (transcript.ts).
+      const agentRows = entry.event?.agent ? (() => {
+        const label = tensedLabel(entry.event.label, true);
+        const settled = renderActivityLine({ ...entry.event, kind: 'tool-done' })[0]?.trim() ?? label;
+        return {
+          released: ['', `  ${runningChatLine(label, 0, kind, entry.event.category).trim()} ${chalk.dim('· running')}`],
+          completed: ['', `  ${chalk.green('✓')} ${settled}`],
+          childHeader: [`    ${chalk.dim(`↳ ${entry.event.label}`)}`],
+        };
+      })() : {};
       return {
-        id, done: false, responseOffset: entry.responseOffset, ...order,
+        id, done: false, responseOffset: entry.responseOffset, ...order, ...agentRows,
         lines: ['', `  ${row}`, ...live],
       };
     };
@@ -2321,7 +2334,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         for (const child of this.liveChildren.rows(open.map((entry) => ({ id: entry.event!.id!, offset: entry.responseOffset, seq: entry.sequence })))) {
           const uses = child.newest ? open.find((entry) => entry.event!.id === child.parentId)?.event?.childTools : undefined;
           tools.push({
-            id: child.id, done: false, agent: true, responseOffset: child.offset, seq: child.seq,
+            id: child.id, done: false, nested: true, parent: child.parentId, responseOffset: child.offset, seq: child.seq,
             lines: [`    ${chalk.cyan(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child.label}${uses ? ` · ${toolUses(uses)}` : ''}`)}`],
           });
         }
@@ -2478,6 +2491,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         turnEnded: !this.turn,
         renderBlocks,
         renderLive,
+        // What a running sub-agent may keep behind it: half of what the
+        // conversation can show. Past it the agent row is retired as a
+        // running line and the held text follows (transcript.ts).
+        agentHoldRows: Math.max(3, Math.floor(maxComposerRows / 2)),
       });
       emit(step.finished);
       liveConversation.push(...step.live);
