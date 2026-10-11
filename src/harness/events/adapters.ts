@@ -2,6 +2,7 @@
  * consume only normalized response updates, never vendor JSON shapes. */
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { aiderLine } from './aider.js';
+import { CLINE_ANSWER_KINDS, clineLine, type ClineState } from './cline.js';
 import { ClaudeBlocks } from './claude-stream.js';
 import { parseNativeActivityEventsFromValue, type NativeActivityEvent } from '../protocol/activity-events.js';
 import { nativeActivityPhaseFromValue } from '../protocol/activity-line.js';
@@ -54,6 +55,8 @@ export interface StreamState {
   anonymousCallCount: number;
   /** The turn's task list (Claude Code's task tools build it a call at a time). */
   readonly tasks: TaskListTracker;
+  /** Cline's one open call, which no record of its stream completes. */
+  cline?: ClineState;
 }
 
 /** A fresh state for one turn attempt. */
@@ -170,7 +173,10 @@ export const parsersByFamily: Readonly<Record<string, ResponseParser>> = {
     const update = cursorRecord(value, state);
     return prefix ? { text: `${prefix}${update?.text ?? ''}`, mode: 'append' } : update;
   },
+  // Only its words are the answer: a `tool` or `command` message's text is the
+  // call (cline.ts), never prose. A record with no `say` kind is plain text.
   'cline-json': (value) => value.type === 'say' && typeof value.text === 'string' && value.text
+    && (value.say === undefined || CLINE_ANSWER_KINDS.has(String(value.say)))
     ? { text: value.text, mode: 'replace' } : undefined,
   'pi-json': (value) => {
     const event = value.type === 'message_update' ? object(value.assistantMessageEvent) : undefined;
@@ -319,6 +325,7 @@ function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn:
   const response = nativeResponseUpdateFromValue(harness, value, turn);
   const activities = pairAnonymousCalls(harness, turn, value, [
     ...(claudeShaped(harness) ? (turn.claudeBlocks ??= new ClaudeBlocks(harness.command)).note(value) : []),
+    ...(harness.parser === 'cline-json' ? clineLine(value, turn, harness.command) : []),
     ...parseNativeActivityEventsFromValue(harness, value),
   ]);
   const compaction = claudeShaped(harness) ? claudeCompaction(value) : undefined;
