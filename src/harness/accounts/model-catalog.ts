@@ -24,6 +24,7 @@ import { acpConfigOptionValues, acpDiscoverySession, acpProbeArgv, acpSessionMod
 import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
+import { NO_WALL_CLOCK_MS } from './probe-clock.js';
 
 /** Provider-specific model naming belongs to account metadata, not generic
  * session pickers or terminal renderers. Unknown models always pass through. */
@@ -405,8 +406,9 @@ async function discoverModelCatalog(
   rememberVendorModelNames(harness, result);
   // A list read from a server (Copilot's, from models.dev) that came back
   // empty was offline, not empty: remembered, it stayed empty until Copilot
-  // itself was updated. Asked again next time instead.
-  if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider' || harness.acp)) return result;
+  // itself was updated. Asked again next time instead (a failed `models`
+  // run is the same: no list is not an empty list).
+  if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider' || harness.acp || harness.modelDiscoveryArgv)) return result;
   await rememberCatalog(harness, account, fingerprint, result);
   return result;
 }
@@ -573,7 +575,7 @@ async function nativeModelCatalogUncached(
     }
     try {
       if (!configured) {
-        const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, 12_000)) as { default?: unknown; provider?: unknown };
+        const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, NO_WALL_CLOCK_MS)) as { default?: unknown; provider?: unknown };
         const model = typeof parsed.default === 'string' ? parsed.default.trim() : '';
         const provider = typeof parsed.provider === 'string' ? parsed.provider.trim() : '';
         if (model) configured = provider ? `${provider}:${model}` : model;
@@ -638,7 +640,7 @@ async function nativeModelCatalogUncached(
         const session = await acpDiscoverySession(request, capabilities, cacheKey(harness, account));
         const efforts = harness.acp?.effortConfigId ? acpConfigOptionValues(session, harness.acp.effortConfigId) : [];
         return { ...acpSessionModels(session), ...(efforts.length ? { efforts } : {}) };
-      }, 30_000).catch(() => undefined);
+      }).catch(() => undefined);
     if (listed?.models.length) {
       // A declared ACP model list is authoritative for ACP sessions. Keeping
       // persisted CLI ids alongside it can select an id this transport does
@@ -656,7 +658,7 @@ async function nativeModelCatalogUncached(
   if (harness.modelDiscoveryArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
-      const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, 12_000);
+      const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, NO_WALL_CLOCK_MS);
       // OpenCode and Kilo print only connected providers' models, each with
       // its price and (Kilo) whether it is free; the rest of what they know
       // is offered as a sign-in.

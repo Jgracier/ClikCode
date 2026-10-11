@@ -2,6 +2,7 @@
  * prints -- a table for some, structured output for others. */
 
 import { captureNativeHarnessOutput } from '../../harness/transport/native/command.js';
+import { NO_WALL_CLOCK_MS } from '../../harness/accounts/probe-clock.js';
 import { freshListing, lastSeenListing, rememberListing } from './cache.js';
 import { harnessBinaryIdentity } from '../../harness/transport/native/version-memo.js';
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
@@ -167,7 +168,7 @@ export async function discoverNativeSessions(
   const fresh = await freshListing(harness.command, folder, profile, Date.now(), build);
   if (fresh) return fresh;
   try {
-    const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, 4_000, workspace);
+    const raw = await captureNativeHarnessOutput(harness, harness.session.discoverArgv, environment, NO_WALL_CLOCK_MS, workspace);
     const format = harness.session.discoverFormat ?? 'json';
     const found = format === 'text' ? parseDiscoveredSessionsText(raw) : parseDiscoveredSessionsStructured(raw, format);
     await rememberListing(harness.command, folder, profile, found, Date.now(), build);
@@ -210,7 +211,7 @@ export async function adoptListedNativeId(
   const name = session.nativeSessionId;
   const listing = harness.session;
   if (!listing?.idByName || !listing.discoverArgv || !name || session.nativeSessionPreallocated || !MINTED_ID.test(name)) return false;
-  const raw = await captureNativeHarnessOutput(harness, listing.discoverArgv, environment, 15_000, session.workspace).catch(() => '');
+  const raw = await captureNativeHarnessOutput(harness, listing.discoverArgv, environment, NO_WALL_CLOCK_MS, session.workspace).catch(() => '');
   const found = parseDiscoveredSessionsStructured(raw, listing.discoverFormat === 'json-lines' ? 'json-lines' : 'json')
     .find((item) => item.title === name && item.nativeId !== name);
   if (!found) return false;

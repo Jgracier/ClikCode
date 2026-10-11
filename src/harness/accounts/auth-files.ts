@@ -10,6 +10,7 @@ import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { NO_WALL_CLOCK_MS } from './probe-clock.js';
 
 type AuthFile = NonNullable<AiLocalHarnessDefinition['authFiles']>[number];
 type Environment = Readonly<Record<string, string | undefined>>;
@@ -147,9 +148,9 @@ export function harnessCanLogout(harness: AiLocalHarnessDefinition): boolean {
 }
 
 /** Sign the vendor out: its logout command where it has one, else its
- * credential files. Bounded, so an offline vendor cannot hang the caller. */
+ * credential files. Ends when the vendor does; a caller that must bound it passes `timeoutMs`. */
 export async function logoutNativeHarness(
-  harness: AiLocalHarnessDefinition, profileEnvironment: Readonly<Record<string, string>>, timeoutMs = 20_000,
+  harness: AiLocalHarnessDefinition, profileEnvironment: Readonly<Record<string, string>>, timeoutMs = NO_WALL_CLOCK_MS,
 ): Promise<void> {
   if (harness.logoutArgv) {
     await captureNativeHarnessOutput(harness, harness.logoutArgv, profileEnvironment, timeoutMs);

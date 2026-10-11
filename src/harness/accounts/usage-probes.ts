@@ -8,14 +8,15 @@ import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js
 import { grokUsageReading } from './grok-usage.js';
 import { ampUsageProbe, antigravityUsageReading, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
+import { NO_WALL_CLOCK_MS } from './probe-clock.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { NativeUsageProbe } from '../definition.js';
 import { UsageReading, UsageWindow, claudeRateLimitReading, claudeUsageCommandReading, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
 
 /** Claude Code's `/usage` probe: measured at ~3.8s (see
- * CLAUDE_USAGE_PROBE_ARGV), with room for a slow start. */
-const NATIVE_USAGE_PROBE_TIMEOUT_MS = 20_000;
+ * CLAUDE_USAGE_PROBE_ARGV), no clock: a slow start is not an absent figure. */
+const NATIVE_USAGE_PROBE_TIMEOUT_MS = NO_WALL_CLOCK_MS;
 
 /** Per-harness live usage probe. Each vendor CLI exposes quota/cost through a different
  * surface (or none at all); adding a harness here is the only step needed to light up

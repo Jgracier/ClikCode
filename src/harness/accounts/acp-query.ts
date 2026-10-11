@@ -21,11 +21,13 @@ import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../definition.j
 type Json = Record<string, any>;
 
 /** Runs `ask` against an initialized ACP peer and always shuts it down.
- * Undefined when the binary is missing or the server never initializes. */
+ * Undefined when the binary is missing or the server exits or errors before
+ * answering. No clock unless the caller passes one: a slow start is not a
+ * missing answer. */
 export async function queryAcp<T>(
   binary: string, argv: readonly string[], environment: Readonly<Record<string, string>>,
   ask: (request: (method: string, params?: Json) => Promise<Json>, capabilities: Json) => Promise<T>,
-  timeoutMs = 20_000,
+  timeoutMs?: number,
 ): Promise<T | undefined> {
   const executable = await resolveBinaryPath(binary);
   if (!executable) return undefined;
