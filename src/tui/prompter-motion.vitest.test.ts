@@ -78,4 +78,34 @@ describe('the status line motion', () => {
       expect(line()).toContain('● waiting for you');
     } finally { rl.close(); }
   });
+
+  it('shows the turn\'s tokens in the status line: estimated from the answer, then the vendor\'s figure', () => {
+    const { rl, line } = open();
+    try {
+      expect(line()).not.toContain('tokens');
+      rl.response('x'.repeat(4000));
+      vi.advanceTimersByTime(SPIN_MS * 40);
+      expect(line()).toMatch(/thinking|writing/);
+      expect(line()).toContain('↓ 1.0k tokens');
+      // The vendor reports fewer: the number never goes down within a turn.
+      (rl as unknown as { setTurnUsage(u: { output: number }): void }).setTurnUsage({ output: 300 });
+      vi.advanceTimersByTime(SPIN_MS * 10);
+      expect(line()).toContain('↓ 1.0k tokens');
+      // And rises with the vendor's figure once it passes.
+      (rl as unknown as { setTurnUsage(u: { output: number }): void }).setTurnUsage({ output: 3400 });
+      vi.advanceTimersByTime(SPIN_MS * 60);
+      expect(line()).toContain('↓ 3.4k tokens');
+    } finally { rl.close(); }
+  });
+
+  it('says nothing about tokens while the turn waits on the user', () => {
+    const { rl, line } = open();
+    try {
+      rl.response('x'.repeat(4000));
+      vi.advanceTimersByTime(SPIN_MS * 40);
+      void rl.approval('Run make?', 'make clean');
+      expect(line()).toContain('waiting for you');
+      expect(line()).not.toContain('tokens');
+    } finally { rl.close(); }
+  });
 });

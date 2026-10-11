@@ -6,7 +6,8 @@
 
 import type { FileDiff } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../prompter.js';
-import { formatElapsed } from './format.js';
+import { compactCount, formatElapsed } from './format.js';
+import type { TurnUsage } from './turn-usage.js';
 import { SHIMMER_WIDTH } from './timings.js';
 
 /** Each row's first word, running and done ("Reading" / "Read"), as all four
@@ -132,6 +133,36 @@ export function turnStatus(state: {
   const thinking = !phase || /^thinking$/i.test(phase);
   const label = heading ?? (!thinking ? phase! : state.writing ? 'writing' : 'thinking');
   return { label, tone: 'thinking' };
+}
+
+/** Tokens in `chars` characters of response, as a model counts them. */
+export function estimateTokens(chars: number): number {
+  return Math.max(0, Math.round(chars / 4));
+}
+
+/** How many tokens the turn has produced so far: what the vendor's usage
+ * for the turn says (output tokens, where it reports them), else the
+ * response's length / 4. The shown count steps toward this (smoothTokens). */
+export function liveTokenTarget(state: { usage?: Pick<TurnUsage, 'output'>; responseChars: number }): number {
+  const reported = state.usage?.output;
+  return reported !== undefined && reported > 0 ? Math.round(reported) : estimateTokens(state.responseChars);
+}
+
+/** One step of the shown count toward its target: a fifth of the gap, at
+ * least one, never past the target and never down within a turn -- a
+ * vendor's later, lower reading or a replaced snapshot does not make the
+ * number fall. */
+export function smoothTokens(shown: number, target: number): number {
+  if (target <= shown) return shown;
+  return Math.min(target, shown + Math.max(1, Math.ceil((target - shown) / 5)));
+}
+
+/** The meter the status line carries, as Claude Code words it:
+ * `↓ 1.2k tokens`. Nothing while the count is zero: an unknown count is not
+ * "0 tokens" (so the 16 s Claude Code waits to show a meter is moot here --
+ * it shows as soon as there is anything to count). */
+export function tokenMeterLabel(tokens: number): string | undefined {
+  return tokens > 0 ? `↓ ${compactCount(tokens)} tokens` : undefined;
 }
 
 /** One frame of the shimmer the status label wears (Claude Code and Codex
