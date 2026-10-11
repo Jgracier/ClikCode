@@ -116,7 +116,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       onUsage: (usage) => observer.setTurnUsage(usage),
       onPhase: (phase) => observer.phase(phase),
       onPlan: (entries) => observer.setPlan(entries),
-      onApproval: async (title, detail, preview, signal) => (await observer.approval(title, detail, preview, undefined, signal)) !== false,
+      onApproval: async (title, detail, preview, signal, callId) => (await observer.approval(title, detail, preview, undefined, signal, callId)) !== false,
       onNotice: (message) => observer.activity(message),
       ...(observer.askQuestions ? { onQuestion: (request, signal) => observer.askQuestions!(request, signal) } : {}),
     };

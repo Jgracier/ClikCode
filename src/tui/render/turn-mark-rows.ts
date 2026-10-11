@@ -8,7 +8,7 @@
 
 import chalk from 'chalk';
 import { orderMarks } from '../../harness/protocol/activity-view.js';
-import { decisionRow, thoughtRow } from '../../harness/protocol/turn-flow.js';
+import { decisionRow, thoughtRow, type Decision } from '../../harness/protocol/turn-flow.js';
 import type { TurnActivity, TurnMark } from '../../session/model.js';
 import { sanitizeTerminalText } from './text.js';
 
@@ -45,6 +45,16 @@ export function turnMarkLines(mark: TurnMark): string[] {
       ];
     }
   }
+}
+
+/** The decision an outcome mark that names its call stands for: settled onto
+ * that call's row (settleDecisionEntry) instead of drawn as a second row
+ * (standard section 8). Undefined for any other mark, and for an outcome
+ * saved with no call id, which keeps its own row as it always had. */
+export function callDecision(mark: TurnMark): { callId: string; decision: Decision } | undefined {
+  if (mark.kind !== 'outcome' || !mark.callId) return undefined;
+  const label = sanitizeTerminalText(mark.label, { singleLine: true }).trim();
+  return { callId: mark.callId, decision: { kind: mark.outcome, label } };
 }
 
 /** The one rank every row of a saved turn is drawn by: its calls and its

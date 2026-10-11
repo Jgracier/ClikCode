@@ -125,8 +125,10 @@ export type WorkerEvent =
    * the turn ended): every window closes its prompt. */
   /** `outcome`/`label`: the user decided it -- the settled row the request
    * becomes where it was asked (TurnMark `outcome`). Absent when it was
-   * withdrawn or the turn ended under it. */
-  | { type: 'request-closed'; id: string; outcome?: 'approved' | 'denied' | 'answered'; label?: string }
+   * withdrawn or the turn ended under it. `callId`: the call the request was
+   * about (as on `approval-request`), so a window that never saw the request
+   * settles that call's row with the decision. */
+  | { type: 'request-closed'; id: string; outcome?: 'approved' | 'denied' | 'answered'; label?: string; callId?: string }
   /** A turn has started. `prompt` (additive) is its text: a client that did
    * not send it -- another window's turn, or one the worker started itself
    * for a finished background shell -- follows it from here to waiting-stop

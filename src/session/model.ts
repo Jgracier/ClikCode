@@ -30,7 +30,11 @@ export type TurnMark = { id: string; seq: number; responseOffset: number } & (
   /** Updated in place: one per turn, kept after every step is done. */
   | { kind: 'plan'; entries: Array<{ content: string; status?: string; priority?: string }> }
   | { kind: 'notice'; message: string }
-  | { kind: 'outcome'; outcome: 'approved' | 'denied' | 'answered'; label: string }
+  /** `callId`: the vendor's id of the call the decision was about, where it
+   * named one -- replay settles that call's row with the decision instead of
+   * drawing a second row (standard section 8). Absent on a mark saved before
+   * it was kept, and where the vendor reports no call. */
+  | { kind: 'outcome'; outcome: 'approved' | 'denied' | 'answered'; label: string; callId?: string }
 );
 
 /** The thought being had when the journal was last written: settled into a
