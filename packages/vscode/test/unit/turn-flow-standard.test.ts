@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
 import { applyEvent, connectionLost, emptyModel, preparing, reconnecting, rejectedPrompt, submittingPrompt, turnMarks, type ChatModel } from '../../src/model';
 import { createStreamingMarkdown } from '../../src/webview/markdown';
-import { runGroupView, traceSummaryLine, workingStatus } from '../../src/webview/flow';
+import { followsBottom, runGroupView, traceSummaryLine, workingStatus } from '../../src/webview/flow';
 import type { HarnessSession, IdeEvent } from '../../src/protocol';
 
 const session = (patch: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -268,5 +268,32 @@ describe('nothing animates while the bridge reconnects (V8)', () => {
     const live = begin().live!;
     expect(workingStatus(live, false, Date.now(), true).label).toBe('Reconnecting…');
     expect(workingStatus(live, false, Date.now()).label).not.toBe('Reconnecting…');
+  });
+});
+
+describe('following the bottom of the log (V6)', () => {
+  const at = (top: number, height: number, client = 500) => ({ top, height, client });
+  const start = { follow: true, top: 0, height: 0 };
+
+  it('stays on while the content grows under a reader at the bottom', () => {
+    let state = followsBottom(start, at(500, 1000));
+    expect(state.follow).toBe(true);
+    state = followsBottom(state, at(900, 1400));
+    expect(state.follow).toBe(true);
+  });
+
+  it('a small scroll up while streaming is not snapped back', () => {
+    const state = followsBottom({ follow: true, top: 500, height: 1000 }, at(470, 1000));
+    expect(state.follow).toBe(false);
+  });
+
+  it('scrolling back to the bottom follows again', () => {
+    const state = followsBottom({ follow: false, top: 300, height: 1000 }, at(430, 1000));
+    expect(state.follow).toBe(true);
+  });
+
+  it('a log that got shorter (the turn folded) is not the reader scrolling up', () => {
+    const state = followsBottom({ follow: true, top: 900, height: 1400 }, at(600, 1100));
+    expect(state.follow).toBe(true);
   });
 });
