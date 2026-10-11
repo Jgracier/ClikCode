@@ -600,6 +600,9 @@ export const HOME_REDIRECT_ENV_DEFAULTS: Readonly<Record<string, string | null>>
   GNUPGHOME: '~/.gnupg',
   CARGO_HOME: '~/.cargo',
   RUSTUP_HOME: '~/.rustup',
+  // The `junie` launcher reads its installed builds from ${JUNIE_DATA:-$HOME/.local/share/junie}/versions,
+  // empty under a private HOME ("[Junie] Error: No version found"); sign-in lives in ~/.junie, so it stays isolated.
+  JUNIE_DATA: '~/.local/share/junie',
   SSH_AUTH_SOCK: null,
   GIT_SSH_COMMAND: null,
 };
@@ -614,7 +617,8 @@ const HOME_REDIRECT_ENV_PASSTHROUGH: readonly string[] = Object.keys(HOME_REDIRE
 const OPENCODE_FAMILY = {
   transport: 'acp', integration: 'structured', parser: 'opencode-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false,
   customCommandDirs: ['.opencode/command', '~/.config/opencode/command'],
-  acp: { argv: ['acp'], inheritCliOptions: false, sharedSessions: true },
+  // session/new configOptions `mode` (category mode): opencode build|plan (1.x), kilo code|ask|debug|orchestrator|plan.
+  acp: { argv: ['acp'], inheritCliOptions: false, sharedSessions: true, planModeId: 'plan' },
   localAuth: ['api-key', 'oauth', 'vendor-cli'], loginArgv: ['auth', 'login'], providerLoginArgv: ['auth', 'login', '--provider', '{provider}'],
   // Kilo's list (a fork) names them the same; both checked signed out.
   loginKeyRoutes: providerKeyRoutes([], {
@@ -820,7 +824,9 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // than getting a near-identical one of its own. Its ACP server publishes
   // session-wide token usage, which ClikCode turns into a per-turn reading.
   // It publishes no quota window (errors are balance-based: HTTP 402).
-  { command: 'grok', freePlan: { listed: true }, provider: 'xai', displayName: 'Grok Build', tier: 'primary', transport: 'acp', acp: { argv: ['agent', 'stdio'], inheritCliOptions: false, effortConfigId: 'reasoning_effort', sharedSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['low', 'medium', 'high'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'grok', npmPackage: '@xai-official/grok', authFiles: [{ path: '~/.grok/auth.json' }], authEnv: ['XAI_API_KEY'], loginArgv: ['login'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'default'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions'] }, auto: { argv: ['--permission-mode', 'auto'] } }, turn: { startArgv: ['--output-format', 'streaming-messages-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'] } },
+  // grok 1.0.50 --reasoning-effort accepts none|minimal|low|medium|high|xhigh|max (its own parse error); the session's
+  // reasoning_effort configOption narrows this static fallback per model.
+  { command: 'grok', freePlan: { listed: true }, provider: 'xai', displayName: 'Grok Build', tier: 'primary', transport: 'acp', acp: { argv: ['agent', 'stdio'], inheritCliOptions: false, effortConfigId: 'reasoning_effort', sharedSessions: true }, integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, effortValues: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'grok', npmPackage: '@xai-official/grok', authFiles: [{ path: '~/.grok/auth.json' }], authEnv: ['XAI_API_KEY'], loginArgv: ['login'], logoutArgv: ['logout'], modelArgvPrefix: ['--model'], modelDiscoveryArgv: ['models'], workspaceArgvPrefix: ['--cwd'], effortArgvPrefix: ['--reasoning-effort'], permissionModes: ['ask', 'bypass', 'auto'], permissionArgv: { ask: { argv: ['--permission-mode', 'default'] }, bypass: { argv: ['--permission-mode', 'bypassPermissions'] }, auto: { argv: ['--permission-mode', 'auto'] } }, turn: { startArgv: ['--output-format', 'streaming-messages-json', '--include-partial-messages'], createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'], promptArgvPrefix: ['-p'], output: 'json-lines', responseFields: ['result'] }, session: { idKind: 'uuid', createIdPrefix: ['--session-id'], resumeIdPrefix: ['--resume'] } },
   // Restored and re-checked against gemini 0.60.0 on a real install, not the
   // entry this replaces. What changed: --acp is the flag now (the old
   // --experimental-acp is deprecated), -r/--resume takes "latest" or an index
@@ -1101,7 +1107,9 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // exists too but is left unwired: the flag is documented, the shape its
   // output takes is not, and a parser declared against an unverified shape
   // fails at the one moment it matters.
-  { command: 'cn', provider: 'continue', displayName: 'Continue', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cn', npmPackage: '@continuedev/cli', loginArgv: [], authFiles: [{ path: '${CONTINUE_GLOBAL_DIR:-~/.continue}/config.yaml', contains: 'apiKey:' }], authEnv: ['ANTHROPIC_API_KEY'], modelArgvPrefix: ['--model'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--readonly'] }, bypass: { argv: ['--auto'] } }, turn: { startArgv: [], promptArgvPrefix: ['-p'], output: 'text' } },
+  // cn 1.5.47 has no model selector: `--model <slug>` ADDS a hub model (owner/package), so a
+  // plain model id is not passed; the model comes from the assistant's config.yaml / --config.
+  { command: 'cn', provider: 'continue', displayName: 'Continue', tier: 'more', transport: 'text-cli', integration: 'compatibility', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'cn', npmPackage: '@continuedev/cli', loginArgv: [], authFiles: [{ path: '${CONTINUE_GLOBAL_DIR:-~/.continue}/config.yaml', contains: 'apiKey:' }], authEnv: ['ANTHROPIC_API_KEY'], permissionModes: ['ask', 'bypass'], permissionArgv: { ask: { argv: ['--readonly'] }, bypass: { argv: ['--auto'] } }, turn: { startArgv: [], promptArgvPrefix: ['-p'], output: 'text' } },
   // ACP entrypoints checked against each vendor's own source. Devin CLI and
   // MiniMax Code also have session stores and native-thread writers, and
   // their failover carry was verified live on 2026-10-05: Devin with signed-in
@@ -1112,7 +1120,10 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'dcode', provider: 'deepagents-code', displayName: 'Deep Agents Code', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp'], optionPlacement: 'after' }, localAuth: ['api-key', 'vendor-cli'], binary: 'dcode', installer: HARNESS_INSTALLERS.dcode, loginArgv: [], loginKeyCommand: { providersArgv: ['auth', 'list'], setArgv: ['auth', 'set', '{provider}'] },
     // Its provider names (`dcode auth list`), for the key's provider.
     loginKeyRoutes: providerKeyRoutes([], { anthropic: 'anthropic', openai: 'openai', google: 'google_genai' }), authEnv: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'GOOGLE_API_KEY'], modelArgvPrefix: ['--model'] },
-  { command: 'devin', freePlan: { listed: true }, loginAccountChoose: ['Log in with browser'], provider: 'devin', displayName: 'Devin CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'], optionPlacement: 'after' }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'devin', installer: HARNESS_INSTALLERS.devin, loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], authEnv: ['WINDSURF_API_KEY'], modelArgvPrefix: ['--model'] },
+  // devin 3000.11.3 session/new: starts in `accept-edits` (workspace edits auto-approved) and offers
+  // modes accept-edits|smart|ask|plan|bypass (configOptions id `mode`, category `mode`). `ask` is its
+  // read-only Q&A mode, the strict end of ClikCode's ask.
+  { command: 'devin', freePlan: { listed: true }, loginAccountChoose: ['Log in with browser'], provider: 'devin', displayName: 'Devin CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'], optionPlacement: 'after', permissionModeIds: { ask: 'ask', auto: 'smart', bypass: 'bypass' }, planModeId: 'plan' }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'devin', installer: HARNESS_INSTALLERS.devin, loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], authEnv: ['WINDSURF_API_KEY'], modelArgvPrefix: ['--model'] },
   { command: 'junie', provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'] }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
   // Sign-in evidence: the OAuth record `mcode login` writes under
   // ~/.minimax/auth/prod/<region>/<client>/auth.json (vendor-identity.ts
@@ -1388,7 +1399,9 @@ export const AI_LOCAL_HARNESS_CAPABILITIES: Readonly<Record<string, AiHarnessCap
       value('append-system-prompt', 'Additional instructions', 'Append text to Droid’s system prompt', 'context', ['--append-system-prompt']),
       value('append-system-prompt-file', 'Instruction file', 'Append a file to Droid’s system prompt', 'context', ['--append-system-prompt-file'], 'path'),
       flag('spec-mode', 'Specification mode', 'Plan in read-only specification mode before execution', 'mode', ['--use-spec']),
-      flag('disable-builtin-skills', 'Disable built-in skills', 'Hide Factory-provided skills while retaining other skill sources', 'tools', ['--disable-builtin-skills']),
+      // `--disable-builtin-skills` is deliberately absent: droid 0.223.0 refuses it in ACP
+      // modes ("Invalid flags: --disable-builtin-skills is not supported in ACP modes"),
+      // which is how every droid turn runs, so the child died at launch.
       flag('worktree', 'Managed worktree', 'Run in an isolated Droid worktree', 'session', ['--worktree'], { requiresNewSession: true }),
       flag('mission', 'Mission mode', 'Run multi-agent mission orchestration', 'mode', ['--mission']),
     ],

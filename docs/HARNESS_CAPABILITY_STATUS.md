@@ -5,10 +5,10 @@ Checked against the ClikCode catalog on 2026-10-06. A listed control is a ClikCo
 | Harness | Model source | Effort | Permissions | Free-plan models | Account usage |
 | --- | --- | --- | --- | --- | --- |
 | Claude Code | Installed vendor model table | Yes | Ask, bypass, auto | - | Direct probe, and its turn stream |
-| Grok Build | Vendor CLI | Yes | Ask, bypass, auto | Plan's own list | Direct probe (ACP extension call) |
+| Grok Build | Vendor CLI | Yes (minimal to max) | Ask, bypass, auto | Plan's own list | Direct probe (ACP extension call) |
 | Gemini CLI | ACP when available | No declared control | Ask, bypass, auto | - | Learned after refusals |
 | Codex | Vendor model cache | Yes, per model | Ask, bypass, auto | Plan's own list | Direct probe |
-| OpenCode | Vendor CLI | Yes | Ask, bypass | Zero-price models in its list | Learned after refusals |
+| OpenCode | Vendor CLI | Yes | Ask, bypass; plan mode | Zero-price models in its list | Learned after refusals |
 | Copilot | Its own server, for this account (`models.list`); public models.dev catalog only when that fails | Yes, over ACP (levels from `copilot --help`) | Ask, bypass | Plan's own list | Direct probe (`account.getQuota`) |
 | Aider | Configured providers and their caches | No declared control | Ask, bypass | `:free` models | Learned after refusals |
 | Goose | Configured providers and ACP | Yes, over ACP (levels from its `thinking_effort` option) | Ask, bypass, auto | `:free` models | Learned after refusals |
@@ -19,7 +19,7 @@ Checked against the ClikCode catalog on 2026-10-06. A listed control is a ClikCo
 | Kiro | ACP when available | Yes | Ask, bypass | Plan's own list | Direct probe (its `/usage` over ACP) |
 | Qwen Code | ACP when available | No declared control | Ask, bypass, auto | - | Learned after refusals |
 | Cline | ACP when available | Yes | Ask, bypass | `:free` models | Credit balance, advisory (`:free` models still run when it is spent) |
-| Kilo | Vendor CLI | Yes | Ask, auto | `:free` models, and the ones its list marks free | Credit balance (`kilo profile`) |
+| Kilo | Vendor CLI | Yes | Ask, auto; plan mode | `:free` models, and the ones its list marks free | Credit balance (`kilo profile`) |
 | Cursor Agent | ACP when available | No declared control | Ask, bypass, auto | Auto (the models it does not count as named) | Direct probe |
 | Hermes | Provider inventory and cache | Yes | Ask, bypass | `:free` models | Direct probe (Nous Portal credits) |
 | OpenClaw | Vendor configuration and provider inventory | Yes | No declared modes | - | Learned after refusals |
@@ -28,9 +28,9 @@ Checked against the ClikCode catalog on 2026-10-06. A listed control is a ClikCo
 | Auggie | Vendor CLI | Yes | No declared modes | - | Credit balance (`auggie account status`) |
 | Mistral Vibe | ACP when available | No declared control | Ask, bypass, auto | - | Direct probe (a key whose plan allows no requests reads spent) |
 | OpenHands | ACP when available | No declared control | Bypass, auto | - | Learned after refusals |
-| Continue | Configured or saved account models | No declared control | Ask, bypass | - | Learned after refusals |
+| Continue | Saved account models (no `--model`: `cn --model` adds a hub model) | No declared control | Ask, bypass | - | Learned after refusals |
 | Deep Agents Code | ACP when available | No declared control | No declared modes | - | Learned after refusals |
-| Devin CLI | ACP when available | No declared control | No declared modes | Plan's own list | Direct probe (daily and weekly) |
+| Devin CLI | ACP when available | No declared control | Ask, auto (Smart), bypass; plan mode | Plan's own list | Direct probe (daily and weekly) |
 | Junie CLI | ACP when available | Yes | No declared modes | - | Learned after refusals |
 | MiniMax Code | ACP when available | No declared control | No declared modes | - | Learned after refusals |
 

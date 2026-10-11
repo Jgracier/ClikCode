@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { harnessSupportsPermissionMode, allLocalHarnesses, harnessAcpLaunch, harnessSupportsEffort, harnessSupportsImages, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
+import { HOME_REDIRECT_ENV_DEFAULTS, harnessSupportsPermissionMode, allLocalHarnesses, harnessAcpLaunch, harnessSupportsEffort, harnessSupportsImages, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
 
 /**
  * A declared capability must be a usable one.
@@ -129,5 +129,20 @@ describe('every declared capability is usable', () => {
     for (const h of harnesses) {
       expect(Boolean(h.turn || h.acp), `${h.command} cannot run a turn at all`).toBe(true);
     }
+  });
+  it('matches what the installed vendor binaries were verified to accept', () => {
+    const byCommand = new Map(harnesses.map((h) => [h.command, h]));
+    // droid refuses --disable-builtin-skills in every ACP mode (0.223.0).
+    expect(JSON.stringify(localHarnessCapabilityManifest(byCommand.get('droid')!).options)).not.toContain('disable-builtin-skills');
+    // cn --model ADDS a hub model (owner/package); it is no model selector (1.5.47).
+    expect(byCommand.get('cn')?.modelArgvPrefix).toBeUndefined();
+    // junie's launcher finds its builds through JUNIE_DATA, empty under a private HOME.
+    expect(HOME_REDIRECT_ENV_DEFAULTS.JUNIE_DATA).toBe('~/.local/share/junie');
+    // devin session/new offers accept-edits|smart|ask|plan|bypass and starts in accept-edits.
+    expect(byCommand.get('devin')?.acp?.permissionModeIds).toEqual({ ask: 'ask', auto: 'smart', bypass: 'bypass' });
+    expect(byCommand.get('devin')?.acp?.planModeId).toBe('plan');
+    for (const command of ['opencode', 'kilo']) expect(byCommand.get(command)?.acp?.planModeId, command).toBe('plan');
+    // grok 1.0.50 accepts none|minimal|low|medium|high|xhigh|max.
+    expect(byCommand.get('grok')?.effortValues).toContain('xhigh');
   });
 });
