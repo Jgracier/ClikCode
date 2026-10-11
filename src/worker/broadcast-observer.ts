@@ -16,12 +16,17 @@ import { randomUUID } from 'node:crypto';
 import type { Socket } from 'node:net';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import type { HarnessSession } from '../session/model.js';
+import type { HarnessSession, OpenThought, TurnMark } from '../session/model.js';
+import { remapOffset } from '../turn/checkpoint.js';
+import { MarkSequencer, stepThought, settledThought, upsertMark, type TurnMarkJournal } from '../turn/turn-marks.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { LiveTurnInputResult } from '../turn/live-input.js';
 import type { SignInRequest, TurnObserver } from '../turn/observer.js';
-import { encodeFrame, isTranscriptActivity, type LiveActivity, type LiveTurn, type WorkerEvent } from './protocol.js';
+import { encodeFrame, isTranscriptActivity, type LiveActivity, type LiveThought, type LiveTurn, type WorkerEvent } from './protocol.js';
+
+/** Characters of the thought a joining window is sent: its newest words. */
+const LIVE_THOUGHT_CHARS = 1000;
 
 /** How far a window may fall behind before it is let go. A window that stops
  * reading -- a suspended terminal, a hung process -- would otherwise have
@@ -36,6 +41,10 @@ export function sendEvent(socket: Socket, event: WorkerEvent): void {
   if (socket.writableLength > MAX_UNREAD_BYTES) { socket.destroy(); return; }
   socket.write(encodeFrame(event));
 }
+
+/** Where a request was asked, and what it was about: its settled row goes
+ * there when the user decides. */
+type Place = { seq: number; responseOffset: number; label: string };
 
 export class BroadcastObserver implements TurnObserver {
   private readonly clients = new Set<Socket>();
@@ -56,14 +65,27 @@ export class BroadcastObserver implements TurnObserver {
    * draws those too, not only its text. */
   private liveActivities: LiveActivity[] = [];
   private livePlan: readonly PlanEntry[] = [];
+  /** The rest of what an attached window has drawn, so a joining one draws it
+   * too: the turn's settled thoughts, plan, notices and approval outcomes
+   * (the same marks the journal keeps), the thought being had, the turn's
+   * phase and usage so far. */
+  private liveMarks: TurnMark[] = [];
+  private liveThought: OpenThought | undefined;
+  private livePhase: string | undefined;
+  private liveUsage: TurnUsage | undefined;
+  /** The turn's one counter: rows are numbered once, when first seen
+   * (turn/turn-marks.ts). The journal's own once it is bound, so a row has
+   * the same number on the screen and in the saved turn. */
+  private sequencer = new MarkSequencer();
+  private journal: TurnMarkJournal | undefined;
   /** The turn and the session spool can both report one clerk event. */
   private readonly seenActivity = new Map<string, string>();
   /** Each open request is kept WITH the event that asked it, so a client
    * attaching later is asked too (reofferPending). They used to go only to
    * whoever was attached at that moment: a turn waiting on an approval with
    * nobody watching waited forever, and reattaching showed nothing to answer. */
-  private readonly pendingApprovals = new Map<string, { resolve: (approved: boolean | 'always') => void; event: WorkerEvent }>();
-  private readonly pendingQuestions = new Map<string, { resolve: (result: HarnessQuestionResult) => void; event: WorkerEvent }>();
+  private readonly pendingApprovals = new Map<string, { resolve: (approved: boolean | 'always') => void; event: WorkerEvent; place?: Place }>();
+  private readonly pendingQuestions = new Map<string, { resolve: (result: HarnessQuestionResult) => void; event: WorkerEvent; place?: Place }>();
   private readonly pendingSignIns = new Map<string, { resolve: () => void; reject: (error: Error) => void; event: WorkerEvent }>();
 
   /** Told when the oldest approval still waiting changes (undefined: none
@@ -117,6 +139,10 @@ export class BroadcastObserver implements TurnObserver {
     return {
       text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}),
       activities: [...this.liveActivities], plan: [...this.livePlan],
+      ...(this.liveMarks.length ? { marks: [...this.liveMarks] } : {}),
+      ...(this.liveThought ? { thought: liveThought(this.liveThought) } : {}),
+      ...(this.livePhase ? { phase: this.livePhase } : {}),
+      ...(this.liveUsage ? { usage: this.liveUsage } : {}),
     };
   }
 
@@ -128,7 +154,9 @@ export class BroadcastObserver implements TurnObserver {
     sendEvent(socket, { type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
   }
 
-  resolveApproval(id: string, approved: boolean | 'always'): void {
+  /** `decided`: the user chose (a window's answer), as against the vendor
+   * withdrawing it. Only a decision leaves a settled row behind. */
+  resolveApproval(id: string, approved: boolean | 'always', decided = true): void {
     const pending = this.pendingApprovals.get(id);
     if (!pending) return;
     this.pendingApprovals.delete(id);
@@ -136,11 +164,12 @@ export class BroadcastObserver implements TurnObserver {
     this.userWaitChanged();
     pending.resolve(approved);
     this.announceAwaiting();
+    const outcome = decided && pending.place ? this.recordOutcome(pending.place, approved === false ? 'denied' : 'approved', id) : undefined;
     // Answered in one window: the others close their copy.
-    this.broadcast({ type: 'request-closed', id });
+    this.broadcast({ type: 'request-closed', id, ...(outcome ?? {}) });
   }
 
-  resolveQuestion(id: string, result: HarnessQuestionResult): void {
+  resolveQuestion(id: string, result: HarnessQuestionResult, decided = true): void {
     const pending = this.pendingQuestions.get(id);
     if (!pending) return;
     this.pendingQuestions.delete(id);
@@ -148,8 +177,54 @@ export class BroadcastObserver implements TurnObserver {
     this.userWaitChanged();
     pending.resolve(result);
     this.announceAwaiting();
+    const outcome = decided && pending.place ? this.recordOutcome(pending.place, result.kind === 'answered' ? 'answered' : 'denied', id) : undefined;
     // The others see it answered: their prompt closes.
-    this.broadcast({ type: 'request-closed', id });
+    this.broadcast({ type: 'request-closed', id, ...(outcome ?? {}) });
+  }
+
+  /** The settled row of a decided request, kept at the place it was asked. */
+  private recordOutcome(place: Place, outcome: 'approved' | 'denied' | 'answered', id: string): { outcome: 'approved' | 'denied' | 'answered'; label: string } {
+    this.putMark({ kind: 'outcome', id: `outcome:${id}`, seq: place.seq, responseOffset: place.responseOffset, outcome, label: place.label });
+    return { outcome, label: place.label };
+  }
+
+  /** Where a request being asked now sits in the turn. */
+  private placeOf(label: string): Place | undefined {
+    return this.waitingLabel ? { seq: this.sequencer.take(), responseOffset: this.liveText.length, label } : undefined;
+  }
+
+  /** A mark of the turn: kept for a window joining, and handed to the
+   * journal. The copy kept is the merged one (a plan updates in place). */
+  private putMark(mark: TurnMark): void {
+    if (!this.waitingLabel) return;
+    this.liveMarks = upsertMark(this.liveMarks, mark);
+    const kept = this.liveMarks.find((item) => item.id === mark.id);
+    if (kept) this.journal?.recordMark(kept);
+  }
+
+  /** The turn's journal exists: from here its counter numbers rows and every
+   * mark goes to it. What the observer made before that is handed over. */
+  bindJournal(journal: TurnMarkJournal | undefined): void {
+    this.journal = journal;
+    if (!journal) return;
+    journal.sequencer.raiseTo(this.sequencer.peek());
+    this.sequencer = journal.sequencer;
+    for (const mark of this.liveMarks) journal.recordMark(mark);
+    if (this.liveThought) journal.setThought(this.liveThought);
+  }
+
+  /** Where the steer `id` was placed, when the turn has taken it. */
+  steerOrder(id: string): { seq: number; responseOffset: number } | undefined {
+    return this.journal?.steerOrder(id);
+  }
+
+  /** The thought being had settles where it began (`Thought for Ns`). */
+  private settleLiveThought(): void {
+    const open = this.liveThought;
+    if (!open) return;
+    this.liveThought = undefined;
+    this.journal?.setThought(undefined);
+    this.putMark(settledThought(open, Date.now()));
   }
 
   /** A turn's end, whatever it was: nobody is left to answer what it asked. */
@@ -180,16 +255,36 @@ export class BroadcastObserver implements TurnObserver {
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {
     if (text) this.outputStarted = true;
+    if (mode === 'replace') {
+      // Every row that began in the replaced text moves with it, by the rule
+      // the journal uses (checkpoint.ts remapOffset): a window joining now
+      // must place them where a reopened chat will (standard 1.6).
+      const before = this.liveText;
+      if (before !== text) {
+        const at = (offset: number): number => remapOffset(before, text, offset);
+        this.liveActivities = this.liveActivities.map((row) => ({ ...row, responseOffset: at(row.responseOffset) }));
+        this.liveMarks = this.liveMarks.map((mark) => ({ ...mark, responseOffset: at(mark.responseOffset) }));
+        if (this.liveThought) this.liveThought = { ...this.liveThought, responseOffset: at(this.liveThought.responseOffset) };
+      }
+    } else if (text.trim()) {
+      // The answer began (or went on): the thought before it is over.
+      this.settleLiveThought();
+    }
     this.liveText = mode === 'replace' ? text : this.liveText + text;
     this.broadcast({ type: 'delta', text, mode });
   }
 
   activity(message: string): void {
     this.outputStarted = true;
-    this.broadcast({ type: 'note', message });
+    const place = this.waitingLabel ? { seq: this.sequencer.take(), responseOffset: this.liveText.length } : undefined;
+    if (place) this.putMark({ kind: 'notice', id: `notice:${place.seq}`, ...place, message });
+    this.broadcast({ type: 'note', message, ...(place ?? {}) });
   }
 
-  activityEvent(event: HarnessActivityEvent): void {
+  activityEvent(raw: HarnessActivityEvent): void {
+    // Numbered once, here or already in the journal: the same object, so
+    // whichever saw it first gave the number.
+    const event = this.sequencer.stamp(raw);
     if (event.id) {
       const key = `${event.id}\0${event.kind}\0${event.parentId ?? ''}\0${event.label}`;
       const value = JSON.stringify(event);
@@ -197,30 +292,64 @@ export class BroadcastObserver implements TurnObserver {
       this.seenActivity.set(key, value);
     }
     this.outputStarted = true;
+    if (this.waitingLabel && !event.parentId) this.foldThought(event);
     if (this.waitingLabel && isTranscriptActivity(event)) this.liveActivities.push({ event, responseOffset: this.liveText.length });
     this.broadcast({ type: 'activity', event });
   }
 
+  /** The turn's own thinking, as a row (standard 4): accumulates by the rule
+   * every surface uses, settles when a call starts, the answer begins or a
+   * new reasoning item takes over. A sub-agent's thinking is its own. */
+  private foldThought(event: HarnessActivityEvent): void {
+    if (event.kind === 'tool-start') { this.settleLiveThought(); return; }
+    if (event.kind !== 'thinking') return;
+    const step = stepThought(this.liveThought, this.liveMarks, { label: event.label, ...(event.id ? { id: event.id } : {}), seq: event.seq ?? this.sequencer.seqFor(event) },
+      { offset: this.liveText.length, now: Date.now() });
+    if (step.unchanged) return;
+    if (step.mark) this.putMark(step.mark);
+    if (step.thought !== this.liveThought) {
+      this.liveThought = step.thought;
+      this.journal?.setThought(step.thought);
+    }
+  }
+
   phase(message: string): void {
+    if (this.waitingLabel) this.livePhase = message;
     this.broadcast({ type: 'phase', message });
   }
 
+  /** The turn's plan: one row, drawn where it first appeared, updated in
+   * place and kept after every step is done (standard 7). */
   setPlan(entries: readonly PlanEntry[]): void {
-    if (this.waitingLabel) this.livePlan = entries;
-    this.broadcast({ type: 'plan', entries });
+    let place: { seq: number; responseOffset: number } | undefined;
+    if (this.waitingLabel) {
+      this.livePlan = entries;
+      const kept = this.liveMarks.find((mark) => mark.id === 'plan');
+      if (entries.length || kept) {
+        place = kept ?? { seq: this.sequencer.take(), responseOffset: this.liveText.length };
+        this.putMark({ kind: 'plan', id: 'plan', seq: place.seq, responseOffset: place.responseOffset, entries: entries.map((entry) => ({ ...entry })) });
+      }
+    }
+    this.broadcast({ type: 'plan', entries, ...(place ? { seq: place.seq, responseOffset: place.responseOffset } : {}) });
   }
 
   setTurnUsage(usage: TurnUsage): void {
+    if (this.waitingLabel) this.liveUsage = { ...this.liveUsage, ...usage };
     this.broadcast({ type: 'usage', usage });
   }
 
   approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal): Promise<boolean | 'always'> {
     const id = randomUUID();
     if (signal?.aborted) return Promise.resolve(false);
-    signal?.addEventListener('abort', () => { if (this.pendingApprovals.has(id)) { this.resolveApproval(id, false); } }, { once: true });
-    const event: WorkerEvent = { type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}) };
+    // Withdrawn by the vendor, not decided by the user: no outcome row.
+    signal?.addEventListener('abort', () => { if (this.pendingApprovals.has(id)) { this.resolveApproval(id, false, false); } }, { once: true });
+    const place = this.placeOf(title);
+    const event: WorkerEvent = {
+      type: 'approval-request', id, title, ...(detail ? { detail } : {}), ...(preview ? { preview } : {}), ...(rule ? { rule } : {}),
+      ...(place ? { seq: place.seq, responseOffset: place.responseOffset } : {}),
+    };
     return new Promise((resolveApproval) => {
-      this.pendingApprovals.set(id, { resolve: resolveApproval, event });
+      this.pendingApprovals.set(id, { resolve: resolveApproval, event, ...(place ? { place } : {}) });
       this.awaitingSince.set(id, new Date().toISOString());
       this.userWaitChanged();
       // Recorded before anyone is asked: once a window sees the question,
@@ -234,10 +363,11 @@ export class BroadcastObserver implements TurnObserver {
   askQuestions(request: HarnessQuestionRequest, signal?: AbortSignal): Promise<HarnessQuestionResult> {
     const id = randomUUID();
     if (signal?.aborted) return Promise.resolve({ kind: 'cancelled' });
-    const event: WorkerEvent = { type: 'question-request', id, request };
-    signal?.addEventListener('abort', () => { if (this.pendingQuestions.has(id)) this.resolveQuestion(id, { kind: 'cancelled' }); }, { once: true });
+    const place = this.placeOf(request.title);
+    const event: WorkerEvent = { type: 'question-request', id, request, ...(place ? { seq: place.seq, responseOffset: place.responseOffset } : {}) };
+    signal?.addEventListener('abort', () => { if (this.pendingQuestions.has(id)) this.resolveQuestion(id, { kind: 'cancelled' }, false); }, { once: true });
     return new Promise((resolveQuestion) => {
-      this.pendingQuestions.set(id, { resolve: resolveQuestion, event });
+      this.pendingQuestions.set(id, { resolve: resolveQuestion, event, ...(place ? { place } : {}) });
       this.awaitingSince.set(id, new Date().toISOString());
       this.userWaitChanged();
       const recorded = this.announceAwaiting();
@@ -275,12 +405,24 @@ export class BroadcastObserver implements TurnObserver {
     this.livePrompt = prompt;
     this.liveActivities = [];
     this.livePlan = [];
+    this.resetLiveMarks();
     this.outputStarted = false;
     this.broadcast({ type: 'waiting-start', message, ...(prompt !== undefined ? { prompt } : {}) });
   }
 
   stopWaiting(): void {
     this.endWaiting(false);
+  }
+
+  /** A new turn's rows are numbered from its own counter; the last one's
+   * journal is no longer this turn's. */
+  private resetLiveMarks(): void {
+    this.liveMarks = [];
+    this.liveThought = undefined;
+    this.livePhase = undefined;
+    this.liveUsage = undefined;
+    this.journal = undefined;
+    this.sequencer = new MarkSequencer();
   }
 
   /** `stopped`: the turn was stopped, not finished -- whichever window
@@ -290,6 +432,7 @@ export class BroadcastObserver implements TurnObserver {
     this.livePrompt = undefined;
     this.liveActivities = [];
     this.livePlan = [];
+    this.resetLiveMarks();
     this.dropPending();
     this.broadcast({ type: 'waiting-stop', ...(stopped ? { stopped: true as const } : {}) });
   }
@@ -343,3 +486,10 @@ export class BroadcastObserver implements TurnObserver {
     else pending.resolve();
   }
 }
+
+const liveThought = (open: OpenThought): LiveThought => ({
+  ...(open.id === undefined ? {} : { id: open.id }),
+  text: open.text.length > LIVE_THOUGHT_CHARS ? `…${open.text.slice(-(LIVE_THOUGHT_CHARS - 1))}` : open.text,
+  ...(open.heading ? { heading: open.heading } : {}),
+  seq: open.seq, responseOffset: open.responseOffset, startedAt: open.startedAtMs,
+});

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandOutputPreview, diffPreview, DIFF_PREVIEW_LINES, outputPreview } from '../harness/protocol/activity-view.js';
 import type { TurnActivity } from '../session/model.js';
-import { boundTurnActivities, MAX_OUTPUT_LINES, MAX_TURN_ACTIVITY_BYTES, readTurnActivities, recordTurnActivity, runningTurnActivity, textTranscript } from './turn-activities.js';
+import { activitiesBetween, boundTurnActivities, MAX_CHILDREN_PER_PARENT, MAX_OUTPUT_LINES, MAX_TURN_ACTIVITY_BYTES, readTurnActivities, recordTurnActivity, runningTurnActivity, textTranscript } from './turn-activities.js';
 
 const lines = (count: number, prefix = 'line'): string[] => Array.from({ length: count }, (_, index) => `${prefix} ${index + 1}`);
 
@@ -93,5 +93,73 @@ describe('a turn\'s calls, as kept', () => {
       { role: 'assistant', content: 'Tool calls: $ make; $ make test (failed).' },
       { role: 'assistant', content: 'Done.' },
     ]);
+  });
+});
+
+describe('a sub-agent in the journal (standards 1, 2, 5)', () => {
+  it("counts the sub-agent's unique child calls, however many frames each arrived in", () => {
+    let calls: TurnActivity[] = [];
+    calls = recordTurnActivity(calls, { kind: 'tool-start', label: 'Task(look)', id: 'agent', agent: true }, 0);
+    for (const id of ['c1', 'c1', 'c1', 'c2', 'c2', 'c2']) {
+      calls = recordTurnActivity(calls, { kind: 'tool-start', label: `Read(${id})`, id, parentId: 'agent' }, 0);
+    }
+    expect(calls[0]!.event.childTools).toBe(2);
+    // Saved: the number only.
+    expect(JSON.parse(JSON.stringify(calls[0]))).toEqual({ responseOffset: 0, event: { kind: 'tool-start', label: 'Task(look)', id: 'agent', agent: true, childTools: 2 } });
+  });
+
+  it("does not let a long sub-agent's children evict its parent or the turn's own rows", () => {
+    let calls: TurnActivity[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      calls = recordTurnActivity(calls, { kind: 'tool-done', label: `$ main ${index}`, id: `m${index}`, category: 'run', output: lines(30) }, index);
+    }
+    calls = recordTurnActivity(calls, { kind: 'tool-start', label: 'Task(big)', id: 'agent', agent: true }, 9);
+    for (let index = 0; index < 2000; index += 1) {
+      calls = recordTurnActivity(calls, { kind: 'tool-start', label: `Read(f${index})`, id: `c${index}`, parentId: 'agent' }, 9);
+      calls = recordTurnActivity(calls, { kind: 'tool-done', label: `Read(f${index})`, id: `c${index}`, parentId: 'agent', output: lines(60, `body ${index}`) }, 9);
+    }
+    const parents = calls.filter((call) => !call.event.parentId).map((call) => call.event.label);
+    expect(parents).toEqual(['$ main 0', '$ main 1', '$ main 2', '$ main 3', '$ main 4', 'Task(big)']);
+    const children = calls.filter((call) => call.event.parentId === 'agent');
+    expect(children.length).toBe(MAX_CHILDREN_PER_PARENT);
+    // The newest are the ones kept, and the count still says how many there were.
+    expect(children.at(-1)!.event.id).toBe('c1999');
+    expect(calls.find((call) => call.event.id === 'agent')!.event.childTools).toBe(2000);
+    expect(JSON.stringify(calls).length).toBeLessThanOrEqual(MAX_TURN_ACTIVITY_BYTES);
+  });
+
+  it('past the size bound drops a sub-agent\'s children before any row of the turn', () => {
+    const rows: TurnActivity[] = [
+      ...Array.from({ length: 6 }, (_, index): TurnActivity => ({ event: { kind: 'tool-done', label: `$ ${'m'.repeat(200)} ${index}`, id: `m${index}` }, responseOffset: index })),
+      { event: { kind: 'tool-start', label: 'Task(x)', id: 'a', agent: true, childTools: 30 }, responseOffset: 6 },
+      ...Array.from({ length: 30 }, (_, index): TurnActivity => ({ event: { kind: 'tool-done', label: `Read ${'c'.repeat(200)} ${index}`, id: `c${index}`, parentId: 'a' }, responseOffset: 6 })),
+    ];
+    const kept = boundTurnActivities(rows, 2600);
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(2600);
+    expect(kept.filter((call) => !call.event.parentId)).toHaveLength(7);
+  });
+
+  it('keeps the first sequence a row was given when its later frames merge', () => {
+    let calls: TurnActivity[] = [];
+    calls = recordTurnActivity(calls, { kind: 'tool-start', label: '$ x', id: 'a', seq: 4 }, 0);
+    calls = recordTurnActivity(calls, { kind: 'tool-done', label: '$ x', id: 'a', seq: 9 }, 0);
+    expect(calls[0]!.event.seq).toBe(4);
+  });
+});
+
+describe('a steer splits a turn by (offset, seq) (standard 1.5)', () => {
+  const call = (id: string, responseOffset: number, seq?: number): TurnActivity => ({ event: { kind: 'tool-done', label: id, id, ...(seq === undefined ? {} : { seq }) }, responseOffset });
+
+  it('puts a row the steer caused after it, at the same offset', () => {
+    const rows = [call('before', 10, 1), call('caused', 10, 3)];
+    const steer = { responseOffset: 10, seq: 2 };
+    expect(activitiesBetween(rows, 0, 10, 10, true, undefined, steer.seq).map((row) => row.event.id)).toEqual(['before']);
+    expect(activitiesBetween(rows, 10, undefined, 5, false, steer.seq).map((row) => row.event.id)).toEqual(['caused']);
+  });
+
+  it('keeps the order saved turns were always drawn in: rows at a steer\'s offset go before it', () => {
+    const rows = [call('a', 10), call('b', 10)];
+    expect(activitiesBetween(rows, 0, 10, 10, true).map((row) => row.event.id)).toEqual(['a', 'b']);
+    expect(activitiesBetween(rows, 10, undefined, 5, false)).toEqual([]);
   });
 });

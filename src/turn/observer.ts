@@ -14,6 +14,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from './live-input.js';
+import type { TurnMarkJournal } from './turn-marks.js';
 
 export interface TurnObserver {
   render(session: HarnessSession, account?: string, notice?: string): void;
@@ -44,6 +45,11 @@ export interface TurnObserver {
     onSendWaiting?: () => void,
   ): void;
   stopWaiting(refresh?: boolean): void;
+  /** The turn's journal exists now: send it the turn's thoughts, plan,
+   * notices and approval outcomes, and number rows from its counter, so what
+   * is shown and what is saved agree (turn-marks.ts). Optional: a surface
+   * that keeps no copy of its own has nothing to hand over. */
+  bindJournal?(journal: TurnMarkJournal | undefined): void;
   /** Runs a vendor sign-in somewhere with a terminal. A worker has none, so
    * it asks its client; absent, the turn signs in where it runs. */
   signIn?(request: SignInRequest): Promise<void>;

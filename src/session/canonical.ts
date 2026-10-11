@@ -24,6 +24,7 @@ import type { HarnessActivityEvent, ToolCategory } from '../harness/prompter.js'
 import type { HarnessPlanEntry } from '../harness/events/turn-observer.js';
 import type { HarnessSession, TranscriptMessage } from './model.js';
 import { messageOrigin, sessionTranscriptMessages, touchedFilesFromActivity, type PendingTurnWithHints } from '../turn/checkpoint.js';
+import { orderMarks } from '../harness/protocol/activity-view.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
 import { providerBoundaryNote } from '../turn/failover-prompt.js';
 import { conversationIdFor } from './conversation-rows.js';
@@ -186,7 +187,7 @@ function assistantParts(message: TranscriptMessage): CanonicalPart[] {
     if (slice.trim()) parts.push({ type: 'text', text: slice });
     at = Math.max(at, end);
   };
-  for (const activity of [...activities].sort((left, right) => left.responseOffset - right.responseOffset)) {
+  for (const activity of orderMarks(activities, (item) => ({ responseOffset: item.responseOffset, ...(item.event.seq === undefined ? {} : { seq: item.event.seq }) }))) {
     text(Math.min(message.content.length, Math.max(0, activity.responseOffset)));
     parts.push({ type: 'tool', call: canonicalCall(activity.event) });
   }

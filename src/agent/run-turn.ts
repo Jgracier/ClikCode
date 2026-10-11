@@ -544,7 +544,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
             input.onPhase?.('generating response');
           },
           // The whole thought so far, under one id per step, so each delta
-          // replaces the last rather than adding a row.
+          // replaces the last rather than adding a row. This is the item's
+          // only emission: it settles where it began, when the answer starts.
           onReasoningDelta: (text) => {
             reasoning = `${reasoning}${text}`.slice(-4000);
             if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: thoughtLabel(reasoning), id: `${turnId}:reasoning:${steps}` });
@@ -615,7 +616,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         input.onResponseDelta?.(step.text.slice(streamedThisStep.length), 'append');
       }
       const stepText = step.text || streamedThisStep;
-      if (reasoning.trim()) input.onActivity?.({ kind: 'thinking', label: thoughtLabel(reasoning), id: `${turnId}:reasoning:${steps - 1}` });
+      // The step's reasoning was shown as it streamed, under one id, before the
+      // answer. It is not emitted again here: the same id after the text
+      // opened a second thought row below the answer (standard 1.4: a row
+      // does not move once placed).
 
       const cutOff = step.stopReason === 'length';
       const calls = (finalOnly ? [] : withUniqueIds(step.toolCalls)).map((call) => cutOff && call.argumentsError

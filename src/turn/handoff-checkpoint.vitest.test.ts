@@ -24,6 +24,7 @@ describe('reopening a vendor thread after an interrupted turn', () => {
         nativeSessionId: 'thread', workspace, model: 'opus', effort: 'medium', permissionMode: 'ask',
         createdAt: now, updatedAt: now, status: 'active',
         pendingTurn: { prompt: 'inspect', response: 'Partial finding', startedAt: now, updatedAt: now, outputStarted: true,
+          marks: [{ kind: 'thought', id: 'thought:r1', seq: 1, responseOffset: 0, durationMs: 2500, heading: 'Reading first' }],
           activities: [
             { responseOffset: 0, event: { kind: 'tool-start', label: 'Agent(inspect)', id: 'agent' } },
             { responseOffset: 0, event: { kind: 'tool-done', label: 'Read(a.ts)', id: 'child', parentId: 'agent', output: ['found clue'] } },
@@ -35,6 +36,8 @@ describe('reopening a vendor thread after an interrupted turn', () => {
       expect(session.pendingTurn).toBeUndefined();
       expect(session.messages?.at(-1)?.activities?.map((activity) => activity.event.label)).toEqual(['Agent(inspect)', 'Read(a.ts)']);
       expect(session.messages?.at(-1)?.activities?.[1]?.event.output).toEqual(['found clue']);
+      // The thought the journal kept goes with the answer it was had for.
+      expect(session.messages?.at(-1)?.marks).toMatchObject([{ kind: 'thought', heading: 'Reading first', durationMs: 2500 }]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
