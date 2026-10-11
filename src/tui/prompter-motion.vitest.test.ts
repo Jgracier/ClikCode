@@ -161,3 +161,81 @@ describe('an approval on a short terminal', () => {
     expect(screen).toContain('pondering');
   });
 });
+
+describe('answering an approval', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.assign(process.stdout, { isTTY: realTty });
+    process.stdout.write = realWrite;
+  });
+
+  type Window = TerminalHarnessPrompter & { key(k: string): void; screen(): string; status(): string };
+  /** A prompter on a 100x30 screen, with `onWaitingKey` and what has been written so far. */
+  function window(): Window {
+    const written: string[] = [];
+    Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 30 });
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      for (const arg of rest) if (typeof arg === 'function') (arg as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+    const rl = new TerminalHarnessPrompter() as unknown as Window;
+    rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
+    rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
+    const inner = rl as unknown as { onWaitingKey(k: string): void; turn: unknown; waitingLine(turn: unknown, width: number): string };
+    rl.key = (k) => inner.onWaitingKey(k);
+    rl.screen = () => strip(written.join(''));
+    rl.status = () => strip(inner.waitingLine(inner.turn, 100));
+    return rl;
+  }
+  const after = (ms: number): void => { vi.advanceTimersByTime(ms); };
+
+  it('leaves a settled row for each decision, in the words of what was decided', async () => {
+    const rl = window();
+    try {
+      rl.response('Cleaning up.');
+      const first = rl.approval('make clean', '$ make clean');
+      after(1000);
+      rl.key('n');
+      await expect(first).resolves.toBe(false);
+      after(100);
+      const second = rl.approval('make build', '$ make build');
+      after(1000);
+      rl.key('y');
+      await expect(second).resolves.toBe(true);
+      after(100);
+      expect(rl.screen()).toContain('✗ denied make clean');
+      expect(rl.screen()).toContain('✓ approved make build');
+    } finally { rl.close(); }
+  });
+
+  it('says what it was told when the answer is "tell it instead"', async () => {
+    const rl = window();
+    try {
+      rl.response('Releasing.');
+      const asked = rl.approval('make release', '$ make release');
+      after(1000);
+      rl.key('t');
+      for (const ch of 'use pnpm instead') rl.key(ch);
+      rl.key('\r');
+      await expect(asked).resolves.toBe(false);
+      after(100);
+      expect(rl.screen()).toContain('↳ told: use pnpm instead');
+    } finally { rl.close(); }
+  });
+
+  it('does not keep the vendor\'s "waiting for your approval" phase as the status after the answer', async () => {
+    const rl = window();
+    try {
+      rl.phase('waiting for your approval: make clean');
+      const asked = rl.approval('make clean', '$ make clean');
+      after(1000);
+      rl.key('y');
+      await asked;
+      after(100);
+      expect(rl.status()).not.toContain('waiting for');
+      expect(rl.status()).toMatch(/thinking|writing/);
+    } finally { rl.close(); }
+  });
+});

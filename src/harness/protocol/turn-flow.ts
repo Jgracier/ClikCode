@@ -117,6 +117,45 @@ export function answerWriting(state: { writingAt?: number; callAt?: number }): b
   return state.writingAt !== undefined && (state.callAt === undefined || state.writingAt > state.callAt);
 }
 
+/** What the user decided at an approval or a question. */
+export type Decision =
+  | { kind: 'approved'; label: string; always?: boolean }
+  | { kind: 'denied'; label: string }
+  /** Denied with "tell it instead": the words that were sent. */
+  | { kind: 'told'; text: string }
+  | { kind: 'answered'; label: string; values?: readonly string[] }
+  | { kind: 'declined'; label: string };
+
+const oneLine = (text: string, max: number): string => {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/** The settled row a decision leaves at its place in the turn: `✓ approved
+ * make clean`, `✗ denied make clean`, `↳ told: use pnpm instead`, `✓
+ * answered Which database?: MySQL` (standard section 8). `tone` is what the
+ * surface colours it by. Values of a question are only passed where they
+ * are safe to show (never a secret). */
+export function decisionRow(decision: Decision): { text: string; tone: 'ok' | 'no' | 'told' } {
+  switch (decision.kind) {
+    case 'approved': return { text: `✓ approved${decision.always ? ' (always)' : ''} ${oneLine(decision.label, 80)}`, tone: 'ok' };
+    case 'denied': return { text: `✗ denied ${oneLine(decision.label, 80)}`, tone: 'no' };
+    case 'told': return { text: `↳ told: ${oneLine(decision.text, 120)}`, tone: 'told' };
+    case 'answered': {
+      const values = decision.values?.length ? `: ${oneLine(decision.values.join(', '), 80)}` : '';
+      return { text: `✓ answered ${oneLine(decision.label, 60)}${values}`, tone: 'ok' };
+    }
+    case 'declined': return { text: `✗ declined ${oneLine(decision.label, 80)}`, tone: 'no' };
+  }
+}
+
+/** The adapters' own phase while an approval is up ("waiting for your
+ * approval: make clean"): true for it, so a surface does not restore it as
+ * the status once the approval is answered -- by then it is stale. */
+export function isApprovalWaitPhase(phase: string | undefined): boolean {
+  return Boolean(phase && /^waiting for (?:your |the )?(?:approval|answer|permission|input)\b/i.test(phase.trim()));
+}
+
 export type StatusTone = 'thinking' | 'tool' | 'asking';
 
 /** What the status line says and how it looks: waiting on the user, else the

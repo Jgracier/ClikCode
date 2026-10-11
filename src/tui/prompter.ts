@@ -37,7 +37,7 @@ import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/act
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { answerWriting, liveTokenTarget, reasoningBody, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { answerWriting, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
 import { waitStalled } from '../harness/protocol/turn-pace.js';
@@ -362,7 +362,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         if (key === '\r') {
           const text = turn.draft.trim();
           if (!text) return;
-          this.answerApproval(pending, false);
+          this.answerApproval(pending, false, { kind: 'told', text });
           // After the denial is on its way: the answer's own send is queued
           // behind this resolve, and the steer must not overtake it.
           setImmediate(() => this.submitWaiting(text, false));
@@ -603,9 +603,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** An approval answered: the next one waiting comes up, or the band goes
    * back to what the turn was doing. */
-  private answerApproval(pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always'): void {
+  private answerApproval(
+    pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always', settled?: Parameters<typeof decisionRow>[0],
+  ): void {
     lifecycle('window.approval.answer', { answer: answer === 'always' ? 'always' : answer ? 'allow' : 'deny' });
     this.pendingApproval = undefined;
+    // The decision stays on the page where it was made: the block is gone,
+    // and a call that was denied or approved leaves no other trace.
+    this.settleDecision(settled ?? (answer
+      ? { kind: 'approved', label: pending.title, ...(answer === 'always' ? { always: true } : {}) }
+      : { kind: 'denied', label: pending.title }));
     this.approvalsAnswered += 1;
     pending.resolve(answer);
     if (!this.presentNextApproval()) {
@@ -614,6 +621,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.resumeClock();
       this.updateWaiting();
     }
+  }
+
+  /** A decision's settled row, appended at the answer's current place in the
+   * turn like any note (and never merged with an identical earlier one: two
+   * denials of the same command are two decisions). */
+  private settleDecision(decision: Parameters<typeof decisionRow>[0]): void {
+    if (!this.turn) return;
+    const { text, tone } = decisionRow(decision);
+    const row = tone === 'ok' ? chalk.green(text.slice(0, 1)) + chalk.dim(text.slice(1))
+      : tone === 'no' ? chalk.red(text.slice(0, 1)) + chalk.dim(text.slice(1))
+      : chalk.cyan(text.slice(0, 1)) + chalk.dim(text.slice(1));
+    this.activityEntries = [...this.activityEntries, {
+      anchor: this.activityAnchor, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
+      // A settled thought's own shape: a row of the turn that is not a call
+      // (it is counted as none) and is retired in its place like any other.
+      event: { kind: 'thinking', label: text },
+      lines: [sanitizeTerminalText(row, { keepSgr: true, singleLine: true })],
+    }];
   }
 
   /** The draft set aside for "tell it instead", back in the composer. */
@@ -1573,7 +1598,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!turn || turn.cancelled || turn.label === message) return;
     // The band says "waiting for approval" while one is up; remember the phase
     // for when it is answered instead of replacing that.
-    if (this.pendingApproval) { this.approvalRestoreLabel = message; return; }
+    if (this.pendingApproval) { if (!isApprovalWaitPhase(message)) this.approvalRestoreLabel = message; return; }
     turn.label = message;
     this.reportedPhase = message;
     this.updateWaiting();
@@ -1583,7 +1608,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     lifecycle('window.approval.ask', { title: title.slice(0, 80) });
     if (signal?.aborted) return Promise.resolve(false);
     return new Promise<boolean | 'always'>((resolveApproval) => {
-      if (!this.pendingApproval) this.approvalRestoreLabel = this.turn?.label ?? '';
+      if (!this.pendingApproval) this.approvalRestoreLabel = isApprovalWaitPhase(this.turn?.label) ? '' : this.turn?.label ?? '';
       const request: ApprovalRequest = {
         title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }),
         ...(rule === undefined ? {} : { rule }), resolve: resolveApproval,
@@ -1598,7 +1623,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Closes a prompt nobody answered: on screen it is answered `no` (which
    * brings up the next); queued it is simply dropped. */
   private withdrawApproval(request: ApprovalRequest): void {
-    if (this.pendingApproval === request) { this.answerApproval(this.pendingApproval, false); return; }
+    if (this.pendingApproval === request) { this.answerApproval(this.pendingApproval, false, { kind: 'declined', label: request.title }); return; }
     const at = this.approvalQueue.indexOf(request);
     if (at < 0) return;
     this.approvalQueue.splice(at, 1);
@@ -1668,7 +1693,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const rows = questionRows(state.question);
     const finish = (values: string[] | undefined): void => {
       pending.question!.done(values);
-      this.answerApproval(pending, values !== undefined);
+      const { question } = state;
+      const label = question.header ?? question.prompt;
+      this.answerApproval(pending, values !== undefined, values === undefined ? { kind: 'declined', label }
+        : { kind: 'answered', label, ...(values.length && !question.secret ? { values } : {}) });
     };
     const typeIn = (): void => {
       state.typing = true;
