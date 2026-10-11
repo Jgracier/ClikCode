@@ -54,7 +54,7 @@ Ask and Bypass do nothing for these, and ClikCode does not offer the control: Am
 
 ### Left
 
-- Claude ACP also advertises `additionalDirectories`, `fork`, `list`, `delete` and `providers`. `/add-dir` on Claude currently refuses the turn (its ACP command takes no CLI options) instead of sending `additionalDirectories` with `session/new|load|resume`; that needs a field on the ACP turn input.
+- Claude ACP `additionalDirectories` is sent with `session/new|load|resume` for `/add-dir` (agents that advertise `sessionCapabilities.additionalDirectories`; others refuse the turn naming it). Not run live. `fork`, `list`, `delete` and `providers` are still unused.
 - Droid and Command Code efforts come from the session of the default model; the picker reads the vendor's list only for harnesses without an effort flag, so the per-model list is not shown yet.
 
 Effort levels come from the vendor wherever it states them: Codex's model cache per model, a harness's `--help` for its effort flag, or Goose's ACP session. The catalog's list is the fallback for harnesses that publish none.

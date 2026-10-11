@@ -10,6 +10,7 @@ import type { DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
+import { optionIdsForControl } from '../harness/options.js';
 import { appServerThreadOverrides, declaredOptionArgv } from '../harness/transport/options.js';
 import { recordDerivedUsage } from '../harness/accounts/stream-usage.js';
 import { readAcpUsageFile } from '../harness/transport/acp-usage-file.js';
@@ -172,7 +173,17 @@ function acpLaunchInput(input: {
   const launchOptions = planOption && session.harnessOptions
     ? Object.fromEntries(Object.entries(session.harnessOptions).filter(([id]) => id !== planOption.option))
     : session.harnessOptions;
-  const optionArgv = declaredOptionArgv(declaredOptions, launchOptions, Boolean(session.nativeSessionId));
+  // An agent that takes no CLI options (inheritCliOptions: false) gets the /add-dir directories over
+  // the protocol (`additionalDirectories` of session/new|load|resume) instead of as argv.
+  const protocolDirectories = harness.acp?.inheritCliOptions === false ? optionIdsForControl('/add-dir') : [];
+  const additionalDirectories = protocolDirectories.flatMap((id) => {
+    const value = launchOptions?.[id];
+    return (Array.isArray(value) ? value : typeof value === 'string' && value ? [value] : []).map(String);
+  });
+  const argvOptions = additionalDirectories.length && launchOptions
+    ? Object.fromEntries(Object.entries(launchOptions).filter(([id]) => !protocolDirectories.includes(id)))
+    : launchOptions;
+  const optionArgv = declaredOptionArgv(declaredOptions, argvOptions, Boolean(session.nativeSessionId));
   if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
     throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
   }
@@ -183,6 +194,7 @@ function acpLaunchInput(input: {
     extraArgv: [...launch.optionArgv, ...optionArgv],
     ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
     cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
+    ...(additionalDirectories.length ? { additionalDirectories } : {}),
     acp: harness.acp,
     // Plan mode as an ACP session mode (catalog acp.planModeId); the
     // agent leaving it -- its plan approved -- turns the chat's off.

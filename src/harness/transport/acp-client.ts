@@ -55,6 +55,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   binary: string;
   command: string;
   cwd: string;
+  /** Extra roots the agent may work in (`/add-dir`): sent with session/new|load|resume when the agent advertises `sessionCapabilities.additionalDirectories`. */
+  additionalDirectories?: readonly string[];
   prompt: string;
   nativeSessionId?: string;
   environment: Readonly<Record<string, string>>;
@@ -657,6 +659,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       peer.request(method, params, options);
     const capabilities = live.capabilities;
     const mcpServers = input.mcpServers ?? [];
+    const directories = input.additionalDirectories ?? [];
+    if (directories.length && !capabilities.sessionCapabilities?.additionalDirectories) {
+      throw new Error(`${input.command} ACP does not accept additional directories (/add-dir); remove them or start from a common parent directory`);
+    }
+    const sessionParams = { cwd: input.cwd, mcpServers, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });
@@ -684,7 +691,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         const method = capabilities.sessionCapabilities?.resume ? 'session/resume' : 'session/load';
         try {
           const loadAt = Date.now();
-          loaded = await waitOnStart(call(method, { sessionId: wanted, cwd: input.cwd, mcpServers }, setup));
+          loaded = await waitOnStart(call(method, { sessionId: wanted, ...sessionParams }, setup));
           threadLoadMs = Date.now() - loadAt;
         } catch (error) {
           throw markMissingThread(error, wanted);
@@ -699,7 +706,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       turn.sessionId = wanted;
     } else {
       this.sessionTotals = {};
-      const started = await waitOnStart(call('session/new', { cwd: input.cwd, mcpServers }, setup));
+      const started = await waitOnStart(call('session/new', sessionParams, setup));
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
