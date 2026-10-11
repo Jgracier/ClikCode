@@ -6,7 +6,8 @@
 
 import type { FileDiff } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent } from '../prompter.js';
-import { formatElapsed } from './format.js';
+import { compactCount, formatElapsed } from './format.js';
+import type { TurnUsage } from './turn-usage.js';
 import { SHIMMER_WIDTH } from './timings.js';
 
 /** Each row's first word, running and done ("Reading" / "Read"), as all four
@@ -104,6 +105,57 @@ export function reasoningBody(thought: string): string {
   return thought.replace(/\*\*([^*\n]{3,80})\*\*/, '').replace(/^\s*\*\*[^*\n]*$/, '').replace(/\*\*|__/g, '').replace(/\s+/g, ' ').trim();
 }
 
+/** Whether the status line says "writing": answer text has arrived in THIS
+ * response and no call has started since. It holds through any pause -- a
+ * slow model, an ACP stall -- until a call starts or the turn ends, so
+ * half-printed text is never labelled "thinking" (standard section 9).
+ * `callAt` is when the latest call started: a call after the text begins a
+ * new response, which is "thinking" again until text arrives. Timestamps
+ * from any monotonic counter work; the terminal and the webview each keep
+ * `writingAt` (last text) and `callAt` (last call start). */
+export function answerWriting(state: { writingAt?: number; callAt?: number }): boolean {
+  return state.writingAt !== undefined && (state.callAt === undefined || state.writingAt > state.callAt);
+}
+
+/** What the user decided at an approval or a question. */
+export type Decision =
+  | { kind: 'approved'; label: string; always?: boolean }
+  | { kind: 'denied'; label: string }
+  /** Denied with "tell it instead": the words that were sent. */
+  | { kind: 'told'; text: string }
+  | { kind: 'answered'; label: string; values?: readonly string[] }
+  | { kind: 'declined'; label: string };
+
+const oneLine = (text: string, max: number): string => {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+};
+
+/** The settled row a decision leaves at its place in the turn: `✓ approved
+ * make clean`, `✗ denied make clean`, `↳ told: use pnpm instead`, `✓
+ * answered Which database?: MySQL` (standard section 8). `tone` is what the
+ * surface colours it by. Values of a question are only passed where they
+ * are safe to show (never a secret). */
+export function decisionRow(decision: Decision): { text: string; tone: 'ok' | 'no' | 'told' } {
+  switch (decision.kind) {
+    case 'approved': return { text: `✓ approved${decision.always ? ' (always)' : ''} ${oneLine(decision.label, 80)}`, tone: 'ok' };
+    case 'denied': return { text: `✗ denied ${oneLine(decision.label, 80)}`, tone: 'no' };
+    case 'told': return { text: `↳ told: ${oneLine(decision.text, 120)}`, tone: 'told' };
+    case 'answered': {
+      const values = decision.values?.length ? `: ${oneLine(decision.values.join(', '), 80)}` : '';
+      return { text: `✓ answered ${oneLine(decision.label, 60)}${values}`, tone: 'ok' };
+    }
+    case 'declined': return { text: `✗ declined ${oneLine(decision.label, 80)}`, tone: 'no' };
+  }
+}
+
+/** The adapters' own phase while an approval is up ("waiting for your
+ * approval: make clean"): true for it, so a surface does not restore it as
+ * the status once the approval is answered -- by then it is stale. */
+export function isApprovalWaitPhase(phase: string | undefined): boolean {
+  return Boolean(phase && /^waiting for (?:your |the )?(?:approval|answer|permission|input)\b/i.test(phase.trim()));
+}
+
 export type StatusTone = 'thinking' | 'tool' | 'asking';
 
 /** What the status line says and how it looks: waiting on the user, else the
@@ -120,6 +172,36 @@ export function turnStatus(state: {
   const thinking = !phase || /^thinking$/i.test(phase);
   const label = heading ?? (!thinking ? phase! : state.writing ? 'writing' : 'thinking');
   return { label, tone: 'thinking' };
+}
+
+/** Tokens in `chars` characters of response, as a model counts them. */
+export function estimateTokens(chars: number): number {
+  return Math.max(0, Math.round(chars / 4));
+}
+
+/** How many tokens the turn has produced so far: what the vendor's usage
+ * for the turn says (output tokens, where it reports them), else the
+ * response's length / 4. The shown count steps toward this (smoothTokens). */
+export function liveTokenTarget(state: { usage?: Pick<TurnUsage, 'output'>; responseChars: number }): number {
+  const reported = state.usage?.output;
+  return reported !== undefined && reported > 0 ? Math.round(reported) : estimateTokens(state.responseChars);
+}
+
+/** One step of the shown count toward its target: a fifth of the gap, at
+ * least one, never past the target and never down within a turn -- a
+ * vendor's later, lower reading or a replaced snapshot does not make the
+ * number fall. */
+export function smoothTokens(shown: number, target: number): number {
+  if (target <= shown) return shown;
+  return Math.min(target, shown + Math.max(1, Math.ceil((target - shown) / 5)));
+}
+
+/** The meter the status line carries, as Claude Code words it:
+ * `↓ 1.2k tokens`. Nothing while the count is zero: an unknown count is not
+ * "0 tokens" (so the 16 s Claude Code waits to show a meter is moot here --
+ * it shows as soon as there is anything to count). */
+export function tokenMeterLabel(tokens: number): string | undefined {
+  return tokens > 0 ? `↓ ${compactCount(tokens)} tokens` : undefined;
 }
 
 /** One frame of the shimmer the status label wears (Claude Code and Codex
@@ -153,8 +235,15 @@ export function endsWithSummary(ms: number, calls: number): boolean {
 }
 
 /** The line a turn ends on, as Codex's "Worked for 1m 2s" and Cursor's
- * "3 files edited": how long, and what it changed. */
-export function turnSummary(state: { ms: number; diffs?: ReadonlyArray<readonly FileDiff[]>; stopped?: boolean }): string {
+ * "3 files edited": how long, and what it changed -- then what it spent
+ * (`usage`, already worded by formatTurnUsage's brief form, so the terminal
+ * and the extension say the same). A turn that left background agents
+ * running says `Waiting for 2 background agents` where it would say
+ * "Worked for" (standard section 10); `pendingBackground` absent or 0 is
+ * none. */
+export function turnSummary(state: {
+  ms: number; diffs?: ReadonlyArray<readonly FileDiff[]>; stopped?: boolean; usage?: string; pendingBackground?: number;
+}): string {
   const files = new Map<string, { additions: number; removals: number }>();
   for (const diff of state.diffs ?? []) {
     for (const file of diff) {
@@ -166,7 +255,10 @@ export function turnSummary(state: { ms: number; diffs?: ReadonlyArray<readonly 
   const additions = [...files.values()].reduce((sum, file) => sum + file.additions, 0);
   const removals = [...files.values()].reduce((sum, file) => sum + file.removals, 0);
   const changed = files.size ? ` · ${plural(files.size, 'file')} changed${additions ? ` +${additions}` : ''}${removals ? ` −${removals}` : ''}` : '';
+  const spent = state.usage ? ` · ${state.usage}` : '';
+  const background = state.pendingBackground && state.pendingBackground > 0 ? Math.floor(state.pendingBackground) : 0;
+  if (background) return `Waiting for ${plural(background, 'background agent')}${changed}${spent}`;
   // A stopped turn says so where it ends: "Stopped" is otherwise only a
   // passing notice, and "Worked for" read as a turn that finished.
-  return `${state.stopped ? 'Stopped after' : 'Worked for'} ${formatElapsed(Math.max(1000, state.ms))}${changed}`;
+  return `${state.stopped ? 'Stopped after' : 'Worked for'} ${formatElapsed(Math.max(1000, state.ms))}${changed}${spent}`;
 }

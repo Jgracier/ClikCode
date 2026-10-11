@@ -353,6 +353,8 @@ SCENARIOS = {
         ],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
         'final_contains': ['grok-4-fast'],
+        # The typed command is acknowledged, not silently swallowed.
+        'ever': ['/model grok-4-fast · applied'],
     },
     'redraw-idle': {
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -791,9 +793,12 @@ SCENARIOS = {
             ('keys', 'use pnpm instead'), ('keys', '\r'),
             ('wait_for', 'Releasing with pnpm now.', 40), ('settle', 3),
         ],
-        'watch': ['clean and release', 'Answers: reject, reject.', 'use pnpm instead', 'Releasing with pnpm now.'],
+        'watch': ['clean and release', 'Answers: reject, reject.', 'Releasing with pnpm now.',
+                  '✗ denied make clean', '↳ told: use pnpm instead'],
         # While an approval waits the line is a still dot and no clock.
         'ever': ['● waiting for you'],
+        # Each decision leaves one settled row at its place.
+        'final_once': ['✗ denied make clean', '↳ told: use pnpm instead'],
     },
     # A long paste is a placeholder in the composer, and the whole text is
     # what is sent; the placeholder never reaches the transcript.

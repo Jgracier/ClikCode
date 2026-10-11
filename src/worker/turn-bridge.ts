@@ -374,9 +374,10 @@ async function driveWorkerTurn(
           case 'plan':
             rl.setPlan(event.entries);
             return;
-          // The terminal's waiting line shows no token count; usage is
-          // recorded on the session (lastUsage) by the worker.
+          // The status line's `↓ N tokens` meter reads the turn's usage so
+          // far; the worker records it on the session (lastUsage) too.
           case 'usage':
+            rl.setTurnUsage(event.usage);
             return;
           case 'approval-request': {
             const closing = new AbortController();

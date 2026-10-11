@@ -1,6 +1,8 @@
 /** A ClikCode slash command typed while a turn is still streaming.
  *
- * It applies at the earliest moment it can, with nothing announced:
+ * It applies at the earliest moment it can. The composer acknowledges it
+ * with one transient line saying which (`/model sonnet · applied`, `/stats ·
+ * runs when this turn ends`; `commandOutcome` below), never a queued row:
  *
  *  - **now**, if its argument form is a pure state write -- `/model sonnet`,
  *    `/effort high`, `/permissions plan`, `/account work`. These need no
@@ -13,7 +15,7 @@
  *    environment it was spawned with.
  *  - **at the turn boundary** for everything else, because a picker or a panel
  *    needs the screen the answer is being written on. That is the next moment
- *    it could run, and it runs there silently: no queued row, no notice.
+ *    it could run, and it runs there.
  *
  * What it must never be is what it was: sent to the harness as the literal
  * word "/model".
@@ -73,7 +75,7 @@ export async function commandDuringTurn(sessionId: string, line: string): Promis
     const queued = { ...submission, kind: 'command' as const };
     enqueueSessionTurn(session, queued, queued.submittedAt);
     await writeState(state);
-    return { disposition: 'command', submission: queued };
+    return { disposition: 'command', submission: queued, commandOutcome: 'later' };
   }
   const route = routeSlashInput(line, slashRouteContextFor(
     session, sessionHarness(session), (path) => existsSync(expandHomePath(path)),
@@ -82,11 +84,11 @@ export async function commandDuringTurn(sessionId: string, line: string): Promis
     // Straight through to the same handler the composer would reach between
     // turns. It reads state itself, so nothing here writes first.
     await aiSessionCommand(sessionId, line);
-    return { disposition: 'command', submission };
+    return { disposition: 'command', submission, commandOutcome: 'applied' };
   }
   const isCommand = route.kind !== 'prompt' && route.kind !== 'native';
   const queued = { ...submission, ...(isCommand ? { kind: 'command' as const } : {}) };
   enqueueSessionTurn(session, queued, queued.submittedAt);
   await writeState(state);
-  return { disposition: isCommand ? 'command' : 'queued', submission: queued };
+  return { disposition: isCommand ? 'command' : 'queued', submission: queued, ...(isCommand ? { commandOutcome: 'later' as const } : {}) };
 }

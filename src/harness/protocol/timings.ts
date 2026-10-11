@@ -3,16 +3,20 @@
  * free and dependency free, so the webview bundle can import it.
  */
 
-/** How often a spinner steps and a shimmer moves while work is arriving. */
-export const SPIN_MS = 300;
+/** How often a spinner steps and a shimmer moves while work is arriving.
+ * Claude Code steps its glyph at 50-100 ms and Codex similarly; at 300 ms
+ * the same glyph read as steppy beside them. At most 120 (a test holds it).
+ * Painting stays cheap: ticks go through the 32 ms paint coalesce and the
+ * frame writes only the rows that changed, in one synchronized update. */
+export const SPIN_MS = 100;
 
 /** The spinner's phases: one full turn of it is SPIN_PHASES * SPIN_MS, which
  * is also how long one pulse of a working dot takes. */
 export const SPIN_PHASES = 4;
 
-/** The shimmer's highlight moves this many characters per spinner step: at
- * SPIN_MS a step, one would take most of ten seconds to cross a short label. */
-export const SHIMMER_STRIDE = 2;
+/** The shimmer's highlight moves this many characters per spinner step: one
+ * cell a step, a sweep of ~200 ms/char at most as Claude Code's. */
+export const SHIMMER_STRIDE = 1;
 
 /** How wide the shimmer's highlight is, in characters either side. */
 export const SHIMMER_WIDTH = 4;
@@ -32,8 +36,8 @@ export const NOTICE_MS = 4000;
 /** How long a copy button shows its tick after copying. */
 export const COPIED_MS = 1200;
 
-/** Answer text arrived this recently: the status line says "writing", not
- * "thinking". */
+/** @deprecated Writing no longer expires: see answerWriting() in
+ * turn-flow.ts. Kept only so the webview still compiles until it uses that. */
 export const WRITING_MS = 1500;
 
 /** A wait shorter than this shows nothing; past it a spinner or a "looking

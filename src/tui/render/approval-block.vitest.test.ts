@@ -92,3 +92,28 @@ describe('the approval header', () => {
     expect(rows.filter((row) => row.includes('make clean'))).toHaveLength(1);
   });
 });
+
+describe('an approval given too few rows', () => {
+  const plain = (rows: string[]): string[] => rows.map((row) => row.replace(/\u001b\[[0-9;]*m/g, ''));
+  const state = { guarded: false, needsFocus: false, focused: false };
+
+  it('degrades to what it was given, never past it, and always shows what is asked and the keys', () => {
+    const request = { title: 'make clean', detail: '$ make clean\n  cd build', rule: 'Bash(make:*)' };
+    for (const maxRows of [1, 2, 3, 4]) {
+      const rows = plain(approvalBlockRows(request, 80, maxRows, state));
+      expect(rows.length, `maxRows ${maxRows}`).toBeLessThanOrEqual(maxRows);
+      expect(rows.join('\n'), `maxRows ${maxRows}`).toMatch(/make clean/);
+      expect(rows.join('\n'), `maxRows ${maxRows}`).toContain('[y]');
+      expect(rows.join('\n'), `maxRows ${maxRows}`).toContain('[n]');
+    }
+  });
+
+  it('puts the question and the keys on one row when only one is given, narrow or wide', () => {
+    for (const width of [30, 46, 80]) {
+      const rows = plain(approvalBlockRows({ title: 'Run make clean in the build directory and then delete everything' }, width, 1, state));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toContain('[y]');
+      expect(rows[0]!.length).toBeLessThanOrEqual(width);
+    }
+  });
+});
