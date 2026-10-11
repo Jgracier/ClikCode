@@ -38,7 +38,6 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   configOverrides?: Record<string, unknown>;
   /** Extra top-level thread/start|resume params; wins over the defaults. */
   extraThreadParams?: Record<string, unknown>;
-  /** Timeout for initialize / thread / turn-start requests. Default 20s. */
 }
 
 type CodexErrorKind = 'quota' | 'auth' | 'other';
@@ -207,6 +206,17 @@ export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; sta
   return { errorKind: 'other', ...(statusCode ? { statusCode } : {}) };
 }
 
+/** The structured fields of a Codex failure, for the failover classifier:
+ * the turn error's `codexErrorInfo` (kept as the vendor sent it) and the
+ * JSON-RPC code the app-server answered a request with. */
+export function codexStructuredFields(turnError: JsonObject | undefined, error: unknown): { codexErrorInfo?: unknown; rpcCode?: number } {
+  const thrown = asRecord(error);
+  const data = asRecord(thrown?.data);
+  const info = turnError?.codexErrorInfo ?? turnError?.codex_error_info ?? data?.codexErrorInfo ?? thrown?.codexErrorInfo;
+  const code = typeof thrown?.rpcCode === 'number' ? thrown.rpcCode : undefined;
+  return { ...(info !== undefined && info !== null ? { codexErrorInfo: info } : {}), ...(code !== undefined ? { rpcCode: code } : {}) };
+}
+
 /** What the user is approving: the command and where it runs, or the files. */
 function codexApprovalDetail(params: JsonObject, item?: JsonObject): string {
   const lines: string[] = [];
@@ -294,6 +304,8 @@ interface PendingWork { label: string; turnId?: string }
 
 class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, BackgroundRun> implements CodexSession {
   private readonly pendingWork = new Map<string, PendingWork>();
+  /** Approval prompts open, by JSON-RPC request id: released by serverRequest/resolved. */
+  private readonly openApprovals = new Map<string, () => void>();
   private turnCompletedWaiter?: () => void;
   private threadId?: string;
   private lastPermissionMode: AiHarnessPermissionMode = 'ask';
@@ -317,7 +329,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     return this.runActive(turn, input.signal, failure, () => this.flow(turn, completion), {
       failed: (error) => {
         // Prefer the server's structured error over the transport's message.
-        Object.assign(error, codexErrorKind(turn.lastError ?? error));
+        Object.assign(error, codexErrorKind(turn.lastError ?? error), codexStructuredFields(turn.lastError, error));
         keepFailedWork = this.pendingWork.size > 0;
         // A failed *turn* leaves a healthy server; anything else is unknown.
         if (!keepFailedWork && !(error as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(error);
@@ -405,7 +417,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       peer: {
         label: 'Codex app-server',
         jsonrpcVersion: false,
-        onRequest: (method, params) => this.serverRequest(method, params),
+        onRequest: (method, params, id) => this.serverRequest(method, params, id),
         onNotification: (method, params) => this.notification(method, params),
       },
     }, { initialized: false });
@@ -474,13 +486,53 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     return { text, nativeSessionId: threadId };
   }
 
-  private serverRequest(method: string, params: JsonObject): Promise<unknown> | undefined {
-    const modern = method.endsWith('/requestApproval');
+  /** Every ServerRequest of the app-server schema (codex-cli 0.155) answered
+   * with its OWN response shape. A request this client cannot serve is
+   * declined in the schema's terms, never -32601: the vendor waits on it. */
+  private serverRequest(method: string, params: JsonObject, id?: number | string): Promise<unknown> | undefined {
+    const stream = (): Stream | undefined => (this.turn && !this.turn.done ? this.turn : undefined) ?? this.background ?? this.openBackground('vendor-turn');
+    const notice = (message: string): void => { stream()?.observer.onNotice?.(message); };
+    switch (method) {
+      case 'item/commandExecution/requestApproval':
+      case 'item/fileChange/requestApproval':
+      case 'item/permissions/requestApproval':
+      case 'execCommandApproval':
+      case 'applyPatchApproval':
+        return this.approvalRequest(method, params, id);
+      case 'item/tool/requestUserInput':
+        // ClikCode has no question prompt for a vendor's tool: no answers.
+        notice('Codex asked a question ClikCode cannot show; it was left unanswered');
+        return Promise.resolve({ answers: {} });
+      case 'mcpServer/elicitation/request':
+        notice(`MCP server ${String(params.serverName ?? '')} asked for input ClikCode cannot show; it was declined`.replace('  ', ' '));
+        return Promise.resolve({ action: 'decline', content: null });
+      case 'item/tool/call':
+        return Promise.resolve({
+          contentItems: [{ type: 'inputText', text: `ClikCode does not provide the client-side tool ${String(params.tool ?? '')}`.trim() }],
+          success: false,
+        });
+      case 'account/chatgptAuthTokens/refresh':
+        notice('Codex asked ClikCode to refresh its ChatGPT sign-in; sign in again with `codex login`');
+        return Promise.reject(Object.assign(new Error('ClikCode does not manage ChatGPT tokens: run `codex login`'), { errorKind: 'auth' }));
+      case 'attestation/generate':
+        return Promise.reject(new Error('ClikCode does not provide client attestation'));
+      default:
+        return undefined;
+    }
+  }
+
+  private approvalRequest(method: string, params: JsonObject, id?: number | string): Promise<unknown> {
+    const permissions = method === 'item/permissions/requestApproval';
     const legacy = method === 'execCommandApproval' || method === 'applyPatchApproval';
-    if (!modern && !legacy) return undefined;
-    const answer = (accepted: boolean, aborted = false): JsonObject => modern
-      ? { decision: aborted ? 'cancel' : accepted ? 'accept' : 'decline' }
-      : { decision: aborted ? 'abort' : accepted ? 'approved' : 'denied' };
+    const answer = (accepted: boolean, aborted = false): JsonObject => {
+      if (permissions) {
+        // GrantedPermissionProfile: what was asked for, or nothing.
+        return accepted ? { permissions: asRecord(params.permissions) ?? {}, scope: 'turn' } : { permissions: {} };
+      }
+      return legacy
+        ? { decision: aborted ? 'abort' : accepted ? 'approved' : 'denied' }
+        : { decision: aborted ? 'cancel' : accepted ? 'accept' : 'decline' };
+    };
     return (async () => {
       const turn = this.turn && !this.turn.done ? this.turn : undefined;
       // Out of turn, a vendor turn or a sub-agent still asks the user -- via
@@ -496,11 +548,19 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       const item = typeof params.itemId === 'string' ? stream.items.get(params.itemId) : undefined;
       // Codex is waiting on the user, not wedged.
       const resume = stream.watchdog?.pause();
+      // Answered elsewhere (serverRequest/resolved): stop waiting on the user.
+      let resolvedElsewhere!: () => void;
+      const elsewhere = new Promise<'elsewhere'>((resolve) => { resolvedElsewhere = () => resolve('elsewhere'); });
+      if (id !== undefined) this.openApprovals.set(String(id), resolvedElsewhere);
       try {
         const diff = fileChange ? fileChangeActivity(params.changes ?? params.fileChanges ?? item?.changes).diff : undefined;
-        const accepted = await stream.observer.onApproval?.(fileChange ? 'Approve file changes' : 'Approve command', codexApprovalDetail(params, item), diff?.length ? { diff } : undefined) === true;
-        return turn?.done ? answer(false, true) : answer(accepted);
+        const title = permissions ? 'Approve additional permissions' : fileChange ? 'Approve file changes' : 'Approve command';
+        const asked = Promise.resolve(stream.observer.onApproval?.(title, codexApprovalDetail(params, item), diff?.length ? { diff } : undefined));
+        const outcome = await Promise.race([asked, elsewhere]);
+        if (outcome === 'elsewhere') return answer(false, true);
+        return turn?.done ? answer(false, true) : answer(outcome === true);
       } finally {
+        if (id !== undefined) this.openApprovals.delete(String(id));
         resume?.();
       }
     })();
@@ -689,6 +749,29 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       const stopReason = turnStopReason(completedTurn.status);
       if (stopReason) observer.onUsage?.({ stopReason });
       turn.complete();
+    } else if (method === 'serverRequest/resolved') {
+      // Approved or denied somewhere else (another client, the reviewer): the
+      // prompt here is moot.
+      const id = String(asRecord(params)?.requestId ?? '');
+      this.openApprovals.get(id)?.();
+    } else if (method === 'thread/status/changed') {
+      const status = asRecord(params.status);
+      if (status?.type === 'systemError' && target === this.turn) {
+        // Codex gave up on the thread; a turn/completed may never follow.
+        const error = target.lastError;
+        (target as ActiveTurn).complete(Object.assign(new Error(String(error?.message ?? 'Codex reported a system error on this thread')), { codexSystemError: true }));
+      } else if (Array.isArray(status?.activeFlags) && status.activeFlags.includes('waitingOnUserInput')) observer.onPhase?.('waiting for input in Codex');
+    } else if (method === 'item/autoApprovalReview/started' || method === 'autoApprovalReview/strictReviewRequired') {
+      observer.onPhase?.('reviewing an approval');
+    } else if (method === 'mcpServer/startupStatus/updated') {
+      const name = typeof params.name === 'string' ? params.name : typeof params.serverName === 'string' ? params.serverName : '';
+      observer.onPhase?.(`starting MCP server${name ? ` ${name}` : ''}`);
+    } else if (method === 'model/verification') {
+      observer.onPhase?.('verifying the model');
+    } else if (method === 'modelProvider/authRecoveryStarted') {
+      observer.onPhase?.('refreshing sign-in');
+    } else if (method === 'item/autoApprovalReview/completed' || method === 'modelProvider/authRecoveryCompleted') {
+      // Activity only: the watchdog was reset on receipt.
     } else if (method === 'error') {
       const error = (params.error as JsonObject) ?? {};
       // Say why it is retrying, not only that it is.
