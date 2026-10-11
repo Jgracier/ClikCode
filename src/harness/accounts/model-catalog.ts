@@ -147,7 +147,7 @@ const SERVER_LIST_TTL_MS = 300_000;
 
 function serverModelList(harness: AiLocalHarnessDefinition): boolean {
   // Copilot's account list moves with its quota (spent chat lists `auto` alone).
-  return harness.command === 'copilot' || (!listsModelsLive(harness) && Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false)));
+  return harness.command === 'copilot' || (!listsModelsLive(harness) && !harness.acp?.liveModelList && Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false)));
 }
 
 /** The catalog is the list an ACP session offers, so each live session
@@ -159,6 +159,7 @@ function serverModelList(harness: AiLocalHarnessDefinition): boolean {
 function listsModelsLive(harness: AiLocalHarnessDefinition): boolean {
   // Codex: its running app-server answers `model/list` (transport/codex-app-server.ts).
   if (harness.command === 'codex') return true;
+  if (harness.acp?.liveModelList) return true;
   return Boolean(harness.acp && harness.acp.listsModels !== false && !harness.acp.providerConfigId && !harness.modelDiscoveryArgv);
 }
 
@@ -641,7 +642,8 @@ async function nativeModelCatalogUncached(
   }
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
-  if (harness.acp && harness.acp.listsModels !== false && !harness.modelDiscoveryArgv) {
+  const liveOnly = Boolean(liveListed && harness.acp?.liveModelList);
+  if (harness.acp && harness.acp.listsModels !== false && (!harness.modelDiscoveryArgv || liveOnly)) {
     const listed = liveListed ?? await queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...await acpProbeArgv(harness, account)], nativeProfileEnvironment(account?.nativeProfile),
       async (request, capabilities) => {
         const session = await acpDiscoverySession(request, capabilities, cacheKey(harness, account));
@@ -662,7 +664,7 @@ async function nativeModelCatalogUncached(
     }
     if (listed?.efforts?.length) effortValues = listed.efforts;
   }
-  if (harness.modelDiscoveryArgv) {
+  if (harness.modelDiscoveryArgv && !liveOnly) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
       const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, undefined);
@@ -697,4 +699,39 @@ async function nativeModelCatalogUncached(
     ...(localRecommendations?.length ? { localRecommendations } : {}),
     ...(effortValues?.length ? { effortValues } : {}),
   };
+}
+
+/** A harness whose effort levels depend on the model and which states them only over ACP (Droid,
+ * Command Code: `reasoning_effort` / `effort` options re-listed after the model is set). */
+export function acpEffortPerModel(harness: AiLocalHarnessDefinition): boolean {
+  return Boolean(harness.acp?.effortConfigId && harness.acp.inheritCliOptions === false && harness.acp.listsModels !== false);
+}
+
+/** The effort levels `model` offers, as the agent lists them once that model is set on a session. The
+ * discovery session is the reusable out-of-the-way one (acpDiscoverySession), under its own key so
+ * choosing a model on it never changes what the catalog reads as the agent's default; the agent is
+ * stopped when the question is answered. Undefined when the agent will not say. */
+export async function acpModelEffortChoices(
+  harness: AiLocalHarnessDefinition, account: AiHarnessAccount | undefined, model: string | null | undefined,
+): Promise<{ values: string[]; default?: string } | undefined> {
+  const effortConfigId = harness.acp?.effortConfigId;
+  if (!harness.acp || !effortConfigId) return undefined;
+  return queryAcp(harness.acp.binary ?? harness.binary, [...harness.acp.argv, ...await acpProbeArgv(harness, account)], nativeProfileEnvironment(account?.nativeProfile),
+    async (request, capabilities) => {
+      const session = await acpDiscoverySession(request, capabilities, `${cacheKey(harness, account)}:effort`);
+      let answer: Record<string, any> = session;
+      const modelOption = Array.isArray(session.configOptions) ? session.configOptions.find((option: Record<string, any>) => (option?.id ?? option?.configId) === 'model') : undefined;
+      const current = session.models?.currentModelId ?? modelOption?.currentValue;
+      if (model && model !== current && typeof session.sessionId === 'string') {
+        const updated = modelOption
+          ? await request('session/set_config_option', { sessionId: session.sessionId, configId: 'model', value: model })
+          : await request('session/set_model', { sessionId: session.sessionId, modelId: model });
+        if (Array.isArray(updated?.configOptions)) answer = updated;
+      }
+      const values = acpConfigOptionValues(answer, effortConfigId);
+      if (!values.length) return undefined;
+      const option = (answer.configOptions as Record<string, any>[] | undefined)?.find((entry) => (entry?.id ?? entry?.configId) === effortConfigId);
+      const fallback = typeof option?.currentValue === 'string' && values.includes(option.currentValue) ? option.currentValue : undefined;
+      return { values, ...(fallback ? { default: fallback } : {}) };
+    });
 }

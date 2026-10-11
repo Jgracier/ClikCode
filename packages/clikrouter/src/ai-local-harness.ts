@@ -44,6 +44,9 @@ export interface AiHarnessAcpDefinition {
   /** False when CLI flags do not belong to the ACP command. Model and mode
    * are then selected over the protocol. */
   inheritCliOptions?: boolean;
+  /** The harness has a models command for cold discovery, and its ACP session lists the same models: a
+   * session the user opened reports them, so discovery starts no agent for them (Command Code). */
+  liveModelList?: boolean;
   /** ACP and the one-shot CLI read and write one session store: either
    * continues a thread the other started (verified live for Grok Build in
    * both directions). Such a thread is never pinned to the transport that
@@ -657,7 +660,7 @@ const { customCommandDirs: _openCodeCommandDirs, normalizedPermissionOptionIds: 
  * The one-shot `--print` contract stays for turns ACP cannot take. Not claimed:
  * sharedSessions (ACP and `--resume` ids were not shown to name one store). */
 const COMMAND_CODE_ACP = {
-  argv: ['acp'], inheritCliOptions: false, effortConfigId: 'effort',
+  argv: ['acp'], inheritCliOptions: false, liveModelList: true, effortConfigId: 'effort',
   permissionModeIds: { ask: 'default', auto: 'auto-accept', bypass: 'bypass' }, planModeId: 'plan',
 } as const satisfies AiHarnessAcpDefinition;
 

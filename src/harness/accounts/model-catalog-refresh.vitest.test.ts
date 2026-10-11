@@ -79,6 +79,33 @@ describe('ACP model catalog refresh', () => {
     expect((await nativeModelCatalog(harness)).models).not.toContain('from-acp');
   });
 
+  it('takes the session list of a harness with a models command when its ACP definition says the lists agree', async () => {
+    const harness = {
+      command: 'test-acp-live-model-list', binary: 'missing-test-acp-live-model-list', transport: 'acp',
+      acp: { argv: [], liveModelList: true }, modelDiscoveryArgv: ['--list-models'],
+    } as unknown as AiLocalHarnessDefinition;
+    await recordLiveModelCatalog(harness, undefined, { models: { availableModels: [{ modelId: 'from-acp', name: 'From ACP' }] } }, true);
+    const catalog = await nativeModelCatalog(harness);
+    expect(catalog.models).toEqual(['from-acp']);
+    expect(catalog.labels).toEqual({ 'from-acp': 'From ACP' });
+  });
+
+  it('asks an ACP agent for the effort levels of the model it is asked about', async () => {
+    const { acpModelEffortChoices } = await import('./model-catalog.js');
+    const harness = {
+      command: 'test-acp-effort', binary: 'missing-test-acp-effort', transport: 'acp',
+      acp: { argv: [], inheritCliOptions: false, effortConfigId: 'reasoning_effort' },
+    } as unknown as AiLocalHarnessDefinition;
+    const requests: Array<[string, unknown]> = [];
+    queryAcp.mockImplementation(async (_b, _a, _e, ask) => ask(async (method: string, params: unknown) => {
+      requests.push([method, params]);
+      if (method === 'session/set_config_option') return { configOptions: [{ id: 'reasoning_effort', currentValue: 'off', options: [{ value: 'off' }, { value: 'high' }] }] };
+      return { sessionId: 'S', configOptions: [{ id: 'model', currentValue: 'big', options: [{ value: 'big' }, { value: 'small' }] }] };
+    }, { sessionCapabilities: {} }));
+    expect(await acpModelEffortChoices(harness, undefined, 'small')).toEqual({ values: ['off', 'high'], default: 'off' });
+    expect(requests.some(([method, params]) => method === 'session/set_config_option' && (params as { value?: string }).value === 'small')).toBe(true);
+  });
+
   it('keeps ACP model lists separate for two logged-in profiles', async () => {
     const harness = {
       command: 'test-acp-account-models', binary: 'missing-test-acp-account-models', transport: 'acp',
