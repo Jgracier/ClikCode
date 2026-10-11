@@ -22,6 +22,7 @@ const BANNER = [
   /^Warning for /, /^Unknown context window/, /^and costs, using/, /^Did you mean one of these/, /^- \S+$/,
   /^You can skip this check/, /^https:\/\/aider\.chat\/docs\//, /^Restored previous conversation history/,
   /^Added .+ to the chat/, /^Use \/help/, /^Cost estimates may be inaccurate/,
+  /^Add \.aider\* to \.gitignore/, /^Added \.aider\* to \.gitignore/,
 ];
 const FOOTER = /^Tokens: .+ sent, .+ received/;
 const COST = /Cost: \$([\d.]+) message/;
