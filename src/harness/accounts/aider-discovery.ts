@@ -78,7 +78,7 @@ async function openRouterList(): Promise<string> {
   const kept = await stat(file).catch(() => undefined);
   if (kept && Date.now() - kept.mtimeMs < 24 * 60 * 60_000) return readFile(file, 'utf8').catch(() => '');
   try {
-    const response = await fetch('https://openrouter.ai/api/v1/models', { signal: AbortSignal.timeout(8_000) });
+    const response = await fetch('https://openrouter.ai/api/v1/models');
     if (!response.ok) throw new Error(String(response.status));
     const body = await response.text();
     await atomicWriteFile(file, body).catch(() => undefined);
@@ -112,7 +112,7 @@ export async function discoverAiderModels(
           continue;
         }
       }
-      const printed = await captureNativeHarnessOutput(harness, ['--no-git', '--list-models', provider.prefix], environment, 20_000, scratch).catch(() => '');
+      const printed = await captureNativeHarnessOutput(harness, ['--no-git', '--list-models', provider.prefix], environment, undefined, scratch).catch(() => '');
       models.push(...aiderListedModels(printed, provider.prefix));
     }
   } finally {

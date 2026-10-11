@@ -33,8 +33,6 @@ import { planIsFree } from './free-plan.js';
 type Json = Record<string, any>;
 type Environment = Readonly<Record<string, string>>;
 
-const PROBE_TIMEOUT_MS = 15_000;
-
 const stripAnsi = (text: string): string => text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
 
 function catalogBinary(command: string, fallback: string): string {
@@ -84,12 +82,9 @@ function contentLengthRequest(binary: string, argv: readonly string[], environme
     const finish = (value?: Json): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       terminatePortable(child);
       resolve(value);
     };
-    const timer = setTimeout(() => finish(), PROBE_TIMEOUT_MS);
-    timer.unref();
     child.stdout!.on('data', (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
       for (;;) {
@@ -102,7 +97,7 @@ function contentLengthRequest(binary: string, argv: readonly string[], environme
         try {
           const message = JSON.parse(body) as Json;
           if (message.id === 1) return finish(message.result as Json | undefined);
-        } catch { /* fail-open-ok: a malformed frame is not the answer; the timeout ends the probe */ }
+        } catch { /* fail-open-ok: a malformed frame is not the answer; the vendor's exit ends the probe */ }
       }
     });
     child.once('error', () => finish());
@@ -182,13 +177,13 @@ export async function antigravityUsageReading(environment: Environment): Promise
     let token = await antigravityAccessToken(environment).catch(() => undefined);
     if (!token) {
       const harness = localHarnessForCommand('antigravity');
-      if (harness) await captureNativeHarnessOutput(harness, ['models'], environment, PROBE_TIMEOUT_MS).catch(() => '');
+      if (harness) await captureNativeHarnessOutput(harness, ['models'], environment).catch(() => '');
       token = await antigravityAccessToken(environment);
     }
     if (!token) return undefined;
     const ask = async (method: string, body: Json): Promise<Json | undefined> => {
       const response = await fetch(`https://cloudcode-pa.googleapis.com/v1internal:${method}`, {
-        method: 'POST', body: JSON.stringify(body), signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+        method: 'POST', body: JSON.stringify(body),
         // Any other client is told "This client is no longer supported".
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'User-Agent': 'antigravity/1.0.0' },
       });
@@ -244,20 +239,18 @@ export async function kimiUsageReading(environment: Environment): Promise<UsageR
   try {
     const endpoint = await new Promise<{ url: string; token: string } | undefined>((resolve) => {
       let banner = '';
-      const timer = setTimeout(() => resolve(undefined), PROBE_TIMEOUT_MS);
-      timer.unref();
       child.stdout!.setEncoding('utf8');
       child.stdout!.on('data', (chunk: string) => {
         banner += chunk;
         const found = kimiWebEndpoint(banner);
-        if (found) { clearTimeout(timer); resolve(found); }
+        if (found) resolve(found);
       });
-      child.once('exit', () => { clearTimeout(timer); resolve(undefined); });
-      child.once('error', () => { clearTimeout(timer); resolve(undefined); });
+      child.once('exit', () => resolve(undefined));
+      child.once('error', () => resolve(undefined));
     });
     if (!endpoint) return undefined;
     const response = await fetch(`${endpoint.url}/api/v1/oauth/usage`, {
-      headers: { Authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${endpoint.token}` },
     });
     if (!response.ok) return undefined;
     const body = await response.json() as Json;
@@ -303,7 +296,7 @@ async function cursorUnnamedModels(environment: Environment): Promise<string[] |
   const token = await cursorAccessToken(environment);
   if (!token) return undefined;
   const response = await fetch('https://api2.cursor.sh/aiserver.v1.AiService/AvailableModels', {
-    method: 'POST', body: '{}', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+    method: 'POST', body: '{}',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
   });
   if (!response.ok) return undefined;
@@ -323,7 +316,7 @@ export async function cursorUsageReading(environment: Environment): Promise<Usag
     const token = await cursorAccessToken(environment);
     if (!token) return undefined;
     return fetch(`https://api2.cursor.sh/aiserver.v1.DashboardService/${method}`, {
-      method: 'POST', body: '{}', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      method: 'POST', body: '{}',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
     });
   };
@@ -332,7 +325,7 @@ export async function cursorUsageReading(environment: Environment): Promise<Usag
     if (response?.status === 401) {
       // An expired token: the CLI refreshes its own on `status`, then ask once more.
       const harness = localHarnessForCommand('cursor');
-      if (harness) await captureNativeHarnessOutput(harness, ['status'], environment, PROBE_TIMEOUT_MS).catch(() => '');
+      if (harness) await captureNativeHarnessOutput(harness, ['status'], environment).catch(() => '');
       response = await ask('GetCurrentPeriodUsage');
     }
     if (!response?.ok) return undefined;
@@ -373,7 +366,7 @@ export async function clineUsageReading(environment: Environment): Promise<Usage
     const auth = providers?.providers?.cline?.settings?.auth as Json | undefined;
     if (typeof auth?.accessToken !== 'string' || typeof auth.accountId !== 'string') return undefined;
     const response = await fetch(`https://api.cline.bot/api/v1/users/${encodeURIComponent(auth.accountId)}/balance`, {
-      headers: { Authorization: `Bearer ${auth.accessToken}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${auth.accessToken}` },
     });
     return response.ok ? clineQuotaReading(await response.json()) : undefined;
   } catch {
@@ -399,7 +392,7 @@ export async function vibeUsageReading(environment: Environment): Promise<UsageR
     const key = /^MISTRAL_API_KEY=["']?([^"'\s]+)/m.exec(await readFile(join(home, '.env'), 'utf8'))?.[1];
     if (!key) return undefined;
     const response = await fetch('https://api.mistral.ai/v1/chat/completions', {
-      method: 'POST', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: 'mistral-small-latest', messages: [] }),
     });
@@ -435,7 +428,7 @@ export async function devinUsageReading(environment: Environment): Promise<Usage
     if (!key) return undefined;
     // The full metadata: with only the key the server answers invalid_argument.
     const response = await fetch(`${server}/exa.seat_management_pb.SeatManagementService/GetUserStatus`, {
-      method: 'POST', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Connect-Protocol-Version': '1' },
       body: JSON.stringify({ metadata: { apiKey: key, ideName: 'windsurf', ideVersion: '1.0.0', extensionName: 'windsurf', extensionVersion: '1.0.0' } }),
     });
@@ -469,7 +462,7 @@ export async function hermesUsageReading(environment: Environment): Promise<Usag
     // A short-lived token hermes renews as it runs; never renewed here.
     if (typeof nous?.access_token !== 'string') return undefined;
     const base = typeof nous.portal_base_url === 'string' ? nous.portal_base_url : 'https://portal.nousresearch.com';
-    const response = await fetch(`${base}/api/oauth/account`, { headers: { Authorization: `Bearer ${nous.access_token}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    const response = await fetch(`${base}/api/oauth/account`, { headers: { Authorization: `Bearer ${nous.access_token}` } });
     return response.ok ? hermesQuotaReading(await response.json()) : undefined;
   } catch {
     return undefined; // fail-open-ok: no figure beats a wrong one
@@ -501,7 +494,7 @@ export async function kiroUsageReading(environment: Environment): Promise<UsageR
     const reading = kiroQuotaReading(answer.data);
     const plan = (answer.data as Json | undefined)?.planName;
     return reading && typeof plan === 'string' ? { ...reading, plan: { name: plan } } : reading;
-  }, PROBE_TIMEOUT_MS).catch(() => undefined);
+  }).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------- Command Code
@@ -530,7 +523,7 @@ export async function commandCodeUsageReading(environment: Environment): Promise
     const auth = JSON.parse(await readFile(join(home, '.commandcode', 'auth.json'), 'utf8')) as { apiKey?: unknown };
     if (typeof auth.apiKey !== 'string' || !auth.apiKey) return undefined;
     const response = await fetch('https://api.commandcode.ai/alpha/billing/credits', {
-      headers: { Authorization: `Bearer ${auth.apiKey}` }, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS),
+      headers: { Authorization: `Bearer ${auth.apiKey}` },
     });
     return response.ok ? commandCodeQuotaReading(await response.json()) : undefined;
   } catch {
@@ -555,7 +548,7 @@ export function kiloProfileLabel(output: string): string | undefined {
 async function captureLabel(command: string, argv: readonly string[], environment: Environment, parse: (output: string) => string | undefined): Promise<string | undefined> {
   try {
     const harness = localHarnessForCommand(command);
-    return harness ? parse(await captureNativeHarnessOutput(harness, argv, environment, PROBE_TIMEOUT_MS)) : undefined;
+    return harness ? parse(await captureNativeHarnessOutput(harness, argv, environment)) : undefined;
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
 }
 
@@ -580,7 +573,7 @@ export async function auggieUsageReading(environment: Environment): Promise<Usag
   try {
     const harness = localHarnessForCommand('auggie');
     if (!harness) return undefined;
-    raw = await captureNativeHarnessOutput(harness, ['account', 'status', '--json'], environment, PROBE_TIMEOUT_MS);
+    raw = await captureNativeHarnessOutput(harness, ['account', 'status', '--json'], environment);
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one
   const label = auggieUsageLabel(raw);
   if (label === undefined) return undefined;

@@ -90,7 +90,7 @@ export const openClawThreadWriter: NativeThreadWriter = {
       }, null, 2)}\n`);
       const output = await captureNativeHarnessOutput(
         context.harness, ['doctor', '--session-sqlite', 'import', '--session-sqlite-agent', AGENT, '--json'],
-        context.environment, 60_000, context.workspace,
+        context.environment, undefined, context.workspace,
       );
       const report = JSON.parse(output.slice(output.indexOf('{'))) as ImportReport;
       const target = report.targets?.find((item) => item.agentId === AGENT);

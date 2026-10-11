@@ -33,6 +33,10 @@ function probeOnce(key: string, probe: () => Promise<UsageReading | undefined>):
   return asked;
 }
 
+/** How long a paint (footer, list) waits for a probe before showing the last
+ * known reading. UI only: the probe is never cancelled. */
+const USAGE_PAINT_WAIT_MS = 3_000;
+
 /** The structured reading behind nativeUsageLabel: same caching, same sharing. */
 export async function nativeUsageReading(
   session: HarnessSession, state: HarnessState, options: { network?: boolean } = {},
@@ -93,45 +97,58 @@ export async function nativeUsageReading(
   }
   account.usageCheckedAt = new Date().toISOString();
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const reading: UsageReading | undefined = probe ? await probeOnce(cacheKey, () => probe(environment)) : undefined;
-  // Carry the last known figure through a failure rather than blanking it --
-  // but never past its own reset, when it stops describing anything. The
-  // failed probe itself is not stored as usage.
-  const carried = entry && usageReadingIsCurrent(entry) ? entry : undefined;
-  const probedAt = Date.now();
-  const next: UsageCacheEntry = reading?.label !== undefined
-    ? { at: probedAt, label: reading.label, ...(reading.windows.length ? { windows: reading.windows } : {}) }
-    : { at: probedAt, failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) };
-  nativeUsageCache.set(cacheKey, next);
-  // The plan rides on the same answer; it says which models are free
-  // (free-plan.ts), and stays as last said when a reading leaves it out.
-  if (reading?.plan) account.plan = reading.plan;
-  // The vendor's word on the account itself is what the account is now.
-  if (reading?.account === 'signed-out') account.status = 'needs_login';
-  else if (reading?.account) account.verification = { ...(reading.account.verify ? { url: reading.account.verify } : {}), at: new Date(probedAt).toISOString() };
-  if (reading?.label !== undefined) {
-    account.usage = accountUsageFrom(next);
-    // The moment a reading shows room, the refusal it overtakes is cleared on
-    // the record too -- not left for the next failover to notice.
-    settleQuotaMark(account);
-  } else if (carried?.windows?.length && account.usage?.failed) {
-    account.usage = {
-      at: new Date(carried.at).toISOString(),
-      ...(carried.label === undefined ? {} : { label: carried.label }),
-      windows: carried.windows,
-    } as AiHarnessAccount['usage'];
-  } else if (!carried?.windows?.length) {
-    account.usage = accountUsageFrom(next);
-  }
-  // writeState merges per field, so publishing this reading cannot disturb
-  // anything another terminal changed meanwhile.
-  await writeState(state).catch(() => undefined);
-  const shown = !reading?.label && carried?.windows?.length ? carried : next;
-  return shownReading({
-    windows: shown.windows ?? [],
-    ...(shown.label === undefined ? {} : { label: shown.label }),
-    ...(reading?.plan ? { plan: reading.plan } : {}),
-  });
+  const settle = async (reading: UsageReading | undefined): Promise<UsageReading | undefined> => {
+    // Carry the last known figure through a failure rather than blanking it --
+    // but never past its own reset, when it stops describing anything. The
+    // failed probe itself is not stored as usage.
+    const carried = entry && usageReadingIsCurrent(entry) ? entry : undefined;
+    const probedAt = Date.now();
+    const next: UsageCacheEntry = reading?.label !== undefined
+      ? { at: probedAt, label: reading.label, ...(reading.windows.length ? { windows: reading.windows } : {}) }
+      : { at: probedAt, failed: true, ...(carried?.label === undefined ? {} : { label: carried.label }), ...(carried?.windows?.length ? { windows: carried.windows } : {}) };
+    nativeUsageCache.set(cacheKey, next);
+    // The plan rides on the same answer; it says which models are free
+    // (free-plan.ts), and stays as last said when a reading leaves it out.
+    if (reading?.plan) account.plan = reading.plan;
+    // The vendor's word on the account itself is what the account is now.
+    if (reading?.account === 'signed-out') account.status = 'needs_login';
+    else if (reading?.account) account.verification = { ...(reading.account.verify ? { url: reading.account.verify } : {}), at: new Date(probedAt).toISOString() };
+    if (reading?.label !== undefined) {
+      account.usage = accountUsageFrom(next);
+      // The moment a reading shows room, the refusal it overtakes is cleared on
+      // the record too -- not left for the next failover to notice.
+      settleQuotaMark(account);
+    } else if (carried?.windows?.length && account.usage?.failed) {
+      account.usage = {
+        at: new Date(carried.at).toISOString(),
+        ...(carried.label === undefined ? {} : { label: carried.label }),
+        windows: carried.windows,
+      } as AiHarnessAccount['usage'];
+    } else if (!carried?.windows?.length) {
+      account.usage = accountUsageFrom(next);
+    }
+    // writeState merges per field, so publishing this reading cannot disturb
+    // anything another terminal changed meanwhile.
+    await writeState(state).catch(() => undefined);
+    const shown = !reading?.label && carried?.windows?.length ? carried : next;
+    return shownReading({
+      windows: shown.windows ?? [],
+      ...(shown.label === undefined ? {} : { label: shown.label }),
+      ...(reading?.plan ? { plan: reading.plan } : {}),
+    });
+  };
+  const asking = probe ? probeOnce(cacheKey, () => probe(environment)) : Promise.resolve(undefined);
+  const settled = asking.then(settle);
+  // An explicit ask (`/usage`, the account picker, `account status`) waits for
+  // the vendor: the user asked, and ends it themselves.
+  if (options.network || !probe) return settled;
+  // A footer or list paint does not wait on a slow vendor. The probe keeps
+  // running and records its reading when it lands; until then the paint shows
+  // the last known figure (nothing, if there is none yet). This wait only
+  // decides what to paint now: it never cancels the probe.
+  settled.catch(() => undefined);
+  const stale = shownReading(entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
+  return Promise.race([settled, new Promise<UsageReading | undefined>((resolve) => { setTimeout(() => resolve(stale), USAGE_PAINT_WAIT_MS).unref(); })]);
 }
 
 function accountPseudoSession(account: AiHarnessAccount, state: HarnessState, harnessCommand: string): HarnessSession {

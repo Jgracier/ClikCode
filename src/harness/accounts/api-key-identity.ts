@@ -64,7 +64,6 @@ type KeyReader = (key: string, harness: AiLocalHarnessDefinition | undefined) =>
 const bearer = (url: string, parse: (text: string) => string | undefined): KeyReader => async (key) => {
   const response = await fetch(url, {
     headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
-    signal: AbortSignal.timeout(15_000),
   });
   return response.ok ? parse(await response.text()) : undefined;
 };
@@ -82,7 +81,7 @@ const READERS = {
   // Amp publishes no key endpoint; its own `amp usage` reads AMP_API_KEY
   // before its stored login and opens with "Signed in as <email>".
   amp: async (key, harness) => harness?.command === 'amp'
-    ? parseAmpUsage(await captureNativeHarnessOutput(harness, ['usage'], { AMP_API_KEY: key }, 15_000))
+    ? parseAmpUsage(await captureNativeHarnessOutput(harness, ['usage'], { AMP_API_KEY: key }))
     : undefined,
 } satisfies Record<string, KeyReader>;
 

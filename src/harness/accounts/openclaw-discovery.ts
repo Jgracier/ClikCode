@@ -80,8 +80,8 @@ export async function discoverOpenClawModels(
 ): Promise<OpenClawInventory | undefined> {
   const environment = nativeProfileEnvironment(account?.nativeProfile);
   const [catalogJson, pluginsJson] = await Promise.all([
-    captureNativeHarnessOutput(harness, ['models', 'list', '--all', '--refresh', '--json'], environment, 60_000).catch(() => ''),
-    captureNativeHarnessOutput(harness, ['plugins', 'list', '--json'], environment, 60_000).catch(() => ''),
+    captureNativeHarnessOutput(harness, ['models', 'list', '--all', '--refresh', '--json'], environment).catch(() => ''),
+    captureNativeHarnessOutput(harness, ['plugins', 'list', '--json'], environment).catch(() => ''),
   ]);
   return openClawInventory(catalogJson, pluginsJson);
 }
