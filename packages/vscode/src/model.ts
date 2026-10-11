@@ -51,6 +51,12 @@ export interface Note {
   level?: 'info' | 'warning' | 'error';
   title?: string;
   text: string;
+  /** The running turn's prompt index, and where in its answer (and in what
+   * order among its rows) the note arrived: it stays there when the turn
+   * ends. Absent for a note outside a turn. */
+  turn?: number;
+  offset?: number;
+  seq?: number;
 }
 
 export interface Approval {
@@ -82,8 +88,10 @@ export interface TurnTrace {
   /** The answer as it streamed: rows and thoughts are placed in the saved
    * answer only where it still reads the same up to their place. */
   text: string;
-  /** The plan the turn worked through, as it stood at the end. */
+  /** The plan the turn worked through, as it stood at the end, and where in
+   * the turn it first appeared (one plan row per turn). */
   plan?: ChatModel['plan'];
+  planAt?: PlanAt;
   startedAt: number;
   endedAt: number;
   /** The calls and text are the saved turn's, not this window's. */
@@ -94,6 +102,10 @@ export interface TurnTrace {
 
 /** One settled thought: what it said, where in the answer it came, and for
  * how long it went on ("Thought for 4s", as Claude Code and Codex say). */
+/** Where a turn's one plan row sits: the answer offset it first appeared at,
+ * and its place in the order of the turn's rows. */
+export interface PlanAt { offset: number; seq: number }
+
 export interface ThoughtEntry { text: string; offset: number; ms: number; seq: number }
 
 export interface LiveTurn {
@@ -114,8 +126,11 @@ export interface LiveTurn {
    * "editing app.ts") -- the terminal's own status rule. */
   openTools: Array<[string, OpenTool]>;
   toolPhase?: string;
-  /** Messages sent into this turn while it runs, where they landed. */
-  steers: Array<{ text: string; offset: number }>;
+  /** Messages sent into this turn while it runs, where they landed, and
+   * the order they were acknowledged in (`seq`, as every row has). */
+  steers: Array<{ text: string; offset: number; seq?: number }>;
+  /** Where the turn's plan first appeared. */
+  planAt?: PlanAt;
   startedAt: number;
   /** When the model last went back to thinking -- the turn began, or its
    * last open call closed. Not moved by the answer's deltas. */
@@ -273,8 +288,18 @@ function freshFor(model: ChatModel): ChatModel {
 /** A note goes where it happened: during a turn, after the prompt that
  * started it (the prompt is not in the transcript yet), else at the end. */
 export function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel {
-  const after = model.running && model.turnUserIndex !== undefined ? model.turnUserIndex + 1 : model.messages.length;
-  return { ...model, notes: [...model.notes, { ...note, after }].slice(-MAX_NOTES) };
+  const during = model.running && model.turnUserIndex !== undefined;
+  const after = during ? model.turnUserIndex! + 1 : model.messages.length;
+  // Mid-turn it is also placed in the turn: at the answer offset where it
+  // arrived, in order among the rows, so it neither trails the live turn nor
+  // jumps above the answer when the turn ends (standard sections 1, 11).
+  const live = during ? model.live : undefined;
+  const seen = live ? live.seen + 1 : undefined;
+  const placed: Note = { ...note, after, ...(live ? { turn: model.turnUserIndex!, offset: live.text.length, seq: seen! } : {}) };
+  return {
+    ...model, ...(live ? { live: { ...live, seen: seen! } } : {}),
+    notes: [...model.notes, placed].slice(-MAX_NOTES),
+  };
 }
 
 export function applySession(model: ChatModel, session: HarnessSession, account?: string, label?: IdeModelLabel): ChatModel {
@@ -542,13 +567,27 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         ? event.live.activities.reduce<LiveTurn>((live, item) => withToolPhase(upsertActivity(live, item.event, item.responseOffset), item.event), base)
         : base;
       // Steers are the turn's own record, so every window shows them.
-      const steers = (event.session.pendingTurn?.steers ?? []).map((steer) => ({ text: steer.text, offset: steer.responseOffset ?? event.live!.text.length }));
+      // Each takes its place in the order when it was acknowledged: the
+      // worker's `seq` where it sends one, else the order this window first
+      // saw it in (the earlier window's, kept).
+      let seen = replayed.seen;
+      const held = model.live?.steers ?? [];
+      const steers = (event.session.pendingTurn?.steers ?? []).map((steer, index) => {
+        const seq = (steer as { seq?: number }).seq ?? held[index]?.seq ?? ++seen;
+        return { text: steer.text, offset: steer.responseOffset ?? event.live!.text.length, seq };
+      });
+      // The plan the worker says the turn has is placed where this window
+      // first saw it (or, joining mid-turn, at the top, as it was drawn
+      // before). `planOffset` is read defensively: a worker that records it
+      // sends where it really was.
+      const planOffset = (event.live as { planOffset?: number }).planOffset;
+      const planAt = replayed.planAt ?? (event.live.plan?.length ? { offset: planOffset ?? 0, seq: ++seen } : undefined);
       return {
         ...next,
         running: true,
         turnUserIndex: next.turnUserIndex ?? next.messages.length,
         live: {
-          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers,
+          ...replayed, text: event.live.text, waitingLabel: stripAnsi(event.live.waitingLabel), steers, seen, ...(planAt ? { planAt } : {}),
         },
         ...(event.live.plan ? { plan: event.live.plan.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) } : {}),
       };
@@ -571,7 +610,12 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
         reasoning: rebaseOffsets(after.reasoning, live.text, text),
       } : {};
-      return { ...model, live: { ...after, ...placed, text, activeAt: Date.now(), ...(event.text ? { writingAt: Date.now() } : {}) } };
+      const planAt = event.mode === 'replace' && after.planAt ? { planAt: rebaseOffsets([after.planAt], live.text, text)[0]! } : {};
+      // The turn's notices are placed in the answer like its rows.
+      const notes = event.mode === 'replace' && model.notes.some((note) => note.turn !== undefined && note.turn === model.turnUserIndex)
+        ? model.notes.map((note) => (note.turn !== undefined && note.turn === model.turnUserIndex ? rebaseOffsets([note], live.text, text)[0]! : note))
+        : model.notes;
+      return { ...model, notes, live: { ...after, ...placed, ...planAt, text, activeAt: Date.now(), ...(event.text ? { writingAt: Date.now() } : {}) } };
     }
     case 'activity': {
       const live = model.live ?? freshLive('thinking');
@@ -579,8 +623,14 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     }
     case 'phase':
       return model.live ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
-    case 'plan':
-      return { ...model, plan: event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) })) };
+    case 'plan': {
+      const plan = event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) }));
+      // One plan row per turn: placed where it first appeared, updated in place.
+      const live = model.live && !model.live.planAt && plan.length
+        ? { ...model.live, seen: model.live.seen + 1, planAt: { offset: model.live.text.length, seq: model.live.seen + 1 } }
+        : model.live;
+      return { ...model, plan, ...(live ? { live } : {}) };
+    }
     case 'usage': {
       const usage = event.usage;
       const percent = usage.contextPercent ?? (usage.contextUsed && usage.contextWindow ? (usage.contextUsed / usage.contextWindow) * 100 : undefined);
@@ -644,12 +694,13 @@ function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
   const activities = settledCalls(model.live?.activities ?? [], asked);
   const reasoning = turnReasoning(model.live);
   const plan = model.plan.length ? model.plan : undefined;
+  const turnNotes = model.notes.some((note) => note.turn !== undefined && note.turn === model.turnUserIndex);
   // The saved turn's calls, when its snapshot came first, win over the ones
   // this window watched (see withSavedTraces).
   const saved = model.traces.find((trace) => trace.userIndex === model.turnUserIndex && trace.saved);
-  const traces = (activities.length || reasoning || plan || (asked && model.live?.text)) && model.turnUserIndex !== undefined
+  const traces = (activities.length || reasoning || plan || turnNotes || (asked && model.live?.text)) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
-      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan } : {}),
+      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
       // Completed steers are materialized as user messages in session.messages.
       // Keeping the live badges in the finished trace displayed each prompt twice.
       text: model.live?.text ?? '',
@@ -659,7 +710,9 @@ function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
       ...(asked || (saved ?? { activities }).activities.some((activity) => activity.stopped) ? { stopped: true } : {}),
     }].slice(-MAX_TRACES)
     : model.traces;
-  return { ...model, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined, traces };
+  // The plan goes with its turn (the trace holds it, at its place): left
+  // here an unfinished one drew a second card under the answer.
+  return { ...model, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined, traces, plan: [] };
 }
 
 export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
@@ -789,18 +842,25 @@ export function typedDuringTurn(model: ChatModel, id: string, text: string): Cha
   return { ...model, submissions: [...model.submissions, { id, text }] };
 }
 
-export type TurnMark = { offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string };
+export type TurnMark = {
+  offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string; steerIndex?: number; plan?: true; note?: Note;
+};
 
-/** A turn's calls, thoughts and steered messages in the order they happened:
- * by where in the answer they came, then -- where no text came between
- * them -- by which began first. A message sent into the turn goes after
- * whatever was already at its place. */
+/** A turn's calls, thoughts, plan, notices and steered messages in the order
+ * they happened (standard section 1): by where in the answer they came, then
+ * by `seq` -- the order they began in, a steer's being the moment it was
+ * acknowledged. A steer with no seq (a saved turn's) goes after whatever was
+ * already at its place. */
 export function turnMarks(
-  text: string, activities: readonly Activity[], thoughts: readonly ThoughtEntry[], steers: ReadonlyArray<{ text: string; offset: number }>,
+  text: string, activities: readonly Activity[], thoughts: readonly ThoughtEntry[], steers: ReadonlyArray<{ text: string; offset: number; seq?: number }>,
+  extra: { plan?: PlanAt; notes?: ReadonlyArray<{ offset: number; seq: number; note: Note }> } = {},
 ): TurnMark[] {
+  const at = (offset: number): number => Math.min(offset, text.length);
   return [
-    ...thoughts.map((thought) => ({ offset: Math.min(thought.offset, text.length), seq: thought.seq, thought })),
-    ...activities.map((activity, index) => ({ offset: Math.min(activity.offset ?? 0, text.length), seq: activity.seq ?? index, activity })),
-    ...steers.map((steer) => ({ offset: Math.min(steer.offset, text.length), seq: Number.MAX_SAFE_INTEGER, steer: steer.text })),
+    ...thoughts.map((thought) => ({ offset: at(thought.offset), seq: thought.seq, thought })),
+    ...activities.map((activity, index) => ({ offset: at(activity.offset ?? 0), seq: activity.seq ?? index, activity })),
+    ...steers.map((steer, steerIndex) => ({ offset: at(steer.offset), seq: steer.seq ?? Number.MAX_SAFE_INTEGER, steer: steer.text, steerIndex })),
+    ...(extra.plan ? [{ offset: at(extra.plan.offset), seq: extra.plan.seq, plan: true as const }] : []),
+    ...(extra.notes ?? []).map(({ offset, seq, note }) => ({ offset: at(offset), seq, note })),
   ].sort((left, right) => left.offset - right.offset || left.seq - right.seq);
 }
