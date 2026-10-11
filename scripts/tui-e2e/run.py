@@ -1462,6 +1462,143 @@ SCENARIOS = {
         'watch': ['bang-42'], 'snap_contains': {'opened': ['› ! x']}, 'snap_lacks': {'cleared': ['› !']},
         'final_contains': ['!echo bang-$((40+2))', 'exit 0', 'Hello there, all good.'],
     },
+
+    # ------------------------------------------------------------------
+    # Acceptance tests for docs/TURN_FLOW_STANDARD.md, played from an
+    # `emits` script (fake-grok.mjs). Several carry `expect_fail`: the
+    # stream named is the change that makes them pass; see README.md.
+    # ------------------------------------------------------------------
+    # 1.4: completion order never decides position. Y finishes first and X
+    # (which started first) stays above it, while running and once settled.
+    'parallel-order': {
+        'expect_fail': 'order',  # settled rows follow completion order, not start order (1.4)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Running two checks at once.\n\n'},
+            {'op': 'tool-start', 'id': 'px', 'title': 'sleep 2'},
+            {'op': 'tool-start', 'id': 'py', 'title': 'echo Y'},
+            {'op': 'sleep', 'ms': 400},
+            {'op': 'tool-end', 'id': 'py', 'result': 'Y'},
+            {'op': 'sleep', 'ms': 1800},
+            {'op': 'tool-end', 'id': 'px', 'result': 'slept'},
+            {'op': 'text', 'text': 'Both checks are done.'}]}],
+        'steps': [('type', 'run both'), ('wait_for', 'Both checks are done.', 40), ('settle', 3)],
+        'watch': [], 'always_order': [('sleep 2', 'echo Y')],
+        'final_in_order': ['Running two checks at once.', 'sleep 2', 'echo Y', 'Both checks are done.'],
+        'final_once': ['Running two checks at once.', 'Both checks are done.'],
+    },
+    # 5: a child begun after text the parent wrote is drawn after that text,
+    # and two concurrent children each have a slot at once.
+    'child-order': {
+        'expect_fail': 'order',  # agent row after the text begun under it, and one child slot per parent (1.3, 5)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Starting the investigation.\n\n'},
+            {'op': 'agent-start', 'id': 'ag1', 'title': 'Task: investigate'},
+            {'op': 'sleep', 'ms': 400},
+            {'op': 'text', 'text': 'Notes written while the agent works.\n\n'},
+            {'op': 'child-start', 'id': 'c1', 'parent': 'ag1', 'title': 'Read child-alpha.ts'},
+            {'op': 'child-start', 'id': 'c2', 'parent': 'ag1', 'title': 'Read child-bravo.ts'},
+            {'op': 'sleep', 'ms': 2500},
+            {'op': 'child-end', 'id': 'c1', 'parent': 'ag1'},
+            {'op': 'sleep', 'ms': 800},
+            {'op': 'child-end', 'id': 'c2', 'parent': 'ag1'},
+            {'op': 'agent-end', 'id': 'ag1', 'result': 'investigated'},
+            {'op': 'text', 'text': 'The investigation is complete.'}]}],
+        'steps': [('type', 'investigate'), ('wait_for', 'The investigation is complete.', 40), ('settle', 3)],
+        'watch': [],
+        # The agent began before the notes; its children began after them.
+        'always_order': [('Agent Task: investigate', 'Notes written while the agent works.'),
+                         ('Notes written while the agent works.', 'child-alpha'), ('Notes written while the agent works.', 'child-bravo')],
+        'ever_together': [('child-alpha', 'child-bravo')],
+        'final_once': ['Notes written while the agent works.', 'The investigation is complete.'],
+    },
+    # 4/11: each thought settles where it happened -- before the text, and the
+    # second after it -- and neither doubles or moves.
+    'thought-after-text': {
+        'expect_fail': 'core',  # settled thought rows lose their heading and are not durable (4)
+        'turns': [{'emits': [
+            {'op': 'thought', 'heading': 'Planning the approach', 'text': 'Considering which files matter first.'},
+            {'op': 'sleep', 'ms': 900},
+            {'op': 'text', 'text': 'Here is the first part of the answer.\n\n'},
+            {'op': 'thought', 'heading': 'Checking the edge cases', 'text': 'Looking for a boundary that breaks.'},
+            {'op': 'sleep', 'ms': 900},
+            {'op': 'text', 'text': 'And here is the closing part.'}]}],
+        'steps': [('type', 'think it through'), ('wait_for', 'And here is the closing part.', 40), ('settle', 3)],
+        'watch': [],
+        # Two thoughts of the same length read the same; that is not a double.
+        'dup_ok': ['Thought for'],
+        'final_in_order': ['Planning the approach', 'Here is the first part of the answer.', 'Checking the edge cases', 'And here is the closing part.'],
+        'final_once': ['Planning the approach', 'Checking the edge cases', 'Here is the first part of the answer.'],
+    },
+    # 8: a declined approval leaves a settled row where it was asked, and the
+    # status never goes blank between the question and the next thing.
+    'approval-denied-row': {
+        'expect_fail': 'core',  # a declined approval leaves a failed call row, no `denied` outcome (8)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'About to run a command.\n\n'},
+            {'op': 'permission', 'id': 'ap1', 'command': 'rm -rf build'}],
+            'blocks': ['It was answered: {answers}.']}],
+        'steps': [('type', 'clean it'), ('wait_for', 'Allow once?', 30), ('settle', 1.5), ('keys', 'n'),
+                  ('wait_for', 'It was answered: reject.', 20), ('settle', 3)],
+        'watch': [],
+        'status_always': [('Allow once?', 'It was answered: reject.')],
+        'final_in_order': ['About to run a command.', 'rm -rf build', 'It was answered: reject.'],
+        # Its own wording (§8), on a transcript row: not the footer's path.
+        'final_rows_match': [r'\bdenied\b'], 'final_once': ['rm -rf build'],
+    },
+    # 3: a table is held in the live region until it closes; no retired row is
+    # narrower than a row that came after it.
+    'table-stream': {
+        'expect_fail': 'order',  # table rows are retired line by line at the width of the rows so far (3)
+        'env': {'FAKE_DELAY_MS': '200'},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Here is the matrix:\n\n| name | role |\n|---|---|\n| a | x |\n| b | y |\n'
+                                   '| a-much-longer-name-than-before | a considerably longer role description |\n\nThat is all.'}]}],
+        'steps': [('type', 'show the matrix'), ('wait_for', 'That is all.', 40), ('settle', 3)],
+        'watch': [], 'table_aligned': True, 'final_once': ['That is all.', 'Here is the matrix:'],
+    },
+    # 9: `writing` holds for a pause in the middle of an answer.
+    'status-writing': {
+        'expect_fail': 'motion',  # `thinking` returns after a pause mid-answer (9)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'This answer begins here and continues,'},
+            {'op': 'sleep', 'ms': 3200},
+            {'op': 'text', 'text': ' then finishes after a long pause.'}]}],
+        'steps': [('type', 'answer slowly'), ('wait_for', 'then finishes after a long pause.', 40), ('settle', 3)],
+        'watch': [], 'ever': ['writing'],
+        'never_after': [('This answer begins here', 'thinking')],
+    },
+    # 1.5: a steer acknowledged between two calls: the call begun after it is
+    # drawn after it -- with no text between to tell them apart by offset.
+    'steer-order': {
+        'env': {'FAKE_STEERING': '1'},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Starting the checks.\n\n'},
+            {'op': 'tool', 'id': 'sa', 'title': 'echo alpha', 'ms': 300, 'result': 'alpha'},
+            {'op': 'sleep', 'ms': 6000},
+            {'op': 'tool', 'id': 'sb', 'title': 'echo bravo', 'ms': 500, 'result': 'bravo'},
+            {'op': 'text', 'text': 'All the checks ran.'}]}],
+        'steps': [('type', 'start the checks'), ('wait_for', 'echo alpha', 30), ('settle', 1.5),
+                  ('type', 'steer this in'), ('wait_for', 'sent into the turn', 10),
+                  ('wait_for', 'All the checks ran.', 40), ('settle', 3)],
+        'watch': [], 'ever': ['sent into the turn'],
+        'always_order': [('echo alpha', '› steer this in'), ('› steer this in', 'echo bravo')],
+        'final_in_order': ['echo alpha', '› steer this in', 'echo bravo', 'All the checks ran.'],
+        'final_once': ['› steer this in'],
+    },
+    # A resize while TEXT streams (not only while a call runs): every
+    # paragraph is on screen once, the answer carries on after it.
+    'mid-turn-resize-while-streaming': {
+        'env': {'FAKE_DELAY_MS': '220'},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'First paragraph streams while the terminal narrows and widens again.\n\n'},
+            {'op': 'text', 'text': 'Second paragraph follows the resize and must appear once only.\n\n'},
+            {'op': 'text', 'text': 'Third ENDMARK paragraph closes it.'}]}],
+        'steps': [('type', 'stream it'), ('wait_for', 'First paragraph streams', 30),
+                  ('resize', 50, 50), ('settle', 1.5), ('resize', 50, 100),
+                  ('wait_for', 'Third ENDMARK paragraph closes it.', 40), ('settle', 3)],
+        'watch': [],
+        'final_once': ['First paragraph streams', 'Second paragraph follows', 'Third ENDMARK paragraph closes it.'],
+    },
     # No alternate screen: the first message still signs in, on the plain
     # terminal (login.ts plainSignInScreen), then answers.
     'classic-fallback': {
@@ -1859,6 +1996,11 @@ def run(name, spec, entry, keep):
         try: found = open(os.path.join(workspace, name)).read()
         except OSError: found = None
         if found != text: problems.append(f'{name} holds {found!r}, expected {text!r}')
+    # A regular expression that some TRANSCRIPT row of the final screen matches
+    # (the footer, whose path holds the scenario's name, is not a row).
+    for pattern in spec.get('final_rows_match', []):
+        if not any(re.search(pattern, row) for row in (transcript_rows(final) or final.split('\n'))):
+            problems.append(f'no transcript row on the final screen matches {pattern!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     # Top to bottom on the final screen, in this order.
