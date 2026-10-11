@@ -96,3 +96,33 @@ describe('a footer that must hold an approval', () => {
     expect(fitFooterForApproval({ ...parts, approval: ['? Run make?', '  [y] [n]'], height: 5 }).rows.slice(0, 2)).toEqual(['? Run make?', '  [y] [n]']);
   });
 });
+
+describe('the background-terminals indicator row', () => {
+  const withIndicator = (over: Partial<Parameters<typeof frameRowBudget>[0]> = {}) =>
+    frameRowBudget({ targetHeight: 40, waiting: true, notice: 0, requestedPaletteCapacity: 0, indicator: true, ...over });
+
+  it('is one row under the status, only while a turn runs and a terminal does', () => {
+    expect(withIndicator().indicatorRows).toBe(1);
+    expect(withIndicator().optionalRows).toBe(40 - 4 - 2 - 1);
+    expect(withIndicator({ indicator: false }).indicatorRows).toBe(0);
+    expect(withIndicator({ waiting: false }).indicatorRows).toBe(0);
+  });
+
+  it('is dropped before the approval block, the notice or the spinner on a short terminal', () => {
+    // Left over after the fixed footer and the status, the indicator needs
+    // more than an approval's own minimum (APPROVAL_MIN_ROWS) to stay.
+    const rows = (targetHeight: number) => withIndicator({ targetHeight });
+    expect(rows(9).indicatorRows).toBe(1);
+    expect(rows(8).indicatorRows).toBe(0);
+    for (const height of [3, 4, 5, 6, 7, 8]) {
+      expect(rows(height).waitingRows, `status at ${height}`).toBeGreaterThanOrEqual(1);
+      expect(rows(height).optionalRows, `approval room at ${height}`).toBe(budget({ waiting: true, targetHeight: height }).optionalRows);
+    }
+  });
+
+  it('never takes a row the palette was given', () => {
+    const result = withIndicator({ targetHeight: 12, requestedPaletteCapacity: 8 });
+    expect(result.paletteRows + result.indicatorRows + result.noticeRows).toBeLessThanOrEqual(result.optionalRows + result.paletteRows + result.indicatorRows + result.noticeRows);
+    expect(result.optionalRows).toBeGreaterThanOrEqual(0);
+  });
+});

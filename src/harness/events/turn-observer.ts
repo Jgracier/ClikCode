@@ -22,6 +22,7 @@
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { TurnUsage } from '../protocol/turn-usage.js';
 import type { UsageReading } from '../accounts/usage-reading.js';
+import type { BackgroundWorkUpdate } from '../protocol/background-agents.js';
 
 /** One step of an agent's plan. Codex publishes `{content, status}`, ACP adds
  * a `priority`; the UI reads content and status and ignores the rest. */
@@ -61,11 +62,12 @@ export interface HarnessTurnObserver {
   /** Something about the turn the user should be told beside the answer: the
    * vendor substituting another model, compacting the conversation. */
   onNotice?: (message: string) => void;
-  /** How many background agents the vendor says are still running, each time
-   * that changes (the level, not an edge; 0 is "none", see
-   * protocol/background-agents.ts). The turn's end says `Waiting for N
-   * background agents` from the last count (standard section 10). */
-  onBackgroundAgents?: (pending: number) => void;
+  /** What the vendor says is still running in the background, each time that
+   * changes: a level, not an edge, and only the kinds the record names (0 is
+   * "none"; see protocol/background-agents.ts). The turn's end says `Waiting
+   * for N background agents` from the agents and workflows; background
+   * terminals are a footer indicator (standard section 10). */
+  onBackgroundWork?: (work: BackgroundWorkUpdate) => void;
   /** The agent's plan, republished whole each time it changes. */
   onPlan?: (entries: readonly HarnessPlanEntry[], explanation?: string) => void;
   /** The agent left its read-only plan mode during the turn: the user approved

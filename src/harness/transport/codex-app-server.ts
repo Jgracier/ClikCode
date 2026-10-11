@@ -362,6 +362,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       items: new Map(), output: new Map(), thoughts: new Map(), complete, fail,
     };
     let keepFailedWork = false;
+    // A process an earlier turn left running is this turn's indicator from the start.
+    if (this.terminalCount) input.onBackgroundWork?.({ terminals: this.terminalCount });
     return this.runActive(turn, input.signal, failure, () => this.flow(turn, completion), {
       failed: (error) => {
         // Prefer the server's structured error over the transport's message.
@@ -372,12 +374,21 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       },
       ended: (succeeded) => {
         input.onSteerReady?.(undefined);
+        // Whatever is still running now has outlived its turn (a failed turn
+        // that keeps no work keeps no terminal either).
+        if (!succeeded && !keepFailedWork) this.terminals.clear();
+        for (const terminal of this.terminals.values()) terminal.background = true;
+        this.announceTerminals(turn);
         // A turn/steer in flight when the turn ends is never answered.
         this.live?.peer.rejectPending(new Error('Codex turn ended'), (method) => method !== 'turn/interrupt');
         // A parent failure does not stop items the server already started.
         // Leave that server to finish them before retrying or switching.
         if (!succeeded && !keepFailedWork) { this.pendingWork.clear(); this.settleBackground(); }
-        else if (this.pendingWork.size && this.live) this.openBackground('background-work', undefined, turn.items);
+        else if (this.pendingWork.size && this.live) {
+          const run = this.openBackground('background-work', undefined, turn.items);
+          // The background turn starts knowing what runs.
+          if (run && this.terminalCount) run.observer.onBackgroundWork?.({ terminals: this.terminalCount });
+        }
       },
     });
   }
@@ -415,6 +426,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
 
   protected clearPending(): void {
     this.pendingWork.clear();
+    this.terminals.clear();
+    this.terminalCount = 0;
     this.compactWaiter?.fail(new Error('Codex app-server closed before it finished compacting'));
   }
 
@@ -458,6 +471,41 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         ...(vendorTurnId ? { vendorTurnId } : {}),
       };
     }, (watchdog) => { for (const key of this.pendingWork.keys()) watchdog.toolStarted(key); });
+  }
+
+  /** Unified-exec processes (commandExecution items with source
+   * `unifiedExecStartup`, app-server schema v2) by item id. One is a
+   * BACKGROUND terminal -- Codex's own word -- once it has outlived the
+   * model's wait for it: the model came back to it (an
+   * `item/commandExecution/terminalInteraction`, Codex's "Waiting for
+   * background terminal"), or the turn ended with it still running. Every
+   * Codex command is a unified-exec process, so counting from its start would
+   * make the indicator flash for each `ls`. */
+  private readonly terminals = new Map<string, { processId?: string; background: boolean }>();
+  private terminalCount = 0;
+
+  private trackTerminals(target: Stream | undefined, method: string, params: JsonObject): void {
+    if (method === 'item/started' || method === 'item/completed') {
+      const item = (params.item as JsonObject) ?? {};
+      if (item.type !== 'commandExecution' || item.source !== 'unifiedExecStartup' || typeof item.id !== 'string') return;
+      if (method === 'item/completed') this.terminals.delete(item.id);
+      else if (!this.terminals.has(item.id)) this.terminals.set(item.id, { ...(typeof item.processId === 'string' ? { processId: item.processId } : {}), background: false });
+    } else if (method === 'item/commandExecution/terminalInteraction') {
+      const itemId = typeof params.itemId === 'string' ? params.itemId : undefined;
+      const processId = typeof params.processId === 'string' ? params.processId : undefined;
+      for (const [id, terminal] of this.terminals) {
+        if (id === itemId || (processId !== undefined && terminal.processId === processId)) terminal.background = true;
+      }
+    } else return;
+    this.announceTerminals(target);
+  }
+
+  /** Tells `target` the number of background terminals when it changed. */
+  private announceTerminals(target: Stream | undefined, force = false): void {
+    const count = [...this.terminals.values()].filter((terminal) => terminal.background).length;
+    if (count === this.terminalCount && !force) return;
+    this.terminalCount = count;
+    target?.observer.onBackgroundWork?.({ terminals: count });
   }
 
   private settleBackground(): void {
@@ -744,6 +792,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     if (method === 'thread/compacted' && ours) this.compactWaiter?.done();
     const target = this.targetFor(method, params, ours);
     target?.watchdog?.activity();
+    if (ours) this.trackTerminals(target, method, params);
     if (!ours) this.otherThread(target, method, params, threadId!);
     else if (target) this.ownThread(target, method, params);
     else this.bookkeeping(undefined, method, params);

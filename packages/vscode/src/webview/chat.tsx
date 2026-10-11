@@ -24,7 +24,7 @@ import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Animating, Icon, Spinner } from './ui';
-import { decisionBadge, foldedGroupCount, foldedSummary, liveMeter, runGroupView, shimmerStyle, traceSummaryLine, workingDetail, workingStatus } from './flow';
+import { decisionBadge, foldedGroupCount, foldedSummary, liveMeter, runGroupView, shimmerStyle, traceSummaryLine, workingDetail, workingIndicator, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
@@ -610,6 +610,9 @@ function Working({ live, asking, usage, reconnecting: away = false }: { live: Li
         ) : null}
         {/* Not announced: a clock changing every second would be read out. */}
         {live && !held ? <WorkingDetail live={live} usage={usage} /> : null}
+        {/* Background terminals the vendor runs (standard section 10): its
+            footer indicator, here beside the clock. Not on the closing line. */}
+        {workingIndicator(live) ? <span class="muted working-background">{workingIndicator(live)}</span> : null}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
