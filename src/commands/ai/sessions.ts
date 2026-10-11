@@ -5,7 +5,7 @@ import { turboFitSessionClosed } from './turbofit.js';
 import { releaseHeldLocalModel } from './local-model.js';
 import { catalogModel, resolveLocalModelId } from '../../local-models/catalog.js';
 import { isBlankConversation } from '../../session/options.js';
-import { gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
+import { gatewayModelForWord, gatewayModels, isAutomaticModelWord } from '../../gateway/models.js';
 import { gatewayAgents } from '../../gateway/agents.js';
 import { harnessCommand } from '../../session/state/paths.js';
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
@@ -62,16 +62,16 @@ export async function assertRealModel(harness: AiLocalHarnessDefinition | undefi
  * Gateway served a moment before (bench/harness, 2026-10-10). */
 export async function chooseGatewayModel(value: string): Promise<string | null> {
   if (isAutomaticModelWord(value)) return null;
-  const wanted = value.trim().toLowerCase();
-  const lookup = (models: readonly { id: string }[]) => models.find((model) => model.id.toLowerCase() === wanted)
-    ?? models.find((model) => model.id.toLowerCase().endsWith(`/${wanted}`));
+  // The id however spelled, else the newest model the words name (`opus` → `claude-opus-5.5`):
+  // a vendor alias carried from another provider names a model the Gateway also serves.
   let { models } = await gatewayModels();
-  let found = lookup(models);
+  let found = gatewayModelForWord(models, value);
   if (!found) {
     models = (await gatewayModels({ fresh: true })).models;
-    found = lookup(models);
+    found = gatewayModelForWord(models, value);
   }
   if (!found) {
+    const wanted = value.trim().toLowerCase();
     const near = models.filter((model) => model.id.toLowerCase().includes(wanted)).slice(0, 5).map((model) => model.id);
     throw new Error(`"${value.trim()}" is not a model ClikDeploy Gateway offers you${near.length ? `. Did you mean: ${near.join(', ')}` : '; see `' + harnessCommand() + ' gateway models`'}.`);
   }

@@ -9,7 +9,8 @@ vi.mock('../../gateway/credentials.js', () => ({
   getApiUrl: () => 'https://gateway.test',
   getApiKeyForUrl: () => 'test-key',
 }));
-vi.mock('../../gateway/models.js', () => ({
+vi.mock('../../gateway/models.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   savedGatewayModels: catalog.saved,
   gatewayModels: catalog.fresh,
 }));

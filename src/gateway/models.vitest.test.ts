@@ -8,7 +8,7 @@ vi.mock('../agent/models/for-session.js', () => ({
   gatewayConnection: () => ({ baseUrl: 'https://clikdeploy.com', apiKey: account.key }),
 }));
 
-const { gatewayModelDetail, gatewayModels, gatewayPriceLabel, isAutomaticModelWord, resetGatewayModelCache } = await import('./models.js');
+const { gatewayModelDetail, gatewayModelForWord, gatewayModels, gatewayPriceLabel, isAutomaticModelWord, resetGatewayModelCache, sameGatewayModel } = await import('./models.js');
 const { chooseGatewayModel } = await import('../commands/ai/sessions.js');
 
 /** What the Gateway sends (GET /v1/models, OpenAI's list)... */
@@ -130,6 +130,17 @@ describe('choosing a Gateway model', () => {
     vi.stubGlobal('fetch', fetchMock);
     expect(await chooseGatewayModel('claude-opus-5')).toBe('claude-opus-5');
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('takes an id however it is spelled, and a vendor word as the newest model it names', async () => {
+    const models = [{ id: 'claude-opus-5' }, { id: 'claude-opus-5.5-fast' }, { id: 'claude-opus-5.5' }, { id: 'claude-sonnet-5' }, { id: 'claude-opus-4.8' }];
+    expect(sameGatewayModel('claude-opus-5-5', 'anthropic/Claude-Opus-5.5')).toBe(true);
+    expect(gatewayModelForWord(models, 'claude-opus-5-5')?.id).toBe('claude-opus-5.5');
+    // A Claude Code alias carried onto the Gateway: its newest model, never the dearer -fast lane first.
+    expect(gatewayModelForWord(models, 'opus')?.id).toBe('claude-opus-5.5');
+    expect(gatewayModelForWord(models, 'sonnet')?.id).toBe('claude-sonnet-5');
+    expect(gatewayModelForWord(models, 'haiku')).toBeUndefined();
+    expect(await chooseGatewayModel('opus')).toBe('claude-opus-5');
   });
 
   it('refuses a model the Gateway does not offer, and suggests near ones', async () => {

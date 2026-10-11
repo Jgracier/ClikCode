@@ -110,6 +110,33 @@ async function saveGatewayModels(baseUrl: string, auth: string, list: GatewayMod
 }
 
 /** Words that mean "let the Gateway choose" rather than a model id. */
+/** One model however it is spelled: `claude-opus-5-5` and `claude-opus-5.5` (case, `.`, `_` folded). */
+export function sameGatewayModel(a: string, b: string): boolean {
+  const fold = (id: string) => id.trim().toLowerCase().split('/').pop()!.replace(/[._]/g, '-');
+  return fold(a) === fold(b);
+}
+
+/**
+ * The model a typed word names in the Gateway's list: the id itself, however spelled; else the
+ * newest model whose name holds every word (`opus` → `claude-opus-5.5`, ahead of `claude-opus-5`
+ * and of its dearer `-fast` lane). Undefined when nothing holds them.
+ */
+export function gatewayModelForWord(models: readonly GatewayModel[], value: string): GatewayModel | undefined {
+  const exact = models.find((model) => sameGatewayModel(model.id, value));
+  if (exact) return exact;
+  const words = value.trim().toLowerCase().split(/[\s-]+/).filter(Boolean);
+  const parts = (id: string) => id.toLowerCase().split(/[-._/:\s]+/);
+  const holding = models.filter((model) => words.every((word) => parts(model.id).includes(word)));
+  const version = (id: string) => parts(id).filter((part) => /^\d+$/.test(part)).map(Number);
+  const newer = (a: GatewayModel, b: GatewayModel): number => {
+    const x = version(a.id);
+    const y = version(b.id);
+    for (let i = 0; i < Math.max(x.length, y.length); i += 1) if ((y[i] ?? -1) !== (x[i] ?? -1)) return (y[i] ?? -1) - (x[i] ?? -1);
+    return Number(parts(a.id).includes('fast')) - Number(parts(b.id).includes('fast'));
+  };
+  return [...holding].sort(newer)[0];
+}
+
 export function isAutomaticModelWord(value: string): boolean {
   return /^(auto|automatic|default|gateway)$/i.test(value.trim());
 }
