@@ -78,16 +78,16 @@ describe('every declared capability is usable', () => {
     const offenders: string[] = [];
     for (const h of harnesses) {
       for (const mode of h.permissionModes ?? []) {
-        if (!h.permissionArgv?.[mode] && !h.permissionEnv?.[mode]) offenders.push(`${h.command}:${mode}`);
+        if (!h.permissionArgv?.[mode] && !h.permissionEnv?.[mode] && !h.acp?.permissionModeIds?.[mode]) offenders.push(`${h.command}:${mode}`);
       }
     }
-    expect(offenders, 'permission modes that reach the vendor by neither argv nor env').toEqual([]);
+    expect(offenders, 'permission modes that reach the vendor by none of argv, env or an ACP session mode').toEqual([]);
   });
 
   it('never declares a mapping with no modes, or modes with no mapping', () => {
     for (const h of harnesses) {
       const modes = (h.permissionModes ?? []).length;
-      const mapped = new Set([...Object.keys(h.permissionArgv ?? {}), ...Object.keys(h.permissionEnv ?? {})]).size;
+      const mapped = new Set([...Object.keys(h.permissionArgv ?? {}), ...Object.keys(h.permissionEnv ?? {}), ...Object.keys(h.acp?.permissionModeIds ?? {})]).size;
       expect(Boolean(modes) === Boolean(mapped), `${h.command}: modes=${modes} mapped=${mapped}`).toBe(true);
     }
   });
@@ -98,7 +98,7 @@ describe('every declared capability is usable', () => {
     for (const h of harnesses) {
       for (const mode of ['ask', 'bypass', 'auto'] as const) {
         const declared = Boolean(h.permissionModes?.includes(mode));
-        const carried = Boolean(h.permissionArgv?.[mode] ?? h.permissionEnv?.[mode]);
+        const carried = Boolean(h.permissionArgv?.[mode] ?? h.permissionEnv?.[mode] ?? h.acp?.permissionModeIds?.[mode]);
         expect(harnessSupportsPermissionMode(h, mode), `${h.command}:${mode}`).toBe(declared && carried);
       }
     }

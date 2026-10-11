@@ -212,12 +212,14 @@ describe('local harness catalog', () => {
     // grok, kimi, vibe, openhands and cn were added after the previous lists
     // were written.
     const fullThreeTier = new Set(['codex', 'claude', 'grok', 'gemini', 'cursor', 'qwen', 'droid', 'command', 'kimi', 'vibe', 'goose']);
-    const askAndAuto = new Set(['kilo']);
+    const askAndAuto = new Set(['kilo', 'dcode']);
     const bypassAndAuto = new Set(['openhands']);
     const askAndBypass = new Set([
       'opencode', 'copilot', 'aider', 'antigravity', 'kiro', 'cline',
       'hermes', 'cn',
     ]);
+    // Devin carries all three as ACP session modes (permissionModeIds), no flag.
+    fullThreeTier.add('devin');
     for (const harness of AI_LOCAL_HARNESSES) {
       expect(harnessSupportsPermissionMode(harness, 'ask'), `${harness.command} ask`).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || askAndAuto.has(harness.command));
       expect(harnessSupportsPermissionMode(harness, 'bypass'), `${harness.command} bypass`).toBe(fullThreeTier.has(harness.command) || askAndBypass.has(harness.command) || bypassAndAuto.has(harness.command));
@@ -342,7 +344,7 @@ describe('local harness catalog', () => {
       const option = localHarnessCapabilityManifest(harness).options.find((item) => item.id === 'permissions');
       if (harness.permissionModes?.length) {
         expect(option?.values, harness.command).toEqual(harness.permissionModes);
-        for (const mode of harness.permissionModes) expect(harness.permissionArgv?.[mode] ?? harness.permissionEnv?.[mode], `${harness.command}:${mode}`).toBeDefined();
+        for (const mode of harness.permissionModes) expect(harness.permissionArgv?.[mode] ?? harness.permissionEnv?.[mode] ?? harness.acp?.permissionModeIds?.[mode], `${harness.command}:${mode}`).toBeDefined();
       }
       else expect(option, harness.command).toBeUndefined();
     }
@@ -419,7 +421,7 @@ describe('local harness catalog', () => {
     const acp = Object.fromEntries(AI_LOCAL_HARNESSES.filter((item) => item.acp).map((item) => [item.command, item.acp!]));
     expect(acp.cline).toMatchObject({ argv: ['--acp'] });
     expect(acp.copilot).toMatchObject({ argv: ['--acp', '--stdio'] });
-    expect(acp.droid).toMatchObject({ argv: ['exec', '--output-format', 'acp'], optionPlacement: 'after' });
+    expect(acp.droid).toMatchObject({ argv: ['exec', '--output-format', 'acp'], inheritCliOptions: false });
     expect(acp.hermes).toMatchObject({ argv: ['acp'] });
     for (const command of ['cline', 'copilot', 'droid', 'hermes']) {
       expect(localHarnessForCommand(command)!.transport, command).toBe('acp');
@@ -443,15 +445,16 @@ describe('local harness catalog', () => {
   });
 
   it('builds the ACP spawn contract from declarations only', () => {
+    // Droid's `exec --output-format acp` validates but ignores -m/-r/--auto: its session is set over the protocol.
     expect(harnessAcpLaunch(localHarnessForCommand('droid')!, { model: 'gpt-5', effort: 'high', permissionMode: 'auto' }))
-      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp', '--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: ['--model', 'gpt-5', '--reasoning-effort', 'high', '--auto', 'low'], optionPlacement: 'after' });
+      .toEqual({ binary: 'droid', argv: ['exec', '--output-format', 'acp'], modeArgv: ['exec', '--output-format', 'acp'], optionArgv: [], optionPlacement: 'before' });
     expect(harnessAcpLaunch(localHarnessForCommand('copilot')!, { model: 'gpt-5', effort: 'high', permissionMode: 'bypass' }))
       .toMatchObject({ binary: 'copilot', argv: ['--model', 'gpt-5', '--effort', 'high', '--allow-all', '--acp', '--stdio'] });
     expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { effort: 'low', permissionMode: 'bypass' }))
       .toMatchObject({ binary: 'cline', argv: ['--thinking', 'low', '--auto-approve', 'true', '--acp'] });
     expect(harnessAcpLaunch(localHarnessForCommand('cline')!, { permissionMode: 'ask' })).toMatchObject({ binary: 'cline', argv: ['--acp'], optionArgv: [] });
     expect(harnessAcpLaunch(localHarnessForCommand('hermes')!, { permissionMode: 'bypass', effort: 'max' }))
-      .toMatchObject({ binary: 'hermes', argv: ['--reasoning', 'max', '--yolo', 'acp'] });
+      .toMatchObject({ binary: 'hermes', argv: ['--yolo', 'acp'] });
     expect(harnessAcpLaunch(localHarnessForCommand('vibe')!)).toMatchObject({ binary: 'vibe-acp', argv: [] });
     expect(harnessAcpLaunch(localHarnessForCommand('gemini')!)).toMatchObject({ argv: ['--acp'] });
     for (const command of ['opencode', 'kilo', 'goose']) {
@@ -642,8 +645,33 @@ describe('an ACP launch', () => {
   });
 
   it('still carries the CLI flags when ACP is the same program', () => {
-    const droid = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'droid')!;
-    expect(harnessAcpLaunch(droid, { effort: 'high', permissionMode: 'bypass' })!.optionArgv)
-      .toEqual(['--reasoning-effort', 'high', '--skip-permissions-unsafe']);
+    const cline = AI_LOCAL_HARNESSES.find((entry) => entry.command === 'cline')!;
+    expect(harnessAcpLaunch(cline, { effort: 'high', permissionMode: 'bypass' })!.optionArgv)
+      .toEqual(['--thinking', 'high', '--auto-approve', 'true']);
+  });
+});
+
+describe('harness modes read from the installed vendors (2026-10-10)', () => {
+  const byCommand = (command: string) => AI_LOCAL_HARNESSES.find((harness) => harness.command === command)!;
+
+  it('Command Code, Qwen, Cline and Droid carry their permission and plan modes over ACP', () => {
+    expect(byCommand('command').acp).toMatchObject({ planModeId: 'plan', effortConfigId: 'effort', permissionModeIds: { ask: 'default', auto: 'auto-accept', bypass: 'bypass' } });
+    expect(byCommand('qwen').acp).toMatchObject({ planModeId: 'plan', effortConfigId: 'reasoning_effort', permissionModeIds: { ask: 'default', auto: 'auto', bypass: 'yolo' } });
+    expect(byCommand('cline').acp).toMatchObject({ planModeId: 'plan', permissionModeIds: { ask: 'act', bypass: 'act' } });
+    expect(byCommand('droid').acp).toMatchObject({ planModeId: 'spec', effortConfigId: 'reasoning_effort', permissionModeIds: { ask: 'normal', auto: 'auto-low', bypass: 'auto-high' } });
+  });
+
+  it('passes no CLI flag a vendor ACP command ignores', () => {
+    for (const command of ['command', 'droid', 'hermes']) {
+      const launch = harnessAcpLaunch(byCommand(command), { model: 'm', effort: 'high', permissionMode: 'ask' })!;
+      expect(launch.optionArgv, command).toEqual([]);
+    }
+    expect(harnessAcpLaunch(byCommand('hermes'), { model: 'm', permissionMode: 'bypass' })!.argv).toEqual(['--yolo', 'acp']);
+  });
+
+  it('offers a permission mode only where something carries it', () => {
+    expect(harnessSupportsPermissionMode(byCommand('devin'), 'auto')).toBe(true);
+    expect(localHarnessCapabilityManifest(byCommand('dcode')).options.find((option) => option.id === 'permissions')?.values).toEqual(['ask', 'auto']);
+    expect(localHarnessCapabilityManifest(byCommand('amp')).options.some((option) => option.id === 'permissions')).toBe(false);
   });
 });
