@@ -8,14 +8,22 @@ chunk of output. Then it checks what matters for display fragility:
 
   * once a watched piece of text is on screen it never disappears;
   * at the end every watched piece is on screen exactly once;
-  * consecutive blocks never run together without a paragraph break.
+  * consecutive blocks never run together without a paragraph break;
+  * no non-trivial row of the transcript is on screen twice -- in the final
+    screen or, for a stretch of frames, on the way (`dup_ok` lists the rows a
+    scenario legitimately repeats; `no_dup_check` turns it off, with a reason).
+
+A scenario may carry `expect_fail: '<stream>'`: it is an acceptance test for a
+change that has not landed on this branch. It then reports XFAIL when it fails
+(not counted as a failure) and XPASS when it passes (counted, so the mark is
+removed). `--expect-fail` lists them and exits. See README.md.
 
     uv run --with pyte scripts/tui-e2e/run.py [--repeat N] [--only NAME] [dist/index.js]
 
 Exit status 0 when every scenario passes every repeat. Captures of failures
 are kept (the path is printed) so they can be replayed frame by frame.
 """
-import argparse, fcntl, hashlib, json, os, pty, select, shutil, signal, struct, sys, tempfile, termios, time
+import argparse, fcntl, hashlib, json, os, pty, re, select, shutil, signal, struct, sys, tempfile, termios, time
 
 import pyte
 
@@ -48,6 +56,63 @@ class Screen(pyte.Screen):
 
 class ByteStream(pyte.ByteStream):
     csi = {**pyte.ByteStream.csi, 'S': 'scroll_up', 'T': 'scroll_down'}
+
+
+# --- Shared by the global duplicate check and the order checks --------------
+RULE_ROW = re.compile(r'^\s*\u2500{20,}\s*$')
+SPINNER_ROW = re.compile(r'^\s*[\u2800-\u28ff]{2}\s')
+STATUS_ROW = re.compile(r'^\s*(?:[\u2800-\u28ff]{2}\s{2}\S|\u25cf\s)')
+MIN_DUP_ROW = 12
+
+
+def transcript_rows(text):
+    """The rows above the composer's upper rule: the transcript and its live
+    region. None when the screen has no composer (a board, a picker)."""
+    lines = [line.rstrip() for line in text.split('\n')]
+    rules = [i for i, line in enumerate(lines) if RULE_ROW.match(line)]
+    return lines[:rules[-2]] if len(rules) >= 2 else None
+
+
+def checkable_row(row):
+    """A row that is content, not furniture: long enough to be a sentence,
+    not a spinner/status band, not a turn's closing line, and with letters."""
+    text = row.strip()
+    if len(text) < MIN_DUP_ROW or SPINNER_ROW.match(row): return False
+    if text.startswith('\u2500 ') and text.endswith(' \u2500'): return False  # `- Worked for 3s -`
+    if text.startswith('signed in to') or text.startswith('Press Ctrl+C'): return False
+    return sum(ch.isalnum() for ch in text) >= 6
+
+
+def doubled_rows(text, allowed):
+    """{row: count} of rows that appear more often than `allowed(row)` says."""
+    rows = transcript_rows(text)
+    if rows is None: return {}
+    counts = {}
+    for row in rows:
+        if checkable_row(row): counts[re.sub(r'\s+', ' ', row.strip())] = counts.get(re.sub(r'\s+', ' ', row.strip()), 0) + 1
+    return {row: n for row, n in counts.items() if n > allowed(row)}
+
+
+def first_row(rows, phrase):
+    return next((i for i, row in enumerate(rows) if phrase in row), None)
+
+
+def table_misaligned(text):
+    """Table rows (`|` and `+` box rows) whose column borders do not line up
+    with the rows of the same table: a retired row drawn when the table was
+    narrower. Returns the first offending row, or None."""
+    group = []
+    for line in text.split('\n') + ['']:
+        line = line.rstrip()
+        if line.strip().startswith(('\u2502', '\u251c')):
+            group.append(line.strip())
+            continue
+        if len(group) > 1:
+            marks = lambda row: [i for i, ch in enumerate(row) if ch in '\u2502\u253c\u251c\u2524']
+            for row in group[1:]:
+                if marks(row) != marks(group[0]): return row
+        group = []
+    return None
 
 TWO_BLOCKS = {'blocks': ['Checking the workspace first.', 'The final commit is live.']}
 
@@ -1468,6 +1533,10 @@ def run(name, spec, entry, keep):
     stream = ByteStream(screen)
     snaps = {}
     raw, frames = bytearray(), []
+    # Whether each frame was taken between synchronized updates (DEC 2026):
+    # a frame cut mid-update is a half-drawn screen, not something shown.
+    frame_complete = []
+    sync = {'open': False}
     # A second window ('open2'): another ClikCode on the same CLIKCODE_HOME,
     # in its own pty and on its own screen, as a second terminal would be.
     pid2, fd2 = None, None
@@ -1496,7 +1565,10 @@ def run(name, spec, entry, keep):
                     continue
                 if n == 1:
                     raw.extend(chunk); stream.feed(chunk)
+                    begun, ended = chunk.rfind(b'\x1b[?2026h'), chunk.rfind(b'\x1b[?2026l')
+                    if begun >= 0 or ended >= 0: sync['open'] = begun > ended
                     frames.append((time.time() - start, '\n'.join(screen.display)))
+                    frame_complete.append(not sync['open'])
                 else:
                     raw2.extend(chunk); stream2.feed(chunk)
                     frames2.append((time.time() - start, '\n'.join(screen2.display)))
@@ -1736,7 +1808,7 @@ def run(name, spec, entry, keep):
         if gone: problems.append(f'VANISHED {phrase!r}: in {len(gone)} frame(s) after first showing, first at {gone[0]:.2f}s')
         if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
     for turn in spec['turns']:
-        for left, right in zip(turn['blocks'], turn['blocks'][1:]):
+        for left, right in zip(turn.get('blocks', []), turn.get('blocks', [])[1:]):
             if left + right.split()[0] in final: problems.append(f'jammed with no paragraph break: {left!r} / {right!r}')
     for phrase in spec.get('never', []):
         shown = [t for t, text in frames if phrase in text]
@@ -1819,6 +1891,73 @@ def run(name, spec, entry, keep):
     for phrase in spec.get('never_after_mark', []):
         shown = [t for t, text in frames[marked_at or 0:] if phrase in text]
         if shown: problems.append(f'shown in {len(shown)} frame(s) after the mark, first at {shown[0]:.2f}s: {phrase!r}')
+    # ---- Global duplicate check --------------------------------------------
+    # A row of the transcript on screen twice is the display bug every fix so
+    # far was about (one row, two sources). The fake's own stub call -- the
+    # `git log` between blocks, run once per block gap -- is the one repeat a
+    # scenario cannot avoid; anything else a scenario repeats on purpose is in
+    # `dup_ok` (substrings). `no_dup_check` is a reason string, never a bare True.
+    if not spec.get('no_dup_check'):
+        stub_calls = sum(max(0, len(turn.get('blocks', [])) - 1) for turn in spec['turns'])
+        dup_ok = spec.get('dup_ok', [])
+        def allowed(row):
+            if any(phrase in row for phrase in dup_ok): return 1 << 30
+            if 'git log -1 --oneline' in row or row == 'abc123 fix': return max(1, stub_calls)
+            return 1
+        shown_from = next((i for i, (t, _) in enumerate(frames) if typed_at is not None and t >= typed_at), len(frames))
+        final_doubled = doubled_rows(final, allowed)
+        # The frame each row first doubled and stayed doubled to the end.
+        for row, count in final_doubled.items():
+            at = len(frames) - 1
+            while at - 1 >= shown_from and row in doubled_rows(frames[at - 1][1], allowed): at -= 1
+            problems.append(f'DUPLICATED on the final screen ({count}x), doubled from frame {at} ({frames[at][0]:.2f}s): {row!r}')
+        gone = {}
+        for index in range(shown_from, len(frames)):
+            if not frame_complete[index]: continue
+            for row, count in doubled_rows(frames[index][1], allowed).items():
+                if row in final_doubled: continue
+                first, last, n = gone.get(row, (index, index, 0))
+                gone[row] = (first, index, n + 1)
+        for row, (first, last, n) in gone.items():
+            problems.append(f'DOUBLED on screen in {n} frame(s), first at frame {first} ({frames[first][0]:.2f}s), last {last}, gone by the end: {row!r}')
+
+    # ---- Order and state checks over every complete frame ------------------
+    def complete_frames():
+        return [(i, t, text) for i, (t, text) in enumerate(frames) if frame_complete[i] and typed_at is not None and t >= typed_at]
+    # ('above', 'below'): wherever both are on screen, `above` is higher up.
+    for upper, lower in spec.get('always_order', []):
+        bad = []
+        for i, t, text in complete_frames():
+            rows = transcript_rows(text) or text.split('\n')
+            a, b = first_row(rows, upper), first_row(rows, lower)
+            if a is not None and b is not None and a > b: bad.append((i, t))
+        if bad: problems.append(f'{lower!r} drawn above {upper!r} in {len(bad)} frame(s), first at frame {bad[0][0]} ({bad[0][1]:.2f}s)')
+    # Both on screen in one frame at least once (two concurrent slots).
+    for left, right in spec.get('ever_together', []):
+        if not any(left in text and right in text for _, _, text in complete_frames()):
+            problems.append(f'{left!r} and {right!r} were never on screen together')
+    # ('shown', 'unwanted'): after `shown` first appears, `unwanted` never does.
+    for shown, unwanted in spec.get('never_after', []):
+        begun = next((i for i, _, text in complete_frames() if shown in text), None)
+        if begun is None: problems.append(f'never_after: {shown!r} was never on screen'); continue
+        bad = [(i, t) for i, t, text in complete_frames() if i >= begun and unwanted in text]
+        if bad: problems.append(f'{unwanted!r} on screen in {len(bad)} frame(s) after {shown!r} appeared, first at frame {bad[0][0]} ({bad[0][1]:.2f}s)')
+    # ('from', 'until'): in every complete frame from `from` first appearing to
+    # `until` first appearing the screen carries a status row or an approval.
+    for first, last in spec.get('status_always', []):
+        begun = next((i for i, _, text in complete_frames() if first in text), None)
+        ended = next((i for i, _, text in complete_frames() if last in text and (begun is None or i > begun)), None)
+        if begun is None or ended is None: problems.append(f'status_always: {first!r} .. {last!r} never both on screen'); continue
+        blank = [(i, t) for i, t, text in complete_frames() if begun <= i < ended
+                 and not any(STATUS_ROW.match(row) or 'Allow' in row for row in (transcript_rows(text) or text.split('\n')) + text.split('\n')[-12:])]
+        if blank: problems.append(f'no status row in {len(blank)} frame(s) between {first!r} and {last!r}, first at frame {blank[0][0]} ({blank[0][1]:.2f}s)')
+    # Every table on screen is aligned, in the final screen and in each frame.
+    if spec.get('table_aligned'):
+        bad = table_misaligned(final)
+        if bad: problems.append(f'misaligned table row on the final screen: {bad!r}')
+        for i, t, text in complete_frames():
+            bad = table_misaligned(text)
+            if bad: problems.append(f'misaligned table row at frame {i} ({t:.2f}s): {bad!r}'); break
     # Sequences the screen never shows (title, progress, focus, a
     # notification), in the order they must have been written.
     at = 0
@@ -1866,10 +2005,10 @@ def run(name, spec, entry, keep):
             if not shots: continue
             with open(os.path.join(root, name), 'w') as log:
                 last = None
-                for t, text in shots:
+                for number, (t, text) in enumerate(shots):
                     if text == last: continue
                     last = text
-                    log.write(f'===== {t:.2f}s\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
+                    log.write(f'===== {t:.2f}s #{number}\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
     if not problems and not keep: shutil.rmtree(root, ignore_errors=True)
     return problems, root, final
 
@@ -1882,7 +2021,14 @@ def main():
     parser.add_argument('--keep', action='store_true')
     # Every scenario that names no width of its own runs at this one.
     parser.add_argument('--cols', type=int)
+    # Lists the scenarios marked `expect_fail` (acceptance tests for a stream
+    # that has not landed here) with the stream that makes each pass, and exits.
+    parser.add_argument('--expect-fail', action='store_true', dest='list_expected')
     args = parser.parse_args()
+    if args.list_expected:
+        marked = [(spec['expect_fail'], name) for name, spec in SCENARIOS.items() if spec.get('expect_fail')]
+        for stream, name in sorted(marked): print(f'{stream:12} {name}')
+        sys.exit(0)
     entry = os.path.abspath(args.entry)
     failed = 0
     for name, spec in SCENARIOS.items():
@@ -1890,11 +2036,14 @@ def main():
         if args.cols and 'cols' not in spec: spec = {**spec, 'cols': args.cols}
         for attempt in range(1, args.repeat + 1):
             problems, root, final = run(name, spec, entry, args.keep)
-            status = 'PASS' if not problems else 'FAIL'
-            print(f'{status}  {name}  [{attempt}/{args.repeat}]' + ('' if not problems else f'  capture: {root}'))
+            expected = spec.get('expect_fail')
+            if expected: status = 'XFAIL' if problems else 'XPASS'
+            else: status = 'PASS' if not problems else 'FAIL'
+            note = f'  (expected to fail until: {expected})' if status == 'XFAIL' else '  (passes now: remove its expect_fail mark)' if status == 'XPASS' else ''
+            print(f'{status}  {name}  [{attempt}/{args.repeat}]{note}' + ('' if not problems else f'  capture: {root}'))
             for problem in problems: print(f'        - {problem}')
-            if problems:
-                failed += 1
+            if status in ('FAIL', 'XPASS'): failed += 1
+            if problems and status == 'FAIL':
                 print('        final screen:\n' + '\n'.join(f'          {line.rstrip()}' for line in final.split('\n') if line.strip()))
     sys.exit(1 if failed else 0)
 
