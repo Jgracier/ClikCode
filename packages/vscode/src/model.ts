@@ -12,7 +12,7 @@
 import { chatCostLabel, composerUsageLabel } from '../../../src/tui/render/usage-words';
 import { enterAgainSends, STEER_WORDS } from '../../../src/tui/render/steer-rows';
 import { asFileDiffs } from '../../../src/agent/line-diff';
-import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, resumeTurnClock, sameCall, stoppedCall, turnElapsedMs, withChildTool, type OpenTool, type Thought, type TurnClock } from '../../../src/harness/protocol/activity-view';
+import { activityLifecyclePhase, appendThought, childActivity, mergeActivity, orderMarks, resumeTurnClock, sameCall, stoppedCall, turnElapsedMs, withChildTool, type OpenTool, type Thought, type TurnClock } from '../../../src/harness/protocol/activity-view';
 import type { FileDiff, HarnessActivityEvent, HarnessQuestionRequest, HarnessSession, IdeAccount, IdeChatSettings, IdeEvent, IdeModelLabel, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
@@ -233,6 +233,15 @@ function stampAfter(other: number | undefined): number {
   return Math.max(Date.now(), (other ?? Number.NEGATIVE_INFINITY) + 1);
 }
 
+/** A row's place in the turn's order (standard 1.2): the worker's `seq` where
+ * it sent one, else the next number of this window's own counter. The counter
+ * first rises past everything the worker numbered, so a row that has none is
+ * never mixed in among the worker's own numbers. */
+function takeSeq(live: Pick<LiveTurn, 'seen'>, given?: number): { seq: number; seen: number } {
+  if (typeof given === 'number' && Number.isFinite(given)) return { seq: given, seen: Math.max(live.seen, given) };
+  return { seq: live.seen + 1, seen: live.seen + 1 };
+}
+
 /** A live turn without the phase a report set before the vendor answered. */
 function withoutPhase<T extends { phase?: string }>(live: T): T {
   if (live.phase === undefined) return live;
@@ -305,10 +314,14 @@ export function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel
   // arrived, in order among the rows, so it neither trails the live turn nor
   // jumps above the answer when the turn ends (standard sections 1, 11).
   const live = during ? model.live : undefined;
-  const seen = live ? live.seen + 1 : undefined;
-  const placed: Note = { ...note, after, ...(live ? { turn: model.turnUserIndex!, offset: live.text.length, seq: seen! } : {}) };
+  // Where the worker placed it, when it said (WorkerEvent `note`).
+  const taken = live ? takeSeq(live, note.seq) : undefined;
+  const placed: Note = {
+    ...note, after,
+    ...(live ? { turn: model.turnUserIndex!, offset: Math.min(note.offset ?? live.text.length, live.text.length), seq: taken!.seq } : {}),
+  };
   return {
-    ...model, ...(live ? { live: { ...live, seen: seen! } } : {}),
+    ...model, ...(live ? { live: { ...live, seen: taken!.seen } } : {}),
     notes: [...model.notes, placed].slice(-MAX_NOTES),
   };
 }
@@ -500,8 +513,8 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
     });
     return { ...live, activities };
   }
-  const seen = live.seen + 1;
-  const row = asActivity(event.id ?? `#${seen}`, event, { startedAt: Date.now(), offset, seq: seen });
+  const { seq, seen } = takeSeq(live, event.seq);
+  const row = asActivity(event.id ?? `#${seq}`, event, { startedAt: Date.now(), offset, seq });
   // A call began: answer text after it is a new response (answerWriting).
   const began = event.kind === 'tool-start' ? { callAt: stampAfter(live.writingAt) } : {};
   return { ...live, ...began, seen, activities: [...live.activities, row].slice(-MAX_ACTIVITIES) };
@@ -520,7 +533,8 @@ function withThought(live: LiveTurn, event: HarnessActivityEvent): LiveTurn {
   const before = fresh ? settled(live) : live;
   // A thought takes its place in the order when it begins, not when it is
   // settled -- the call it led to is settled after it.
-  return { ...before, thought: next, ...(fresh ? { seen: before.seen + 1, thoughtStart: { offset: live.text.length, at: Date.now(), seq: before.seen + 1 } } : {}) };
+  const taken = takeSeq(before, event.seq);
+  return { ...before, thought: next, ...(fresh ? { seen: taken.seen, thoughtStart: { offset: live.text.length, at: Date.now(), seq: taken.seq } } : {}) };
 }
 
 /** The thought being had, settled in its place: a tool started, the answer
@@ -602,7 +616,9 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       let seen = replayed.seen;
       const held = model.live?.steers ?? [];
       const steers = (event.session.pendingTurn?.steers ?? []).map((steer, index) => {
-        const seq = (steer as { seq?: number }).seq ?? held[index]?.seq ?? ++seen;
+        const given = (steer as { seq?: number }).seq;
+        const seq = given ?? held[index]?.seq ?? ++seen;
+        seen = Math.max(seen, seq);
         return { text: steer.text, offset: steer.responseOffset ?? event.live!.text.length, seq };
       });
       // The plan the worker says the turn has is placed where this window
@@ -661,8 +677,9 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'plan': {
       const plan = event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) }));
       // One plan row per turn: placed where it first appeared, updated in place.
+      const taken = model.live ? takeSeq(model.live, event.seq) : undefined;
       const live = model.live && !model.live.planAt && plan.length
-        ? { ...model.live, seen: model.live.seen + 1, planAt: { offset: model.live.text.length, seq: model.live.seen + 1 } }
+        ? { ...model.live, seen: taken!.seen, planAt: { offset: Math.min(event.responseOffset ?? model.live.text.length, model.live.text.length), seq: taken!.seq } }
         : model.live;
       return { ...model, plan, ...(live ? { live } : {}) };
     }
@@ -701,7 +718,11 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'note':
       // The terminal colours its notes: yellow for an account switch or a
       // limit, red for a failure. The colour is the level.
-      return withNote(model, { kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message) });
+      return withNote(model, {
+        kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message),
+        ...(event.type === 'note' && event.seq !== undefined ? { seq: event.seq } : {}),
+        ...(event.type === 'note' && event.responseOffset !== undefined ? { offset: event.responseOffset } : {}),
+      });
     case 'turn-error': {
       const msg = failureLine(stripAnsi(event.message));
       // Exhaustion is an outcome, not a fault — show it as informational chat
@@ -891,11 +912,13 @@ export function turnMarks(
   extra: { plan?: PlanAt; notes?: ReadonlyArray<{ offset: number; seq: number; note: Note }> } = {},
 ): TurnMark[] {
   const at = (offset: number): number => Math.min(offset, text.length);
-  return [
+  // One comparator for every surface (activity-view.ts orderMarks): the CLI
+  // and the extension cannot disagree about where a row sits.
+  return orderMarks([
     ...thoughts.map((thought) => ({ offset: at(thought.offset), seq: thought.seq, thought })),
     ...activities.map((activity, index) => ({ offset: at(activity.offset ?? 0), seq: activity.seq ?? index, activity })),
     ...steers.map((steer, steerIndex) => ({ offset: at(steer.offset), seq: steer.seq ?? Number.MAX_SAFE_INTEGER, steer: steer.text, steerIndex })),
     ...(extra.plan ? [{ offset: at(extra.plan.offset), seq: extra.plan.seq, plan: true as const }] : []),
     ...(extra.notes ?? []).map(({ offset, seq, note }) => ({ offset: at(offset), seq, note })),
-  ].sort((left, right) => left.offset - right.offset || left.seq - right.seq);
+  ], (mark) => ({ responseOffset: mark.offset, seq: mark.seq }));
 }
