@@ -9,7 +9,10 @@ import { mergeNativeTranscript } from '../session/discovery/transcript.js';
 import { nativeProfileEnvironment } from '../harness/transport/profile-environment.js';
 import { allLocalHarnesses, harnessSupportsEffort, harnessSupportsPermissionMode, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 
-/** The settings a conversation keeps when another harness takes it up. The
+/** (A target with no effort control gets none: '' is "the vendor's own
+ * default", never an invented 'medium'.)
+ *
+ * The settings a conversation keeps when another harness takes it up. The
  * user chose an effort and a permission mode for this conversation, not for
  * a provider: they carry over wherever the target takes them, and fall back
  * to the target's defaults only where it does not. A permission mode carries
@@ -21,7 +24,7 @@ export function carriedHandoffSettings(
   target: AiLocalHarnessDefinition, defaults: HarnessDefaultSettings, efforts?: readonly string[],
 ): HarnessDefaultSettings {
   const effort = source.effort && harnessSupportsEffort(target) && (!efforts?.length || efforts.includes(source.effort))
-    ? source.effort : defaults.effort;
+    ? source.effort : harnessSupportsEffort(target) ? defaults.effort : '';
   const from = source.nativeHarness ? localHarnessForCommand(source.nativeHarness) : undefined;
   const permissionMode = source.permissionMode
     ? carriedPermissionMode(from, source.permissionMode, target, defaults.permissionMode)

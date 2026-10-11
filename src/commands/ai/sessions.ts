@@ -15,7 +15,7 @@ import { emitResult } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { modelIdFromLabel, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
-import { harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { liveWorkerSessions, sessionIsLive } from '../../session/liveness.js';
 import { pruneSessionClaims } from '../../session/claims.js';
 import { readState } from '../../session/state/read.js';
@@ -256,7 +256,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     model: options.route === 'gateway'
       ? (options.model !== undefined ? await chooseGatewayModel(options.model) : null)
       : model ?? (provider ? state.providerSettings[provider]?.model : undefined) ?? null,
-    effort: options.route === 'gateway' ? options.effort ?? GATEWAY_DEFAULT_EFFORT : options.effort ?? defaults.effort,
+    effort: options.route === 'gateway' ? options.effort ?? GATEWAY_DEFAULT_EFFORT : options.effort ?? (harness && !harnessSupportsEffort(harness) ? '' : defaults.effort),
     // Every route: on the agent routes the agent is ClikCode's own, running
     // here, and it honours the same approval setting.
     permissionMode: defaults.permissionMode,

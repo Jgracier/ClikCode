@@ -23,8 +23,8 @@ describe('carriedHandoffSettings', () => {
   it("falls back to the target's defaults for what it does not take", () => {
     // OpenCode has no `xhigh` and no `auto` mode.
     expect(carriedHandoffSettings(source, opencode, defaults, ['minimal', 'low', 'medium', 'high', 'max'])).toMatchObject({ effort: 'medium', permissionMode: 'ask' });
-    // Continue takes no effort at all, but does take bypass.
-    expect(carriedHandoffSettings({ ...source, permissionMode: 'bypass' }, cn, defaults)).toMatchObject({ effort: 'medium', permissionMode: 'bypass' });
+    // Continue takes no effort at all (none is invented), but does take bypass.
+    expect(carriedHandoffSettings({ ...source, permissionMode: 'bypass' }, cn, defaults)).toMatchObject({ effort: '', permissionMode: 'bypass' });
   });
 
   it('carries a permission mode by meaning, never escalating', () => {
