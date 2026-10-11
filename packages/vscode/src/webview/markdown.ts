@@ -89,25 +89,31 @@ function closedBy(before: Token | undefined): boolean {
  * later line from merging into the construct before it (see closedBy), so
  * what comes before it renders the same forever. Link reference definitions resolve across the
  * whole text, so an answer with any is rendered whole. */
-export function createStreamingMarkdown(): (text: string) => { stable: string; tail: string } {
+export function createStreamingMarkdown(): (text: string) => { stable: string; tail: string; parts: string[] } {
   let stableText = '';
   let stableHtml = '';
+  /** The settled html in the chunks it settled in: each is final, so a page
+   * keeps one node per chunk and a later chunk never touches an earlier one's
+   * DOM (selection, a code block's scroll). */
+  let parts: string[] = [];
   let incremental = true;
   return (text) => {
     if (!text.startsWith(stableText)) {
       // A replacement stream rewrote earlier text: start over.
       stableText = '';
       stableHtml = '';
+      parts = [];
       incremental = true;
     }
-    if (!incremental) return { stable: '', tail: renderMarkdown(text) };
+    if (!incremental) return { stable: '', tail: renderMarkdown(text), parts: [] };
     const rest = text.slice(stableText.length);
     const tokens = marked.lexer(rest);
     if (Object.keys(tokens.links).length) {
       incremental = false;
       stableText = '';
       stableHtml = '';
-      return { stable: '', tail: renderMarkdown(text) };
+      parts = [];
+      return { stable: '', tail: renderMarkdown(text), parts: [] };
     }
     let offset = 0;
     let cut = 0;
@@ -120,9 +126,11 @@ export function createStreamingMarkdown(): (text: string) => { stable: string; t
       offset += token.raw.length;
     });
     if (cutIndex > 0) {
-      stableHtml += marked.parser(tokens.slice(0, cutIndex));
+      const chunk = marked.parser(tokens.slice(0, cutIndex));
+      stableHtml += chunk;
+      parts = [...parts, chunk];
       stableText += rest.slice(0, cut);
     }
-    return { stable: stableHtml, tail: marked.parser(tokens.slice(cutIndex)) };
+    return { stable: stableHtml, tail: marked.parser(tokens.slice(cutIndex)), parts };
   };
 }
