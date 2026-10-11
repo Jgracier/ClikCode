@@ -26,12 +26,13 @@ import { isGatewayService } from '../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { sessionTranscriptMessages, settledTranscriptMessages } from '../turn/checkpoint.js';
 import { readTurnActivities } from '../turn/turn-activities.js';
+import { readTurnMarks, thoughtMarkId } from '../turn/turn-marks.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
 import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
-import type { HarnessSession, TranscriptMessage } from '../session/model.js';
+import type { HarnessSession, TranscriptMessage, TurnMark } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, commonPrefixLength, entryLines, rebaseActivityOffsets, settleDecisionEntry, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
 import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
@@ -72,6 +73,7 @@ import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTer
 import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
+import { savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
@@ -303,7 +305,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private thought?: Thought;
   /** When the thought on screen began, and how much of the answer had
    * streamed: it settles there as "Thought for 3s" (settleThought). */
-  private thoughtStart?: { at: number; offset: number };
+  private thoughtStart?: { at: number; offset: number; markId?: string };
+  /** `<anchor>:<mark id>` of every worker mark already on screen (markDrawn). */
+  private readonly drawnMarks = new Set<string>();
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
   private streamingBlocks = createStreamingBlockParser();
@@ -986,7 +990,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
-  activity(message: string): void {
+  activity(message: string, markId?: string): void {
+    if (markId) this.markDrawn(markId);
     const normalized = sanitizeTerminalText(message, { keepSgr: true, singleLine: true }).trim();
     const last = this.activityEntries[this.activityEntries.length - 1];
     if (!normalized || last?.lines[last.lines.length - 1] === normalized) return;
@@ -1049,7 +1054,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const next = appendThought(this.thought, sanitizeTerminalText(event.label, { singleLine: true }), event.id);
       if (next !== this.thought) {
         if (this.thought && this.thought.id !== next?.id) this.settleThought();
-        if (!this.thought) this.thoughtStart = { at: Date.now(), offset: this.liveResponse.length };
+        if (!this.thought) {
+          this.thoughtStart = {
+            at: Date.now(), offset: this.liveResponse.length,
+            ...(event.seq === undefined ? {} : { markId: thoughtMarkId(next?.id, event.seq) }),
+          };
+        }
         this.thought = next;
       }
       this.schedulePaint();
@@ -1077,11 +1087,49 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.thought = undefined;
     this.thoughtStart = undefined;
     if (!thought || !start || !this.turn) return;
+    // The worker numbers this thought and keeps it for a window joining
+    // later: the same row, so a snapshot that lists it draws nothing new.
+    if (start.markId) this.markDrawn(start.markId);
     this.activityEntries = [...this.activityEntries, {
       anchor: this.activityAnchor, responseOffset: Math.min(start.offset, this.liveResponse.length), sequence: ++this.timelineSequence,
       event: { kind: 'thinking', label: thought.text },
       lines: [thoughtRow(Date.now() - start.at, reasoningHeading(thought.text))],
     }];
+  }
+
+  /** The worker's mark `id` is already on this screen, drawn by the window's
+   * own live path (a notice, a decision it answered, a thought it watched
+   * settle): a mid-turn snapshot that lists it again draws nothing. */
+  markDrawn(id: string): void {
+    this.drawnMarks.add(`${this.activityAnchor}:${id}`);
+  }
+
+  /** A settled mark of the running turn this window joined (a thought, a
+   * notice, an approval's outcome), drawn where the worker placed it. By id,
+   * so a snapshot repeated at any moment draws it once (the plan is the
+   * band's: setPlan). Rows arrive in the worker's order and take this
+   * window's counter in that order; a worker `seq` is never compared with
+   * it (standards 1 and 11, joined-turn.ts). */
+  joinMark(mark: TurnMark): void {
+    if (!this.turn || mark.kind === 'plan') return;
+    const lines = turnMarkLines(mark);
+    const key = `${this.activityAnchor}:${mark.id}`;
+    if (!lines.length || this.drawnMarks.has(key)) return;
+    this.drawnMarks.add(key);
+    this.activityEntries = [...this.activityEntries, {
+      anchor: this.activityAnchor, responseOffset: Math.min(mark.responseOffset, this.liveResponse.length), sequence: ++this.timelineSequence,
+      event: { kind: 'thinking', label: mark.id, id: mark.id }, lines,
+    }];
+    this.schedulePaint();
+  }
+
+  /** The thought being had when this window joined: the live row carries on
+   * from its newest words, and settles with the worker's own start time. */
+  joinThought(thought: { id?: string; text: string; responseOffset: number; startedAt: number }): void {
+    if (!this.turn || this.thought) return;
+    this.thought = { ...(thought.id === undefined ? {} : { id: thought.id }), text: sanitizeTerminalText(thought.text, { singleLine: true }) };
+    this.thoughtStart = { at: thought.startedAt, offset: Math.min(thought.responseOffset, this.liveResponse.length) };
+    this.schedulePaint();
   }
 
   /** A scrollable viewer in the live region. It used to keep only the last six
@@ -2309,12 +2357,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
      * upsert the running turn's events go through, and grouped and drawn by
      * the same functions, so a reopened turn looks as it did live. */
     const savedTools = (message: TranscriptMessage, index: number): SettlingTool[] => {
-      const saved = readTurnActivities(message.activities, message.content.length);
-      if (!saved.length) return [];
+      const calls = readTurnActivities(message.activities, message.content.length).filter((activity) => !activity.event.parentId);
+      const marks = readTurnMarks(message.marks);
+      if (!calls.length && !marks.length) return [];
+      // Calls and the turn's durable marks (a thought, the plan, a notice, an
+      // approval's outcome) are drawn in one order (turn-mark-rows.ts), and a
+      // mark is an entry like the settled thought is live, so it breaks a run
+      // of reads the way it did while the turn ran.
+      const ranks = savedTurnRanks(calls, marks);
+      const at = (offset: number): number => Math.min(offset, message.content.length);
       let entries: ActivityEntry[] = [];
-      for (const [position, activity] of saved.entries()) {
-        if (activity.event.parentId) continue;
-        entries = upsertActivityEvent(entries, index, Math.min(activity.responseOffset, message.content.length), activity.event, position + 1, 0);
+      for (const [position, activity] of calls.entries()) {
+        entries = upsertActivityEvent(entries, index, at(activity.responseOffset), activity.event, ranks.activities[position]!, 0);
+      }
+      for (const [position, mark] of marks.entries()) {
+        const lines = turnMarkLines(mark);
+        if (!lines.length) continue;
+        entries.push({
+          anchor: index, responseOffset: at(mark.responseOffset), sequence: ranks.marks[position]!,
+          event: { kind: 'thinking', label: mark.id, id: mark.id }, lines,
+        });
       }
       return groupedRows(entries, true, new ExploreGrouping());
     };

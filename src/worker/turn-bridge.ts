@@ -20,8 +20,13 @@ import { WorkerClient } from './client.js';
 import { workersDirectory } from './registry.js';
 import { watchConversationList } from '../session/list-watch.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { isTranscriptActivity, type LiveActivity, type WorkerEvent } from './protocol.js';
+import { isTranscriptActivity, type LiveActivity, type LiveThought, type WorkerEvent } from './protocol.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
+import type { HarnessSession, TurnMark } from '../session/model.js';
+import type { TurnUsage } from '../harness/protocol/turn-usage.js';
+import { joinedAnswerText } from '../turn/live-answer.js';
+import { upsertMark } from '../turn/turn-marks.js';
+import { drawJoinedTurn } from './joined-turn.js';
 import { withSignIn } from '../commands/account.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
@@ -64,6 +69,15 @@ interface WorkerTracker {
   liveText: string;
   activities: LiveActivity[];
   plan: readonly PlanEntry[];
+  /** The rest of what an attached window has drawn (LiveTurn): the turn's
+   * settled thoughts, notices and decisions, the thought being had, the
+   * phase and the usage so far. */
+  marks: TurnMark[];
+  /** Marks learned of without the worker's numbering (joined-turn.ts). */
+  unsequenced: string[];
+  thought?: LiveThought;
+  phase?: string;
+  usage?: TurnUsage;
   wake?: (reason: 'turn' | 'queue') => void;
   /** Counts queue-changed events, so a change that lands between the loop
    * reading the queue and its prompt opening is not missed (workerQueueMark). */
@@ -79,23 +93,34 @@ const trackers = new WeakMap<WorkerClient, WorkerTracker>();
 const connecting = new Map<string, Promise<WorkerClient | undefined>>();
 
 function track(sessionId: string, client: WorkerClient): void {
-  const tracker: WorkerTracker = { running: false, liveText: '', activities: [], plan: [], driving: false, unanswered: [], queueVersion: 0 };
+  const tracker: WorkerTracker = { running: false, liveText: '', activities: [], plan: [], marks: [], unsequenced: [], driving: false, unanswered: [], queueVersion: 0 };
   trackers.set(client, tracker);
   // A worker older than this client names no prompt and sends text only; it
   // still says a turn is live, and that is what matters most here.
-  const joinLive = (live: NonNullable<Extract<WorkerEvent, { type: 'snapshot' }>['live']>): void => {
+  const joinLive = (live: NonNullable<Extract<WorkerEvent, { type: 'snapshot' }>['live']>, session: HarnessSession): void => {
+    // The journal is written on a debounce and can lag the live text: the
+    // longer copy stands, the same whichever arrived first (live-answer.ts).
+    const journal = session.pendingTurn;
+    const sameTurn = journal && (live.prompt === undefined || journal.prompt.trim() === live.prompt.trim());
     Object.assign(tracker, {
-      running: true, prompt: live.prompt ?? tracker.prompt, liveText: live.text,
+      running: true, prompt: live.prompt ?? tracker.prompt,
+      liveText: joinedAnswerText(sameTurn ? journal.response : undefined, live.text),
       ...(live.activities ? { activities: [...live.activities] } : {}), ...(live.plan ? { plan: live.plan } : {}),
+      // The snapshot is the whole truth about these: what it lacks, the turn
+      // has not got.
+      marks: live.marks ? [...live.marks] : [], unsequenced: [], thought: live.thought, phase: live.phase, usage: live.usage,
     });
   };
   const initial = client.initialEvent;
-  if (initial?.type === 'snapshot' && initial.live) joinLive(initial.live);
+  if (initial?.type === 'snapshot' && initial.live) joinLive(initial.live, initial.session);
   // Registered before any turn's own listener (driveWorkerTurn), so that one
   // always sees this record already up to date with the event it is handling.
   client.on('event', (event: WorkerEvent) => {
     if (event.type === 'waiting-start') {
-      Object.assign(tracker, { running: true, prompt: event.prompt, liveText: '', activities: [], plan: [] });
+      Object.assign(tracker, {
+        running: true, prompt: event.prompt, liveText: '', activities: [], plan: [], marks: [], unsequenced: [],
+        thought: undefined, phase: undefined, usage: undefined,
+      });
       tracker.wake?.('turn');
     } else if (event.type === 'waiting-stop') {
       tracker.running = false;
@@ -103,15 +128,29 @@ function track(sessionId: string, client: WorkerClient): void {
     } else if (event.type === 'approval-request' || event.type === 'question-request' || event.type === 'sign-in-request') {
       if (!tracker.driving) tracker.unanswered.push(event);
     } else if (event.type === 'request-closed') {
+      // A decision leaves its row where it was asked -- for a window that was
+      // not the one to answer it (one that is, drew it itself). Asked while
+      // no turn view was open, it was never answered here.
+      const unseen = !tracker.driving && tracker.unanswered.some((held) => 'id' in held && held.id === event.id);
       tracker.unanswered = tracker.unanswered.filter((held) => !('id' in held && held.id === event.id));
+      if (unseen) recordDecision(tracker, event);
     } else if (event.type === 'snapshot') {
-      if (event.live) joinLive(event.live);
+      if (event.live) joinLive(event.live, event.session);
     } else if (event.type === 'delta') {
       tracker.liveText = event.mode === 'replace' ? event.text : tracker.liveText + event.text;
     } else if (event.type === 'activity') {
       if (tracker.running && isTranscriptActivity(event.event)) tracker.activities.push({ event: event.event, responseOffset: tracker.liveText.length });
     } else if (event.type === 'plan') {
       if (tracker.running) tracker.plan = event.entries;
+    } else if (event.type === 'note') {
+      // A notice of the turn, where the worker placed it.
+      if (tracker.running && event.seq !== undefined) {
+        tracker.marks = upsertMark(tracker.marks, { kind: 'notice', id: `notice:${event.seq}`, seq: event.seq, responseOffset: event.responseOffset ?? tracker.liveText.length, message: event.message });
+      }
+    } else if (event.type === 'phase') {
+      if (tracker.running) tracker.phase = event.message;
+    } else if (event.type === 'usage') {
+      if (tracker.running) tracker.usage = event.usage;
     } else if (event.type === 'queue-changed') {
       tracker.queueVersion++;
       tracker.wake?.('queue');
@@ -271,14 +310,26 @@ export async function workerQueueMark(sessionId: string): Promise<number> {
 }
 const UNATTACHED = -1;
 
+/** The settled row of a request another window decided, kept for any window
+ * that draws this turn later. The worker's number for it is not in the
+ * event, so it is kept unsequenced and read in arrival order. */
+function recordDecision(tracker: WorkerTracker, event: Extract<WorkerEvent, { type: 'request-closed' }>): TurnMark | undefined {
+  if (!tracker.running || !event.outcome || !event.label) return undefined;
+  const id = `outcome:${event.id}`;
+  const existing = tracker.marks.find((mark) => mark.id === id);
+  if (existing) return undefined;
+  const mark: TurnMark = { kind: 'outcome', id, seq: 0, responseOffset: tracker.liveText.length, outcome: event.outcome, label: event.label };
+  tracker.marks = [...tracker.marks, mark];
+  tracker.unsequenced.push(id);
+  return mark;
+}
+
 /** Draws the running turn as far as it has got. Safe to repeat: the text is
  * replaced, an activity the window already shows is skipped by its index,
  * and the plan is the latest. So a join, a return from the board and a
  * mid-turn snapshot all come to the same screen, whatever order they came in. */
 function showLive(rl: TerminalHarnessPrompter, tracker: WorkerTracker): void {
-  if (tracker.liveText) rl.response(tracker.liveText, 'replace');
-  tracker.activities.forEach((item, index) => rl.activityEvent(item.event, { index, responseOffset: item.responseOffset }));
-  if (tracker.plan.length) rl.setPlan(tracker.plan);
+  drawJoinedTurn(rl, tracker);
 }
 
 /** Whether the conversation's worker is running a turn right now, and with
@@ -366,7 +417,8 @@ async function driveWorkerTurn(
             return;
           }
           case 'note':
-            rl.activity(event.message);
+            // Its number is the worker's mark id: a snapshot listing it is not a second row.
+            rl.activity(event.message, event.seq !== undefined ? `notice:${event.seq}` : undefined);
             return;
           case 'phase':
             rl.phase(event.message);
@@ -384,7 +436,8 @@ async function driveWorkerTurn(
             openPrompts.set(event.id, closing);
             void rl.approval(event.title, event.detail, event.preview, event.rule, closing.signal, event.callId).then((approved) => {
               openPrompts.delete(event.id);
-              if (!closing.signal.aborted) client.send({ type: 'approval-response', id: event.id, approved });
+              // Decided here: the row is drawn by this window, not again from a snapshot.
+              if (!closing.signal.aborted) { rl.markDrawn?.(`outcome:${event.id}`); client.send({ type: 'approval-response', id: event.id, approved }); }
             });
             return;
           }
@@ -396,15 +449,22 @@ async function driveWorkerTurn(
               : Promise.resolve<HarnessQuestionResult>({ kind: 'cancelled' }).then((result) => { rl.activity?.(`A question was declined because this screen cannot show it: ${event.request.title}`); return result; });
             void asked.catch((): HarnessQuestionResult => ({ kind: 'cancelled' })).then((result) => {
               openPrompts.delete(event.id);
-              if (!closing.signal.aborted) client.send({ type: 'question-response', id: event.id, result });
+              if (!closing.signal.aborted) { rl.markDrawn?.(`outcome:${event.id}`); client.send({ type: 'question-response', id: event.id, result }); }
             });
             return;
           }
-          case 'request-closed':
+          case 'request-closed': {
             // Answered in another window, withdrawn by the vendor, or the turn ended.
+            // Still open here means this window did not answer it: it draws the
+            // decision as the one that did, where the worker placed it.
+            if (openPrompts.has(event.id)) {
+              const decided = recordDecision(tracker, event);
+              if (decided) rl.joinMark(decided);
+            }
             openPrompts.get(event.id)?.abort();
             openPrompts.delete(event.id);
             return;
+          }
           case 'sign-in-request': {
             // The worker has no terminal; this window does. The vendor's own
             // sign-in runs here, and the worker retries the turn after.
