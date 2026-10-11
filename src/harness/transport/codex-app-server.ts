@@ -12,6 +12,7 @@ import { categoryOf, commandText, formatToolRow, toolLabel } from '../protocol/t
 
 /** A Codex commandExecution is a shell call by its envelope's own shape. */
 const SHELL = categoryOf('shell');
+import { compactCodexThread, codexTurnStartParams, listCodexModels } from './codex-native-methods.js';
 import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel } from './background-turn.js';
@@ -53,6 +54,9 @@ export interface CodexSession {
   close(): Promise<void>;
   /** Work the vendor is still doing between turns (persistent-session.ts). */
   backgroundWorkRunning(): Promise<boolean>;
+  /** Compact the thread natively (`thread/compact/start`) and settle on the vendor's own
+   * `thread/compacted`. False when no server holds that thread (nothing was done). */
+  compactThread(threadId: string): Promise<boolean>;
 }
 
 interface CodexAppServerTurnResult {
@@ -263,6 +267,8 @@ interface LiveServer {
   key: string;
   initialized: boolean;
   threadId?: string;
+  /** `model/list` has been asked of this server (once per server, not per turn). */
+  modelsListed?: boolean;
 }
 
 /** Whatever is receiving the vendor's notifications right now: the user's
@@ -309,6 +315,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   /** Approval prompts open, by JSON-RPC request id: released by serverRequest/resolved. */
   private readonly openApprovals = new Map<string, () => void>();
   private turnCompletedWaiter?: () => void;
+  /** A native compaction waiting for `thread/compacted`; rejected when the server goes away. */
+  private compactWaiter?: { done: () => void; fail: (error: Error) => void };
   private threadId?: string;
   private lastPermissionMode: AiHarnessPermissionMode = 'ask';
 
@@ -355,6 +363,22 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     await live.peer.request('turn/steer', codexSteerParams(turn.threadId, turn.turnId, text));
   }
 
+  async compactThread(threadId: string): Promise<boolean> {
+    const live = this.live;
+    if (!live || live.peer.closed || live.threadId !== threadId) return false;
+    if (this.turn && !this.turn.done) throw new Error('Codex is working; compact when the turn ends');
+    if (this.compactWaiter) throw new Error('Codex is already compacting this conversation');
+    const compacted = new Promise<void>((resolve, reject) => { this.compactWaiter = { done: resolve, fail: reject }; });
+    compacted.catch(() => undefined);
+    try {
+      await compactCodexThread(live.peer, threadId);
+      await compacted;
+    } finally {
+      this.compactWaiter = undefined;
+    }
+    return true;
+  }
+
   protected pendingCount(): number {
     return this.pendingWork.size;
   }
@@ -365,6 +389,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
 
   protected clearPending(): void {
     this.pendingWork.clear();
+    this.compactWaiter?.fail(new Error('Codex app-server closed before it finished compacting'));
   }
 
   protected interrupt(turn: ActiveTurn, live: LiveServer): boolean {
@@ -412,8 +437,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   }
 
   private ensureLive(input: CodexAppServerTurnInput, threadKey: string): LiveServer {
-    // Approval policy, sandbox and config are fixed when a thread is opened:
-    // changing them means a fresh server that resumes the thread.
+    // Config and extra thread params are fixed when a thread is opened: changing them
+    // means a fresh server that resumes the thread. Permission mode is not here: it is
+    // sent with every turn/start (codexTurnStartParams), so changing it restarts nothing.
     return this.liveFor(JSON.stringify([input.binary, input.cwd, input.environment ?? {}, threadKey]), 'Codex app-server restarted', {
       binary: input.binary, argv: ['app-server', '--stdio'], cwd: input.cwd, environment: input.environment,
       peer: {
@@ -429,7 +455,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const { input } = turn;
     const settings = codexPermissionSettings(input.permissionMode);
     const overrides = { ...(input.configOverrides ? { config: input.configOverrides } : {}), ...(input.extraThreadParams ?? {}) };
-    const live = this.ensureLive(input, JSON.stringify([settings, overrides]));
+    const live = this.ensureLive(input, JSON.stringify(overrides));
     const { peer } = live;
     // No clock on setup: see the ACP client. A dead app-server rejects these on exit.
     const setup: { timeoutMs?: number } = {};
@@ -439,6 +465,14 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       peer.notify('initialized');
       live.initialized = true;
       stillRunning();
+    }
+    if (!live.modelsListed && input.onSessionModels) {
+      // The account's own model list, from the server already running: reported in the shape an
+      // ACP session/new answer has, so the catalog takes it as it takes that. Never delays or fails the turn.
+      live.modelsListed = true;
+      void listCodexModels(peer).then((models) => {
+        if (models.length) input.onSessionModels?.({ models: { availableModels: models.map((m) => ({ modelId: m.model, name: m.displayName })) } }, true);
+      }).catch(() => undefined);
     }
     const wanted = input.nativeSessionId ?? this.threadId;
     if (!wanted || live.threadId !== wanted) {
@@ -469,14 +503,10 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     // process on the machine, which on a loaded one took long enough to be
     // mistaken for Codex's silence.
     turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError('Codex', afterMs)));
-    const turnResult = await peer.request('turn/start', {
-      threadId,
-      input: [
-        { type: 'text', text: input.prompt, text_elements: [] },
-        ...(input.images ?? []).map((path) => ({ type: 'localImage', path })),
-      ],
-      cwd: input.cwd, model: input.model ?? null, effort: input.effort ?? null,
-    }, setup);
+    const turnResult = await peer.request('turn/start', codexTurnStartParams({
+      threadId, prompt: input.prompt, images: input.images, cwd: input.cwd, model: input.model, effort: input.effort,
+      permissionMode: input.permissionMode,
+    }), setup);
     stillRunning();
     turn.turnId = String(((turnResult.turn as JsonObject) ?? {}).id ?? '');
     if (!turn.turnId) throw new Error('Codex app-server did not return a turn id');
@@ -667,6 +697,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     // parent's turn/completed, and its prose is not the parent's answer.
     const ours = threadId === undefined || threadId === this.threadId;
     if (method === 'turn/completed' && ours) this.turnCompletedWaiter?.();
+    if (method === 'thread/compacted' && ours) this.compactWaiter?.done();
     const target = this.targetFor(method, params, ours);
     target?.watchdog?.activity();
     if (!ours) this.otherThread(target, method, params, threadId!);
