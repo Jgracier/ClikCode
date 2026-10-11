@@ -63,7 +63,7 @@ export async function hermesInstall(
   const key = await harnessBinaryIdentity(harness.binary) ?? harness.binary;
   let asked = installs.get(key);
   if (!asked) {
-    asked = captureNativeHarnessOutput(harness, ['--version'], environment, 30_000).then(hermesInstallDirectory, () => undefined);
+    asked = captureNativeHarnessOutput(harness, ['--version'], environment).then(hermesInstallDirectory, () => undefined);
     installs.set(key, asked);
   }
   const install = await asked;
@@ -81,7 +81,7 @@ export async function discoverHermesChoices(
   harness: AiLocalHarnessDefinition, account?: AiHarnessAccount,
 ): Promise<{ toolsets: string[] }> {
   const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const toolsText = await captureNativeHarnessOutput(harness, ['tools', 'list'], environment, 12_000).catch(() => '');
+  const toolsText = await captureNativeHarnessOutput(harness, ['tools', 'list'], environment).catch(() => '');
   return { toolsets: hermesToolsetNames(toolsText) };
 }
 

@@ -13,7 +13,7 @@ import { ADOPTED_TRANSCRIPT_LIMIT } from '../transcript.js';
  * text blocks. */
 export async function readOpencodeTranscript(harness: AiLocalHarnessDefinition, nativeId: string, workspace: string): Promise<Array<{ role: 'user' | 'assistant'; content: string }>> {
   let raw: string;
-  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], {}, 8_000, workspace); } catch {
+  try { raw = await captureNativeHarnessOutput(harness, ['export', nativeId], {}, undefined, workspace); } catch {
     // fail-open-ok: session adoption is optional; a failed read-only vendor export has no importable messages.
     return [];
   }

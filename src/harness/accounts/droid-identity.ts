@@ -63,7 +63,7 @@ for item in items:
 function keyringKey(): Promise<Buffer | undefined> {
   if (process.platform !== 'linux') return Promise.resolve(undefined);
   return new Promise((resolve) => {
-    execFile('python3', ['-c', SECRET_SERVICE_LOOKUP], { timeout: 8_000, windowsHide: true }, (error, stdout) => {
+    execFile('python3', ['-c', SECRET_SERVICE_LOOKUP], { windowsHide: true }, (error, stdout) => {
       const key = !error && stdout.trim() ? Buffer.from(stdout.trim(), 'base64') : undefined;
       resolve(key?.length === 32 ? key : undefined);
     });

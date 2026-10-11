@@ -22,7 +22,6 @@ import { testedVersion } from './thread-writer-files.js';
  * whose layout both importers were verified on. */
 export const CLAUDE_THREAD_VERSION = '2.1.288';
 
-const IMPORT_TIMEOUT_MS = 60_000;
 
 
 export interface ClaudeImportSpec {
@@ -50,7 +49,7 @@ export async function importClaudeThread(
       ...(spec.toolCalls ? { toolCalls: spec.toolCalls } : {}),
     }), { mode: 0o600 });
     const output = await captureNativeHarnessOutput(
-      context.harness, spec.argv(file), context.environment, IMPORT_TIMEOUT_MS, context.workspace,
+      context.harness, spec.argv(file), context.environment, undefined, context.workspace,
     );
     const nativeId = spec.parse(output);
     return nativeId ? { nativeId, ...(spec.transport ? { transport: spec.transport } : {}) } : undefined;

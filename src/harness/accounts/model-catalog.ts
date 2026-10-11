@@ -24,7 +24,6 @@ import { acpConfigOptionValues, acpDiscoverySession, acpProbeArgv, acpSessionMod
 import { localHarnessForCommand, modelDisplayId, modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { modelLabel } from '../model-label.js';
 import { jsonMemo } from '../../session/store/json-memo.js';
-import { NO_WALL_CLOCK_MS } from './probe-clock.js';
 
 /** Provider-specific model naming belongs to account metadata, not generic
  * session pickers or terminal renderers. Unknown models always pass through. */
@@ -575,7 +574,7 @@ async function nativeModelCatalogUncached(
     }
     try {
       if (!configured) {
-        const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, NO_WALL_CLOCK_MS)) as { default?: unknown; provider?: unknown };
+        const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, undefined)) as { default?: unknown; provider?: unknown };
         const model = typeof parsed.default === 'string' ? parsed.default.trim() : '';
         const provider = typeof parsed.provider === 'string' ? parsed.provider.trim() : '';
         if (model) configured = provider ? `${provider}:${model}` : model;
@@ -658,7 +657,7 @@ async function nativeModelCatalogUncached(
   if (harness.modelDiscoveryArgv) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
-      const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, NO_WALL_CLOCK_MS);
+      const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, undefined);
       // OpenCode and Kilo print only connected providers' models, each with
       // its price and (Kilo) whether it is free; the rest of what they know
       // is offered as a sign-in.

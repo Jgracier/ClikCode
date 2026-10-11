@@ -370,14 +370,14 @@ export function openCodeFamilyThreadWriter(testedVersions: readonly string[]): N
         await writeFile(file, JSON.stringify(exported), { mode: 0o600 });
         // --pure: no plugins -- importing is a database insert, and a plugin
         // may reach the network or open a session of its own.
-        const output = await captureNativeHarnessOutput(context.harness, ['import', '--pure', file], context.environment, 30_000, context.workspace);
+        const output = await captureNativeHarnessOutput(context.harness, ['import', '--pure', file], context.environment, undefined, context.workspace);
         if (/Imported session: (\S+)/.exec(output)?.[1] === nativeId) return { nativeId };
         throw new Error('import did not report the session');
       } catch {
         // fail-open-ok: import validates message by message after inserting
         // the session row, so a refusal can leave part of it behind; the
         // caller transfers instead.
-        await captureNativeHarnessOutput(context.harness, ['session', 'delete', '--pure', nativeId], context.environment, 15_000, context.workspace)
+        await captureNativeHarnessOutput(context.harness, ['session', 'delete', '--pure', nativeId], context.environment, undefined, context.workspace)
           .catch(() => undefined);
         return undefined;
       } finally {

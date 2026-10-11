@@ -8,15 +8,10 @@ import { spawnPortable as spawn, terminatePortable } from '../transport/spawn.js
 import { grokUsageReading } from './grok-usage.js';
 import { ampUsageProbe, antigravityUsageReading, auggieUsageReading, clineUsageReading, commandCodeUsageReading, devinUsageReading, hermesUsageReading, vibeUsageReading, copilotUsageReading, cursorUsageReading, kiloUsageProbe, kimiUsageReading, kiroUsageReading } from './cli-usage-probes.js';
 import { captureNativeHarnessOutput } from '../transport/native/command.js';
-import { NO_WALL_CLOCK_MS } from './probe-clock.js';
 import { localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { CLIKCODE_VERSION } from '../../version.js';
 import type { NativeUsageProbe } from '../definition.js';
 import { UsageReading, UsageWindow, claudeRateLimitReading, claudeUsageCommandReading, usageReading, usageWindow, usageWindowName } from './usage-reading.js';
-
-/** Claude Code's `/usage` probe: measured at ~3.8s (see
- * CLAUDE_USAGE_PROBE_ARGV), no clock: a slow start is not an absent figure. */
-const NATIVE_USAGE_PROBE_TIMEOUT_MS = NO_WALL_CLOCK_MS;
 
 /** Per-harness live usage probe. Each vendor CLI exposes quota/cost through a different
  * surface (or none at all); adding a harness here is the only step needed to light up
@@ -55,7 +50,6 @@ async function codexUsageReading(environment: Readonly<Record<string, string>>):
     const finish = (value?: Record<string, unknown>): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
       terminatePortable(child);
       resolveUsage(value);
     };
@@ -94,8 +88,6 @@ async function codexUsageReading(environment: Readonly<Record<string, string>>):
     child.once('exit', () => finish());
     send({ id: 1, method: 'initialize', params: { clientInfo: { name: 'clikcode', version: CLIKCODE_VERSION } } });
     send({ method: 'initialized', params: {} });
-    const timer = setTimeout(() => finish(), 8_000);
-    timer.unref();
   });
   if (signedOut) return { windows: [], account: 'signed-out' };
   const reading = codexRateLimitsReading(response?.rateLimits);
@@ -143,7 +135,7 @@ async function claudeUsageReading(environment: Readonly<Record<string, string>>)
   const harness = localHarnessForCommand('claude');
   if (!harness) return undefined;
   try {
-    const output = await captureNativeHarnessOutput(harness, CLAUDE_USAGE_PROBE_ARGV, environment, NATIVE_USAGE_PROBE_TIMEOUT_MS);
+    const output = await captureNativeHarnessOutput(harness, CLAUDE_USAGE_PROBE_ARGV, environment);
     const result = (JSON.parse(output) as { result?: unknown }).result;
     return typeof result === 'string' ? claudeUsageCommandReading(result) : undefined;
   } catch { return undefined; } // fail-open-ok: no figure beats a wrong one

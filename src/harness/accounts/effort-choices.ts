@@ -150,8 +150,11 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
   let values: string[] = [];
   try {
     const helpArgv = harness.command === 'hermes' ? ['chat', '--help'] : ['--help'];
-    values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}, 8_000), flag);
-  } catch { /* fail-open-ok: no help text is the catalog's cue, not an error. */ }
+    values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}), flag);
+  } catch {
+    // A failed ask is not an answer: nothing is remembered, the next call asks again.
+    return undefined;
+  }
   memo.harnesses[harness.command] = { identity, values };
   helpMemo.changed();
   await helpMemo.save();

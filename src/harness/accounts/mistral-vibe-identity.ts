@@ -98,7 +98,6 @@ async function runVibePython(script: string, profilePath?: string): Promise<stri
       const finish = (value?: string): void => {
         if (settled) return;
         settled = true;
-        clearTimeout(timer);
         resolve(value);
       };
       child.stdout?.setEncoding('utf8');
@@ -113,11 +112,6 @@ async function runVibePython(script: string, profilePath?: string): Promise<stri
           finish(typeof parsed.email === 'string' ? parsed.email : undefined);
         } catch { finish(); }
       });
-      const timer = setTimeout(() => {
-        child.kill();
-        finish();
-      }, 10_000);
-      timer.unref();
     });
     return result;
   } catch {

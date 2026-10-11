@@ -34,7 +34,6 @@
  * success.
  */
 import { captureNativeHarnessOutput } from './transport/native/command.js';
-import { NO_WALL_CLOCK_MS } from './accounts/probe-clock.js';
 import { nativeProfileEnvironment } from './transport/profile-environment.js';
 import { localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
@@ -317,7 +316,7 @@ export async function installMcpOnHarness(
     };
   }
   try {
-    await captureNativeHarnessOutput(harness, argv, environment, NO_WALL_CLOCK_MS, undefined, mcpAddGrammar(harness)?.confirmStdin);
+    await captureNativeHarnessOutput(harness, argv, environment, undefined, undefined, mcpAddGrammar(harness)?.confirmStdin);
     return { ...label, ok: true };
   } catch (error) {
     return { ...label, ok: false, detail: error instanceof Error ? error.message.split('\n')[0] : 'failed' };
@@ -389,7 +388,7 @@ export async function removeMcpFromHarness(
       managers?: { mcp?: { remove?: { argv: readonly string[] } } };
     }).managers?.mcp?.remove;
     if (remove) {
-      await captureNativeHarnessOutput(harness, [...remove.argv, name], environment, NO_WALL_CLOCK_MS);
+      await captureNativeHarnessOutput(harness, [...remove.argv, name], environment, undefined);
       return { ...label, ok: true };
     }
     const profile = account?.nativeProfile ? { env: account.nativeProfile.env, path: account.nativeProfile.path } : undefined;

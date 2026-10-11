@@ -59,7 +59,9 @@ export async function captureNativeHarness(spec: NativeHarnessSpec, args: readon
  *  anyway? [y/N]" is No -- so `mcp add` exited 0 having written nothing. */
 const CAPTURE_LIMIT_BYTES = 2 * 1024 * 1024;
 
-export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs = 15_000, cwd?: string, stdinText?: string): Promise<string> {
+export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: readonly string[], envOverrides: Readonly<Record<string, string>> = {}, timeoutMs?: number, cwd?: string, stdinText?: string, signal?: AbortSignal): Promise<string> {
+  // `timeoutMs` undefined or 0 is NO clock: the helper ends when the vendor
+  // exits or errors, or when `signal` aborts (the user's cancel).
   // Never an install: this runs for probes (status, models, sessions, usage)
   // of harnesses nobody chose just now, and choosing is what installs one.
   // Everything that runs a harness because the user asked for it installed
@@ -75,10 +77,16 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
     let stderr = '';
     let exceededLimit = false;
     let settled = false;
+    const onAbort = (): void => {
+      terminatePortable(child);
+      finish(new Error(`${spec.displayName} helper cancelled`));
+    };
+    let timer: NodeJS.Timeout | undefined;
     const finish = (error?: Error): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (error) reject(error);
       else resolve(stdout);
     };
@@ -98,15 +106,17 @@ export async function captureNativeHarnessOutput(spec: NativeHarnessSpec, args: 
     // `close`, not `exit`: exit can fire before the stdout pipe has drained,
     // and a child that prints its JSON and exits at once (OpenClaw) was read
     // back as empty.
-    child.once('close', (code, signal) => {
+    child.once('close', (code, killedBy) => {
       if (exceededLimit) return finish(new Error(`${spec.displayName} helper output exceeded ${CAPTURE_LIMIT_BYTES / 1024 / 1024} MiB`));
-      if (code !== 0) return finish(new Error(`${spec.binary} ${signal ? `stopped (${signal})` : `exited ${code ?? 1}`}${stderr.trim() ? `: ${stderr.trim().slice(-2000)}` : ''}`));
+      if (code !== 0) return finish(new Error(`${spec.binary} ${killedBy ? `stopped (${killedBy})` : `exited ${code ?? 1}`}${stderr.trim() ? `: ${stderr.trim().slice(-2000)}` : ''}`));
       finish();
     });
-    const timer = setTimeout(() => {
+    timer = timeoutMs ? setTimeout(() => {
       terminatePortable(child);
       finish(new Error(`${spec.displayName} helper timed out`));
-    }, timeoutMs);
-    timer.unref();
+    }, timeoutMs) : undefined;
+    timer?.unref();
+    if (signal?.aborted) onAbort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }

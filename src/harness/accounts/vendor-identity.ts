@@ -145,7 +145,7 @@ export function parseOpenHandsUser(text: string): string | undefined {
 
 async function capture(harness: AiLocalHarnessDefinition, profilePath: string | undefined, argv: readonly string[]): Promise<string> {
   const env = profilePath && harness.profileEnv ? nativeProfileEnvironment({ env: harness.profileEnv, path: profilePath }) : {};
-  return captureNativeHarnessOutput(harness, argv, env, 15_000);
+  return captureNativeHarnessOutput(harness, argv, env);
 }
 
 async function openHandsEmail(profilePath: string | undefined): Promise<string | undefined> {
@@ -157,7 +157,6 @@ async function openHandsEmail(profilePath: string | undefined): Promise<string |
   const base = (process.env.OPENHANDS_CLOUD_URL || 'https://app.all-hands.dev').replace(/\/+$/, '');
   const response = await fetch(`${base}/api/v1/users/me`, {
     headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
-    signal: AbortSignal.timeout(15_000),
   });
   return response.ok ? parseOpenHandsUser(await response.text()) : undefined;
 }
@@ -194,7 +193,6 @@ async function kimiEmail(profilePath: string | undefined): Promise<string | unde
     const base = kimiBaseUrl(config) ?? (region === 'overseas' ? 'https://api.kimi.ai/coding/v1' : 'https://api.kimi.com/coding/v1');
     const response = await fetch(`${base}/me`, {
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(15_000),
     });
     const found = response.ok ? parseKimiUserInfo(await response.text()) : undefined;
     if (found) return found;
@@ -249,7 +247,6 @@ async function miniMaxEmail(profilePath: string | undefined): Promise<string | u
             yy: md5(`${encodeURIComponent(`${url.pathname}${url.search}`)}_{}${md5(String(now))}ooui`),
             'x-timestamp': String(seconds), 'x-signature': md5(`${seconds}I*7Cf%WZ#S&%1RlZJ&C2`),
           },
-          signal: AbortSignal.timeout(15_000),
         });
         const found = response.ok ? parseMiniMaxUserInfo(await response.text()) : undefined;
         if (found) return found;
@@ -278,7 +275,6 @@ async function augmentEmail(profilePath: string | undefined): Promise<string | u
     method: 'POST',
     headers: { Authorization: `Bearer ${session.accessToken}`, 'Content-Type': 'application/json', Accept: 'application/json' },
     body: '{}',
-    signal: AbortSignal.timeout(15_000),
   });
   return response.ok ? parseAugmentModels(await response.text()) : undefined;
 }
@@ -296,7 +292,6 @@ async function commandCodeEmail(harness: AiLocalHarnessDefinition, profilePath: 
   if (typeof auth?.apiKey === 'string' && auth.apiKey) {
     const response = await fetch('https://api.commandcode.ai/alpha/whoami', {
       headers: { Authorization: `Bearer ${auth.apiKey}`, Accept: 'application/json' },
-      signal: AbortSignal.timeout(15_000),
     }).catch(() => undefined);
     const found = response?.ok ? parseCommandCodeApiWhoami(await response.text()) : undefined;
     if (found) return found;

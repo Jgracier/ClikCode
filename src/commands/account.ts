@@ -432,7 +432,7 @@ export async function harnessNeedsLogin(harness: AiLocalHarnessDefinition, envir
   }
   let stdout: string;
   try {
-    stdout = await captureNativeHarnessOutput(harness, harness.statusArgv, environment, 8_000);
+    stdout = await captureNativeHarnessOutput(harness, harness.statusArgv, environment);
   } catch {
     // fail-open-ok: an unverified account must authenticate before it can be selected safely.
     loginStatusCache.set(cacheKey, { at: Date.now(), needsLogin: true });
@@ -528,9 +528,9 @@ export async function aiAccountRemove(labelOrId: string, options: AccountRemoveO
       harness = undefined;
     }
     if (harness && harnessCanLogout(harness)) {
-      // Best effort and bounded: an offline or already-expired login must
-      // never make an account impossible to remove.
-      loggedOut = await logoutNativeHarness(harness, profileEnvironment(harness, removed), 10_000)
+      // Best effort: a login the vendor refuses to end (offline, expired)
+      // is reported as not logged out, and removal still proceeds.
+      loggedOut = await logoutNativeHarness(harness, profileEnvironment(harness, removed))
         .then(() => true, () => false);
     }
   }

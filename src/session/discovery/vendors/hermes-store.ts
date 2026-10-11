@@ -331,7 +331,7 @@ async function writeHermesThread(record: CanonicalRecord, context: NativeThreadW
   // its own schema on any command, so the thread lands in exactly the
   // layout it reads.
   if (!await stat(database).then(() => true, () => false)) {
-    await captureNativeHarnessOutput(context.harness, ['sessions', 'list', '--limit', '1'], context.environment, 60_000, context.workspace).catch(() => undefined);
+    await captureNativeHarnessOutput(context.harness, ['sessions', 'list', '--limit', '1'], context.environment, undefined, context.workspace).catch(() => undefined);
     if (!await stat(database).then(() => true, () => false)) return undefined;
   }
   const db = await openSqlite(database);
