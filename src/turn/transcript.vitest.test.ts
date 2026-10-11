@@ -146,15 +146,17 @@ describe('a tool lands where it happened', () => {
     // Append-only: a row is written where it became final. A tool that reports
     // completion three paragraphs later cannot be inserted back up the page.
     const transcript = new TurnTranscript();
-    const tool = { id: 'slow', responseOffset: 0, lines: ['done slow tool'] };
+    // The tool began inside 'One.', so the prose after it waits (it was
+    // generated after the call began); what was already written stays.
+    const tool = { id: 'slow', responseOffset: 'One.'.length, lines: ['done slow tool'] };
     const first = transcript.advance({
       content: 'One.\n\nTwo.\n\n', tools: [{ ...tool, done: false }], turnEnded: false, renderBlocks,
     });
-    expect(first.finished).toEqual(['One.', 'Two.']);
+    expect(first.finished).toEqual(['One.']);
     const second = transcript.advance({
       content: 'One.\n\nTwo.\n\nThree.', tools: [{ ...tool, done: true }], turnEnded: true, renderBlocks,
     });
-    expect(second.finished).toEqual(['done slow tool', 'Three.']);
+    expect(second.finished).toEqual(['done slow tool', 'Two.', 'Three.']);
   });
 });
 
@@ -318,4 +320,83 @@ describe('a streamed answer lays out as its saved copy does', () => {
       for (const step of [1, 2, 3, 5, 7, 11, 30]) expect(streamed(answer, step), `chunks of ${step}`).toEqual(saved);
     });
   }
+});
+
+describe('parallel calls keep the order they started in', () => {
+  const t = (id: string, done: boolean, responseOffset: number, extra: Record<string, unknown> = {}) =>
+    ({ id, done, responseOffset, lines: [`${done ? 'done' : 'run'} ${id}`], ...extra });
+
+  it('does not retire a finished call above an earlier one still running', () => {
+    const transcript = new TurnTranscript();
+    const first = transcript.advance({
+      content: '', tools: [t('X', false, 0, { seq: 1 }), t('Y', true, 0, { seq: 2 })], turnEnded: false, renderBlocks: text,
+    });
+    expect(first.finished, 'Y was written above the still-running X').toEqual([]);
+    expect(first.live).toEqual(['run X', 'done Y']);
+    const second = transcript.advance({
+      content: '', tools: [t('X', true, 0, { seq: 1 }), t('Y', true, 0, { seq: 2 })], turnEnded: false, renderBlocks: text,
+    });
+    expect(second.finished).toEqual(['done X', 'done Y']);
+    expect(second.live).toEqual([]);
+  });
+
+  it('orders by arrival when no seq is given, and by seq when it is', () => {
+    const step = new TurnTranscript().advance({
+      content: '', tools: [t('late', true, 0, { seq: 9 }), t('early', true, 0, { seq: 3 })], turnEnded: false, renderBlocks: text,
+    });
+    expect(step.finished).toEqual(['done early', 'done late']);
+  });
+
+  it('lets a running sub-agent stay open without holding later calls back', () => {
+    const step = new TurnTranscript().advance({
+      content: '', tools: [t('agent', false, 0, { seq: 1, agent: true }), t('Y', true, 0, { seq: 2 })],
+      turnEnded: false, renderBlocks: text,
+    });
+    expect(step.finished).toEqual(['done Y']);
+    expect(step.live).toEqual(['run agent']);
+  });
+
+  it('retires everything at the end of the turn, running or not', () => {
+    const step = new TurnTranscript().advance({
+      content: '', tools: [t('X', false, 0, { seq: 1 }), t('Y', true, 0, { seq: 2 })], turnEnded: true, renderBlocks: text,
+    });
+    expect(step.finished).toEqual(['run X', 'done Y']);
+  });
+
+  it('holds prose written after a running call until the call settles', () => {
+    const transcript = new TurnTranscript();
+    const content = 'Starting.\n\nMore text written while it runs.\n\nAnd more.\n\nTail';
+    const running = t('X', false, 'Starting.'.length, { seq: 1 });
+    const first = transcript.advance({ content, tools: [running], turnEnded: false, renderBlocks: text });
+    expect(first.finished, 'prose generated after the call was retired above its row').toEqual(['Starting.']);
+    expect(first.live).toEqual(['run X', 'More text written while it runs.', 'And more.', 'Tail']);
+    const second = transcript.advance({ content, tools: [{ ...running, done: true, lines: ['done X'] }], turnEnded: false, renderBlocks: text });
+    expect(second.finished).toEqual(['done X', 'More text written while it runs.', 'And more.']);
+    expect(second.live).toEqual(['Tail']);
+  });
+
+  it('does not hold prose behind a running sub-agent', () => {
+    const step = new TurnTranscript().advance({
+      content: 'Go.\n\nWhile it runs.\n\nTail', tools: [t('A', false, 3, { agent: true, seq: 1 })], turnEnded: false, renderBlocks: text,
+    });
+    expect(step.finished).toEqual(['Go.', 'While it runs.']);
+  });
+});
+
+describe('a table is not drawn narrower than it will end up', () => {
+  const render = (blocks: readonly MessageBlock[], first: boolean): string[] => renderMessageBlocks(blocks, '·', 60, first);
+  it('holds an open table live until it closes', () => {
+    const answer = '| name | n |\n|---|---|\n| a | 1 |\n| b | 2 |\n| c | 3 |\n| a much wider cell than before | 4 |\n\nDone.';
+    const transcript = new TurnTranscript();
+    const parse = createStreamingBlockParser();
+    const rows: string[] = [];
+    for (let end = 6; end < answer.length; end += 6) {
+      const content = answer.slice(0, end);
+      const step = transcript.advance({ content, blocks: parse(content), tools: [], turnEnded: false, renderBlocks: render });
+      rows.push(...step.finished);
+      if (end > 40 && end < 60) expect(step.finished.filter((row) => row.includes('|') || row.includes('│')), 'table rows retired while open').toEqual([]);
+    }
+    rows.push(...transcript.advance({ content: answer, blocks: parse(answer), tools: [], turnEnded: true, renderBlocks: render }).finished);
+    expect(rows).toEqual(renderMessageBlocks(splitIntoBlocks(answer), '·', 60));
+  });
 });
