@@ -1,6 +1,7 @@
 /** The turn-flow standard, second wave: what the worker now sends (seq, marks,
  * thought, phase, usage) wired into the extension's model and page logic. */
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
 import { thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { answeredApproval, applyEvent, emptyModel, liveChildren, turnMarks, turnNoticeNotes, type ChatModel } from '../../src/model';
 import { activityOutcome } from '../../../../src/harness/protocol/activity-view';
@@ -487,5 +488,17 @@ describe('sub-agents: children under their parent (X6)', () => {
   it('a child whose parent was never seen is a row of its own, not dropped', () => {
     const model = run([child('c9', 'tool-start')], begin());
     expect(model.live!.activities.map((row) => row.key)).toEqual(['c9']);
+  });
+});
+
+describe('adjacent read, search and list calls are one group (X9)', () => {
+  it('the page groups them with the same function the terminal does', () => {
+    const rows = [
+      { key: 'a', kind: 'tool-done' as const, label: 'Read a.ts', category: 'read' as const },
+      { key: 'b', kind: 'tool-done' as const, label: 'List src', category: 'search' as const },
+      { key: 'c', kind: 'tool-start' as const, label: 'Grep foo', category: 'search' as const },
+      { key: 'd', kind: 'tool-start' as const, label: '$ ls', category: 'run' as const },
+    ];
+    expect(exploreRuns(rows).map((group) => [group.explore, group.rows.map((row) => row.key)])).toEqual([[true, ['a', 'b', 'c']], [false, ['d']]]);
   });
 });
