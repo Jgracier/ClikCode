@@ -3,7 +3,7 @@
 import type { HarnessSession } from '../../session/model.js';
 import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
-import { closePersistentTransport } from '../../turn/vendor-process.js';
+import { closePersistentTransport, persistentTransports } from '../../turn/vendor-process.js';
 import { hasConversationContent } from '../../session/options.js';
 import { conversationIdFor } from '../../session/conversation-rows.js';
 import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
@@ -33,6 +33,18 @@ export async function compactConversation(
   if (harness?.nativeSlashPassthrough && session.nativeSessionId) {
     await send(id, `/compact${focus ? ` ${focus}` : ''}`);
     return;
+  }
+  // A server that compacts its own thread (catalog `nativeOperations: compact`, Codex
+  // `thread/compact/start`) keeps the conversation in one session. The transport's live child
+  // does it (`compactThread`, see harness/transport/codex-native-methods.ts); with no live child
+  // or a transport without the method, the summary path below is the fallback.
+  if (harness?.nativeOperations?.includes('compact') && session.nativeSessionId) {
+    const live = persistentTransports.get(id);
+    const compactor = live?.transport === 'codex-app-server' ? (live.session as unknown as { compactThread?: (threadId: string) => Promise<void> }) : undefined;
+    if (compactor?.compactThread) {
+      await compactor.compactThread(session.nativeSessionId);
+      return;
+    }
   }
   await send(id, `${COMPACT_PROMPT}${focus ? `\nPay particular attention to: ${focus}` : ''}`);
   const state = await readState({ transcripts: [id] });

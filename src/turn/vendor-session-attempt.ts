@@ -163,7 +163,16 @@ function acpLaunchInput(input: {
   const declaredOptions = localHarnessCapabilityManifest(harness).options;
   const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: session.permissionMode ?? 'ask' });
   if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
-  const optionArgv = declaredOptionArgv(declaredOptions, session.harnessOptions, Boolean(session.nativeSessionId));
+  // A harness whose plan mode is an ACP session mode (acp.planModeId) no longer takes it as a launch
+  // option: a chat that stored the old option (Droid `spec-mode`, Cline/Command Code `plan`) keeps its
+  // plan mode through the session mode instead of failing on a CLI flag its ACP command refuses.
+  const planOption = harness.acp?.planModeId ? harness.planMode : undefined;
+  const storedPlan = planOption ? session.harnessOptions?.[planOption.option] : undefined;
+  const planStored = storedPlan !== undefined && storedPlan !== false && storedPlan !== '' && (planOption!.value === true || storedPlan === planOption!.value);
+  const launchOptions = planOption && session.harnessOptions
+    ? Object.fromEntries(Object.entries(session.harnessOptions).filter(([id]) => id !== planOption.option))
+    : session.harnessOptions;
+  const optionArgv = declaredOptionArgv(declaredOptions, launchOptions, Boolean(session.nativeSessionId));
   if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
     throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
   }
@@ -177,10 +186,11 @@ function acpLaunchInput(input: {
     acp: harness.acp,
     // Plan mode as an ACP session mode (catalog acp.planModeId); the
     // agent leaving it -- its plan approved -- turns the chat's off.
-    ...(session.planMode && harness.acp?.planModeId ? {
+    ...((session.planMode || planStored) && harness.acp?.planModeId ? {
       planMode: true,
       onPlanModeExit: () => {
         delete session.planMode;
+        if (planOption && session.harnessOptions) delete session.harnessOptions[planOption.option];
         checkpoint?.touch();
         prompter?.render(session);
       },
