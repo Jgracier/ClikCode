@@ -49,13 +49,15 @@ export function enterAgainSends(waiting: readonly WaitingMessage[]): boolean {
  *  drawn here; the rest are still in flight or failed. */
 export type LiveSubmission = {
   text: string; sequence: number; responseOffset: number; id?: string;
+  /** When the turn acknowledged it: the position it is drawn at. */
+  ack?: { sequence: number; responseOffset: number };
   state: 'sending' | 'queued' | 'steered' | 'error' | 'command';
 };
 
 /** A steer already folded into the conversation by the transcript reader. */
 export type DurableSteer = { text: string; responseOffset?: number; id?: string };
 
-export type SteerRow = { id: string; done: true; responseOffset: number; lines: string[] };
+export type SteerRow = { id: string; done: true; responseOffset: number; lines: string[]; seq?: number };
 
 /** A timed-out steer can be shown as queued before the provider accepts it.
  * Its durable steer then replaces that provisional row under the same id. */
@@ -89,7 +91,12 @@ export function steerTranscriptRows(input: {
     // one, so two steers that say the same thing are still two steers.
     if (hasDurableSteer(item, durable)) continue;
     if (input.materializedPendingTurn && input.retiredThisSession.has(item.id ?? item.text)) continue;
-    rows.push({ id: `steer#${item.sequence}`, done: true, responseOffset: item.responseOffset, lines: input.render(item.text) });
+    // Placed where it was acknowledged, in the same order every other row
+    // is: one that began before sorts above it, one after sorts below.
+    rows.push({
+      id: `steer#${item.sequence}`, done: true, responseOffset: item.ack?.responseOffset ?? item.responseOffset,
+      lines: input.render(item.text), ...(item.ack ? { seq: item.ack.sequence } : {}),
+    });
   }
   return rows;
 }

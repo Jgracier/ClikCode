@@ -99,3 +99,20 @@ describe('Enter again on a waiting message', () => {
     expect(enterAgainSends([])).toBe(false);
   });
 });
+
+describe('where a steer sits among the rows around it', () => {
+  it('is placed at its acknowledgement, not at where it was typed', () => {
+    const [row] = rows({ live: [{ ...live('now', 3), responseOffset: 3, ack: { sequence: 20, responseOffset: 90 } }] });
+    expect(row).toMatchObject({ id: 'steer#3', responseOffset: 90, seq: 20 });
+  });
+
+  it('sorts rows that began before the acknowledgement above it and later ones below', async () => {
+    const { TurnTranscript } = await import('../../turn/transcript');
+    const [steer] = rows({ live: [{ ...live('steer', 1), ack: { sequence: 10, responseOffset: 0 } }] });
+    const tool = (id: string, seq: number) => ({ id, done: true, responseOffset: 0, seq, lines: [id] });
+    const step = new TurnTranscript().advance({
+      content: '', tools: [steer!, tool('after', 11), tool('before', 9)], turnEnded: false, renderBlocks: () => [],
+    });
+    expect(step.finished).toEqual(['before', 'row:steer', 'after']);
+  });
+});

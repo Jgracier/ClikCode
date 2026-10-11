@@ -49,6 +49,23 @@ describe('a turn\'s reads and searches, merged while they happen', () => {
     expect(shape(grouping.group([read('a'), read('b', 'tool-error')], false, 10))).toEqual([['a+b', true, false]]);
   });
 
+  it('does not freeze membership on a start frame that cannot classify yet', () => {
+    const grouping = new ExploreGrouping();
+    const nameOnly = (key: string) => ({ key, responseOffset: 10, event: { kind: 'tool-start' as const, label: key, id: key } });
+    // 'b' starts with a name only: it must not seal the read before it, nor
+    // take a group of its own for good.
+    expect(shape(grouping.group([read('a'), nameOnly('b')], false, 10))).toEqual([['a', false, false], ['b', false, false]]);
+    // The category arrives: it is a read, and joins the run it follows.
+    expect(shape(grouping.group([read('a'), read('b', 'tool-start')], false, 10))).toEqual([['a+b', true, false]]);
+  });
+
+  it('seals what a name-only call follows once that call turns out to be something else', () => {
+    const grouping = new ExploreGrouping();
+    const nameOnly = (key: string) => ({ key, responseOffset: 10, event: { kind: 'tool-start' as const, label: key, id: key } });
+    grouping.group([read('a'), nameOnly('b')], false, 10);
+    expect(shape(grouping.group([read('a'), run('b', 'tool-start')], false, 10))).toEqual([['a', false, true], ['b', false, false]]);
+  });
+
   it('words the merged row as Claude Code does, the last calls under it as Cursor does', () => {
     const events = [read('a').event, { ...read('b').event, output: ['x', 'y'], outputOmitted: 40 }, grep('c').event, read('d', 'tool-start').event];
     const live = mergedExploreLines(events, false);
