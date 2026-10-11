@@ -148,6 +148,26 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
         case 'queue-changed':
           void sendWhenDue().catch(() => undefined);
           return;
+        // A script or pipe has no one to answer. The worker waits on each of
+        // these for ever (a signed-out amp/aider/devin/mcode send, a goose
+        // ask-mode send hung with no output), so each is answered at once:
+        // sign-in fails as 'not signed in', an approval is refused, a
+        // question is cancelled -- never answered on the user's behalf.
+        case 'sign-in-request':
+          if (ours) client.send({ type: 'sign-in-response', id: event.id, error: `${event.name} is not signed in; run "clikcode accounts login <harness>" in a terminal` });
+          return;
+        case 'approval-request':
+          if (ours) {
+            (isJsonDefaultMode() ? process.stderr : output).write(`Declined (no one to ask in a script; use --permissions auto or bypass): ${event.title}\n`);
+            client.send({ type: 'approval-response', id: event.id, approved: false });
+          }
+          return;
+        case 'question-request':
+          if (ours) {
+            (isJsonDefaultMode() ? process.stderr : output).write(`A question was cancelled because a script cannot answer it: ${event.request.title}\n`);
+            client.send({ type: 'question-response', id: event.id, result: { kind: 'cancelled' } });
+          }
+          return;
         case 'shutdown':
           onGone();
           return;
