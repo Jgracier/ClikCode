@@ -215,7 +215,7 @@ function acpLaunchInput(input: {
     // The models this session offers are the catalog model discovery
     // would otherwise start a second copy of the agent to read.
     onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
-    environment,
+    environment: launch.env && Object.keys(launch.env).length ? { ...environment, ...launch.env } : environment,
     ...(mcpServers.length ? { mcpServers } : {}),
   };
 }
