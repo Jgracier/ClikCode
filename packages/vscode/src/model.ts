@@ -949,6 +949,7 @@ function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
       userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(decisions ? { decisions } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
       // Completed steers are materialized as user messages in session.messages.
       // Keeping the live badges in the finished trace displayed each prompt twice.
+      ...(model.turnUsage ? { usage: model.turnUsage } : {}),
       text: model.live?.text ?? '',
       // Less the time approvals waited, as the terminal's summary counts.
       startedAt: model.live ? Date.now() - liveElapsedMs(model.live, Date.now()) : Date.now(), endedAt: Date.now(),

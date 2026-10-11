@@ -2,12 +2,15 @@
  * (the terminal's too) applied to the chat model, with the few choices only
  * a webview makes -- which colour class a status wears. Pure, and free of
  * anything that styles a terminal, so the page bundles it. */
-import { answerWriting, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, tensedLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
+import { answerWriting, decisionRow, endsWithSummary, exploreRuns, explores, exploreSummary, liveTokenTarget, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus, turnSummary, type Decision, type StatusTone } from '../../../../src/harness/protocol/turn-flow';
 import { shimmerCycleMs, SPIN_MS } from '../../../../src/harness/protocol/timings';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import type { FileDiff } from '../protocol';
 import type { Activity, LiveTurn, TurnTrace } from '../model';
+import { formatElapsed } from '../../../../src/harness/protocol/format';
+import { formatTurnUsage } from '../../../../src/tui/render/usage-line';
+import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
 import { titleCase } from './format';
 
 export interface WorkingStatus {
@@ -89,12 +92,18 @@ export function foldedSummary(activities: readonly Activity[]): string {
  * long it took) invents none: a stopped one says only "Stopped", and the rest
  * say only what they changed, never a made-up "Worked for 1s". */
 export function traceSummaryLine(
-  trace: Pick<TurnTrace, 'startedAt' | 'endedAt' | 'stopped' | 'activities'>, diffs: ReadonlyArray<readonly FileDiff[]>,
+  trace: Pick<TurnTrace, 'startedAt' | 'endedAt' | 'stopped' | 'activities'> & Partial<Pick<TurnTrace, 'usage' | 'pendingBackground'>>,
+  diffs: ReadonlyArray<readonly FileDiff[]>,
 ): string | undefined {
   if (trace.endedAt > 0) {
     const ms = trace.endedAt - trace.startedAt;
-    if (!trace.stopped && !endsWithSummary(ms, trace.activities.length)) return undefined;
-    return turnSummary({ ms, diffs, ...(trace.stopped ? { stopped: true } : {}) });
+    const background = trace.pendingBackground ?? 0;
+    if (!trace.stopped && !background && !endsWithSummary(ms, trace.activities.length)) return undefined;
+    // What it spent, in the terminal's own words (formatTurnUsage, brief).
+    const usage = formatTurnUsage(trace.usage, { brief: true });
+    return turnSummary({
+      ms, diffs, ...(trace.stopped ? { stopped: true } : {}), ...(usage ? { usage } : {}), ...(background ? { pendingBackground: background } : {}),
+    });
   }
   if (trace.stopped) return 'Stopped';
   // No clock: only what was changed.
@@ -143,4 +152,20 @@ export function decisionBadge(decision: Decision): { text: string; tone: 'ok' | 
 export function shimmerStyle(label: string): string {
   const cycle = shimmerCycleMs(label.length);
   return `--shimmer-cycle: ${cycle}ms; --shimmer-steps: ${Math.max(1, Math.round(cycle / SPIN_MS))}`;
+}
+
+/** The status line's token count after one more step: toward what the turn
+ * has produced (the vendor's reported output, else the response's length / 4),
+ * never down within a turn (smoothTokens). `label` is `↓ 1.2k tokens`, and
+ * absent while there is nothing to count. */
+export function liveMeter(state: { shown: number; usage?: Pick<TurnUsage, 'output'> | undefined; responseChars: number }): { tokens: number; label?: string } {
+  const tokens = smoothTokens(state.shown, liveTokenTarget({ ...(state.usage ? { usage: state.usage } : {}), responseChars: state.responseChars }));
+  const label = tokenMeterLabel(tokens);
+  return { tokens, ...(label ? { label } : {}) };
+}
+
+/** The working line's trailing detail: the turn's clock, then the meter --
+ * `1m 2s · ↓ 1.2k tokens`, as the terminal words it. */
+export function workingDetail(elapsedMs: number, meter: string | undefined): string {
+  return `${formatElapsed(elapsedMs)}${meter ? ` · ${meter}` : ''}`;
 }
