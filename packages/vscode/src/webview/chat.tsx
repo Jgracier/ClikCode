@@ -8,7 +8,7 @@ import {
   outputPreview, previewLinesFor, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
-import { activityResult, exploreRuns, exploreSummary, tensedLabel } from '../../../../src/harness/protocol/turn-flow';
+import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
 import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
 import { useNow, useSpinFrame } from './clock';
@@ -21,7 +21,7 @@ import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planWindow } from '../../../../src/tui/render/plan-window';
-import { liveElapsedMs, reconnecting, turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
+import { liveElapsedMs, reconnecting, turnMarks, turnNoticeNotes, type Activity, type Approval, type ChatModel, type DecisionEntry, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff, HarnessQuestion, HarnessQuestionResult } from '../protocol';
 import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
@@ -359,17 +359,30 @@ function ExploredRow({ activities, workspace, userIndex }: { activities: Activit
   );
 }
 
-/** A thought, where it happened: "Thought for 4s", open to read it. */
+/** A thought, where it happened: "Thought for 4s · heading", open to read it
+ * when its words were kept (the worker caps them; the heading and the
+ * duration are always there). The same words as the terminal's row. */
 function ThoughtRow({ thought }: { thought: ThoughtEntry }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const row = thoughtRow({ durationMs: thought.ms, heading: thought.heading ?? reasoningHeading(thought.text) });
+  const body = thought.text ? reasoningBody(thought.text) || thought.text : '';
   return (
     <div class="trace thought-row">
-      <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span>Thought for {formatElapsed(Math.max(1000, thought.ms))}</span>
-      </button>
-      {open ? <Reasoning text={thought.text} /> : null}
+      {body ? (
+        <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span>{row}</span>
+        </button>
+      ) : <div class="trace-toggle static"><Icon name="lightbulb" /><span>{row}</span></div>}
+      {open && body ? <Reasoning text={body} /> : null}
     </div>
   );
+}
+
+/** What the user decided at an approval or question, where it was asked:
+ * `✓ approved make clean`, `✗ denied …`, `↳ told: …` (standard 8). */
+function DecisionRow({ entry }: { entry: Pick<DecisionEntry, 'decision'> }): JSX.Element {
+  const { text, tone } = decisionRow(entry.decision);
+  return <div class={`decision-row decision-${tone}`} role="note"><span class="muted">{text}</span></div>;
 }
 
 function Reasoning({ text }: { text: string }): JSX.Element {
@@ -389,11 +402,14 @@ function TurnFlow(props: {
   plan?: { entries: ChatModel['plan']; at: PlanAt };
   /** Notices that arrived during the turn, each where it did. */
   notes?: ReadonlyArray<Note>;
+  /** What the user decided at the turn's approvals, each where it was asked. */
+  decisions?: ReadonlyArray<DecisionEntry>;
 }): JSX.Element {
   const { text } = props;
   const marks = turnMarks(text, props.activities, props.thoughts, props.steers, {
     ...(props.plan?.entries.length ? { plan: props.plan.at } : {}),
     ...(props.notes?.length ? { notes: props.notes.map((note, index) => ({ offset: note.offset ?? 0, seq: note.seq ?? index, note })) } : {}),
+    ...(props.decisions?.length ? { decisions: props.decisions } : {}),
   });
   const parts: JSX.Element[] = [];
   let at = 0;
@@ -425,6 +441,7 @@ function TurnFlow(props: {
     if (mark.thought) parts.push(<ThoughtRow key={`h${mark.thought.seq}`} thought={mark.thought} />);
     else if (mark.plan && props.plan) parts.push(<Plan key="plan" plan={props.plan.entries} folded={!props.live} running={Boolean(props.live)} />);
     else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
+    else if (mark.decision) parts.push(<DecisionRow key={`d${mark.decision.id}`} entry={mark.decision} />);
     else parts.push(<div key={`s${mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
   }
   flushRun();
@@ -469,6 +486,7 @@ const FinishedTurn = memo(({ text, trace, cacheKey, workspace, notes }: { text: 
       <TurnFlow text={text} activities={trace.activities.map(place)} thoughts={(trace.reasoning ?? []).map(place)} steers={(trace.steers ?? []).map(place)}
         {...(trace.plan ? { plan: { entries: trace.plan, at: place(trace.planAt ?? { offset: 0, seq: 0 }) } } : {})}
         {...(notes?.length ? { notes: notes.map(place) } : {})}
+        {...(trace.decisions?.length ? { decisions: trace.decisions.map(place) } : {})}
         workspace={workspace} cacheKey={cacheKey} userIndex={trace.userIndex} />
       <TurnSummary trace={trace} />
       <div class="message-actions"><CopyAnswer text={text} /></div>
@@ -602,6 +620,7 @@ const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away }:
     {live ? (
       <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
         {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
+        {...(live.decisions?.length ? { decisions: live.decisions } : {})}
         {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
     ) : null}
     <Working live={live} asking={asking} reconnecting={away} />
@@ -619,6 +638,12 @@ const WINDOW = 120;
 function turnNotes(notes: readonly Note[], userIndex: number): Note[] | undefined {
   const found = notes.filter((note) => note.turn === userIndex);
   return found.length ? found : undefined;
+}
+
+/** A finished turn's notices: the window's own and the worker's saved ones. */
+function turnNotices(notes: readonly Note[], trace: TurnTrace): Note[] | undefined {
+  const all = turnNoticeNotes(turnNotes(notes, trace.userIndex), trace);
+  return all.length ? all : undefined;
 }
 
 const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'> & { reveal?: number }): JSX.Element => {
@@ -651,7 +676,7 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     parts.push(
       <div key={`m${index}`} class="message-anchor" data-message={index}>
         {message.role === 'user' ? <UserMessage text={message.content} {...(promptNumbers.has(index) ? { prompt: promptNumbers.get(index)! } : {})} />
-          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} notes={turnNotes(notes, index - 1)} />
+          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} notes={turnNotices(notes, trace)} />
             : <AssistantMessage cacheKey={`${sessionId}#${index}`} text={message.content} />}
       </div>,
     );

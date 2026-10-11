@@ -131,6 +131,15 @@ const oneLine = (text: string, max: number): string => {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 };
 
+/** A settled thought's row, in words and without its glyph (the terminal
+ * puts `✻` in front, the webview its own icon): how long it went on, and the
+ * model's own heading when it wrote one -- `Thought for 3s · Reading the
+ * parser` (standard section 4). */
+export function thoughtRow(thought: { durationMs: number; heading?: string }): string {
+  const heading = thought.heading?.replace(/\s+/g, ' ').trim();
+  return `Thought for ${formatElapsed(Math.max(1000, thought.durationMs))}${heading ? ` · ${heading}` : ''}`;
+}
+
 /** The settled row a decision leaves at its place in the turn: `✓ approved
  * make clean`, `✗ denied make clean`, `↳ told: use pnpm instead`, `✓
  * answered Which database?: MySQL` (standard section 8). `tone` is what the

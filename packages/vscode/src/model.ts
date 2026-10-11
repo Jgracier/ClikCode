@@ -18,6 +18,7 @@ import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
 import { noticeLevel, stripAnsi } from './text';
 import type { Remedy } from './compat';
+import type { TurnUsage } from '../../../src/harness/protocol/turn-usage';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
 import { endsWithSummary, isApprovalWaitPhase, reasoningHeading, type Decision } from '../../../src/harness/protocol/turn-flow';
 import { readTurnMarks } from '../../../src/turn/turn-marks';
@@ -43,6 +44,11 @@ export interface Activity extends Pick<HarnessActivityEvent,
   /** When it came among the turn's calls and thoughts: their order where no
    * text came between them. */
   seq?: number;
+  /** What the user decided at this call's approval, when the vendor named the
+   * call: the row says `✓ approved` instead of a second row (standard 8). */
+  decision?: Decision;
+  /** A sub-agent's own calls, in the order they began (standard 5). */
+  children?: Activity[];
 }
 
 export interface Note {
@@ -98,6 +104,14 @@ export interface TurnTrace {
   planAt?: PlanAt;
   startedAt: number;
   endedAt: number;
+  /** Notices and the user's decisions at the turn's approvals, where they
+   * were, from the worker's marks (this window's own notes are in `notes`). */
+  notices?: Array<{ id: string; text: string; offset: number; seq: number }>;
+  decisions?: DecisionEntry[];
+  /** What the turn reported it spent, and the background agents it left
+   * running: the closing line says them. */
+  usage?: TurnUsage;
+  pendingBackground?: number;
   /** The calls and text are the saved turn's, not this window's. */
   saved?: boolean;
   /** The turn was stopped: it ends on "Stopped after", not "Worked for". */
@@ -551,17 +565,35 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     const saved = readTurnActivities(message.activities, message.content.length);
     // The worker's own record of how the turn ended: what the live window
     // said ("Worked for 1m 2s", "Stopped after 3s"), said again on reopen.
-    const end = (message as { turnEnd?: { ms: number; stopped?: true } }).turnEnd;
-    const ended = end ? { startedAt: 0, endedAt: Math.max(0, end.ms), ...(end.stopped ? { stopped: true as const } : {}) } : undefined;
+    const end = message.turnEnd;
+    const background = (end as { pendingBackground?: unknown } | undefined)?.pendingBackground;
+    const pendingBackground = typeof background === 'number' && background > 0 ? background : 0;
+    const ended = end ? {
+      startedAt: 0, endedAt: Math.max(0, end.ms), ...(end.stopped ? { stopped: true as const } : {}),
+      ...(end.usage ? { usage: end.usage } : {}), ...(pendingBackground ? { pendingBackground } : {}),
+    } : undefined;
+    // The worker's durable marks: thoughts, plan, notices, decisions.
+    const rows = marksToRows(message.marks);
+    const hasMarks = rows.reasoning.length > 0 || Boolean(rows.plan) || rows.notices.length > 0 || rows.decisions.length > 0;
     // A turn with no calls has a trace only to carry its closing line.
-    if (!saved.length && !(ended && (ended.stopped || endsWithSummary(ended.endedAt, 0)))) return;
+    if (!saved.length && !hasMarks && !(ended && (ended.stopped || ended.pendingBackground || endsWithSummary(ended.endedAt, 0)))) return;
     // Folded by the same upsert live frames go through.
     const activities = settledCalls(saved.filter((item) => !item.event.parentId).reduce<LiveTurn>(
       (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
     ).activities.map(({ startedAt: _startedAt, ...activity }) => activity), false);
     const prior = byUser.get(index - 1);
     const stopped = ended?.stopped || activities.some((activity) => activity.stopped);
-    const next: TurnTrace = { startedAt: 0, endedAt: 0, ...ended, ...prior, userIndex: index - 1, activities, text: message.content, saved: true, ...(stopped ? { stopped: true } : {}) };
+    // The worker's marks are authoritative for the rows they carry; what only
+    // this window recorded (a longer reasoning text) stays.
+    const reasoning = rows.reasoning.length ? mergeReasoning(prior?.reasoning ?? [], rows.reasoning) : prior?.reasoning;
+    const decisions = mergeDecisions(prior?.decisions, rows.decisions);
+    const next: TurnTrace = {
+      startedAt: 0, endedAt: 0, ...ended, ...prior, userIndex: index - 1, activities, text: message.content, saved: true, ...(stopped ? { stopped: true } : {}),
+      ...(reasoning?.length ? { reasoning } : {}),
+      ...(rows.plan ? { plan: rows.plan.entries, planAt: rows.plan.at } : {}),
+      ...(rows.notices.length ? { notices: rows.notices } : {}),
+      ...(decisions?.length ? { decisions } : {}),
+    };
     if (prior && JSON.stringify(prior) === JSON.stringify(next)) return;
     byUser.set(index - 1, next);
     changed = true;
@@ -895,9 +927,10 @@ function endTurn(model: ChatModel, stoppedElsewhere = false): ChatModel {
   // The saved turn's calls, when its snapshot came first, win over the ones
   // this window watched (see withSavedTraces).
   const saved = model.traces.find((trace) => trace.userIndex === model.turnUserIndex && trace.saved);
-  const traces = (activities.length || reasoning || plan || turnNotes || (asked && model.live?.text)) && model.turnUserIndex !== undefined
+  const decisions = model.live?.decisions?.length ? model.live.decisions : undefined;
+  const traces = (activities.length || reasoning || plan || turnNotes || decisions || (asked && model.live?.text)) && model.turnUserIndex !== undefined
     ? [...model.traces.filter((trace) => trace.userIndex !== model.turnUserIndex), {
-      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
+      userIndex: model.turnUserIndex, activities, ...(reasoning ? { reasoning } : {}), ...(decisions ? { decisions } : {}), ...(plan ? { plan, planAt: model.live?.planAt ?? { offset: 0, seq: 0 } } : {}),
       // Completed steers are materialized as user messages in session.messages.
       // Keeping the live badges in the finished trace displayed each prompt twice.
       text: model.live?.text ?? '',
@@ -1041,7 +1074,24 @@ export function typedDuringTurn(model: ChatModel, id: string, text: string): Cha
 
 export type TurnMark = {
   offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string; steerIndex?: number; plan?: true; note?: Note;
+  /** A decision that is a row of its own (not settled on a call's row). */
+  decision?: DecisionEntry;
 };
+
+/** A turn's notices for drawing: the window's own notes of the turn plus the
+ * worker's saved ones, a notice both have drawn once (same mark, same seq, or
+ * the same words at the same place). */
+export function turnNoticeNotes(notes: readonly Note[] | undefined, trace: Pick<TurnTrace, 'notices' | 'userIndex'>): Note[] {
+  const held = [...(notes ?? [])];
+  for (const notice of trace.notices ?? []) {
+    if (held.some((note) => note.markId === notice.id || note.seq === notice.seq || (note.text === notice.text && note.offset === notice.offset))) continue;
+    held.push({
+      kind: 'notice', level: noticeLevel(notice.text), text: notice.text, after: trace.userIndex + 1, turn: trace.userIndex,
+      offset: notice.offset, seq: notice.seq, markId: notice.id,
+    });
+  }
+  return held;
+}
 
 /** A turn's calls, thoughts, plan, notices and steered messages in the order
  * they happened (standard section 1): by where in the answer they came, then
@@ -1050,14 +1100,25 @@ export type TurnMark = {
  * already at its place. */
 export function turnMarks(
   text: string, activities: readonly Activity[], thoughts: readonly ThoughtEntry[], steers: ReadonlyArray<{ text: string; offset: number; seq?: number }>,
-  extra: { plan?: PlanAt; notes?: ReadonlyArray<{ offset: number; seq: number; note: Note }> } = {},
+  extra: { plan?: PlanAt; notes?: ReadonlyArray<{ offset: number; seq: number; note: Note }>; decisions?: readonly DecisionEntry[] } = {},
 ): TurnMark[] {
   const at = (offset: number): number => Math.min(offset, text.length);
+  // A decision the vendor tied to a call settles that call's row; the others
+  // are rows of their own at the place they were asked.
+  const onCall = new Map<string, Decision>();
+  const alone: DecisionEntry[] = [];
+  for (const entry of extra.decisions ?? []) {
+    if (entry.callId && activities.some((activity) => activity.key === entry.callId)) onCall.set(entry.callId, entry.decision);
+    else alone.push(entry);
+  }
   // One comparator for every surface (activity-view.ts orderMarks): the CLI
   // and the extension cannot disagree about where a row sits.
   return orderMarks([
     ...thoughts.map((thought) => ({ offset: at(thought.offset), seq: thought.seq, thought })),
-    ...activities.map((activity, index) => ({ offset: at(activity.offset ?? 0), seq: activity.seq ?? index, activity })),
+    ...activities.map((activity, index) => ({
+      offset: at(activity.offset ?? 0), seq: activity.seq ?? index, activity: onCall.has(activity.key) ? { ...activity, decision: onCall.get(activity.key)! } : activity,
+    })),
+    ...alone.map((entry) => ({ offset: at(entry.offset), seq: entry.seq, decision: entry })),
     ...steers.map((steer, steerIndex) => ({ offset: at(steer.offset), seq: steer.seq ?? Number.MAX_SAFE_INTEGER, steer: steer.text, steerIndex })),
     ...(extra.plan ? [{ offset: at(extra.plan.offset), seq: extra.plan.seq, plan: true as const }] : []),
     ...(extra.notes ?? []).map(({ offset, seq, note }) => ({ offset: at(offset), seq, note })),
