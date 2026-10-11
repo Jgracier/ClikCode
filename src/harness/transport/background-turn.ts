@@ -15,6 +15,7 @@
  * is over, from the vendor's own events: the vendor turn completed and the
  * work it was tracking finished. A user turn starting supersedes it. */
 import type { HarnessTurnObserver } from '../events/turn-observer.js';
+import { CANCELLED, type HarnessQuestionResult } from '../events/question.js';
 
 export type BackgroundTurnEnd =
   /** The vendor finished everything it was doing. */
@@ -59,6 +60,7 @@ export class BackgroundTurnChannel implements VendorBackgroundTurn {
   private settled = false;
   /** Approvals asked before the owner attached, refused if it never does. */
   private readonly unanswered = new Set<(accepted: boolean) => void>();
+  private readonly unansweredQuestions = new Set<() => void>();
   private resolveFinished!: (outcome: BackgroundTurnOutcome) => void;
 
   constructor(readonly transport: 'codex-app-server' | 'acp' | 'structured-cli', public reason: 'vendor-turn' | 'background-work') {
@@ -83,16 +85,32 @@ export class BackgroundTurnChannel implements VendorBackgroundTurn {
       onAvailableCommands: (commands) => forward((observer) => observer.onAvailableCommands?.(commands)),
       // A vendor turn nobody is watching yet still gets its answer once the
       // owner attaches; an owner with no approval surface refuses.
-      onApproval: (title, detail, preview) => new Promise<boolean>((resolve) => {
-        if (this.settled) return resolve(false);
+      onApproval: (title, detail, preview, signal) => new Promise<boolean>((resolve) => {
+        if (this.settled || signal?.aborted) return resolve(false);
         const ask: Call = (observer) => {
-          const answer = observer.onApproval?.(title, detail, preview);
+          const answer = observer.onApproval?.(title, detail, preview, signal);
           if (!answer) return resolve(false);
           answer.then((accepted) => resolve(accepted === true), () => resolve(false));
         };
         if (this.target) return ask(this.target);
         this.unanswered.add(resolve);
+        signal?.addEventListener('abort', () => { if (this.unanswered.delete(resolve)) resolve(false); }, { once: true });
         this.queue.push((observer) => { if (this.unanswered.delete(resolve)) ask(observer); });
+      }),
+      // The same hold as an approval: asked once the owner attaches, and
+      // cancelled if it never does or has no question surface.
+      onQuestion: (request, signal) => new Promise<HarnessQuestionResult>((resolve) => {
+        if (this.settled || signal?.aborted) return resolve(CANCELLED);
+        const ask: Call = (observer) => {
+          const answer = observer.onQuestion?.(request, signal);
+          if (!answer) { observer.onNotice?.(`A question was declined because this screen cannot show it: ${request.title}`); return resolve(CANCELLED); }
+          answer.then(resolve, () => resolve(CANCELLED));
+        };
+        if (this.target) return ask(this.target);
+        const cancel = (): void => resolve(CANCELLED);
+        this.unansweredQuestions.add(cancel);
+        signal?.addEventListener('abort', () => { if (this.unansweredQuestions.delete(cancel)) cancel(); }, { once: true });
+        this.queue.push((observer) => { if (this.unansweredQuestions.delete(cancel)) ask(observer); });
       }),
     };
   }
@@ -116,6 +134,8 @@ export class BackgroundTurnChannel implements VendorBackgroundTurn {
     // turn) still sees what happened, in order.
     for (const refuse of this.unanswered) refuse(false);
     this.unanswered.clear();
+    for (const cancel of this.unansweredQuestions) cancel();
+    this.unansweredQuestions.clear();
     this.resolveFinished({ text: this.text, ended });
   }
 }

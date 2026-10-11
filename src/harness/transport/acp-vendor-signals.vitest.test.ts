@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { createAcpSession } from './acp-client.js';
 
-type Step = { after?: number; send?: Record<string, unknown>; request?: Record<string, unknown> };
+type Step = { after?: number; send?: Record<string, unknown>; request?: Record<string, unknown>; nowait?: boolean; until?: number };
 
 /** After session/prompt the fake plays `steps`, then answers with what it
  * saw (initialize params, requests it received, replies to its requests). */
@@ -13,17 +13,20 @@ function agent(opts: { steps?: Step[]; initResult?: Record<string, unknown>; ses
     const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
     const o = ${JSON.stringify(opts)}; const seen = { requests: [], replies: {} };
     let buf = '';
+    const waiters = {};
+    const until = (i) => seen.replies[i] !== undefined ? Promise.resolve() : new Promise((r) => { waiters[i] = r; });
     const play = async (m) => {
       for (const [i, step] of (o.steps ?? []).entries()) {
         if (step.after) await new Promise((r) => setTimeout(r, step.after));
         if (step.send) send(step.send);
-        if (step.request) { send({ id: 500 + i, ...step.request }); await new Promise((r) => { seen.wait = r; }); }
+        if (step.request) { send({ id: 500 + i, ...step.request }); if (!step.nowait) await until(i); }
+        if (step.until !== undefined) await until(step.until);
       }
       send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(seen) } } } });
       send({ id: m.id, result: { stopReason: 'end_turn' } });
     };
     process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) { const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
-      if (m.id >= 500 && !m.method) { seen.replies[m.id - 500] = m.result ?? m.error; seen.wait?.(); continue; }
+      if (m.id >= 500 && !m.method) { seen.replies[m.id - 500] = m.result ?? m.error; waiters[m.id - 500]?.(); continue; }
       if (m.method) seen.requests.push({ method: m.method, params: m.params });
       if (m.method === 'initialize') { seen.init = m.params; send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {}, ...(o.initResult ?? {}) } }); }
       else if (m.method === 'session/new') send(o.newError ? { id: m.id, error: o.newError } : { id: m.id, result: { sessionId: 's1', ...(o.sessionResult ?? {}) } });
@@ -54,7 +57,8 @@ describe('ACP client capabilities', () => {
   it('opts in to structured notices only', async () => {
     const { seen } = await run({});
     expect(seen.init.clientCapabilities.session).toEqual({ notices: {} });
-    expect(seen.init.clientCapabilities.elicitation).toBeUndefined();
+    // The form handler exists (elicitation/create below), so claude-agent-acp may send AskUserQuestion as one.
+    expect(seen.init.clientCapabilities.elicitation).toEqual({ form: {} });
     expect(seen.init.clientCapabilities._meta).toEqual({ terminal_output: true });
   });
 });
@@ -127,20 +131,146 @@ describe('a question asked as a permission request (Cursor)', () => {
     },
   };
 
-  it('is skipped, never answered for the user, even in bypass', async () => {
+  it('puts the real options to the user and answers with the pick, even in bypass', async () => {
     for (const mode of ['bypass', 'auto', 'ask'] as const) {
       const asked: string[] = [];
-      const { seen, notices } = await run({ steps: [question] }, { permissionMode: mode, onApproval: async (title: string) => { asked.push(title); return true; } });
-      expect(seen.replies[0], mode).toEqual({ outcome: { outcome: 'selected', optionId: '__ask_question_skip__' } });
+      const questions: any[] = [];
+      const { seen } = await run({ steps: [question] }, {
+        permissionMode: mode, onApproval: async (title: string) => { asked.push(title); return true; },
+        onQuestion: async (request: any) => { questions.push(request); return { kind: 'answered', answers: { answer: ['MySQL'] } }; },
+      });
+      expect(seen.replies[0], mode).toEqual({ outcome: { outcome: 'selected', optionId: 'my' } });
       expect(asked, mode).toEqual([]);
-      expect(notices.join(), mode).toContain('Which database?');
+      expect(questions[0].questions[0].prompt).toBe('Which database?');
+      expect(questions[0].questions[0].options.map((o: any) => o.label)).toEqual(['Postgres', 'MySQL']);
     }
+  });
+
+  it('skips only when the user skips', async () => {
+    const { seen } = await run({ steps: [question] }, { permissionMode: 'bypass', onQuestion: async () => ({ kind: 'answered', answers: {} }) });
+    expect(seen.replies[0]).toEqual({ outcome: { outcome: 'selected', optionId: '__ask_question_skip__' } });
+  });
+
+  it('is cancelled when the user dismisses it', async () => {
+    const { seen } = await run({ steps: [question] }, { onQuestion: async () => ({ kind: 'cancelled' }) });
+    expect(seen.replies[0]).toEqual({ outcome: { outcome: 'cancelled' } });
+  });
+
+  it('with no question surface it is skipped, said so, and never approved', async () => {
+    const asked: string[] = [];
+    const { seen, notices } = await run({ steps: [question] }, { permissionMode: 'bypass', onApproval: async (title: string) => { asked.push(title); return true; } });
+    expect(seen.replies[0]).toEqual({ outcome: { outcome: 'selected', optionId: '__ask_question_skip__' } });
+    expect(asked).toEqual([]);
+    expect(notices.join()).toContain('cannot show it');
   });
 
   it('leaves an ordinary permission request on its plan', async () => {
     const ordinary = { request: { method: 'session/request_permission', params: { sessionId: 's1', toolCall: { toolCallId: 't', title: 'Run ls', kind: 'execute' }, options: [{ optionId: 'ok', name: 'Allow', kind: 'allow_once' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }] } } };
     const { seen } = await run({ steps: [ordinary] }, { permissionMode: 'bypass' });
     expect(seen.replies[0]).toEqual({ outcome: { outcome: 'selected', optionId: 'ok' } });
+  });
+});
+
+describe('elicitation/create (claude-agent-acp AskUserQuestion)', () => {
+  const ask = {
+    request: {
+      method: 'elicitation/create',
+      params: {
+        mode: 'form', sessionId: 's1', toolCallId: 'tu1', message: 'Which auth method?',
+        requestedSchema: {
+          type: 'object',
+          properties: {
+            question_0: { type: 'string', title: 'Auth', oneOf: [{ const: 'OAuth', title: 'OAuth', description: 'hosted' }, { const: 'API key', title: 'API key' }] },
+            question_0_custom: { type: 'string', title: 'Other' },
+          },
+        },
+      },
+    },
+  };
+
+  it('is put to the user as a question and answered in the form\'s own terms', async () => {
+    const requests: any[] = [];
+    const { seen } = await run({ steps: [ask] }, {
+      permissionMode: 'bypass',
+      onQuestion: async (request: any) => { requests.push(request); return { kind: 'answered', answers: { question_0: ['API key'] } }; },
+    });
+    expect(requests[0].questions[0]).toMatchObject({ id: 'question_0', prompt: 'Which auth method?', header: 'Auth', allowFreeText: true, optional: true });
+    expect(requests[0].questions[0].options).toEqual([{ label: 'OAuth', description: 'hosted' }, { label: 'API key' }]);
+    expect(seen.replies[0]).toEqual({ action: 'accept', content: { question_0: 'API key' } });
+  });
+
+  it('sends typed text to the custom field', async () => {
+    const { seen } = await run({ steps: [ask] }, { onQuestion: async () => ({ kind: 'answered', answers: { question_0: ['Passkeys'] } }) });
+    expect(seen.replies[0]).toEqual({ action: 'accept', content: { question_0_custom: 'Passkeys' } });
+  });
+
+  it('cancels when dismissed, and when there is no question surface (with a notice)', async () => {
+    const dismissed = await run({ steps: [ask] }, { onQuestion: async () => ({ kind: 'cancelled' }) });
+    expect(dismissed.seen.replies[0]).toEqual({ action: 'cancel' });
+    const none = await run({ steps: [ask] }, {});
+    expect(none.seen.replies[0]).toEqual({ action: 'cancel' });
+    expect(none.notices.join()).toContain('cannot show it');
+  });
+
+  it('closes the prompt when the agent withdraws the request', async () => {
+    let aborted = false;
+    const { seen } = await run({ steps: [{ ...ask, nowait: true }, { after: 50, send: { method: '$/cancel_request', params: { requestId: 500 } } }, { until: 0 }] }, {
+      onQuestion: (_request: any, signal?: AbortSignal) => new Promise((resolve) => { signal?.addEventListener('abort', () => { aborted = true; resolve({ kind: 'cancelled' }); }); }),
+    });
+    expect(aborted).toBe(true);
+    expect(seen.replies[0]).toEqual({ action: 'cancel' });
+  });
+
+  it('declines a url-mode request it did not advertise', async () => {
+    const { seen } = await run({ steps: [{ request: { method: 'elicitation/create', params: { mode: 'url', sessionId: 's1', message: 'm', url: 'https://x', elicitationId: 'e' } } }] }, {});
+    expect(seen.replies[0]).toEqual({ action: 'decline' });
+  });
+});
+
+describe('ExitPlanMode (claude-agent-acp)', () => {
+  const plan = {
+    request: {
+      method: 'session/request_permission',
+      params: {
+        sessionId: 's1', toolCall: { toolCallId: 'p', title: 'Ready to code?', kind: 'switch_mode', rawInput: { plan: '1. edit a.ts' } },
+        options: [
+          { optionId: 'exit-plan-auto', name: 'Yes, and use auto mode', kind: 'allow_always' },
+          { optionId: 'exit-plan-default', name: 'Yes, manually approve edits', kind: 'allow_once' },
+          { optionId: 'reject', name: 'No, keep planning', kind: 'reject_once' },
+        ],
+      },
+    },
+  };
+
+  it('offers every way out and answers with the one the user picked, in every mode', async () => {
+    for (const mode of ['bypass', 'ask'] as const) {
+      const requests: any[] = [];
+      const { seen } = await run({ steps: [plan] }, {
+        permissionMode: mode,
+        onQuestion: async (request: any) => { requests.push(request); return { kind: 'answered', answers: { plan: ['Yes, and use auto mode'] } }; },
+      });
+      expect(requests[0].questions[0].prompt, mode).toBe('1. edit a.ts');
+      expect(requests[0].questions[0].options.map((o: any) => o.label), mode).toEqual(['Yes, and use auto mode', 'Yes, manually approve edits', 'No, keep planning']);
+      expect(seen.replies[0], mode).toEqual({ outcome: { outcome: 'selected', optionId: 'exit-plan-auto' } });
+    }
+  });
+
+  it('is a plain approval where the surface cannot ask', async () => {
+    const { seen } = await run({ steps: [plan] }, { permissionMode: 'bypass' });
+    expect(seen.replies[0]).toEqual({ outcome: { outcome: 'selected', optionId: 'exit-plan-default' } });
+  });
+});
+
+describe('an approval the agent withdraws', () => {
+  it('aborts the prompt on screen', async () => {
+    let signalSeen: AbortSignal | undefined;
+    let aborted = false;
+    const ordinary = { request: { method: 'session/request_permission', params: { sessionId: 's1', toolCall: { toolCallId: 't', title: 'Run ls', kind: 'execute' }, options: [{ optionId: 'ok', name: 'Allow', kind: 'allow_once' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }] } }, nowait: true };
+    await run({ steps: [ordinary, { after: 50, send: { method: '$/cancel_request', params: { requestId: 500 } } }, { until: 0 }] }, {
+      onApproval: (_t: string, _d: unknown, _p: unknown, signal?: AbortSignal) => new Promise<boolean>((resolve) => { signalSeen = signal; signal?.addEventListener('abort', () => { aborted = true; resolve(false); }); }),
+    });
+    expect(signalSeen).toBeDefined();
+    expect(aborted).toBe(true);
   });
 });
 

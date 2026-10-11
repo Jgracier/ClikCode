@@ -7,6 +7,8 @@ import { extname } from 'node:path';
 import type { AiHarnessAcpDefinition, AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
+import { askHarnessQuestion, type HarnessQuestionRequest, type HarnessQuestionResult } from '../events/question.js';
+import { formToQuestions } from '../events/form-questions.js';
 import { eventDiff } from '../../agent/line-diff.js';
 import { commandOutcome } from '../protocol/activity-events.js';
 import { categoryOf, commandText, formatToolRow, isAgentToolName, toolLabel } from '../protocol/tools.js';
@@ -38,12 +40,14 @@ const ACP_CLIENT_CAPABILITIES = {
   // claude-agent-acp (0.84) sends a vendor warning as a structured `notice`
   // update when the client advertises `session.notices`, instead of appending
   // it to the answer as a bold line. Handled in `deliver` (onNotice).
-  // Deliberately NOT advertised: `elicitation.form` (AskUserQuestion and
-  // ExitPlanMode as forms) -- ClikCode has no multi-field question prompt, so
-  // advertising it would leave the agent waiting on a form nobody shows; and
+  // `elicitation.form`: claude-agent-acp turns AskUserQuestion (and an MCP
+  // server's form) into an `elicitation/create` request only when the client
+  // says it can render one; the handler is `elicitation` below, which puts the
+  // form to the user through the observer's question channel. NOT advertised:
   // the AIR `sessionFailure`/`asyncTasks`/`nativeSubagentSessions` opt-ins,
   // which need the jetbrains.air identity and replace the raw error text the
   // failover classifier reads.
+  elicitation: { form: {} },
   session: { notices: {} },
 };
 
@@ -272,15 +276,33 @@ export function acpApprovalDetail(toolCall: Json | undefined): string | undefine
 const CURSOR_QUESTION_SKIP_ID = '__ask_question_skip__';
 
 /** A permission request that is really a question to the user. */
-export function acpQuestionPermission(params: Json): { skipOptionId: string; prompt: string; answers: string[] } | undefined {
+export function acpQuestionPermission(params: Json): { skipOptionId: string; prompt: string; answers: string[]; choices: { optionId: string; name: string }[] } | undefined {
   const options: Json[] = Array.isArray(params.options) ? params.options : [];
   const skip = options.find((option) => option?.optionId === CURSOR_QUESTION_SKIP_ID);
   if (!skip) return undefined;
+  const choices = options.filter((option) => option !== skip && typeof option?.name === 'string' && option.optionId !== undefined)
+    .map((option) => ({ optionId: String(option.optionId), name: String(option.name) }));
   return {
     skipOptionId: CURSOR_QUESTION_SKIP_ID,
     prompt: String(params.toolCall?.title ?? params.toolCall?.content?.[0]?.content?.text ?? 'a question'),
-    answers: options.filter((option) => option !== skip && typeof option?.name === 'string').map((option) => String(option.name)),
+    answers: choices.map((choice) => choice.name),
+    choices,
   };
+}
+
+/** Claude Code's ExitPlanMode arrives as a permission request whose options
+ * are the ways to leave plan mode (claude-agent-acp permissions/options/
+ * tools.js): "Yes, clear context and ...", "Yes, and use auto mode", "Yes,
+ * manually approve edits", "No, keep planning". Picking one is the user's
+ * decision about the plan, not consent to a tool, so no permission mode may
+ * choose it. */
+export function acpPlanChoices(params: Json): { plan?: string; choices: { optionId: string; name: string }[] } | undefined {
+  const options: Json[] = Array.isArray(params.options) ? params.options : [];
+  const choices = options.filter((option) => typeof option?.name === 'string' && option.optionId !== undefined)
+    .map((option) => ({ optionId: String(option.optionId), name: String(option.name) }));
+  if (!choices.some((choice) => choice.optionId.startsWith('exit-plan-'))) return undefined;
+  const plan = params.toolCall?.rawInput?.plan;
+  return { ...(typeof plan === 'string' && plan.trim() ? { plan: plan.trim() } : {}), choices };
 }
 
 interface AcpPermissionPlan {
@@ -568,9 +590,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       binary: input.binary, argv, cwd: input.cwd, environment: input.environment,
       peer: {
         label: `${input.command} ACP`,
-        onRequest: (method, params) => method === 'session/request_permission' ? this.permission(params) : undefined,
+        onRequest: (method, params, id) => method === 'session/request_permission' ? this.permission(params, id)
+          : method === 'elicitation/create' ? this.elicitation(params, id) : undefined,
         onNotification: (method, params) => {
           if (method === 'session/update') this.update(params);
+          else if (method === '$/cancel_request') this.withdrawn(params.requestId);
           else if (method === '_session/retrying') this.retrying(params);
           else if (method.startsWith('_') && method !== '_kiro.dev/metadata') this.extension(method, params);
           else if (method === '_kiro.dev/metadata') this.kiroMetadata(params);
@@ -589,7 +613,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Setup requests carry no clock. A starting agent answers when it is ready
     // (cold start under load is slow, not broken); a dead one rejects them when
     // its process exits, and Esc or the turn ending rejects them too.
-    const setup: { timeoutMs?: number; idleReset?: boolean } = {};
+    const setup: { timeoutMs?: number } = {};
     // Past the handshake, a request waits on the agent's backend, which is
     // still starting: Claude Code connects every MCP server before it takes a
     // control request, and its adapter answers set_config_option only once
@@ -629,7 +653,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // (`authenticate`): its own browser login showed no link on ClikCode's
     // screen and, from a phone, waited for ever (Devin, 2026-10-06). The error
     // reaches the turn, which signs in on ClikCode's screen like any other.
-    const call = (method: string, params: Json, options: { timeoutMs?: number; idleReset?: boolean } = setup): Promise<Json> =>
+    const call = (method: string, params: Json, options: { timeoutMs?: number } = setup): Promise<Json> =>
       peer.request(method, params, options);
     const capabilities = live.capabilities;
     const mcpServers = input.mcpServers ?? [];
@@ -651,17 +675,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     }
     if (wanted) {
       if (live.sessionId !== wanted) {
-        // session/load streams the whole history before it answers, so its
-        // timeout is an idle window rather than a wall-clock limit.
-        // Nothing streams while the agent is still starting, so the window
-        // is the startup budget, not the handshake's.
-        const loading = { ...control, idleReset: true };
+        // No clock on the load either: it streams the whole history, or
+        // answers when a starting agent is ready. A dead agent rejects it on
+        // exit, Esc or the turn ending rejects it, and the `connecting` phase
+        // says what it waits on.
         this.sessionTotals = {};
         if (!capabilities.sessionCapabilities?.resume && !capabilities.loadSession) throw new Error(`${input.command} ACP cannot load sessions`);
         const method = capabilities.sessionCapabilities?.resume ? 'session/resume' : 'session/load';
         try {
           const loadAt = Date.now();
-          loaded = await waitOnStart(call(method, { sessionId: wanted, cwd: input.cwd, mcpServers }, loading));
+          loaded = await waitOnStart(call(method, { sessionId: wanted, cwd: input.cwd, mcpServers }, setup));
           threadLoadMs = Date.now() - loadAt;
         } catch (error) {
           throw markMissingThread(error, wanted);
@@ -676,7 +699,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       turn.sessionId = wanted;
     } else {
       this.sessionTotals = {};
-      const started = await waitOnStart(call('session/new', { cwd: input.cwd, mcpServers }, control));
+      const started = await waitOnStart(call('session/new', { cwd: input.cwd, mcpServers }, setup));
       stillRunning();
       const sessionId = String(started.sessionId ?? '');
       if (!sessionId) throw new Error(`${input.command} ACP did not return a session id`);
@@ -1175,18 +1198,89 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     ));
   }
 
-  private async permission(params: Json): Promise<Json> {
+  /** Prompts open for the agent's requests, by JSON-RPC id: the agent
+   * withdrawing one (`$/cancel_request`) closes the prompt on screen. */
+  private readonly requestPrompts = new Map<string, () => void>();
+
+  private withdrawn(requestId: unknown): void {
+    if (typeof requestId === 'string' || typeof requestId === 'number') this.requestPrompts.get(String(requestId))?.();
+  }
+
+  /** Puts a question to the user through `stream`, with steering and the idle
+   * watchdog held while it is open. Never answered for the user. */
+  private async askUser(
+    stream: Stream, turn: ActiveTurn | undefined, request: HarnessQuestionRequest, id: number | string | undefined, declined: string,
+  ): Promise<HarnessQuestionResult> {
+    const resume = stream.watchdog?.pause();
+    if (turn) turn.approvals++;
+    const prompt = this.openPrompt();
+    if (id !== undefined) this.requestPrompts.set(String(id), prompt.abort);
+    try {
+      return await askHarnessQuestion(stream.observer, request, prompt.signal, declined);
+    } finally {
+      if (id !== undefined) this.requestPrompts.delete(String(id));
+      prompt.release();
+      resume?.();
+      if (turn) {
+        turn.approvals--;
+        this.steerPause(turn);
+      }
+    }
+  }
+
+  /** `elicitation/create`: a form (claude-agent-acp's AskUserQuestion, an MCP
+   * server's input request). Answered `accept` with the form's content, or
+   * `cancel`. A url-mode request is declined: it was not advertised. */
+  private async elicitation(params: Json, id?: number | string): Promise<Json> {
+    const turn = this.turn && !this.turn.done ? this.turn : undefined;
+    const stream: Stream | undefined = turn ?? (this.turn ? undefined : this.background ?? this.openBackground());
+    if (!stream) return { action: 'cancel' };
+    if (params.mode && params.mode !== 'form') return { action: 'decline' };
+    const agent = turn?.input.command ?? 'The agent';
+    const form = formToQuestions(typeof params.message === 'string' ? params.message : '', params.requestedSchema, `${agent} asks`);
+    if (!form) return { action: 'decline' };
+    const result = await this.askUser(stream, turn, form.request, id, `${agent} asked a question and it was left unanswered: this screen cannot show it`);
+    if (turn?.done || result.kind !== 'answered') return { action: 'cancel' };
+    return { action: 'accept', content: form.content(result.answers) };
+  }
+
+  private async permission(params: Json, id?: number | string): Promise<Json> {
     const turn = this.turn && !this.turn.done ? this.turn : undefined;
     const cancelled = { outcome: { outcome: 'cancelled' } };
     // Out of turn the agent still asks -- through the background turn.
     const stream: Stream | undefined = turn ?? (this.turn ? undefined : this.background ?? this.openBackground());
     if (!stream) return cancelled;
+    const command = turn?.input.command ?? 'The agent';
+    const optionAnswer = (optionId: string): Json => turn?.done ? cancelled : { outcome: { outcome: 'selected', optionId } };
     // A question, not a tool: no permission mode may pick an answer for the
-    // user, and ClikCode has no way to put the choice to them. Skip it, and say so.
+    // user. The user's pick is the answer; Skip only when they skip or there
+    // is nothing to ask them with.
     const question = acpQuestionPermission(params);
+    if (question && !stream.observer.onQuestion) {
+      // Nothing can ask the user: skipped, and said so. Never an answer chosen for them.
+      stream.observer.onNotice?.(`${command} asked "${question.prompt}"${question.answers.length ? ` (${question.answers.join(' / ')})` : ''} and it was skipped: this screen cannot show it`);
+      return optionAnswer(question.skipOptionId);
+    }
     if (question) {
-      stream.observer.onNotice?.(`${turn?.input.command ?? 'The agent'} asked "${question.prompt}"${question.answers.length ? ` (${question.answers.join(' / ')})` : ''} and it was skipped: ClikCode cannot show agent questions yet`);
-      return turn?.done ? cancelled : { outcome: { outcome: 'selected', optionId: question.skipOptionId } };
+      const result = await this.askUser(stream, turn, {
+        title: `${command} asks`,
+        questions: [{ id: 'answer', prompt: question.prompt, options: question.choices.map((choice) => ({ label: choice.name })), optional: true }],
+      }, id, `${command} asked "${question.prompt}"${question.answers.length ? ` (${question.answers.join(' / ')})` : ''} and it was skipped: this screen cannot show it`);
+      if (result.kind === 'cancelled') return cancelled;
+      const picked = result.answers.answer?.[0];
+      return optionAnswer(question.choices.find((choice) => choice.name === picked)?.optionId ?? question.skipOptionId);
+    }
+    // ExitPlanMode: the plan's way out is the user's to choose, in every mode.
+    const exit = stream.observer.onQuestion ? acpPlanChoices(params) : undefined;
+    if (exit) {
+      const result = await this.askUser(stream, turn, {
+        title: `${command} has a plan`,
+        questions: [{ id: 'plan', header: 'Plan', prompt: exit.plan ?? String(params.toolCall?.title ?? 'Leave plan mode?'), options: exit.choices.map((choice) => ({ label: choice.name })) }],
+      }, id, `${command} asked to leave plan mode and it was left unanswered: this screen cannot show it`);
+      if (result.kind === 'cancelled') return cancelled;
+      const picked = result.answers.plan?.[0];
+      const choice = exit.choices.find((candidate) => candidate.name === picked);
+      return choice ? optionAnswer(choice.optionId) : cancelled;
     }
     const plan = acpPermissionPlan(turn?.input.permissionMode ?? 'ask', params);
     let accepted = plan.action === 'allow';
@@ -1205,10 +1299,14 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const resume = stream.watchdog?.pause();
       // Nothing is steered in while the user is being asked.
       if (turn) turn.approvals++;
+      const prompt = this.openPrompt();
+      if (id !== undefined) this.requestPrompts.set(String(id), prompt.abort);
       try {
         const diff = acpActivityEvent({ ...params.toolCall, sessionUpdate: 'tool_call' })?.diff;
-        accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail, diff?.length ? { diff } : undefined) === true;
+        accepted = plan.allowOptionId !== undefined && await stream.observer.onApproval?.(title, detail, diff?.length ? { diff } : undefined, prompt.signal) === true;
       } finally {
+        if (id !== undefined) this.requestPrompts.delete(String(id));
+        prompt.release();
         resume?.();
         if (turn) {
           turn.approvals--;

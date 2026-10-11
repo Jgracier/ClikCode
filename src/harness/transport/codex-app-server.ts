@@ -1,3 +1,5 @@
+import { askHarnessQuestion, CANCELLED, type HarnessQuestion, type HarnessQuestionRequest, type HarnessQuestionResult } from '../events/question.js';
+import { formToQuestions } from '../events/form-questions.js';
 import { activityOutput } from '../protocol/activity-events.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
@@ -500,12 +502,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       case 'applyPatchApproval':
         return this.approvalRequest(method, params, id);
       case 'item/tool/requestUserInput':
-        // ClikCode has no question prompt for a vendor's tool: no answers.
-        notice('Codex asked a question ClikCode cannot show; it was left unanswered');
-        return Promise.resolve({ answers: {} });
+        return this.userInputRequest(params, id);
       case 'mcpServer/elicitation/request':
-        notice(`MCP server ${String(params.serverName ?? '')} asked for input ClikCode cannot show; it was declined`.replace('  ', ' '));
-        return Promise.resolve({ action: 'decline', content: null });
+        return this.elicitationRequest(params, id);
       case 'item/tool/call':
         return Promise.resolve({
           contentItems: [{ type: 'inputText', text: `ClikCode does not provide the client-side tool ${String(params.tool ?? '')}`.trim() }],
@@ -551,19 +550,93 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       // Answered elsewhere (serverRequest/resolved): stop waiting on the user.
       let resolvedElsewhere!: () => void;
       const elsewhere = new Promise<'elsewhere'>((resolve) => { resolvedElsewhere = () => resolve('elsewhere'); });
-      if (id !== undefined) this.openApprovals.set(String(id), resolvedElsewhere);
+      const prompt = this.openPrompt();
+      if (id !== undefined) this.openApprovals.set(String(id), () => { resolvedElsewhere(); prompt.abort(); });
       try {
         const diff = fileChange ? fileChangeActivity(params.changes ?? params.fileChanges ?? item?.changes).diff : undefined;
         const title = permissions ? 'Approve additional permissions' : fileChange ? 'Approve file changes' : 'Approve command';
-        const asked = Promise.resolve(stream.observer.onApproval?.(title, codexApprovalDetail(params, item), diff?.length ? { diff } : undefined));
+        const asked = Promise.resolve(stream.observer.onApproval?.(title, codexApprovalDetail(params, item), diff?.length ? { diff } : undefined, prompt.signal));
         const outcome = await Promise.race([asked, elsewhere]);
         if (outcome === 'elsewhere') return answer(false, true);
         return turn?.done ? answer(false, true) : answer(outcome === true);
       } finally {
         if (id !== undefined) this.openApprovals.delete(String(id));
+        prompt.release();
         resume?.();
       }
     })();
+  }
+
+  /** Puts one question to the user through whichever turn is listening, and
+   * closes the prompt when Codex resolves the request elsewhere or the turn
+   * ends. Never answered for the user, in any permission mode. */
+  private async askUser(request: HarnessQuestionRequest, id: number | string | undefined, declined: string): Promise<HarnessQuestionResult> {
+    const turn = this.turn && !this.turn.done ? this.turn : undefined;
+    const stream: Stream | undefined = turn ?? this.background ?? this.openBackground('vendor-turn');
+    if (!stream) return CANCELLED;
+    const resume = stream.watchdog?.pause();
+    const prompt = this.openPrompt();
+    if (id !== undefined) this.openApprovals.set(String(id), () => prompt.abort());
+    try {
+      const result = await askHarnessQuestion(stream.observer, request, prompt.signal, declined);
+      return turn?.done ? CANCELLED : result;
+    } finally {
+      if (id !== undefined) this.openApprovals.delete(String(id));
+      prompt.release();
+      resume?.();
+    }
+  }
+
+  /** `item/tool/requestUserInput` (ToolRequestUserInputParams): the answers
+   * go back as `{answers: {<question id>: {answers: [...]}}}`. A question left
+   * unanswered is absent; none answered is `{answers: {}}`. */
+  private async userInputRequest(params: JsonObject, id?: number | string): Promise<unknown> {
+    const asked: unknown[] = Array.isArray(params.questions) ? params.questions : [];
+    const questions: HarnessQuestion[] = asked.flatMap((entry): HarnessQuestion[] => {
+      const q = asRecord(entry);
+      if (!q || typeof q.id !== 'string') return [];
+      const options = (Array.isArray(q.options) ? q.options : []).flatMap((option) => {
+        const o = asRecord(option);
+        return o && typeof o.label === 'string' ? [{ label: o.label, ...(typeof o.description === 'string' && o.description ? { description: o.description } : {}) }] : [];
+      });
+      return [{
+        id: q.id, ...(typeof q.header === 'string' && q.header ? { header: q.header } : {}), prompt: String(q.question ?? q.header ?? q.id), options,
+        // `isOther`: the user may type an answer beside the options. With no options it is plain text.
+        allowFreeText: q.isOther === true || options.length === 0, ...(q.isSecret === true ? { secret: true } : {}),
+      }];
+    });
+    if (!questions.length) return { answers: {} };
+    const result = await this.askUser({ title: 'Codex asks', questions }, id, 'Codex asked a question and it was left unanswered: this screen cannot show it');
+    if (result.kind !== 'answered') return { answers: {} };
+    return { answers: Object.fromEntries(Object.entries(result.answers).map(([key, values]) => [key, { answers: [...values] }])) };
+  }
+
+  /** `mcpServer/elicitation/request` (McpServerElicitationRequestParams): a
+   * form (`form`, `openai/form`, `openaiForm`) or a link (`url`). The answer
+   * is `{action: accept|decline|cancel, content}`. */
+  private async elicitationRequest(params: JsonObject, id?: number | string): Promise<unknown> {
+    const server = String(params.serverName ?? '').trim();
+    const title = server ? `MCP server ${server} asks` : 'An MCP server asks';
+    const message = typeof params.message === 'string' ? params.message : '';
+    const declined = `${title} for input and it was declined: this screen cannot show it`;
+    if (params.mode === 'url') {
+      const url = typeof params.url === 'string' ? params.url : '';
+      const result = await this.askUser({
+        title, ...(url ? { url } : {}),
+        questions: [{ id: 'link', prompt: message || 'Open this link to continue.', options: [{ label: 'Continue (I opened the link)' }, { label: 'Decline' }] }],
+      }, id, declined);
+      if (result.kind !== 'answered') return { action: 'cancel', content: null };
+      return result.answers.link?.[0] === 'Decline' ? { action: 'decline', content: null } : { action: 'accept', content: null };
+    }
+    const form = formToQuestions(message, params.requestedSchema, title);
+    if (!form) {
+      // Nothing to fill in: the server only wants a yes.
+      const result = await this.askUser({ title, questions: [{ id: 'ok', prompt: message || title, options: [{ label: 'Accept' }, { label: 'Decline' }] }] }, id, declined);
+      if (result.kind !== 'answered') return { action: 'cancel', content: null };
+      return result.answers.ok?.[0] === 'Decline' ? { action: 'decline', content: null } : { action: 'accept', content: {} };
+    }
+    const result = await this.askUser(form.request, id, declined);
+    return result.kind === 'answered' ? { action: 'accept', content: form.content(result.answers) } : { action: 'cancel', content: null };
   }
 
   /** Where a notification goes: the user's turn while one runs, otherwise a

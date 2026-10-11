@@ -99,7 +99,10 @@ export interface HarnessPrompter {
    * tui/render/pending-prompt.ts for why a snapshot cannot carry it. */
   submitted?(prompt: string | undefined): void;
   response?(text: string, mode?: 'append' | 'replace'): void;
-  approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string): Promise<boolean | 'always'>;
+  approval?(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal): Promise<boolean | 'always'>;
+  /** A vendor's question, drawn where approvals are. Absent where nothing can
+   * ask; the turn then cancels it with a notice. */
+  askQuestions?(request: import('./events/question.js').HarnessQuestionRequest, signal?: AbortSignal): Promise<import('./events/question.js').HarnessQuestionResult>;
   activityEvent?(event: HarnessActivityEvent): void;
   panel?(title: string, body: string): void;
   /** A line in the conversation outside any turn's own output. */

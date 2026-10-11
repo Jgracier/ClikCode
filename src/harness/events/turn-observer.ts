@@ -73,8 +73,14 @@ export interface HarnessTurnObserver {
   /** The account's plan usage, when the turn itself carries it (Claude
    * Code's rate-limit windows, over its stream or ACP). */
   onQuotaReading?: (reading: UsageReading) => void;
-  /** A tool or command needing a yes or no before it runs. */
-  onApproval?: (title: string, detail?: string, preview?: import('../../tui/render/approval-block.js').ApprovalPreview) => Promise<boolean>;
+  /** A tool or command needing a yes or no before it runs. `signal` aborts
+   * when the vendor withdraws the request (answered elsewhere, the turn
+   * ended): the prompt closes and the promise settles `false`. */
+  onApproval?: (title: string, detail?: string, preview?: import('../../tui/render/approval-block.js').ApprovalPreview, signal?: AbortSignal) => Promise<boolean>;
+  /** A real question from the harness: options, several questions, free text.
+   * Absent on a surface that cannot ask; the transport then cancels the
+   * question with a notice (askHarnessQuestion). Never answered for the user. */
+  onQuestion?: import('./question.js').HarnessQuestionAsk;
   /** Coarse progress ("generating response", "retrying"), for the waiting line. */
   onPhase?: (phase: string) => void;
   /** A model step of a multi-step agent turn is starting: the next response
