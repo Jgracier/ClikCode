@@ -6,7 +6,7 @@
  * cannot take it back.
  */
 import { describe, expect, it } from 'vitest';
-import { enterAgainSends, hasDurableSteer, steerTranscriptRows, type LiveSubmission } from './steer-rows';
+import { enterAgainSends, hasDurableSteer, liveTurnSpan, steerTranscriptRows, type LiveSubmission } from './steer-rows';
 
 const render = (text: string) => [`row:${text}`];
 const live = (text: string, sequence: number, state: LiveSubmission['state'] = 'steered'): LiveSubmission =>
@@ -22,7 +22,7 @@ describe('which steers reach the transcript', () => {
   });
   it('draws a live steer once, before the turn is materialized', () => {
     expect(rows({ live: [live('try the other file', 7)] })).toEqual([
-      { id: 'steer#7', done: true, responseOffset: 7, lines: ['row:try the other file'] },
+      { id: 'steer#7', done: true, responseOffset: 7, lines: ['row:try the other file'], steer: true, text: 'try the other file' },
     ]);
   });
 
@@ -30,7 +30,20 @@ describe('which steers reach the transcript', () => {
     // The double-draw this exists to prevent.
     const result = rows({ durable: [{ text: 'same words', responseOffset: 3 }], live: [live('same words', 9)] });
     expect(result).toHaveLength(1);
-    expect(result[0]!.id).toBe('steer#3#0');
+    // Under the live copy's id, not a new one: a row is retired once, by id,
+    // and the live copy may be retired already when the durable one arrives
+    // (changed: this asserted the id the durable copy had when it did not know
+    // the live one -- which drew the steer again).
+    expect(result[0]!.id).toBe('steer#9');
+    expect(result[0]!.responseOffset).toBe(3);
+  });
+
+  it('gives two durable steers that say the same thing their own live ids', () => {
+    const result = rows({
+      durable: [{ text: 'again', responseOffset: 2 }, { text: 'again', responseOffset: 8 }],
+      live: [live('again', 4), live('again', 6)],
+    });
+    expect(result.map((row) => row.id)).toEqual(['steer#4', 'steer#6']);
   });
 
   it('drops the durable side entirely once the pending turn is materialized', () => {
@@ -64,7 +77,7 @@ describe('which steers reach the transcript', () => {
 
   it('defaults a durable steer with no offset to 0 rather than dropping it', () => {
     expect(rows({ durable: [{ text: 'no offset' }] })).toEqual([
-      { id: 'steer#0#0', done: true, responseOffset: 0, lines: ['row:no offset'] },
+      { id: 'steer#0#0', done: true, responseOffset: 0, lines: ['row:no offset'], steer: true, text: 'no offset' },
     ]);
   });
 
@@ -114,5 +127,30 @@ describe('where a steer sits among the rows around it', () => {
       content: '', tools: [steer!, tool('after', 11), tool('before', 9)], turnEnded: false, renderBlocks: () => [],
     });
     expect(step.finished).toEqual(['before', 'row:steer', 'after']);
+  });
+});
+
+describe('which saved messages a live turn already drew', () => {
+  const messages = (...items: Array<[string, string, string?]>) => items.map(([role, content, id]) => ({ role, content, ...(id ? { id } : {}) }));
+
+  it('owns the steers it drew and the answer after each', () => {
+    const saved = messages(['user', 'go'], ['assistant', 'Step one'], ['user', 'then this'], ['assistant', ' job.\n\nStep two.']);
+    expect(liveTurnSpan(saved, 1, [{ text: 'then this' }])).toBe(3);
+  });
+
+  it('matches by id where both carry one, so same words are still two steers', () => {
+    const saved = messages(['assistant', 'A'], ['user', 'same', 'x1'], ['assistant', 'B'], ['user', 'same', 'x2'], ['assistant', 'C']);
+    expect(liveTurnSpan(saved, 0, [{ text: 'same', steerId: 'x1' }])).toBe(2);
+    expect(liveTurnSpan(saved, 0, [{ text: 'same', steerId: 'x1' }, { text: 'same', steerId: 'x2' }])).toBe(4);
+  });
+
+  it('stops at a user message it never drew: that is the next turn', () => {
+    const saved = messages(['assistant', 'A'], ['user', 'next question'], ['assistant', 'B']);
+    expect(liveTurnSpan(saved, 0, [{ text: 'something else' }])).toBe(0);
+  });
+
+  it('owns a trailing steer that nothing followed', () => {
+    const saved = messages(['assistant', 'A'], ['user', 'last word']);
+    expect(liveTurnSpan(saved, 0, [{ text: 'last word' }])).toBe(1);
   });
 });
