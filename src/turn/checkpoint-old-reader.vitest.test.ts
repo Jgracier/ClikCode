@@ -61,9 +61,22 @@ describe('a streaming turn, read by a build that knows only <id>.json', () => {
     await checkpoint.complete('part one part two');
     const after = await oldRead();
     expect(after.pendingTurn).toBeUndefined();
-    // The steer splits the answer where it landed.
-    expect(after.messages?.slice(2).map((message) => message.content.trim())).toEqual(['go', 'part one', 'also this', 'part two']);
+    // The steer landed inside a block, so it follows that block whole: never a cut through the
+    // middle of a sentence (standard 1.5 / 3; the live view draws it there too).
+    expect(after.messages?.slice(2).map((message) => message.content.trim())).toEqual(['go', 'part one part two', 'also this']);
     await expect(stat(turnPath())).rejects.toThrow();
+  });
+
+  it('splits the answer at a steer that landed between blocks', async () => {
+    const { checkpoint } = await started();
+    checkpoint.response('part one\n\n');
+    await tick();
+    await checkpoint.steer({ id: 'st', text: 'also this', submittedAt: new Date().toISOString() } as never);
+    checkpoint.response('part two');
+    await tick();
+    await checkpoint.complete('part one\n\npart two');
+    const after = await oldRead();
+    expect(after.messages?.slice(2).map((message) => message.content.trim())).toEqual(['go', 'part one', 'also this', 'part two']);
   });
 
   it('keeps the streamed journal when such a build rewrites <id>.json mid-turn, and drops it when that build ends the turn', async () => {
