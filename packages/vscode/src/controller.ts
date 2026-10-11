@@ -735,10 +735,12 @@ export class ClikCodeController implements vscode.Disposable {
   /** A question answered, or dismissed (cancelled). */
   answerQuestion(id: string, result: HarnessQuestionResult): void {
     this.bridge?.send({ type: 'question-response', id, result });
-    this.setModel(answeredApproval(this.model, id));
+    this.setModel(answeredApproval(this.model, id, { outcome: result.kind === 'answered' ? 'answered' : 'declined' }));
   }
 
-  approve(id: string, approved: boolean | 'always'): void {
+  /** `told`: denied with a note -- the words sent in its place, which the
+   * settled row says (`↳ told: …`). */
+  approve(id: string, approved: boolean | 'always', told?: string): void {
     // Esc and the keyboard commands name the first waiting item; for a
     // question that is a dismissal, never an answer.
     if (this.model.approvals.find((item) => item.id === id)?.question) {
@@ -746,7 +748,9 @@ export class ClikCodeController implements vscode.Disposable {
       return;
     }
     this.bridge?.send({ type: 'approval-response', id, approved });
-    this.setModel(answeredApproval(this.model, id));
+    this.setModel(answeredApproval(this.model, id, {
+      outcome: approved === false ? 'denied' : 'approved', ...(approved === 'always' ? { always: true } : {}), ...(told ? { told } : {}),
+    }));
     if (this.shownDiffs.has(id)) void this.host.diffs.close(id);
     this.forgetDiff(id);
   }
@@ -865,7 +869,7 @@ export class ClikCodeController implements vscode.Disposable {
         return;
       }
       case 'approve':
-        this.approve(message.id, message.approved);
+        this.approve(message.id, message.approved, message.told);
         return;
       case 'answerQuestion':
         this.answerQuestion(message.id, message.result);

@@ -409,7 +409,7 @@ function App(): JSX.Element {
             ) : (
               <ApprovalCard key={model.approvals[0].id} approval={model.approvals[0]} workspace={model.workspace} position={1} total={model.approvals.length}
                 onAnswer={(value, note) => {
-                  post({ type: 'approve', id: model.approvals[0]!.id, approved: value });
+                  post({ type: 'approve', id: model.approvals[0]!.id, approved: value, ...(note ? { told: note } : {}) });
                   // Denied with a note: the note goes into the running turn, as
                   // a message typed during it does (a steer).
                   if (note) post({ type: 'send', text: note, id: uid() });

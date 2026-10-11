@@ -8,26 +8,23 @@ import {
   outputPreview, previewLinesFor, toolUses, waitingSpinnerGlyph,
 } from '../../../../src/harness/protocol/activity-view';
 import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
-import { activityResult, exploreRuns, exploreSummary, tensedLabel } from '../../../../src/harness/protocol/turn-flow';
+import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
 import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
-import { COPIED_MS, shimmerCycleMs } from '../../../../src/harness/protocol/timings';
+import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { useNow, useSpinFrame } from './clock';
-
-/** The shimmer sweeps a label at the terminal's pace: the same characters a
- * step, so a longer label takes longer, as it does there. */
-const shimmerStyle = (label: string): string => `--shimmer-cycle: ${shimmerCycleMs(label.length)}ms`;
+import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
 import { formatElapsed } from '../../../../src/harness/protocol/format';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
 import type { ToolCategory } from '../../../../src/harness/prompter';
 import { APPROVAL_GUARD_MS, approvalHeading, approvalKeyAction } from '../../../../src/tui/render/approval-keys';
 import { planWindow } from '../../../../src/tui/render/plan-window';
-import { liveElapsedMs, reconnecting, turnMarks, type Activity, type Approval, type ChatModel, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
+import { liveChildren, liveElapsedMs, reconnecting, turnMarks, turnNoticeNotes, type Activity, type Approval, type ChatModel, type DecisionEntry, type LiveChild, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import type { FileDiff, HarnessQuestion, HarnessQuestionResult } from '../protocol';
 import { post, uid } from './bus';
 import { pathIn, titleCase } from './format';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Animating, Icon, Spinner } from './ui';
-import { foldedGroupCount, foldedSummary, runGroupView, traceSummaryLine, workingStatus } from './flow';
+import { decisionBadge, foldedGroupCount, foldedSummary, liveMeter, runGroupView, shimmerStyle, traceSummaryLine, workingDetail, workingStatus } from './flow';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
 import { splitEditorContext } from '../editor-context';
 
@@ -225,6 +222,17 @@ function Clock({ since }: { since: number }): JSX.Element | null {
   return now - since >= 1000 ? <span class="activity-outcome">{formatElapsed(now - since)}</span> : null;
 }
 
+/** One running child of a sub-agent, on its own line with its own spinner;
+ * the newest carries the parent's count (as the terminal's row does). */
+function ChildLine({ live }: { live: LiveChild }): JSX.Element {
+  const uses = live.newest ? live.parent.childTools : undefined;
+  return (
+    <div class="activity-child" title={live.child.label}>
+      <Spinner tone="tone-cyan" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
+    </div>
+  );
+}
+
 function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
   const id = rowId(activity);
   const [open, setOpenState] = useState(openRows.has(id));
@@ -238,7 +246,10 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
   const ends = activity.category === 'run' && status !== 'running' ? commandOutputPreview(activity) : undefined;
   const preview = !ends && activity.output?.length && budget > 0 ? outputPreview(activity, budget) : undefined;
   const hasMore = Boolean((activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
-    || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines));
+    || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines) || activity.children?.length);
+  // Its own live children directly under it (those that began after more
+  // text was written are drawn lower, by the turn: turnMarks).
+  const beside = status === 'running' ? liveChildren(activity).filter((entry) => entry.beside) : [];
   // What it found ("42 lines"), then the exceptions (a failure, a long run).
   const result = activityResult(activity);
   const outcome = activityOutcome(activity);
@@ -261,10 +272,11 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
         </span>
         <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
         {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
+        {activity.decision ? <span class={`activity-outcome activity-decision ${decisionBadge(activity.decision).tone}`}>{decisionBadge(activity.decision).text}</span> : null}
         {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
         {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
         {result ? <span class="activity-outcome activity-result">{result}</span> : null}
-        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{outcome.parts.join(' · ')}</span> : null}
+        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{activity.children?.length || activity.childTools ? `(${outcome.parts.join(' · ')})` : outcome.parts.join(' · ')}</span> : null}
         {activity.diff?.length && status !== 'running' ? (
           <span class="activity-actions">
             <button type="button" class="icon-button tiny" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={change('view')}><Icon name="diff" /></button>
@@ -277,7 +289,13 @@ function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; w
           </button>
         ) : null}
       </div>
-      {status === 'running' && activity.child ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {beside.map((entry) => <ChildLine key={entry.child.key} live={entry} />)}
+      {/* A harness that sent no child calls, only what it is doing now. */}
+      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {/* The children stay available once it settles, one click away. */}
+      {open && activity.children?.length ? (
+        <div class="activities nested">{activity.children.map((child) => <ActivityRow key={child.key} activity={child} workspace={workspace} userIndex={userIndex} />)}</div>
+      ) : null}
       {/* A running call shows what it has printed so far, newest last -- a
           long build is visibly working instead of a bare timer. */}
       {status === 'running' && !open && activity.output?.length ? <OutputView activity={{ ...activity, outputTail: true }} budget={LIVE_OUTPUT_LINES} /> : null}
@@ -359,17 +377,30 @@ function ExploredRow({ activities, workspace, userIndex }: { activities: Activit
   );
 }
 
-/** A thought, where it happened: "Thought for 4s", open to read it. */
+/** A thought, where it happened: "Thought for 4s · heading", open to read it
+ * when its words were kept (the worker caps them; the heading and the
+ * duration are always there). The same words as the terminal's row. */
 function ThoughtRow({ thought }: { thought: ThoughtEntry }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const row = thoughtRow({ durationMs: thought.ms, heading: thought.heading ?? reasoningHeading(thought.text) });
+  const body = thought.text ? reasoningBody(thought.text) || thought.text : '';
   return (
     <div class="trace thought-row">
-      <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span>Thought for {formatElapsed(Math.max(1000, thought.ms))}</span>
-      </button>
-      {open ? <Reasoning text={thought.text} /> : null}
+      {body ? (
+        <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span>{row}</span>
+        </button>
+      ) : <div class="trace-toggle static"><Icon name="lightbulb" /><span>{row}</span></div>}
+      {open && body ? <Reasoning text={body} /> : null}
     </div>
   );
+}
+
+/** What the user decided at an approval or question, where it was asked:
+ * `✓ approved make clean`, `✗ denied …`, `↳ told: …` (standard 8). */
+function DecisionRow({ entry }: { entry: Pick<DecisionEntry, 'decision'> }): JSX.Element {
+  const { text, tone } = decisionRow(entry.decision);
+  return <div class={`decision-row decision-${tone}`} role="note"><span class="muted">{text}</span></div>;
 }
 
 function Reasoning({ text }: { text: string }): JSX.Element {
@@ -389,11 +420,14 @@ function TurnFlow(props: {
   plan?: { entries: ChatModel['plan']; at: PlanAt };
   /** Notices that arrived during the turn, each where it did. */
   notes?: ReadonlyArray<Note>;
+  /** What the user decided at the turn's approvals, each where it was asked. */
+  decisions?: ReadonlyArray<DecisionEntry>;
 }): JSX.Element {
   const { text } = props;
   const marks = turnMarks(text, props.activities, props.thoughts, props.steers, {
     ...(props.plan?.entries.length ? { plan: props.plan.at } : {}),
     ...(props.notes?.length ? { notes: props.notes.map((note, index) => ({ offset: note.offset ?? 0, seq: note.seq ?? index, note })) } : {}),
+    ...(props.decisions?.length ? { decisions: props.decisions } : {}),
   });
   const parts: JSX.Element[] = [];
   let at = 0;
@@ -425,6 +459,8 @@ function TurnFlow(props: {
     if (mark.thought) parts.push(<ThoughtRow key={`h${mark.thought.seq}`} thought={mark.thought} />);
     else if (mark.plan && props.plan) parts.push(<Plan key="plan" plan={props.plan.entries} folded={!props.live} running={Boolean(props.live)} />);
     else if (mark.note) parts.push(<NoteView key={`n${mark.seq}`} note={mark.note} />);
+    else if (mark.child) parts.push(<div key={`c${mark.child.child.key}`} class="activities"><ChildLine live={mark.child} /></div>);
+    else if (mark.decision) parts.push(<DecisionRow key={`d${mark.decision.id}`} entry={mark.decision} />);
     else parts.push(<div key={`s${mark.steerIndex}`} class="steer"><Icon name="arrow-small-right" /><span>{mark.steer}</span><span class="muted">sent into this turn</span></div>);
   }
   flushRun();
@@ -469,6 +505,7 @@ const FinishedTurn = memo(({ text, trace, cacheKey, workspace, notes }: { text: 
       <TurnFlow text={text} activities={trace.activities.map(place)} thoughts={(trace.reasoning ?? []).map(place)} steers={(trace.steers ?? []).map(place)}
         {...(trace.plan ? { plan: { entries: trace.plan, at: place(trace.planAt ?? { offset: 0, seq: 0 }) } } : {})}
         {...(notes?.length ? { notes: notes.map(place) } : {})}
+        {...(trace.decisions?.length ? { decisions: trace.decisions.map(place) } : {})}
         workspace={workspace} cacheKey={cacheKey} userIndex={trace.userIndex} />
       <TurnSummary trace={trace} />
       <div class="message-actions"><CopyAnswer text={text} /></div>
@@ -537,7 +574,21 @@ const VISIBLE_ACTIVITIES = 6;
  * running sub-agent or swarm agent keeps its own spinner on its chat row.
  * The thought being had is this line's tooltip, and opens under it. Ticks
  * on its own. */
-function Working({ live, asking, reconnecting: away = false }: { live: LiveTurn | undefined; asking: boolean; reconnecting?: boolean }): JSX.Element {
+/** The working line's clock and token meter. The count steps on the page's
+ * spinner clock, as the terminal's does on its tick, and never falls within a
+ * turn (liveMeter); the clock beside it reads once a second. */
+function WorkingDetail({ live, usage }: { live: LiveTurn; usage?: TurnUsage }): JSX.Element {
+  const now = useNow();
+  useSpinFrame();
+  const shown = useRef({ turn: live.startedAt, tokens: 0 });
+  // A new turn starts its count again.
+  if (shown.current.turn !== live.startedAt) shown.current = { turn: live.startedAt, tokens: 0 };
+  const meter = liveMeter({ shown: shown.current.tokens, usage, responseChars: live.text.length });
+  shown.current.tokens = meter.tokens;
+  return <span class="muted" aria-hidden="true">{workingDetail(liveElapsedMs(live, now), meter.label)}</span>;
+}
+
+function Working({ live, asking, usage, reconnecting: away = false }: { live: LiveTurn | undefined; asking: boolean; usage?: TurnUsage; reconnecting?: boolean }): JSX.Element {
   const now = useNow(!away);
   const [open, setOpen] = useState(false);
   const status = workingStatus(live, asking, now, away);
@@ -558,7 +609,7 @@ function Working({ live, asking, reconnecting: away = false }: { live: LiveTurn 
             onClick={() => setOpen(!open)}><Icon name="lightbulb" /></button>
         ) : null}
         {/* Not announced: a clock changing every second would be read out. */}
-        <span class="muted" aria-hidden="true">{live && !held ? formatElapsed(liveElapsedMs(live, now)) : ''}</span>
+        {live && !held ? <WorkingDetail live={live} usage={usage} /> : null}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
     </div>
@@ -595,16 +646,17 @@ function ActivityRun({ activities, workspace }: { activities: Activity[]; worksp
 /** The running turn as the terminal lays it out: each call (and each message
  * sent into the turn) where it happened in the answer, the paragraphs around
  * it, the newest still streaming; then the working line. */
-const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away }: {
-  live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean;
+const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, away, usage }: {
+  live: LiveTurn | undefined; workspace?: string; asking: boolean; plan: ChatModel['plan']; notes: Note[]; turn?: number; away: boolean; usage?: TurnUsage;
 }): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
     {live ? (
       <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
         {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
+        {...(live.decisions?.length ? { decisions: live.decisions } : {})}
         {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
     ) : null}
-    <Working live={live} asking={asking} reconnecting={away} />
+    <Working live={live} asking={asking} reconnecting={away} {...(usage ? { usage } : {})} />
   </div>
 ));
 
@@ -619,6 +671,12 @@ const WINDOW = 120;
 function turnNotes(notes: readonly Note[], userIndex: number): Note[] | undefined {
   const found = notes.filter((note) => note.turn === userIndex);
   return found.length ? found : undefined;
+}
+
+/** A finished turn's notices: the window's own and the worker's saved ones. */
+function turnNotices(notes: readonly Note[], trace: TurnTrace): Note[] | undefined {
+  const all = turnNoticeNotes(turnNotes(notes, trace.userIndex), trace);
+  return all.length ? all : undefined;
 }
 
 const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }: Pick<ChatModel, 'sessionId' | 'messages' | 'traces' | 'notes' | 'workspace'> & { reveal?: number }): JSX.Element => {
@@ -651,7 +709,7 @@ const History = memo(({ sessionId, messages, traces, notes, workspace, reveal }:
     parts.push(
       <div key={`m${index}`} class="message-anchor" data-message={index}>
         {message.role === 'user' ? <UserMessage text={message.content} {...(promptNumbers.has(index) ? { prompt: promptNumbers.get(index)! } : {})} />
-          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} notes={turnNotes(notes, index - 1)} />
+          : trace ? <FinishedTurn text={message.content} trace={trace} cacheKey={`${sessionId}#${index}`} workspace={workspace} notes={turnNotices(notes, trace)} />
             : <AssistantMessage cacheKey={`${sessionId}#${index}`} text={message.content} />}
       </div>,
     );
@@ -685,6 +743,7 @@ export function Transcript({ model, reveal }: { model: ChatModel; reveal?: numbe
   const inTurn = model.live && model.turnUserIndex !== undefined ? model.turnUserIndex : undefined;
   if (model.running) {
     parts.push(<LiveTurnView key="live" live={model.live} workspace={model.workspace} asking={waitingOnUser(model)} plan={model.plan} notes={model.notes} away={reconnecting(model)}
+      {...(model.turnUsage ? { usage: model.turnUsage } : {})}
       {...(inTurn !== undefined ? { turn: inTurn } : {})} />);
   }
   // Notes from the running turn that could not be placed in it follow it.
