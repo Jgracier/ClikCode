@@ -86,7 +86,8 @@ export type FromWebview =
    * back in the composer -- once the worker says it was still the user's to
    * take (a message already steered in stays sent, as in the terminal). */
   | { type: 'unqueue'; id: string; edit?: boolean }
-  | { type: 'approve'; id: string; approved: boolean | 'always' }
+  /** `told`: denied with a note, the words that were sent in its place. */
+  | { type: 'approve'; id: string; approved: boolean | 'always'; told?: string }
   /** A harness question answered (or dismissed: cancelled). */
   | { type: 'answerQuestion'; id: string; result: import('./protocol').HarnessQuestionResult }
   | { type: 'viewDiff'; id: string }
