@@ -574,7 +574,10 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
     if (event?.type === 'toolcall_start') {
       const content = asRecord(event.partial)?.content;
       const call = Array.isArray(content) && typeof event.contentIndex === 'number' ? asRecord(content[event.contentIndex]) : undefined;
-      return piTool(call ? { toolCallId: call.id, toolName: call.name, args: call.arguments } : event, true);
+      // JSON mode drops `partial` and puts the call's `id` and `toolName` on the event itself: read
+      // them there, so this start and the `tool_execution_start` that follows are ONE call, by id.
+      return piTool(call ? { toolCallId: call.id, toolName: call.name, args: call.arguments }
+        : { toolCallId: event.id, toolName: event.toolName ?? event.name, args: event.args ?? event.arguments }, true);
     }
   }
   return undefined;

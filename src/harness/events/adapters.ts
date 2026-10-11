@@ -330,12 +330,25 @@ export function parseHarnessLine(
 
 /** parseHarnessLine for a record the caller has already parsed. */
 function parseHarnessValue(harness: AiLocalHarnessDefinition, value: Json, turn: StreamState): ParsedHarnessLine {
-  const response = nativeResponseUpdateFromValue(harness, value, turn);
+  const parsedResponse = nativeResponseUpdateFromValue(harness, value, turn);
   const activities = stampThoughts(harness, turn, value, pairAnonymousCalls(harness, turn, value, [
     ...(claudeShaped(harness) ? (turn.claudeBlocks ??= new ClaudeBlocks(harness.command)).note(value) : []),
     ...(harness.parser === 'cline-json' ? clineLine(value, turn, harness.command) : []),
     ...parseNativeActivityEventsFromValue(harness, value),
   ]));
+  // ONE PARAGRAPH RULE FOR EVERY FAMILY. Text that follows a tool call is a new paragraph, whichever
+  // parser read it: the families that build their update directly (pi, antigravity, goose, opencode)
+  // never went through appendText, so a closing answer was glued to the sentence before the tools
+  // ("...looking.Here is what I found.") and settled onto the screen as one block that lost its tail.
+  // A parser that did use appendText has consumed the flag already; this only completes it.
+  let response = parsedResponse;
+  if (response && response.mode === 'append' && response.text) {
+    if (turn.needsSeparator && turn.hasText && !/^\s/.test(response.text)) response = { ...response, text: `\n\n${response.text}` };
+    turn.needsSeparator = false;
+    turn.hasText = true;
+  }
+  // The call comes after the words that introduced it, so it marks the break for what follows.
+  if (turn.hasText && activities.some((event) => event.kind === 'tool-start' && !event.parentId)) turn.needsSeparator = true;
   const compaction = claudeShaped(harness) ? claudeCompaction(value) : undefined;
   const phase = compaction?.phase ?? nativeActivityPhaseFromValue(harness, value);
   // The terminal record's own totals, else the running sum of per-message usage.
@@ -396,9 +409,17 @@ function stampThoughts(harness: AiLocalHarnessDefinition, turn: StreamState, val
   const family = pi ? 'pi' : 'cursor';
   if (pi) {
     const inner = value.type === 'message_update' ? object(value.assistantMessageEvent) : undefined;
-    if (inner?.type === 'thinking_start') turn.thoughtCount += 1;
-    return events.map((event) => event.kind === 'thinking' && !event.id
-      ? { ...event, id: `thinking:pi-${Math.max(turn.thoughtCount, 1)}` } : event);
+    if (inner?.type === 'thinking_start') { turn.thoughtCount += 1; turn.thoughtText = ''; }
+    const id = `thinking:pi-${Math.max(turn.thoughtCount, 1)}`;
+    // Pi's JSON mode is delta-only: `message_update` omits `partial` (its docs/json.md), so the thought so
+    // far is the deltas joined, as Cursor's is. A build that still sends `partial` is read by the activity
+    // reader and needs nothing here.
+    if (inner?.type === 'thinking_delta' && typeof inner.delta === 'string' && !events.some((event) => event.kind === 'thinking')) {
+      turn.thoughtText += inner.delta;
+      const label = thoughtLabel(turn.thoughtText);
+      return label.trim() ? [...events, { kind: 'thinking', label, id }] : events;
+    }
+    return events.map((event) => event.kind === 'thinking' && !event.id ? { ...event, id } : event);
   }
   if (value.type === 'thinking' && value.subtype === 'completed') {
     turn.thoughtCount += 1;
