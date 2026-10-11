@@ -50,7 +50,7 @@ import { ApprovalPreview, ApprovalRequest, approvalBlockRows } from './render/ap
 import { APPROVAL_GUARD_MS, approvalKeyAction } from './render/approval-keys.js';
 import { questionBlockRows, questionKeyAction, questionRows, questionValues, startsTyping, type QuestionPromptState } from './render/question-block.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
-import { frameRowBudget } from './render/frame-budget.js';
+import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './render/frame-budget.js';
 import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
 import { runOptionPicker, type OptionPickerHost, type PaletteLayout } from './option-picker.js';
 import { runConversationBoard, type BoardResult, type ConversationBoardSettings } from './conversation-board.js';
@@ -2067,12 +2067,16 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // shorter between two keystrokes. Bound the composer by what remains in
     // this exact frame so it can never create a physical terminal scroll.
     const approval = this.pendingApproval;
-    const approvalRows = approval?.question && optionalRows - paletteRows >= 2
-      ? questionBlockRows(approval.question.state, width, Math.min(optionalRows - paletteRows, Math.max(6, Math.floor(targetHeight * 0.6))), {
+    // Never omitted (standard section 8): short of room the block degrades to
+    // its question and keys (one row at the least), and the rows around it
+    // give way first (fitFooterForApproval, below).
+    const approvalSpace = Math.max(APPROVAL_MIN_ROWS, optionalRows - paletteRows);
+    const approvalRows = approval?.question
+      ? questionBlockRows(approval.question.state, width, Math.min(approvalSpace, Math.max(6, Math.floor(targetHeight * 0.6))), {
         guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS, needsFocus: approval.needsFocus, focused: approval.focused,
       })
-      : approval && optionalRows - paletteRows >= 2
-      ? approvalBlockRows(approval, width, Math.min(optionalRows - paletteRows, Math.max(6, Math.floor(targetHeight * 0.6))), {
+      : approval
+      ? approvalBlockRows(approval, width, Math.min(approvalSpace, Math.max(6, Math.floor(targetHeight * 0.6))), {
         guarded: Date.now() - approval.shownAt < APPROVAL_GUARD_MS,
         needsFocus: approval.needsFocus, focused: approval.focused,
         position: this.approvalsAnswered + 1, total: this.approvalsAnswered + 1 + this.approvalQueue.length,
@@ -2434,33 +2438,54 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
       }));
     }
-    footer.push(...panelRows, ...planRows, ...approvalRows, ...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : []));
-    if (waitingRows && this.turn) {
-      footer.push('', `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}`);
-    }
+    footer.push(...panelRows, ...planRows);
+    const aboveApproval = footer.length;
+    const midRows = [...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : [])];
+    footer.push(...approvalRows, ...midRows);
+    // The generating band: a blank above the status where the height has the
+    // row for it. The status itself is always drawn while a turn runs.
+    const statusBlank = waitingRows >= 2 && this.turn ? '' : undefined;
+    const statusRow = this.turn ? `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
+    if (statusBlank !== undefined) footer.push(statusBlank);
+    if (statusRow !== undefined) footer.push(statusRow);
     // Usage lives on the upper composer border, mirroring the title on the
     // lower border. A spent window replaces the percentage with the reset
     // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
-    footer.push(paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel)));
-    const composerStart = footer.length;
+    const usageRule = paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel));
+    footer.push(usageRule);
+    let composerStart = footer.length;
+    const composerFooter: string[] = [];
     for (const [index, row] of composerRows.rows.entries()) {
       // The caret is drawn in the same foreground as the rules and the text
       // between them, so the whole composer reads as one field: white frame,
       // white prompt, white input.
-      footer.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+      composerFooter.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
     }
+    footer.push(...composerFooter);
     // The rule below the composer carries the chat's title at its right
     // edge instead of a plain dashed line -- dashes fill from the left up to
     // wherever the title starts, so a longer title just eats more of the
     // rule rather than needing a line of its own. Provider/model/directory
     // (meta) stay on their own separate line below, never sharing space with
     // the title the way they used to.
-    footer.push(paintTitleRule(rowWidth, session.name || undefined));
+    const titleRule = paintTitleRule(rowWidth, session.name || undefined);
+    footer.push(titleRule);
     // Provider, model, effort and directory are one statement -- what this
     // conversation is running as -- so they read as one line in one colour
     // rather than a bright word followed by a dimmer tail. Cyan is ClikCode's
     // own chrome, the same family as the caret above it.
-    footer.push(`  ${chalk.cyan(meta)}`);
+    const metaRow = `  ${chalk.cyan(meta)}`;
+    footer.push(metaRow);
+    // A short terminal with an approval up: the rows that are not the prompt
+    // go first, so it is never the prompt that is cut off the top.
+    if (approvalRows.length && footer.length > targetHeight) {
+      const fitted = fitFooterForApproval({
+        above: footer.slice(0, aboveApproval), approval: approvalRows, mid: midRows, blank: statusBlank, status: statusRow,
+        usageRule, composer: composerFooter, titleRule, meta: metaRow, height: targetHeight,
+      });
+      footer.splice(0, footer.length, ...fitted.rows);
+      composerStart = fitted.composerStart;
+    }
 
     // The live region is bounded by the viewport: it is erased and redrawn as
     // one block every frame, so it can never be taller than the terminal. A

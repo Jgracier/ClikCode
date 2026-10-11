@@ -109,3 +109,55 @@ describe('the status line motion', () => {
     } finally { rl.close(); }
   });
 });
+
+describe('an approval on a short terminal', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.assign(process.stdout, { isTTY: realTty });
+    process.stdout.write = realWrite;
+  });
+
+  /** What the screen shows after a frame: the writes since `start`, replayed
+   * naively as text (enough to ask "is the question on it"). */
+  function screenAt(rows: number, ask: (rl: TerminalHarnessPrompter) => void, label = 'thinking'): string {
+    const written: string[] = [];
+    Object.assign(process.stdout, { isTTY: true, columns: 80, rows });
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      for (const arg of rest) if (typeof arg === 'function') (arg as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+    const rl = new TerminalHarnessPrompter();
+    try {
+      rl.render({
+        id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [],
+      } as never);
+      rl.startWaiting(label, () => undefined, async () => ({ kind: 'sent' }) as never);
+      ask(rl);
+      vi.advanceTimersByTime(300);
+      return strip(written.join(''));
+    } finally { rl.close(); }
+  }
+
+  for (const rows of [5, 6, 7, 8, 12]) {
+    it(`draws the approval and its keys at ${rows} rows`, () => {
+      const screen = screenAt(rows, (rl) => { void rl.approval('make clean', '$ make clean'); });
+      expect(screen).toContain('[y]');
+      expect(screen).toContain('[n]');
+      expect(screen).toContain('waiting for you');
+    });
+
+    it(`draws a question and its keys at ${rows} rows`, () => {
+      const screen = screenAt(rows, (rl) => {
+        void rl.askQuestions({ title: 'Codex asks', questions: [{ id: 'db', prompt: 'Which database?', options: [{ label: 'Postgres' }, { label: 'MySQL' }, { label: 'SQLite' }] }] });
+      });
+      expect(screen).toContain('[enter]');
+    });
+  }
+
+  it('keeps a one-row status on a viewport too short for the band', () => {
+    const screen = screenAt(4, () => undefined, 'pondering');
+    expect(screen).toContain('pondering');
+  });
+});

@@ -72,3 +72,28 @@ describe('a question\'s rows', () => {
     expect(rows).toContain('[enter] choose');
   });
 });
+
+describe('a question given too few rows', () => {
+  const plain = (rows: string[]): string[] => rows.map((row) => row.replace(/\u001b\[[0-9;]*m/g, ''));
+  const many = (highlight: number) => state({
+    options: ['Postgres', 'MySQL', 'SQLite', 'Redis', 'Mongo'].map((label) => ({ label })),
+  }, { highlight });
+  const flags = { guarded: false, needsFocus: false, focused: true };
+
+  it('shows fewer options, around the highlighted one, never past the rows it was given', () => {
+    for (const maxRows of [2, 3, 4, 5]) {
+      for (const highlight of [0, 2, 4]) {
+        const rows = plain(questionBlockRows(many(highlight), 80, maxRows, flags));
+        const text = rows.join('\n');
+        expect(rows.length, `maxRows ${maxRows}`).toBeLessThanOrEqual(maxRows);
+        expect(text, `maxRows ${maxRows}`).toContain('[enter]');
+        expect(text, `maxRows ${maxRows} highlight ${highlight}`).toContain(['Postgres', 'MySQL', 'SQLite', 'Redis', 'Mongo'][highlight]!);
+      }
+    }
+  });
+
+  it('is unchanged when everything fits', () => {
+    const rows = plain(questionBlockRows(many(0), 80, 20, flags));
+    expect(rows.join('\n')).toContain('Mongo');
+  });
+});
