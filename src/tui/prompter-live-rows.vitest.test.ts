@@ -98,3 +98,36 @@ describe('the background terminals indicator (standard section 10)', () => {
     } finally { short.rl.close(); }
   });
 });
+
+describe('the token meter of a running turn', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.assign(process.stdout, { isTTY: realTty });
+    process.stdout.write = realWrite;
+  });
+
+  // MEASURED 2026-10-11: a window that joined a turn showed a number that did not move however much
+  // was written, because a vendor's early, small reading outranked the written length.
+  it('is not held on a vendor reading taken once, early, nor by reasoning it cannot see', () => {
+    const written: string[] = [];
+    Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 30 });
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      for (const arg of rest) if (typeof arg === 'function') (arg as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+    const rl = new TerminalHarnessPrompter();
+    rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
+    rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
+    try {
+      rl.setTurnUsage({ output: 8 });
+      rl.response('word '.repeat(2000));
+      vi.advanceTimersByTime(3000);
+      const text = strip(written.join(''));
+      const counts = [...text.matchAll(/↓ ([0-9.]+)k? tokens/g)].map((match) => match[0]);
+      // 10000 chars is 2500 tokens: shown as 2.5k, not 8.
+      expect(counts.at(-1)).toBe('↓ 2.5k tokens');
+    } finally { rl.close(); }
+  });
+});

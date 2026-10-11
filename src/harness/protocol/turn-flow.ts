@@ -189,12 +189,18 @@ export function estimateTokens(chars: number): number {
   return Math.max(0, Math.round(chars / 4));
 }
 
-/** How many tokens the turn has produced so far: what the vendor's usage
- * for the turn says (output tokens, where it reports them), else the
- * response's length / 4. The shown count steps toward this (smoothTokens). */
-export function liveTokenTarget(state: { usage?: Pick<TurnUsage, 'output'>; responseChars: number }): number {
+/** How many tokens the turn has produced so far: the larger of what the
+ * vendor's usage for the turn says (output tokens, where it reports them)
+ * and the length of what was written (answer and reasoning) / 4. A vendor's
+ * reading is often taken once, early in a message, and then not again until
+ * the turn ends; used alone it left the meter on one number however much
+ * more was written -- and a window that joined the turn later showed that
+ * number from the start. Both are lower bounds on the truth, so the larger
+ * is the better one. The shown count steps toward this (smoothTokens). */
+export function liveTokenTarget(state: { usage?: Pick<TurnUsage, 'output'>; responseChars: number; thoughtChars?: number }): number {
   const reported = state.usage?.output;
-  return reported !== undefined && reported > 0 ? Math.round(reported) : estimateTokens(state.responseChars);
+  const counted = reported !== undefined && reported > 0 ? Math.round(reported) : 0;
+  return Math.max(counted, estimateTokens(state.responseChars + (state.thoughtChars ?? 0)));
 }
 
 /** One step of the shown count toward its target: a fifth of the gap, at

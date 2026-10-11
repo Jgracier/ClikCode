@@ -1504,7 +1504,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * produced (see smoothTokens). Stepped on the tick, not on paint, so the
    * speed does not depend on how many frames were drawn. */
   private stepTokens(turn: WaitingTurn): void {
-    const target = liveTokenTarget({ ...(turn.usage ? { usage: turn.usage } : {}), responseChars: this.liveResponse.length });
+    // Reasoning is tokens too: the thought being had and the ones settled
+    // this turn (a settled mark copy carries its id as its label, not text).
+    const thoughtChars = (this.thought?.text.length ?? 0) + this.activityEntries.reduce((sum, entry) => (
+      entry.anchor === this.activityAnchor && entry.event?.kind === 'thinking' && entry.event.id === undefined
+        ? sum + (entry.event.label?.length ?? 0) : sum), 0);
+    const target = liveTokenTarget({ ...(turn.usage ? { usage: turn.usage } : {}), responseChars: this.liveResponse.length, thoughtChars });
     turn.tokens = smoothTokens(turn.tokens ?? 0, target);
   }
 

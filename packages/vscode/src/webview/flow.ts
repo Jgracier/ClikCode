@@ -164,11 +164,13 @@ export function shimmerStyle(label: string): string {
 }
 
 /** The status line's token count after one more step: toward what the turn
- * has produced (the vendor's reported output, else the response's length / 4),
+ * has produced (the larger of the vendor's reported output and what was written / 4),
  * never down within a turn (smoothTokens). `label` is `↓ 1.2k tokens`, and
  * absent while there is nothing to count. */
-export function liveMeter(state: { shown: number; usage?: Pick<TurnUsage, 'output'> | undefined; responseChars: number }): { tokens: number; label?: string } {
-  const tokens = smoothTokens(state.shown, liveTokenTarget({ ...(state.usage ? { usage: state.usage } : {}), responseChars: state.responseChars }));
+export function liveMeter(state: { shown: number; usage?: Pick<TurnUsage, 'output'> | undefined; responseChars: number; thoughtChars?: number }): { tokens: number; label?: string } {
+  const tokens = smoothTokens(state.shown, liveTokenTarget({
+    ...(state.usage ? { usage: state.usage } : {}), responseChars: state.responseChars, ...(state.thoughtChars ? { thoughtChars: state.thoughtChars } : {}),
+  }));
   const label = tokenMeterLabel(tokens);
   return { tokens, ...(label ? { label } : {}) };
 }

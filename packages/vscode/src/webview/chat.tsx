@@ -583,7 +583,8 @@ function WorkingDetail({ live, usage }: { live: LiveTurn; usage?: TurnUsage }): 
   const shown = useRef({ turn: live.startedAt, tokens: 0 });
   // A new turn starts its count again.
   if (shown.current.turn !== live.startedAt) shown.current = { turn: live.startedAt, tokens: 0 };
-  const meter = liveMeter({ shown: shown.current.tokens, usage, responseChars: live.text.length });
+  const thoughtChars = (live.thought?.text.length ?? 0) + (live.reasoning ?? []).reduce((sum, item) => sum + (item.text?.length ?? 0), 0);
+  const meter = liveMeter({ shown: shown.current.tokens, usage, responseChars: live.text.length, thoughtChars });
   shown.current.tokens = meter.tokens;
   return <span class="muted" aria-hidden="true">{workingDetail(liveElapsedMs(live, now), meter.label)}</span>;
 }
