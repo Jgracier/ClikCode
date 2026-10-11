@@ -386,7 +386,9 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // vendor error. Only Codex's exact confirmed wording is matched here --
   // no other vendor's equivalent phrasing has been verified, so none is
   // guessed at.
-  if (/no rollout found/i.test(text)) return 'native-thread-invalid';
+  // Amp archives a thread made with -x (one-shot), so `--chat last` on it is refused
+  // this way; the transcript replay carries the conversation to a fresh thread.
+  if (/no rollout found|thread is archived and cannot be continued/i.test(text)) return 'native-thread-invalid';
   // Last, so a genuine auth/quota/throttle signal always wins: those can
   // legitimately be worded as a rejection too, and they ARE worth another
   // account.
