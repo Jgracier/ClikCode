@@ -4,6 +4,7 @@
  * killed, and background turns for work the vendor does between ours. What
  * a turn says and how it is cancelled stay with each transport. */
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { markTurn } from '../../runtime/turn-latency.js';
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
 import { spawnPortable } from './spawn.js';
@@ -239,7 +240,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     binary: string; argv: readonly string[]; cwd: string; environment?: Readonly<Record<string, string>>;
     peer: Omit<JsonRpcPeerOptions, 'detached' | 'onClose'>;
   }, fields: Omit<L, 'peer' | 'key'>): L {
-    if (this.live && !this.live.peer.closed && this.live.key === key) return this.live;
+    if (this.live && !this.live.peer.closed && this.live.key === key) {
+      markTurn('spawned', { reused: true, transport: this.label });
+      return this.live;
+    }
     if (this.live) this.dropLive(new Error(restarted));
     const detached = process.platform !== 'win32';
     const child = this.spawn(launch.binary, launch.argv, {
@@ -247,6 +251,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     });
     this.leftRunning.clear();
     lifecycle('vendor.child.spawn', { transport: this.label, child: child.pid });
+    markTurn('spawned', { reused: false, transport: this.label });
     child.once('close', (code, signal) => lifecycle('vendor.child.exit', { transport: this.label, child: child.pid, code, signal }));
     const live: L = {
       ...fields,

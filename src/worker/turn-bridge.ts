@@ -38,6 +38,9 @@ import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 export interface WorkerTurnRequest {
   echo: boolean;
   queuedTurnId?: string;
+  /** The window's latency clock for this turn (runtime/turn-latency.ts). */
+  turnId?: string;
+  submittedAt?: number;
 }
 
 /** One WorkerClient per session, reused across every turn for as long as
@@ -243,7 +246,10 @@ export async function runTurnThroughWorker(
   if (!clients.has(sessionId)) rl.turnStarting();
   const client = await clientFor(sessionId).catch((error: unknown) => { rl.stopWaiting(); throw error; });
   return driveWorkerTurn(sessionId, client, rl, () => {
-    client.send({ type: 'submit', text: promptText, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
+    client.send({
+      type: 'submit', text: promptText, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}),
+      ...(turn.turnId ? { turnId: turn.turnId } : {}), ...(turn.submittedAt !== undefined ? { submittedAt: turn.submittedAt } : {}),
+    });
   });
 }
 

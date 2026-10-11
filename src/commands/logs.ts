@@ -4,8 +4,9 @@
 import { createReadStream, existsSync, readFileSync, statSync, watch } from 'node:fs';
 import { lifecycleLogPath } from '../runtime/lifecycle-log.js';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
+import { formatLatencyTable, medianLatencyByHarness, turnsLatency } from '../runtime/turn-latency.js';
 
-export interface LogsOptions { session?: string; role?: string; since?: string; lines?: string; follow?: boolean }
+export interface LogsOptions { session?: string; role?: string; since?: string; lines?: string; follow?: boolean; latency?: boolean; last?: string }
 
 type Entry = Record<string, unknown> & { t: string; pid: number; role: string; event: string; session?: string };
 
@@ -51,6 +52,13 @@ export async function showLogs(options: LogsOptions): Promise<void> {
   const entries = text.split('\n').map(parse).filter((entry): entry is Entry => Boolean(entry) && matches(entry!, options, cutoff));
   if (!entries.length && !options.follow) {
     process.stderr.write(existsSync(path) ? 'No lifecycle records match.\n' : `No lifecycle log yet (${path}).\n`);
+  }
+  if (options.latency) {
+    // Where each turn's time went: the marks of the turns, newest --last N.
+    const last = Math.max(1, Number.parseInt(options.last ?? '20', 10) || 20);
+    const turns = turnsLatency(entries.filter((entry) => entry.event === 'turn.mark')).slice(-last);
+    process.stdout.write(`${json ? JSON.stringify({ turns, medians: medianLatencyByHarness(turns) }) : formatLatencyTable(turns)}\n`);
+    return;
   }
   for (const entry of entries.slice(-limit)) print(entry);
   if (!options.follow) return;
