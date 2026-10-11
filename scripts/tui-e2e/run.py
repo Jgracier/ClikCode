@@ -8,14 +8,22 @@ chunk of output. Then it checks what matters for display fragility:
 
   * once a watched piece of text is on screen it never disappears;
   * at the end every watched piece is on screen exactly once;
-  * consecutive blocks never run together without a paragraph break.
+  * consecutive blocks never run together without a paragraph break;
+  * no non-trivial row of the transcript is on screen twice -- in the final
+    screen or, for a stretch of frames, on the way (`dup_ok` lists the rows a
+    scenario legitimately repeats; `no_dup_check` turns it off, with a reason).
+
+A scenario may carry `expect_fail: '<stream>'`: it is an acceptance test for a
+change that has not landed on this branch. It then reports XFAIL when it fails
+(not counted as a failure) and XPASS when it passes (counted, so the mark is
+removed). `--expect-fail` lists them and exits. See README.md.
 
     uv run --with pyte scripts/tui-e2e/run.py [--repeat N] [--only NAME] [dist/index.js]
 
 Exit status 0 when every scenario passes every repeat. Captures of failures
 are kept (the path is printed) so they can be replayed frame by frame.
 """
-import argparse, fcntl, hashlib, json, os, pty, select, shutil, signal, struct, sys, tempfile, termios, time
+import argparse, fcntl, hashlib, json, os, pty, re, select, shutil, signal, struct, sys, tempfile, termios, time
 
 import pyte
 
@@ -48,6 +56,63 @@ class Screen(pyte.Screen):
 
 class ByteStream(pyte.ByteStream):
     csi = {**pyte.ByteStream.csi, 'S': 'scroll_up', 'T': 'scroll_down'}
+
+
+# --- Shared by the global duplicate check and the order checks --------------
+RULE_ROW = re.compile(r'^\s*\u2500{20,}\s*$')
+SPINNER_ROW = re.compile(r'^\s*[\u2800-\u28ff]{2}\s')
+STATUS_ROW = re.compile(r'^\s*(?:[\u2800-\u28ff]{2}\s{2}\S|\u25cf\s)')
+MIN_DUP_ROW = 12
+
+
+def transcript_rows(text):
+    """The rows above the composer's upper rule: the transcript and its live
+    region. None when the screen has no composer (a board, a picker)."""
+    lines = [line.rstrip() for line in text.split('\n')]
+    rules = [i for i, line in enumerate(lines) if RULE_ROW.match(line)]
+    return lines[:rules[-2]] if len(rules) >= 2 else None
+
+
+def checkable_row(row):
+    """A row that is content, not furniture: long enough to be a sentence,
+    not a spinner/status band, not a turn's closing line, and with letters."""
+    text = row.strip()
+    if len(text) < MIN_DUP_ROW or SPINNER_ROW.match(row): return False
+    if text.startswith('\u2500 ') and text.endswith(' \u2500'): return False  # `- Worked for 3s -`
+    if text.startswith('signed in to') or text.startswith('Press Ctrl+C'): return False
+    return sum(ch.isalnum() for ch in text) >= 6
+
+
+def doubled_rows(text, allowed):
+    """{row: count} of rows that appear more often than `allowed(row)` says."""
+    rows = transcript_rows(text)
+    if rows is None: return {}
+    counts = {}
+    for row in rows:
+        if checkable_row(row): counts[re.sub(r'\s+', ' ', row.strip())] = counts.get(re.sub(r'\s+', ' ', row.strip()), 0) + 1
+    return {row: n for row, n in counts.items() if n > allowed(row)}
+
+
+def first_row(rows, phrase):
+    return next((i for i, row in enumerate(rows) if phrase in row), None)
+
+
+def table_misaligned(text):
+    """Table rows (`|` and `+` box rows) whose column borders do not line up
+    with the rows of the same table: a retired row drawn when the table was
+    narrower. Returns the first offending row, or None."""
+    group = []
+    for line in text.split('\n') + ['']:
+        line = line.rstrip()
+        if line.strip().startswith(('\u2502', '\u251c')):
+            group.append(line.strip())
+            continue
+        if len(group) > 1:
+            marks = lambda row: [i for i, ch in enumerate(row) if ch in '\u2502\u253c\u251c\u2524']
+            for row in group[1:]:
+                if marks(row) != marks(group[0]): return row
+        group = []
+    return None
 
 TWO_BLOCKS = {'blocks': ['Checking the workspace first.', 'The final commit is live.']}
 
@@ -1402,6 +1467,143 @@ SCENARIOS = {
         'watch': ['bang-42'], 'snap_contains': {'opened': ['› ! x']}, 'snap_lacks': {'cleared': ['› !']},
         'final_contains': ['!echo bang-$((40+2))', 'exit 0', 'Hello there, all good.'],
     },
+
+    # ------------------------------------------------------------------
+    # Acceptance tests for docs/TURN_FLOW_STANDARD.md, played from an
+    # `emits` script (fake-grok.mjs). Several carry `expect_fail`: the
+    # stream named is the change that makes them pass; see README.md.
+    # ------------------------------------------------------------------
+    # 1.4: completion order never decides position. Y finishes first and X
+    # (which started first) stays above it, while running and once settled.
+    'parallel-order': {
+        'expect_fail': 'order',  # settled rows follow completion order, not start order (1.4)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Running two checks at once.\n\n'},
+            {'op': 'tool-start', 'id': 'px', 'title': 'sleep 2'},
+            {'op': 'tool-start', 'id': 'py', 'title': 'echo Y'},
+            {'op': 'sleep', 'ms': 400},
+            {'op': 'tool-end', 'id': 'py', 'result': 'Y'},
+            {'op': 'sleep', 'ms': 1800},
+            {'op': 'tool-end', 'id': 'px', 'result': 'slept'},
+            {'op': 'text', 'text': 'Both checks are done.'}]}],
+        'steps': [('type', 'run both'), ('wait_for', 'Both checks are done.', 40), ('settle', 3)],
+        'watch': [], 'always_order': [('sleep 2', 'echo Y')],
+        'final_in_order': ['Running two checks at once.', 'sleep 2', 'echo Y', 'Both checks are done.'],
+        'final_once': ['Running two checks at once.', 'Both checks are done.'],
+    },
+    # 5: a child begun after text the parent wrote is drawn after that text,
+    # and two concurrent children each have a slot at once.
+    'child-order': {
+        'expect_fail': 'order',  # agent row after the text begun under it, and one child slot per parent (1.3, 5)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Starting the investigation.\n\n'},
+            {'op': 'agent-start', 'id': 'ag1', 'title': 'Task: investigate'},
+            {'op': 'sleep', 'ms': 400},
+            {'op': 'text', 'text': 'Notes written while the agent works.\n\n'},
+            {'op': 'child-start', 'id': 'c1', 'parent': 'ag1', 'title': 'Read child-alpha.ts'},
+            {'op': 'child-start', 'id': 'c2', 'parent': 'ag1', 'title': 'Read child-bravo.ts'},
+            {'op': 'sleep', 'ms': 2500},
+            {'op': 'child-end', 'id': 'c1', 'parent': 'ag1'},
+            {'op': 'sleep', 'ms': 800},
+            {'op': 'child-end', 'id': 'c2', 'parent': 'ag1'},
+            {'op': 'agent-end', 'id': 'ag1', 'result': 'investigated'},
+            {'op': 'text', 'text': 'The investigation is complete.'}]}],
+        'steps': [('type', 'investigate'), ('wait_for', 'The investigation is complete.', 40), ('settle', 3)],
+        'watch': [],
+        # The agent began before the notes; its children began after them.
+        'always_order': [('Agent Task: investigate', 'Notes written while the agent works.'),
+                         ('Notes written while the agent works.', 'child-alpha'), ('Notes written while the agent works.', 'child-bravo')],
+        'ever_together': [('child-alpha', 'child-bravo')],
+        'final_once': ['Notes written while the agent works.', 'The investigation is complete.'],
+    },
+    # 4/11: each thought settles where it happened -- before the text, and the
+    # second after it -- and neither doubles or moves.
+    'thought-after-text': {
+        'expect_fail': 'core',  # settled thought rows lose their heading and are not durable (4)
+        'turns': [{'emits': [
+            {'op': 'thought', 'heading': 'Planning the approach', 'text': 'Considering which files matter first.'},
+            {'op': 'sleep', 'ms': 900},
+            {'op': 'text', 'text': 'Here is the first part of the answer.\n\n'},
+            {'op': 'thought', 'heading': 'Checking the edge cases', 'text': 'Looking for a boundary that breaks.'},
+            {'op': 'sleep', 'ms': 900},
+            {'op': 'text', 'text': 'And here is the closing part.'}]}],
+        'steps': [('type', 'think it through'), ('wait_for', 'And here is the closing part.', 40), ('settle', 3)],
+        'watch': [],
+        # Two thoughts of the same length read the same; that is not a double.
+        'dup_ok': ['Thought for'],
+        'final_in_order': ['Planning the approach', 'Here is the first part of the answer.', 'Checking the edge cases', 'And here is the closing part.'],
+        'final_once': ['Planning the approach', 'Checking the edge cases', 'Here is the first part of the answer.'],
+    },
+    # 8: a declined approval leaves a settled row where it was asked, and the
+    # status never goes blank between the question and the next thing.
+    'approval-denied-row': {
+        'expect_fail': 'core',  # a declined approval leaves a failed call row, no `denied` outcome (8)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'About to run a command.\n\n'},
+            {'op': 'permission', 'id': 'ap1', 'command': 'rm -rf build'}],
+            'blocks': ['It was answered: {answers}.']}],
+        'steps': [('type', 'clean it'), ('wait_for', 'Allow once?', 30), ('settle', 1.5), ('keys', 'n'),
+                  ('wait_for', 'It was answered: reject.', 20), ('settle', 3)],
+        'watch': [],
+        'status_always': [('Allow once?', 'It was answered: reject.')],
+        'final_in_order': ['About to run a command.', 'rm -rf build', 'It was answered: reject.'],
+        # Its own wording (§8), on a transcript row: not the footer's path.
+        'final_rows_match': [r'\bdenied\b'], 'final_once': ['rm -rf build'],
+    },
+    # 3: a table is held in the live region until it closes; no retired row is
+    # narrower than a row that came after it.
+    'table-stream': {
+        'expect_fail': 'order',  # table rows are retired line by line at the width of the rows so far (3)
+        'env': {'FAKE_DELAY_MS': '200'},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Here is the matrix:\n\n| name | role |\n|---|---|\n| a | x |\n| b | y |\n'
+                                   '| a-much-longer-name-than-before | a considerably longer role description |\n\nThat is all.'}]}],
+        'steps': [('type', 'show the matrix'), ('wait_for', 'That is all.', 40), ('settle', 3)],
+        'watch': [], 'table_aligned': True, 'final_once': ['That is all.', 'Here is the matrix:'],
+    },
+    # 9: `writing` holds for a pause in the middle of an answer.
+    'status-writing': {
+        'expect_fail': 'motion',  # `thinking` returns after a pause mid-answer (9)
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'This answer begins here and continues,'},
+            {'op': 'sleep', 'ms': 3200},
+            {'op': 'text', 'text': ' then finishes after a long pause.'}]}],
+        'steps': [('type', 'answer slowly'), ('wait_for', 'then finishes after a long pause.', 40), ('settle', 3)],
+        'watch': [], 'ever': ['writing'],
+        'never_after': [('This answer begins here', 'thinking')],
+    },
+    # 1.5: a steer acknowledged between two calls: the call begun after it is
+    # drawn after it -- with no text between to tell them apart by offset.
+    'steer-order': {
+        'env': {'FAKE_STEERING': '1'},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'Starting the checks.\n\n'},
+            {'op': 'tool', 'id': 'sa', 'title': 'echo alpha', 'ms': 300, 'result': 'alpha'},
+            {'op': 'sleep', 'ms': 6000},
+            {'op': 'tool', 'id': 'sb', 'title': 'echo bravo', 'ms': 500, 'result': 'bravo'},
+            {'op': 'text', 'text': 'All the checks ran.'}]}],
+        'steps': [('type', 'start the checks'), ('wait_for', 'echo alpha', 30), ('settle', 1.5),
+                  ('type', 'steer this in'), ('wait_for', 'sent into the turn', 10),
+                  ('wait_for', 'All the checks ran.', 40), ('settle', 3)],
+        'watch': [], 'ever': ['sent into the turn'],
+        'always_order': [('echo alpha', '› steer this in'), ('› steer this in', 'echo bravo')],
+        'final_in_order': ['echo alpha', '› steer this in', 'echo bravo', 'All the checks ran.'],
+        'final_once': ['› steer this in'],
+    },
+    # A resize while TEXT streams (not only while a call runs): every
+    # paragraph is on screen once, the answer carries on after it.
+    'mid-turn-resize-while-streaming': {
+        'env': {'FAKE_DELAY_MS': '220'},
+        'turns': [{'emits': [
+            {'op': 'text', 'text': 'First paragraph streams while the terminal narrows and widens again.\n\n'},
+            {'op': 'text', 'text': 'Second paragraph follows the resize and must appear once only.\n\n'},
+            {'op': 'text', 'text': 'Third ENDMARK paragraph closes it.'}]}],
+        'steps': [('type', 'stream it'), ('wait_for', 'First paragraph streams', 30),
+                  ('resize', 50, 50), ('settle', 1.5), ('resize', 50, 100),
+                  ('wait_for', 'Third ENDMARK paragraph closes it.', 40), ('settle', 3)],
+        'watch': [],
+        'final_once': ['First paragraph streams', 'Second paragraph follows', 'Third ENDMARK paragraph closes it.'],
+    },
     # No alternate screen: the first message still signs in, on the plain
     # terminal (login.ts plainSignInScreen), then answers.
     'classic-fallback': {
@@ -1473,6 +1675,10 @@ def run(name, spec, entry, keep):
     stream = ByteStream(screen)
     snaps = {}
     raw, frames = bytearray(), []
+    # Whether each frame was taken between synchronized updates (DEC 2026):
+    # a frame cut mid-update is a half-drawn screen, not something shown.
+    frame_complete = []
+    sync = {'open': False}
     # A second window ('open2'): another ClikCode on the same CLIKCODE_HOME,
     # in its own pty and on its own screen, as a second terminal would be.
     pid2, fd2 = None, None
@@ -1501,7 +1707,10 @@ def run(name, spec, entry, keep):
                     continue
                 if n == 1:
                     raw.extend(chunk); stream.feed(chunk)
+                    begun, ended = chunk.rfind(b'\x1b[?2026h'), chunk.rfind(b'\x1b[?2026l')
+                    if begun >= 0 or ended >= 0: sync['open'] = begun > ended
                     frames.append((time.time() - start, '\n'.join(screen.display)))
+                    frame_complete.append(not sync['open'])
                 else:
                     raw2.extend(chunk); stream2.feed(chunk)
                     frames2.append((time.time() - start, '\n'.join(screen2.display)))
@@ -1741,7 +1950,7 @@ def run(name, spec, entry, keep):
         if gone: problems.append(f'VANISHED {phrase!r}: in {len(gone)} frame(s) after first showing, first at {gone[0]:.2f}s')
         if final.count(phrase) != 1: problems.append(f'on screen {final.count(phrase)}x at the end, expected once: {phrase!r}')
     for turn in spec['turns']:
-        for left, right in zip(turn['blocks'], turn['blocks'][1:]):
+        for left, right in zip(turn.get('blocks', []), turn.get('blocks', [])[1:]):
             if left + right.split()[0] in final: problems.append(f'jammed with no paragraph break: {left!r} / {right!r}')
     for phrase in spec.get('never', []):
         shown = [t for t, text in frames if phrase in text]
@@ -1792,6 +2001,11 @@ def run(name, spec, entry, keep):
         try: found = open(os.path.join(workspace, name)).read()
         except OSError: found = None
         if found != text: problems.append(f'{name} holds {found!r}, expected {text!r}')
+    # A regular expression that some TRANSCRIPT row of the final screen matches
+    # (the footer, whose path holds the scenario's name, is not a row).
+    for pattern in spec.get('final_rows_match', []):
+        if not any(re.search(pattern, row) for row in (transcript_rows(final) or final.split('\n'))):
+            problems.append(f'no transcript row on the final screen matches {pattern!r}')
     for phrase in spec.get('final_contains', []):
         if phrase not in final: problems.append(f'expected on the final screen: {phrase!r}')
     # Top to bottom on the final screen, in this order.
@@ -1824,6 +2038,73 @@ def run(name, spec, entry, keep):
     for phrase in spec.get('never_after_mark', []):
         shown = [t for t, text in frames[marked_at or 0:] if phrase in text]
         if shown: problems.append(f'shown in {len(shown)} frame(s) after the mark, first at {shown[0]:.2f}s: {phrase!r}')
+    # ---- Global duplicate check --------------------------------------------
+    # A row of the transcript on screen twice is the display bug every fix so
+    # far was about (one row, two sources). The fake's own stub call -- the
+    # `git log` between blocks, run once per block gap -- is the one repeat a
+    # scenario cannot avoid; anything else a scenario repeats on purpose is in
+    # `dup_ok` (substrings). `no_dup_check` is a reason string, never a bare True.
+    if not spec.get('no_dup_check'):
+        stub_calls = sum(max(0, len(turn.get('blocks', [])) - 1) for turn in spec['turns'])
+        dup_ok = spec.get('dup_ok', [])
+        def allowed(row):
+            if any(phrase in row for phrase in dup_ok): return 1 << 30
+            if 'git log -1 --oneline' in row or row == 'abc123 fix': return max(1, stub_calls)
+            return 1
+        shown_from = next((i for i, (t, _) in enumerate(frames) if typed_at is not None and t >= typed_at), len(frames))
+        final_doubled = doubled_rows(final, allowed)
+        # The frame each row first doubled and stayed doubled to the end.
+        for row, count in final_doubled.items():
+            at = len(frames) - 1
+            while at - 1 >= shown_from and row in doubled_rows(frames[at - 1][1], allowed): at -= 1
+            problems.append(f'DUPLICATED on the final screen ({count}x), doubled from frame {at} ({frames[at][0]:.2f}s): {row!r}')
+        gone = {}
+        for index in range(shown_from, len(frames)):
+            if not frame_complete[index]: continue
+            for row, count in doubled_rows(frames[index][1], allowed).items():
+                if row in final_doubled: continue
+                first, last, n = gone.get(row, (index, index, 0))
+                gone[row] = (first, index, n + 1)
+        for row, (first, last, n) in gone.items():
+            problems.append(f'DOUBLED on screen in {n} frame(s), first at frame {first} ({frames[first][0]:.2f}s), last {last}, gone by the end: {row!r}')
+
+    # ---- Order and state checks over every complete frame ------------------
+    def complete_frames():
+        return [(i, t, text) for i, (t, text) in enumerate(frames) if frame_complete[i] and typed_at is not None and t >= typed_at]
+    # ('above', 'below'): wherever both are on screen, `above` is higher up.
+    for upper, lower in spec.get('always_order', []):
+        bad = []
+        for i, t, text in complete_frames():
+            rows = transcript_rows(text) or text.split('\n')
+            a, b = first_row(rows, upper), first_row(rows, lower)
+            if a is not None and b is not None and a > b: bad.append((i, t))
+        if bad: problems.append(f'{lower!r} drawn above {upper!r} in {len(bad)} frame(s), first at frame {bad[0][0]} ({bad[0][1]:.2f}s)')
+    # Both on screen in one frame at least once (two concurrent slots).
+    for left, right in spec.get('ever_together', []):
+        if not any(left in text and right in text for _, _, text in complete_frames()):
+            problems.append(f'{left!r} and {right!r} were never on screen together')
+    # ('shown', 'unwanted'): after `shown` first appears, `unwanted` never does.
+    for shown, unwanted in spec.get('never_after', []):
+        begun = next((i for i, _, text in complete_frames() if shown in text), None)
+        if begun is None: problems.append(f'never_after: {shown!r} was never on screen'); continue
+        bad = [(i, t) for i, t, text in complete_frames() if i >= begun and unwanted in text]
+        if bad: problems.append(f'{unwanted!r} on screen in {len(bad)} frame(s) after {shown!r} appeared, first at frame {bad[0][0]} ({bad[0][1]:.2f}s)')
+    # ('from', 'until'): in every complete frame from `from` first appearing to
+    # `until` first appearing the screen carries a status row or an approval.
+    for first, last in spec.get('status_always', []):
+        begun = next((i for i, _, text in complete_frames() if first in text), None)
+        ended = next((i for i, _, text in complete_frames() if last in text and (begun is None or i > begun)), None)
+        if begun is None or ended is None: problems.append(f'status_always: {first!r} .. {last!r} never both on screen'); continue
+        blank = [(i, t) for i, t, text in complete_frames() if begun <= i < ended
+                 and not any(STATUS_ROW.match(row) or 'Allow' in row for row in (transcript_rows(text) or text.split('\n')) + text.split('\n')[-12:])]
+        if blank: problems.append(f'no status row in {len(blank)} frame(s) between {first!r} and {last!r}, first at frame {blank[0][0]} ({blank[0][1]:.2f}s)')
+    # Every table on screen is aligned, in the final screen and in each frame.
+    if spec.get('table_aligned'):
+        bad = table_misaligned(final)
+        if bad: problems.append(f'misaligned table row on the final screen: {bad!r}')
+        for i, t, text in complete_frames():
+            bad = table_misaligned(text)
+            if bad: problems.append(f'misaligned table row at frame {i} ({t:.2f}s): {bad!r}'); break
     # Sequences the screen never shows (title, progress, focus, a
     # notification), in the order they must have been written.
     at = 0
@@ -1871,10 +2152,10 @@ def run(name, spec, entry, keep):
             if not shots: continue
             with open(os.path.join(root, name), 'w') as log:
                 last = None
-                for t, text in shots:
+                for number, (t, text) in enumerate(shots):
                     if text == last: continue
                     last = text
-                    log.write(f'===== {t:.2f}s\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
+                    log.write(f'===== {t:.2f}s #{number}\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
     if not problems and not keep: shutil.rmtree(root, ignore_errors=True)
     return problems, root, final
 
@@ -1887,7 +2168,14 @@ def main():
     parser.add_argument('--keep', action='store_true')
     # Every scenario that names no width of its own runs at this one.
     parser.add_argument('--cols', type=int)
+    # Lists the scenarios marked `expect_fail` (acceptance tests for a stream
+    # that has not landed here) with the stream that makes each pass, and exits.
+    parser.add_argument('--expect-fail', action='store_true', dest='list_expected')
     args = parser.parse_args()
+    if args.list_expected:
+        marked = [(spec['expect_fail'], name) for name, spec in SCENARIOS.items() if spec.get('expect_fail')]
+        for stream, name in sorted(marked): print(f'{stream:12} {name}')
+        sys.exit(0)
     entry = os.path.abspath(args.entry)
     failed = 0
     for name, spec in SCENARIOS.items():
@@ -1895,11 +2183,14 @@ def main():
         if args.cols and 'cols' not in spec: spec = {**spec, 'cols': args.cols}
         for attempt in range(1, args.repeat + 1):
             problems, root, final = run(name, spec, entry, args.keep)
-            status = 'PASS' if not problems else 'FAIL'
-            print(f'{status}  {name}  [{attempt}/{args.repeat}]' + ('' if not problems else f'  capture: {root}'))
+            expected = spec.get('expect_fail')
+            if expected: status = 'XFAIL' if problems else 'XPASS'
+            else: status = 'PASS' if not problems else 'FAIL'
+            note = f'  (expected to fail until: {expected})' if status == 'XFAIL' else '  (passes now: remove its expect_fail mark)' if status == 'XPASS' else ''
+            print(f'{status}  {name}  [{attempt}/{args.repeat}]{note}' + ('' if not problems else f'  capture: {root}'))
             for problem in problems: print(f'        - {problem}')
-            if problems:
-                failed += 1
+            if status in ('FAIL', 'XPASS'): failed += 1
+            if problems and status == 'FAIL':
                 print('        final screen:\n' + '\n'.join(f'          {line.rstrip()}' for line in final.split('\n') if line.strip()))
     sys.exit(1 if failed else 0)
 

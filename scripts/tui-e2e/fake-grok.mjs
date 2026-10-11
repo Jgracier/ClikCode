@@ -225,13 +225,89 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
       await sleep(ms);
       update({ sessionUpdate: 'tool_call_update', toolCallId: 'stream_1', status: 'completed' });
     }
-    for (const [index, block] of turn.blocks.map((text) => text.replace('{answers}', answers).replace('{received}', received)).entries()) {
+    // `emits`: a script, an event list played in order -- the way to write a
+    // turn whose ORDER matters (parallel calls, a child begun after text, a
+    // steer between two calls) which the fixed shapes above cannot say.
+    //   { op: 'text', text, ms? }            words, `ms` apart (FAKE_DELAY_MS)
+    //   { op: 'thought', heading?, text, ms? }  reasoning, **heading** first
+    //   { op: 'sleep', ms }                  nothing arrives
+    //   { op: 'tool-start', id, title, kind?, input?, parent? }
+    //   { op: 'tool-end', id, result?, status?, parent? }
+    //   { op: 'tool', id, title, ms, result? }  start, hold `ms`, end
+    //   { op: 'agent-start', id, title, description? } / { op: 'agent-end', id, result? }
+    //   { op: 'child-start', id, parent, title, kind?, input? } / { op: 'child-end', id, parent, result? }
+    //   { op: 'permission', id, command, result? }  asks; allowed -> done, else failed
+    //   { op: 'usage', used, size, cost? }   { op: 'plan', entries: [{content, status}] }
+    // A steer injected while the script runs is answered at the end, as above.
+    const words = async (text, ms) => {
+      // Leading blanks stay with the first word: a script continues a sentence.
+      for (const piece of text.match(/\s*\S+\s*|\s+$/g) ?? []) {
+        if (cancelled) return;
+        await sleep(ms ?? Number(process.env.FAKE_DELAY_MS ?? 120));
+        update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
+      }
+    };
+    const metaFor = (parent) => (parent ? { _meta: { claudeCode: { parentToolUseId: parent } } } : {});
+    const done = (id, result, status, parent) => update({
+      sessionUpdate: 'tool_call_update', toolCallId: id, status: status ?? 'completed',
+      ...(result === undefined ? {} : { content: [{ type: 'content', content: { type: 'text', text: result } }] }), ...metaFor(parent),
+    });
+    for (const event of turn.emits ?? []) {
+      if (cancelled) break;
+      switch (event.op) {
+        case 'text': await words(event.text, event.ms); break;
+        case 'thought': {
+          const body = `${event.heading ? `**${event.heading}**\n\n` : ''}${event.text ?? ''}`;
+          for (const piece of body.match(/\S+\s*/g) ?? []) {
+            await sleep(event.ms ?? 40);
+            update({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: piece } });
+          }
+          break;
+        }
+        case 'sleep': await sleep(event.ms); break;
+        case 'tool-start':
+          open.add(event.id);
+          update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: event.title, kind: event.kind ?? 'execute', status: 'in_progress',
+            rawInput: event.input ?? { command: event.title }, ...metaFor(event.parent) });
+          break;
+        case 'tool-end': if (open.delete(event.id) || event.parent) done(event.id, event.result, event.status, event.parent); break;
+        case 'tool': await tool(event.id, event.title, event.result ?? 'ok', event.ms); break;
+        case 'agent-start':
+          open.add(event.id);
+          update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: event.title, kind: 'think', status: 'in_progress',
+            rawInput: { description: event.description ?? event.title, subagent_type: 'general-purpose' } });
+          break;
+        case 'agent-end': if (open.delete(event.id)) done(event.id, event.result ?? 'agent done'); break;
+        case 'child-start':
+          update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: event.title, kind: event.kind ?? 'read', status: 'in_progress',
+            rawInput: event.input ?? { file_path: `/tmp/${event.title.split(' ').pop()}` }, ...metaFor(event.parent) });
+          break;
+        case 'child-end': done(event.id, event.result ?? 'ok', undefined, event.parent); break;
+        case 'permission': {
+          open.add(event.id);
+          update({ sessionUpdate: 'tool_call', toolCallId: event.id, title: event.command, kind: 'execute', status: 'pending', rawInput: { command: event.command } });
+          const outcome = await ask('session/request_permission', {
+            sessionId,
+            toolCall: { toolCallId: event.id, title: event.command, kind: 'execute', rawInput: { command: event.command } },
+            options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }, { optionId: 'reject', name: 'Reject', kind: 'reject_once' }],
+          });
+          const allowed = outcome?.outcome?.optionId === 'allow';
+          answers += `${answers ? ', ' : ''}${outcome?.outcome?.optionId ?? outcome?.outcome?.outcome ?? 'none'}`;
+          if (open.delete(event.id)) done(event.id, allowed ? (event.result ?? 'ran') : '[rejected by user]', allowed ? 'completed' : 'failed');
+          break;
+        }
+        case 'usage': update({ sessionUpdate: 'usage_update', used: event.used, size: event.size, ...(event.cost ? { cost: { amount: event.cost, currency: 'USD' } } : {}) }); break;
+        case 'plan': update({ sessionUpdate: 'plan', entries: event.entries.map((entry) => ({ priority: 'medium', ...entry })) }); break;
+        default: throw new Error(`fake grok: unknown emit ${event.op}`);
+      }
+    }
+    for (const [index, block] of (turn.blocks ?? []).map((text) => text.replace('{answers}', answers).replace('{received}', received)).entries()) {
       for (const piece of block.match(/\S+\s*/g) ?? []) {
         if (cancelled) break;
         await sleep(Number(process.env.FAKE_DELAY_MS ?? 120));
         update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: piece } });
       }
-      if (index < turn.blocks.length - 1 && !cancelled) await tool(`tool_${index}`, 'git log -1 --oneline', 'abc123 fix', 600);
+      if (index < (turn.blocks ?? []).length - 1 && !cancelled) await tool(`tool_${index}`, 'git log -1 --oneline', 'abc123 fix', 600);
     }
     for (const text of steered.splice(0)) {
       for (const piece of `Steered in: ${text}.`.match(/\S+\s*/g) ?? []) {

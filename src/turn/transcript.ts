@@ -70,6 +70,12 @@ export type SettlingTool = {
    * never holds another row back (a background agent may run for minutes while
    * the parent goes on working). */
   agent?: boolean;
+  /** A message the user steered into the turn: not a call the model made.
+   * It never proves the prose before it is final (the model has not stopped
+   * writing; it was interrupted), and it waits for the block its offset falls
+   * inside to settle, so that block is retired whole and the steer lands
+   * after it -- never in the middle of a sentence. */
+  steer?: boolean;
 };
 
 /** Start order: the response offset, then arrival. Completion never enters. */
@@ -180,21 +186,22 @@ export class TurnTranscript {
     // final: the model stopped writing to call it. A call that is still
     // running closes that prose too, so its row can sit directly under it
     // instead of under whatever sentence arrives next.
-    const closedByTool = input.tools.some((tool) => tool.responseOffset !== undefined
+    const closedByTool = input.tools.some((tool) => !tool.steer && tool.responseOffset !== undefined
       && tool.responseOffset >= input.content.length && input.content.length > 0);
     // Same rule as settledToolRows, kept grouped so a tool's rows can be
     // placed at the offset it started at rather than after all of the prose.
+    const allBlocks = input.blocks ?? splitIntoBlocks(input.content);
     const isSettled = (tool: SettlingTool): boolean => tool.done || input.turnEnded;
     const owing = startOrder(input.tools.filter((tool) => !this.emittedTools.has(tool.id)));
     // Position is start order, never completion order. A call that finished
     // while an earlier one is still running keeps its row in the live region
     // until that one settles, and then everything retires in start order. A
-    // sub-agent is not a gate: it may run for minutes while the parent works.
-    const firstOpen = owing.findIndex((tool) => !tool.agent && !isSettled(tool));
-    const settledTools = owing.filter((tool, index) => isSettled(tool) && (firstOpen < 0 || index < firstOpen));
-    const liveTools = owing.filter((tool, index) => !isSettled(tool) || (firstOpen >= 0 && index > firstOpen));
+    // sub-agent is not a gate: it may run for minutes while the parent works,
+    // and a steer is not one either: it only waits for its own block (below).
+    const firstOpen = owing.findIndex((tool) => !tool.agent && !tool.steer && !isSettled(tool));
+    let settledTools = owing.filter((tool, index) => isSettled(tool) && (firstOpen < 0 || index < firstOpen));
+    let liveTools = owing.filter((tool, index) => !isSettled(tool) || (firstOpen >= 0 && index > firstOpen));
     const gate = firstOpen >= 0 ? owing[firstOpen]! : undefined;
-    const allBlocks = input.blocks ?? splitIntoBlocks(input.content);
     // Prose generated after an unfinished call began belongs below that call's
     // row, so it stays live (bounded by the call; the end of the turn settles
     // everything). The block the call began inside may still retire above it:
@@ -207,6 +214,19 @@ export class TurnTranscript {
     }
     const proseHeld = holdCount < allBlocks.length;
     const answer = settledAnswerBlocks(input.content, this.emittedBlocks, input.turnEnded, allBlocks, closedByTool, holdCount);
+    // A steer acknowledged inside a block that is still open waits, with the
+    // live rows, until that block has settled: it was drawn, truncated,
+    // otherwise, and the rest of the block was then written again under it.
+    // Judged against what THIS frame retired, so a block that closes in the
+    // same frame releases the steer in the same frame.
+    const retiredEnd = answer.emitted > 0 ? (allBlocks[answer.emitted - 1]?.sourceEnd ?? 0) : 0;
+    const waitsForBlock = (tool: SettlingTool): boolean => Boolean(tool.steer) && !input.turnEnded
+      && (tool.responseOffset ?? 0) > retiredEnd && (tool.responseOffset ?? 0) <= input.content.length;
+    const waiting = settledTools.filter(waitsForBlock);
+    if (waiting.length) {
+      settledTools = settledTools.filter((tool) => !waitsForBlock(tool));
+      liveTools = startOrder([...liveTools, ...waiting]);
+    }
     const renderLive = input.renderLive ?? input.renderBlocks;
     /** Rows for `blocks` as they continue what is already written: without
      * the leading separator when it was written already (`joined`) or when

@@ -57,7 +57,7 @@ import { runConversationBoard, type BoardResult, type ConversationBoardSettings 
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
 import { LiveChildren } from './render/child-rows.js';
-import { enterAgainSends, hasDurableSteer, STEER_WORDS, steerTranscriptRows, type WaitingMessage } from './render/steer-rows.js';
+import { enterAgainSends, hasDurableSteer, liveTurnSpan, STEER_WORDS, steerTranscriptRows, type SteerRow, type WaitingMessage } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/search-focus.js';
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
@@ -191,6 +191,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private signingIn = false;
   /** collapseToolRuns over activityEntries, redone only when they change. */
   private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
+  /** The steers this window drew into the running turn, by row id, kept past
+   * the sources they were drawn from (the live submission is dropped when the
+   * turn ends; the journal's copy is gone once the turn is saved). The saved
+   * list then holds each as a user message of its own, and what was drawn
+   * live is what decides which of those are copies (liveTurnSpan). */
+  private turnSteers = new Map<string, SteerRow>();
   /** The calls still open: the status line names the newest (toolStatus). */
   private activeTools = new Map<string, OpenTool>();
   /** The calls inside running sub-agents, one live slot each
@@ -1321,6 +1327,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     };
     this.turn = turn;
     this.waitingSubmissions = [];
+    this.turnSteers.clear();
     this.waitingFrame = 0;
     this.thought = undefined;
     this.thoughtStart = undefined;
@@ -2322,10 +2329,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const steerRows = (text: string): string[] => [
         '', '', ...messageRows(text, userMarker), `  ${chalk.dim(`↳ ${STEER_WORDS.steered}`)}`, '',
       ];
-      tools.push(...steerTranscriptRows({
+      const steers = steerTranscriptRows({
         durable: pending?.steers ?? [], live: this.waitingSubmissions,
         materializedPendingTurn, retiredThisSession: this.emitted.retiredTexts(), render: steerRows,
-      }));
+      });
+      for (const row of steers) this.turnSteers.set(row.id, row);
+      // A steer drawn earlier is still this turn's row once its sources are
+      // gone (the turn has ended: the saved list is all that is left of it).
+      // It is owed under the id it was first drawn with -- once, whichever
+      // copy arrives -- so it is drawn from what was kept, never again from
+      // the saved user message that replaces it.
+      tools.push(...(materializedPendingTurn ? steers : [...this.turnSteers.values()]));
       return tools;
     };
     const renderBlocks = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
@@ -2384,17 +2398,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // the first must not draw those calls a second time.
     let drewLiveTurn = false;
     for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
-      const message = persistedMessages[index]!;
+      let message = persistedMessages[index]!;
       this.messageLines.set(index, this.alternateTrimmed + this.alternateTranscript.length + this.pendingFinished.length + finished.length);
       const pastTools = message.role === 'assistant' && index !== liveAssistant && !drewLiveTurn ? savedTools(message, index) : [];
+      // A steered turn is saved as several messages and was drawn live as
+      // one answer: the span of them is that answer, written once.
+      const spanEnd = index === liveAssistant && message.role === 'assistant'
+        ? liveTurnSpan(persistedMessages, index, [...this.turnSteers.values()]) : index;
       if (index === liveAssistant && message.role === 'assistant') {
         // The answer that just streamed. Its rows are already in scrollback and
         // the transcript knows exactly which blocks it still owes, so a
         // persisted copy that runs longer than what streamed -- a re-derived
         // answer, an interrupted turn -- contributes only its tail, and one
         // identical to what streamed contributes nothing at all.
+        const answer = persistedMessages.slice(index, spanEnd + 1).filter((item) => item.role === 'assistant').map((item) => item.content).join('');
         emit(this.turnTranscript.advance({
-          content: sanitizeTerminalText(message.content), tools: turnTools(true), turnEnded: true, renderBlocks,
+          content: sanitizeTerminalText(answer), tools: turnTools(true), turnEnded: true, renderBlocks,
         }).finished);
       } else if (pastTools.length) {
         // A saved turn: its calls go back where they happened, between the
@@ -2423,6 +2442,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         liveAssistant = undefined;
         drewLiveTurn = true;
         this.turnTranscript.reset();
+        this.turnSteers.clear();
+        // The steers and the answers after them were that same drawing.
+        for (let covered = index + 1; covered <= spanEnd; covered += 1) {
+          this.messageLines.set(covered, this.messageLines.get(index) ?? 0);
+          this.emitted.wrote(persistedMessages[covered]!);
+        }
+        index = spanEnd;
+        message = persistedMessages[index]!;
       }
       // What the turn needed on the way -- a sign-in, another account --
       // saved with its answer, then its closing line.
