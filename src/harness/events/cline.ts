@@ -18,7 +18,7 @@ import { asRecord, parseJsonRecord, type JsonRecord } from '../protocol/json-lin
 import type { StreamState } from './adapters.js';
 
 /** The call a message is about, and the message that started it. */
-interface OpenCall { id: string; ts: unknown; label: string; category?: NativeActivityEvent['category'] }
+interface OpenCall { id: string; ts: unknown; label: string; category?: NativeActivityEvent['category']; output: string }
 
 /** Cline's tool names -> the verbs every harness's rows use. */
 const TOOL_NAMES: Readonly<Record<string, string>> = {
@@ -48,6 +48,12 @@ function startOf(kind: string, ts: unknown, text: string, state: ClineState, com
   return { id, facts: toolFacts(name, { ...rest, ...(typeof regex === 'string' ? { pattern: regex } : {}), ...(typeof content === 'string' && name === 'Write' ? { content } : {}) }, command) };
 }
 
+/** The call's last frame: what it printed (its tail), or the error that ended it. */
+function settled(open: OpenCall, kind: 'tool-done' | 'tool-error', failure?: string): NativeActivityEvent {
+  const said = failure?.trim() ? failure : open.output;
+  return { kind, label: open.label, id: open.id, ...(open.category ? { category: open.category } : {}), ...(said.trim() ? activityOutput(said, { tail: true }) : {}) };
+}
+
 /** The activity one record of Cline's stream describes. */
 export function clineLine(value: JsonRecord, turn: StreamState, command: string): NativeActivityEvent[] {
   const state = (turn.cline ??= { calls: 0 });
@@ -61,13 +67,16 @@ export function clineLine(value: JsonRecord, turn: StreamState, command: string)
 
   // What the open call printed: another frame of the same row.
   if (open && continues) {
-    if (text.trim()) events.push({ kind: 'tool-start', label: open.label, id: open.id, ...(open.category ? { category: open.category } : {}), ...activityOutput(text, { tail: true }) });
-    if (kind === 'mcp_server_response') { events.push({ kind: 'tool-done', label: open.label, id: open.id, ...(open.category ? { category: open.category } : {}) }); state.open = undefined; }
+    if (text.trim()) {
+      open.output = `${open.output}${open.output ? '\n' : ''}${text}`;
+      events.push({ kind: 'tool-start', label: open.label, id: open.id, ...(open.category ? { category: open.category } : {}), ...activityOutput(text, { tail: true }) });
+    }
+    if (kind === 'mcp_server_response') { events.push(settled(open, 'tool-done')); state.open = undefined; }
     return events;
   }
   // Any other message of the conversation ends the call before it.
   if (open && !sameMessage && kind !== 'api_req_started') {
-    events.push({ kind: kind === 'error' ? 'tool-error' : 'tool-done', label: open.label, id: open.id, ...(open.category ? { category: open.category } : {}) });
+    events.push(settled(open, kind === 'error' ? 'tool-error' : 'tool-done', kind === 'error' ? text : undefined));
     state.open = undefined;
   }
   if (kind === 'reasoning' && text.trim()) {
@@ -76,7 +85,7 @@ export function clineLine(value: JsonRecord, turn: StreamState, command: string)
     const started = startOf(kind, value.ts, text, state, command);
     if (started) {
       const { facts } = started;
-      state.open = { id: started.id, ts: value.ts, label: facts.label, ...(facts.category ? { category: facts.category } : {}) };
+      state.open = { id: started.id, ts: value.ts, label: facts.label, output: '', ...(facts.category ? { category: facts.category } : {}) };
       events.push({ kind: 'tool-start', ...facts, id: started.id });
     }
   }
