@@ -200,7 +200,9 @@ export function codexPermissionSettings(mode: AiHarnessPermissionMode): {
 export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; statusCode?: number } {
   const source = error && typeof error === 'object' ? error as JsonObject : { message: String(error ?? '') };
   const info = source.codexErrorInfo ?? source.codex_error_info ?? source.data ?? '';
-  const text = `${typeof info === 'string' ? info : JSON.stringify(info ?? '')} ${String(source.message ?? '')}`;
+  // The child's stderr tail rides beside the message as classifier input only
+  // (a 401 is printed there and nowhere in the protocol).
+  const text = `${typeof info === 'string' ? info : JSON.stringify(info ?? '')} ${String(source.message ?? '')} ${typeof source.stderrTail === 'string' ? source.stderrTail : ''}`;
   const status = /"?http_?status_?code"?\s*[:=]\s*(\d{3})/i.exec(text)?.[1];
   const statusCode = status ? Number(status) : undefined;
   // HTTP 429 covers both a spent subscription and short-lived throttling.
@@ -221,6 +223,24 @@ export function codexStructuredFields(turnError: JsonObject | undefined, error: 
   const info = turnError?.codexErrorInfo ?? turnError?.codex_error_info ?? data?.codexErrorInfo ?? thrown?.codexErrorInfo;
   const code = typeof thrown?.rpcCode === 'number' ? thrown.rpcCode : undefined;
   return { ...(info !== undefined && info !== null ? { codexErrorInfo: info } : {}), ...(code !== undefined ? { rpcCode: code } : {}) };
+}
+
+/** A spent plan as the account's rate-limit snapshot tells it (a window at
+ * 100%, or the snapshot's own `rateLimitReachedType`). `codex exec` prints
+ * "You've hit your usage limit ... try again at <date>"; over app-server the
+ * thread only goes to `systemError`, and this snapshot is the one place the
+ * reason and the reset time are. */
+export function codexUsageLimitRefusal(rateLimits: unknown): { message: string; codexErrorInfo: string } | undefined {
+  const snapshot = asRecord(rateLimits);
+  if (!snapshot) return undefined;
+  const windows = [snapshot.primary, snapshot.secondary].map(asRecord).filter((item): item is JsonObject => Boolean(item));
+  const spent = windows.filter((item) => typeof item.usedPercent === 'number' && item.usedPercent >= 100);
+  const reached = snapshot.rateLimitReachedType ?? snapshot.rate_limit_reached_type;
+  if (!spent.length && (reached === undefined || reached === null || reached === '')) return undefined;
+  const resets = spent.map((item) => item.resetsAt).find((value): value is number => typeof value === 'number' && value > 0);
+  const when = resets !== undefined ? new Date(resets < 1e12 ? resets * 1000 : resets) : undefined;
+  const at = when && !Number.isNaN(when.getTime()) ? ` Try again at ${when.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}.` : '';
+  return { message: `You've hit your usage limit.${at}`, codexErrorInfo: 'usageLimitExceeded' };
 }
 
 /** What the user is approving: the command and where it runs, or the files. */
@@ -279,6 +299,9 @@ interface Stream {
   streamedMessage: string;
   sawActivity: boolean;
   lastError?: JsonObject;
+  /** The account's latest `account/rateLimits/updated` snapshot: how a spent
+   * plan is told when the thread's error carries no text. */
+  rateLimits?: JsonObject;
   items: Map<string, JsonObject>;
   /** `cut`: the buffer has dropped the output's start, so it has no head. */
   output: Map<string, { text: string; emittedAt: number; cut?: boolean }>;
@@ -339,7 +362,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     return this.runActive(turn, input.signal, failure, () => this.flow(turn, completion), {
       failed: (error) => {
         // Prefer the server's structured error over the transport's message.
-        Object.assign(error, codexErrorKind(turn.lastError ?? error), codexStructuredFields(turn.lastError, error));
+        Object.assign(error, (error as { errorKind?: string }).errorKind ? {} : codexErrorKind(turn.lastError ?? error), codexStructuredFields(turn.lastError, error));
         keepFailedWork = this.pendingWork.size > 0;
         // A failed *turn* leaves a healthy server; anything else is unknown.
         if (!keepFailedWork && !(error as { codexTurnFailed?: boolean }).codexTurnFailed) this.dropLive(error);
@@ -401,6 +424,21 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     }, () => { this.turnCompletedWaiter = undefined; });
     live.peer.request('turn/interrupt', { threadId: turn.threadId, turnId: turn.turnId }, { timeoutMs: CANCEL_SETTLE_MS }).catch(() => undefined);
     return true;
+  }
+
+  /** The error for a thread Codex gave up on or a turn it failed. The words
+   * are the vendor's: the thread's error, else the account's spent-plan
+   * snapshot (usage limit), else `fallback`. The structured `codexErrorInfo`
+   * travels beside them, and the child's stderr tail (where a 401 is printed)
+   * rides as `stderrTail` for the failover classifier -- never in the message. */
+  private vendorFailure(target: Stream, fallback: string, flags: Record<string, boolean>): Error {
+    const thread = target.lastError;
+    const refusal = codexUsageLimitRefusal(target.rateLimits);
+    const text = typeof thread?.message === 'string' && thread.message ? thread.message : refusal?.message ?? fallback;
+    const stderrTail = this.live?.peer.failureDetail().slice(-2000);
+    const info = thread?.codexErrorInfo ?? thread?.codex_error_info ?? refusal?.codexErrorInfo;
+    const error = Object.assign(new Error(text), flags, info !== undefined ? { codexErrorInfo: info } : {}, stderrTail ? { stderrTail } : {});
+    return Object.assign(error, codexErrorKind(error));
   }
 
   protected closedTurnError(turn: ActiveTurn, error: Error): Error {
@@ -585,6 +623,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       try {
         const diff = fileChange ? fileChangeActivity(params.changes ?? params.fileChanges ?? item?.changes).diff : undefined;
         const title = permissions ? 'Approve additional permissions' : fileChange ? 'Approve file changes' : 'Approve command';
+        stream.observer.onPhase?.(`waiting for your approval: ${title}`);
         const asked = Promise.resolve(stream.observer.onApproval?.(title, codexApprovalDetail(params, item), diff?.length ? { diff } : undefined, prompt.signal));
         const outcome = await Promise.race([asked, elsewhere]);
         if (outcome === 'elsewhere') return answer(false, true);
@@ -608,6 +647,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const prompt = this.openPrompt();
     if (id !== undefined) this.openApprovals.set(String(id), () => prompt.abort());
     try {
+      stream.observer.onPhase?.(`waiting for your answer: ${request.title}`);
       const result = await askHarnessQuestion(stream.observer, request, prompt.signal, declined);
       return turn?.done ? CANCELLED : result;
     } finally {
@@ -833,6 +873,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         observer.onUsage?.(turnUsage.usage);
       }
     } else if (method === 'account/rateLimits/updated') {
+      const snapshot = asRecord(params.rateLimits);
+      if (snapshot) target.rateLimits = snapshot;
       observer.onRateLimits?.(params.rateLimits);
     } else if (method === 'turn/completed') {
       const completedTurn = (params.turn as JsonObject) ?? {};
@@ -847,7 +889,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       if (completedTurn.status === 'failed') {
         const error = (completedTurn.error as JsonObject | undefined) ?? turn.lastError;
         if (error) turn.lastError = error;
-        return turn.complete(Object.assign(new Error(String(error?.message ?? 'Codex turn failed')), { codexTurnFailed: true }));
+        return turn.complete(this.vendorFailure(turn, 'Codex turn failed', { codexTurnFailed: true }));
       }
       if (completedTurn.status === 'interrupted') return turn.complete(turnCancelledError());
       const stopReason = turnStopReason(completedTurn.status);
@@ -862,8 +904,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       const status = asRecord(params.status);
       if (status?.type === 'systemError' && target === this.turn) {
         // Codex gave up on the thread; a turn/completed may never follow.
-        const error = target.lastError;
-        (target as ActiveTurn).complete(Object.assign(new Error(String(error?.message ?? 'Codex reported a system error on this thread')), { codexSystemError: true }));
+        (target as ActiveTurn).complete(this.vendorFailure(target, 'Codex reported a system error on this thread', { codexSystemError: true }));
       } else if (Array.isArray(status?.activeFlags) && status.activeFlags.includes('waitingOnUserInput')) observer.onPhase?.('waiting for input in Codex');
     } else if (method === 'item/autoApprovalReview/started' || method === 'autoApprovalReview/strictReviewRequired') {
       observer.onPhase?.('reviewing an approval');
@@ -880,7 +921,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       const error = (params.error as JsonObject) ?? {};
       // Say why it is retrying, not only that it is.
       if (params.willRetry === true) observer.onPhase?.(typeof error.message === 'string' && error.message ? `retrying: ${error.message.split('\n')[0]!.slice(0, 120)}` : 'retrying');
-      else if (typeof error.message === 'string') target.lastError = error;
+      else if (typeof error.message === 'string' || error.codexErrorInfo !== undefined || error.codex_error_info !== undefined) target.lastError = error;
     }
   }
 
