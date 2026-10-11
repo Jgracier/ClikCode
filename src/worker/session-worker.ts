@@ -12,6 +12,7 @@ import { isTurnCancelled } from '../agent/cancellation.js';
 import { STOPPED } from '../harness/protocol/wording.js';
 import { spawn } from 'node:child_process';
 import { lifecycle } from '../runtime/lifecycle-log.js';
+import { beginTurnClock, endTurnClock, markTurn } from '../runtime/turn-latency.js';
 import { idleDecision, startsSuccessor, vendorIdleDecision } from './idle-decisions.js';
 import { createResumeWaiter } from './resume-wait.js';
 import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
@@ -511,6 +512,12 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     const turnStarted = Date.now();
     let turnOutcome = 'completed';
     lifecycle('worker.turn.start', { queued: Boolean(command.queuedTurnId), clients: observer.attachedCount });
+    // The window's clock when it sent one; else this turn is timed from here
+    // (a queued notification, a scripted send).
+    const turnId = command.turnId ?? randomUUID();
+    beginTurnClock({ turnId, ...(command.submittedAt !== undefined ? { startedAt: command.submittedAt } : {}) });
+    if (command.submittedAt === undefined) markTurn('submit');
+    markTurn('accepted', { queued: Boolean(command.queuedTurnId) });
     const resumed = resumingTurn;
     resumingTurn = false;
     if (idleTimer) clearTimeout(idleTimer);
@@ -601,6 +608,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       observer.endTurn(ended.session, ended.account, turnOutcome === 'cancelled');
       turnRunning = false;
       lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
+      endTurnClock(turnId);
       vendorUsed();
       activeQueuedTurnId = undefined;
       // Vendor work that arrived while this turn was finishing.

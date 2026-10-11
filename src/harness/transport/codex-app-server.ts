@@ -2,6 +2,7 @@ import { askHarnessQuestion, CANCELLED, type HarnessQuestion, type HarnessQuesti
 import { formToQuestions } from '../events/form-questions.js';
 import { activityOutput } from '../protocol/activity-events.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { markTurn } from '../../runtime/turn-latency.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
@@ -584,6 +585,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     if (input.prepareOnly) return { text: '', nativeSessionId: threadId };
     await input.onSessionId?.(threadId);
     stillRunning();
+    markTurn('ready');
     await this.promptSent();
     stillRunning();
     // The turn ends on Codex's own turn/completed. This is only the ceiling
@@ -592,6 +594,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     // process on the machine, which on a loaded one took long enough to be
     // mistaken for Codex's silence.
     turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError('Codex', afterMs)));
+    markTurn('prompt-sent');
     const turnResult = await peer.request('turn/start', codexTurnStartParams({
       threadId, prompt: input.prompt, images: input.images, cwd: input.cwd, model: input.model, effort: input.effort,
       permissionMode: input.permissionMode,

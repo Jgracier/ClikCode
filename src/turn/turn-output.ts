@@ -12,6 +12,7 @@ import type { HarnessState } from '../session/model.js';
 import type { StreamingTitle } from '../session/title.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnObserver } from './observer.js';
+import { markTurn } from '../runtime/turn-latency.js';
 
 type Invocation = HarnessState['invocations'][number];
 
@@ -86,10 +87,14 @@ export function turnSink(checkpoint: Pick<DurableTurnCheckpoint, 'response' | 'a
       // be written through, and an empty replace clears the answer already
       // on screen -- the reply flashed, then was gone.
       if (!visible || (options.keep && !options.keep(visible, mode))) return;
+      // Once per turn each: after the first, a Set lookup and no I/O.
+      markTurn('first-event');
+      if (visible.trim()) markTurn('first-text');
       checkpoint.response(visible, mode);
       prompter?.response(visible, mode);
     },
     activity(event: HarnessActivityEvent): void {
+      markTurn('first-event');
       checkpoint.activity(event);
       showActivity(prompter, event);
     },

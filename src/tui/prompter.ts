@@ -61,6 +61,7 @@ import { reseedStartIndex } from './render/reseed-window.js';
 import { LiveChildren } from './render/child-rows.js';
 import { enterAgainSends, hasDurableSteer, liveTurnSpan, STEER_WORDS, steerTranscriptRows, type SteerRow, type WaitingMessage } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
+import { markTurn, turnMarkOpen } from '../runtime/turn-latency.js';
 import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/search-focus.js';
 import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
 import { copyToClipboard } from '../session/attachments.js';
@@ -2729,6 +2730,10 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
     this.pendingSignals += this.terminalSignals();
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
+    // The two moments a user feels, once per turn each (runtime/turn-latency.ts):
+    // their message on screen, and the first of the answer.
+    if (pendingPrompt && turnMarkOpen('first-paint')) markTurn('first-paint');
+    if (this.turn && turnMarkOpen('first-text-paint') && this.liveResponse.trim()) markTurn('first-text-paint');
   }
 
   /** The last frame's live rows made safe, by the row as built and the width. */
