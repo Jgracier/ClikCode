@@ -19,4 +19,10 @@ describe('the turn usage line', () => {
     expect(formatTurnUsage({ contextUsed: 12_000 })).toBe('12k context');
     expect(formatTurnUsage({ input: 1_200, output: 30, costUsd: 0.0042 })).toBe('↑ 1.2k ↓ 30 tokens · $0.0042');
   });
+
+  it('has a brief form for the end of a turn: tokens and cost only', () => {
+    const usage = { input: 18, output: 164, cacheRead: 37_010, contextUsed: 23_444, contextWindow: 200_000, costUsd: 0.023699 };
+    expect(formatTurnUsage(usage, { brief: true })).toBe('↑ 18 ↓ 164 tokens · $0.02');
+    expect(formatTurnUsage({ contextUsed: 12_000 }, { brief: true })).toBe('');
+  });
 });

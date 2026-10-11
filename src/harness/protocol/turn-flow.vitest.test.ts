@@ -84,6 +84,11 @@ describe('how a turn reads', () => {
     const edit = (path: string, additions: number, removals: number) => [{ path, change: 'modify' as const, additions, removals, lines: [] }];
     expect(turnSummary({ ms: 62_000, diffs: [edit('a.ts', 10, 2), edit('b.ts', 3, 0), edit('a.ts', 1, 1)] })).toBe('Worked for 1m 2s · 2 files changed +14 −3');
     expect(turnSummary({ ms: 400 })).toBe('Worked for 1s');
+    expect(turnSummary({ ms: 62_000, usage: '↑ 1.2k ↓ 340 tokens · $0.02' })).toBe('Worked for 1m 2s · ↑ 1.2k ↓ 340 tokens · $0.02');
+    expect(turnSummary({ ms: 3000, stopped: true, usage: '↓ 12 tokens' })).toBe('Stopped after 3s · ↓ 12 tokens');
+    expect(turnSummary({ ms: 3000, pendingBackground: 2 })).toBe('Waiting for 2 background agents');
+    expect(turnSummary({ ms: 3000, pendingBackground: 1 })).toBe('Waiting for 1 background agent');
+    expect(turnSummary({ ms: 3000, pendingBackground: 0 })).toBe('Worked for 3s');
     expect(endsWithSummary(5_000, 0)).toBe(false);
     expect(endsWithSummary(5_000, 1)).toBe(true);
     expect(endsWithSummary(12_000, 0)).toBe(true);

@@ -353,7 +353,11 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   // Less the time it waited on the user, as both live clocks count it.
   const ms = Date.parse(now) - startedAt - userWaitedMs(session.id, Date.parse(now));
   if (session.messages.length > before && last?.role === 'assistant' && Number.isFinite(ms)) {
-    last.turnEnd = { ms: Math.max(0, ms), ...(stopped ? { stopped: true as const } : {}) };
+    // What THIS turn reported: the session's lastUsage is the latest reading,
+    // and an older one from a turn that reported nothing is not this turn's.
+    const { at, ...spent } = session.lastUsage ?? { at: '' };
+    const reported = Date.parse(at) >= startedAt && Object.keys(spent).length ? spent : undefined;
+    last.turnEnd = { ms: Math.max(0, ms), ...(stopped ? { stopped: true as const } : {}), ...(reported ? { usage: reported } : {}) };
     if (accountSwitch) last.accountSwitch = accountSwitch;
     if (signedInTo) last.signedInTo = signedInTo;
   }
