@@ -12,9 +12,9 @@ import { ensurePrivateDirectory } from './files.js';
 import { stateDirectory } from './paths.js';
 
 class StateLockTimeoutError extends Error {
-  constructor(lockPath: string, holder: string | undefined, waitedMs: number) {
-    super(`ClikCode could not lock its local state after ${Math.round(waitedMs / 1000)}s (${lockPath}${holder ? `, held by ${holder}` : ''}). `
-      + 'Nothing was written. If no other ClikCode process is running, delete that lock file and retry.');
+  constructor(lockPath: string, holder: string | undefined, heldMs: number) {
+    super(`ClikCode could not lock its local state: a task in this process has held it for ${Math.round(heldMs / 1000)}s without finishing (${lockPath}${holder ? `, held by ${holder}` : ''}). `
+      + 'Nothing was written.');
     this.name = 'StateLockTimeoutError';
   }
 }
@@ -49,8 +49,11 @@ export const LOCK_TUNING = {
   /** ...for at most this long. A holder stuck past it stops refreshing, and
    * is broken staleMs later rather than stalling every ClikCode forever. */
   maxHoldMs: 5 * 60_000,
-  /** Writes wait this long, then fail loudly. They never proceed unlocked. */
-  waitMs: 30_000,
+  /** A waiter behind a live holder never gives up (a holder that is alive and
+   * heartbeating is only slow, and a stuck one is broken by maxHoldMs +
+   * staleMs); it records a 'lock.wait' event this often so the wait is
+   * visible. It never proceeds unlocked. */
+  waitNoticeMs: 10_000,
 };
 
 const lockQueues = new Map<string, Promise<unknown>>();
@@ -166,16 +169,30 @@ export async function withFileLock<T>(lockPath: string, run: () => Promise<T>, o
   return result;
 }
 
-/** Waits for this process's earlier holder of `lockPath` -- for as long as
- * one may legitimately wait for the file and then hold it -- then fails the
- * same loud way a cross-process wait does. Waiting forever on a holder stuck
- * in this process left every write behind it hanging with no error. */
+/** In-process holders currently inside `run()`, per lock, with when they began. */
+const running = new Map<string, number>();
+
+/** Waits for this process's earlier holder of `lockPath`. Waiting behind an
+ * earlier task that is itself still queued for the file (a live holder in
+ * another process, however slow) is never an error: that wait ends when the
+ * holder finishes or is broken as stale. Only a task in THIS process that has
+ * been inside `run()` longer than maxHoldMs + staleMs -- the point at which
+ * another process would break its lock -- is stuck, and the queue fails
+ * loudly rather than hang every write behind it. The clock runs only while
+ * `run()` executes, so load on the machine or a slow foreign holder cannot
+ * trip it. */
 function queueTurn(lockPath: string, previous: Promise<unknown>): Promise<void> {
-  const limit = LOCK_TUNING.waitMs + LOCK_TUNING.maxHoldMs;
   return new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new StateLockTimeoutError(lockPath, `this process (pid ${process.pid})`, limit)), limit);
-    timer.unref?.();
-    void previous.then(() => { clearTimeout(timer); resolve(); });
+    const poll = setInterval(() => {
+      const since = running.get(lockPath);
+      const limit = LOCK_TUNING.maxHoldMs + LOCK_TUNING.staleMs;
+      if (since !== undefined && Date.now() - since > limit) {
+        clearInterval(poll);
+        reject(new StateLockTimeoutError(lockPath, `this process (pid ${process.pid})`, Date.now() - since));
+      }
+    }, Math.max(10, Math.min(1_000, Math.floor((LOCK_TUNING.maxHoldMs + LOCK_TUNING.staleMs) / 4))));
+    poll.unref?.();
+    void previous.then(() => { clearInterval(poll); resolve(); });
   });
 }
 
@@ -247,6 +264,7 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
   const mine = JSON.stringify(owner);
   const started = Date.now();
   let holder: string | undefined;
+  let lastNotice = started;
   // A fair lock is taken in arrival order. Waiters used to re-poll at random
   // with no line at all, so under load one could lose every race for many
   // times the fair wait (p99 26 s on the state lock while idle).
@@ -265,10 +283,14 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
           continue;
         }
       }
-      const waited = Date.now() - started;
       // Proceeding without the lock would make the read-merge-write below
-      // non-atomic and silently drop another terminal's work. Refuse instead.
-      if (waited > LOCK_TUNING.waitMs) throw new StateLockTimeoutError(lockPath, holder, waited);
+      // non-atomic and silently drop another terminal's work, and giving up on
+      // a live holder ends a vendor turn over ClikCode's own bookkeeping. So
+      // wait on, loudly: the holder is alive (heartbeat) or gets broken above.
+      if (Date.now() - lastNotice >= LOCK_TUNING.waitNoticeMs) {
+        lastNotice = Date.now();
+        lifecycle('lock.wait', { lock: basename(lockPath), ms: lastNotice - started, waiting: true, ...(holder ? { holder } : {}) });
+      }
       // A waiter's place is kept fresh like a held lock (its heartbeat).
       if (ticket && Date.now() - ticketTouched > LOCK_TUNING.heartbeatMs) {
         ticketTouched = Date.now();
@@ -300,9 +322,11 @@ async function holdFileLock<T>(lockPath: string, run: () => Promise<T>, fair: bo
     }).catch(() => undefined);
   }, LOCK_TUNING.heartbeatMs);
   heartbeat.unref();
+  running.set(lockPath, Date.now());
   try {
     return await run();
   } finally {
+    running.delete(lockPath);
     clearInterval(heartbeat);
     // Only ever remove our own lock: if it was judged stale and replaced while
     // we ran, the file now belongs to someone else.
