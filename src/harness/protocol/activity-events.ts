@@ -306,7 +306,7 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
   if (value.type !== 'message') return undefined;
   const content = asRecord(value.message)?.content;
   if (!Array.isArray(content)) return [];
-  return content.flatMap((part): NativeActivityEvent[] => {
+  return content.flatMap((part, index): NativeActivityEvent[] => {
     const block = asRecord(part);
     const identity = typeof block?.id === 'string' ? { id: block.id } : {};
     if (block?.type === 'toolRequest') {
@@ -327,7 +327,11 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
       return [{ kind: failed ? 'tool-error' : 'tool-done', label: 'tool', ...identity, ...output }];
     }
     if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
-      return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140) }];
+      // One id per thought (its message and place in it), so a thought that
+      // is streamed and then completed is one row, and a settled one is keyed.
+      const messageId = asRecord(value.message)?.id;
+      const thoughtKey = typeof messageId === 'string' && messageId ? { id: `thinking:${messageId}:${index}` } : {};
+      return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140), ...thoughtKey }];
     }
     return [];
   });
@@ -408,7 +412,8 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   if (type === 'thread.started' || type === 'turn.started') return undefined;
   if (/reasoning|thinking/.test(itemType) && /completed|done/.test(type)) {
     const summary = reasoningSummary(item?.summary) ?? reasoningSummary(item?.text) ?? reasoningSummary(item?.content);
-    return summary ? { kind: 'thinking', label: visibleSlice(summary.replace(/\s+/g, ' '), 140) } : undefined;
+    // The item's id, as the app-server transport keys the same thought.
+    return summary ? { kind: 'thinking', label: visibleSlice(summary.replace(/\s+/g, ' '), 140), ...(typeof item?.id === 'string' ? { id: item.id } : {}) } : undefined;
   }
   if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
     const command = String(item?.command ?? item?.command_line ?? '').trim();
@@ -475,6 +480,14 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   // that actually called a tool — `part.tool` is the tool name and
   // `part.state.status` tracks completion.
   // Kilo Code CLI is an OpenCode fork and emits the same envelope.
+  // opencode / Kilo `run --format json` reasoning part: the model's thought,
+  // one part id per thought (written only when the run asks for thinking).
+  if (opencodeShaped(harness) && type === 'reasoning') {
+    const part = asRecord(value.part);
+    const text = typeof part?.text === 'string' ? part.text : '';
+    if (text.trim()) return { kind: 'thinking', label: thoughtLabel(text), ...(typeof part?.id === 'string' ? { id: `thinking:${part.id}` } : {}) };
+    return undefined;
+  }
   if (opencodeShaped(harness) && type === 'tool_use') {
     const part = asRecord(value.part);
     const state = asRecord(part?.state);
@@ -538,6 +551,15 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       const label = !id ? formatToolRow(name, undefined, facts.category) : start || args ? facts.label : 'tool';
       return { kind: 'tool-start', ...facts, label, ...(id ? { id } : {}) };
     };
+    // The model's reasoning, as the message so far (`partial.content[i].thinking`).
+    // The id is the turn's own (adapters.ts): Pi names none.
+    const reasoning = type === 'message_update' ? asRecord(value.assistantMessageEvent) : undefined;
+    if (reasoning && /^thinking_(?:start|delta|end)$/.test(String(reasoning.type))) {
+      const content = asRecord(reasoning.partial)?.content;
+      const block = Array.isArray(content) && typeof reasoning.contentIndex === 'number' ? asRecord(content[reasoning.contentIndex]) : undefined;
+      const text = typeof block?.thinking === 'string' ? block.thinking : typeof reasoning.content === 'string' ? reasoning.content : '';
+      return text.trim() ? { kind: 'thinking', label: thoughtLabel(text) } : undefined;
+    }
     if (type === 'tool_execution_start') return piTool(value, true);
     if (type === 'tool_execution_end') return { ...piTool(value, false), kind: value.isError === true || value.error ? 'tool-error' : 'tool-done' };
     const event = type === 'message_update' ? asRecord(value.assistantMessageEvent) : undefined;
