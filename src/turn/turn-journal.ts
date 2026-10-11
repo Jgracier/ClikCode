@@ -1,13 +1,15 @@
 /** Durable turn state, completion, and interrupted-turn recovery. */
 import { extractSessionTitle, normalizeSessionTitle } from '../session/title.js';
-import type { HarnessSession, HarnessState } from '../session/model.js';
+import type { HarnessSession, HarnessState, OpenThought, TurnMark } from '../session/model.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { LiveTurnSubmission } from './live-input.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState, writeTranscriptCheckpoint } from '../session/state/write.js';
-import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingSteer, stopPendingCalls, updatePendingResponse } from './checkpoint.js';
+import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessionTurn, failPendingTurn, finishPendingTurn, recordPendingActivity, recordPendingMark, recordPendingSteer, setPendingThought, stopPendingCalls, updatePendingResponse } from './checkpoint.js';
+import { MarkSequencer, readTurnMarks } from './turn-marks.js';
+import { readTurnActivities } from './turn-activities.js';
 
 /** Name a chat, once, from a title the model produced.
  *
@@ -96,7 +98,20 @@ export class DurableTurnCheckpoint {
   /** Also told every activity: the turn's record for /undo (session/turn-changes.ts). */
   private recorder: { add(event: HarnessActivityEvent): void } | undefined;
 
-  private constructor(private readonly state: HarnessState, readonly session: HarnessSession) {}
+  /** The turn's one counter. The worker's observer takes it over when it is
+   * bound to this journal (TurnObserver.bindJournal), so a row's number is
+   * the same on the screen and in the saved turn. */
+  readonly sequencer = new MarkSequencer();
+
+  private constructor(private readonly state: HarnessState, readonly session: HarnessSession) {
+    // A journal already holding rows (a turn resumed) goes on after them.
+    const pending = session.pendingTurn;
+    if (pending) {
+      for (const activity of readTurnActivities(pending.activities)) this.sequencer.raiseTo(activity.event.seq ?? 0);
+      for (const mark of readTurnMarks(pending.marks)) this.sequencer.raiseTo(mark.seq);
+      for (const steer of pending.steers ?? []) this.sequencer.raiseTo(steer.seq ?? 0);
+    }
+  }
 
   static async start(
     state: HarnessState, session: HarnessSession, prompt: string, queuedTurnId?: string,
@@ -119,9 +134,31 @@ export class DurableTurnCheckpoint {
   }
 
   activity(event: HarnessActivityEvent): void {
-    this.recorder?.add(event);
-    recordPendingActivity(this.session, event, new Date().toISOString());
+    // Numbered here, in place: the observer is shown the same object next.
+    const stamped = this.sequencer.stamp(event);
+    this.recorder?.add(stamped);
+    recordPendingActivity(this.session, stamped, new Date().toISOString());
     this.schedule();
+  }
+
+  /** A thought, plan, notice or approval outcome of the turn, from the
+   * observer that saw it (TurnMarkJournal). */
+  recordMark(mark: TurnMark): void {
+    recordPendingMark(this.session, mark, new Date().toISOString());
+    this.schedule();
+  }
+
+  /** The thought being had; undefined when it settled. */
+  setThought(thought: OpenThought | undefined): void {
+    setPendingThought(this.session, thought, new Date().toISOString());
+    this.schedule();
+  }
+
+  /** Where a steer the turn took was placed: what its message and its
+   * `submission` answer carry, so every window orders it the same. */
+  steerOrder(id: string): { seq: number; responseOffset: number } | undefined {
+    const steer = this.session.pendingTurn?.steers?.find((item) => item.id === id);
+    return steer?.seq === undefined ? undefined : { seq: steer.seq, responseOffset: steer.responseOffset ?? 0 };
   }
 
   async queue(submission: LiveTurnSubmission, options: { held?: boolean } = {}): Promise<void> {
@@ -149,7 +186,7 @@ export class DurableTurnCheckpoint {
   async steer(submission: LiveTurnSubmission): Promise<void> {
     recordPendingSteer(
       this.session, submission.text, submission.submittedAt,
-      this.session.pendingTurn?.response?.length ?? 0, new Date().toISOString(), submission.id,
+      this.session.pendingTurn?.response?.length ?? 0, new Date().toISOString(), submission.id, this.sequencer.take(),
     );
     await this.persistNow();
   }
