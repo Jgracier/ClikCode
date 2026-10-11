@@ -97,35 +97,111 @@ export async function runCli({ harness, turn, argv, log, sleep, wordMs, promptMa
     out({ type: 'result', subtype: 'success', is_error: false, session_id: sessionId, result: lastText,
       ...(usage ? { total_cost_usd: 0.01, usage: { input_tokens: usage.input, output_tokens: usage.output } } : {}) });
   } else if (family === 'pi-json') {
-    let index = 0;
+    // Pi's JSON mode as its own doc states it (docs/json.md, pi 0.87): events are
+    // DELTA-ONLY -- `message_update` omits the cumulative `message` and
+    // `assistantMessageEvent.partial` -- and `message_end` carries the final,
+    // authoritative message. Every assistant message is bracketed by
+    // message_start / message_end; its tool calls are executed AFTER it ends
+    // (tool_execution_*), then a toolResult message and turn_end / turn_start.
+    const blocks = [];          // the open assistant message's content blocks, as message_end will carry them
+    let open = false;
+    const pendingCalls = [];    // toolcalls of the open message, awaiting execution
+    const finished = new Map(); // id -> tool-end op, once the script has ended it
+    const assistant = () => ({
+      role: 'assistant', content: blocks.map((block) => ({ ...block })), api: 'fake', provider: 'fake', model: 'fake-model-1',
+      stopReason: pendingCalls.length ? 'toolUse' : 'stop',
+      // Provider-reported usage rides the final message (the turn's last), as the doc says.
+      ...(usage && !pendingCalls.length ? { usage: { input: usage.input, output: usage.output, totalTokens: usage.input + usage.output, cost: { total: 0.001 } } } : {}),
+    });
+    const openMessage = () => {
+      if (open) return;
+      open = true;
+      out({ type: 'message_start', message: { role: 'assistant', content: [] } });
+    };
+    const closeMessage = () => {
+      if (!open) return;
+      out({ type: 'message_end', message: assistant() });
+      open = false;
+    };
+    const runCalls = async () => {
+      closeMessage();
+      const results = [];
+      for (const call of pendingCalls) out({ type: 'tool_execution_start', toolCallId: call.id, toolName: 'bash', args: { command: call.title } });
+      for (const call of pendingCalls) {
+        const end = finished.get(call.id);
+        const text = end?.result ?? 'ok';
+        out({ type: 'tool_execution_end', toolCallId: call.id, toolName: 'bash', isError: false, result: { content: [{ type: 'text', text }] } });
+        const message = { role: 'toolResult', toolCallId: call.id, toolName: 'bash', content: [{ type: 'text', text }], isError: false };
+        out({ type: 'message_start', message });
+        out({ type: 'message_end', message });
+        results.push(message);
+      }
+      out({ type: 'turn_end', message: assistant(), toolResults: results });
+      pendingCalls.length = 0;
+      blocks.length = 0;
+      out({ type: 'turn_start' });
+    };
+    out({ type: 'session', version: 3, id: sessionId, timestamp: new Date().toISOString(), cwd: process.cwd() });
+    out({ type: 'agent_start' });
+    out({ type: 'turn_start' });
+    // The ops give tool-start ... tool-end in script order; the vendor runs a
+    // message's calls once the message has ended, so a call's end is held until
+    // the next thing that is not another call of the same message.
+    const queued = [];
     for (const op of ops) {
+      if (op.op === 'tool-end') { finished.set(op.id, op); continue; }
+      if (op.op === 'tool-start' && !queued.length && !open) openMessage();
+      if (op.op === 'tool-start') {
+        openMessage();
+        const index = blocks.length;
+        out({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_start', contentIndex: index, id: op.id, toolName: 'bash' } });
+        out({ type: 'message_update', assistantMessageEvent: { type: 'toolcall_end', contentIndex: index, toolCall: { type: 'toolCall', id: op.id, name: 'bash', arguments: { command: op.title } } } });
+        blocks.push({ type: 'toolCall', id: op.id, name: 'bash', arguments: { command: op.title } });
+        pendingCalls.push({ id: op.id, title: op.title });
+        queued.push(op.id);
+        continue;
+      }
+      if (pendingCalls.length && op.op !== 'sleep' && op.op !== 'usage') {
+        // The next thing is not another call: the message is over, its calls run.
+        await runCalls();
+        queued.length = 0;
+      }
       switch (op.op) {
-        case 'text':
+        case 'text': {
+          openMessage();
+          const index = blocks.length;
+          out({ type: 'message_update', assistantMessageEvent: { type: 'text_start', contentIndex: index } });
           for (const piece of wordsOf(op.text)) {
             await sleep(wordMs);
             out({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', contentIndex: index, delta: piece } });
           }
-          index += 1;
+          out({ type: 'message_update', assistantMessageEvent: { type: 'text_end', contentIndex: index, content: op.text } });
+          blocks.push({ type: 'text', text: op.text });
           break;
+        }
         case 'thought': {
-          out({ type: 'message_update', assistantMessageEvent: { type: 'thinking_start', contentIndex: index, partial: { content: [{ type: 'thinking', thinking: '' }] } } });
-          let so = '';
-          for (const piece of wordsOf(`**${op.heading}**\n\n${op.text}`)) {
+          openMessage();
+          const index = blocks.length;
+          const full = `**${op.heading}**\n\n${op.text}`;
+          out({ type: 'message_update', assistantMessageEvent: { type: 'thinking_start', contentIndex: index } });
+          for (const piece of wordsOf(full)) {
             await sleep(op.ms ?? 20);
-            so += piece;
-            out({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: index, delta: piece, partial: { content: [{ type: 'thinking', thinking: so }] } } });
+            out({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', contentIndex: index, delta: piece } });
           }
-          index += 1;
+          out({ type: 'message_update', assistantMessageEvent: { type: 'thinking_end', contentIndex: index, content: full } });
+          blocks.push({ type: 'thinking', thinking: full });
           break;
         }
         case 'sleep': await sleep(op.ms); break;
-        case 'tool-start': out({ type: 'tool_execution_start', toolCallId: op.id, toolName: 'bash', args: { command: op.title } }); break;
-        case 'tool-end': out({ type: 'tool_execution_end', toolCallId: op.id, toolName: 'bash', isError: false, result: { content: [{ type: 'text', text: op.result ?? 'ok' }] } }); break;
         case 'usage': usage = op; break;
+        case 'tool-end': break;
         default: throw new Error(`fake ${family}: unknown op ${op.op}`);
       }
     }
-    out({ type: 'message_end', message: { role: 'assistant', ...(usage ? { usage: { input: usage.input, output: usage.output, totalTokens: usage.input + usage.output, cost: { total: 0.001 } } } : {}) } });
+    if (pendingCalls.length) await runCalls();
+    closeMessage();
+    out({ type: 'turn_end', message: assistant(), toolResults: [] });
+    out({ type: 'agent_end', messages: [] });
   } else if (family === 'antigravity') {
     let step = 0;
     const steps = new Map();
