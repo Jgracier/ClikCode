@@ -8,6 +8,8 @@
  * a mobile SSH connection dropping mid-turn.
  */
 import { lifecycle, setLifecycleRole } from '../../runtime/lifecycle-log.js';
+import { beginTurnClock, endTurnClock, markTurn } from '../../runtime/turn-latency.js';
+import { randomUUID } from 'node:crypto';
 import { STOPPED } from '../../harness/protocol/wording.js';
 import { currentWorkerBuild } from '../../worker/registry.js';
 import { isClikCodeAgent, isGatewayService } from '../../session/route.js';
@@ -560,6 +562,20 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
        * paints the submitted text as the pending user message; synthetic
        * prompts (/review, /init, /compact) are not shown as if typed. */
       const runInteractiveTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> => {
+        // The turn's latency clock starts here, at Enter (runtime/turn-latency.ts):
+        // the worker is handed its turn id and start so both processes measure
+        // from the same moment.
+        const turnId = randomUUID();
+        const submittedAt = Date.now();
+        beginTurnClock({ turnId, startedAt: submittedAt, ...(lastSeen.id === targetId ? { harness: lastSeen.nativeHarness ?? lastSeen.route } : {}) });
+        markTurn('submit');
+        try {
+          await runTimedTurn(targetId, promptText, { ...turn, turnId, submittedAt });
+        } finally {
+          endTurnClock(turnId);
+        }
+      };
+      const runTimedTurn = async (targetId: string, promptText: string, turn: { echo: boolean; queuedTurnId?: string; turnId: string; submittedAt: number }): Promise<void> => {
         sentPrompt = promptText;
         // The submitted prompt is the prompter's for the whole turn, not a
         // message and not part of any snapshot: it is not a message yet, and

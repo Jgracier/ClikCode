@@ -28,7 +28,10 @@ export type ClientCommand =
    * directly anyway -- just belt-and-suspenders against a stale socket path
    * some other process's connection happened to land on. */
   | { type: 'attach'; token: string }
-  | { type: 'submit'; text: string; echo: boolean; queuedTurnId?: string }
+  /** `turnId` and `submittedAt` (the window's wall clock at Enter) carry the
+   * turn's latency marks across the two processes (runtime/turn-latency.ts);
+   * a client without them gets a turn the worker times from its own start. */
+  | { type: 'submit'; text: string; echo: boolean; queuedTurnId?: string; turnId?: string; submittedAt?: number }
   /** A message typed while a turn runs. `id` is echoed back on the
    * `submission` event that says what actually happened to it. */
   | { type: 'steer'; text: string; id?: string }

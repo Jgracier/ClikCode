@@ -2,6 +2,7 @@
  * app-server both speak this framing; keeping the lifecycle here means pending
  * requests, EPIPE, partial lines and process-tree shutdown are solved once
  * instead of drifting apart in two hand-rolled copies. */
+import { markTurn } from '../../runtime/turn-latency.js';
 import type { ChildProcess } from 'node:child_process';
 import { killProcessTreePortable } from './spawn.js';
 import { LineBuffer } from '../protocol/json-lines.js';
@@ -321,6 +322,8 @@ export class JsonRpcPeer {
 
   private receive(chunk: string): void {
     if (this.isClosed) return;
+    // The vendor's first byte after the prompt went out (once per turn).
+    markTurn('first-byte');
     for (const line of this.lines.push(chunk)) if (line.trim()) this.handleLine(line);
   }
 

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { lifecycleLogPath } from './lifecycle-log.js';
+import { turnSink } from '../turn/turn-output.js';
 import {
   beginTurnClock, endTurnClock, formatLatencyTable, markTurn, medianLatencyByHarness, turnLatency, turnsLatency,
 } from './turn-latency.js';
@@ -94,6 +95,17 @@ describe('turn marks', () => {
       markTurn('first-text');
     }
     expect(records().length).toBe(before);
+  });
+
+  it('the turn sink marks the first event and the first text, and streaming N deltas writes zero lines', () => {
+    beginTurnClock({ turnId: 'turn-5', harness: 'claude' });
+    const sink = turnSink({ response: () => undefined, activity: () => undefined }, undefined);
+    sink.response('Hel');
+    const after = records().map((entry) => entry.mark);
+    expect(after).toEqual(['first-event', 'first-text']);
+    for (let delta = 0; delta < 2000; delta += 1) sink.response('lo ');
+    sink.activity({ kind: 'tool-start', label: 'Read' });
+    expect(records().map((entry) => entry.mark)).toEqual(after);
   });
 
   it('does not take a handshake answer for the vendor\'s first byte', () => {

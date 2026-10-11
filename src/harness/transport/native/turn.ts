@@ -3,6 +3,7 @@
  * kept. */
 
 import { lifecycle } from '../../../runtime/lifecycle-log.js';
+import { markTurn } from '../../../runtime/turn-latency.js';
 import { killProcessTreePortable, spawnPortable as spawn } from '../spawn.js';
 import { NativeHarnessSpec } from './binary.js';
 import { ensureNativeHarness } from './inspect.js';
@@ -223,6 +224,11 @@ export async function captureNativeHarnessTurn(
     });
     const spawnedAt = Date.now();
     lifecycle('vendor.turn.spawn', { harness: spec.command, child: child.pid });
+    // A one-shot CLI has no handshake: the prompt rides in its argv or on its
+    // stdin from the moment it is spawned.
+    markTurn('spawned', { reused: false, transport: 'cli' });
+    markTurn('ready');
+    markTurn('prompt-sent');
     child.once('close', (code, signal) => lifecycle('vendor.turn.exit', { harness: spec.command, child: child.pid, code, signal, ms: Date.now() - spawnedAt }));
     let stdout = '';
     let stderr = '';
@@ -267,6 +273,7 @@ export async function captureNativeHarnessTurn(
     child.stderr!.setEncoding('utf8');
     const collect = (target: 'stdout' | 'stderr', chunk: string): void => {
       watchdog.activity();
+      markTurn('first-byte');
       if (!loginPrompt && loginHead[target].length < LOGIN_HEAD_LIMIT) {
         loginHead[target] = (loginHead[target] + chunk).slice(0, LOGIN_HEAD_LIMIT);
         loginPrompt = interactiveLoginPrompt(loginHead[target]);

@@ -21,6 +21,7 @@ import { BackgroundTurnChannel } from './background-turn.js';
 import { configuredIdleMs, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
+import { markTurn } from '../../runtime/turn-latency.js';
 
 type Json = Record<string, any>;
 
@@ -879,6 +880,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       lifecycle('vendor.acp.prepared', { harness: input.command, cold, setupMs: Date.now() - setupAt, threadLoadMs });
       return { text: '', nativeSessionId: turn.sessionId! };
     }
+    // Handshake, session, model and mode are all in place.
+    markTurn('ready', { cold });
     const blocks: Json[] = [{ type: 'text', text: input.prompt }, ...await Promise.all(images.map(acpImageBlock))];
     stillRunning();
     // Taken now, not when the turn was created: a session/load above may have
@@ -894,6 +897,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // No wall-clock timeout: a prompt legitimately runs for hours, and the
     // idle watchdog above is its only ceiling.
     turn.prompt = call('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
+    markTurn('prompt-sent');
     if (live.steering) input.onSteerReady?.((text, hold) => this.steer(turn, text, hold));
     const completed = await turn.prompt as Json;
     // The answer ends the turn: nothing held can be steered into it any more
