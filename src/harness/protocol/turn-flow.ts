@@ -51,7 +51,8 @@ export function activityResult(event: Pick<HarnessActivityEvent, 'kind' | 'label
   return plural(lines, 'match', 'matches');
 }
 
-/** Calls that only look around -- reads and searches -- are one row while a
+/** Calls that only look around -- reads, searches and directory listings (a
+ * listing is category `search`; tools.ts) -- are one row while a
  * run of them goes on, as Codex's "Explored" and Cursor's merged reads are. */
 export function explores(event: Pick<HarnessActivityEvent, 'category' | 'agent' | 'kind'>): boolean {
   return !event.agent && event.kind !== 'tool-error' && (event.category === 'read' || event.category === 'search');
