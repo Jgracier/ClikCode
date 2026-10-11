@@ -57,6 +57,8 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .option('--since <age>', 'Only the last 30s, 10m, 2h, 1d')
     .option('-n, --lines <count>', 'How many lines (default 100)')
     .option('-f, --follow', 'Keep printing as it is written')
+    .option('--latency', 'Where each turn\'s time went (marks per turn, median per harness) instead of the log lines')
+    .option('--last <count>', 'With --latency: how many turns (default 20)')
     .action(async (options) => (await import('../commands/logs.js')).showLogs(options));
   program.command('permissions [mode]').description('Choose Ask, Bypass, or Auto approval behavior for the active chat')
     .action((mode?: string) => aiPermissions(mode));

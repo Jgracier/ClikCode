@@ -18,9 +18,12 @@ import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { runAgentTurn } from './agent-turn.js';
 import { sendDirectApiTurn } from './direct-turn.js';
 import { sendVendorTurn } from './vendor-turn.js';
+import { isTurnCancelled } from '../agent/cancellation.js';
 import { isQueuedTurnAlreadyRun } from './turn-journal.js';
 import { TurnRecorder } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
+import { beginTurnClock, currentTurnId, endTurnClock, markTurn, setTurnHarness } from '../runtime/turn-latency.js';
+import { randomUUID } from 'node:crypto';
 
 /** Options supplied by any caller of a turn. */
 export interface TurnRunOptions {
@@ -43,9 +46,15 @@ export interface TurnRunOptions {
 export async function runSessionTurn(
   config: Conf, id: string, prompt: string, signal?: AbortSignal, run: TurnRunOptions = {},
 ): Promise<void> {
+  // A turn nobody is timing yet (a scripted send, the console loop) is timed
+  // from here; a worker's turn already has its window's clock.
+  const ownClock = currentTurnId() === undefined ? randomUUID() : undefined;
+  if (ownClock) { beginTurnClock({ turnId: ownClock }); markTurn('submit'); markTurn('accepted'); }
+  let outcome = 'completed';
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);
+  setTurnHarness(session.nativeHarness ?? session.route);
   // A session that left ClikCode Local lets go of the model this process
   // held for it (a worker that ran its earlier turns, say).
   if (session.route !== 'clikcode-local') await releaseHeldLocalModel(session.id);
@@ -72,8 +81,11 @@ export async function runSessionTurn(
     // Already run by another submit of the same queued entry: nothing to do,
     // and nothing went wrong.
     if (isQueuedTurnAlreadyRun(error)) return;
+    outcome = isTurnCancelled(error) ? 'cancelled' : 'error';
     throw error;
   } finally {
+    markTurn('end', { outcome });
+    if (ownClock) endTurnClock(ownClock);
     // A record that failed to write must not fail the turn it records.
     await recorder.finish(stateDirectory(), id).catch(() => undefined);
   }
@@ -97,6 +109,8 @@ async function runAccountTurn(
   }
   const text = prompt.trim();
   if (!text) throw new Error('prompt is required');
+  // The account and its model are settled: what follows is the route's own work.
+  markTurn('account');
   const prepared = await prepareAttachments(session.attachments ?? []);
   let turnText = `${text}${prepared.textContext}`;
   // A resumed native-harness thread never replays ClikCode's own transcript
