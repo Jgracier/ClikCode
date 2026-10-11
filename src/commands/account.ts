@@ -48,12 +48,23 @@ export const ACCOUNT_LIMIT_NOTE = 'At an account\'s usage limit, ClikCode moves 
 /** How long the list waits for the probes it starts before it shows what it has. */
 const ACCOUNT_LIST_PROBE_WAIT_MS = 1_500;
 
+/** The vendor keeps its sign-in in files it names (catalog `authFiles`) and
+ * has no status command: an account recorded as ready whose files are gone is
+ * signed out, whatever it was when ClikCode last saw it. */
+export async function accountSignedOutOnDisk(account: AiHarnessAccount): Promise<boolean> {
+  if (account.authKind !== 'vendor-cli' || account.status !== 'ready') return false;
+  const harness = localHarnessForProvider(account.provider);
+  if (!harness || harness.statusArgv || !hasAuthEvidence(harness)) return false;
+  return !await authEvidencePresent(harness, profileEnvironment(harness, account));
+}
+
 /** Each account and what is left on it -- what a person, or an agent
  * checking accounts, wants from this list. The model catalog is long and
  * rarely the question, so it comes only with `--models`. */
 export async function aiAccountsList(options: { models?: boolean } = {}): Promise<void> {
   const state = await readState({ transcripts: [] });
-  const ready = (account: AiHarnessAccount): boolean => account.status === 'ready' && accountCanTakeTurn(account);
+  const signedOut = new Set((await Promise.all(state.accounts.map(async (account) => await accountSignedOutOnDisk(account) ? account.id : undefined))).filter(Boolean));
+  const ready = (account: AiHarnessAccount): boolean => account.status === 'ready' && !signedOut.has(account.id) && accountCanTakeTurn(account);
   // Each account's probe runs on its own, behind its own cache entry
   // (account-usage.ts). The list shows what was last read and waits only a
   // moment for the probes it starts: one that never answers (a vendor CLI
@@ -74,6 +85,7 @@ export async function aiAccountsList(options: { models?: boolean } = {}): Promis
     const fallbacks = state.accounts.filter((other) => other.id !== account.id && other.provider === account.provider && ready(other)).length;
     return {
       ...(options.models ? accountView(account) : brief),
+      ...(signedOut.has(account.id) ? { status: 'needs_login' as const } : {}),
       usage: reading?.label ?? (checking ? 'checking…' : 'not reported'),
       ...(resets ? { resets } : {}),
       canTakeTurn: ready(account),
@@ -106,6 +118,12 @@ function installSummary(harness: Parameters<typeof harnessInstallRoute>[0]): Rec
   };
 }
 
+/** The version out of whatever a `--version` run printed: the first line that
+ * holds one, not the first line (OpenHands opens with a deprecation warning). */
+export function versionFromOutput(text: string): string | undefined {
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => /\bv?\d+\.\d+(?:\.\d+)?/.test(line) && !/deprecat|warning/i.test(line));
+}
+
 /** Read-only compatibility report for every catalog entry. */
 export async function aiDoctor(): Promise<void> {
   // One write for the whole sweep: every harness inspected here contributes a
@@ -113,6 +131,12 @@ export async function aiDoctor(): Promise<void> {
   const flush = async (): Promise<void> => { await saveVersionMemo().catch(() => undefined); };
   const harnesses = await Promise.all(builtInHarnesses().map(async (harness) => {
     const inspection = await inspectNativeHarness(harness);
+    // The probe reports the first line of output; where that is noise rather
+    // than a version, read the version from the output itself.
+    if (inspection.installed && inspection.version && !/\d+\.\d+/.test(inspection.version)) {
+      const found = versionFromOutput(await captureNativeHarnessOutput(harness, harness.versionArgv ?? ['--version'], {}).catch(() => ''));
+      if (found) inspection.version = found;
+    }
     return {
       command: harness.command,
       displayName: harness.displayName,
