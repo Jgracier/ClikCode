@@ -92,8 +92,10 @@ frame that cannot classify yet does not freeze the group.
 
 One plan per turn, updated in place. While the turn runs it is a live band
 (append-only scrollback cannot hold a row whose steps change); finishing every
-step does not delete it: it is kept as a row at the offset it first appeared,
-on reopen and for a window that joins mid-turn. It is in the journal. A
+step does not delete it: it is kept as a row. On reopen, and for a window that
+joins mid-turn, that row is at the offset it first appeared; in the window that
+watched the turn it is drawn when the turn ends, below the prose already
+retired (scrollback is append-only). It is in the journal. A
 sub-agent's plan is not the turn's plan.
 
 ## 8. Approvals and questions

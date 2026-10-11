@@ -314,6 +314,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private readonly drawnMarks = new Set<string>();
   private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
   private planEntries: readonly PlanEntry[] = [];
+  /** The length of the answer when this turn's plan first appeared (settlePlan). */
+  private planStart: number | undefined;
   private streamingBlocks = createStreamingBlockParser();
   /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
   private resumeInput?: () => void;
@@ -919,6 +921,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       if (this.mentionFocus?.sessionId !== session.id) this.mentionFocus = undefined;
       this.activityEntries = [];
       this.planEntries = [];
+      this.planStart = undefined;
       this.panelState = undefined;
       // The conversation opened is the only one in the transcript.
       this.emitted.requestReseed();
@@ -1015,7 +1018,32 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the live region. Pass an empty list to remove it. */
   setPlan(entries: readonly PlanEntry[]): void {
     this.planEntries = entries.map((entry) => ({ ...entry }));
+    // Where in the answer it first appeared: the row it leaves at the turn's end sits there.
+    if (!entries.length) this.planStart = undefined;
+    else if (this.planStart === undefined && this.turn) this.planStart = this.liveResponse.length;
     this.schedulePaint();
+  }
+
+  /** The plan at the end of the turn, kept as a row where it first appeared (standard section 7):
+   * the band says what is left, and goes with the turn; the row says what was planned and how far it
+   * got -- the same rows a reopened chat draws from the saved plan mark (turn-mark-rows.ts). */
+  private settlePlan(): void {
+    const entries = this.planEntries;
+    const start = this.planStart;
+    this.planStart = undefined;
+    if (!entries.length || start === undefined || !this.turn) return;
+    const lines = turnMarkLines({
+      kind: 'plan', id: 'plan', seq: 0, responseOffset: start,
+      entries: entries.map((entry) => ({ content: entry.content, status: entry.status })),
+    } as never);
+    if (!lines.length) return;
+    // The worker numbered this plan and keeps it for a window joining later: one row, not two.
+    this.markDrawn('plan');
+    this.activityEntries = [...this.activityEntries, {
+      anchor: this.activityAnchor, responseOffset: Math.min(start, this.liveResponse.length), sequence: ++this.timelineSequence,
+      event: { kind: 'thinking', label: 'plan', id: 'plan' }, lines,
+    }];
+    this.planEntries = [];
   }
 
   /** `live`: this is the running turn's activity number `index`, which
@@ -1361,7 +1389,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.alternateScrollback = 0;
     if (!rejoined) this.liveResponse = '';
     // The last turn's plan, finished or left unfinished, is not this one's.
-    if (!rejoined) this.planEntries = [];
+    if (!rejoined) { this.planEntries = []; this.planStart = undefined; }
     // A running turn always renders as stable messages, its submitted user
     // prompt, then one live assistant slot. Keep that slot fixed for the
     // whole turn: deriving it from sessionTranscriptMessages made the anchor
@@ -1565,7 +1593,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.settleApprovals();
     // A thought still being had when the turn ended stays, settled. Not
     // when stepping out: the turn, and the thought, carry on.
-    if (!this.steppedOut) this.settleThought();
+    if (!this.steppedOut) { this.settleThought(); this.settlePlan(); }
     // Stopped: what was still running did not finish. Its row says so, as
     // the worker's saved copy of the turn does (turn-journal.ts).
     if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));

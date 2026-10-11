@@ -110,7 +110,9 @@ def run_once(entry, harness, turn, keep=False, concurrency=1):
         'startup': 6, 'no_clear_after_type': False,
         'steps': [('type', PROMPT), ('wait_for', final_marker, 45), ('settle', 4)],
         'watch': [],
-        'status_always': [(turn['expect'][0]['marker'], final_marker)],
+        # Between the turn's first text and its closing text a status row is always up; a one-reply
+        # harness has only the closing text, so there is no span to hold it to.
+        'status_always': [(turn['expect'][0]['marker'], final_marker)] if turn['expect'][0]['marker'] != final_marker else [],
         'dup_ok': [],
     }
     problems, root, final = runner.run(f'matrix-{harness["command"]}', spec, os.path.abspath(entry), keep)
@@ -182,7 +184,9 @@ def evaluate(harness, turn, result, concurrency):
     if caps['toolOutput'] and ability['tools']:
         check('tool-output-reaches-screen', ever('mkrSoloOut') and ever('mkrOutA') and ever('mkrOutB'),
               'catalog capability toolOutput=true: a tool result\'s text reaches the screen', kind='wire')
-    if caps['usage']:
+    if caps['usage'] and ability['tools']:
+        # The summary line ends a turn that ran calls or took 10 s (endsWithSummary); a short toolless
+        # turn draws none, and its usage lives in the status line while it runs.
         row = next((r for r in final_rows if SUMMARY.search(r)), '')
         check('usage-reaches-screen', bool(re.search(r'tokens|\$\d', row)),
               'catalog capability usage=true: per-turn usage (tokens, cost) reaches the summary line',
@@ -282,6 +286,21 @@ def evaluate(harness, turn, result, concurrency):
 
 
 # ---- driver -------------------------------------------------------------------
+SKIP_REASONS = {
+    # Goose signs in with a provider key ClikCode stores, after probing the provider's REAL endpoint with it
+    # (src/harness/transport/native/login.ts routeFor/acceptsKey). The rig never sends a key, fake or not,
+    # to the network; the shared ACP client is exercised by the 21 other ACP harnesses and Goose's own
+    # wire shape is held by the conformance test.
+    'providerConfigId': 'sign-in is a provider key ClikCode validates against the provider\'s real endpoint; the rig sends no key to the network',
+}
+
+
+def skip_reason(harness):
+    for field, why in SKIP_REASONS.items():
+        if harness.get(field): return why
+    return None
+
+
 def run_harness(entry, harness, repeat, concurrency, keep):
     turn = turn_of(entry, harness['command'])
     runs = []
@@ -344,6 +363,12 @@ def cmd_run(args):
     os.makedirs(out_dir, exist_ok=True)
     results = []
     for harness in chosen:
+        why = skip_reason(harness)
+        if why:
+            results.append({'harness': harness['command'], 'transport': harness['transport'], 'parser': harness['parser'],
+                            'skipped': why, 'wired': None, 'standard': None, 'failing': [], 'runs': [], 'median': {}, 'concurrency': args.concurrency})
+            print(f'SKIPPED {harness["command"]:12} {why}', flush=True)
+            continue
         runs = run_harness(entry, harness, args.repeat, args.concurrency, args.keep)
         last = runs[-1]
         item = {'harness': harness['command'], 'transport': harness['transport'], 'parser': harness['parser'],
