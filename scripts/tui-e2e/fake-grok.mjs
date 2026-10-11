@@ -238,6 +238,9 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     //   { op: 'child-start', id, parent, title, kind?, input? } / { op: 'child-end', id, parent, result? }
     //   { op: 'permission', id, command, result? }  asks; allowed -> done, else failed
     //   { op: 'usage', used, size, cost? }   { op: 'plan', entries: [{content, status}] }
+    //   { op: 'background', tasks: [{ type, description?, parent? }] }  the vendor's whole live
+    //     background-task level (claude-agent-acp's `_claude/sdkMessage` background_tasks_changed;
+    //     type is a task_type: local_agent, local_bash, local_workflow). `tasks: []` empties it.
     // A steer injected while the script runs is answered at the end, as above.
     const words = async (text, ms) => {
       // Leading blanks stay with the first word: a script continues a sentence.
@@ -297,6 +300,11 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
           break;
         }
         case 'usage': update({ sessionUpdate: 'usage_update', used: event.used, size: event.size, ...(event.cost ? { cost: { amount: event.cost, currency: 'USD' } } : {}) }); break;
+        case 'background':
+          send({ method: '_claude/sdkMessage', params: { sessionId, message: { type: 'system', subtype: 'background_tasks_changed',
+            tasks: (event.tasks ?? []).map((task, index) => ({ task_id: `bg${index}`, task_type: task.type, description: task.description ?? task.type,
+              ...(task.parent ? { parent_task_id: task.parent } : {}) })) } } });
+          break;
         case 'plan': update({ sessionUpdate: 'plan', entries: event.entries.map((entry) => ({ priority: 'medium', ...entry })) }); break;
         default: throw new Error(`fake grok: unknown emit ${event.op}`);
       }
@@ -318,6 +326,15 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     await sleep(300);
     running = false;
     send({ id, result: { stopReason: cancelled ? 'cancelled' : 'end_turn' } });
+    // `after`: what the vendor says once the turn is answered -- a background
+    // task it left running ending ({ op: 'sleep' } and { op: 'background' }).
+    for (const event of turn.after ?? []) {
+      if (event.op === 'sleep') await sleep(event.ms);
+      else if (event.op === 'background') {
+        send({ method: '_claude/sdkMessage', params: { sessionId, message: { type: 'system', subtype: 'background_tasks_changed',
+          tasks: (event.tasks ?? []).map((task, index) => ({ task_id: `bg${index}`, task_type: task.type, description: task.description ?? task.type })) } } });
+      }
+    }
   };
   const steer = (id, params) => {
     if (!running && params?._meta?.steering?.idleBehavior === 'promptRequired') { send({ id, result: { outcome: 'promptRequired', reason: 'noRunningTurn' } }); return; }
