@@ -93,8 +93,9 @@ One status line per turn, by priority: waiting for you > the open call's verb
 
 - `writing` holds for as long as answer text is arriving in this response and
   no call has started; it does not fall back to `thinking` on a pause.
-- One spinner per running thing. A call that has its own spinning row does
-  not also spin in the status line.
+- The status line spins for the turn and each running row spins for itself
+  (Claude Code draws both). They share ONE clock: every glyph in a frame is
+  the same step, so nothing steps out of phase with its neighbour.
 - Glyph cadence is at most 120 ms per step (Claude Code steps at 50-100 ms,
   Codex similarly); the label shimmer advances one cell per step. Reduced
   motion shows a static glyph. Nothing animates when nothing is happening
