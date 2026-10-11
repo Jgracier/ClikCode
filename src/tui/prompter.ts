@@ -1366,6 +1366,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!turn) return;
     turn.clock = pauseTurnClock(turn.clock, Date.now());
     turn.activeAt = Date.now();
+    // Blocked on the user: the frame stops now, not at the next spinner tick.
+    if (turn.timer) this.scheduleWaitingTick();
   }
 
   /** Whatever the turn waited on the user for has been answered (or the
