@@ -1,16 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { readlinkSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LOCK_TUNING, breakStaleLock, lockLooksStale, withFileLock } from './locks.js';
+import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { runChild } from '../state/testing/concurrency.js';
+
+vi.mock('../../runtime/lifecycle-log.js', () => ({ lifecycle: vi.fn() }));
 
 let root: string | undefined;
 const defaults = { ...LOCK_TUNING };
 
 afterEach(async () => {
   Object.assign(LOCK_TUNING, defaults);
+  vi.mocked(lifecycle).mockClear();
   if (root) await rm(root, { recursive: true, force: true });
   root = undefined;
 });
@@ -71,10 +75,10 @@ describe('withFileLock', () => {
     });
   });
 
-  it('times out instead of waiting forever behind a stuck holder in this process', async () => {
+  it('fails instead of waiting forever behind a task stuck inside run() in this process', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
     const path = join(root, 'e.lock');
-    Object.assign(LOCK_TUNING, { waitMs: 50, maxHoldMs: 50 });
+    Object.assign(LOCK_TUNING, { staleMs: 50, maxHoldMs: 50 });
     let release!: () => void;
     const stuck = withFileLock(path, () => new Promise<void>((resolve) => { release = resolve; }));
     await expect(withFileLock(path, async () => 'ran')).rejects.toThrow(/could not lock/);
@@ -180,15 +184,33 @@ describe('a lock left without its owner', () => {
     }
   });
 
-  it('a lock written by a live holder is never broken, however long it is waited on', async () => {
+  it('a live holder is waited for beyond any fixed limit, never broken, and the wait is logged', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
     const path = join(root, 'k.lock');
-    Object.assign(LOCK_TUNING, { waitMs: 1_500 });
+    Object.assign(LOCK_TUNING, { waitNoticeMs: 60, maxHoldMs: 100, staleMs: 30_000 });
     const live = owner({ pid: process.pid, ...(ourPidns ? { pidns: ourPidns } : {}) });
     await writeFile(path, live);
     await age(path, 2_000); // Past ownerlessStaleMs, well inside staleMs.
-    await expect(withFileLock(path, async () => 'ran')).rejects.toThrow(/could not lock/);
+    let ran = false;
+    const waiting = withFileLock(path, async () => { ran = true; return 'ran'; });
+    // Far beyond the old 30 s limit scaled to this test's tuning (maxHoldMs 100).
+    await tick(600);
+    expect(ran).toBe(false);
     expect(await readFile(path, 'utf8')).toBe(live);
+    const notices = vi.mocked(lifecycle).mock.calls.filter(([event]) => event === 'lock.wait');
+    expect(notices.length).toBeGreaterThanOrEqual(2);
+    expect(notices[0]![1]).toMatchObject({ waiting: true, holder: `pid ${process.pid} on ${hostname()}` });
+    await rm(path);
+    expect(await waiting).toBe('ran');
+  });
+
+  it('a holder that stops heartbeating is broken, and the wait ends', async () => {
+    root = await mkdtemp(join(tmpdir(), 'clikcode-locks-'));
+    const path = join(root, 'm.lock');
+    Object.assign(LOCK_TUNING, { staleMs: 200 });
+    await writeFile(path, owner({ pid: process.pid, ...(ourPidns ? { pidns: ourPidns } : {}) }));
+    await age(path, 1_000);
+    expect(await withFileLock(path, async () => 'ran')).toBe('ran');
   });
 
   it('a stale lock\'s break also clears what a killed holder left beside it, never a fresh attempt\'s temp', async () => {
