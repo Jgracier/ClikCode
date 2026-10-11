@@ -74,7 +74,7 @@ import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
-import { keyHint, keyHintFor } from '../harness/protocol/wording.js';
+import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js';
 import { userError } from '../harness/protocol/errors.js';
 
 const EXIT_CONFIRM_MS = 2000;
@@ -570,9 +570,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
     const localId = ++this.waitingSubmissionId;
     // A message gets a row, because the user needs to know where their words
-    // went. A command gets none: it either applies (and the status line it
-    // changed already shows that) or it runs at the turn boundary. A row
-    // saying so would be the announcement this is meant not to make.
+    // went. A command is acknowledged too -- `/model sonnet · applied`, or
+    // when it runs -- as a transient line once it has been taken: typed words
+    // that simply vanish read as ignored (Claude Code acknowledges them).
     if (!asCommand) {
       this.waitingSubmissions.push({
         localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
@@ -585,6 +585,15 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         item.state = result.disposition;
         item.id = result.submission.id;
         if (result.unsteered) item.unsteered = true;
+      } else if (asCommand && result.disposition === 'command') {
+        this.showTransientNotice(commandAck(line, result.commandOutcome), NOTICE_MS, () => this.updateWaiting());
+      } else if (asCommand) {
+        // The router decided the line was conversation after all: it is a
+        // message, with its row, as if it had never looked like a command.
+        this.waitingSubmissions.push({
+          localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
+          state: result.disposition, id: result.submission.id, ...(result.unsteered ? { unsteered: true } : {}),
+        });
       }
       this.updateWaiting();
     }).catch(() => {

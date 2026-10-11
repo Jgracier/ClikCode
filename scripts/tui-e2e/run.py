@@ -353,6 +353,8 @@ SCENARIOS = {
         ],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
         'final_contains': ['grok-4-fast'],
+        # The typed command is acknowledged, not silently swallowed.
+        'ever': ['/model grok-4-fast · applied'],
     },
     'redraw-idle': {
         'turns': [{'blocks': ['The final commit is live.']}],
