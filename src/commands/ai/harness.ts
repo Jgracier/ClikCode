@@ -17,7 +17,7 @@ import { readState } from '../../session/state/read.js';
 import { accountView } from '../../session/state/views.js';
 import { writeState } from '../../session/state/write.js';
 import { modelIdFromLabel, resolveNativeModel } from '../../harness/accounts/model-catalog.js';
-import { harnessNeedsLogin, syncAccountIdentityAfterLogin, withSignIn } from '../account.js';
+import { accountSignedOutOnDisk, harnessNeedsLogin, syncAccountIdentityAfterLogin, withSignIn } from '../account.js';
 import { deriveAccountLabel, nameAccount } from '../../harness/accounts/labels.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
@@ -289,7 +289,30 @@ export async function startOrResumeChat(options: { harness?: string; chat?: stri
       await writeState(state);
     }
   }
+  await refuseAccountThatCannotTakeTurn(id);
   return id;
+}
+
+/** A script's send goes to the account the chat is bound to; one that cannot
+ * take a turn (signed out, or refused by the vendor and still held) would only
+ * fail, or be retried against a vendor that said no. Said once, with the
+ * reason, before anything is dispatched. A person at a terminal is signed in
+ * by the turn itself, so a signed-out account only stops a script. */
+async function refuseAccountThatCannotTakeTurn(id: string): Promise<void> {
+  const state = await readState({ transcripts: [id] });
+  const session = state.sessions.find((item) => item.id === id);
+  const account = session?.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
+  if (!session || !account || isClikCodeAgent(session) || account.authKind !== 'vendor-cli') return;
+  const name = sessionProviderLabel(session);
+  const command = session.nativeHarness ?? account.provider;
+  if (account.status === 'needs_login' || await accountSignedOutOnDisk(account)) {
+    if (process.stdin.isTTY) return;
+    throw new Error(`${name} is not signed in. Run \`${harnessCommand()} accounts login ${command}\` in a terminal.`);
+  }
+  if (!accountCanTakeTurn(account)) {
+    const why = account.verification ? 'it needs verification with the vendor' : (account.usage as { label?: string } | undefined)?.label ?? 'it is out of usage';
+    throw new Error(`${name} account "${account.label}" cannot take a turn: ${why}. Add or switch to another account, or wait for it to reset.`);
+  }
 }
 
 /** `send --permissions`: the approval mode for this chat, checked against
