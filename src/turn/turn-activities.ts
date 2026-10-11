@@ -267,18 +267,21 @@ export function runningTurnActivity(activities: readonly TurnActivity[]): Harnes
 export function activitiesBetween(
   activities: readonly TurnActivity[], start: number, end: number | undefined, length: number, first: boolean,
   startSeq?: number, endSeq?: number,
+  /** Where this segment's TEXT begins, when it is not `start` (a steer cuts
+   * the text at the end of the block it fell inside, steer-place.ts). */
+  textStart = start,
 ): TurnActivity[] {
   return betweenSteers(activities, (activity) => activity.event.seq, start, end, length, first, startSeq, endSeq)
-    .map((activity) => ({ ...activity, responseOffset: Math.min(length, Math.max(0, activity.responseOffset - start)) }));
+    .map((activity) => ({ ...activity, responseOffset: Math.min(length, Math.max(0, activity.responseOffset - textStart)) }));
 }
 
 /** The marks of the same segment, with offsets re-anchored the same way. */
 export function marksBetween(
   marks: readonly TurnMark[], start: number, end: number | undefined, length: number, first: boolean,
-  startSeq?: number, endSeq?: number,
+  startSeq?: number, endSeq?: number, textStart = start,
 ): TurnMark[] {
   return betweenSteers(marks, (mark) => mark.seq, start, end, length, first, startSeq, endSeq)
-    .map((mark) => ({ ...mark, responseOffset: Math.min(length, Math.max(0, mark.responseOffset - start)) }));
+    .map((mark) => ({ ...mark, responseOffset: Math.min(length, Math.max(0, mark.responseOffset - textStart)) }));
 }
 
 function betweenSteers<T extends { responseOffset: number }>(

@@ -159,6 +159,15 @@ export function decisionRow(decision: Decision): { text: string; tone: 'ok' | 'n
   }
 }
 
+/** The settled row a thought leaves at its place in the turn: `✻ Thought
+ * for 4s`, and `· <heading>` when the model titled it (standards 4 and 11).
+ * Live and reopened say it the same way: the duration is never shorter than
+ * a second, as Claude Code words it. No styling (the webview bundles this). */
+export function thoughtRow(thought: { durationMs: number; heading?: string }): string {
+  const heading = thought.heading?.replace(/\s+/g, ' ').trim();
+  return `✻ Thought for ${formatElapsed(Math.max(1000, thought.durationMs))}${heading ? ` · ${heading}` : ''}`;
+}
+
 /** The adapters' own phase while an approval is up ("waiting for your
  * approval: make clean"): true for it, so a surface does not restore it as
  * the status once the approval is answered -- by then it is stale. */

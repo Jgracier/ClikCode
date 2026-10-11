@@ -207,14 +207,14 @@ describe('durable turn checkpoints', () => {
   it('splits a steered turn\'s calls between the messages it became', () => {
     const target = session();
     beginPendingTurn(target, 'Work', stamp(0));
-    updatePendingResponse(target, 'First part. ', 'append', stamp(1));
+    updatePendingResponse(target, 'First part.\n\n', 'append', stamp(1));
     recordPendingActivity(target, { kind: 'tool-done', label: '$ one', id: 'a' }, stamp(2));
     recordPendingSteer(target, 'also two', stamp(3), target.pendingTurn!.response!.length, stamp(3));
     updatePendingResponse(target, 'Second part.', 'append', stamp(4));
     recordPendingActivity(target, { kind: 'tool-done', label: '$ two', id: 'b' }, stamp(5));
     finishPendingTurn(target, undefined, stamp(6));
     expect(target.messages!.slice(-3)).toEqual([
-      { role: 'assistant', content: 'First part. ', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a' }, responseOffset: 12 }], ...by },
+      { role: 'assistant', content: 'First part.\n\n', activities: [{ event: { kind: 'tool-done', label: '$ one', id: 'a' }, responseOffset: 13 }], ...by },
       { role: 'user', content: 'also two' },
       { role: 'assistant', content: 'Second part.', activities: [{ event: { kind: 'tool-done', label: '$ two', id: 'b' }, responseOffset: 12 }], ...by, turnEnd: { ms: 6_000 } },
     ]);
@@ -253,11 +253,13 @@ describe('durable turn checkpoints', () => {
   it('preserves native steering inside the active turn transcript', () => {
     const target = session();
     beginPendingTurn(target, 'Initial request', '2026-01-02T00:00:00.000Z');
-    updatePendingResponse(target, 'Before. After.', 'append', '2026-01-02T00:00:01.000Z');
-    recordPendingSteer(target, 'Prioritize tests', '2026-01-02T00:00:01.000Z', 8, '2026-01-02T00:00:01.000Z');
+    // Typed between two blocks. (Typed inside one, the steer is drawn after the
+    // block, where the live view put it: steer-replay.vitest.test.ts.)
+    updatePendingResponse(target, 'Before.\n\nAfter.', 'append', '2026-01-02T00:00:01.000Z');
+    recordPendingSteer(target, 'Prioritize tests', '2026-01-02T00:00:01.000Z', 7, '2026-01-02T00:00:01.000Z');
     expect(sessionTranscriptMessages(target).slice(-4)).toEqual([
       { role: 'user', content: 'Initial request' },
-      { role: 'assistant', content: 'Before. ', ...by },
+      { role: 'assistant', content: 'Before.\n\n', ...by },
       { role: 'user', content: 'Prioritize tests' },
       { role: 'assistant', content: 'After.', ...by },
     ]);
