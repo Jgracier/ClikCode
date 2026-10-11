@@ -22,6 +22,7 @@ import type { TurnUsage } from '../../../src/harness/protocol/turn-usage';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
 import { endsWithSummary, isApprovalWaitPhase, reasoningHeading, type Decision } from '../../../src/harness/protocol/turn-flow';
 import { readTurnMarks } from '../../../src/turn/turn-marks';
+import { CHILDREN_SHOWN } from '../../../src/tui/render/child-rows';
 import { failureLine } from '../../../src/harness/protocol/stderr-line';
 import { pendingPromptText } from '../../../src/tui/render/pending-prompt';
 
@@ -556,11 +557,13 @@ function sameMessages(previous: ChatModel['messages'], next: ChatModel['messages
  * as done, as the terminal draws it. Kept open, it span and its clock
  * counted on every reopen. */
 function settledCalls(activities: Activity[], stopped: boolean): Activity[] {
-  if (!activities.some((activity) => activity.kind === 'tool-start')) return activities;
+  const open = (rows: readonly Activity[]): boolean => rows.some((activity) => activity.kind === 'tool-start' || open(activity.children ?? []));
+  if (!open(activities)) return activities;
   return activities.map((activity) => {
-    if (activity.kind !== 'tool-start') return activity;
+    const children = activity.children ? { children: settledCalls(activity.children, stopped) } : {};
+    if (activity.kind !== 'tool-start') return { ...activity, ...children };
     const { child: _child, ...rest } = activity;
-    return stopped ? stoppedCall(rest) : { ...rest, kind: 'tool-done' as const };
+    return { ...(stopped ? stoppedCall(rest) : { ...rest, kind: 'tool-done' as const }), ...children };
   });
 }
 
@@ -590,9 +593,9 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     // A turn with no calls has a trace only to carry its closing line.
     if (!saved.length && !hasMarks && !(ended && (ended.stopped || ended.pendingBackground || endsWithSummary(ended.endedAt, 0)))) return;
     // Folded by the same upsert live frames go through.
-    const activities = settledCalls(saved.filter((item) => !item.event.parentId).reduce<LiveTurn>(
+    const activities = settledCalls(saved.reduce<LiveTurn>(
       (live, item) => upsertActivity(live, item.event, Math.min(item.responseOffset, message.content.length)), freshLive(''),
-    ).activities.map(({ startedAt: _startedAt, ...activity }) => activity), false);
+    ).activities.map(withoutClock), false);
     const prior = byUser.get(index - 1);
     const stopped = ended?.stopped || activities.some((activity) => activity.stopped);
     // The worker's marks are authoritative for the rows they carry; what only
@@ -611,6 +614,14 @@ function withSavedTraces(traces: TurnTrace[], messages: NonNullable<HarnessSessi
     changed = true;
   });
   return changed ? [...byUser.values()].sort((left, right) => left.userIndex - right.userIndex).slice(-MAX_TRACES) : traces;
+}
+
+/** A saved turn's row without this window's clock (a saved call is not
+ * running: no seconds to count, and nothing that differs between two reads of
+ * the same turn). */
+function withoutClock(activity: Activity): Activity {
+  const { startedAt: _startedAt, ...rest } = activity;
+  return activity.children ? { ...rest, children: activity.children.map(withoutClock) } : rest;
 }
 
 function cleanEvent(event: HarnessActivityEvent): HarnessActivityEvent {
@@ -633,6 +644,73 @@ function asActivity(key: string, event: HarnessActivityEvent, extra: Partial<Act
   return { ...fields, key, ...extra } as Activity;
 }
 
+/** Children kept under one sub-agent row. */
+const MAX_CHILDREN = 200;
+
+/** A sub-agent's frame into the row of its parent (anywhere in the tree):
+ * its words, and -- for a call -- a child row of its own, merged by id like
+ * any call, in the order the children began (standard 5). The parent's count
+ * is of unique child call ids (withChildTool), never of frames. Returns the
+ * rows unchanged when nothing changed, undefined when the parent is not here. */
+function placeChild(rows: Activity[], event: HarnessActivityEvent, offset: number): Activity[] | undefined {
+  for (let index = 0; index < rows.length; index += 1) {
+    const row = rows[index]!;
+    if (row.key !== event.parentId) {
+      const inner = row.children?.length ? placeChild(row.children, event, offset) : undefined;
+      if (!inner) continue;
+      if (inner === row.children) return rows;
+      const next = [...rows];
+      next[index] = { ...row, children: inner };
+      return next;
+    }
+    const says = childActivity(row.child, event);
+    let parent = withChildTool(row, event);
+    let children = row.children;
+    if (event.kind !== 'thinking') {
+      const held = row.children ?? [];
+      const at = held.findIndex((entry) => sameCall(entry, event));
+      if (at >= 0) {
+        const merged = mergeActivity(held[at]!, event);
+        const prior = held[at]!;
+        children = [...held];
+        children[at] = asActivity(prior.key, merged, {
+          ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
+          ...(prior.offset !== undefined ? { offset: prior.offset } : {}),
+          ...(prior.seq !== undefined ? { seq: prior.seq } : {}),
+          ...(prior.children ? { children: prior.children } : {}),
+        });
+      } else {
+        const key = event.id ?? `${row.key}>#${held.length + 1}`;
+        children = [...held, asActivity(key, event, { startedAt: Date.now(), offset, ...(event.seq !== undefined ? { seq: event.seq } : {}) })].slice(-MAX_CHILDREN);
+      }
+      // Counted from the unique ids it holds while it runs; a finished
+      // parent's number is what the harness reported, else what was counted.
+      if (row.kind === 'tool-start') parent = { ...parent, childTools: Math.max(parent.childTools ?? 0, children.length) };
+    }
+    if (says === row.child && parent === row && children === row.children) return rows;
+    const next = [...rows];
+    next[index] = { ...parent, ...(children ? { children } : {}), ...(says ? { child: says } : { child: undefined }) };
+    return next;
+  }
+  return undefined;
+}
+
+/** A running sub-agent's live children for drawing: the last few that are
+ * still running, each its own line (one finishing never clears another's).
+ * `beside`: it began no later than the parent's row, so it sits directly
+ * under it; one that began after more of the answer was written sits at its
+ * own place below that text (never above text emitted before it). `newest`
+ * carries the parent's count. */
+export interface LiveChild { parent: Activity; child: Activity; beside: boolean; newest: boolean }
+
+export function liveChildren(parent: Activity, shown = CHILDREN_SHOWN): LiveChild[] {
+  if (parent.kind !== 'tool-start' || !parent.children?.length) return [];
+  const running = parent.children.filter((entry) => entry.kind === 'tool-start').slice(-shown);
+  return running.map((child, rank) => ({
+    parent, child, beside: (child.offset ?? 0) <= (parent.offset ?? 0), newest: rank === running.length - 1,
+  }));
+}
+
 /** A tool frame into the turn's rows, by the terminal's rules: a later frame
  * of the same call (by id, or the open row with its label) merges into it --
  * never reopening a finished call -- and a sub-agent's frames say what it is
@@ -641,15 +719,12 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
   if (raw.kind === 'thinking' && !raw.parentId) return live;
   const event = cleanEvent(raw);
   if (event.parentId) {
-    const index = live.activities.findIndex((item) => item.key === event.parentId);
-    if (index < 0) return live;
-    const parent = live.activities[index]!;
-    const child = childActivity(parent.child, event);
-    const counted = withChildTool(parent, event);
-    if (child === parent.child && counted === parent) return live;
-    const activities = [...live.activities];
-    activities[index] = { ...counted, ...(child ? { child } : { child: undefined }) };
-    return { ...live, activities };
+    const placed = placeChild(live.activities, event, offset);
+    if (placed === live.activities) return live;
+    if (placed) return { ...live, activities: placed };
+    // Its parent was never seen (or is gone): its reasoning is nothing to
+    // draw, its call is a row of its own rather than lost.
+    if (event.kind === 'thinking') return live;
   }
   for (let index = live.activities.length - 1; index >= 0; index -= 1) {
     const prior = live.activities[index]!;
@@ -660,6 +735,7 @@ function upsertActivity(live: LiveTurn, raw: HarnessActivityEvent, offset = live
       ...(prior.startedAt ? { startedAt: prior.startedAt } : {}),
       ...(prior.offset !== undefined ? { offset: prior.offset } : {}),
       ...(prior.seq !== undefined ? { seq: prior.seq } : {}),
+      ...(prior.children ? { children: prior.children } : {}),
       ...(prior.child && merged.kind === 'tool-start' ? { child: prior.child } : {}),
     });
     return { ...live, activities };
@@ -1136,6 +1212,9 @@ export type TurnMark = {
   offset: number; seq: number; activity?: Activity; thought?: ThoughtEntry; steer?: string; steerIndex?: number; plan?: true; note?: Note;
   /** A decision that is a row of its own (not settled on a call's row). */
   decision?: DecisionEntry;
+  /** A running sub-agent's live child that sits below text (not beside its
+   * parent's row). */
+  child?: LiveChild;
 };
 
 /** A turn's notices for drawing: the window's own notes of the turn plus the
@@ -1179,6 +1258,11 @@ export function turnMarks(
       offset: at(activity.offset ?? 0), seq: activity.seq ?? index, activity: onCall.has(activity.key) ? { ...activity, decision: onCall.get(activity.key)! } : activity,
     })),
     ...alone.map((entry) => ({ offset: at(entry.offset), seq: entry.seq, decision: entry })),
+    // Live children that began after more answer was written: a row of their
+    // own under that text, in the order they began, just after their parent.
+    ...activities.flatMap((activity, index) => liveChildren(activity).flatMap((live, rank) => (live.beside ? [] : [{
+      offset: at(live.child.offset ?? 0), seq: live.child.seq ?? (activity.seq ?? index) + (rank + 1) / 1000, child: live,
+    }]))),
     ...steers.map((steer, steerIndex) => ({ offset: at(steer.offset), seq: steer.seq ?? Number.MAX_SAFE_INTEGER, steer: steer.text, steerIndex })),
     ...(extra.plan ? [{ offset: at(extra.plan.offset), seq: extra.plan.seq, plan: true as const }] : []),
     ...(extra.notes ?? []).map(({ offset, seq, note }) => ({ offset: at(offset), seq, note })),

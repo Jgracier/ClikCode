@@ -235,6 +235,7 @@ code.file-link:hover, a.file-link:hover { text-decoration: underline; }
 .decision-no > span::first-letter { color: var(--err); }
 .decision-told > span::first-letter { color: var(--vscode-terminal-ansiCyan, #29b8db); }
 .activity-decision { white-space: nowrap; }
+.activities.nested { margin: 2px 0 0 18px; padding-left: 6px; border-left: 1px solid var(--border); }
 .activity-decision.ok { color: var(--ok); }
 .activity-decision.no { color: var(--err); }
 /* A run of reads and searches as one row, its newest calls dimmed beneath. */
