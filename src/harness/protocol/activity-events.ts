@@ -7,7 +7,7 @@ import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import { claudeShaped, JsonRecord, opencodeShaped, asRecord } from './json-lines.js';
 import { eventDiff, unifiedEventDiff } from '../../agent/line-diff.js';
-import { categoryOf, formatToolRow, toolLabel } from './tools.js';
+import { categoryOf, formatToolRow, isAgentToolName, toolLabel } from './tools.js';
 
 import { COMMAND_HEAD_LINES } from './activity-view.js';
 
@@ -43,19 +43,55 @@ export function activityOutput(text: string, options: { tail?: boolean } = {}): 
   };
 }
 
+/** The scalar a JSON tool result carries for a human: the first of these keys
+ * holding a non-empty string (an `error` first: a failure's reason is what the
+ * row is for), looking one object deeper (`{"error":{"message":..}}`,
+ * `{"result":{"text":..}}`). */
+const HUMAN_KEYS = ['error', 'output', 'stdout', 'message', 'text', 'result', 'response', 'content'] as const;
+
+function jsonHumanSummary(value: unknown, depth = 0): string | undefined {
+  if (Array.isArray(value)) return `${value.length} items`;
+  const record = asRecord(value);
+  if (!record) return undefined;
+  for (const key of HUMAN_KEYS) {
+    const field = record[key];
+    if (typeof field === 'string' && field.trim()) return field;
+    if (Array.isArray(field)) {
+      const text = blockText(field);
+      if (text.trim()) return text;
+    } else if (depth < 2 && asRecord(field)) {
+      const nested = jsonHumanSummary(field, depth + 1);
+      if (nested && !/^\d+ items$/.test(nested)) return nested;
+    }
+  }
+  // A result that is a list: how big, under the name it was given.
+  const lists = Object.entries(record).filter(([, field]) => Array.isArray(field));
+  if (lists.length === 1) {
+    const [key, list] = lists[0]!;
+    return `${(list as unknown[]).length} ${(HUMAN_KEYS as readonly string[]).includes(key) ? 'items' : key}`;
+  }
+  return undefined;
+}
+
 function cappedActivityOutput(text: string): Pick<HarnessActivityEvent, 'output' | 'outputOmitted' | 'outputTail'> {
   const normalized = withoutHarnessNotes(text).trim();
   if (!normalized) return {};
   // Machine-readable tool output belongs to the native event protocol, not
   // the human transcript. Printing JSON/JSONL here was the reason a working
   // turn looked like a wall of tool-call envelopes until the final response
-  // replaced it. Keep the useful tool label/status and omit its raw payload.
+  // replaced it. The raw envelope is never shown; what a person would read in
+  // it (an `output`, a `message`, an `error`, how long a list is) is.
   const records = normalized.split(/\r?\n/).filter(Boolean);
-  const isJson = (candidate: string): boolean => {
-    if (!/^(?:\{|\[)/.test(candidate.trim())) return false;
-    try { JSON.parse(candidate); return true; } catch { return false; }
+  const parse = (candidate: string): { value: unknown } | undefined => {
+    if (!/^(?:\{|\[)/.test(candidate.trim())) return undefined;
+    try { return { value: JSON.parse(candidate) }; } catch { return undefined; }
   };
-  if (isJson(normalized) || (records.length > 0 && records.every(isJson))) return {};
+  const whole = parse(normalized);
+  if (whole) {
+    const summary = jsonHumanSummary(whole.value);
+    return summary ? activityOutput(summary) : {};
+  }
+  if (records.length > 0 && records.every((record) => parse(record))) return {};
   return activityOutput(normalized);
 }
 
@@ -147,7 +183,10 @@ export function editDiffFromInput(input: JsonRecord | undefined): HarnessActivit
 export function toolFacts(name: string, input: JsonRecord | undefined, command: string): Pick<HarnessActivityEvent, 'label' | 'category' | 'agent' | 'diff' | 'call'> {
   const classified = categoryOf(name, input, command);
   const diff = classified.category === 'edit' ? editDiffFromInput(input) : undefined;
-  return { label: toolLabel(name, input, classified.category), ...classified, ...(diff?.length ? { diff } : {}), call: toolCall(name, input) };
+  // The call that spawns a sub-agent is the parent row (standard section 5),
+  // by the tool's own name or the sub-agent type its input names.
+  const agent = isAgentToolName(name) || typeof input?.subagent_type === 'string' ? { agent: true as const } : {};
+  return { label: toolLabel(name, input, classified.category), ...classified, ...agent, ...(diff?.length ? { diff } : {}), call: toolCall(name, input) };
 }
 
 /** Characters one argument string keeps in a call record. */
@@ -270,7 +309,7 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
   if (value.type !== 'message') return undefined;
   const content = asRecord(value.message)?.content;
   if (!Array.isArray(content)) return [];
-  return content.flatMap((part): NativeActivityEvent[] => {
+  return content.flatMap((part, index): NativeActivityEvent[] => {
     const block = asRecord(part);
     const identity = typeof block?.id === 'string' ? { id: block.id } : {};
     if (block?.type === 'toolRequest') {
@@ -291,7 +330,11 @@ function gooseActivity(value: JsonRecord, command: string): NativeActivityEvent[
       return [{ kind: failed ? 'tool-error' : 'tool-done', label: 'tool', ...identity, ...output }];
     }
     if (block?.type === 'thinking' && typeof block.thinking === 'string' && block.thinking.trim()) {
-      return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140) }];
+      // One id per thought (its message and place in it), so a thought that
+      // is streamed and then completed is one row, and a settled one is keyed.
+      const messageId = asRecord(value.message)?.id;
+      const thoughtKey = typeof messageId === 'string' && messageId ? { id: `thinking:${messageId}:${index}` } : {};
+      return [{ kind: 'thinking', label: visibleSlice(block.thinking.trim().replace(/\s+/g, ' '), 140), ...thoughtKey }];
     }
     return [];
   });
@@ -372,7 +415,8 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   if (type === 'thread.started' || type === 'turn.started') return undefined;
   if (/reasoning|thinking/.test(itemType) && /completed|done/.test(type)) {
     const summary = reasoningSummary(item?.summary) ?? reasoningSummary(item?.text) ?? reasoningSummary(item?.content);
-    return summary ? { kind: 'thinking', label: visibleSlice(summary.replace(/\s+/g, ' '), 140) } : undefined;
+    // The item's id, as the app-server transport keys the same thought.
+    return summary ? { kind: 'thinking', label: visibleSlice(summary.replace(/\s+/g, ' '), 140), ...(typeof item?.id === 'string' ? { id: item.id } : {}) } : undefined;
   }
   if (/command_execution/.test(itemType) && /started|completed/.test(type)) {
     const command = String(item?.command ?? item?.command_line ?? '').trim();
@@ -439,6 +483,14 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   // that actually called a tool — `part.tool` is the tool name and
   // `part.state.status` tracks completion.
   // Kilo Code CLI is an OpenCode fork and emits the same envelope.
+  // opencode / Kilo `run --format json` reasoning part: the model's thought,
+  // one part id per thought (written only when the run asks for thinking).
+  if (opencodeShaped(harness) && type === 'reasoning') {
+    const part = asRecord(value.part);
+    const text = typeof part?.text === 'string' ? part.text : '';
+    if (text.trim()) return { kind: 'thinking', label: thoughtLabel(text), ...(typeof part?.id === 'string' ? { id: `thinking:${part.id}` } : {}) };
+    return undefined;
+  }
   if (opencodeShaped(harness) && type === 'tool_use') {
     const part = asRecord(value.part);
     const state = asRecord(part?.state);
@@ -502,8 +554,22 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
       const label = !id ? formatToolRow(name, undefined, facts.category) : start || args ? facts.label : 'tool';
       return { kind: 'tool-start', ...facts, label, ...(id ? { id } : {}) };
     };
+    // The model's reasoning, as the message so far (`partial.content[i].thinking`).
+    // The id is the turn's own (adapters.ts): Pi names none.
+    const reasoning = type === 'message_update' ? asRecord(value.assistantMessageEvent) : undefined;
+    if (reasoning && /^thinking_(?:start|delta|end)$/.test(String(reasoning.type))) {
+      const content = asRecord(reasoning.partial)?.content;
+      const block = Array.isArray(content) && typeof reasoning.contentIndex === 'number' ? asRecord(content[reasoning.contentIndex]) : undefined;
+      const text = typeof block?.thinking === 'string' ? block.thinking : typeof reasoning.content === 'string' ? reasoning.content : '';
+      return text.trim() ? { kind: 'thinking', label: thoughtLabel(text) } : undefined;
+    }
     if (type === 'tool_execution_start') return piTool(value, true);
-    if (type === 'tool_execution_end') return { ...piTool(value, false), kind: value.isError === true || value.error ? 'tool-error' : 'tool-done' };
+    if (type === 'tool_execution_end') {
+      // The result's own text (`result.content[]`), or the error's.
+      const result = asRecord(value.result);
+      const said = blockText(result?.content) || (typeof value.error === 'string' ? value.error : '') || (typeof result?.error === 'string' ? result.error : '');
+      return { ...piTool(value, false), kind: value.isError === true || value.error ? 'tool-error' : 'tool-done', ...cappedActivityOutput(said) };
+    }
     const event = type === 'message_update' ? asRecord(value.assistantMessageEvent) : undefined;
     if (event?.type === 'toolcall_start') {
       const content = asRecord(event.partial)?.content;
