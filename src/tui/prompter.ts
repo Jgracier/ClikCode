@@ -37,7 +37,7 @@ import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/act
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
-import { reasoningBody, tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { answerWriting, reasoningBody, tensedLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
 import { waitStalled } from '../harness/protocol/turn-pace.js';
@@ -45,7 +45,7 @@ import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
-import { NOTICE_MS, PAINT_COALESCE_MS, WRITING_MS } from '../harness/protocol/timings.js';
+import { NOTICE_MS, PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
 import { ApprovalPreview, ApprovalRequest, approvalBlockRows } from './render/approval-block.js';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from './render/approval-keys.js';
 import { questionBlockRows, questionKeyAction, questionRows, questionValues, startsTyping, type QuestionPromptState } from './render/question-block.js';
@@ -124,8 +124,11 @@ type WaitingTurn = {
    * approval was answered: quiet past turn-pace's threshold and the spinner
    * turns yellow, by the same rule as a stalled row in the conversation list. */
   activeAt: number;
-  /** When answer text last arrived: the status line says "writing". */
+  /** When answer text last arrived (a statusOrder tick): the status line says
+   * "writing" until a call starts after it (answerWriting). */
   writingAt?: number;
+  /** When the latest call started (a statusOrder tick). */
+  callAt?: number;
   /** The composer typed into while the turn runs. */
   draft: string;
   cursor: number;
@@ -165,6 +168,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The turn (or other wait) in flight: see WaitingTurn. */
   private turn?: WaitingTurn;
   private waitingFrame = 0;
+  /** Orders answer text against call starts for answerWriting: a counter, so
+   * two events in one millisecond keep their order. */
+  private statusOrder = 0;
   /** Whether the pending tick is the spinner's (true) or the clock's. */
   private waitingTickFast = false;
   private activityEntries: ActivityEntry[] = [];
@@ -920,7 +926,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // no-op, but replace must clear the obsolete partial response.
     if (!text && mode === 'append') return;
     // The thought led to this text: it settles where it was had.
-    if (text) { this.settleThought(); this.vendorAnswered(); if (this.turn) this.turn.activeAt = this.turn.writingAt = Date.now(); }
+    if (text) { this.settleThought(); this.vendorAnswered(); if (this.turn) { this.turn.activeAt = Date.now(); this.turn.writingAt = ++this.statusOrder; } }
     if (mode === 'replace') {
       // Only a turn in flight has tool rows whose place in the answer can
       // move. After it, a replacement (a snapshot's copy of the finished
@@ -1000,7 +1006,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.schedulePaint();
       return;
     }
-    if (event.kind === 'tool-start') this.settleThought();
+    if (event.kind === 'tool-start') { this.settleThought(); if (this.turn) this.turn.callAt = ++this.statusOrder; }
     const anchor = this.turn ? this.activityAnchor : this.restingAnchor();
     const responseOffset = this.turn ? live?.responseOffset ?? this.liveResponse.length : undefined;
     this.activityEntries = upsertActivityEvent(this.activityEntries, anchor, responseOffset, event, ++this.timelineSequence);
@@ -1805,7 +1811,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       ...(!turn.cancelled && tool ? { toolPhase: tool.phase } : {}),
       ...(this.thought && !turn.cancelled ? { thought: this.thought.text } : {}),
       asking: Boolean(this.pendingApproval),
-      writing: turn.writingAt !== undefined && now - turn.writingAt < WRITING_MS,
+      writing: answerWriting({ writingAt: turn.writingAt, callAt: turn.callAt }),
     });
     // An approval or a sign-in: the wait is on the user.
     const asking = this.waitingOnUser();

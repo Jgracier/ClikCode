@@ -32,8 +32,8 @@ export const NOTICE_MS = 4000;
 /** How long a copy button shows its tick after copying. */
 export const COPIED_MS = 1200;
 
-/** Answer text arrived this recently: the status line says "writing", not
- * "thinking". */
+/** @deprecated Writing no longer expires: see answerWriting() in
+ * turn-flow.ts. Kept only so the webview still compiles until it uses that. */
 export const WRITING_MS = 1500;
 
 /** A wait shorter than this shows nothing; past it a spinner or a "looking
