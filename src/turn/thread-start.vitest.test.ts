@@ -87,6 +87,17 @@ describe('startConversationThread', () => {
     expect((await startConversationThread(input({ writer, harness: goose, model: 'anthropic/sonnet' }))).kind).toBe('native');
   });
 
+  it('treats OpenClaw statelessRoute providers as keeping no history', async () => {
+    const claw = {
+      command: 'openclaw', provider: 'openclaw', displayName: 'OpenClaw', modelProviderSeparator: '/',
+      turn: { output: 'json', statelessRoute: { path: ['meta'], values: ['claude-cli'] } },
+    } as AiLocalHarnessDefinition;
+    const { writer, seen } = fakeWriter();
+    const start = await startConversationThread(input({ writer, harness: claw, model: 'claude-cli/claude-opus-4-7' }));
+    expect(start.kind).toBe('transfer');
+    expect(seen).toEqual([]);
+  });
+
   it('writes nothing for a conversation with no turns', async () => {
     const { writer, seen } = fakeWriter();
     const start = await startConversationThread(input({ writer, record: { ...record, turns: [] } }));

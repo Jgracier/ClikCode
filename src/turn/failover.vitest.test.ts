@@ -23,6 +23,11 @@ describe('ClikCode account failover', () => {
     })).toBe('quota-exhausted');
   });
 
+  it('classifies a thread the vendor archived as a thread to replace', () => {
+    expect(classifyAccountFailure(new Error('amp exited 1: Error: This thread is archived and cannot be continued.'))).toBe('native-thread-invalid');
+    expect(classifyAccountFailure(new Error('thread/resume failed: no rollout found for thread id x'))).toBe('native-thread-invalid');
+  });
+
   it('classifies authentication separately', () => {
     expect(classifyAccountFailure(Object.assign(new Error('unauthorized'), { statusCode: 401 }))).toBe('authentication-required');
   });
