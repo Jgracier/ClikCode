@@ -14,7 +14,7 @@ import { acpSessionTotals, normalizeTurnUsage, turnShareOf, turnStopReason, type
 import { claudeRateLimitReading } from '../accounts/usage-reading.js';
 import { activityOutput, editDiffFromInput, toolCall } from '../protocol/activity-events.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
-import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
+import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
 import { configuredIdleMs, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
@@ -78,7 +78,6 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   extraArgv?: readonly string[];
   /** The adapter handshake's timeout (initialize). Requests that wait on the
    *  agent starting up are bounded by the idle budget instead. */
-  setupTimeoutMs?: number;
   /** Servers this session should start. Empty keeps the previous request. */
   mcpServers?: readonly Record<string, unknown>[];
   /** Open the session -- start the agent, load the thread, apply model,
@@ -553,7 +552,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const cold = !live.capabilities;
     let threadLoadMs = 0;
     const { peer } = live;
-    const setup = { timeoutMs: input.setupTimeoutMs ?? JSONRPC_SETUP_TIMEOUT_MS };
+    // Setup requests carry no clock. A starting agent answers when it is ready
+    // (cold start under load is slow, not broken); a dead one rejects them when
+    // its process exits, and Esc or the turn ending rejects them too.
+    const setup: { timeoutMs?: number; idleReset?: boolean } = {};
     // Past the handshake, a request waits on the agent's backend, which is
     // still starting: Claude Code connects every MCP server before it takes a
     // control request, and its adapter answers set_config_option only once
@@ -580,11 +582,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // ordinary turn through the CLI fallback.
     const effortRequiresProtocol = modelRequiresProtocol && input.effort !== 'medium';
     if (!live.capabilities) {
-      const initialized = await peer.request('initialize', {
+      const initialized = await waitOnStart(peer.request('initialize', {
         protocolVersion: 1,
         clientCapabilities: ACP_CLIENT_CAPABILITIES,
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
-      }, setup);
+      }, setup));
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
       live.steering = initialized._meta?.steering?.supported === true;
       stillRunning();
@@ -625,7 +627,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         const method = capabilities.sessionCapabilities?.resume ? 'session/resume' : 'session/load';
         try {
           const loadAt = Date.now();
-          loaded = await call(method, { sessionId: wanted, cwd: input.cwd, mcpServers }, loading);
+          loaded = await waitOnStart(call(method, { sessionId: wanted, cwd: input.cwd, mcpServers }, loading));
           threadLoadMs = Date.now() - loadAt;
         } catch (error) {
           throw markMissingThread(error, wanted);
@@ -832,7 +834,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
           const answer = await live.peer.request('_session/steering', {
             sessionId: turn.sessionId, prompt: [{ type: 'text', text: item.text }],
             _meta: { steering: { idleBehavior: 'promptRequired' } },
-          }, { timeoutMs: JSONRPC_SETUP_TIMEOUT_MS });
+          }, {});
           if (answer?.outcome === 'injected') item.resolve();
           else item.reject(new Error(`${turn.input.command} did not take the message into its turn (${String(answer?.outcome)})`));
         } catch (error) {

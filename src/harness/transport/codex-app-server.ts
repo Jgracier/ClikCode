@@ -1,7 +1,7 @@
 import { activityOutput } from '../protocol/activity-events.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { turnCancelledError } from '../../agent/cancellation.js';
-import { JSONRPC_SETUP_TIMEOUT_MS, type JsonRpcPeer } from './jsonrpc-peer.js';
+import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import type { AiHarnessPermissionMode } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { HarnessPlanEntry, HarnessTurnObserver } from '../events/turn-observer.js';
@@ -39,7 +39,6 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   /** Extra top-level thread/start|resume params; wins over the defaults. */
   extraThreadParams?: Record<string, unknown>;
   /** Timeout for initialize / thread / turn-start requests. Default 20s. */
-  setupTimeoutMs?: number;
 }
 
 type CodexErrorKind = 'quota' | 'auth' | 'other';
@@ -339,7 +338,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const turn = this.turn;
     const live = this.live;
     if (!turn || turn.done || !live || !turn.threadId || !turn.turnId) throw new Error('Codex has no active turn to steer');
-    await live.peer.request('turn/steer', codexSteerParams(turn.threadId, turn.turnId, text), { timeoutMs: JSONRPC_SETUP_TIMEOUT_MS });
+    await live.peer.request('turn/steer', codexSteerParams(turn.threadId, turn.turnId, text));
   }
 
   protected pendingCount(): number {
@@ -418,7 +417,8 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const overrides = { ...(input.configOverrides ? { config: input.configOverrides } : {}), ...(input.extraThreadParams ?? {}) };
     const live = this.ensureLive(input, JSON.stringify([settings, overrides]));
     const { peer } = live;
-    const setup = { timeoutMs: input.setupTimeoutMs ?? JSONRPC_SETUP_TIMEOUT_MS };
+    // No clock on setup: see the ACP client. A dead app-server rejects these on exit.
+    const setup: { timeoutMs?: number } = {};
     const stillRunning = (): void => { if (turn.done) throw turnCancelledError(); };
     if (!live.initialized) {
       await peer.request('initialize', { clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' }, capabilities: { experimentalApi: false, requestAttestation: false } }, setup);
