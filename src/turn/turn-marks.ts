@@ -206,3 +206,15 @@ export function readTurnMarks(value: unknown): TurnMark[] {
   });
   return kept.length === value.length ? value as TurnMark[] : kept;
 }
+
+/** What a worker's observer hands the turn's journal: every mark it makes,
+ * and the thought being had. It also takes the journal's counter, so a row
+ * is numbered the same on the screen and in the saved turn.
+ * (DurableTurnCheckpoint is the one implementation.) */
+export interface TurnMarkJournal {
+  readonly sequencer: MarkSequencer;
+  recordMark(mark: TurnMark): void;
+  setThought(thought: OpenThought | undefined): void;
+  /** Where the steer `id` was placed, once the turn took it. */
+  steerOrder(id: string): { seq: number; responseOffset: number } | undefined;
+}

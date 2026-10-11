@@ -711,7 +711,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
       // at the next pause. The turn is not cancelled, so a sub-agent it
       // started keeps running. A command or a notice stays for the turn's end.
       const answer = (disposition: 'steered' | 'queued' | 'error', id?: string, message?: string, unsteered?: boolean): void => {
-        if (id) sendEvent(socket, { type: 'submission', id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}) });
+        if (id) sendEvent(socket, { type: 'submission', id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}), ...(disposition === 'steered' ? observer.steerOrder(id) ?? {} : {}) });
       };
       if (!activeLiveInput) return;
       const liveInput = activeLiveInput;
@@ -779,7 +779,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     }
     if (command.type === 'steer') {
       const answer = (disposition: 'steered' | 'queued' | 'error', message?: string, unsteered?: boolean): void => {
-        if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}) });
+        if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}), ...(disposition === 'steered' ? observer.steerOrder(command.id) ?? {} : {}) });
       };
       // The turn ended between the client's Enter and this arriving. This used
       // to `return` -- and the message was simply gone. Nothing is running to

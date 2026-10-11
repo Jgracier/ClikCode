@@ -10,7 +10,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { LineBuffer } from '../harness/protocol/json-lines.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
-import type { HarnessSession, TurnActivity } from '../session/model.js';
+import type { HarnessSession, TurnActivity, TurnMark } from '../session/model.js';
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
@@ -81,7 +81,19 @@ export function isTranscriptActivity(event: HarnessActivityEvent): boolean {
 export type LiveTurn = {
   text: string; waitingLabel: string; prompt?: string;
   activities?: LiveActivity[]; plan?: PlanEntry[];
+  /** The rest of what an attached window has drawn (additive): the thought
+   * being had, the turn's settled thoughts / plan / notices / approval
+   * outcomes in their own order (TurnMark, placed like a call), the turn's
+   * latest phase, and its usage so far. A thought is not an activity, so
+   * `activities` never carries one -- a window that took only that lost its
+   * reasoning at every mid-turn snapshot. */
+  thought?: LiveThought; marks?: TurnMark[]; phase?: string; usage?: TurnUsage;
 };
+
+/** The thought being had, as a joining window continues it. `text` is its
+ * newest words; `startedAt` (epoch ms, the worker's clock) lets the window
+ * settle it with the duration the attached ones show. */
+export type LiveThought = { id?: string; text: string; heading?: string; seq: number; responseOffset: number; startedAt: number };
 
 /** What the worker tells an attached client. `snapshot` is always the first
  * event after `attach` answers -- the full session to paint, and, when a
@@ -100,17 +112,21 @@ export type WorkerEvent =
   /** A line of the turn's own transcript that is not a tool call: an account
    * switch, a model substitution, an answer cut off at its limit. It was
    * sent as a thought, which a window shows only until the next one. */
-  | { type: 'note'; message: string }
+  | { type: 'note'; message: string; seq?: number; responseOffset?: number }
   | { type: 'phase'; message: string }
-  | { type: 'plan'; entries: readonly PlanEntry[] }
+  /** `seq`/`responseOffset`: where the plan row began (it updates in place). */
+  | { type: 'plan'; entries: readonly PlanEntry[]; seq?: number; responseOffset?: number }
   | { type: 'usage'; usage: TurnUsage }
-  | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string }
+  | { type: 'approval-request'; id: string; title: string; detail?: string; preview?: ApprovalPreview; rule?: string; seq?: number; responseOffset?: number }
   /** A harness asks the user a question (options, several questions, free
    * text); answered with `question-response`. */
-  | { type: 'question-request'; id: string; request: HarnessQuestionRequest }
+  | { type: 'question-request'; id: string; request: HarnessQuestionRequest; seq?: number; responseOffset?: number }
   /** An approval or question is no longer wanted (the vendor withdrew it, or
    * the turn ended): every window closes its prompt. */
-  | { type: 'request-closed'; id: string }
+  /** `outcome`/`label`: the user decided it -- the settled row the request
+   * becomes where it was asked (TurnMark `outcome`). Absent when it was
+   * withdrawn or the turn ended under it. */
+  | { type: 'request-closed'; id: string; outcome?: 'approved' | 'denied' | 'answered'; label?: string }
   /** A turn has started. `prompt` (additive) is its text: a client that did
    * not send it -- another window's turn, or one the worker started itself
    * for a finished background shell -- follows it from here to waiting-stop
@@ -138,7 +154,9 @@ export type WorkerEvent =
    * said "queued for next turn" for the rest of the turn. */
   /** `unsteered`: queued though steering was asked for -- nothing running
    *  could take a steer (LiveTurnInputResult.unsteered). */
-  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string; unsteered?: boolean }
+  | { type: 'submission'; id: string; disposition: 'steered' | 'queued' | 'error'; message?: string; unsteered?: boolean;
+    /** Where a steered message was placed (its acknowledgement's order). */
+    seq?: number; responseOffset?: number }
   /** The worker is exiting (idle timeout, explicit stop, an unrecoverable
    * error) -- told, not just disconnected, so a client can say why instead
    * of a bare "connection closed". */
