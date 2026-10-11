@@ -36,8 +36,10 @@ export type TranscriptMessage = {
   /** On the answer a turn ended on: how long the turn took, and whether it
    * was stopped. The turn's closing line ("Worked for 12s", "Stopped after
    * 3s") is drawn from this, so it is there however the conversation is
-   * opened again -- not only in the window that watched the turn end. */
-  turnEnd?: { ms: number; stopped?: true };
+   * opened again -- not only in the window that watched the turn end.
+   * `usage` is what the turn reported it spent, when it reported any: the
+   * closing line adds tokens and cost from it. */
+  turnEnd?: { ms: number; stopped?: true; usage?: TurnUsage };
   /** On the answer a turn ended on: the account it moved to on the way,
    * from which, and why ("Switched to work: personal is out of usage"). */
   accountSwitch?: AccountSwitch;
