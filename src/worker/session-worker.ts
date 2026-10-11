@@ -18,7 +18,7 @@ import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { createServer, type Socket } from 'node:net';
 import { hasHeldVendorProcess, stopHeldVendorProcess, whenHeldVendorGone } from '../harness/transport/native/held-vendor.js';
-import { existsSync } from 'node:fs';
+import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
 import { runSessionTurn } from '../turn/session-turn.js';
@@ -140,6 +140,15 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   /** The agent's in-process state for this conversation: its background
    * shells and their exit notifications (agent/session-state.ts). */
   const agentSession = sessionState(stateDirectory(), sessionId);
+  /** The state directory this worker started in, by identity. A path that
+   * exists again is not the same home: the worker's own writes (a log, a
+   * record) recreate a deleted one, which made a path check pass for the
+   * whole idle time while the sandbox that owned it was long gone. */
+  const homeIdentity = (): string | undefined => {
+    try { const stat = statSync(stateDirectory()); return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`; } catch { return undefined; }
+  };
+  const startedHome = homeIdentity();
+  const homeGone = (): boolean => homeIdentity() !== startedHome;
   const connections = new Map<Socket, ConnectionState>();
   /** The turn currently in flight, if any -- both cleared together in
    * runTurn's `finally`. A `cancel` with nothing running is simply a no-op:
@@ -293,6 +302,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * bounded like a background shell (ABANDONED_SHELL_MS). */
   const idleReached = async (): Promise<void> => {
     idleTimer = undefined;
+    if (homeGone()) { void shutdown('its ClikCode home was removed'); return; }
     const running = await persistentWorkRunning(sessionId);
     // Something happened meanwhile (a turn, a window): its own edge re-arms.
     if (idleTimer || turnRunning || draining || observer.attachedCount > 0 || resumeWaiter.pending) return;
@@ -936,7 +946,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     // A home that is gone (a test run's, cleaned up) has no conversation to
     // serve or save: whatever this worker was waiting on, it leaves. Two
     // workers lived for days this way, each holding its MCP servers.
-    if (!existsSync(stateDirectory())) { void shutdown('its ClikCode home was removed'); return; }
+    if (homeGone()) { void shutdown('its ClikCode home was removed'); return; }
     leaveIfStaleBuild();
   }, BUILD_WATCH_MS);
   buildWatch.unref();
