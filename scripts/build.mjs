@@ -56,8 +56,6 @@ const pkg = JSON.parse(await readFile('package.json', 'utf8'));
  * must therefore be listed in package.json `dependencies`.
  */
 const INLINE_PACKAGES = new Set(['chalk', 'commander', 'conf', 'cross-spawn', 'marked']);
-/** Never inline, even transitively. */
-const FORCE_EXTERNAL = new Set(['@basetenlabs/performance-client']);
 const builtins = new Set(builtinModules);
 
 function packageName(specifier) {
@@ -73,7 +71,6 @@ const selectiveExternals = {
       if (args.kind === 'entry-point') return undefined;
       if (args.path.startsWith('node:') || builtins.has(args.path) || /^[a-zA-Z]:[\\/]/.test(args.path)) return undefined;
       const name = packageName(args.path);
-      if (FORCE_EXTERNAL.has(name)) return { path: args.path, external: true };
       const fromDependency = /[\\/]node_modules[\\/]/.test(args.importer);
       if (fromDependency || INLINE_PACKAGES.has(name)) return undefined; // let esbuild bundle it
       return { path: args.path, external: true };
@@ -164,7 +161,6 @@ const router = await build({
   ...common,
   entryPoints: ['src/runtime/router.ts'],
   format: 'cjs',
-  external: [...FORCE_EXTERNAL],
   outfile: 'dist/ai-router-runtime.cjs',
 });
 

@@ -31,17 +31,13 @@
     "imports at RUNTIME, and scripts/build.mjs fails if one is missing and warns about",
     "extras. chalk, commander, conf, cross-spawn and marked are inlined into dist/index.js,",
     "and @clikcode/router (a private, source-only workspace package) is bundled into",
-    "dist/*.cjs, so all of those are devDependencies. @basetenlabs/performance-client is a",
-    "native addon that must never be bundled (FORCE_EXTERNAL in the build); @ai-sdk/baseten",
-    "no longer imports it, so it is a devDependency pinned for the day it comes back — at",
-    "which point build:strict fails until it is moved here."
+    "dist/*.cjs, so all of those are devDependencies."
   ],
   "dependencies": {
     "@huggingface/gguf": "^0.4.6",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
-    "@basetenlabs/performance-client": "0.0.10",
     "@clikcode/router": "workspace:*",
     "@types/cross-spawn": "6.0.6",
     "@types/node": "26.1.2",

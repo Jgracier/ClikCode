@@ -143,7 +143,6 @@ async function saveGatewayModels(baseUrl: string, auth: string, subscriptions: b
   await writeFile(file, JSON.stringify({ baseUrl, auth, subscriptions, at: Date.now(), list }), { mode: 0o600 });
 }
 
-/** Words that mean "let the Gateway choose" rather than a model id. */
 /** One model however it is spelled: `claude-opus-5-5` and `claude-opus-5.5` (case, `.`, `_` folded). */
 export function sameGatewayModel(a: string, b: string): boolean {
   const fold = (id: string) => id.trim().toLowerCase().split('/').pop()!.replace(/[._]/g, '-');
