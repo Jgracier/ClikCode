@@ -5,7 +5,8 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { ConversationStore } from './conversation.js';
-import { retryDelaySeconds, runGatewayHarnessTurn, stepRecovery } from './run-turn.js';
+import { runAgentLoop } from './run-turn.js';
+import { retryDelaySeconds, stepRecovery } from './turn-recovery.js';
 import { MAX_REQUEST_ITEMS } from './context.js';
 import { disposeSessionState, formatShellNotifications, sessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
@@ -54,7 +55,7 @@ function harness(script: ScriptEntry[], overrides: Partial<GatewayHarnessTurnInp
   };
 }
 
-describe('runGatewayHarnessTurn', () => {
+describe('runAgentLoop', () => {
   it('runs tool round trips and emits start/done in order with matching ids', async () => {
     await fs.writeFile(path.join(cwd, 'a.txt'), 'hello\nworld\n');
     const h = harness([
@@ -63,7 +64,7 @@ describe('runGatewayHarnessTurn', () => {
       { text: 'Done.' },
     ]);
     const usage: unknown[] = [];
-    const result = await runGatewayHarnessTurn({ ...h.input, onUsage: (report) => usage.push(report) });
+    const result = await runAgentLoop({ ...h.input, onUsage: (report) => usage.push(report) });
 
     expect(result).toMatchObject({ text: 'Looking.\n\nDone.', steps: 3, stopReason: 'completed', nativeSessionId: h.input.sessionId });
     expect(result.isError).toBeUndefined();
@@ -101,7 +102,7 @@ describe('runGatewayHarnessTurn', () => {
       onActivity: (event) => { if (event.kind === 'thinking') order.push(`thinking:${event.id}`); },
       onResponseDelta: (text) => { order.push(`text:${text}`); },
     });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const firstText = order.findIndex((item) => item.startsWith('text:'));
     // Every reasoning frame of the item came before the answer's first word,
     // and under one id (a client merges them into one row).
@@ -111,7 +112,7 @@ describe('runGatewayHarnessTurn', () => {
 
   it('treats tool work with no prose as success', async () => {
     const h = harness([{ toolCalls: [{ name: 'list_dir', args: {} }] }, {}]);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result).toMatchObject({ text: '', steps: 2, stopReason: 'completed' });
     expect(result.isError).toBeUndefined();
   });
@@ -140,7 +141,7 @@ describe('runGatewayHarnessTurn', () => {
       ] },
       { text: 'ok' },
     ], { tools: [slow('slow_read', 'read'), slow('slow_meta', 'meta')] });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     expect(peakReads).toBe(3);
     expect(order.slice(0, 3)).toEqual(['start:r1', 'start:r2', 'start:r3']);
     expect(order.slice(6)).toEqual(['start:m1', 'end:m1', 'start:m2', 'end:m2']);
@@ -157,7 +158,7 @@ describe('runGatewayHarnessTurn', () => {
       ] },
       { text: 'sorry' },
     ]);
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const results = h.client.requests[1].items.filter((item) => item.type === 'tool_result');
     expect(results[0]).toMatchObject({ id: 'bad', isError: true });
     expect(results[0].type === 'tool_result' && results[0].output).toMatch(/args\.path: expected string, got integer/);
@@ -173,7 +174,7 @@ describe('runGatewayHarnessTurn', () => {
       { toolCalls: [{ id: 'dup', name: 'read_file', args: { path: 'a.txt' } }, { id: 'dup', name: 'read_file', args: { path: 'b.txt' } }] },
       { text: 'ok' },
     ]);
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const items = h.client.requests[1].items;
     const calls = items.filter((item) => item.type === 'tool_call').map((item) => item.type === 'tool_call' && item.id);
     const results = items.filter((item) => item.type === 'tool_result');
@@ -185,14 +186,14 @@ describe('runGatewayHarnessTurn', () => {
   it('classifies its rows the way every harness\'s are: grep is a search', async () => {
     await fs.writeFile(path.join(cwd, 'a.txt'), 'needle\n');
     const h = harness([{ toolCalls: [{ id: 'g', name: 'grep', args: { pattern: 'needle' } }, { id: 'r', name: 'read_file', args: { path: 'a.txt' } }] }, { text: 'ok' }]);
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const started = (id: string) => h.events.find((event) => event.kind === 'tool-start' && event.id === id);
     expect([started('g')?.category, started('r')?.category]).toEqual(['search', 'read']);
   });
 
   it('reports a command\'s exit code and how long each call ran', async () => {
     const h = harness([{ toolCalls: [{ id: 'x', name: 'bash', args: { command: 'exit 3' } }] }, { text: 'ok' }]);
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const done = h.events.find((event) => event.kind === 'tool-error' && event.id === 'x');
     expect(done).toMatchObject({ label: '$ exit 3', category: 'run', exitCode: 3 });
     expect(done?.durationMs).toBeGreaterThanOrEqual(0);
@@ -200,14 +201,14 @@ describe('runGatewayHarnessTurn', () => {
 
   it('tells the model an empty path is a mistake in the call to correct, not a permission it lacks', async () => {
     const h = harness([{ toolCalls: [{ name: 'read_file', args: { path: '' } }] }, { text: 'ok' }]);
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const result = h.client.requests[1].items.at(-1);
     const output = result?.type === 'tool_result' ? result.output : '';
     expect(output).toMatch(/^Invalid arguments: A non-empty path is required\. Correct the call and try again\./);
     expect(output).not.toMatch(/Permission denied|Do not retry/);
     // A real refusal still says so.
     const denied = harness([{ toolCalls: [{ name: 'read_file', args: { path: '~/.ssh/id_rsa' } }] }, { text: 'ok' }]);
-    await runGatewayHarnessTurn(denied.input);
+    await runAgentLoop(denied.input);
     const refused = denied.client.requests[1].items.at(-1);
     expect(refused?.type === 'tool_result' && refused.output).toMatch(/^Permission denied/);
   });
@@ -216,14 +217,14 @@ describe('runGatewayHarnessTurn', () => {
     const h = harness([], {}, (_request, index) => index < 89
       ? { toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `walk${index}` }] }
       : { text: 'All ninety steps done.' });
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result).toMatchObject({ steps: 90, stopReason: 'completed', text: 'All ninety steps done.' });
   });
 
   it('detects no progress: tells the model after 3 identical failures with nothing changed, then stops', async () => {
     const failing = { name: 'read_file', args: { path: 'missing.txt' } };
     const h = harness([{ toolCalls: [failing] }, { toolCalls: [failing] }, { toolCalls: [failing] }, { text: 'I cannot find missing.txt.', toolCalls: [failing] }]);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result).toMatchObject({ steps: 4, stopReason: 'no-progress', isError: true, text: 'I cannot find missing.txt.' });
     const last = h.client.requests[3];
     // The tools stay declared -- the history holds tool calls, which Anthropic
@@ -244,7 +245,7 @@ describe('runGatewayHarnessTurn', () => {
       { toolCalls: [failing] }, { toolCalls: [failing] }, { toolCalls: [write(2)] },
       { toolCalls: [failing] }, { text: 'Done after three rounds.' },
     ]);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result).toMatchObject({ stopReason: 'completed', text: 'Done after three rounds.' });
     expect(h.events.filter((event) => event.kind === 'tool-start')).toHaveLength(7);
     expect(h.client.requests.every((request) => request.toolChoice !== 'none')).toBe(true);
@@ -258,7 +259,7 @@ describe('runGatewayHarnessTurn', () => {
       { toolCalls: [missing] }, { toolCalls: [present] }, { toolCalls: [missing] }, { toolCalls: [present] }, { toolCalls: [missing] },
       { text: 'Still failing.', toolCalls: [missing] },
     ]);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result).toMatchObject({ stopReason: 'no-progress' });
   });
 
@@ -267,7 +268,7 @@ describe('runGatewayHarnessTurn', () => {
     const controller = new AbortController();
     const h = harness([{ toolCalls: [{ name: 'bash', args: { command: `sleep 300 & echo $! > ${JSON.stringify(pidFile)}; wait` } }] }], { signal: controller.signal });
     const steerStates: boolean[] = [];
-    const turn = runGatewayHarnessTurn({ ...h.input, onSteerReady: (handler) => steerStates.push(!!handler) });
+    const turn = runAgentLoop({ ...h.input, onSteerReady: (handler) => steerStates.push(!!handler) });
     let pid = 0;
     for (let attempt = 0; attempt < 100 && !pid; attempt++) {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -298,7 +299,7 @@ describe('runGatewayHarnessTurn', () => {
         { text: 'started it' },
       ]);
       const exited = nextNotification(h.input.sessionId);
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(result.text).toBe('started it');
       const told = h.client.requests[1].items.at(-1);
       expect(told?.type === 'tool_result' && told.output).toMatch(/You will be told when it exits/);
@@ -320,7 +321,7 @@ describe('runGatewayHarnessTurn', () => {
       ]);
       exited = nextNotification(h.input.sessionId);
       const events: string[] = [];
-      await runGatewayHarnessTurn({ ...h.input, onActivity: (event) => events.push(`${event.kind}:${event.label}`) });
+      await runAgentLoop({ ...h.input, onActivity: (event) => events.push(`${event.kind}:${event.label}`) });
       const third = h.client.requests[2].items;
       const notices = third.filter((item) => item.type === 'text' && item.text.startsWith('[background shell bash_1 exited (code 0)]'));
       expect(notices).toHaveLength(1);
@@ -337,7 +338,7 @@ describe('runGatewayHarnessTurn', () => {
         { text: 'it finished' },
       ]);
       exited = nextNotification(h.input.sessionId);
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(result).toMatchObject({ steps: 3, text: 'waiting for it\n\nit finished' });
       const last = h.client.requests[2].items.at(-1);
       expect(last?.type === 'text' && last.text).toMatch(/^\[background shell bash_1 exited \(code 0\)\] while .*; echo done\ndone$/);
@@ -351,7 +352,7 @@ describe('runGatewayHarnessTurn', () => {
         { toolCalls: [{ name: 'bash', args: { command: 'sleep 31', run_in_background: true } }] },
         { text: 'ok' },
       ]);
-      await runGatewayHarnessTurn(h.input);
+      await runAgentLoop(h.input);
       const state = sessionState(stateDir, h.input.sessionId);
       const killed = state.shells.get('bash_1')!;
       if (killed.exitCode === undefined) await new Promise((resolve) => killed.child.once('close', resolve));
@@ -365,7 +366,7 @@ describe('runGatewayHarnessTurn', () => {
     const controller = new AbortController();
     controller.abort();
     const h = harness([{ text: 'never' }], { signal: controller.signal });
-    await expect(runGatewayHarnessTurn(h.input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    await expect(runAgentLoop(h.input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
     expect(h.client.requests).toHaveLength(0);
   });
 
@@ -376,7 +377,7 @@ describe('runGatewayHarnessTurn', () => {
       [{ toolCalls: [{ name: 'list_dir', args: {} }] }],
       { modelClientForStep: async () => (++calls === 1 ? undefined : next) },
     );
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(h.client.requests).toHaveLength(1);
     expect(next.requests).toHaveLength(1);
     expect(result.text).toBe('next account');
@@ -389,7 +390,7 @@ describe('runGatewayHarnessTurn', () => {
       [{ toolCalls: [{ name: 'list_dir', args: {} }] }, { text: 'never' }],
       { modelClientForStep: async () => (++calls === 1 ? undefined : 'switch') },
     );
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result.stopReason).toBe('account-switch');
     expect(result.steps).toBe(1);
     expect(h.client.requests).toHaveLength(1);
@@ -402,7 +403,7 @@ describe('runGatewayHarnessTurn', () => {
       { text: 'ok, tabs' },
     ]);
     const published: boolean[] = [];
-    await runGatewayHarnessTurn({ ...h.input, onSteerReady: (handler) => { steer = handler; published.push(!!handler); } });
+    await runAgentLoop({ ...h.input, onSteerReady: (handler) => { steer = handler; published.push(!!handler); } });
     const items = h.client.requests[1].items;
     expect(items[items.length - 1]).toEqual({ type: 'text', role: 'user', text: 'use tabs, not spaces' });
     expect(published).toEqual([true, false]);
@@ -412,17 +413,17 @@ describe('runGatewayHarnessTurn', () => {
   it('continues instead of finishing when steering arrives during the final step', async () => {
     let steer: ((text: string) => Promise<void>) | undefined;
     const h = harness([{ text: 'done', before: async () => { await steer!('one more thing'); } }, { text: 'handled' }]);
-    const result = await runGatewayHarnessTurn({ ...h.input, onSteerReady: (handler) => { steer = handler; } });
+    const result = await runAgentLoop({ ...h.input, onSteerReady: (handler) => { steer = handler; } });
     expect(result.steps).toBe(2);
     expect(result.text).toBe('done\n\nhandled');
   });
 
   it('classifies model failures from structured status', async () => {
-    const quota = await runGatewayHarnessTurn(harness([{ error: Object.assign(new Error('slow down'), { statusCode: 429, retryAfter: 12 }) }]).input);
+    const quota = await runAgentLoop(harness([{ error: Object.assign(new Error('slow down'), { statusCode: 429, retryAfter: 12 }) }]).input);
     expect(quota).toMatchObject({ isError: true, errorKind: 'quota', retryAfter: 12, text: 'slow down', stopReason: 'model-error' });
-    const auth = await runGatewayHarnessTurn(harness([{ error: Object.assign(new Error('nope'), { statusCode: 401 }) }]).input);
+    const auth = await runAgentLoop(harness([{ error: Object.assign(new Error('nope'), { statusCode: 401 }) }]).input);
     expect(auth.errorKind).toBe('auth');
-    const other = await runGatewayHarnessTurn(harness([{ error: new Error('quota exceeded in prose only') }]).input);
+    const other = await runAgentLoop(harness([{ error: new Error('quota exceeded in prose only') }]).input);
     expect(other.errorKind).toBe('other');
   });
 
@@ -435,7 +436,7 @@ describe('runGatewayHarnessTurn', () => {
         return false;
       },
     });
-    await runGatewayHarnessTurn(declined.input);
+    await runAgentLoop(declined.input);
     expect(prompts).toHaveLength(1);
     expect(prompts[0].detail).toContain(path.join(cwd, 'new.txt'));
     expect(prompts[0].added).toEqual(['x']);
@@ -444,20 +445,20 @@ describe('runGatewayHarnessTurn', () => {
     expect(refusal?.type === 'tool_result' && refusal.output).toMatch(/user declined/);
 
     const unattended = harness([{ toolCalls: [write] }, { text: 'ok' }], { permissionMode: 'ask' });
-    await runGatewayHarnessTurn(unattended.input);
+    await runAgentLoop(unattended.input);
     const denied = unattended.client.requests[1].items.at(-1);
     expect(denied?.type === 'tool_result' && denied.output).toMatch(/no approver is attached/);
 
     // An approver that answers no (a script's, or the user's): the model is told the action was not
     // approved -- never that "the user declined" when nobody was asked -- and the file is not written.
     const refused = harness([{ toolCalls: [write] }, { text: 'ok' }], { permissionMode: 'ask', onApproval: async () => false });
-    await runGatewayHarnessTurn(refused.input);
+    await runAgentLoop(refused.input);
     const notApproved = refused.client.requests[1].items.at(-1);
     expect(notApproved?.type === 'tool_result' && notApproved.output).toMatch(/not approved.*no one was available/);
     await expect(fs.readFile(path.join(cwd, 'new.txt'), 'utf8')).rejects.toThrow();
 
     const approved = harness([{ toolCalls: [write] }, { text: 'ok' }], { permissionMode: 'ask', onApproval: async () => true });
-    await runGatewayHarnessTurn(approved.input);
+    await runAgentLoop(approved.input);
     expect(await fs.readFile(path.join(cwd, 'new.txt'), 'utf8')).toBe('x\n');
   });
 
@@ -474,7 +475,7 @@ describe('runGatewayHarnessTurn', () => {
       currentPermissionMode: async () => mode,
       onApproval: async (title) => { prompts.push(title); mode = 'bypass'; return true; },
     });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     expect(prompts).toHaveLength(1);
     expect(await fs.readFile(path.join(cwd, 'second.txt'), 'utf8')).toBe('2\n');
   });
@@ -489,7 +490,7 @@ describe('runGatewayHarnessTurn', () => {
       permissionMode: 'ask',
       onApproval: async (title, _detail, rule) => { prompts.push(`${title} ${rule}`); return 'always'; },
     });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     expect(prompts).toEqual(['Approve command Bash(true 1:*)']);
     expect(h.events.filter((event) => event.kind === 'tool-done')).toHaveLength(3);
   });
@@ -501,7 +502,7 @@ describe('runGatewayHarnessTurn', () => {
       currentPermissionMode: async () => { throw new Error('index unreadable'); },
       onApproval: async (title) => { prompts.push(title); return true; },
     });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     expect(prompts).toHaveLength(1);
   });
 
@@ -510,7 +511,7 @@ describe('runGatewayHarnessTurn', () => {
       { toolCalls: [{ name: 'ask_user', args: { question: 'Which database?', options: ['Postgres', 'SQLite'] } }] },
       { text: 'should not run' },
     ]);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result.stopReason).toBe('completed');
     expect(result.text).toBe('Which database?\n\n1. Postgres\n2. SQLite\n\nReply with a number, or in your own words.');
     expect(h.client.requests).toHaveLength(1);
@@ -518,14 +519,14 @@ describe('runGatewayHarnessTurn', () => {
 
   it('refuses a prompt a UserPromptSubmit hook blocks, and adds the context one returns', async () => {
     const blocked = harness([{ text: 'never' }], { hooks: { userPromptSubmit: async () => ({ block: 'no deploys on Friday' }) } });
-    const refused = await runGatewayHarnessTurn(blocked.input);
+    const refused = await runAgentLoop(blocked.input);
     expect(refused).toMatchObject({ isError: true, text: 'Your message was blocked by a UserPromptSubmit hook: no deploys on Friday' });
     expect(blocked.client.requests).toHaveLength(0);
 
     const enriched = harness([{ text: 'ok' }], {
       hooks: { userPromptSubmit: async () => ({ context: 'branch: main' }), sessionStart: async () => ({ context: 'on-call: ana' }) },
     });
-    await runGatewayHarnessTurn(enriched.input);
+    await runAgentLoop(enriched.input);
     const first = enriched.client.requests[0]!.items.find((item) => item.type === 'text' && item.role === 'user');
     expect(first?.type === 'text' && first.text).toMatch(/<hook-context>\non-call: ana\n\nbranch: main\n<\/hook-context>/);
   });
@@ -535,7 +536,7 @@ describe('runGatewayHarnessTurn', () => {
     const h = harness([{ text: 'done' }, { text: 'ran the tests' }, { text: 'x' }, { text: 'y' }, { text: 'z' }], {
       hooks: { stop: async ({ stopHookActive }) => { asked += 1; return stopHookActive && asked > 1 ? undefined : { continueWith: 'run the tests first' }; } },
     });
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result.stopReason).toBe('completed');
     expect(result.text).toContain('ran the tests');
     const nudge = h.client.requests[1]!.items.at(-1);
@@ -548,11 +549,11 @@ describe('runGatewayHarnessTurn', () => {
     const approving = harness([{ toolCalls: [{ name: 'write_file', args: { path: 'n.txt', content: 'x' } }] }, { text: 'ok' }], {
       permissionMode: 'ask', onApproval: async () => true, hooks: { notification },
     });
-    await runGatewayHarnessTurn(approving.input);
+    await runAgentLoop(approving.input);
     expect(notes).toEqual([{ sessionId: approving.input.sessionId, cwd, message: 'ClikCode needs your permission to use Write', notificationType: 'permission_prompt' }]);
     notes.length = 0;
     const asking = harness([{ toolCalls: [{ name: 'ask_user', args: { question: 'Which database?' } }] }], { hooks: { notification } });
-    await runGatewayHarnessTurn(asking.input);
+    await runAgentLoop(asking.input);
     expect(notes).toMatchObject([{ notificationType: 'idle_prompt', message: expect.stringContaining('Which database?') }]);
   });
 
@@ -564,7 +565,7 @@ describe('runGatewayHarnessTurn', () => {
       { toolCalls: [{ name: 'write_file', args: { path: 'p.txt', content: '1' } }] },
       { text: 'done' },
     ], { planMode: true, permissionMode: 'bypass', onApproval: async (title) => title === 'Approve plan', onPlanModeExit: (plan) => exits.push(plan) });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const names = (index: number): string[] => h.client.requests[index].tools.map((tool) => tool.name);
     expect(names(0)).not.toContain('write_file');
     expect(names(0)).not.toContain('bash');
@@ -596,7 +597,7 @@ describe('runGatewayHarnessTurn', () => {
         postToolUse: (call) => call.name === 'read_file' ? { output: 'REWRITTEN' } : undefined,
       },
     });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const outputs = h.client.requests[1].items.flatMap((item) => item.type === 'tool_result' ? [item.output] : []);
     expect(outputs[0]).toBe('REWRITTEN');
     expect(outputs[1]).toMatch(/Blocked by a hook: listing disabled/);
@@ -613,11 +614,11 @@ describe('runGatewayHarnessTurn', () => {
       { toolCalls: [{ name: 'mcp__big__t4', args: {} }] },
       { text: 'done' },
     ], { extraTools: mcp });
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const toolNames = h.client.requests.map((request) => request.tools.map((tool) => tool.name).filter((name) => name.startsWith('mcp__')));
     expect(toolNames).toEqual([[], ['mcp__big__t4'], ['mcp__big__t4']]);
     const later = harness([{ text: 'again' }], { extraTools: mcp, sessionId: h.input.sessionId, prompt: 'more' });
-    await runGatewayHarnessTurn(later.input);
+    await runAgentLoop(later.input);
     expect(later.client.requests[0].tools.map((tool) => tool.name)).toContain('mcp__big__t4');
   });
 
@@ -628,7 +629,7 @@ describe('runGatewayHarnessTurn', () => {
       { toolCalls: [{ id: 'b', name: 'bash', args: { command: 'seq 1 20000' } }] },
       { text: 'ok' },
     ]);
-    await runGatewayHarnessTurn(h.input);
+    await runAgentLoop(h.input);
     const results = h.client.requests[2].items.filter((item) => item.type === 'tool_result');
     const read = results[0].type === 'tool_result' ? results[0].output : '';
     expect(Buffer.byteLength(read)).toBeLessThanOrEqual(8 * 1024);
@@ -654,15 +655,15 @@ describe('runGatewayHarnessTurn', () => {
       run: async () => { await fs.rm(transcript, { force: true }); await fs.mkdir(transcript); return { output: 'ran' }; },
     });
     const h = harness([{ toolCalls: [{ id: 'b1', name: 'breaker', args: {} }] }, { text: 'never reached' }], { sessionId, extraTools: [breaker] });
-    await expect(runGatewayHarnessTurn(h.input)).rejects.toThrow(/could not save the results of 1 tool call/);
+    await expect(runAgentLoop(h.input)).rejects.toThrow(/could not save the results of 1 tool call/);
     expect(h.client.requests).toHaveLength(1);
   });
 
   it('resumes a session from its transcript', async () => {
     const first = harness([{ text: 'first answer' }]);
-    await runGatewayHarnessTurn(first.input);
+    await runAgentLoop(first.input);
     const second = harness([{ text: 'second answer' }], { sessionId: first.input.sessionId, prompt: 'follow up' });
-    await runGatewayHarnessTurn(second.input);
+    await runAgentLoop(second.input);
     expect(second.client.requests[0].items).toEqual([
       { type: 'text', role: 'user', text: expect.stringMatching(/^<environment>\nDate: [\d-]+\n[\s\S]*<\/environment>\n\ndo the thing$/) },
       { type: 'text', role: 'assistant', text: 'first answer' },
@@ -682,7 +683,7 @@ describe('runGatewayHarnessTurn', () => {
     const turn = 'x'.repeat(10_000);
     const lines = Array.from({ length: 100 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: turn } }));
     await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result.stopReason).toBe('completed');
     expect(phases).not.toContain('compacting context');
     expect(h.client.requests).toHaveLength(1);
@@ -704,7 +705,7 @@ describe('runGatewayHarnessTurn', () => {
       const h = harness([], { onPhase: (phase) => phases.push(phase) }, (request) => (request.tools.length === 0 ? { text: 'SUMMARY of the long history' } : { text: 'answered' }));
       Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
       await seed(h, MAX_REQUEST_ITEMS + 100);
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(result.stopReason).toBe('completed');
       expect(phases).toContain('compacting context');
       const real = h.client.requests.find((request) => request.tools.length > 0)!;
@@ -717,7 +718,7 @@ describe('runGatewayHarnessTurn', () => {
       const h = harness([{ text: 'answered' }], { onPhase: (phase) => phases.push(phase) });
       Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
       await seed(h, MAX_REQUEST_ITEMS - 100);
-      await runGatewayHarnessTurn(h.input);
+      await runAgentLoop(h.input);
       expect(phases).not.toContain('compacting context');
       expect(h.client.requests).toHaveLength(1);
     });
@@ -737,7 +738,7 @@ describe('runGatewayHarnessTurn', () => {
       onPhase: (phase) => phases.push(phase),
       hooks: { preCompact: async ({ trigger }) => { phases.push(`PreCompact ${trigger}`); } },
     }, { text: 'finished' });
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result.stopReason).toBe('completed');
     expect(phases).toContain('compacting context');
     expect(phases[phases.indexOf('compacting context') + 1]).toBe('PreCompact auto');
@@ -759,14 +760,14 @@ describe('runGatewayHarnessTurn', () => {
     await fs.mkdir(store, { recursive: true });
     const lines = Array.from({ length: MAX_REQUEST_ITEMS + 100 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
     await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result).toMatchObject({ stopReason: 'completed', text: 'answered' });
     expect(phases.some((phase) => phase.startsWith('compaction failed'))).toBe(true);
   });
 
   it('saves text streamed during a step that then fails', async () => {
     const h = harness([{ before: (request) => { request.onTextDelta('Half an answ'); }, error: Object.assign(new Error('boom'), { code: 'X', kind: 'other' }) }]);
-    const result = await runGatewayHarnessTurn(h.input);
+    const result = await runAgentLoop(h.input);
     expect(result.stopReason).toBe('model-error');
     const persisted = await new ConversationStore(stateDir, h.input.sessionId).load();
     expect(persisted.at(-1)).toMatchObject({ type: 'text', role: 'assistant', text: 'Half an answ' });
@@ -794,7 +795,7 @@ describe('runGatewayHarnessTurn', () => {
     it('is sent again on a transient failure, with a growing wait, and the turn completes', async () => {
       const phases: string[] = [];
       const h = harness([{ error: gatewayError('MODEL_ERROR') }, { error: gatewayError('incomplete_stream') }, { text: 'PONG' }], { onPhase: (phase) => phases.push(phase) });
-      const result = await driven(runGatewayHarnessTurn(h.input));
+      const result = await driven(runAgentLoop(h.input));
       expect(result).toMatchObject({ text: 'PONG', stopReason: 'completed' });
       expect(h.client.requests).toHaveLength(3);
       expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 1s', 'retrying in 2s']);
@@ -803,7 +804,7 @@ describe('runGatewayHarnessTurn', () => {
     it('keeps retrying for the whole patience budget, then reports the failure', async () => {
       const phases: string[] = [];
       const h = harness([], { onPhase: (phase) => phases.push(phase) }, { error: gatewayError('MODEL_RATE_LIMITED') });
-      const result = await driven(runGatewayHarnessTurn(h.input));
+      const result = await driven(runAgentLoop(h.input));
       expect(result).toMatchObject({ isError: true, stopReason: 'model-error', text: 'gateway: MODEL_RATE_LIMITED' });
       const waits = phases.filter((phase) => phase.startsWith('retrying')).map((phase) => Number(/in (\d+)s/.exec(phase)?.[1]));
       expect(waits.slice(0, 7)).toEqual([1, 2, 4, 8, 16, 30, 30]);
@@ -814,14 +815,14 @@ describe('runGatewayHarnessTurn', () => {
     it('honours a longer Retry-After than the backoff, and never a shorter one than the backoff', async () => {
       const phases: string[] = [];
       const h = harness([{ error: gatewayError('MODEL_ERROR', { retryAfter: 20 }) }, { error: gatewayError('MODEL_ERROR', { retryAfter: 0 }) }, { text: 'ok' }], { onPhase: (phase) => phases.push(phase) });
-      await driven(runGatewayHarnessTurn(h.input));
+      await driven(runAgentLoop(h.input));
       expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 20s', 'retrying in 2s']);
     });
 
     it('stops waiting the moment the turn is cancelled', async () => {
       const controller = new AbortController();
       const h = harness([], { signal: controller.signal }, { error: gatewayError('MODEL_ERROR') });
-      const turn = runGatewayHarnessTurn(h.input);
+      const turn = runAgentLoop(h.input);
       await vi.advanceTimersByTimeAsync(10);
       controller.abort();
       await expect(turn).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
@@ -844,7 +845,7 @@ describe('runGatewayHarnessTurn', () => {
 
     it('is never resent once text has streamed', async () => {
       const h = harness([{ before: (request) => request.onTextDelta('Half an ans'), error: gatewayError('MODEL_ERROR') }, { text: 'never asked' }]);
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(result.isError).toBe(true);
       expect(h.client.requests).toHaveLength(1);
     });
@@ -852,7 +853,7 @@ describe('runGatewayHarnessTurn', () => {
     it('is the answer when the failure is about the account, not the moment', async () => {
       for (const code of ['AI_CREDIT_EXHAUSTED', 'NO_MODEL_AVAILABLE', 'VALIDATION_ERROR', 'CLIKCODE_DISABLED', 'MODEL_REJECTED_REQUEST']) {
         const h = harness([{ error: gatewayError(code) }, { text: 'never asked' }]);
-        expect((await runGatewayHarnessTurn(h.input)).isError, code).toBe(true);
+        expect((await runAgentLoop(h.input)).isError, code).toBe(true);
         expect(h.client.requests, code).toHaveLength(1);
       }
     });
@@ -866,7 +867,7 @@ describe('runGatewayHarnessTurn', () => {
         { error: gatewayError('CONTEXT_TOO_LARGE') },
         (request) => (request.tools.length === 0 ? { text: 'SUMMARY: read a.txt eight times' } : { text: 'done' }),
       ], { onPhase: (phase) => phases.push(phase) }, { text: 'done' });
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(result).toMatchObject({ text: 'done', stopReason: 'completed' });
       expect(phases).toContain('compacting context');
       const resent = h.client.requests.at(-1)!;
@@ -888,7 +889,7 @@ describe('runGatewayHarnessTurn', () => {
         },
         { text: 'Done.' },
       ]);
-      await runGatewayHarnessTurn(h.input);
+      await runAgentLoop(h.input);
       expect(h.events.map((event) => `${event.kind}:${event.id}:${event.label}`)).toEqual([
         'tool-start:c1:Read', 'tool-start:c1:Read a.txt', 'tool-done:c1:Read a.txt',
       ]);
@@ -901,14 +902,14 @@ describe('runGatewayHarnessTurn', () => {
         { before: (request) => request.onToolCallDelta?.({ id: 'lost', name: 'list_dir', arguments: '{"pa' }), error: failure },
         { text: 'PONG' },
       ]);
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(result.text).toBe('PONG');
       expect(h.events.filter((event) => event.id === 'lost').map((event) => event.kind)).toEqual(['tool-start', 'tool-error']);
     });
 
     it('carries on an answer cut off at the output limit, in the same paragraph', async () => {
       const h = harness([{ text: 'The answer begins and is cu', stopReason: 'length' }, { text: 't off no more.' }]);
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(result).toMatchObject({ text: 'The answer begins and is cut off no more.', stopReason: 'completed', steps: 2 });
       expect(h.deltas.join('')).toBe('The answer begins and is cut off no more.');
       expect(h.client.requests[1]!.items.at(-1)).toMatchObject({ type: 'text', role: 'user', text: expect.stringMatching(/output limit/) });
@@ -917,7 +918,7 @@ describe('runGatewayHarnessTurn', () => {
     it('stops carrying on after three cut-off replies and says the answer was cut', async () => {
       const usage: { stopReason?: string }[] = [];
       const h = harness([], { onUsage: (report) => usage.push(report) }, { text: 'more', stopReason: 'length' });
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await runAgentLoop(h.input);
       expect(h.client.requests).toHaveLength(4);
       expect(result.stopReason).toBe('completed');
       expect(usage.at(-1)?.stopReason).toBe('length');
@@ -928,7 +929,7 @@ describe('runGatewayHarnessTurn', () => {
         { toolCalls: [{ id: 'w', name: 'write_file', args: {}, argumentsError: 'Unexpected end of JSON input' }], stopReason: 'length' },
         { text: 'ok' },
       ]);
-      await runGatewayHarnessTurn(h.input);
+      await runAgentLoop(h.input);
       const answer = h.client.requests[1]!.items.find((item) => item.type === 'tool_result');
       expect(answer).toMatchObject({ isError: true, output: expect.stringMatching(/reached the output limit/) });
     });
@@ -939,7 +940,7 @@ describe('runGatewayHarnessTurn', () => {
         onUsage: (report) => seen.push(`usage ${report.servedModel} ${report.contextWindow}`),
         onResponseDelta: (text) => seen.push(`text ${text}`),
       });
-      await runGatewayHarnessTurn(h.input);
+      await runAgentLoop(h.input);
       expect(seen.slice(0, 3)).toEqual(['step', 'usage glm-5 200000', 'text hi']);
     });
   });

@@ -10,7 +10,7 @@ import {
 import { discoverSkills } from './skills.js';
 import { skillTool } from './tools/skill.js';
 import { discoverCustomCommands, expandCustomCommand } from '../session/custom-commands.js';
-import { runGatewayHarnessTurn } from './run-turn.js';
+import { runAgentLoop } from './run-turn.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import type { ModelClient, ModelStepRequest, ModelStepResult } from './model-client.js';
 import type { ToolContext } from './tool-contract.js';
@@ -166,7 +166,7 @@ describe('plugin agent types', () => {
       ],
       'Review a.txt': [{ text: 'a.txt:1 looks fine.' }],
     });
-    const result = await runGatewayHarnessTurn({
+    const result = await runAgentLoop({
       sessionId: 'p1', cwd, stateDir, homeDir: home, userConfigDir: path.join(root, 'config'),
       prompt: 'parent', permissionMode: 'bypass', modelClient: client,
     });

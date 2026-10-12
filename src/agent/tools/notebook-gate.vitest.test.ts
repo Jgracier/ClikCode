@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runGatewayHarnessTurn } from '../run-turn.js';
+import { runAgentLoop } from '../run-turn.js';
 import { disposeSessionState } from '../session-state.js';
 import { ScriptedModelClient } from '../testing.js';
 import { gateNotebookTool, NOTEBOOK_TOOL, resetNotebookScans, workspaceHasNotebooks } from './notebook-gate.js';
@@ -66,7 +66,7 @@ describe('the notebook_edit gate', () => {
       { text: 'Done.' },
     ]);
     try {
-      const result = await runGatewayHarnessTurn({
+      const result = await runAgentLoop({
         sessionId: 'gate', cwd, stateDir, homeDir: path.join(root, 'home'), userConfigDir: path.join(root, 'config'),
         permissionMode: 'bypass', modelClient: client, prompt: 'Make a notebook.',
       });

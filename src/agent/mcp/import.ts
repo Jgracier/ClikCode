@@ -1,5 +1,11 @@
-/** A one-time copy of the MCP servers the user already gave their vendor
- * harnesses into `<state dir>/mcp.json`, so ClikCode's own agent has them too.
+/** Two things share this file. The one-time import (`importVendorMcpServers`)
+ * copies the MCP servers the user already gave their vendor harnesses into
+ * `<state dir>/mcp.json`, so ClikCode's own agent has them too. The vendor-config
+ * readers (`vendorSources`, `normalize`, `vendorMcpServerNames`,
+ * `vendorMcpServerUrls`, `importedFromCommand`, `removeFromVendorJsonFile`,
+ * `stripJsonc`, `parseToml`) are NOT one-time: provisioning, the MCP registry and
+ * ACP queries read vendors' files live through them. The rest of this comment
+ * describes the import.
  *
  * Why it exists: `clikcode mcp add` only started writing mcp.json once this
  * agent could use MCP. Every server added before that -- through ClikCode or
