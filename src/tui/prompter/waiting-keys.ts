@@ -1,7 +1,7 @@
 /** Keys typed while a turn runs: scroll, approval and question answers, stop and take-back, sign-in answers and the waiting composer. */
 import { isKeyShaped } from '../../gateway/login/vendor-sign-in.js';
 import { backslashNewline } from '../composer-edit.js';
-import { approvalKeyAction } from '../render/approval-keys.js';
+import { approvalKey } from './approvals.js';
 import { waitingEnterAction, waitingInputAction } from '../input-decoder.js';
 import { SWIPE_ROWS } from '../modes.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -34,44 +34,7 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
     return;
   }
   if (this.pendingApproval) {
-    const pending = this.pendingApproval;
-    // "No, and tell it what to do instead": the composer is where it is
-    // typed, on its own -- whatever draft was there waits aside -- and
-    // Enter denies the call and sends the text into the turn as a steer.
-    const telling = this.tellingInstead;
-    if (telling) {
-      if (key === '\r') {
-        const text = turn.draft.trim();
-        if (!text) return;
-        this.answerApproval(pending, false, { kind: 'told', text });
-        // After the denial is on its way: the answer's own send is queued
-        // behind this resolve, and the steer must not overtake it.
-        setImmediate(() => this.submitWaiting(text, false));
-        return;
-      }
-      if (key === '\u001b' || key === '\u0003') {
-        this.restoreTellingDraft();
-        if (key === '\u0003') this.answerApproval(pending, false);
-        else this.updateWaiting();
-        return;
-      }
-      this.editTurnDraft(turn, key);
-      return;
-    }
-    // Otherwise the draft is never edited from here: every key is either an
-    // answer or dropped, so the composer is exactly as the user left it.
-    const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused, Boolean(pending.rule), Boolean(turn.submit));
-    if (action === 'focus') {
-      pending.focused = true;
-      this.updateWaiting();
-    } else if (action === 'tell') {
-      this.tellingInstead = { draft: turn.draft, cursor: turn.cursor };
-      turn.draft = '';
-      turn.cursor = 0;
-      this.updateWaiting();
-    } else if (action === 'allow' || action === 'always' || action === 'deny') {
-      this.answerApproval(pending, action === 'deny' ? false : action === 'always' ? 'always' : true);
-    }
+    approvalKey.call(this, turn, this.pendingApproval, key);
     return;
   }
   // Up and Down with nothing typed read the conversation, as they do at
