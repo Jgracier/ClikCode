@@ -5,15 +5,13 @@
 
 import chalk from 'chalk';
 import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
-import { pastedText } from './keys.js';
-import { backslashNewline, composerVerticalMove, editWaitingComposer } from './composer-edit.js';
-import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, exactPaletteCommand, type PaletteEntry } from './command-palette.js';
+import type { PaletteEntry } from './command-palette.js';
 import { stdin as input, stdout as output } from 'node:process';
 import { noticeLines } from './render/wrap.js';
 import { composerLayout } from './render/composer-layout.js';
 import { createStreamingBlockParser } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
-import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
+import { terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
 import { ENTER_ALTERNATE_SCREEN, installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
 import type { FocusState } from './terminal-signals.js';
 import { stripRepeatedTitles } from '../session/title.js';
@@ -30,7 +28,6 @@ import { logProcessWarnings } from './warnings.js';
 import { backgroundTerminalsLabel, reasoningBody, tensedLabel } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
-import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { ApprovalRequest, approvalBlockRows } from './render/approval-block.js';
@@ -50,14 +47,14 @@ import type { Selection } from './render/selection.js';
 import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
 import { isClikCodeNotice } from '../session/clikcode-notice.js';
 import { reducedMotion } from './capabilities.js';
-import { KEEP_STDIN_FLOWING, onTerminalFocus, takeTerminalKeys } from './input-decoder.js';
-import { SWIPE_ROWS, enterInputModes, popReadModes, sessionModesOn, type Redraw } from './modes.js';
+import { KEEP_STDIN_FLOWING, onTerminalFocus } from './input-decoder.js';
+import { sessionModesOn, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
-import { keyHint, keyHintFor } from '../harness/protocol/wording.js';
-import { EXIT_CONFIRM_MS, ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
+import { keyHint } from '../harness/protocol/wording.js';
+import { ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
@@ -71,6 +68,7 @@ import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clear
 import { signInScreen } from './prompter/sign-in.js';
 import { renderFrame, flushFrame, flushAlternateFrame } from './prompter/frame-flush.js';
 import { clearInteractiveFrame, select, board, pickerHost } from './prompter/picker-host.js';
+import { question } from './prompter/prompt-input.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -1414,319 +1412,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   clearInteractiveFrame(...args: Parameters<typeof clearInteractiveFrame>): ReturnType<typeof clearInteractiveFrame> { return clearInteractiveFrame.apply(this, args); }
 
-  async question(
-    prompt: string,
-    commands: readonly PaletteEntry[] = [],
-    settings?: { cancellable?: boolean; rightArrowPalette?: boolean; leftArrowCommand?: string; signal?: AbortSignal; secret?: boolean },
-  ): Promise<string> {
-    // Kept for the turn this prompt's answer starts: a turn in flight offers
-    // the same commands, and this is where they are known.
-    this.paletteCommands = commands;
-    // Node sets isTTY once when it creates process.stdin and never changes
-    // it, and this prompter is only built when stdin is a TTY
-    // (terminalUiSupported). So this is a guard, not a wait: an earlier
-    // version retried here for 10s after a vendor login, which could never
-    // change the answer -- it only delayed the same exit.
-    if (!input.isTTY) throw Object.assign(new Error('terminal input is closed'), { code: 'ERR_USE_AFTER_CLOSE' });
-    lifecycle('window.prompt.start');
-    return new Promise((resolveQuestion, rejectQuestion) => {
-      let value = this.queuedDraft ?? '';
-      this.queuedDraft = undefined;
-      this.signedInJustNow = false;
-      let cursor = value.length;
-      let selected = 0;
-      let historyIndex = this.history.length;
-      // Long pastes, held out of the draft as placeholders (held-pastes.ts)
-      // and put back when it is sent.
-      let held: HeldPaste[] = [];
-      const draft = (): DraftWithPastes => ({ value, cursor, held });
-      const apply = (next: DraftWithPastes): void => { value = next.value; cursor = next.cursor; held = [...next.held]; };
-      // Reserved once for the whole prompt, not recomputed per keystroke: keeping the
-      // footer band a fixed height is what stops the conversation area above it from
-      // reflowing (and the cursor from jumping) as the number of matches narrows.
-      const paletteCapacity = commands.length ? Math.min(commands.length, 8) + 2 : 0;
-      // Every match, not the first eight: paint() windows a longer list, so
-      // the selection can reach all of them.
-      const matches = () => commandPaletteMatches(value, commands);
-      // The row that runs is the row that is highlighted. When what was typed
-      // names a command outright (`/new`), that command's row starts
-      // highlighted, wherever its group ranks it -- so Enter and Right Arrow,
-      // which both run the highlighted row, run what was typed.
-      const highlightFor = (text: string): number => {
-        const typed = exactPaletteCommand(text, commands)?.toLowerCase();
-        if (!typed) return 0;
-        const rows = commandPaletteMatches(text, commands);
-        const at = rows.findIndex((row) => row.value.toLowerCase() === typed || row.aliases?.some((alias) => alias.toLowerCase() === typed));
-        return Math.max(0, at);
-      };
-      // Running a command clears the palette and the typed command first, so
-      // whatever it opens next -- a picker, a sign-in -- never has the
-      // finished list and its `/command` left on screen around it.
-      const runCommand = (line: string): void => {
-        value = '';
-        cursor = 0;
-        selected = 0;
-        draw();
-        finish(line);
-      };
-      let stopInput: () => void = () => {};
-      const draw = (): void => {
-        const options = commandPaletteMatches(value, commands);
-        if (selected >= options.length) selected = 0;
-        if (options.length) {
-          // After a space the palette is that command's own values to choose
-          // from, or -- for a free-text argument -- just its hint.
-          const hint = options[0]?.completes ? [keyHintFor('↑↓', 'choose'), keyHintFor('tab', 'fill in'), keyHint('apply'), keyHintFor('esc', 'clear')].join(' · ')
-            : value.includes(' ') ? `${keyHintFor('enter', 'run')} · ${keyHintFor('esc', 'clear')}` : undefined;
-          this.paint(value, options, selected, prompt, cursor, { capacity: paletteCapacity, ...(hint ? { hint } : {}) });
-          this.paletteActive = true;
-          return;
-        }
-        this.paletteActive = false;
-        // Palette closure and ordinary typing are both complete frames, so
-        // the transcript immediately reclaims any previously reserved rows.
-        // A secret (an API key typed into a sign-in) is drawn as dots.
-        this.paint(settings?.secret ? '•'.repeat(value.length) : value, [], 0, prompt, cursor);
-      };
-      let finished = false;
-      /** The prompt is over, however it ended: the keyboard and the read
-       * modes are given back, once. False when it had already ended. */
-      const release = (): boolean => {
-        if (finished) return false;
-        finished = true;
-        this.paletteActive = false;
-        stopInput();
-        output.write(`${popReadModes()}\u001b[?25h`);
-        this.cursorShown = true;
-        this.resumeInput = undefined;
-        return true;
-      };
-      const finish = (answer: string): void => {
-        if (!release()) return;
-        lifecycle('window.prompt.end', { how: !answer ? 'empty' : answer.startsWith('/') ? `command ${answer.split(/\s/, 1)[0]}` : 'message' });
-        this.clearTransientNotice();
-        if (answer) this.panelState = undefined;
-        // A line sent is done with the mention it was looking at.
-        if (answer) this.mentionFocus = undefined;
-        // The submitted line is the conversation's now. Leaving it in the
-        // composer made the next idle check look like a draft still in progress.
-        this.composer = { ...this.composer, text: '' };
-        if (answer && !settings?.secret && !answer.startsWith('/') && this.history[this.history.length - 1] !== answer) this.history.push(answer);
-        resolveQuestion(answer);
-      };
-      // Opt-in, not a default: this same question() drives the persistent
-      // chat composer too, where Esc doing nothing is the existing,
-      // intentional behavior (there's nothing to "cancel" mid-draft the way
-      // there is for a one-off prompt). Callers that need real cancel
-      // semantics -- like the API-key env-var-name prompt, previously
-      // "esc doesn't cancel" with no way out short of Ctrl+C -- pass
-      // { cancellable: true } and get a real rejection to catch, instead of
-      // an empty string indistinguishable from "accepted the default".
-      const cancel = (): void => {
-        if (!release()) return;
-        rejectQuestion(Object.assign(new Error('cancelled'), { code: 'ERR_PROMPT_CANCELLED' }));
-      };
-      // Something other than the keyboard needs the screen: a turn this
-      // window did not start is running (worker/turn-bridge.ts). The draft is
-      // kept for the next prompt, and the caller is told why it ended.
-      const interrupt = (): void => {
-        if (!release()) return;
-        // Kept whole: a placeholder in the next prompt's draft would have
-        // lost the paste it stood for.
-        const kept = expandPastes(value, held);
-        if (kept) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${kept}` : kept;
-        rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
-      };
-      if (settings?.signal?.aborted) {
-        this.queuedDraft = value || undefined;
-        rejectQuestion(Object.assign(new Error('interrupted'), { code: 'ERR_PROMPT_INTERRUPTED' }));
-        return;
-      }
-      settings?.signal?.addEventListener('abort', interrupt, { once: true });
-      const handleKey = (key: string): void => {
-        if (key === '\u000c') {
-          this.requestRedraw('repair');
-          this.forgetScreenPosition();
-          return draw();
-        }
-        const matched = matches();
-        // `options` drives selection keys. While an argument is being typed the
-        // palette is only a hint -- unless it is listing the argument's own
-        // values, which are chosen exactly like commands are.
-        const completing = Boolean(matched[0]?.completes);
-        const options = value.includes(' ') && !completing ? [] : matched;
-        const pasted = pastedText(key);
-        if (pasted !== undefined) {
-          // Pasted newlines are content, not Enter. Splitting on them is what
-          // turned one pasted block into a queue of separate messages. A long
-          // one is held as `[Pasted text #1 +40 lines]`.
-          const next = insertPaste(draft(), pasted, this.pasteCount + 1);
-          if (next.held.length > held.length) this.pasteCount += 1;
-          apply(next);
-          selected = 0;
-          return draw();
-        }
-        // Ctrl+O: the held pastes back in the draft as text, to read or edit.
-        if (key === '\u000f') {
-          if (!held.length) return;
-          cursor = expandPastes(value.slice(0, cursor), held).length;
-          value = expandPastes(value, held);
-          held = [];
-          return draw();
-        }
-        if (key === '\u001a') return this.suspendToShell();
-        // Esc on an empty composer, no panel open, stops a turn parked for
-        // the quota reset.
-        if (key === '\u001b' && !value && !this.panelState && this.idleEscape) { const stop = this.idleEscape; this.idleEscape = undefined; stop(); return; }
-        if (!value && !matched.length && this.panelKey(key)) return draw();
-        if (key === '\u0003') {
-          // Ctrl+C clears a draft first. Leaving takes a second press, because
-          // the same key also interrupts a turn and is pressed by reflex.
-          if (value) { value = ''; cursor = 0; held = []; selected = 0; historyIndex = this.history.length; return draw(); }
-          if (Date.now() - exitArmedAt <= EXIT_CONFIRM_MS) return finish('/exit');
-          exitArmedAt = Date.now();
-          this.showTransientNotice('Press Ctrl+C again to exit', EXIT_CONFIRM_MS, draw);
-          return draw();
-        }
-        if (exitArmedAt) { exitArmedAt = 0; this.clearTransientNotice(); }
-        // Ctrl+D is end-of-input only on an empty draft; otherwise it deletes
-        // forward like every other line editor.
-        if (key === '\u0004' && !value) return finish('/exit');
-        if (key === '\u001b' && settings?.cancellable) return cancel();
-        if (key === '\u001b' && matched.length) {
-          value = '';
-          cursor = 0;
-          selected = 0;
-          return draw();
-        }
-        if (key === '\r') {
-          const continued = options.length ? undefined : backslashNewline(value, cursor);
-          if (continued) { value = continued.value; cursor = continued.cursor; return draw(); }
-          // A value from the command's own list: what was typed wins when it
-          // IS a value, otherwise the highlighted one.
-          if (completing) return runCommand(completedCommandLine(value, commands, selected));
-          // The highlighted command, bare. One that takes a value (model,
-          // effort, permissions, account, resume) opens its own picker, titled
-          // and starting on the current value; the values are listed here
-          // only once one is being typed (`/model op`).
-          if (options.length && value.startsWith('/') && !value.includes(' ')) return runCommand(options[selected].value);
-          if (value.startsWith('/')) return runCommand(expandPastes(value, held));
-          return finish(expandPastes(value, held));
-        }
-        if (key === '\t' && options.length) {
-          // A value fills in as it is, ready to run or to keep editing; a
-          // command that takes an argument completes ready for it.
-          value = completing ? options[selected].value
-            : `${options[selected].value}${options[selected].argHint || options[selected].argValues ? ' ' : ''}`;
-          cursor = value.length;
-          selected = 0;
-          return draw();
-        }
-        // Up/Down navigate palette options; otherwise they move through a
-        // multi-line draft and fall through to input history from its first
-        // and last line. (Wheel/touch scrolling belongs to the terminal and
-        // never arrives as these keys.) Ctrl+P/Ctrl+N always mean history.
-        const historyStep = (direction: -1 | 1): void => {
-          if (direction < 0 && historyIndex > 0) historyIndex -= 1;
-          else if (direction > 0) historyIndex = Math.min(this.history.length, historyIndex + 1);
-          else return;
-          value = this.history[historyIndex] ?? '';
-          cursor = value.length;
-        };
-        if (key === '\u001b[A' || key === '\u001b[B') {
-          const direction = key === '\u001b[A' ? -1 : 1;
-          if (options.length) { selected = (selected + direction + options.length) % options.length; return draw(); }
-          // An empty composer means the conversation is what is being looked
-          // at, so the arrows read it. Recorded from a real phone client: a
-          // swipe arrives as arrow keys and nothing else -- no mouse report in
-          // any encoding, and no page keys on the keyboard -- so on that
-          // client this is the only way back through the conversation at all.
-          // History keeps Ctrl+P and Ctrl+N, which is where it always was as
-          // well, and the arrows still move through a draft once there is one.
-          if (!value) {
-            if (this.scrollTranscript(direction === -1 ? SWIPE_ROWS : -SWIPE_ROWS)) return;
-            if (direction === 1 && this.noteReadingDirection()) return;
-          }
-          const moved = composerVerticalMove(value, cursor, direction);
-          if (moved !== undefined) cursor = moved;
-          else historyStep(direction);
-          return draw();
-        }
-        if (key === '\u0010' && !options.length) { historyStep(-1); return draw(); }
-        if (key === '\u000e' && !options.length) { historyStep(1); return draw(); }
-        if (key === '\u001b[D') {
-          // With nothing typed there is nothing for the arrow to move through,
-          // so the chat composer spends it on its conversations: what is
-          // running now, and below it what can be resumed.
-          if (!value && settings?.leftArrowCommand) return finish(settings.leftArrowCommand);
-          // Backing out of the command list clears it; inside an argument the
-          // arrow edits, as it does in any line.
-          if (options.length && !completing) { value = ''; cursor = 0; selected = 0; }
-          else cursor = previousCharacterIndex(value, cursor);
-          return draw();
-        }
-        if (key === '\u001b[C') {
-          // Right Arrow is deliberately identical to Enter.
-          if (completing && cursor >= value.length) return runCommand(completedCommandLine(value, commands, selected));
-          // When the palette is open (any options match), right arrow selects/runs the highlighted option
-          if (options.length && cursor >= value.length) return runCommand(options[selected].value);
-          const paletteValue = composerRightArrowValue(value, options.length > 0, settings?.rightArrowPalette);
-          if (paletteValue) {
-            value = paletteValue;
-            cursor = value.length;
-            selected = 0;
-            return draw();
-          }
-          cursor = nextCharacterIndex(value, cursor);
-          return draw();
-        }
-        // Page keys read the conversation rather than edit the draft: the
-        // alternate screen has no terminal scrollback behind it, so this is
-        // the only way back through what was said. Shift+Up/Down does the
-        // same a row at a time. Esc, which already clears a draft, also
-        // returns to the live end.
-        if (this.handleScrollKey(key)) return;
-        // Escape returns to the live end here; in the waiting band it keeps
-        // meaning interrupt, and a new turn rejoins on its own.
-        if (key === '\u001b' && this.scrolledBack) { this.scrollTranscript(-Number.MAX_SAFE_INTEGER); return; }
-        // A placeholder is deleted whole, its paste with it.
-        const removed = key === '\u007f' || key === '\b' ? removePlaceholderAt(draft(), 'back')
-          : key === '\u001b[3~' || key === '\u0004' ? removePlaceholderAt(draft(), 'forward') : undefined;
-        if (removed) { apply(removed); selected = highlightFor(value); return draw(); }
-        // Everything else is text editing, shared with the waiting composer.
-        const edited = editWaitingComposer(value, cursor, key);
-        if (!edited.changed) return;
-        if (edited.value !== value) selected = highlightFor(edited.value);
-        value = edited.value;
-        cursor = edited.cursor;
-        // An edit that broke a placeholder drops its paste.
-        held = keptPastes(value, held);
-        draw();
-      };
-      let exitArmedAt = 0;
-      const listen = (): void => {
-        stopInput = takeTerminalKeys((key) => { if (!finished) handleKey(key); });
-        output.write(enterInputModes());
-      };
-      this.resumeInput = () => { stopInput(); if (!finished) listen(); };
-      // Typed ahead under a sign-in: before anything the terminal sends
-      // next (listen() hands that on, on a later tick than this one). What
-      // follows an Enter that sent this prompt is the next prompt's draft.
-      const ahead = this.typedAhead.splice(0);
-      if (ahead.length) {
-        process.nextTick(() => {
-          for (const [index, key] of ahead.entries()) {
-            if (!finished) { handleKey(key); continue; }
-            const rest = ahead.slice(index).filter((item) => !item.startsWith('\u001b') && item.charCodeAt(0) >= 0x20 && item !== '\u007f').join('');
-            if (rest) this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}${rest}` : rest;
-            break;
-          }
-        });
-      }
-      listen();
-      draw();
-    });
-  }
+  question(...args: Parameters<typeof question>): ReturnType<typeof question> { return question.apply(this, args); }
 
   select<T>(
     title: string,
