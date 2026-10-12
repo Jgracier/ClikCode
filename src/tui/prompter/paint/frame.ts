@@ -52,7 +52,7 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   });
   liveConversation.push(...queuedMessageRows(queuedMessages, enterAt, escAt, inner, userRows));
   const conversationLines = liveConversationLines(liveConversation, true);
-  const { footer, composerStart } = buildFooter(this, { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands });
+  const { footer, composerStart } = buildFooter.call(this, { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands });
   // The live region is bounded by the viewport: it is erased and redrawn as
   // one block every frame, so it can never be taller than the terminal. A
   // construct that settles only when it closes -- a table still receiving
