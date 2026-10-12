@@ -1,0 +1,97 @@
+/** The footer of a frame: notice, palette, panel, plan, approval, status, composer and rules, fitted under an approval. */
+import chalk from 'chalk';
+import type { PaletteEntry } from '../../command-palette.js';
+import { terminalCellWidth, visibleSlice } from '../../render/width.js';
+import type { PickerOption } from '../../../harness/prompter.js';
+import { fitFooterForApproval } from '../../render/frame-budget.js';
+import { paletteRows as paletteBandRows } from '../../render/footer-rows.js';
+import type { PaletteLayout } from '../../option-picker.js';
+import { composerUsageLabel, paintTitleRule, paintUsageRule } from '../../render/waiting.js';
+import type { TerminalHarnessPrompter } from '../../prompter.js';
+import type { HarnessSession } from '../../../session/model.js';
+import { frameBands } from './bands.js';
+
+
+export type FooterInput = {
+  inner: number; rowWidth: number; width: number; prompt: string; options: readonly PickerOption<string>[]; selected: number;
+  palette: PaletteLayout | undefined; session: HarnessSession; targetHeight: number;
+  bands: ReturnType<typeof frameBands>;
+};
+
+/** The footer's rows and where the composer starts in them. */
+export function buildFooter(p: TerminalHarnessPrompter, input: FooterInput): { footer: string[]; composerStart: number } {
+  const { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands } = input;
+  const {
+    noticeShown, noticeRows, waitingRows, paletteRows: paletteCapacity, indicatorRows, indicatorText, approvalRows,
+    thoughtRows, signInRows, planRows, panelRows, composerRows,
+  } = bands;
+  const meta = p.statusText(inner);
+  const footer: string[] = [];
+  // The resting composer starts with a clear row, or its rule sits directly
+  // on the last line of the answer. While a turn runs the generating band
+  // already carries its own blank, budgeted into the height -- adding a
+  // second one there would double the gap and push an answer row off.
+  if (!p.turn) footer.push('');
+  footer.push(...noticeShown.slice(0, noticeRows).map((row) => `  ${chalk.yellow(row)}`));
+  if (paletteCapacity) {
+    footer.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
+      ...(palette?.headings ? { headings: true } : {}), ...(palette?.hint ? { hint: palette.hint } : {}),
+    }));
+  }
+  footer.push(...panelRows, ...planRows);
+  const aboveApproval = footer.length;
+  const midRows = [...thoughtRows, ...(signInRows.length ? ['', ...signInRows] : [])];
+  footer.push(...approvalRows, ...midRows);
+  // The generating band: a blank above the status where the height has the
+  // row for it. The status itself is always drawn while a turn runs.
+  const statusBlank = waitingRows >= 2 && p.turn ? '' : undefined;
+  const statusRow = p.turn ? `  ${visibleSlice(p.waitingLine(p.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
+  if (statusBlank !== undefined) footer.push(statusBlank);
+  if (statusRow !== undefined) footer.push(statusRow);
+  // Background terminals the vendor runs: one dim row under the status,
+  // not drawn at zero, and the first row a short terminal gives up.
+  const indicatorRow = indicatorRows && indicatorText !== undefined
+    ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : undefined;
+  if (indicatorRow !== undefined) footer.push(indicatorRow);
+  // Usage lives on the upper composer border, mirroring the title on the
+  // lower border. A spent window replaces the percentage with the reset
+  // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
+  const usageRule = paintUsageRule(rowWidth, composerUsageLabel(p.usageLabel, p.usageResetLabel));
+  footer.push(usageRule);
+  let composerStart = footer.length;
+  const composerFooter: string[] = [];
+  for (const [index, row] of composerRows.rows.entries()) {
+    // The caret is drawn in the same foreground as the rules and the text
+    // between them, so the whole composer reads as one field: white frame,
+    // white prompt, white input.
+    composerFooter.push(`  ${index === 0 ? chalk.bold(prompt) : ' '.repeat(terminalCellWidth(prompt))}${row}`);
+  }
+  footer.push(...composerFooter);
+  // The rule below the composer carries the chat's title at its right
+  // edge instead of a plain dashed line -- dashes fill from the left up to
+  // wherever the title starts, so a longer title just eats more of the
+  // rule rather than needing a line of its own. Provider/model/directory
+  // (meta) stay on their own separate line below, never sharing space with
+  // the title the way they used to.
+  const titleRule = paintTitleRule(rowWidth, session.name || undefined);
+  footer.push(titleRule);
+  // Provider, model, effort and directory are one statement -- what this
+  // conversation is running as -- so they read as one line in one colour
+  // rather than a bright word followed by a dimmer tail. Cyan is ClikCode's
+  // own chrome, the same family as the caret above it.
+  const metaRow = `  ${chalk.cyan(meta)}`;
+  footer.push(metaRow);
+  // A short terminal with an approval up: the rows that are not the prompt
+  // go first, so it is never the prompt that is cut off the top.
+  if (approvalRows.length && footer.length > targetHeight) {
+    const fitted = fitFooterForApproval({
+      above: footer.slice(0, aboveApproval), approval: approvalRows, mid: midRows, blank: statusBlank, status: statusRow,
+      indicator: indicatorRow,
+      usageRule, composer: composerFooter, titleRule, meta: metaRow, height: targetHeight,
+    });
+    footer.splice(0, footer.length, ...fitted.rows);
+    composerStart = fitted.composerStart;
+  }
+  return { footer, composerStart };
+}
+
