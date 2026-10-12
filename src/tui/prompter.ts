@@ -62,25 +62,24 @@ import { enterAgainSends, hasDurableSteer, liveTurnSpan, STEER_WORDS, steerTrans
 import { pendingPromptText } from './render/pending-prompt.js';
 import { markTurn, turnMarkOpen } from '../runtime/turn-latency.js';
 import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/search-focus.js';
-import { highlightSelectionAt, lineAtRow, lineText, orderedRange, scrollShift, selectedText, selectionAction, selectionIsEmpty, shiftedRow, type MouseAction, type Selection } from './render/selection.js';
-import { copyToClipboard } from '../session/attachments.js';
+import { highlightSelectionAt, scrollShift, shiftedRow, type Selection } from './render/selection.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
 import { isClikCodeNotice } from '../session/clikcode-notice.js';
 import { reducedMotion } from './capabilities.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { logCursorEvent } from './cursor-log.js';
-import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
-import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOn, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
+import { KEEP_STDIN_FLOWING, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
+import { SWIPE_ROWS, enterInputModes, popReadModes, redrawPreamble, sessionModesOn, takeQueuedModes, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js';
-import { userError } from '../harness/protocol/errors.js';
-import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, SCROLL_DRAIN_MIN, SCROLL_DRAIN_MS, ALTERNATE_TRANSCRIPT_ROWS, SELECTION_SCROLL_MS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
+import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
+import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -2902,29 +2901,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     focus.jumped = true;
   }
 
-  /** Move the viewport through the transcript. Positive scrolls back, and the
-   * conversation is followed again at zero, which every new frame returns to
-   * by itself once the reader lets go. Returns whether anything moved, so a
-   * key that cannot scroll any further still means something to the caller. */
-  scrollTranscript(rows: number): boolean {
-    // Bounded by what the CURRENT screen can show -- see flushAlternateFrame.
-    // Bounding it by the transcript's length instead let the offset run past
-    // the end of what any frame would draw, and the rows a reader then had to
-    // swipe back through before the view moved again were rows that were
-    // never on it.
-    const furthest = Math.max(0, this.alternateTranscript.length - this.alternateAbove);
-    const next = Math.max(0, Math.min(furthest, this.alternateScrollback + rows));
-    // What a report of "it did not move" needs to be answerable: whether the
-    // key arrived (logged where keys are read), and whether there was anywhere
-    // to go -- a screen tall enough to show the whole transcript has nothing
-    // hidden above it, and refusing to move is then the right answer.
-    logCursorEvent(`scroll by=${rows} from=${this.alternateScrollback} to=${next} furthest=${furthest} rows=${this.alternateTranscript.length} above=${this.alternateAbove}`);
-    if (next === this.alternateScrollback) return false;
-    this.alternateScrollback = next;
-    this.paintingScroll = true;
-    this.scheduleScrollPaint();
-    return true;
-  }
+  scrollTranscript(...args: Parameters<typeof scrollTranscript>): ReturnType<typeof scrollTranscript> { return scrollTranscript.apply(this, args); }
 
   /** How much of a pending scroll to apply now, carrying the rest.
    *
@@ -2944,34 +2921,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** True while the frame being drawn is the result of a scroll. */
   paintingScroll = false;
   scrollDrainTimer?: NodeJS.Timeout;
-  drainScroll(): void {
-    if (this.closed || this.suspended || !this.pendingScroll) return;
-    const magnitude = Math.abs(this.pendingScroll);
-    const step = Math.min(Math.max(1, this.viewportRows() - 1), Math.max(SCROLL_DRAIN_MIN, (magnitude * 3) >> 2));
-    const applied = magnitude <= step ? this.pendingScroll : (this.pendingScroll > 0 ? step : -step);
-    this.pendingScroll -= applied;
-    const moved = this.scrollTranscript(applied);
-    // Nowhere further to go: drop the rest rather than drain against the end.
-    if (!moved) this.pendingScroll = 0;
-    if (!this.pendingScroll || this.scrollDrainTimer) return;
-    this.scrollDrainTimer = setTimeout(() => {
-      this.scrollDrainTimer = undefined;
-      this.drainScroll();
-    }, SCROLL_DRAIN_MS);
-    this.scrollDrainTimer.unref();
-  }
+  drainScroll(...args: Parameters<typeof drainScroll>): ReturnType<typeof drainScroll> { return drainScroll.apply(this, args); }
 
-  /** Wheel notches go here, not straight to the viewport. */
-  queueScroll(rows: number): void {
-    this.pendingScroll += rows;
-    if (inKeyBatch()) this.drainAtBatchEnd();
-    else this.drainScroll();
-  }
+  queueScroll(...args: Parameters<typeof queueScroll>): ReturnType<typeof queueScroll> { return queueScroll.apply(this, args); }
 
   stopDrainBatch?: () => void;
-  drainAtBatchEnd(): void {
-    this.stopDrainBatch ??= onKeyBatchEnd(() => this.drainScroll());
-  }
+  drainAtBatchEnd(...args: Parameters<typeof drainAtBatchEnd>): ReturnType<typeof drainAtBatchEnd> { return drainAtBatchEnd.apply(this, args); }
 
   /** One repaint per burst of wheel notches, not one per notch.
    *
@@ -2992,180 +2947,30 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * lands exactly where the finger left it; only the drawing is coalesced. */
   scrollPaintQueued = false;
   stopScrollBatch?: () => void;
-  scheduleScrollPaint(): void {
-    const draw = (): void => {
-      this.scrollPaintQueued = false;
-      if (this.closed || this.suspended) return;
-      this.repaint();
-    };
-    // Inside a batch the frame waits for the end of the chunk; outside one --
-    // a page key, an arrow, a test pressing a single key -- it draws at once.
-    if (!inKeyBatch()) { draw(); return; }
-    this.scrollPaintQueued = true;
-    this.stopScrollBatch ??= onKeyBatchEnd(() => { if (this.scrollPaintQueued) draw(); });
-  }
+  scheduleScrollPaint(...args: Parameters<typeof scheduleScrollPaint>): ReturnType<typeof scheduleScrollPaint> { return scheduleScrollPaint.apply(this, args); }
 
   /** True while the reader is looking at something other than the live end. */
   get scrolledBack(): boolean { return this.alternateScrollback > 0; }
 
-  /** Keys that move the transcript rather than the draft, in the one place
-   * both the prompt and the waiting band read them from. Reading back is
-   * wanted most while a turn runs -- which is the half that had no scrolling
-   * at all, so a page key or a wheel notch reached the draft editor instead.
-   * Returns whether the key was spent here. */
-  handleScrollKey(key: string): boolean {
-    if (isMouseEvent(key)) {
-      // A left press, drag or release is a selection ClikCode makes itself:
-      // with mouse reporting on, the terminal's own selection never sees it.
-      const action = selectionAction(key);
-      if (action) { this.handleSelection(action); return true; }
-      // Every other mouse report is consumed too, wheel or not: none of them
-      // belongs to the composer.
-      const rows = wheelScrollRows(key);
-      // Queued and drained -- a flick is hundreds of notches in one read.
-      if (rows) this.queueScroll(rows);
-      return true;
-    }
-    const page = Math.max(1, this.viewportRows() - 3);
-    if (key === '\u001b[5~') { this.scrollTranscript(page); return true; }
-    if (key === '\u001b[6~') { this.scrollTranscript(-page); return true; }
-    // Ctrl+B and Ctrl+F, a page at a time, as less and vi have always read.
-    //
-    // A phone keyboard has no page keys, but its key bar has ctrl, so these
-    // two are reachable by hand where PageUp and PageDown are not.
-    if (key === '\u0002') { this.scrollTranscript(page); return true; }
-    if (key === '\u0006') { if (!this.scrollTranscript(-page)) this.noteReadingDirection(); return true; }
-    return false;
-  }
+  handleScrollKey(...args: Parameters<typeof handleScrollKey>): ReturnType<typeof handleScrollKey> { return handleScrollKey.apply(this, args); }
 
-  /** Press starts a selection, drag extends it, release copies it. A click
-   * that never moved selects nothing and copies nothing. No confirmation is
-   * shown: the highlight is what was selected, and it clears when the text is
-   * on the clipboard. Only a failure to copy says anything. */
-  handleSelection(action: MouseAction): void {
-    // Scrolled back, the rows below the conversation are the composer and the
-    // status line: a drag reaching them is reaching for the conversation's
-    // next line, which the edge scroll brings up, not for the chrome.
-    const intoChrome = this.alternateScrollback > 0 && action.kind !== 'press' && action.at.row >= this.alternateAbove;
-    const at = intoChrome
-      ? { row: this.lineAtScreenRow(Math.max(0, this.alternateAbove - 1)), col: Number.MAX_SAFE_INTEGER }
-      : { row: this.lineAtScreenRow(action.at.row), col: action.at.col };
-    if (action.kind === 'press') {
-      this.stopSelectionScroll();
-      if (!Number.isFinite(at.row)) return;
-      this.selection = { anchor: at, head: at };
-      return;
-    }
-    const selection = this.selection;
-    if (!selection) return;
-    if (Number.isFinite(at.row)) selection.head = at;
-    if (action.kind === 'drag') {
-      this.followSelectionEdge(action.at.row, action.at.col);
-      this.redrawSelection();
-      return;
-    }
-    this.stopSelectionScroll();
-    this.selection = undefined;
-    if (selectionIsEmpty(selection)) return;
-    const text = this.selectionText(selection);
-    this.redrawSelection();
-    if (!text) return;
-    void copyToClipboard(text).catch((error: unknown) => {
-      this.showTransientNotice(userError('copy', error), NOTICE_MS, () => this.redrawSelection());
-      this.redrawSelection();
-    });
-  }
+  handleSelection(...args: Parameters<typeof handleSelection>): ReturnType<typeof handleSelection> { return handleSelection.apply(this, args); }
 
-  /** The conversation line screen row `row` shows (see render/selection.ts),
-   * from where the view is now, not from the last frame drawn: a scroll's
-   * repaint lands a moment after the scroll, and a release in between was
-   * placed by the old layout -- the selection snapped back to where the drag
-   * reached the edge. */
-  lineAtScreenRow(row: number): number {
-    return lineAtRow({
-      length: this.alternateTranscript.length, trimmed: this.alternateTrimmed,
-      above: this.alternateAbove, scrollback: this.alternateScrollback,
-    }, row);
-  }
+  lineAtScreenRow(...args: Parameters<typeof lineAtScreenRow>): ReturnType<typeof lineAtScreenRow> { return lineAtScreenRow.apply(this, args); }
 
-  /** What a selection copies, read from the conversation itself -- all of it,
-   * including the lines scrolled out of view while it was being made. */
-  selectionText(selection: Selection): string {
-    const range = orderedRange(selection);
-    const rows: string[] = [];
-    for (let line = range.start.row; line <= range.end.row; line += 1) {
-      rows.push(lineText(line, this.alternateTranscript, this.alternateTrimmed, this.frameLayout.live));
-    }
-    const shift = (cell: { row: number; col: number }) => ({ row: cell.row - range.start.row, col: cell.col });
-    return selectedText(rows, { anchor: shift(selection.anchor), head: shift(selection.head) });
-  }
+  selectionText(...args: Parameters<typeof selectionText>): ReturnType<typeof selectionText> { return selectionText.apply(this, args); }
 
-  /** A drag resting on the top row scrolls back; one resting on the bottom of
-   * the conversation while it is scrolled back scrolls forward. Anywhere else
-   * stops. The terminal sends a drag report only when the pointer moves, so
-   * a timer carries the scroll while it is held still at the edge. */
-  followSelectionEdge(row: number, col: number): void {
-    const bottom = Math.max(0, this.alternateAbove - 1);
-    const direction: 1 | -1 | 0 = row <= 0 ? 1 : row >= bottom && this.alternateScrollback > 0 ? -1 : 0;
-    if (!direction) { this.stopSelectionScroll(); return; }
-    if (this.selectionScroll?.direction === direction) { this.selectionScroll.col = col; return; }
-    this.stopSelectionScroll();
-    const timer = setInterval(() => this.stepSelectionScroll(), SELECTION_SCROLL_MS);
-    timer.unref?.();
-    this.selectionScroll = { timer, direction, col };
-    this.stepSelectionScroll();
-  }
+  followSelectionEdge(...args: Parameters<typeof followSelectionEdge>): ReturnType<typeof followSelectionEdge> { return followSelectionEdge.apply(this, args); }
 
-  stepSelectionScroll(): void {
-    const scroll = this.selectionScroll;
-    const selection = this.selection;
-    if (!scroll || !selection || this.closed || this.suspended) { this.stopSelectionScroll(); return; }
-    const before = this.alternateScrollback;
-    if (!this.scrollTranscript(scroll.direction)) { this.stopSelectionScroll(); return; }
-    // The line under the resting pointer moved by however far the view did.
-    const moved = this.alternateScrollback - before;
-    selection.head = { row: selection.head.row - moved, col: scroll.direction < 0 ? Number.MAX_SAFE_INTEGER : scroll.col };
-  }
+  stepSelectionScroll(...args: Parameters<typeof stepSelectionScroll>): ReturnType<typeof stepSelectionScroll> { return stepSelectionScroll.apply(this, args); }
 
-  stopSelectionScroll(): void {
-    if (!this.selectionScroll) return;
-    clearInterval(this.selectionScroll.timer);
-    this.selectionScroll = undefined;
-  }
+  stopSelectionScroll(...args: Parameters<typeof stopSelectionScroll>): ReturnType<typeof stopSelectionScroll> { return stopSelectionScroll.apply(this, args); }
 
-  /** The current frame again, so the highlight follows the pointer. */
-  redrawSelection(): void {
-    if (this.closed || this.suspended || this.selecting) return;
-    if (this.turn) this.paintWaiting(this.turn);
-    else this.repaint();
-  }
+  redrawSelection(...args: Parameters<typeof redrawSelection>): ReturnType<typeof redrawSelection> { return redrawSelection.apply(this, args); }
 
-  /** Down at the live end moves nothing, and says so.
-   *
-   * There is nothing newer than the newest, so the key is a correct no-op --
-   * and an invisible one, which is worse than useless when the only way to
-   * read back on a client is its arrow keys: the request looks like a broken
-   * feature rather than a wrong direction. Inverting it instead was tried and
-   * is worse, because then nothing settles at the live end: every press
-   * bounces back into the history. So it stays a no-op, and it tells the
-   * reader which way to go. */
-  noteReadingDirection(): boolean {
-    if (this.scrolledBack || this.alternateTranscript.length === 0) return false;
-    this.showTransientNotice(
-      '↑ or Ctrl+B to read earlier messages',
-      2000,
-      () => this.repaint(),
-    );
-    this.repaint();
-    return true;
-  }
+  noteReadingDirection(...args: Parameters<typeof noteReadingDirection>): ReturnType<typeof noteReadingDirection> { return noteReadingDirection.apply(this, args); }
 
-  /** Forget where on screen the live block sits: whoever writes next (the
-   * shell, a vendor CLI, a resize) decides that now. */
-  forgetScreenPosition(): void {
-    this.alternatePrevious = [];
-    this.cursorShown = undefined;
-  }
+  forgetScreenPosition(...args: Parameters<typeof forgetScreenPosition>): ReturnType<typeof forgetScreenPosition> { return forgetScreenPosition.apply(this, args); }
 
   notice(text: string): void {
     this.showTransientNotice(text, NOTICE_MS, () => this.repaint());
