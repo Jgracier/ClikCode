@@ -764,7 +764,8 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (command.type === 'cancel') {
       if (activeController) {
         lifecycle('worker.cancel', { stopped: 'turn' });
-        activeRestoreDraft = command.restoreDraft ? socket : undefined;
+        // A second Stop (the editor repeats it until the turn ends) must not take back the first's draft.
+        if (command.restoreDraft) activeRestoreDraft = socket;
         activeController.abort();
         return;
       }

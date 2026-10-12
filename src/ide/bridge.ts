@@ -76,6 +76,9 @@ import {
 class TurnFailed extends Error {}
 
 const USAGE_REFRESH_MS = 15_000;
+/** How long a Stop is given to end the turn before it is asked again, and how many times. */
+const STOP_RESEND_MS = 4_000;
+const STOP_RESENDS = 6;
 
 export class IdeBridge {
   readonly prompter: IdePrompter;
@@ -147,7 +150,7 @@ export class IdeBridge {
         void this.send(request.text, request.id);
         return;
       case 'cancel':
-        this.worker?.client.send({ type: 'cancel', restoreDraft: request.restoreDraft });
+        void this.cancelTurn(request.restoreDraft);
         return;
       case 'send-queued':
         this.worker?.client.send({ type: 'send-queued' });
@@ -236,6 +239,7 @@ export class IdeBridge {
     this.listWatch?.stop();
     this.listWatch = undefined;
     for (const timer of this.timers) clearInterval(timer);
+    clearInterval(this.stopWatch);
     this.prompter.cancelAll();
     this.searchKey?.('done');
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));
@@ -399,6 +403,35 @@ export class IdeBridge {
     return client;
   }
 
+  private stopWatch: NodeJS.Timeout | undefined;
+
+  /** Stop, and see that it lands. The editor shows "stopping" until the turn
+   * ends, so a Stop that never reached a turn -- no worker attached just then,
+   * or one that arrived before the worker had started the turn -- left it
+   * stopping for as long as the turn ran. The cancel is sent to a worker found
+   * or reattached, and sent again while the turn is still running; when none
+   * is, the worker is asked for a snapshot, which ends the editor's turn. */
+  private async cancelTurn(restoreDraft: boolean): Promise<void> {
+    const id = this.sessionId;
+    try {
+      const client = this.worker?.client ?? (id ? await this.workerFor(id) : undefined);
+      client?.send({ type: 'cancel', restoreDraft });
+    } catch (error) { this.report(error); }
+    clearInterval(this.stopWatch);
+    let looks = 0;
+    this.stopWatch = setInterval(() => {
+      looks += 1;
+      const running = this.workerTurnRunning || Boolean(this.turnWaiter);
+      if (this.closed || looks > STOP_RESENDS || (!running && looks > 1)) { clearInterval(this.stopWatch); this.stopWatch = undefined; }
+      const client = this.worker?.client;
+      if (!client || this.closed) return;
+      // Still running: ask again (the draft was restored, or not, by the first).
+      // Not running: nothing was cancelled, so bring the editor up to date.
+      client.send(running ? { type: 'cancel', restoreDraft: false } : { type: 'refresh' });
+    }, STOP_RESEND_MS);
+    this.stopWatch.unref();
+  }
+
   private detachWorker(): void {
     const worker = this.worker;
     if (!worker) return;
@@ -432,6 +465,8 @@ export class IdeBridge {
         return;
       case 'waiting-stop': {
         this.workerTurnRunning = false;
+        clearInterval(this.stopWatch);
+        this.stopWatch = undefined;
         const waiter = this.turnWaiter;
         this.turnWaiter = undefined;
         // The turn's cost is on the conversation's figure now.
