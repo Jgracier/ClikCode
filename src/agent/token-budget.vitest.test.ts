@@ -16,7 +16,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { toChatMessages } from './models/openai-client.js';
 import type { ModelStepRequest } from './model-client.js';
-import { runGatewayHarnessTurn } from './run-turn.js';
+import { runAgentLoop } from './run-turn.js';
 import { disposeSessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptedStep } from './testing.js';
 import { CONTEXT_PROFILE_ENV, type ContextHints, type ContextProfileName } from './context-profile.js';
@@ -197,9 +197,9 @@ async function runSession(options: SessionOptions): Promise<ModelStepRequest[]> 
     ...(options.onUsage ? { onUsage: options.onUsage } : {}),
   };
   try {
-    const first = await runGatewayHarnessTurn({ ...base, prompt: 'Fix the off-by-one in paginate and add a test.' });
+    const first = await runAgentLoop({ ...base, prompt: 'Fix the off-by-one in paginate and add a test.' });
     expect(first.stopReason).toBe('completed');
-    const second = await runGatewayHarnessTurn({ ...base, prompt: 'Also rename helper1..3 to words.' });
+    const second = await runAgentLoop({ ...base, prompt: 'Also rename helper1..3 to words.' });
     expect(second.stopReason).toBe('completed');
     // The profile is recorded on the result, and a session keeps one.
     expect(second.contextProfile).toBe(first.contextProfile);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { FileCheckpointStore } from './file-checkpoints.js';
-import { runGatewayHarnessTurn } from './run-turn.js';
+import { runAgentLoop } from './run-turn.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import type { GatewayHarnessTurnInput, ModelClient, ModelStepRequest, ModelStepResult } from './model-client.js';
 
@@ -98,7 +98,7 @@ describe('task sub-agents', () => {
       approvals.push({ title, preview });
       return true;
     } });
-    const result = await runGatewayHarnessTurn(input);
+    const result = await runAgentLoop(input);
     expect(result.stopReason).toBe('completed');
     expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 43\n');
     expect(approvals).toHaveLength(1);
@@ -128,7 +128,7 @@ describe('task sub-agents', () => {
       ] },
     });
     const { input } = turn(client, { signal: controller.signal });
-    await expect(runGatewayHarnessTurn(input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    await expect(runAgentLoop(input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
     expect(await fs.readFile(path.join(cwd, 'a.txt'), 'utf8')).toBe('the answer is 43\n');
     const checkpoints = new FileCheckpointStore(stateDir);
     expect(await checkpoints.listTurns(input.sessionId)).toHaveLength(1);
@@ -148,7 +148,7 @@ describe('task sub-agents', () => {
         { text: 'Started bash_1.' },
       ] },
     });
-    const result = await runGatewayHarnessTurn(turn(client).input);
+    const result = await runAgentLoop(turn(client).input);
     expect(result.stopReason).toBe('completed');
     expect(toolResults(client.requests(PARENT_PROMPT)[2])).toContain('Stopped bash_1.');
   });
@@ -165,7 +165,7 @@ describe('task sub-agents', () => {
       ] },
     });
     const { input, events } = turn(client);
-    const result = await runGatewayHarnessTurn(input);
+    const result = await runAgentLoop(input);
 
     expect(result).toMatchObject({ text: 'It says 42.', stopReason: 'completed' });
     // The answer, without the narration that preceded the read.
@@ -210,7 +210,7 @@ describe('task sub-agents', () => {
     // from then on the conversation has left this route.
     let checks = 0;
     const { input, events } = turn(client, { modelClientForStep: async () => (++checks >= 2 ? 'switch' as const : undefined) });
-    const result = await runGatewayHarnessTurn(input);
+    const result = await runAgentLoop(input);
 
     expect(result.stopReason).toBe('account-switch');
     // The sub-agent was not cut off: both its reads ran and it gave its answer.
@@ -242,7 +242,7 @@ describe('task sub-agents', () => {
       'question two': { script: [slowAnswer('answer two')] },
       'question three': { script: [slowAnswer('answer three')] },
     });
-    await runGatewayHarnessTurn(turn(client).input);
+    await runAgentLoop(turn(client).input);
     expect(peak).toBe(3);
     expect(toolResults(client.requests(PARENT_PROMPT)[1]).map(withoutTrace)).toEqual(['answer one', 'answer two', 'answer three']);
   });
@@ -252,7 +252,7 @@ describe('task sub-agents', () => {
       [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'task', args: { prompt: 'go deeper' } }] }, { text: 'done' }] },
       'go deeper': { script: [{ toolCalls: [{ name: 'task', args: { prompt: 'deeper still' } }] }, { text: 'I did it myself.' }] },
     });
-    await runGatewayHarnessTurn(turn(client).input);
+    await runAgentLoop(turn(client).input);
     const child = client.requests('go deeper');
     expect(child[0].tools.map((tool) => tool.name)).not.toContain('task');
     expect(toolResults(child[1])[0]).toMatch(/Unknown tool "task"/);
@@ -270,7 +270,7 @@ describe('task sub-agents', () => {
       ] },
     });
     const { input } = turn(client, { signal: controller.signal });
-    await expect(runGatewayHarnessTurn(input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    await expect(runAgentLoop(input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
     expect(client.requests('long job')).toHaveLength(2);
     const files = await fs.readdir(path.join(stateDir, 'sessions', input.sessionId, 'tool-output'));
     expect(files).toHaveLength(1);
@@ -291,7 +291,7 @@ describe('task sub-agents', () => {
       ] },
     });
     const reports: { input?: number; output?: number; costMicroUsd?: number; contextTokens?: number }[] = [];
-    const result = await runGatewayHarnessTurn(turn(client, { onUsage: (report) => reports.push(report) }).input);
+    const result = await runAgentLoop(turn(client, { onUsage: (report) => reports.push(report) }).input);
     expect(result.usage).toEqual({ input: 310, output: 31, costMicroUsd: 20 });
     expect(reports.map((report) => report.input)).toEqual([100, 150, 210, 310]);
     // Rolled-up reports keep describing the parent's context, not the sub-agent's.
@@ -304,7 +304,7 @@ describe('task sub-agents', () => {
       [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'task', args: { prompt: 'long' } }] }, { text: 'done' }] },
       long: { script: [], fallback: (_request: unknown, index: number) => (index < steps - 1 ? { toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `l${index}` }] } : { text: 'Found it after a long search.' }) },
     });
-    const result = await runGatewayHarnessTurn(turn(client).input);
+    const result = await runAgentLoop(turn(client).input);
     expect(result.stopReason).toBe('completed');
     expect(client.requests('long')).toHaveLength(steps);
     const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
@@ -320,7 +320,7 @@ describe('task sub-agents', () => {
       [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'task', args: { prompt: 'peek' } }] }, { text: 'done' }] },
       peek: { script: [{ toolCalls: [{ name: 'read_file', args: { path: outside } }] }, { text: 'was refused' }] },
     });
-    await runGatewayHarnessTurn(turn(client, { permissionMode: 'ask', onApproval: async (title) => { asked.push(title); return false; } }).input);
+    await runAgentLoop(turn(client, { permissionMode: 'ask', onApproval: async (title) => { asked.push(title); return false; } }).input);
     expect(asked).toHaveLength(1);
     expect(toolResults(client.requests('peek')[1])[0]).toMatch(/declined/);
     expect(toolResults(client.requests(PARENT_PROMPT)[1]).map(withoutTrace)).toEqual(['was refused']);
@@ -339,7 +339,7 @@ describe('task sub-agents', () => {
         return info.stopHookActive ? undefined : { continueWith: 'verify it' };
       },
     } });
-    const result = await runGatewayHarnessTurn(input);
+    const result = await runAgentLoop(input);
     expect(result.text).toBe('parent done');
     expect(seen).toHaveLength(2);
     expect(seen[0]).toMatchObject({ sessionId: input.sessionId, cwd, agentType: 'research', stopHookActive: false });
@@ -407,7 +407,7 @@ describe('coding sub-agents in their own worktree', () => {
       'make it 44': { script: [{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, slowEdit('44'), { text: 'Changed to 44.' }] },
     });
     const { input } = turn(client);
-    expect((await runGatewayHarnessTurn(input)).stopReason).toBe('completed');
+    expect((await runAgentLoop(input)).stopReason).toBe('completed');
     expect(peak).toBe(2);
 
     const [first, second] = toolResults(client.requests(PARENT_PROMPT)[1]);
@@ -433,7 +433,7 @@ describe('coding sub-agents in their own worktree', () => {
       [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'look only', isolation: 'worktree' } }] }, { text: 'done' }] },
       'look only': { script: [{ toolCalls: [{ name: 'read_file', args: { path: 'a.txt' } }] }, { text: 'Nothing to change.' }] },
     });
-    await runGatewayHarnessTurn(turn(client).input);
+    await runAgentLoop(turn(client).input);
     const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
     expect(output).toMatch(/no changes were made; its worktree and branch were removed/);
     expect(await git('branch', '--list', 'clikcode/*')).toBe('');
@@ -452,7 +452,7 @@ describe('coding sub-agents in their own worktree', () => {
         { before: () => controller.abort(), text: 'not completed' },
       ] },
     });
-    await expect(runGatewayHarnessTurn(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    await expect(runAgentLoop(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
     // The cancelled turn returns at once; the sub-agent winds down after it.
     await vi.waitFor(async () => expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]));
     const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');
@@ -465,7 +465,7 @@ describe('coding sub-agents in their own worktree', () => {
       [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', isolation: 'worktree' } }] }, { text: 'done' }] },
       'never runs': { script: [{ text: 'ran' }] },
     });
-    await runGatewayHarnessTurn(turn(client).input);
+    await runAgentLoop(turn(client).input);
     const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
     expect(output).toMatch(/needs a git repository/);
     expect(output.split('\n')).toHaveLength(1);
@@ -491,7 +491,7 @@ describe('coding sub-agents in their own worktree', () => {
       ] },
     });
     const { input, events } = turn(client);
-    const result = await runGatewayHarnessTurn(input);
+    const result = await runAgentLoop(input);
     expect(result.stopReason).toBe('completed');
     const parent = client.requests(PARENT_PROMPT);
     expect(toolResults(parent[1])[0]).toMatch(/^Started agent_1 in the background/);
@@ -530,7 +530,7 @@ describe('coding sub-agents in their own worktree', () => {
       if (checks === 2) setTimeout(() => release(), 50);
       return checks >= 2 ? 'switch' as const : undefined;
     } });
-    const result = await runGatewayHarnessTurn(input);
+    const result = await runAgentLoop(input);
     expect(result.stopReason).toBe('account-switch');
     // The agent was not stopped: it made its edit and gave its answer.
     expect(client.requests('slow edit')).toHaveLength(3);
@@ -560,7 +560,7 @@ describe('coding sub-agents in their own worktree', () => {
         { text: 'Made it 46.' },
       ] },
     });
-    await runGatewayHarnessTurn(turn(client).input);
+    await runAgentLoop(turn(client).input);
     // The instruction reached the agent before its second step.
     const second = client.requests('edit a.txt')[1].items;
     expect(second.some((item) => item.type === 'text' && item.role === 'user' && item.text === 'Make it 46 instead.')).toBe(true);
@@ -579,7 +579,7 @@ describe('coding sub-agents in their own worktree', () => {
       [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'agent', args: { prompt: 'never runs', background: true } }] }, { text: 'done' }] },
       'never runs': { script: [{ text: 'ran' }] },
     });
-    await runGatewayHarnessTurn(turn(client).input);
+    await runAgentLoop(turn(client).input);
     expect(toolResults(client.requests(PARENT_PROMPT)[1])[0]).toMatch(/not in a git repository/);
     expect(client.requests('never runs')).toHaveLength(0);
   });
@@ -598,7 +598,7 @@ describe('coding sub-agents in their own worktree', () => {
         { before: () => controller.abort(), text: 'never' },
       ] },
     });
-    await expect(runGatewayHarnessTurn(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    await expect(runAgentLoop(turn(client, { signal: controller.signal }).input)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
     // The turn returned only after the agent wound down.
     expect(await fs.readdir(path.join(root, 'tmp'))).toEqual([]);
     const branch = await git('branch', '--list', '--format=%(refname:short)', 'clikcode/*');

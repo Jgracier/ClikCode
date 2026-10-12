@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
-import { runGatewayHarnessTurn } from '../agent/run-turn.js';
+import { runAgentLoop } from '../agent/run-turn.js';
 import { disposeSessionState } from '../agent/session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from '../agent/testing.js';
 import { eventDiff } from '../agent/line-diff.js';
@@ -47,7 +47,7 @@ async function agentTurn(id: string, script: ScriptEntry[], prompt = 'edit'): Pr
   const events: HarnessActivityEvent[] = [];
   const recorder = new TurnRecorder(prompt, 'agent');
   recorder.start();
-  await runGatewayHarnessTurn({
+  await runAgentLoop({
     sessionId: id, cwd, stateDir, homeDir: path.join(root, 'home'), userConfigDir: path.join(root, 'config'),
     prompt, permissionMode: 'bypass', modelClient: new ScriptedModelClient([...script, { text: 'Done.' }]),
     onActivity: (event) => { events.push(event); recorder.add(event); },

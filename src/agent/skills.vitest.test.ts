@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runGatewayHarnessTurn } from './run-turn.js';
+import { runAgentLoop } from './run-turn.js';
 import { discoverSkills, MAX_DESCRIPTION_CHARS, MAX_LISTED_SKILLS, parseFrontmatter, skillsPromptSection, type Skill } from './skills.js';
 import { ScriptedModelClient } from './testing.js';
 import type { ToolContext } from './tool-contract.js';
@@ -181,7 +181,7 @@ describe('skill tool', () => {
 describe('system prompt', () => {
   const systemFor = async (): Promise<string> => {
     const client = new ScriptedModelClient([{ text: 'done' }]);
-    await runGatewayHarnessTurn({ sessionId: `p${Math.random()}`, cwd, stateDir, homeDir, userConfigDir: path.join(root, 'config'), prompt: 'hi', permissionMode: 'bypass', modelClient: client });
+    await runAgentLoop({ sessionId: `p${Math.random()}`, cwd, stateDir, homeDir, userConfigDir: path.join(root, 'config'), prompt: 'hi', permissionMode: 'bypass', modelClient: client });
     return client.requests[0].system;
   };
 
