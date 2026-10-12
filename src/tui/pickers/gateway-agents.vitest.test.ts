@@ -37,7 +37,7 @@ describe('Gateway agents in /model', () => {
     const agents = [{ id: 'silas', name: 'Silas' }, { id: 'cliknet', name: 'ClikNet' }];
     const rows = gatewayPickerRows(list, agents, 'gpt', 'silas');
     expect(rows.map((row) => row.label)).toEqual(['No agent', '✓ Silas', 'ClikNet', 'Agent default', 'gpt']);
-    expect(rows.map((row) => row.group)).toEqual(['Your agents (remote)', 'Your agents (remote)', 'Your agents (remote)', 'Models', 'Models']);
+    expect(rows.map((row) => row.group)).toEqual(['Your agents (remote)', 'Your agents (remote)', 'Your agents (remote)', 'Automatic', 'Other']);
     expect(rows[1]!.value).toEqual({ kind: 'agent', id: 'silas' });
     expect(rows[4]!.value).toEqual({ kind: 'model', id: 'gpt' });
   });
@@ -48,7 +48,7 @@ describe('Gateway agents in /model', () => {
     expect(customer.some((row) => row.value.kind === 'subscriptions')).toBe(false);
     const on = gatewayPickerRows({ auto: null, models: [{ id: 'gpt' }], subscriptions: true }, agents, 'gpt');
     expect(on[0]).toMatchObject({ label: '✓ Use subscriptions', value: { kind: 'subscriptions' }, group: 'Gateway' });
-    expect(on.map((row) => row.group)).toEqual(['Gateway', 'Your agents (remote)', 'Your agents (remote)', 'Models', 'Models']);
+    expect(on.map((row) => row.group)).toEqual(['Gateway', 'Your agents (remote)', 'Your agents (remote)', 'Automatic', 'Other']);
     const off = gatewayPickerRows({ auto: null, models: [{ id: 'gpt' }], subscriptions: false }, agents, 'gpt');
     expect(off[0]).toMatchObject({ label: '○ Use subscriptions', value: { kind: 'subscriptions' } });
   });
@@ -112,5 +112,12 @@ createdAt: now, updatedAt: now, status: 'active',
     expect((await readState()).sessions.find((item) => item.id === 'gw')).toMatchObject({ gatewayAgentId: 'silas', model: 'gpt' });
     await aiSessionSet('gw', { route: 'local' });
     expect((await readState()).sessions.find((item) => item.id === 'gw')?.gatewayAgentId).toBeUndefined();
+  });
+});
+
+describe('the Gateway model picker groups by maker', () => {
+  it('lists each maker under its own heading, Automatic first', () => {
+    const rows = gatewayPickerRows({ auto: null, models: [{ id: 'g', maker: 'openai' }, { id: 'c', maker: 'anthropic' }, { id: 'u' }] }, [], null);
+    expect(rows.map((row) => [row.label, row.group])).toEqual([['Automatic', 'Automatic'], ['c', 'Anthropic'], ['g', 'OpenAI'], ['u', 'Other']]);
   });
 });

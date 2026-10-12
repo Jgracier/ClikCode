@@ -17,6 +17,8 @@ import { gatewaySubscriptionsOn, subscriptionsHeader } from './subscriptions.js'
 
 export interface GatewayModel {
   id: string;
+  /** The lab that made it (`anthropic`, `meta`), as the Gateway names it; absent when unknown. Never who serves it. */
+  maker?: string;
   contextWindow?: number;
   /** Takes images beside text: ClikCode sends a message's images to it. */
   vision?: boolean;
@@ -42,6 +44,25 @@ const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
 export function gatewayModelLabel(model: GatewayModel): string {
   const name = withoutFreeTag(model.id);
   return model.access ? `${name} (${model.access})` : name;
+}
+
+const MAKER_NAMES: Readonly<Record<string, string>> = {
+  openai: 'OpenAI', xai: 'xAI', zai: 'Z.ai', ibm: 'IBM', bytedance: 'ByteDance', nousresearch: 'Nous Research',
+  inclusionai: 'inclusionAI', aionlabs: 'AionLabs', 'nex-agi': 'Nex AGI', 'nomic-ai': 'Nomic', deepseek: 'DeepSeek',
+  minimax: 'MiniMax', moonshot: 'Moonshot AI', thinkingmachines: 'Thinking Machines', sao10k: 'Sao10K', nvidia: 'NVIDIA',
+};
+
+/** Where a model sits in a list of models: its maker's name, or "Other". */
+export function gatewayMakerName(model: GatewayModel): string {
+  const maker = model.maker;
+  if (!maker) return 'Other';
+  return MAKER_NAMES[maker] ?? maker.replace(/(^|[-_ ])(\w)/g, (_m, space: string, letter: string) => `${space ? ' ' : ''}${letter.toUpperCase()}`);
+}
+
+/** The models ordered by maker (A to Z, Other last), each maker's models in the list's own order. */
+export function gatewayModelsByMaker(models: readonly GatewayModel[]): GatewayModel[] {
+  const key = (model: GatewayModel): string => (model.maker ? gatewayMakerName(model).toLowerCase() : '\uffff');
+  return [...models].sort((left, right) => key(left).localeCompare(key(right)));
 }
 
 export interface GatewayModelPrice {
@@ -192,7 +213,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
   for (const raw of data) {
     if (!raw || typeof raw !== 'object') continue;
     const entry = raw as {
-      id?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
+      id?: unknown; owned_by?: unknown; root?: unknown; type?: unknown; access?: unknown; context_length?: unknown; max_output_tokens?: unknown; tokens_per_second?: unknown;
       capabilities?: { vision?: unknown; reasoning?: unknown }; pricing?: Record<string, unknown>;
     };
     if (typeof entry.id !== 'string' || !entry.id) continue;
@@ -213,6 +234,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     const charged = { inMTok: num('input_per_mtok'), outMTok: num('output_per_mtok') };
     models.push({
       id: entry.id,
+      ...(typeof entry.owned_by === 'string' && entry.owned_by && entry.owned_by !== 'clikdeploy' ? { maker: entry.owned_by } : {}),
       ...(typeof entry.access === 'string' && ACCESS.has(entry.access) ? { access: entry.access as GatewayAccess } : {}),
       ...(typeof entry.context_length === 'number' && entry.context_length > 0 ? { contextWindow: entry.context_length } : {}),
       ...(entry.capabilities?.vision === true ? { vision: true } : {}),

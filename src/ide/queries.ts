@@ -12,7 +12,7 @@ import { sendModeOf } from '../turn/send-mode.js';
 import { turnFacts } from '../session/conversation-state.js';
 import type Conf from 'conf';
 import { getApiKeyForUrl, getApiUrl } from '../gateway/credentials.js';
-import { savedGatewayModels, gatewayModels, gatewayModelDetail, gatewayModelLabel } from '../gateway/models.js';
+import { savedGatewayModels, gatewayModels, gatewayModelDetail, gatewayModelLabel, gatewayMakerName, gatewayModelsByMaker } from '../gateway/models.js';
 import { gatewayAgents } from '../gateway/agents.js';
 import { accountUsageReading } from '../harness/accounts/account-usage.js';
 import { NATIVE_USAGE_PROBES } from '../harness/accounts/usage-probes.js';
@@ -86,7 +86,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
       ...(agentsError ? { agentsError } : {}),
       models: [
         { id: 'auto', label: 'Automatic', detail: 'the Gateway chooses', current: session?.route === 'gateway' && !current },
-        ...list.models.map((model) => ({ id: model.id, label: gatewayModelLabel(model), ...(gatewayModelDetail(model) ? { detail: gatewayModelDetail(model) } : {}), current: model.id === current })),
+        ...gatewayModelsByMaker(list.models).map((model) => ({ id: model.id, group: gatewayMakerName(model), label: gatewayModelLabel(model), ...(gatewayModelDetail(model) ? { detail: gatewayModelDetail(model) } : {}), current: model.id === current })),
       ],
     };
   }

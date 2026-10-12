@@ -144,6 +144,8 @@ export interface IdeModel {
   /** How the model reads beside its provider; `id` is what is sent. */
   label: string;
   detail?: string;
+  /** The heading it is listed under (its maker), when the list is grouped. */
+  group?: string;
   current: boolean;
   /** Listed but not choosable here, and why (a local model that does not fit). */
   unavailable?: string;
