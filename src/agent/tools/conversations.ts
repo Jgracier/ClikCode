@@ -1,6 +1,6 @@
 /** The user's conversations, for ClikCode's own agent: the same tools vendors
  * get over MCP (search/mcp.ts), answered in process. Search, read, and active
- * leave out the chat the agent is in. Hindsight is that chat. */
+ * leave out the chat the agent is in. */
 import { CONVERSATION_TOOLS, type ConversationTool } from '../../search/tools.js';
 import { defineTool, type ToolDefinition } from '../tool-contract.js';
 
@@ -9,12 +9,6 @@ const clip = (text: string, max = 48): string => (text.length > max ? `${text.sl
 function label(tool: ConversationTool, args: Record<string, unknown>): string {
   if (tool.name === 'search_conversations') return `Search conversation${typeof args.in === 'string' && args.in ? ` ${clip(args.in, 12)}` : ''} "${clip(String(args.query ?? ''))}"`;
   if (tool.name === 'read_conversation') return `Read conversation ${clip(String(args.id ?? ''), 12)}${args.at !== undefined ? ` at ${String(args.at)}` : ''}`;
-  if (tool.name === 'hindsight') {
-    if (typeof args.query === 'string' && args.query.trim()) return `Hindsight "${clip(args.query)}"`;
-    if (args.from !== undefined || args.to !== undefined || args.at !== undefined) return `Hindsight read ${args.at !== undefined ? String(args.at) : `${String(args.from ?? '')}–${String(args.to ?? '')}`}`;
-    if (args.back !== undefined) return `Hindsight back ${String(args.back)}`;
-    return 'Hindsight';
-  }
   return 'Active conversations';
 }
 
