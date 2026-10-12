@@ -1,0 +1,135 @@
+/** A worker's event applied to the chat: the live turn's reducer. */
+import { asFileDiffs } from '../../../../src/agent/line-diff';
+import { backgroundWorkOf } from '../../../../src/harness/protocol/background-agents';
+import { isApprovalWaitPhase } from '../../../../src/harness/protocol/turn-flow';
+import { failureLine } from '../../../../src/harness/protocol/stderr-line';
+import { isUsageExhaustedMessage } from '../../../../src/turn/usage-exhausted';
+import { noticeLevel, stripAnsi } from '../text';
+import type { WorkerEvent } from '../protocol';
+import { applyActivity, cleanDiff, freshLive, liveBackground, rebaseOffsets, settled, stampAfter, takeSeq, withoutPhase } from './activity';
+import { answeredApproval, askedAt } from './approvals';
+import { applySnapshot } from './snapshot';
+import { withNote } from './notes';
+import { endTurn } from './traces';
+import type { ChatModel } from './types';
+
+
+export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
+  if (model.sessionId && sessionId !== model.sessionId) return model;
+  switch (event.type) {
+
+    case 'snapshot':
+      return applySnapshot(model, event);
+
+    case 'waiting-start':
+      return {
+        ...model, running: true, turnUserIndex: model.messages.length,
+        live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
+        turnUsage: undefined,
+      };
+    case 'waiting-stop':
+      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], submissions: [] };
+    case 'delta': {
+      const live = model.live ?? freshLive('thinking');
+      const text = event.mode === 'replace' ? event.text : live.text + event.text;
+      // The thought led to this text; once the answer arrives it is settled.
+      // The vendor is answering: a phase reported before it ("switching to …") is over.
+      const after = event.text ? withoutPhase(settled(live)) : live;
+      const placed = event.mode === 'replace' ? {
+        activities: rebaseOffsets(after.activities, live.text, text), steers: rebaseOffsets(after.steers, live.text, text),
+        reasoning: rebaseOffsets(after.reasoning, live.text, text),
+      } : {};
+      const planAt = event.mode === 'replace' && after.planAt ? { planAt: rebaseOffsets([after.planAt], live.text, text)[0]! } : {};
+      // The turn's notices are placed in the answer like its rows.
+      const notes = event.mode === 'replace' && model.notes.some((note) => note.turn !== undefined && note.turn === model.turnUserIndex)
+        ? model.notes.map((note) => (note.turn !== undefined && note.turn === model.turnUserIndex ? rebaseOffsets([note], live.text, text)[0]! : note))
+        : model.notes;
+      return { ...model, notes, live: { ...after, ...placed, ...planAt, text, activeAt: Date.now(), ...(event.text ? { writingAt: stampAfter(after.callAt) } : {}) } };
+    }
+    case 'activity': {
+      const live = model.live ?? freshLive('thinking');
+      return { ...model, live: { ...applyActivity(withoutPhase(live), event.event), activeAt: Date.now() } };
+    }
+    case 'background': {
+      // A level: the vendor's own count of what still runs, by kind.
+      const live = model.live ?? freshLive('thinking');
+      const { pendingBackground: _held, background: _work, ...rest } = live;
+      return { ...model, live: { ...rest, ...liveBackground(backgroundWorkOf({ background: event.work, pendingBackground: event.pending })) } };
+    }
+    case 'phase':
+      // The adapters' own "waiting for your approval" is what the approval
+      // card says; kept as the status it would outlast the answer.
+      return model.live && !isApprovalWaitPhase(event.message) ? { ...model, live: { ...model.live, phase: stripAnsi(event.message) } } : model;
+    case 'plan': {
+      const plan = event.entries.map((entry) => ({ content: stripAnsi(entry.content), ...(entry.status ? { status: entry.status } : {}) }));
+      // One plan row per turn: placed where it first appeared, updated in place.
+      const taken = model.live ? takeSeq(model.live, event.seq) : undefined;
+      const live = model.live && !model.live.planAt && plan.length
+        ? { ...model.live, seen: taken!.seen, planAt: { offset: Math.min(event.responseOffset ?? model.live.text.length, model.live.text.length), seq: taken!.seq } }
+        : model.live;
+      return { ...model, plan, ...(live ? { live } : {}) };
+    }
+    case 'usage': {
+      const usage = event.usage;
+      const percent = usage.contextPercent ?? (usage.contextUsed && usage.contextWindow ? (usage.contextUsed / usage.contextWindow) * 100 : undefined);
+      return {
+        ...model, turnUsage: { ...usage },
+        ...(percent !== undefined ? { context: { percent: Math.min(100, Math.max(0, percent)), ...(usage.contextUsed ? { used: usage.contextUsed } : {}), ...(usage.contextWindow ? { window: usage.contextWindow } : {}) } } : {}),
+      };
+    }
+    case 'approval-request':
+      if (model.approvals.some((item) => item.id === event.id)) return model;
+      return {
+        ...model,
+        // The clock stops while the turn waits on the user, not the agent.
+        ...(model.live && model.live.pausedAt === undefined ? { live: { ...model.live, pausedAt: Date.now() } } : {}),
+        approvals: [...model.approvals, {
+          id: event.id, title: stripAnsi(event.title),
+          ...(event.detail ? { detail: stripAnsi(event.detail) } : {}),
+          ...(event.rule ? { rule: event.rule } : {}),
+          ...askedAt(model, event),
+          ...(asFileDiffs(event.preview?.diff)?.length ? { diff: cleanDiff(asFileDiffs(event.preview?.diff)!) } : {}),
+        }],
+      };
+    case 'question-request':
+      if (model.approvals.some((item) => item.id === event.id)) return model;
+      return {
+        ...model,
+        ...(model.live && model.live.pausedAt === undefined ? { live: { ...model.live, pausedAt: Date.now() } } : {}),
+        approvals: [...model.approvals, { id: event.id, title: stripAnsi(event.request.title), question: event.request, ...askedAt(model, event) }],
+      };
+    case 'request-closed':
+      // Answered in another window, withdrawn by the vendor, or the turn ended.
+      // Decided (by any window): the settled row it becomes, once.
+      return model.approvals.some((item) => item.id === event.id) || event.outcome
+        ? answeredApproval(model, event.id, event.outcome ? { outcome: event.outcome, ...(event.label ? { label: stripAnsi(event.label) } : {}), ...(event.callId ? { callId: event.callId } : {}) } : undefined)
+        : model;
+    case 'notice':
+    case 'note':
+      // The terminal colours its notes: yellow for an account switch or a
+      // limit, red for a failure. The colour is the level.
+      return withNote(model, {
+        kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message),
+        ...(event.type === 'note' && event.seq !== undefined ? { seq: event.seq } : {}),
+        ...(event.type === 'note' && event.responseOffset !== undefined ? { offset: event.responseOffset } : {}),
+      });
+    case 'turn-error': {
+      const msg = failureLine(stripAnsi(event.message));
+      // Exhaustion is an outcome, not a fault — show it as informational chat
+      // text rather than a red error banner so it reads as part of the flow.
+      const exhausted = isUsageExhaustedMessage(msg);
+      return withNote(model, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
+    }
+    case 'submission':
+      return { ...model, submissions: model.submissions.map((item) => (item.id === event.id ? { ...item, disposition: event.disposition, ...(event.unsteered ? { unsteered: true } : {}) } : item)) };
+    case 'shutdown':
+      // An idle worker retiring (a newer build, an idle timeout) is invisible:
+      // the bridge attaches to its replacement. Only a cut-off turn is news.
+      if (!model.running) return model;
+      return { ...endTurn(withNote(model, { kind: 'notice', level: 'warning', text: `The conversation's worker stopped: ${event.reason}` })), approvals: [] };
+    default:
+      // suspend/resume, sign-in-request (the bridge handles it), restore-draft
+      // (arrives separately) and anything a newer worker says.
+      return model;
+  }
+}
