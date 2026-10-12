@@ -12,21 +12,21 @@ import { highlightLines, highlightsLanguage } from '../../../../src/tui/render/h
 
 const HTML_ESCAPES: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
-export function escapeHtml(text: string): string {
+function escapeHtml(text: string): string {
   return text.replace(/[&<>"']/g, (character) => HTML_ESCAPES[character]!);
 }
 
 /** A fence's code as escaped HTML, each highlighted span in a `tok-<kind>`
  * span the stylesheet colours from the editor theme (styles.css). The same
  * highlighter colours the terminal's fences. */
-export function highlightedCode(text: string, language: string): string {
+function highlightedCode(text: string, language: string): string {
   if (!highlightsLanguage(language)) return escapeHtml(text);
   return highlightLines(text.split('\n'), language)
     .map((spans) => spans.map((span) => (span.kind ? `<span class="tok-${span.kind}">${escapeHtml(span.text)}</span>` : escapeHtml(span.text))).join(''))
     .join('\n');
 }
 
-export function safeHref(href: string | null | undefined): string | undefined {
+function safeHref(href: string | null | undefined): string | undefined {
   if (!href) return undefined;
   const trimmed = href.trim();
   return /^(https?:|mailto:)/i.test(trimmed) ? trimmed : undefined;

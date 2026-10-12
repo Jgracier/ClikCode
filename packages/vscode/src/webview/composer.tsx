@@ -556,7 +556,7 @@ export function Composer(props: {
  * download at 42%), as the terminal's band shows it: the page's spinner
  * and clock, and only once it is slow (useSlowWait) -- "preparing…" came
  * and went before every turn. */
-export function BusyLine({ label }: { label: string | undefined }): JSX.Element | null {
+function BusyLine({ label }: { label: string | undefined }): JSX.Element | null {
   const shown = useSlowWait(label !== undefined);
   const last = useRef<{ label: string; since: number }>();
   if (label !== undefined && !last.current) last.current = { label, since: Date.now() };

@@ -280,14 +280,14 @@ function stampAfter(other: number | undefined): number {
 /** A turn's durable marks (what a snapshot carries as `live.marks`, a saved
  * answer as `marks`) as the rows this window draws. Anything malformed is
  * skipped (readTurnMarks). */
-export interface MarkRows {
+interface MarkRows {
   reasoning: ThoughtEntry[];
   plan?: { entries: ChatModel['plan']; at: PlanAt };
   notices: Array<{ id: string; text: string; offset: number; seq: number }>;
   decisions: DecisionEntry[];
 }
 
-export function marksToRows(value: unknown): MarkRows {
+function marksToRows(value: unknown): MarkRows {
   const rows: MarkRows = { reasoning: [], notices: [], decisions: [] };
   for (const mark of readTurnMarks(value)) {
     switch (mark.kind) {
@@ -434,7 +434,7 @@ export function chatModelLabel(model: ChatModel, providerName?: string): string 
 }
 
 /** What `choose provider` calls the provider a session runs on. */
-export function providerIdOf(session: HarnessSession): string | undefined {
+function providerIdOf(session: HarnessSession): string | undefined {
   if (session.route === 'gateway') return 'gateway';
   if (session.route === 'clikcode-local') return 'clikcode-local';
   return session.nativeHarness ?? undefined;
@@ -849,7 +849,7 @@ function withNoticeMarks(notes: Note[], turn: number, notices: MarkRows['notices
   }))].slice(-MAX_NOTES);
 }
 
-export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
+function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
   if (model.sessionId && sessionId !== model.sessionId) return model;
   switch (event.type) {
     case 'snapshot': {
