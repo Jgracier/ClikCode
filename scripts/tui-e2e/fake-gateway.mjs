@@ -40,6 +40,11 @@ createServer(async (request, response) => {
     response.end(JSON.stringify({ object: 'list', data: [{ id: 'auto', root: MODEL }, { id: MODEL, context_length: 200000, max_output_tokens: 8000 }] }));
     return;
   }
+  if (request.method === 'GET' && request.url?.startsWith('/v1/credits')) {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(JSON.stringify({ data: process.env.GATEWAY_FAKE_UNLIMITED ? { unlimited: true } : { balanceUsd: 12.5, allowed: true } }));
+    return;
+  }
   if (request.method !== 'POST' || !request.url?.startsWith('/v1/chat/completions')) { response.writeHead(404).end('{}'); return; }
   const arrived = Date.now();
   let raw = '';
@@ -68,7 +73,8 @@ createServer(async (request, response) => {
     return;
   }
   send({ role: 'assistant', content: '' });
-  for (const word of ['Weighing ', 'the ', 'options ', 'first. ']) { send({ reasoning_content: word }); await sleep(15); }
+  if (lastUser(messages).includes('steer-now')) { for (const word of ['Steer ', 'received, ', 'adjusting.']) { send({ content: word }); await sleep(20); } finish('stop', usage(900, 20, 0.0004)); return; }
+  for (const word of (prompt.includes('GW-HEAD') ? ['**Planning**\n\n', 'Weighing ', 'the ', 'options ', 'first. '] : ['Weighing ', 'the ', 'options ', 'first. '])) { send({ reasoning_content: word }); await sleep(15); }
   if (prompt.includes('GW-SLOW')) {
     for (let piece = 0; piece < 50; piece += 1) { send({ content: `word${piece} ` }); await sleep(40); }
     finish('stop', usage(900, 120, 0.0012));

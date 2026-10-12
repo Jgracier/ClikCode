@@ -8,10 +8,11 @@ const credits = (data: Record<string, unknown>) => vi.fn(async () => new Respons
 afterEach(() => resetGatewayCreditLabel());
 
 describe('the Gateway credit on the composer rule', () => {
-  it('says what is left, or that it has run out, and nothing for an unlimited account', async () => {
+  it('says what is left, that it has run out, or that the account is not metered', async () => {
     expect(await gatewayCreditLabel({} as never, { fresh: true, fetchImpl: credits({ balanceUsd: 4.5 }) as never })).toBe('$4.50 credit left');
     expect(await gatewayCreditLabel({} as never, { fresh: true, fetchImpl: credits({ balanceMicroUsd: 0 }) as never })).toBe('Out of credits');
-    expect(await gatewayCreditLabel({} as never, { fresh: true, fetchImpl: credits({ unlimited: true }) as never })).toBeUndefined();
+    expect(await gatewayCreditLabel({} as never, { fresh: true, fetchImpl: credits({ unlimited: true }) as never })).toBe('Unlimited credit');
+    expect(await gatewayCreditLabel({} as never, { fresh: true, fetchImpl: credits({}) as never })).toBeUndefined();
   });
 
   it('asks the Gateway again only after a turn, or once its reading is a minute old', async () => {
