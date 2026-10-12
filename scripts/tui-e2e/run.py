@@ -126,7 +126,7 @@ def gateway_fake(mode_env=None):
         port_file = os.path.join(context['root'], 'gateway-port')
         log_file = os.path.join(context['root'], 'gateway.jsonl')
         server = subprocess.Popen(['node', os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-gateway.mjs'), port_file],
-                                  stdout=subprocess.DEVNULL, env={**os.environ, 'GATEWAY_FAKE_LOG': log_file})
+                                  stdout=subprocess.DEVNULL, env={**os.environ, 'GATEWAY_FAKE_LOG': log_file, **(mode_env or {})})
         context['servers'] = [server]
         for _ in range(100):
             if os.path.exists(port_file) and open(port_file).read().strip(): break
@@ -1474,6 +1474,18 @@ SCENARIOS = {
     # /gateway on a conversation with history moves it, as /provider's
     # Gateway row does (it refused: "Use the interactive /provider menu");
     # closing its sign-in choice leaves the conversation where it was.
+    # A Gateway chat shows what its calls are paid from in the composer's upper right, where a vendor
+    # chat shows its plan window: the balance, or that the account is not metered.
+    'gateway-credit-on-composer': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'static screen',
+        'steps': [('keys', '\r'), ('settle', 4)],
+        'watch': [], 'final_contains': ['$12.50 credit left'],
+    },
+    'gateway-unlimited-on-composer': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake({'GATEWAY_FAKE_UNLIMITED': '1'}), 'startup': 5, 'no_dup_check': 'static screen',
+        'steps': [('keys', '\r'), ('settle', 4)],
+        'watch': [], 'final_contains': ['Unlimited credit'], 'never': ['credit left'],
+    },
     'gateway-moves-existing-conversation': {
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),

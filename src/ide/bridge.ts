@@ -21,7 +21,7 @@ import { CLIKCODE_VERSION } from '../version.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
-import { isClikCodeAgent } from '../session/route.js';
+import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { planModeOnChat, setAgentPlanMode } from '../agent/plan-mode-setting.js';
 import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
 import { afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
@@ -30,6 +30,7 @@ import { consumeSessionTurn } from '../turn/checkpoint.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../harness/accounts/account-usage.js';
+import { gatewayCreditLabel } from '../gateway/credit-label.js';
 import { usageNextReset, usageResetLabel, usageWindowsDetail } from '../harness/accounts/usage-reading.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
@@ -340,7 +341,10 @@ export class IdeBridge {
     // The other accounts too, as the terminal does: one whose quota may have
     // come back is re-read, so failover and the picker see it.
     void recheckRecoveredAccounts(state).catch(() => undefined);
-    const reading = await nativeUsageReading(session, state);
+    // A Gateway chat's allowance is its credit, worded as the terminal's composer rule words it.
+    const reading = isGatewayService(session)
+      ? await gatewayCreditLabel(this.config, { fresh: true }).then((label) => (label ? { label, windows: undefined } : undefined)).catch(() => undefined)
+      : await nativeUsageReading(session, state);
     // A turn parked for the reset says so instead of when it comes back.
     const reset = session.resumeAt ? resumeWaitLabel(session.resumeAt) : usageResetLabel(reading?.windows);
     const chatCost = conversationCost(state, session.id);
