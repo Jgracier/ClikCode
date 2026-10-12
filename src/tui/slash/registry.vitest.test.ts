@@ -159,9 +159,8 @@ describe('slash registry', () => {
 });
 
 describe('pass-through rules', () => {
-  it('forwards //text and /native <text> verbatim', () => {
+  it('forwards //text verbatim', () => {
     expect(routeSlashInput('//compact keep the api notes')).toEqual({ kind: 'native', prompt: '/compact keep the api notes', why: 'explicit' });
-    expect(routeSlashInput('/native /rewind 2')).toMatchObject({ kind: 'command', head: 'native', args: '/rewind 2' });
   });
 
   it('forwards an unknown command when the harness declares nativeSlashPassthrough', () => {

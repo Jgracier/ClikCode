@@ -39,7 +39,7 @@ export const SLASH_PALETTE_PINNED: readonly string[] = [
  * is a compile error as well as a parity-test failure. */
 export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'changes',
-  'native', 'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
+  'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
   'model', 'effort', 'fast', 'swarm', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
@@ -147,7 +147,6 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
   entry('changes', 'Conversation', "each turn's file edits; N shows that turn's diff; a path lists the conversations that edited it", { argHint: '[N|path]', availability: recordedEditsAvailability }),
-  entry('native', 'Conversation', 'send text to the harness verbatim (also: //text)', { argHint: '<text>', availability: needsHarness('sending native commands') }),
   entry('select', 'Conversation', "hand the mouse to the terminal's own selection (drag-to-copy works without it)"),
   entry('redraw', 'Conversation', 'repaint the screen'),
   entry('exit', 'Conversation', 'save and leave', { aliases: ['quit'] }),
@@ -158,7 +157,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('diff', 'Workspace', 'changes against HEAD, staged included, plus untracked files'),
   entry('cwd', 'Workspace', 'show or change the working directory', { argHint: '[dir]' }),
   entry('add-dir', 'Workspace', 'give the harness another writable directory', { argHint: '<dir>', availability: bothRoutes('adding directories') }),
-  entry('mention', 'Workspace', 'attach a file to the next request; alone, lists what is attached', { aliases: ['attachments'], argHint: '[path|clear]' }),
+  entry('mention', 'Workspace', 'attach a file to the next request; alone, lists what is attached', { argHint: '[path|clear]' }),
 
   entry('provider', 'Provider', 'choose a provider', { aliases: ['switch'] }),
   entry('account', 'Provider', 'switch, add or remove accounts', { aliases: ['accounts'], handlerKey: 'accounts', argHint: '[label|login|add|remove …]', duringTurn: 'apply' }),
@@ -216,7 +215,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('context', 'Info', 'context window and token usage reported by the harness'),
   entry('usage', 'Info', 'quota, tokens, and cost for this provider', { aliases: ['cost'], argHint: '[all]' }),
   entry('doctor', 'Info', 'check installed harnesses and accounts'),
-  entry('help', 'Info', 'all commands', { aliases: ['?'] }),
+  entry('help', 'Info', 'all commands'),
 ];
 
 const BY_NAME: ReadonlyMap<string, SlashCommandEntry> = new Map(

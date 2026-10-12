@@ -300,7 +300,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 45 commands. Ten are pinned
+Pressing `/` opens a searchable list of ClikCode's 44 commands. Ten are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, start over, change what needs your
 approval, then settings, sessions, status and help. (The terminal leaves
@@ -318,7 +318,7 @@ it pins nine; typed, `/resume` still works.)
 | `/settings` | configure this workspace (below) |
 | `/sessions` | manage conversations |
 | `/status` | current configuration |
-| `/help` (also `/?`) | all commands |
+| `/help` | all commands |
 
 `/help` lists every command grouped by topic instead of by frequency, since a
 reference reads better that way. All of them, grouped as `/help` groups them:
@@ -334,7 +334,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | `/export [path]` | write the transcript as markdown |
 | `/changes [N\|path]` | each turn's file edits, newest first; `N` shows that turn's diff. With a path, every turn in any conversation that edited that file, newest first: pick one and its conversation opens at that turn (↑↓ to the others) |
 | `/redo [@N] [keep]` | go back to before one of your prompts and send it again, edited or not; that turn's file edits and every later one's are put back (unless `keep`), and a file changed since is left alone and named. The conversation as it was is archived beside it. ClikCode's agent restores its own snapshots; a vendor harness's edits are reversed from the diffs it reported (not on the plain-text CLIs, Aider and Continue). What a shell command changed is put back only for ClikCode's agent, and only files tracked in the git repository. To undo a turn, `/redo` to before it and leave the prompt unsent; there is no separate undo command |
-| `/native <text>` (also `//text`) | send text straight to the tool, unchanged |
+| `//text` | send text straight to the tool, unchanged |
 | `/select` | release the mouse so you can select and copy text |
 | `/redraw` | repaint the screen |
 | `/exit` (also `/quit`) | save and leave |
@@ -355,7 +355,7 @@ not reversed.
 | `/diff` | changes against HEAD, staged included, plus untracked files |
 | `/cwd [dir]` | show or change the working directory |
 | `/add-dir <dir>` | let the tool write in another directory too |
-| `/mention [path\|clear]` (also `/attachments`) | attach a file to the next request; alone, list what is attached; `clear` empties it |
+| `/mention [path\|clear]` | attach a file to the next request; alone, list what is attached; `clear` empties it |
 
 **Provider**
 
@@ -407,7 +407,7 @@ Command Code and Auggie get it as their own option.
 | `/context` | how much of the model's context this conversation is using |
 | `/usage [all]` (also `/cost`) | quota, tokens, and cost for the provider you are in, and this chat; `all` for every provider and the last seven days |
 | `/doctor` | check your installed tools and accounts |
-| `/help` (also `/?`) | all commands |
+| `/help` | all commands |
 
 A command that doesn't apply right now — no provider chosen yet, or a
 Gateway-managed setting on the ClikDeploy Gateway route — stays listed with a reason
