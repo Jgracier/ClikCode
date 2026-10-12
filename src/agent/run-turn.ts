@@ -489,7 +489,17 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     const compact = async (system: string, targetTokens?: number): Promise<boolean> => {
       input.onPhase?.('compacting context');
       if (!input.subagent && input.hooks?.preCompact) await abortable(input.hooks.preCompact({ ...turnHookInfo, trigger: 'auto' }), signal);
-      const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, maxItems: MAX_REQUEST_ITEMS, ...(targetTokens !== undefined ? { targetTokens } : {}) }), signal);
+      let compacted: Awaited<ReturnType<typeof compactConversation>>;
+      try {
+        compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, maxItems: MAX_REQUEST_ITEMS, ...(targetTokens !== undefined ? { targetTokens } : {}) }), signal);
+      } catch (error) {
+        // Cancel ends the turn. Any other failure of the summarising call
+        // leaves the conversation as it was: the step that follows has its own
+        // recovery if the context really does not fit.
+        if (isTurnCancelled(error) || signal?.aborted) throw error;
+        input.onPhase?.(`compaction failed (${error instanceof Error ? error.message : String(error)}); continuing`);
+        return false;
+      }
       if (compacted.stage === 'none') return false;
       items = compacted.items;
       lastStepUsage = undefined;
@@ -621,6 +631,8 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
             continue;
           }
         }
+        // What was shown is what is saved: the partial answer stays in the conversation.
+        if (streamedThisStep.trim()) await append({ type: 'text', role: 'assistant', text: streamedThisStep });
         const classified = classifyModelError(error);
         const message = error instanceof Error ? error.message : String(error);
         const statusCode = (error as { statusCode?: unknown } | undefined)?.statusCode;

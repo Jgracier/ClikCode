@@ -10,9 +10,10 @@ import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../gateway/credentials.js';
 import { classifyAccountFailure } from './failover.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
+import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
-import { recordInvocation, turnSink } from './turn-output.js';
+import { recordInvocation, recordUnfinishedInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
 
@@ -45,6 +46,17 @@ export async function sendDirectApiTurn(input: {
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
   });
   const sink = turnSink(checkpoint, prompter, { title: () => titleStream });
+  // A provider that fails mid-answer reports no usage, but what it streamed was
+  // generated and billed: counted from the text (about four characters a token).
+  let streamedChars = 0;
+  let promptChars = 0;
+  const recordUnfinished = (ended: 'stopped' | 'error'): void => {
+    const output = Math.ceil(streamedChars / 4);
+    const input = Math.ceil(promptChars / 4);
+    streamedChars = 0;
+    if (!output) return;
+    if (recordUnfinishedInvocation(state, { sessionId: session.id, accountId: account.id, provider: session.provider ?? account.provider, model, startedAt, usage: { input, output } }, ended)) checkpoint.touch();
+  };
   try {
   await accounts.start();
   const invoke = (active: AiHarnessAccount) => {
@@ -53,11 +65,13 @@ export async function sendDirectApiTurn(input: {
     // Each provider delta then goes straight to the checkpoint and the screen.
     checkpoint.response('', 'replace');
     prompter?.response('', 'replace');
+    const messages = [...baseMessages, { role: 'user', content: turnText }];
+    promptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
     return streamLocalAiTurn({
       provider: session.provider ?? active.provider, model, apiKey: localApiKey(active),
-      messages: [...baseMessages, { role: 'user', content: turnText }], reasoningEffort: session.effort,
+      messages, reasoningEffort: session.effort,
       ...(signal ? { abortSignal: signal } : {}),
-      onDelta: (delta: string) => sink.response(delta),
+      onDelta: (delta: string) => { streamedChars += delta.length; sink.response(delta); },
     });
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
@@ -70,6 +84,10 @@ export async function sendDirectApiTurn(input: {
       turn = await invoke(account);
       break;
     } catch (error) {
+      // Stopping is an outcome, not an account failure: never classified, never retried elsewhere.
+      if (isTurnCancelled(error) || signal?.aborted) { recordUnfinished('stopped'); throw turnCancelledError(); }
+      // This attempt's tokens were spent whether the turn then moves on or ends.
+      recordUnfinished('error');
       const failureKind = classifyAccountFailure(error);
       const switchAt = Date.now();
       const to = await accounts.after(error, failureKind, signal);

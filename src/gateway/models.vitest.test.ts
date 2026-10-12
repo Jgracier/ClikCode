@@ -45,6 +45,22 @@ const home = mkdtempSync(join(tmpdir(), 'cc-gw-models-'));
 beforeEach(() => { process.env.CLIKCODE_HOME = home; rmSync(join(home, 'cache'), { recursive: true, force: true }); resetGatewayModelCache(); account.key = 'cd_live_key'; vi.unstubAllGlobals(); });
 afterAll(() => { delete process.env.CLIKCODE_HOME; rmSync(home, { recursive: true, force: true }); });
 
+describe('a Gateway that never answers the model list', () => {
+  const hang = ((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+    init.signal?.addEventListener('abort', () => reject(init.signal!.reason));
+  })) as never;
+
+  it('gives the last saved list once the timeout passes', async () => {
+    await gatewayModels({ fetchImpl: (async () => reply(WIRE)) as never });
+    resetGatewayModelCache();
+    expect(await gatewayModels({ fetchImpl: hang, timeoutMs: 20, fresh: true })).toEqual(LIST);
+  });
+
+  it('fails, rather than waiting forever, when nothing was saved', async () => {
+    await expect(gatewayModels({ fetchImpl: hang, timeoutMs: 20 })).rejects.toBeDefined();
+  });
+});
+
 describe('the Gateway\'s model list', () => {
   it('is read with the account\'s key, and kept briefly', async () => {
     const fetchImpl = vi.fn(async () => reply(WIRE));

@@ -363,7 +363,16 @@ function safeCut(items: readonly ConversationItem[], keepRecent: number): number
 
 const SUMMARY_SYSTEM = `You compress a coding-agent conversation so the work can continue with less context. Write a dense summary covering: the user's goal and explicit constraints; decisions made and why; every file read or changed with what matters about it (paths, functions, line references); commands run and their significant results; errors hit and how they were resolved; the current state; and the exact next steps. Preserve identifiers, paths and error text verbatim. Do not address the user. Do not call tools.`;
 
-function renderForSummary(items: readonly ConversationItem[]): string {
+/** The summary request is itself a model call: it must fit. Over this the oldest part is dropped (the newest work matters most to what follows). */
+export const SUMMARY_INPUT_MAX_CHARS = 400_000;
+
+export function renderForSummary(items: readonly ConversationItem[]): string {
+  const text = renderAllForSummary(items);
+  if (text.length <= SUMMARY_INPUT_MAX_CHARS) return text;
+  return `[earlier part of the conversation omitted: it was too long to summarize in one request]\n\n${text.slice(-SUMMARY_INPUT_MAX_CHARS)}`;
+}
+
+function renderAllForSummary(items: readonly ConversationItem[]): string {
   return items.filter((item) => item.type !== 'reasoning').map((item) => {
     if (item.type === 'text') return `${item.role.toUpperCase()}: ${item.text}`;
     if (item.type === 'summary') return `EARLIER SUMMARY: ${item.text}`;
