@@ -76,9 +76,7 @@ import {
 class TurnFailed extends Error {}
 
 const USAGE_REFRESH_MS = 15_000;
-/** How long a Stop is given to end the turn before it is asked again, and how many times. */
-const STOP_RESEND_MS = 4_000;
-const STOP_RESENDS = 6;
+import { STOP_RESEND_MS, STOP_RESENDS } from '../worker/stop-resend.js';
 
 export class IdeBridge {
   readonly prompter: IdePrompter;
