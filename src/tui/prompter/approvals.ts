@@ -2,7 +2,7 @@
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { decisionRow, isApprovalWaitPhase } from '../../harness/protocol/turn-flow.js';
 import { ApprovalPreview, ApprovalRequest } from '../render/approval-block.js';
-import { APPROVAL_GUARD_MS } from '../render/approval-keys.js';
+import { APPROVAL_GUARD_MS, approvalKeyAction } from '../render/approval-keys.js';
 import { questionKeyAction, questionRows, questionValues, startsTyping, type QuestionPromptState } from '../render/question-block.js';
 import type { HarnessQuestionRequest, HarnessQuestionResult } from '../../harness/events/question.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
@@ -231,4 +231,51 @@ export function settleApprovals(this: TerminalHarnessPrompter): void {
   this.restoreTellingDraft();
   this.resumeClock();
   for (const item of outstanding) item?.resolve(false);
+}
+
+/** A key while an approval (not a question) is on screen: its answer, or --
+ * once "tell it instead" was chosen -- the composer typing that text. */
+export function approvalKey(
+  this: TerminalHarnessPrompter,
+  turn: WaitingTurn,
+  pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>,
+  key: string,
+): void {
+  // "No, and tell it what to do instead": the composer is where it is
+  // typed, on its own -- whatever draft was there waits aside -- and
+  // Enter denies the call and sends the text into the turn as a steer.
+  const telling = this.tellingInstead;
+  if (telling) {
+    if (key === '\r') {
+      const text = turn.draft.trim();
+      if (!text) return;
+      this.answerApproval(pending, false, { kind: 'told', text });
+      // After the denial is on its way: the answer's own send is queued
+      // behind this resolve, and the steer must not overtake it.
+      setImmediate(() => this.submitWaiting(text, false));
+      return;
+    }
+    if (key === '\u001b' || key === '\u0003') {
+      this.restoreTellingDraft();
+      if (key === '\u0003') this.answerApproval(pending, false);
+      else this.updateWaiting();
+      return;
+    }
+    this.editTurnDraft(turn, key);
+    return;
+  }
+  // Otherwise the draft is never edited from here: every key is either an
+  // answer or dropped, so the composer is exactly as the user left it.
+  const action = approvalKeyAction(key, Date.now() - pending.shownAt, pending.needsFocus, pending.focused, Boolean(pending.rule), Boolean(turn.submit));
+  if (action === 'focus') {
+    pending.focused = true;
+    this.updateWaiting();
+  } else if (action === 'tell') {
+    this.tellingInstead = { draft: turn.draft, cursor: turn.cursor };
+    turn.draft = '';
+    turn.cursor = 0;
+    this.updateWaiting();
+  } else if (action === 'allow' || action === 'always' || action === 'deny') {
+    this.answerApproval(pending, action === 'deny' ? false : action === 'always' ? 'always' : true);
+  }
 }
