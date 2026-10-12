@@ -6,19 +6,19 @@ import { PAINT_COALESCE_MS } from '../../../src/harness/protocol/timings';
 import { errorText, userError } from '../../../src/harness/protocol/errors';
 import * as vscode from 'vscode';
 import { homedir, tmpdir } from 'node:os';
-import { unwatchFile, watchFile } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
-import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
+import type { IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
-import { applyHunks, fileHunks, turnChanges, unwindChanges } from './text';
-import { readFile } from 'node:fs/promises';
-import { DiffDocuments, fileNameIn, openSignInLink, runInTerminal } from './ui';
+import { ChangeViews } from './controller/changes';
+import { AutoReconnect, BuildWatcher } from './controller/reconnect';
+import { deliver, TIMEOUT } from './controller/requests';
+import { DiffDocuments, openSignInLink, runInTerminal } from './ui';
 import type { FromWebview, ListedConversation, ToWebview, WebviewRequest } from './webview-protocol';
 import { mentionFromUri, pastedReference, searchWorkspaceFiles } from './mentions';
 import type { Mention } from './webview-protocol';
@@ -44,23 +44,21 @@ export class ClikCodeController implements vscode.Disposable {
   readonly onDidChange = this.changed.event;
   /** Pickers drawn in a webview, and which one. */
   private readonly panelQuestions = new Map<string, WebviewSurface>();
-  /** Approvals whose change is open in a diff editor. */
-  private readonly shownDiffs = new Set<string>();
+  private readonly changes: ChangeViews;
+  private readonly reconnect = new AutoReconnect();
+  private readonly builds = new BuildWatcher(() => { void this.moveToNewBuild(); });
   /** Queued messages being taken back to edit, by id: their text goes back in
    * the composer when the worker answers `removed`. */
   private readonly takingBack = new Map<string, string>();
   private readonly surfaces = new Set<WebviewSurface>();
   private starting: Promise<void> | undefined;
   private restartingForBuild = false;
-  private watchedEntry: string | undefined;
-  private buildSettle: NodeJS.Timeout | undefined;
   private disposed = false;
   private postTimer: NodeJS.Timeout | undefined;
   private refreshTimer: NodeJS.Timeout | undefined;
   /** A full read is pending in the coalesced refresh (refreshStructured). */
   private refreshFull = false;
   private refreshedFor = '';
-  private lastAutoRestart = 0;
   private readonly subscriptions: vscode.Disposable[] = [];
   /** Pasted images: path -> sent in a message yet. */
   private readonly images = new Map<string, boolean>();
@@ -71,7 +69,9 @@ export class ClikCodeController implements vscode.Disposable {
     /** What opens first: the setting's choice, or a conversation asked for. */
     private readonly first: { mode: 'new' | 'continue' | 'resume'; sessionId?: string } | undefined,
     readonly label: string,
-  ) {}
+  ) {
+    this.changes = new ChangeViews(host.diffs, () => this.model, () => this.workspaceFolder());
+  }
 
   get state(): ChatModel {
     return this.model;
@@ -231,9 +231,9 @@ export class ClikCodeController implements vscode.Disposable {
     if (!bridge?.running) return;
     const sessionId = this.model.sessionId;
     const [settings, providers, accounts] = await Promise.all([
-      onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, 30_000).catch(() => undefined),
-      onlyAccount ? Promise.resolve(undefined) : bridge.call<IdeProvider[]>({ type: 'query', query: 'providers' }, 30_000).catch(() => undefined),
-      bridge.call<IdeAccounts>({ type: 'query', query: 'accounts' }, 30_000).catch(() => undefined),
+      onlyAccount ? Promise.resolve(this.model.chatSettings) : bridge.call<IdeChatSettings>({ type: 'query', query: 'chat-settings' }, TIMEOUT.structured).catch(() => undefined),
+      onlyAccount ? Promise.resolve(undefined) : bridge.call<IdeProvider[]>({ type: 'query', query: 'providers' }, TIMEOUT.structured).catch(() => undefined),
+      bridge.call<IdeAccounts>({ type: 'query', query: 'accounts' }, TIMEOUT.structured).catch(() => undefined),
     ]);
     if (this.model.sessionId !== sessionId) return;
     const provider = providers?.find((item) => item.current) ?? (onlyAccount ? this.model.provider : undefined);
@@ -288,7 +288,7 @@ export class ClikCodeController implements vscode.Disposable {
     log.appendLine(`[${this.label}] Starting ${runtime.entry} with ${runtime.node} (${runtime.nodeSource})`);
     const bridge = BridgeClient.start(runtime, this.workspaceFolder());
     this.bridge = bridge;
-    this.watchBuild(runtime.entry);
+    this.builds.watch(runtime.entry);
     const startLog: string[] = [];
     bridge.on('log', (line) => { log.appendLine(`[${this.label}] ${line}`); if (startLog.length < 200) startLog.push(line); });
     bridge.on('exit', ({ code, signal }) => {
@@ -296,14 +296,8 @@ export class ClikCodeController implements vscode.Disposable {
       log.appendLine(`[${this.label}] ClikCode exited (${signal ?? code})`);
       this.dropQuestions();
       if (this.disposed) return;
-      // A bridge that dies after it was ready (killed, crashed, the machine
-      // slept through it) comes back on its own, onto the same conversation;
-      // the worker kept the turn going meanwhile. Once a minute at most, so a
-      // bridge that cannot stay up ends at the banner instead of a loop.
-      const wasReady = this.model.connection === 'ready';
-      const now = Date.now();
-      if (wasReady && now - this.lastAutoRestart > 60_000) {
-        this.lastAutoRestart = now;
+      // Back on its own when it had been ready (see AutoReconnect).
+      if (this.reconnect.take(this.model.connection === 'ready')) {
         log.appendLine(`[${this.label}] reconnecting`);
         this.bridge = undefined;
         // The turn keeps its place on screen: the worker is still running it,
@@ -319,7 +313,7 @@ export class ClikCodeController implements vscode.Disposable {
       }));
     });
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('ClikCode did not start within 60 seconds. See the log for details.')), 60_000);
+      const timer = setTimeout(() => reject(new Error('ClikCode did not start within 60 seconds. See the log for details.')), TIMEOUT.start);
       bridge.on('event', (event) => {
         if (event.type === 'ready') {
           clearTimeout(timer);
@@ -396,26 +390,6 @@ export class ClikCodeController implements vscode.Disposable {
    * Watched for, never done in the way of a message: a send used to restart
    * the bridge first, and one stood 30 s before it went out. A running turn
    * moves when it ends (turnEnded). */
-  private watchBuild(entry: string): void {
-    if (this.watchedEntry === entry) return;
-    this.unwatchBuild();
-    this.watchedEntry = entry;
-    watchFile(entry, { interval: 2_000 }, this.onBuildChanged);
-  }
-
-  private unwatchBuild(): void {
-    if (this.watchedEntry) unwatchFile(this.watchedEntry, this.onBuildChanged);
-    this.watchedEntry = undefined;
-    if (this.buildSettle) clearTimeout(this.buildSettle);
-    this.buildSettle = undefined;
-  }
-
-  /** A build is several files written in turn: wait for it to settle. */
-  private readonly onBuildChanged = (): void => {
-    if (this.buildSettle) clearTimeout(this.buildSettle);
-    this.buildSettle = setTimeout(() => { this.buildSettle = undefined; void this.moveToNewBuild(); }, 1_500);
-  };
-
   private async moveToNewBuild(): Promise<void> {
     const bridge = this.bridge;
     if (!bridge || this.disposed || this.model.running || this.model.connection !== 'ready' || this.restartingForBuild) return;
@@ -514,8 +488,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   private onWorkerEvent(event: WorkerEvent): void {
     if (event.type === 'request-closed') {
-      if (this.shownDiffs.has(event.id)) void this.host.diffs.close(event.id);
-      this.forgetDiff(event.id);
+      this.changes.close(event.id);
       return;
     }
     if (event.type === 'question-request') {
@@ -533,7 +506,7 @@ export class ClikCodeController implements vscode.Disposable {
       // the keyboard -- neither `vscode.changes` nor the editor behind it
       // takes a preserveFocus (VS Code 1.123) -- so those wait for the
       // card's diff button.
-      if (event.preview?.diff?.length === 1 && vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.viewDiff(event.id);
+      if (event.preview?.diff?.length === 1 && vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.changes.viewApproval(event.id);
       // Only a chat out of sight asks in a toast: one on screen shows the
       // question already, and a toast for it was the same question twice
       // when the user came back to the window.
@@ -558,7 +531,7 @@ export class ClikCodeController implements vscode.Disposable {
       if (lost) this.post({ type: 'insert', text: lost.text });
     }
     if (event.type === 'waiting-stop') {
-      for (const id of [...this.shownDiffs]) this.forgetDiff(id);
+      this.changes.forgetAll();
     }
   }
 
@@ -566,120 +539,8 @@ export class ClikCodeController implements vscode.Disposable {
     return this.model.approvals.some((approval) => approval.id === id);
   }
 
-  /** A pending approval's change in VS Code's diff editor, every file of it. */
-  async viewDiff(id: string): Promise<void> {
-    const approval = this.model.approvals.find((item) => item.id === id);
-    if (!approval?.diff?.length) return;
-    const files = await Promise.all(approval.diff.map((file) => this.fileVersions(file, 'proposed')));
-    this.shownDiffs.add(id);
-    await this.host.diffs.show(id, approval.title, files.map((file, index) => ({ ...file, name: file.name ?? fileNameIn(approval.title, approval.detail) ?? `change ${index + 1}` })));
-  }
-
-  private forgetDiff(id: string): void {
-    this.shownDiffs.delete(id);
-    this.host.diffs.forget(id);
-  }
-
-  /** A file's whole text before and after a change, where the file on disk
-   * lets the hunks be placed: a proposed change applies to the file as it
-   * is; a made one is undone from it. When a hunk does not place cleanly, or
-   * the diff was cut short, the hunks themselves. */
-  private async fileVersions(file: FileDiff, state: 'proposed' | 'made'): Promise<{ name?: string; path?: string; before: string; after: string; whole: boolean }> {
-    const hunks = fileHunks(file);
-    const path = file.path ? (isAbsolute(file.path) ? file.path : join(this.model.workspace ?? this.workspaceFolder(), file.path)) : undefined;
-    const current = path ? await readFile(path, 'utf8').catch(() => undefined) : undefined;
-    const name = file.path?.split(/[\\/]/).pop();
-    if (state === 'made' && file.change === 'add' && current !== undefined) return { name, path, before: '', after: current, whole: true };
-    if (current !== undefined && !file.omitted) {
-      if (state === 'proposed') {
-        const after = applyHunks(current, hunks);
-        if (after !== undefined) return { name, path, before: current, after, whole: true };
-      } else {
-        const before = applyHunks(current, hunks.map((hunk) => ({ before: hunk.after, after: hunk.before })));
-        if (before !== undefined) return { name, path, before, after: current, whole: true };
-      }
-    }
-    return {
-      name, path, whole: false,
-      before: hunks.map((hunk) => hunk.before.join('\n')).join('\n⋮\n'),
-      after: hunks.map((hunk) => hunk.after.join('\n')).join('\n⋮\n'),
-    };
-  }
-
-  /** A tool row's change, by the turn it belongs to (none: the running one). */
-  private changeOf(key: string, userIndex: number | undefined): FileDiff[] | undefined {
-    const activities = userIndex === undefined ? this.model.live?.activities : this.model.traces.find((trace) => trace.userIndex === userIndex)?.activities;
-    return activities?.find((activity) => activity.key === key)?.diff;
-  }
-
-  /** A change the agent made, in the diff editor. */
-  private async viewChange(key: string, userIndex: number | undefined): Promise<void> {
-    const diff = this.changeOf(key, userIndex);
-    if (!diff?.length) return;
-    const files = await Promise.all(diff.map((file) => this.fileVersions(file, 'made')));
-    const id = `made-${userIndex ?? 'live'}-${key.replace(/[^\w-]+/g, '_')}`;
-    await this.host.diffs.show(id, 'Change', files.map((file, index) => ({ ...file, name: file.name ?? `change ${index + 1}` })), true);
-  }
-
-  /** Undo a change the agent made, as one edit VS Code can itself undo --
-   * only where every file of it still places cleanly. */
-  private async revertChange(key: string, userIndex: number | undefined): Promise<void> {
-    const diff = this.changeOf(key, userIndex);
-    if (!diff?.length) return;
-    const files = await Promise.all(diff.map(async (file) => ({ ...(await this.fileVersions(file, 'made')), created: file.change === 'add' })));
-    await this.undoFiles(files, 'this change', (names) => `Undo ClikCode's change to ${names}?`, 'Undo Change');
-  }
-
-  /** Every file a finished turn changed, as it was before the turn and as
-   * it is now (unwindChanges): whole where all its changes still place. */
-  private async turnFiles(userIndex: number): Promise<Array<{ name: string; path: string; before: string; after: string; whole: boolean; created: boolean }>> {
-    const trace = this.model.traces.find((item) => item.userIndex === userIndex);
-    const workspace = this.model.workspace ?? this.workspaceFolder();
-    return Promise.all([...turnChanges(trace?.activities ?? [])].map(async ([file, changes]) => {
-      const path = isAbsolute(file) ? file : join(workspace, file);
-      const current = await readFile(path, 'utf8').catch(() => undefined);
-      const unwound = unwindChanges(current, changes);
-      return { name: file.split(/[\\/]/).pop() || file, path, before: unwound.before, after: current ?? '', whole: unwound.whole, created: unwound.created };
-    }));
-  }
-
-  /** All of a turn's changes in the diff editor at once -- the multi-file
-   * changes editor where it touched several files. */
-  private async viewTurnChanges(userIndex: number): Promise<void> {
-    const files = await this.turnFiles(userIndex);
-    if (!files.length) return;
-    await this.host.diffs.show(`turn-${userIndex}`, 'Changes', files, true);
-  }
-
-  /** Every change a turn made undone as one edit, after a modal confirm;
-   * refused when any of its files changed since. */
-  private async revertTurnChanges(userIndex: number): Promise<void> {
-    const files = await this.turnFiles(userIndex);
-    if (!files.length) return;
-    await this.undoFiles(files, "this turn's changes", (names) => `Undo all of ClikCode's changes in this turn (${files.length} file${files.length === 1 ? '' : 's'}: ${names})?`, 'Undo All');
-  }
-
-  /** Files put back as they were, as one WorkspaceEdit VS Code can itself
-   * undo: a file the agent created is deleted. Nothing is touched unless
-   * every file still places cleanly. */
-  private async undoFiles(files: ReadonlyArray<{ name?: string; path?: string; before: string; whole: boolean; created: boolean }>, what: string, question: (names: string) => string, action: string): Promise<void> {
-    const stale = files.filter((item) => !item.whole || !item.path);
-    if (stale.length) {
-      void vscode.window.showWarningMessage(userError(`undo ${what}`, `${stale.map((item) => item.name ?? 'a file').join(', ')} changed since`));
-      return;
-    }
-    const names = files.map((item) => item.name).join(', ');
-    const choice = await vscode.window.showWarningMessage(question(names), { modal: true, detail: 'You can redo it with Undo in the editor.' }, action);
-    if (choice !== action) return;
-    const edit = new vscode.WorkspaceEdit();
-    for (const item of files) {
-      const uri = vscode.Uri.file(item.path!);
-      if (item.created) { edit.deleteFile(uri, { ignoreIfNotExists: true }); continue; }
-      const document = await vscode.workspace.openTextDocument(uri);
-      edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), item.before);
-    }
-    if (!(await vscode.workspace.applyEdit(edit))) { void vscode.window.showErrorMessage(userError(`undo the change to ${names}`)); return; }
-    await Promise.all(files.filter((item) => !item.created).map(async (item) => (await vscode.workspace.openTextDocument(vscode.Uri.file(item.path!))).save()));
+  viewDiff(id: string): Promise<void> {
+    return this.changes.viewApproval(id);
   }
 
   // ---- what the user does --------------------------------------------------------
@@ -719,12 +580,8 @@ export class ClikCodeController implements vscode.Disposable {
     }
   }
 
-  /** Hands a request to the bridge; when it is gone the user is told, not left
-   * waiting on something that will never be heard. */
   private deliver(request: IdeRequest, what: string): boolean {
-    if (this.bridge?.send(request)) return true;
-    this.note(`${what} was not delivered: ClikCode is not connected. Try again once it has reconnected.`, 'warning');
-    return false;
+    return deliver(this.bridge, request, what, (text) => this.note(text, 'warning'));
   }
 
   /** Bumped by a Stop pressed before a turn exists: a send still being
@@ -763,8 +620,7 @@ export class ClikCodeController implements vscode.Disposable {
     this.setModel(answeredApproval(this.model, id, {
       outcome: approved === false ? 'denied' : 'approved', ...(approved === 'always' ? { always: true } : {}), ...(told ? { told } : {}),
     }));
-    if (this.shownDiffs.has(id)) void this.host.diffs.close(id);
-    this.forgetDiff(id);
+    this.changes.close(id);
   }
 
   async open(mode: 'new' | 'continue' | 'resume', sessionId?: string): Promise<void> {
@@ -842,7 +698,7 @@ export class ClikCodeController implements vscode.Disposable {
       return undefined;
     }
     if (request.method === 'query') {
-      const data = await bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, 120_000);
+      const data = await bridge.call({ type: 'query', query: request.query, ...(request.provider ? { provider: request.provider } : {}), ...(request.network ? { network: true } : {}) }, TIMEOUT.query);
       if (request.query !== 'conversations') return data;
       const others = this.host.chats().filter((chat) => chat !== this).map((chat) => ({ sessionId: chat.state.sessionId, approvals: chat.state.approvals.length, unread: chat.unread }));
       return (data as IdeConversation[]).map((row): ListedConversation => {
@@ -851,7 +707,7 @@ export class ClikCodeController implements vscode.Disposable {
       });
     }
     // A choice can take a sign-in or an install: no short deadline.
-    const result = await bridge.call({ type: 'choose', choice: request.choice }, 30 * 60_000);
+    const result = await bridge.call({ type: 'choose', choice: request.choice }, TIMEOUT.choose);
     this.refreshedFor = '';
     this.refreshStructured(false);
     return result;
@@ -890,10 +746,10 @@ export class ClikCodeController implements vscode.Disposable {
         void this.viewDiff(message.id);
         return;
       case 'change':
-        void (message.action === 'view' ? this.viewChange(message.key, message.userIndex) : this.revertChange(message.key, message.userIndex));
+        void (message.action === 'view' ? this.changes.viewChange(message.key, message.userIndex) : this.changes.revertChange(message.key, message.userIndex));
         return;
       case 'turnChanges':
-        void (message.action === 'view' ? this.viewTurnChanges(message.userIndex) : this.revertTurnChanges(message.userIndex));
+        void (message.action === 'view' ? this.changes.viewTurn(message.userIndex) : this.changes.revertTurn(message.userIndex));
         return;
       case 'request':
         void this.answer(surface, message.id, message.request);
@@ -935,7 +791,7 @@ export class ClikCodeController implements vscode.Disposable {
 
   dispose(): void {
     this.disposed = true;
-    this.unwatchBuild();
+    this.builds.stop();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     if (this.postTimer) clearTimeout(this.postTimer);
     for (const subscription of this.subscriptions) subscription.dispose();
