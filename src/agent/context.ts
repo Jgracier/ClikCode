@@ -236,6 +236,7 @@ function estimateItemTokens(item: ConversationItem): number {
   switch (item.type) {
     case 'text': return estimateTextTokens(item.text) + 4 + (item.images?.length ?? 0) * IMAGE_TOKENS;
     case 'summary': return estimateTextTokens(item.text) + 4;
+    case 'reasoning': return estimateTextTokens(item.text) + estimateTextTokens(item.signature ?? item.redactedData ?? '') + 4;
     case 'tool_call': return estimateTextTokens(item.name) + estimateTextTokens(JSON.stringify(item.args)) + 8;
     case 'tool_result': return estimateTextTokens(item.output) + 8 + (item.images?.length ?? 0) * IMAGE_TOKENS;
   }
@@ -308,7 +309,7 @@ function safeCut(items: readonly ConversationItem[], keepRecent: number): number
 const SUMMARY_SYSTEM = `You compress a coding-agent conversation so the work can continue with less context. Write a dense summary covering: the user's goal and explicit constraints; decisions made and why; every file read or changed with what matters about it (paths, functions, line references); commands run and their significant results; errors hit and how they were resolved; the current state; and the exact next steps. Preserve identifiers, paths and error text verbatim. Do not address the user. Do not call tools.`;
 
 function renderForSummary(items: readonly ConversationItem[]): string {
-  return items.map((item) => {
+  return items.filter((item) => item.type !== 'reasoning').map((item) => {
     if (item.type === 'text') return `${item.role.toUpperCase()}: ${item.text}`;
     if (item.type === 'summary') return `EARLIER SUMMARY: ${item.text}`;
     if (item.type === 'tool_call') return `TOOL CALL ${item.name} ${JSON.stringify(item.args).slice(0, 2000)}`;

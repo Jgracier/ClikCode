@@ -1,7 +1,7 @@
 /** ModelClient for any OpenAI-compatible server (llama.cpp's llama-server,
  * vLLM, OpenAI itself, most hosted providers):
  * `POST {baseUrl}/v1/chat/completions` with `stream: true`. */
-import type { ConversationItem, ImageInput, ModelClient, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage, ToolSpec } from '../model-client.js';
+import type { ConversationItem, ImageInput, ModelClient, ReasoningBlock, ModelStepRequest, ModelStepResult, ModelToolCall, TokenUsage, ToolSpec } from '../model-client.js';
 import { turnCancelledError } from '../cancellation.js';
 import type { ContextHints } from '../context-profile.js';
 import { ModelClientError, parseRetryAfter, readWithin, SseParser, STREAM_IDLE_TIMEOUT_MS, type SseEvent } from './gateway-client.js';
@@ -117,10 +117,13 @@ type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_u
 
 interface WireToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 
+/** OpenRouter's `reasoning_details` entry: how the Gateway sends a block's signature out and takes it back. */
+export type ReasoningDetail = { type: 'reasoning.text'; text: string; signature: string } | { type: 'reasoning.encrypted'; data: string };
+
 export type ChatMessage =
   | { role: 'system'; content: string }
   | { role: 'user'; content: string | ContentPart[] }
-  | { role: 'assistant'; content: string | null; tool_calls?: WireToolCall[] }
+  | { role: 'assistant'; content: string | null; tool_calls?: WireToolCall[]; reasoning_details?: ReasoningDetail[] }
   | { role: 'tool'; tool_call_id: string; content: string };
 
 /** Consecutive user text (a summary followed by a steer, say) is merged into
@@ -129,7 +132,7 @@ export type ChatMessage =
  * A tool message carries text only, so images a tool showed (read_file on a
  * picture) follow the run of tool messages as one user message, as other
  * harnesses send them; the calls' results stay together, as the API needs. */
-export function toChatMessages(system: string, items: readonly ConversationItem[], vision: boolean): ChatMessage[] {
+export function toChatMessages(system: string, items: readonly ConversationItem[], vision: boolean, model?: string): ChatMessage[] {
   const out: ChatMessage[] = [{ role: 'system', content: system }];
   const pushUser = (text: string, images: readonly ImageInput[] = []): void => {
     const parts: ContentPart[] = [{ type: 'text', text }, ...(vision ? images.map((image): ContentPart => ({ type: 'image_url', image_url: { url: `data:${image.mimeType};base64,${image.data}` } })) : [])];
@@ -156,6 +159,12 @@ export function toChatMessages(system: string, items: readonly ConversationItem[
   for (const item of items) {
     if (item.type !== 'tool_result') flushToolImages();
     if (item.type === 'summary') pushUser(`Summary of the earlier conversation:\n${item.text}`);
+    // Reasoning goes back only to the model that wrote it: another vendor rejects its signature.
+    else if (item.type === 'reasoning') {
+      if (item.model !== model) continue;
+      const detail: ReasoningDetail | undefined = item.redactedData ? { type: 'reasoning.encrypted', data: item.redactedData } : item.signature ? { type: 'reasoning.text', text: item.text, signature: item.signature } : undefined;
+      if (detail) (assistant().reasoning_details ??= []).push(detail);
+    }
     else if (item.type === 'text' && item.role === 'user') pushUser(item.text, item.images);
     else if (item.type === 'text') {
       const message = assistant();
@@ -302,7 +311,7 @@ export class OpenAIModelClient implements ModelClient {
     const { options } = this;
     const doFetch = options.fetchImpl ?? fetch;
     const fitted = options.limits ? fitToLimits(request.system, request.tools, options.limits) : { system: request.system, tools: request.tools };
-    const messages = toChatMessages(fitted.system, request.items, this.acceptsImages);
+    const messages = toChatMessages(fitted.system, request.items, this.acceptsImages, options.model);
     if (options.limits?.messages !== undefined && messages.length > options.limits.messages) {
       throw new ModelClientError(`${this.label}: the conversation has ${messages.length} messages, more than the ${options.limits.messages} one request may carry`, { kind: 'other', code: 'CONTEXT_TOO_LARGE' });
     }
@@ -358,6 +367,7 @@ export class OpenAIModelClient implements ModelClient {
     let servedModel: string | undefined;
     let servedWindow: number | undefined;
     let timings: LlamaTimings | undefined;
+    const blocks: ReasoningBlock[] = [];
 
     const handle = (event: SseEvent): void => {
       if (!event.data) return;
@@ -392,6 +402,14 @@ export class OpenAIModelClient implements ModelClient {
       // `reasoning_content` is llama.cpp and DeepSeek; `reasoning` is OpenRouter and vLLM.
       const reasoning = typeof delta.reasoning_content === 'string' ? delta.reasoning_content : typeof delta.reasoning === 'string' ? delta.reasoning : '';
       if (reasoning) request.onReasoningDelta?.(reasoning);
+      // The Gateway's finished blocks, with the signature that lets them be sent back.
+      if (Array.isArray(delta.reasoning_details)) {
+        for (const raw of delta.reasoning_details as Record<string, unknown>[]) {
+          if (!raw || typeof raw !== 'object') continue;
+          if (raw.type === 'reasoning.encrypted' && typeof raw.data === 'string' && raw.data) blocks.push({ text: '', redactedData: raw.data, model: options.model });
+          else if (raw.type === 'reasoning.text' && typeof raw.signature === 'string' && raw.signature) blocks.push({ text: typeof raw.text === 'string' ? raw.text : '', signature: raw.signature, model: options.model });
+        }
+      }
       if (Array.isArray(delta.tool_calls)) {
         for (const raw of delta.tool_calls as Record<string, unknown>[]) {
           if (!raw || typeof raw !== 'object') continue;
@@ -465,6 +483,7 @@ export class OpenAIModelClient implements ModelClient {
       text, toolCalls,
       stopReason: stopReason ?? (toolCalls.length ? 'tool-calls' : 'stop'),
       usage,
+      ...(blocks.length ? { reasoning: blocks } : {}),
       ...(servedModel ? { servedModel } : {}),
       ...(servedWindow ?? options.contextWindow ? { contextWindow: servedWindow ?? options.contextWindow } : {}),
     };

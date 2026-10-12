@@ -342,6 +342,47 @@ describe('toChatMessages', () => {
   });
 });
 
+describe('reasoning with its signature', () => {
+  const items: ConversationItem[] = [
+    { type: 'text', role: 'user', text: 'go' },
+    { type: 'reasoning', text: 'think', signature: 'sig1', model: 'claude-x' },
+    { type: 'reasoning', text: '', redactedData: 'red1', model: 'claude-x' },
+    { type: 'tool_call', id: 'c1', name: 'ls', args: {} },
+    { type: 'tool_result', id: 'c1', name: 'ls', output: 'a' },
+  ];
+
+  it('is captured from the stream, with live text still shown', async () => {
+    reply = { chunks: [
+      delta({ reasoning: 'think' }),
+      delta({ reasoning_details: [{ type: 'reasoning.text', text: 'think', signature: 'sig1' }] }),
+      delta({ reasoning_details: [{ type: 'reasoning.encrypted', data: 'red1' }] }),
+      delta({ content: 'ok' }, 'stop'),
+      'data: [DONE]\n\n',
+    ] };
+    const req = request();
+    const result = await new OpenAIModelClient({ baseUrl, model: 'claude-x' }).step(req);
+    expect(req.reasoning).toEqual(['think']);
+    expect(result.reasoning).toEqual([
+      { text: 'think', signature: 'sig1', model: 'claude-x' },
+      { text: '', redactedData: 'red1', model: 'claude-x' },
+    ]);
+  });
+
+  it('is resent as reasoning_details on the assistant message when the model is the same', () => {
+    expect(toChatMessages('sys', items, false, 'claude-x')[2]).toEqual({
+      role: 'assistant', content: null,
+      reasoning_details: [{ type: 'reasoning.text', text: 'think', signature: 'sig1' }, { type: 'reasoning.encrypted', data: 'red1' }],
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'ls', arguments: '{}' } }],
+    });
+  });
+
+  it('is dropped when the model changed, and a plain conversation is unchanged', () => {
+    const other = toChatMessages('sys', items, false, 'glm-5');
+    expect(JSON.stringify(other)).not.toContain('reasoning_details');
+    expect(other[2]).toMatchObject({ role: 'assistant', tool_calls: [{ id: 'c1' }] });
+  });
+});
+
 describe('parseToolArguments', () => {
   it('parses, repairs what is safely repairable, and reports the rest', () => {
     expect(parseToolArguments('{"a":1}')).toEqual({ args: { a: 1 } });
