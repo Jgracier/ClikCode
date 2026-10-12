@@ -178,7 +178,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     input.subagent ? input.subagent.system
       : (tools.some((tool) => tool.name === SKILL_TOOL) ? discoverSkills({ cwd, stateDir: input.stateDir, homeDir, turnId }) : Promise.resolve({ skills: [] }))
         .then((catalog) => buildSystemPrompt({
-          cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir,
+          cwd, addDirs, homeDir, userConfigDir: input.userConfigDir ?? input.stateDir,
           skillsSection: [
             skillsPromptSection(catalog.skills, profile),
             // Plugin agent types, when a tool can start one.
@@ -404,7 +404,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       // already in force if this same call asks again -- and a failed write
       // only costs the remembering, never the approval they already gave.
       if (approved === 'always' && rule) {
-        turnRules.current = await addPermissionAllowRule(ctx.cwd, rule).catch(() => ({ allow: [...turnRules.current.allow, ...parsePermissionRules([rule]).allow] }));
+        turnRules.current = { ...turnRules.current, allow: await addPermissionAllowRule(ctx.cwd, rule).catch(() => [...turnRules.current.allow, ...parsePermissionRules([rule]).allow]) };
       }
     }
 
