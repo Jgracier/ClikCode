@@ -63,7 +63,8 @@ const CLAUDE_TOOL_NAMES: Record<string, string> = {
   read_file: 'Read', write_file: 'Write', edit_file: 'Edit', multi_edit: 'MultiEdit',
   list_dir: 'LS', glob: 'Glob', grep: 'Grep', lsp: 'LSP',
   web_fetch: 'WebFetch', web_search: 'WebSearch',
-  todo_write: 'TodoWrite', task: 'Task', skill: 'Skill', exit_plan_mode: 'ExitPlanMode',
+  todo_write: 'TodoWrite', task: 'Task', skill: 'Skill', exit_plan_mode: 'ExitPlanMode', enter_plan_mode: 'EnterPlanMode',
+  monitor: 'Monitor', schedule_wakeup: 'ScheduleWakeup', list_agents: 'ListAgents',
   ask_user: 'AskUserQuestion', notebook_edit: 'NotebookEdit',
   list_mcp_resources: 'ListMcpResourcesTool', read_mcp_resource: 'ReadMcpResourceTool',
 };

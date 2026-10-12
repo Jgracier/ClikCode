@@ -11,8 +11,8 @@
 
 /** What every notice ClikCode writes itself begins with. */
 export const CLIKCODE_NOTICE_TAG = '[ClikCode] ';
-/** formatShellNotifications (agent/session-state.ts): `[background shell <id> exited ...] <command>`. */
-const SHELL_NOTICE = /^\[background shell \S+ (?:exited|was stopped)/;
+/** formatShellNotifications (agent/session-state.ts): `[background shell <id> exited ...] <command>`, a monitor's `... output]` and a `[scheduled wakeup <id>]`. */
+const SHELL_NOTICE = /^\[(?:background shell \S+ (?:exited|was stopped|output)|scheduled wakeup \S+\])/;
 
 export function isClikCodeNotice(text: string): boolean {
   return text.startsWith(CLIKCODE_NOTICE_TAG) || SHELL_NOTICE.test(text);

@@ -14,7 +14,7 @@ import { formatToolRow } from '../../harness/protocol/tools.js';
 import { sandboxCommand, sandboxDenialHint, sandboxMissingNotice } from '../sandbox.js';
 import { describeShellChanges, shellChangesSince, snapshotBeforeShell, type ShellChanges, type ShellSnapshot } from '../shell-changes.js';
 
-interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string; sandbox?: boolean }
+export interface BashArgs { command: string; timeout_ms?: number; run_in_background?: boolean; description?: string; sandbox?: boolean }
 
 const BASH_DEFAULT_TIMEOUT_MS = 120_000;
 const BASH_MAX_TIMEOUT_MS = 600_000;
@@ -120,7 +120,10 @@ export function stopBackgroundShell(shell: BackgroundShell, reason: string): voi
   killTree(shell.child, shell.detached);
 }
 
-function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
+/** Spawns `args.command` as a background shell of the session: its output
+ * collects in `unread` (stdout too, unless `onStdout` takes it), and its exit
+ * is queued as a notification. */
+export function spawnBackgroundShell(args: BashArgs, ctx: ToolContext, onStdout?: (chunk: string) => void): { shell: BackgroundShell; notice?: string } {
   const detached = process.platform !== 'win32';
   const { file, args: argv, notice } = sandboxedInvocation(args, ctx);
   // stdin is a pipe so bash_input can answer a prompt or drive a REPL. A
@@ -135,7 +138,9 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
     if (combined.length > BACKGROUND_BUFFER_CHARS) shell.droppedBytes += combined.length - BACKGROUND_BUFFER_CHARS;
     shell.unread = combined.slice(-BACKGROUND_BUFFER_CHARS);
   };
-  child.stdout!.setEncoding('utf8').on('data', onData);
+  // A monitor takes stdout itself (its lines are the events); stderr still
+  // collects for the exit notice and bash_output.
+  child.stdout!.setEncoding('utf8').on('data', onStdout ?? onData);
   child.stderr!.setEncoding('utf8').on('data', onData);
   child.once('error', (error) => { onData(`\n[failed to start: ${error.message}]`); if (shell.status === 'running') shell.status = 'exited'; });
   child.once('close', (code, signal) => {
@@ -153,6 +158,11 @@ function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
     });
   });
   ctx.session.shells.set(id, shell);
+  return { shell, ...(notice ? { notice } : {}) };
+}
+
+function startBackground(args: BashArgs, ctx: ToolContext): { output: string } {
+  const { shell: { id }, notice } = spawnBackgroundShell(args, ctx);
   return { output: `${notice ? `${notice}\n` : ''}Started background shell ${id}. You will be told when it exits, with the end of its output: do not poll it or sleep waiting for it. Carry on with other work, end your turn if there is nothing else to do, or use wait (shell_ids ["${id}"]) to continue in this turn once it exits -- with output (a regex such as "listening|ready") to continue once it prints that instead. bash_output (id "${id}") reads its output so far; bash_input types into it; kill_bash stops it.` };
 }
 

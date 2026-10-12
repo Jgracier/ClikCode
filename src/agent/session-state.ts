@@ -30,6 +30,10 @@ export interface BackgroundShell {
  * model: at the top of the next step of a running turn, or, when no turn is
  * running, as the prompt of a follow-up turn the worker starts. */
 export interface ShellNotification {
+  /** What happened: the shell exited (the default), a monitor's command printed
+   * lines (`tail` holds them), or a scheduled wakeup fired (`shellId` is its
+   * id, `command` the reason, `tail` the prompt to carry out). */
+  kind?: 'output' | 'wakeup';
   shellId: string;
   command: string;
   exitCode?: number | null;
@@ -38,6 +42,17 @@ export interface ShellNotification {
   tail: string;
   reason?: string;
   at: number;
+}
+
+/** A prompt the model scheduled for itself (schedule_wakeup). Held in this
+ * process only: it does not outlive the worker that holds it. */
+export interface PendingWakeup {
+  id: string;
+  prompt: string;
+  reason: string;
+  /** Epoch ms it fires. */
+  at: number;
+  timer: NodeJS.Timeout;
 }
 
 export interface HarnessSessionState {
@@ -49,6 +64,8 @@ export interface HarnessSessionState {
    * the user's next message is the answer. */
   pendingQuestion?: string;
   nextShellNumber: number;
+  readonly wakeups: Map<string, PendingWakeup>;
+  nextWakeupNumber: number;
   /** The "no sandbox installed" notice has been given (sandbox.ts): once a session. */
   sandboxNoticeShown?: boolean;
   /** Finished background shells the model has not been told about yet. */
@@ -65,7 +82,7 @@ export function sessionState(stateDir: string, sessionId: string): HarnessSessio
   const key = `${path.resolve(stateDir)}\0${sessionId}`;
   let state = sessions.get(key);
   if (!state) {
-    state = { sessionId, readFiles: new Map(), shells: new Map(), plan: { active: false }, nextShellNumber: 1, notifications: [] };
+    state = { sessionId, readFiles: new Map(), shells: new Map(), plan: { active: false }, nextShellNumber: 1, wakeups: new Map(), nextWakeupNumber: 1, notifications: [] };
     sessions.set(key, state);
   }
   return state;
@@ -80,6 +97,29 @@ export function takeShellNotifications(state: HarnessSessionState): ShellNotific
   return state.notifications.splice(0);
 }
 
+/** Fires `prompt` at the model after `delayMs`: queued as a notification, so a
+ * running turn hears it before its next step and an idle worker starts a
+ * follow-up turn with it. */
+export function scheduleWakeup(state: HarnessSessionState, request: { prompt: string; reason: string; delayMs: number }): PendingWakeup {
+  const id = `wake_${state.nextWakeupNumber++}`;
+  const timer = setTimeout(() => {
+    state.wakeups.delete(id);
+    queueShellNotification(state, { kind: 'wakeup', shellId: id, command: request.reason, tail: request.prompt, at: Date.now() });
+  }, request.delayMs);
+  timer.unref();
+  const wakeup: PendingWakeup = { id, prompt: request.prompt, reason: request.reason, at: Date.now() + request.delayMs, timer };
+  state.wakeups.set(id, wakeup);
+  return wakeup;
+}
+
+/** Cancels every pending wakeup; how many there were. */
+export function cancelWakeups(state: HarnessSessionState): number {
+  const count = state.wakeups.size;
+  for (const wakeup of state.wakeups.values()) clearTimeout(wakeup.timer);
+  state.wakeups.clear();
+  return count;
+}
+
 export function runningShellCount(state: HarnessSessionState): number {
   let running = 0;
   for (const shell of state.shells.values()) if (shell.status === 'running') running++;
@@ -90,6 +130,8 @@ export function runningShellCount(state: HarnessSessionState): number {
  * ended and what it ran; the tail is what it printed that was never read. */
 export function formatShellNotifications(notifications: readonly ShellNotification[]): string {
   return notifications.map((note) => {
+    if (note.kind === 'wakeup') return `[scheduled wakeup ${note.shellId}] ${note.command}\n${note.tail}`;
+    if (note.kind === 'output') return `[background shell ${note.shellId} output] ${note.command}\n${note.tail.replace(/\s+$/, '')}`;
     const how = note.reason ? `was stopped: ${note.reason}`
       : note.exitCode !== undefined && note.exitCode !== null ? `exited (code ${note.exitCode})`
         : note.signal ? `exited (${note.signal})` : 'exited';
@@ -108,6 +150,10 @@ export function disposeSessionState(stateDir: string, sessionId: string, reason 
   if (!state) return [];
   state.onNotification = undefined;
   const undelivered = takeShellNotifications(state);
+  for (const wakeup of state.wakeups.values()) {
+    undelivered.push({ shellId: wakeup.id, command: wakeup.reason, tail: '', reason: 'the session closed before it fired; schedule it again if it is still needed', at: Date.now() });
+  }
+  cancelWakeups(state);
   for (const shell of state.shells.values()) {
     if (shell.status !== 'running') continue;
     // Marked first, so its close handler does not queue a second notice.
