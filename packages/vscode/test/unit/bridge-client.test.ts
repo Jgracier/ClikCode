@@ -38,6 +38,7 @@ describe('BridgeClient', () => {
     client.dispose();
     await exited;
     expect(client.running).toBe(false);
+    expect(client.send({ type: 'cancel', restoreDraft: false })).toBe(false);
     expect(logs).toContain('stray stdout line');
     expect(client.build).toMatch(/^\d+:\d+$/);
   });

@@ -84,9 +84,12 @@ export class BridgeClient extends EventEmitter<BridgeClientEvents> {
     return !this.exited;
   }
 
-  send(request: IdeRequest): void {
-    if (this.exited || !this.child.connected) return;
-    this.child.send(request);
+  /** False when the request could not be handed to the bridge (it is gone):
+   * the caller owns telling the user, and clearing what waited on it. */
+  send(request: IdeRequest): boolean {
+    if (this.exited || !this.child.connected) return false;
+    try { this.child.send(request); } catch { return false; }
+    return true;
   }
 
   /** A request answered by a `result` event carrying its requestId. */

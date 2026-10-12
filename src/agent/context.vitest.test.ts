@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildSystemPrompt, compactionThreshold, environmentNote, needsEnvironmentNote, staticInstructions, toolOutputCap } from './context.js';
+import { renderForSummary, SUMMARY_INPUT_MAX_CHARS, buildSystemPrompt, compactionThreshold, environmentNote, needsEnvironmentNote, staticInstructions, toolOutputCap } from './context.js';
 import type { ConversationItem } from './model-client.js';
 
 /** A fake git whose answers can change between calls, as a real repo's do. */
@@ -163,5 +163,14 @@ describe('instruction files', () => {
     await fs.writeFile(path.join(w.cwd, 'AGENTS.md'), 'SMALL');
     expect(await w.prompt()).not.toMatch(/not loaded because/);
     await fs.rm(w.root, { recursive: true, force: true });
+  });
+});
+
+describe('renderForSummary', () => {
+  it('bounds the whole request, keeping the newest items', () => {
+    const items: ConversationItem[] = Array.from({ length: 1500 }, (_, i) => ({ type: 'text', role: 'user', text: `${i === 1499 ? 'NEWEST' : 'x'}${'y'.repeat(4000)}` }));
+    const out = renderForSummary(items);
+    expect(out.length).toBeLessThan(SUMMARY_INPUT_MAX_CHARS + 200);
+    expect(out).toContain('NEWEST');
   });
 });

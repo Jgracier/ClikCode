@@ -22,6 +22,7 @@ import type { TurnUsage } from '../../../src/harness/protocol/turn-usage';
 import { backgroundWorkOf, type BackgroundWork } from '../../../src/harness/protocol/background-agents';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
 import { endsWithSummary, isApprovalWaitPhase, reasoningHeading, type Decision } from '../../../src/harness/protocol/turn-flow';
+import { isUsageExhaustedMessage } from '../../../src/turn/usage-exhausted';
 import { readTurnMarks } from '../../../src/turn/turn-marks';
 import { CHILDREN_SHOWN } from '../../../src/tui/render/child-rows';
 import { failureLine } from '../../../src/harness/protocol/stderr-line';
@@ -524,6 +525,9 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
 export function connectionLost(model: ChatModel, patch: Partial<ChatModel> = {}): ChatModel {
   return {
     ...model, ...patch, running: false, live: undefined, approvals: [], ownTurn: undefined, pendingPrompt: undefined, turnUserIndex: undefined,
+    // Only a live bridge ends these: a 'signing in…' or busy label, the queue
+    // it was holding and the submissions it had yet to answer.
+    busy: undefined, signIn: undefined, queued: [], submissions: [],
   };
 }
 
@@ -1018,7 +1022,7 @@ function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEven
       const msg = failureLine(stripAnsi(event.message));
       // Exhaustion is an outcome, not a fault — show it as informational chat
       // text rather than a red error banner so it reads as part of the flow.
-      const exhausted = /^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/i.test(msg.trim());
+      const exhausted = isUsageExhaustedMessage(msg);
       return withNote(model, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
     }
     case 'submission':
