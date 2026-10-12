@@ -19,7 +19,7 @@ import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { delimiter, dirname, extname, join } from 'node:path';
 import { INSTALL_HELP } from './compat';
 
-export const MINIMUM_NODE = '22.12.0';
+const MINIMUM_NODE = '22.12.0';
 
 export interface Runtime {
   /** The Node.js executable. */
@@ -49,7 +49,7 @@ export interface RuntimeHost {
   nodeVersion(node: string): Promise<string | undefined>;
 }
 
-export const realHost: RuntimeHost = {
+const realHost: RuntimeHost = {
   platform: process.platform,
   env: process.env,
   execPath: process.execPath,

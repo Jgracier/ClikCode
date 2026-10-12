@@ -52,7 +52,7 @@ export function tooOldToStartMessage(): string {
 }
 
 /** The first VS Code that takes a `secondarySidebar` view container. */
-export const SECONDARY_SIDEBAR_SINCE = [1, 106] as const;
+const SECONDARY_SIDEBAR_SINCE = [1, 106] as const;
 
 export function supportsSecondarySidebar(version: string): boolean {
   const [major = 0, minor = 0] = version.split('.').map((part) => Number.parseInt(part, 10) || 0);

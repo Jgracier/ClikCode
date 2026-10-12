@@ -18,7 +18,7 @@ export interface BridgeClientEvents {
 /** Anything that looks like a protocol message. Unknown `type`s pass through
  * and are ignored by whoever does not know them -- a newer ClikCode may say
  * more than this extension understands. */
-export function isIdeEvent(message: unknown): message is IdeEvent {
+function isIdeEvent(message: unknown): message is IdeEvent {
   return typeof message === 'object' && message !== null && typeof (message as { type?: unknown }).type === 'string';
 }
 
