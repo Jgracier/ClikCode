@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FileCheckpointStore } from './file-checkpoints.js';
 import { mcpToolDefinition } from './mcp/tools.js';
 import {
-  addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, NO_RULES, parsePermissionRule, parsePermissionRules,
+  addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, NO_RULES, parsePermissionRule, parsePermissionRules, parsePermissionSettings,
   suggestPermissionRule, visibleTools, type PermissionRules,
 } from './permissions.js';
 import type { PathScope } from './security.js';
@@ -197,5 +197,53 @@ describe('approval prompts', () => {
 
   it('shows the plan for exit_plan_mode', async () => {
     expect(await buildApprovalPrompt(tool('exit_plan_mode'), { plan: '1. do it' }, ctx(), 'r')).toEqual({ title: 'Approve plan', detail: '1. do it' });
+  });
+});
+
+describe('deny and ask rules', () => {
+  const rulesOf = (permissions: { allow?: string[]; deny?: string[]; ask?: string[] }): PermissionRules => parsePermissionSettings(permissions);
+
+  it('lets a deny rule beat an allow rule and hold even in bypass mode', () => {
+    const rules = rulesOf({ allow: ['Bash(git:*)'], deny: ['Bash(git push:*)'] });
+    expect(decide('bash', { command: 'git status' }, 'ask', { rules })).toBe('allow');
+    expect(decide('bash', { command: 'git push origin main' }, 'bypass', { rules })).toBe('deny');
+    expect(decide('bash', { command: 'git push origin main' }, 'ask', { rules })).toBe('deny');
+  });
+
+  it('denies a compound command when any segment is denied', () => {
+    const rules = rulesOf({ deny: ['Bash(rm:*)'] });
+    expect(decide('bash', { command: 'ls && rm -r build' }, 'bypass', { rules })).toBe('deny');
+    expect(decide('bash', { command: 'echo $(rm -r build)' }, 'bypass', { rules })).toBe('deny');
+    expect(decide('bash', { command: 'ls build' }, 'bypass', { rules })).toBe('allow');
+  });
+
+  it('denies reads, edits and fetches by path or domain', () => {
+    const rules = rulesOf({ deny: ['Read(.env)', 'Edit(src/generated/**)', 'WebFetch(domain:evil.test)'] });
+    expect(decide('read_file', { path: '.env' }, 'bypass', { rules })).toBe('deny');
+    expect(decide('read_file', { path: 'a.ts' }, 'bypass', { rules })).toBe('allow');
+    expect(decide('edit_file', { path: 'src/generated/x.ts', old_string: 'a', new_string: 'b' }, 'bypass', { rules })).toBe('deny');
+    expect(decide('web_fetch', { url: 'https://evil.test/x' }, 'bypass', { rules })).toBe('deny');
+  });
+
+  it('lets an ask rule force a question over auto mode and an allow rule, but not over bypass', () => {
+    const rules = rulesOf({ allow: ['Edit(src/**)'], ask: ['Edit(src/config/**)'] });
+    expect(decide('write_file', { path: 'src/a.ts', content: '' }, 'ask', { rules })).toBe('allow');
+    expect(decide('write_file', { path: 'src/config/a.ts', content: '' }, 'auto', { rules })).toBe('ask');
+    expect(decide('write_file', { path: 'src/config/a.ts', content: '' }, 'bypass', { rules })).toBe('allow');
+  });
+
+  it('reads deny and ask from the committed project settings, but allow only from the local file', async () => {
+    await fs.mkdir(path.join(scope.cwd, '.clikcode'), { recursive: true });
+    await fs.writeFile(path.join(scope.cwd, '.clikcode', 'settings.json'), JSON.stringify({ permissions: { allow: ['Bash(make:*)'], deny: ['Read(.env)'], ask: ['Bash(git commit:*)'] } }));
+    await fs.writeFile(path.join(scope.cwd, '.clikcode', 'settings.local.json'), JSON.stringify({ permissions: { allow: ['Bash(ls:*)'], deny: ['Bash(curl:*)'] } }));
+    const rules = await loadPermissionRules(scope.cwd);
+    expect(rules.allow.map((rule) => rule.raw)).toEqual(['Bash(ls:*)']);
+    expect(rules.deny.map((rule) => rule.raw).sort()).toEqual(['Bash(curl:*)', 'Read(.env)']);
+    expect(rules.ask.map((rule) => rule.raw)).toEqual(['Bash(git commit:*)']);
+  });
+
+  it('asks before a commit that skips the hooks', () => {
+    expect(decide('bash', { command: 'git commit --no-verify -m x' }, 'auto')).toBe('ask');
+    expect(decide('bash', { command: 'git commit --no-verify -m x' }, 'ask', { rules: parsePermissionRules(['Bash(git commit:*)']) })).toBe('ask');
   });
 });

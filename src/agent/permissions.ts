@@ -16,9 +16,12 @@ type PermissionVerdict = 'allow' | 'ask' | 'deny';
 interface PermissionDecision { decision: PermissionVerdict; reason: string }
 
 interface PermissionRule { tool: string; specifier?: string; raw: string }
-export interface PermissionRules { allow: readonly PermissionRule[] }
+/** `deny` beats everything but a hard deny's own refusal (it holds in bypass
+ * mode too); `ask` forces a question over an allow rule and over auto mode;
+ * `allow` skips the question. */
+export interface PermissionRules { allow: readonly PermissionRule[]; deny: readonly PermissionRule[]; ask: readonly PermissionRule[] }
 
-export const NO_RULES: PermissionRules = { allow: [] };
+export const NO_RULES: PermissionRules = { allow: [], deny: [], ask: [] };
 const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
 const BASH_TOOL = 'bash';
 
@@ -31,9 +34,20 @@ export function parsePermissionRule(raw: string): PermissionRule | undefined {
   return { tool: match[1], raw: raw.trim(), ...(specifier ? { specifier } : {}) };
 }
 
-export function parsePermissionRules(values: unknown): PermissionRules {
+function parseRuleList(values: unknown): PermissionRule[] {
   const list = Array.isArray(values) ? values : [];
-  return { allow: list.flatMap((value) => typeof value === 'string' ? (parsePermissionRule(value) ?? []) : []) };
+  return list.flatMap((value) => typeof value === 'string' ? (parsePermissionRule(value) ?? []) : []);
+}
+
+/** Allow rules only; the deny and ask lists come from parsePermissionSettings. */
+export function parsePermissionRules(values: unknown): PermissionRules {
+  return { ...NO_RULES, allow: parseRuleList(values) };
+}
+
+/** A settings file's `permissions` object, as rules. */
+export function parsePermissionSettings(permissions: unknown): PermissionRules {
+  const value = (permissions && typeof permissions === 'object' ? permissions : {}) as { allow?: unknown; deny?: unknown; ask?: unknown };
+  return { allow: parseRuleList(value.allow), deny: parseRuleList(value.deny), ask: parseRuleList(value.ask) };
 }
 
 /** Rule families → the tool classes/names they cover. */
@@ -65,6 +79,12 @@ function bashSpecifierMatches(specifier: string, simpleCommand: string): boolean
  * must not ride in on `Bash(git status:*)`: every segment of a compound
  * command has to be covered (by a rule or by the read-only classifier), and
  * anything with substitution or redirection is never rule-matched. */
+/** Every simple command in a line, including those inside `$(...)`, backticks,
+ * subshells and braces: a deny or ask rule must see `rm` in `echo $(rm x)`. */
+function bashSegments(command: string): string[] {
+  return command.split(/&&|\|\||[;|&\n\r`(){}]|\$\(/).map((segment) => segment.trim()).filter(Boolean);
+}
+
 function bashCommandAllowedByRules(command: string, rules: readonly PermissionRule[], scope: PathScope): boolean {
   const text = command.trim();
   if (!text || UNSPLITTABLE.test(text.replace(/&&/g, ';'))) return false;
@@ -107,17 +127,35 @@ interface PermissionRequest {
   hasApprover: boolean;
 }
 
+/** Whether any deny/ask rule names part of this call: some segment of a
+ * command, the URL's domain, or one of the paths it touches. */
+function ruleNamesCall(rules: readonly PermissionRule[], request: PermissionRequest, resolved: readonly ResolvedPath[]): boolean {
+  const covering = rules.filter((rule) => ruleCoversTool(rule, request.tool));
+  if (!covering.length) return false;
+  if (request.tool.name === BASH_TOOL) {
+    const segments = bashSegments(String(request.args.command ?? ''));
+    return covering.some((rule) => segments.some((segment) => bashSpecifierMatches(rule.specifier ?? '*', segment)));
+  }
+  if (request.tool.class === 'network') return networkRuleMatches(covering, request.args.url);
+  if (!resolved.length) return covering.some((rule) => !rule.specifier || rule.specifier === '*');
+  return resolved.some((entry) => covering.some((rule) => pathRuleMatches(rule.specifier ?? '*', entry, request.scope)));
+}
+
+function networkRuleMatches(rules: readonly PermissionRule[], url: unknown): boolean {
+  const host = hostOf(url);
+  return rules.some((rule) => {
+    if (!rule.specifier || rule.specifier === '*') return true;
+    const domain = rule.specifier.replace(/^domain:/, '').toLowerCase();
+    return !!host && (host === domain || host.endsWith(`.${domain}`));
+  });
+}
+
 function allowedByRules(request: PermissionRequest, resolved: readonly ResolvedPath[]): boolean {
   const rules = request.rules.allow.filter((rule) => ruleCoversTool(rule, request.tool));
   if (!rules.length) return false;
   if (request.tool.name === BASH_TOOL) return bashCommandAllowedByRules(String(request.args.command ?? ''), rules, request.scope);
   if (request.tool.class === 'network') {
-    const host = hostOf(request.args.url);
-    return rules.some((rule) => {
-      if (!rule.specifier || rule.specifier === '*') return true;
-      const domain = rule.specifier.replace(/^domain:/, '').toLowerCase();
-      return !!host && (host === domain || host.endsWith(`.${domain}`));
-    });
+    return networkRuleMatches(rules, request.args.url);
   }
   if (!resolved.length) return rules.some((rule) => !rule.specifier || rule.specifier === '*');
   return resolved.every((entry) => rules.some((rule) => pathRuleMatches(rule.specifier ?? '*', entry, request.scope)));
@@ -140,6 +178,9 @@ function decide(request: PermissionRequest): PermissionDecision {
   const command = tool.name === BASH_TOOL ? classifyCommand(String(args.command ?? ''), scope) : undefined;
   if (command?.tier === 'deny') return { decision: 'deny', reason: `blocked as dangerous: ${command.reason}` };
 
+  const denied = request.rules.deny.find((rule) => ruleNamesCall([rule], request, resolved));
+  if (denied) return { decision: 'deny', reason: `blocked by the deny rule ${denied.raw}` };
+
   // 2. Plan mode: nothing may change until the user approves the plan.
   if (tool.name === EXIT_PLAN_MODE_TOOL) {
     return planMode ? { decision: 'ask', reason: 'the user must approve the plan' } : { decision: 'allow', reason: 'plan mode is not active' };
@@ -155,7 +196,12 @@ function decide(request: PermissionRequest): PermissionDecision {
   // 3. Bypass.
   if (mode === 'bypass') return { decision: 'allow', reason: 'bypass mode' };
 
-  // 4. Persisted allow rules.
+  // 4. An ask rule or a check that skips a safeguard outranks allow rules and auto mode.
+  const asked = request.rules.ask.find((rule) => ruleNamesCall([rule], request, resolved));
+  if (asked) return { decision: 'ask', reason: `the ask rule ${asked.raw} requires approval` };
+  if (command?.tier === 'ask' && command.always) return { decision: 'ask', reason: command.reason };
+
+  // 5. Persisted allow rules.
   if (allowedByRules(request, resolved)) return { decision: 'allow', reason: 'matches a saved allow rule' };
 
   const allConfined = resolved.every((entry) => entry.confined);
@@ -234,15 +280,34 @@ function permissionSettingsPath(cwd: string): string {
   return path.join(cwd, '.clikcode', 'settings.local.json');
 }
 
-export async function loadPermissionRules(cwd: string): Promise<PermissionRules> {
+async function readPermissions(file: string): Promise<PermissionRules> {
   try {
-    const parsed = JSON.parse(await fs.readFile(permissionSettingsPath(cwd), 'utf8')) as { permissions?: { allow?: unknown } };
-    return parsePermissionRules(parsed?.permissions?.allow);
-  } catch { return NO_RULES; }
+    return parsePermissionSettings((JSON.parse(await fs.readFile(file, 'utf8')) as { permissions?: unknown } | null)?.permissions);
+  } catch {
+    // fail-open-ok: a settings file that is absent or unreadable declares no rules; the permission modes still apply
+    return NO_RULES;
+  }
+}
+
+/** The workspace's rules. Allow rules come only from the user's own local
+ * file: a repository must not be able to grant itself permissions. Deny and
+ * ask rules only restrict, so the files a project commits (`.clikcode` and
+ * Claude Code's `.claude`) may declare them too. */
+export async function loadPermissionRules(cwd: string): Promise<PermissionRules> {
+  const restricting = await Promise.all([
+    path.join(cwd, '.clikcode', 'settings.json'), path.join(cwd, '.claude', 'settings.json'), path.join(cwd, '.claude', 'settings.local.json'),
+  ].map(readPermissions));
+  const local = await readPermissions(permissionSettingsPath(cwd));
+  const unique = (rules: readonly PermissionRule[]): PermissionRule[] => [...new Map(rules.map((rule) => [rule.raw, rule])).values()];
+  return {
+    allow: local.allow,
+    deny: unique([...local.deny, ...restricting.flatMap((entry) => entry.deny)]),
+    ask: unique([...local.ask, ...restricting.flatMap((entry) => entry.ask)]),
+  };
 }
 
 /** Adds one allow rule, preserving every other key in the file. */
-export async function addPermissionAllowRule(cwd: string, rule: string): Promise<PermissionRules> {
+export async function addPermissionAllowRule(cwd: string, rule: string): Promise<PermissionRules['allow']> {
   if (!parsePermissionRule(rule)) throw new Error(`Not a valid permission rule: ${rule}`);
   const settings = await updateJsonFile(permissionSettingsPath(cwd), (raw): Record<string, unknown> => {
     // A file that is there but is not a settings object is the user's to fix, never to overwrite.
@@ -255,7 +320,7 @@ export async function addPermissionAllowRule(cwd: string, rule: string): Promise
     if (allow.includes(rule.trim())) return undefined;
     return { ...current, permissions: { ...permissions, allow: [...allow, rule.trim()] } };
   });
-  return parsePermissionRules((settings.permissions as { allow?: unknown } | undefined)?.allow);
+  return parsePermissionRules((settings.permissions as { allow?: unknown } | undefined)?.allow).allow;
 }
 
 /** The narrowest rule that would have allowed this call, for "always allow". */

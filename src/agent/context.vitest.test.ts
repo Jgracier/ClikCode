@@ -1,3 +1,6 @@
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildSystemPrompt, compactionThreshold, environmentNote, needsEnvironmentNote, staticInstructions, toolOutputCap } from './context.js';
 import type { ConversationItem } from './model-client.js';
@@ -84,5 +87,59 @@ describe('a conversation run as a Gateway agent', () => {
     expect(asAgent).toContain('Watch the platform.');
     // ClikCode's own instructions come first: the agent adds to the harness, it does not replace it.
     expect(asAgent.indexOf(staticInstructions(true).slice(0, 40))).toBeLessThan(asAgent.indexOf('# Agent'));
+  });
+});
+
+describe('sections that make the model restrained about scope and risk', () => {
+  it('puts each in the assembled prompt of every profile', async () => {
+    for (const full of [true, false]) {
+      const prompt = await buildSystemPrompt({ cwd: '/repo', userConfigDir: '/nonexistent-config', git: fakeGit({ branch: 'main', status: '' }), toolUsageGuidance: full });
+      expect(prompt).toContain('# Doing tasks');
+      expect(prompt).toMatch(/exploratory question/i);
+      expect(prompt).toContain('# Risky actions');
+      expect(prompt).toMatch(/approval once/i);
+      expect(prompt).toContain('# Git');
+      expect(prompt).toMatch(/--no-verify/);
+      expect(prompt).toMatch(/only when asked/i);
+    }
+  });
+});
+
+describe('instruction files', () => {
+  async function workspace(): Promise<{ root: string; home: string; cwd: string; prompt: () => Promise<string> }> {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'ctx-memory-')));
+    const home = path.join(root, 'home');
+    const cwd = path.join(root, 'repo');
+    await fs.mkdir(path.join(home, '.claude'), { recursive: true });
+    await fs.mkdir(cwd, { recursive: true });
+    return { root, home, cwd, prompt: () => buildSystemPrompt({ cwd, userConfigDir: path.join(root, 'state'), homeDir: home, git: fakeGit({ branch: 'main', status: '' }) }) };
+  }
+
+  it('inlines @imports relative to the file, skips code spans, missing files and protected paths', async () => {
+    const w = await workspace();
+    await fs.mkdir(path.join(w.cwd, 'docs'), { recursive: true });
+    await fs.writeFile(path.join(w.cwd, 'docs', 'style.md'), 'STYLE-RULES see @deeper.md');
+    await fs.writeFile(path.join(w.cwd, 'docs', 'deeper.md'), 'DEEP-RULES');
+    await fs.mkdir(path.join(w.home, '.ssh'), { recursive: true });
+    await fs.writeFile(path.join(w.home, '.ssh', 'id'), 'PRIVATE-KEY-BODY');
+    await fs.writeFile(path.join(w.cwd, 'CLAUDE.md'), 'Read @docs/style.md and @missing.md and `@docs/style.md` and @~/.ssh/id\n');
+    const prompt = await w.prompt();
+    expect(prompt).toContain('STYLE-RULES');
+    expect(prompt).toContain('DEEP-RULES');
+    expect(prompt).not.toContain('PRIVATE-KEY-BODY');
+    expect(prompt.match(/STYLE-RULES/g)).toHaveLength(1);
+    await fs.rm(w.root, { recursive: true, force: true });
+  });
+
+  it('adds CLAUDE.local.md beside the project file and the user\'s ~/.claude/CLAUDE.md first', async () => {
+    const w = await workspace();
+    await fs.writeFile(path.join(w.home, '.claude', 'CLAUDE.md'), 'USER-GLOBAL');
+    await fs.writeFile(path.join(w.cwd, 'AGENTS.md'), 'PROJECT-AGENTS');
+    await fs.writeFile(path.join(w.cwd, 'CLAUDE.local.md'), 'MY-LOCAL');
+    const prompt = await w.prompt();
+    expect(prompt.indexOf('USER-GLOBAL')).toBeGreaterThan(-1);
+    expect(prompt.indexOf('USER-GLOBAL')).toBeLessThan(prompt.indexOf('PROJECT-AGENTS'));
+    expect(prompt.indexOf('PROJECT-AGENTS')).toBeLessThan(prompt.indexOf('MY-LOCAL'));
+    await fs.rm(w.root, { recursive: true, force: true });
   });
 });

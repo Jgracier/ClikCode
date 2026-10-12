@@ -7,7 +7,8 @@
 import { readDenyReason, resolvePath, type PathScope } from './security.js';
 
 type CommandTier = 'deny' | 'ask' | 'safe';
-interface CommandClassification { tier: CommandTier; reason: string }
+/** `always`: an ask that no allow rule or auto mode may waive. */
+interface CommandClassification { tier: CommandTier; reason: string; always?: true }
 
 const ROOTISH = String.raw`(?:/|/\*|~|~/|~/\*|\$HOME|\$\{HOME\}|\$HOME/|\$HOME/\*|/(?:bin|boot|dev|etc|home|lib|lib64|opt|proc|root|sbin|sys|usr|var)/?\*?)`;
 const RM_FLAGS = String.raw`(?:\s+(?:-[a-zA-Z]+|--[a-z-]+))*`;
@@ -25,12 +26,13 @@ const DENY_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
   { pattern: /\bchown\s+(?:-[a-zA-Z]+\s+)*-R\s+\S+\s+\/(?:\s|$)/, reason: 'recursive chown of /' },
 ];
 
-const ASK_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string }> = [
+const ASK_PATTERNS: ReadonlyArray<{ pattern: RegExp; reason: string; always?: true }> = [
   { pattern: /\b(?:curl|wget|fetch)\b[^;&]*\|\s*(?:sudo\s+)?(?:ba|z|da|k)?sh\b/, reason: 'pipes a download into a shell' },
   { pattern: /\b(?:ba|z)?sh\s+<\(\s*(?:curl|wget)\b/, reason: 'runs a downloaded script' },
   { pattern: /\bsudo\b|\bsu\s+-|\bdoas\b/, reason: 'elevates privileges' },
-  { pattern: /\bgit\s+push\b[^;&|]*(?:--force|-f\b)/, reason: 'force push' },
-  { pattern: /\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f)/, reason: 'discards uncommitted work' },
+  { pattern: /\bgit\s+push\b[^;&|]*(?:--force|-f\b)/, reason: 'force push', always: true },
+  { pattern: /\bgit\s+(?:reset\s+--hard|clean\s+-[a-zA-Z]*f)/, reason: 'discards uncommitted work', always: true },
+  { pattern: /\bgit\b[^;&|]*\s(?:--no-verify|--no-gpg-sign)\b|\bgit\s+commit\b[^;&|]*\s-[a-zA-Z]*n\b/, reason: 'skips git hooks or signing', always: true },
 ];
 
 /** Read-only programs that are safe for auto mode with plain arguments. */
@@ -157,7 +159,7 @@ export function classifyCommand(command: string, scope?: PathScope): CommandClas
   const text = command.trim();
   if (!text) return { tier: 'deny', reason: 'empty command' };
   for (const { pattern, reason } of DENY_PATTERNS) if (pattern.test(text)) return { tier: 'deny', reason };
-  for (const { pattern, reason } of ASK_PATTERNS) if (pattern.test(text)) return { tier: 'ask', reason };
+  for (const { pattern, reason, always } of ASK_PATTERNS) if (pattern.test(text)) return { tier: 'ask', reason, ...(always ? { always } : {}) };
   const pipelines = tokenizeSimple(text);
   if (!pipelines) return { tier: 'ask', reason: 'uses shell features that cannot be checked statically' };
   for (const tokens of pipelines) {
