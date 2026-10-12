@@ -42,8 +42,7 @@ export function serverDir(modelId: string): string { return join(serversDir(), s
 function leasesDir(modelId: string): string { return join(serverDir(modelId), 'leases'); }
 
 /** Lease files, one per process and session: `<pid>-<session>.json` in a
- * directory of their holder's choosing (a model's server here, TurboFit's
- * state directory for its runtime). */
+ * directory of their holder's choosing (a model's server). */
 export function leaseFile(directory: string, sessionId: string): string {
   return join(directory, `${process.pid}-${safeName(sessionId)}.json`);
 }

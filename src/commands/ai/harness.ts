@@ -1,15 +1,13 @@
 /** `clikcode harness`: choosing which harness a session runs on. */
 
-import { withSlowWait } from '../../tui/slow-wait.js';
 import { forceStoreSession } from '../../session/ephemeral.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
 import { isClikCodeAgent } from '../../session/route.js';
 import { randomUUID } from 'node:crypto';
 import { ensureNativeHarness } from '../../harness/transport/native/inspect.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
-import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../../harness/definition.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
-import { hermesTurboFitInstalled, installHermesTurboFit, registerHermesTurboFitProvider, restoreHermesPluginScan } from '../../harness/accounts/hermes-discovery.js';
 import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
@@ -155,7 +153,6 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
   if (!session.accountId && state.accounts.some((item) => item.provider === harness.provider)) {
     throw new Error(`${harness.displayName} is not signed in. Run \`${harnessCommand()} accounts login ${harness.command}\`.`);
   }
-  if (harness.turboFit) await ensureHermesTurboFit(harness, nativeProfileEnvironment(account?.nativeProfile));
   // Always a real model, never a placeholder -- see resolveNativeModel.
   if (!session.model) {
     const lastUsedModel = [...state.sessions]
@@ -177,28 +174,6 @@ export async function aiHarnessSelect(harnessCommandName: string, sessionId: str
     model: session.model ?? 'provider default', centralized: true,
     ...(session.accountId ? {} : { actionRequired: `Choose one with /accounts use <label>`, accounts: compatible.map(accountView) }),
   });
-}
-
-/** TurboFit is Hermes' local-model provider: its modes and hardware-fit
- * recommendations are what /model lists under Hermes. Choosing Hermes is the
- * whole decision -- it is installed with Hermes, no second question. Tried
- * once per run, so an install that fails (offline, say) is reported once
- * rather than on every /hermes. */
-let turboFitTried = false;
-async function ensureHermesTurboFit(harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>): Promise<void> {
-  if (turboFitTried) return;
-  turboFitTried = true;
-  // A run killed mid-install left Hermes' scan setting changed; put it back
-  // whether or not TurboFit needs installing now.
-  await restoreHermesPluginScan(harness, environment).catch(() => undefined);
-  const installed = await hermesTurboFitInstalled(environment);
-  try {
-    await withSlowWait(TERMINAL.active, installed ? 'connecting TurboFit to Hermes…' : 'installing TurboFit local models for Hermes…', async () => {
-      if (!installed) await installHermesTurboFit(harness, environment);
-      await registerHermesTurboFitProvider(harness, environment);
-    });
-  }
-  catch (error) { emitHarnessOutput({ panel: 'error', message: error instanceof Error ? error.message : String(error) }); }
 }
 
 /** About to send on a chat whose provider has no signed-in account (marked

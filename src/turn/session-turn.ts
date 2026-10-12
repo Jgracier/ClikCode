@@ -7,7 +7,6 @@ import type Conf from 'conf';
 import { readState } from '../session/state/read.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { isClikCodeAgent } from '../session/route.js';
-import { hermesTurboFitModelId } from '../harness/accounts/hermes-discovery.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { releaseHeldLocalModel } from '../commands/ai/local-model.js';
@@ -99,12 +98,7 @@ async function runAccountTurn(
   const account = state.accounts.find((item) => item.id === session.accountId);
   if (!account) throw new Error('local AI session account was removed');
   let model: string | null = session.model ?? account.models[0] ?? null;
-  // A model this account lists, spelled as it was listed: TurboFit ids saved
-  // before they were corrected to `custom:turbofit:` still count, or a session
-  // corrected on its first turn would be refused on its second.
-  const listed = (candidate: string): boolean => account!.models.includes(candidate)
-    || account!.models.some((item) => hermesTurboFitModelId(item) === candidate);
-  if (model && account.models.length > 0 && !listed(model)) {
+  if (model && account.models.length > 0 && !account.models.includes(model)) {
     throw new Error(`model "${model}" is not available through local account "${account.label}"`);
   }
   const text = prompt.trim();

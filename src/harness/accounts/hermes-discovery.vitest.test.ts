@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hermesCachedModels, hermesInstallDirectory, hermesInventory, hermesToolsetNames, hermesTurboFitModelId } from './hermes-discovery';
+import { hermesCachedModels, hermesInstallDirectory, hermesInventory, hermesToolsetNames } from './hermes-discovery';
 
 describe('hermes discovery', () => {
   it('reads model ids out of the provider cache', () => {
@@ -50,38 +50,5 @@ describe('hermes discovery', () => {
       ['bedrock', 'model'],
     ]);
     expect(hermesInventory('Traceback: no module'), 'an install without the inventory').toBeUndefined();
-  });
-
-  it('lists TurboFit\'s local modes even though its placeholder key reads as not ready', () => {
-    const output = '\x00HERMES_INVENTORY' + JSON.stringify({
-      providers: [
-        { provider: 'custom:turbofit', name: 'TurboFit', ready: false, authType: 'api_key', models: ['auto', 'active:main', 'active:aux'] },
-      ],
-    }) + '\n';
-    const inventory = hermesInventory(output)!;
-    expect(inventory.models).toEqual(['custom:turbofit:auto', 'custom:turbofit:active:main', 'custom:turbofit:active:aux']);
-    expect(inventory.labels).toEqual({
-      'custom:turbofit:auto': 'TurboFit Auto mode',
-      'custom:turbofit:active:main': 'TurboFit Main mode',
-      'custom:turbofit:active:aux': 'TurboFit Auxiliary mode',
-    });
-    expect(inventory.connect).toEqual([]);
-  });
-
-  it('names TurboFit models the way Hermes can route them', () => {
-    // Hermes' inventory calls the provider `turbofit`, but its model parser
-    // reads `turbofit:auto` as a model named that on the CURRENT provider --
-    // which sent it to Codex. `custom:turbofit:auto` reaches TurboFit.
-    const output = '\x00HERMES_INVENTORY' + JSON.stringify({
-      providers: [{ provider: 'turbofit', name: 'TurboFit', ready: false, models: ['auto', 'active:main'] }],
-      model: 'auto', provider: 'turbofit',
-    }) + '\n';
-    const inventory = hermesInventory(output)!;
-    expect(inventory.models).toEqual(['custom:turbofit:auto', 'custom:turbofit:active:main']);
-    expect(inventory.configured).toBe('custom:turbofit:auto');
-    expect(inventory.labels['custom:turbofit:auto']).toBe('TurboFit Auto mode');
-    expect(hermesTurboFitModelId('turbofit:active:aux')).toBe('custom:turbofit:active:aux');
-    expect(hermesTurboFitModelId('custom:turbofit:auto')).toBe('custom:turbofit:auto');
-    expect(hermesTurboFitModelId('openai-codex:gpt-6-astra')).toBe('openai-codex:gpt-6-astra');
   });
 });

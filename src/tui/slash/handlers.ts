@@ -13,9 +13,6 @@ import { searchResultsPayload } from '../../search/navigate.js';
 import { shownSummary } from '../../session/conversation-summary.js';
 import { changesPath, fileTurnRows, fileTurnsText, isChangesPath } from './file-changes.js';
 import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService, ROUTE_CHOICES_TEXT } from '../../session/route.js';
-import { hermesTurboFitModelId } from '../../harness/accounts/hermes-discovery.js';
-import { isTurboFitModel } from '../../harness/accounts/turbofit-local.js';
-import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { localModelChosen, releaseHeldLocalModel } from '../../commands/ai/local-model.js';
 import { localModelChoices } from '../../local-models/index.js';
 import { resolveLocalModelId } from '../../local-models/catalog.js';
@@ -388,14 +385,9 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // Typed the way the picker shows it (`claude-code:sonnet`), stored the
     // way the harness takes it (`claude-code/sonnet`).
     const typed = normalizeModelWord(harness ? modelIdFromDisplay(harness, value) : value);
-    const asked = typed && harness?.turboFit ? hermesTurboFitModelId(typed) : typed;
-    const requested = asked && !trusted ? await assertRealModel(harness, account, asked) : asked;
+    const requested = typed && !trusted ? await assertRealModel(harness, account, typed) : typed;
     const model = requested ?? await resolveNativeModel(harness, account) ?? null;
     if (!model) throw new Error(`${harness.displayName} does not publish any models to choose from.`);
-    // A TurboFit model is running before it is chosen: if its setup fails,
-    // the session keeps the model it had.
-    const previous = session.model;
-    if (isTurboFitModel(model)) await turboFitModelChanged(harness, account, session.id, previous, model);
     session.model = model;
     // What the vendor reported running answered the PREVIOUS request. The
     // status line prefers it (a vendor that substitutes a model says so), so
@@ -405,7 +397,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     await keepEffortValidFor(session, harness, account);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
-    if (!isTurboFitModel(model)) await turboFitModelChanged(harness, account, session.id, previous, model);
     return emitHarnessOutput({ panel: 'settings', session, account: state.accounts.find((item) => item.id === session.accountId)?.label });
   },
   effort: async ({ state, session, words }) => {

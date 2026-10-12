@@ -13,7 +13,6 @@ import { modelIdFromDisplay } from '../../runtime/lazy-bridge.js';
 import { sessionOrProviderHarness } from '../slash/context.js';
 import { readState } from '../../session/state/read.js';
 import { harnessModelLabel, modelSettingsDetail, modelIdFromLabel, nativeModelCatalogForPicker } from '../../harness/accounts/model-catalog.js';
-import { turboFitModelChanged } from '../../commands/ai/turbofit.js';
 import { loginNativeHarness } from '../../harness/transport/native/login.js';
 import { nativeProfileEnvironment } from '../../harness/transport/profile-environment.js';
 import { TERMINAL } from '../active-terminal.js';
@@ -74,11 +73,8 @@ export function modelRow(
   /** freePlanModels for the account: these say "free plan". */
   free?: ReadonlySet<string>,
 ): PickerOption<string> {
-  const localLabel = harness?.turboFit && /^(?:custom:)?turbofit:/.test(model)
-    ? catalog.labels?.[model]
-    : undefined;
-  const shown = localLabel ?? (harness ? harnessModelLabel(harness, model) : model);
-  const name = localLabel ? undefined : catalog.labels?.[model];
+  const shown = harness ? harnessModelLabel(harness, model) : model;
+  const name = catalog.labels?.[model];
   const bare = (text: string): string => text.toLowerCase().replace(/[^a-z0-9]/g, '');
   const respells = name !== undefined && [shown, shown.slice(shown.indexOf('/') + 1)].some((id) => bare(id) === bare(name));
   const parts = [
@@ -120,11 +116,6 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   const discoveredModels = [...catalog.models].sort((left, right) => left === effective ? -1 : right === effective ? 1 : left.localeCompare(right));
   const options: PickerOption<string>[] = [
     ...discoveredModels.map((model) => modelRow(harness, catalog, model, effective, !session.model && model === catalog.configured, free)),
-    ...(harness?.turboFit ? (catalog.localRecommendations ?? []).map((item) => ({
-      label: item.label,
-      detail: `· TurboFit · ${item.detail}`,
-      value: `__turbofit_profile__:${encodeURIComponent(item.id)}`,
-    })) : []),
     // A multi-provider harness (Hermes) lists providers it can reach but is
     // not signed in to. Signing in here is the whole connection flow: no
     // command to know, and the picker comes back with that provider's models.
@@ -137,22 +128,10 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   // looking like a choice. A model picker lists models.
   // Nothing to list and nothing to connect: the one thing left to do is type
   // an id, so ask for it rather than showing a one-row list first.
-  const hasLocalRecommendations = Boolean(catalog.localRecommendations?.length);
-  const selected = !discoveredModels.length && !catalog.connect?.length && !hasLocalRecommendations
+  const selected = !discoveredModels.length && !catalog.connect?.length
     ? '__custom__'
-    : await chooseOption(rl, discoveredModels.length || hasLocalRecommendations ? 'Choose a model' : `${harness?.displayName ?? 'This provider'} reported no models — enter one`, options);
+    : await chooseOption(rl, discoveredModels.length ? 'Choose a model' : `${harness?.displayName ?? 'This provider'} reported no models — enter one`, options);
   if (!selected) return;
-  if (selected.startsWith('__turbofit_profile__:') && harness?.turboFit) {
-    const profile = decodeURIComponent(selected.slice('__turbofit_profile__:'.length));
-    // Hermes names the provider `turbofit` (config providers:) or
-    // `custom:turbofit` (legacy custom_providers:); use the one it listed.
-    const main = catalog.models.find((model) => /^(?:custom:)?turbofit:active:main$/.test(model)) ?? 'custom:turbofit:active:main';
-    // Selected, downloaded, built and answering before the session moves to
-    // it; a failure leaves the session on the model it had.
-    await turboFitModelChanged(harness, account, id, session.model, main, profile);
-    await aiSessionCommand(id, `/model ${main}`);
-    return;
-  }
   if (selected === '__connect__' && harness && catalog.connect?.length) {
     const target = await chooseOption(rl, `Connect ${harness.displayName} to`, catalog.connect.map((item) => ({
       label: item.label, detail: item.detail ? `· ${item.detail}` : undefined, value: item.id,

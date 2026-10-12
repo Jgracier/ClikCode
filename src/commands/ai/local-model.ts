@@ -2,7 +2,7 @@
  * model up before a turn (from the terminal, so the model follows it), load
  * a newly chosen one before the session moves to it, and let go when the
  * session leaves the route or closes. The engine is src/local-models; this
- * is where it meets the screen, as commands/ai/turbofit.ts is for TurboFit.
+ * is where it meets the screen.
  *
  * Leases are per process and session. The interactive terminal takes one
  * before handing a turn to its worker, and the worker joins without its
@@ -42,8 +42,7 @@ export type ProgressSink = (label: string) => void;
 /** Long work with its progress on the waiting line; without a terminal, one
  * stderr line per distinct `shape` (a stage, not each percent) rather than
  * one per update. The wait starts on the first update, so work that has
- * nothing to do -- a model already running -- shows nothing at all. Shared
- * with commands/ai/turbofit.ts.
+ * nothing to do -- a model already running -- shows nothing at all.
  *
  * A band already up -- the turn's own, drawn as its message was sent --
  * only has its label moved, and gets it back after: stopping and starting a
