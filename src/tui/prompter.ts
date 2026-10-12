@@ -46,10 +46,9 @@ import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftW
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
 import { NOTICE_MS, PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
-import { ApprovalPreview, ApprovalRequest, approvalBlockRows } from './render/approval-block.js';
+import { ApprovalRequest, approvalBlockRows } from './render/approval-block.js';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from './render/approval-keys.js';
-import { questionBlockRows, questionKeyAction, questionRows, questionValues, startsTyping, type QuestionPromptState } from './render/question-block.js';
-import type { HarnessQuestionRequest, HarnessQuestionResult } from '../harness/events/question.js';
+import { questionBlockRows } from './render/question-block.js';
 import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './render/frame-budget.js';
 import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
@@ -82,6 +81,7 @@ import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
 import { notice, showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
+import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -547,27 +547,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     void write.finally(() => this.waitingSubmissionWrites.delete(write));
   }
 
-  /** An approval answered: the next one waiting comes up, or the band goes
-   * back to what the turn was doing. */
-  answerApproval(
-    pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always', settled?: Parameters<typeof decisionRow>[0],
-  ): void {
-    lifecycle('window.approval.answer', { answer: answer === 'always' ? 'always' : answer ? 'allow' : 'deny' });
-    this.pendingApproval = undefined;
-    // The decision stays on the page where it was made: the block is gone,
-    // and a call that was denied or approved leaves no other trace.
-    this.settleDecision(settled ?? (answer
-      ? { kind: 'approved', label: pending.title, ...(answer === 'always' ? { always: true } : {}) }
-      : { kind: 'denied', label: pending.title }), pending.callId);
-    this.approvalsAnswered += 1;
-    pending.resolve(answer);
-    if (!this.presentNextApproval()) {
-      if (this.turn) this.turn.label = this.approvalRestoreLabel || 'thinking';
-      this.approvalRestoreLabel = undefined;
-      this.resumeClock();
-      this.updateWaiting();
-    }
-  }
+  answerApproval(...args: Parameters<typeof answerApproval>): ReturnType<typeof answerApproval> { return answerApproval.apply(this, args); }
 
   /** A decision's settled row. On the row of the call it was about when the
    * vendor named one (a refusal replaces the call's own failure line, an
@@ -582,16 +562,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
-  /** The draft set aside for "tell it instead", back in the composer. */
-  restoreTellingDraft(): void {
-    const telling = this.tellingInstead;
-    if (!telling) return;
-    this.tellingInstead = undefined;
-    if (this.turn) {
-      this.turn.draft = telling.draft;
-      this.turn.cursor = telling.cursor;
-    }
-  }
+  restoreTellingDraft(...args: Parameters<typeof restoreTellingDraft>): ReturnType<typeof restoreTellingDraft> { return restoreTellingDraft.apply(this, args); }
   readonly onResize = (): void => {
     if (!this.closed) {
       // The settled repaint redraws everything at the new size, and a change
@@ -1572,196 +1543,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.updateWaiting();
   }
 
-  approval(title: string, detail?: string, preview?: ApprovalPreview, rule?: string, signal?: AbortSignal, callId?: string): Promise<boolean | 'always'> {
-    lifecycle('window.approval.ask', { title: title.slice(0, 80) });
-    if (signal?.aborted) return Promise.resolve(false);
-    return new Promise<boolean | 'always'>((resolveApproval) => {
-      if (!this.pendingApproval) this.approvalRestoreLabel = isApprovalWaitPhase(this.turn?.label) ? '' : this.turn?.label ?? '';
-      const request: ApprovalRequest = {
-        title, ...(detail === undefined ? {} : { detail }), ...(preview === undefined ? {} : { preview }),
-        ...(rule === undefined ? {} : { rule }), ...(callId === undefined ? {} : { callId }), resolve: resolveApproval,
-      };
-      this.approvalQueue.push(request);
-      // The vendor withdrew it (answered elsewhere, the turn ended): the prompt closes.
-      signal?.addEventListener('abort', () => this.withdrawApproval(request), { once: true });
-      if (!this.pendingApproval) this.presentNextApproval();
-    });
-  }
+  approval(...args: Parameters<typeof approval>): ReturnType<typeof approval> { return approval.apply(this, args); }
 
-  /** Closes a prompt nobody answered: on screen it is answered `no` (which
-   * brings up the next); queued it is simply dropped. */
-  withdrawApproval(request: ApprovalRequest): void {
-    if (this.pendingApproval === request) { this.answerApproval(this.pendingApproval, false, { kind: 'declined', label: request.title }); return; }
-    const at = this.approvalQueue.indexOf(request);
-    if (at < 0) return;
-    this.approvalQueue.splice(at, 1);
-    request.resolve(false);
-    this.updateWaiting();
-  }
+  withdrawApproval(...args: Parameters<typeof withdrawApproval>): ReturnType<typeof withdrawApproval> { return withdrawApproval.apply(this, args); }
 
-  /** A harness's question, one question at a time in the waiting band: pick
-   * an option, tick several, or type. Never answered for the user. */
-  askQuestions(request: HarnessQuestionRequest, signal?: AbortSignal): Promise<HarnessQuestionResult> {
-    lifecycle('window.question.ask', { title: request.title.slice(0, 80), questions: request.questions.length });
-    if (signal?.aborted || !request.questions.length) return Promise.resolve({ kind: 'cancelled' });
-    return new Promise<HarnessQuestionResult>((resolveResult) => {
-      const collected: Record<string, string[]> = {};
-      let open: ApprovalRequest | undefined;
-      let ended = false;
-      const end = (result: HarnessQuestionResult): void => {
-        if (ended) return;
-        ended = true;
-        resolveResult(result);
-      };
-      const ask = (index: number): void => {
-        const question = request.questions[index]!;
-        const state: QuestionPromptState = {
-          request, question, position: index + 1, total: request.questions.length,
-          highlight: 0, picked: new Set(), typing: false, collected,
-        };
-        let handled = false;
-        const item: ApprovalRequest = {
-          title: question.header ?? request.title,
-          // Turn end, withdrawn: the prompt is answered "no", which here is a
-          // cancel -- unless the user already answered this one (`done`).
-          resolve: () => { if (!handled) end({ kind: 'cancelled' }); },
-          question: {
-            state,
-            done: (values) => {
-              handled = true;
-              if (values === undefined) return end({ kind: 'cancelled' });
-              if (values.length) collected[question.id] = values;
-              if (index + 1 < request.questions.length) {
-                // The next question of this request comes up before anything else queued.
-                ask(index + 1);
-                this.approvalQueue.unshift(open!);
-              } else end({ kind: 'answered', answers: { ...collected } });
-            },
-          },
-        };
-        open = item;
-        if (index === 0) {
-          if (!this.pendingApproval) this.approvalRestoreLabel = this.turn?.label ?? '';
-          this.approvalQueue.push(item);
-        }
-      };
-      ask(0);
-      signal?.addEventListener('abort', () => {
-        end({ kind: 'cancelled' });
-        if (open) this.withdrawApproval(open);
-      }, { once: true });
-      if (!this.pendingApproval) this.presentNextApproval();
-    });
-  }
+  askQuestions(...args: Parameters<typeof askQuestions>): ReturnType<typeof askQuestions> { return askQuestions.apply(this, args); }
 
-  /** The question on screen takes a key. */
-  questionKey(turn: WaitingTurn, pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, key: string): void {
-    const state = pending.question!.state;
-    const action = questionKeyAction(key, state, Date.now() - pending.shownAt, pending.needsFocus, pending.focused);
-    const rows = questionRows(state.question);
-    const finish = (values: string[] | undefined): void => {
-      pending.question!.done(values);
-      const { question } = state;
-      const label = question.header ?? question.prompt;
-      this.answerApproval(pending, values !== undefined, values === undefined ? { kind: 'declined', label }
-        : { kind: 'answered', label, ...(values.length && !question.secret ? { values } : {}) });
-    };
-    const typeIn = (): void => {
-      state.typing = true;
-      this.tellingInstead ??= { draft: turn.draft, cursor: turn.cursor };
-      turn.draft = '';
-      turn.cursor = 0;
-      this.updateWaiting();
-    };
-    switch (action.type) {
-      case 'ignore': return;
-      case 'focus':
-        pending.focused = true;
-        if (startsTyping(state.question)) typeIn(); else this.updateWaiting();
-        return;
-      case 'cancel': return finish(undefined);
-      case 'back':
-        state.typing = false;
-        this.restoreTellingDraft();
-        this.updateWaiting();
-        return;
-      case 'move': state.highlight = action.to; this.updateWaiting(); return;
-      case 'toggle':
-        state.highlight = action.index;
-        if (!state.picked.delete(action.index)) state.picked.add(action.index);
-        this.updateWaiting();
-        return;
-      case 'choose': {
-        state.highlight = action.index;
-        const row = rows[action.index];
-        if (!row) return;
-        if (row.kind === 'other') return typeIn();
-        if (row.kind === 'skip') return finish([]);
-        return finish(questionValues(state, row));
-      }
-      case 'submit': {
-        if (state.typing) {
-          const text = turn.draft.trim();
-          if (!text) {
-            if (state.question.multiSelect && state.picked.size) return finish(questionValues(state, undefined));
-            if (state.question.optional) return finish([]);
-            return;
-          }
-          return finish(questionValues(state, undefined, text));
-        }
-        return finish(questionValues(state, undefined));
-      }
-      case 'type': this.editTurnDraft(turn, key); return;
-    }
-  }
+  questionKey(...args: Parameters<typeof questionKey>): ReturnType<typeof questionKey> { return questionKey.apply(this, args); }
 
-  /** Returns false when nothing was waiting, so the caller knows to restore
-   * the turn's own label instead of leaving a stale prompt on screen. */
-  presentNextApproval(): boolean {
-    this.restoreTellingDraft();
-    const next = this.approvalQueue.shift();
-    if (!next) { this.approvalsAnswered = 0; return false; }
-    // Each approval gets its own guard window and its own focus requirement:
-    // answering the first of two must not let the same keypress, or the next
-    // character of a sentence, answer the second.
-    this.pendingApproval = { ...next, shownAt: Date.now(), needsFocus: Boolean(this.turn?.draft), focused: false };
-    // A question with nothing to pick is answered in the composer from the start.
-    const asked = next.question?.state;
-    if (asked && startsTyping(asked.question) && this.turn && !this.pendingApproval.needsFocus) {
-      asked.typing = true;
-      this.tellingInstead = { draft: this.turn.draft, cursor: this.turn.cursor };
-      this.turn.draft = '';
-      this.turn.cursor = 0;
-    }
-    if (this.turn) {
-      this.turn.label = next.question ? 'waiting for your answer' : 'waiting for approval';
-      // The clock stops while the turn waits on the user, not on the agent.
-      this.pauseClock();
-    }
-    if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
-    // Repaint when the guard lifts so the answer row visibly becomes live.
-    this.approvalGuardTimer = setTimeout(() => { this.approvalGuardTimer = undefined; this.updateWaiting(); }, APPROVAL_GUARD_MS);
-    this.approvalGuardTimer.unref();
-    this.notifyIfAway(next.question ? `Question: ${next.question.state.question.prompt.slice(0, 80)}` : `Approval needed: ${next.title}`);
-    this.updateWaiting();
-    return true;
-  }
+  presentNextApproval(...args: Parameters<typeof presentNextApproval>): ReturnType<typeof presentNextApproval> { return presentNextApproval.apply(this, args); }
 
-  /** A turn can end while an approval is on screen. Denying outstanding asks
-   * is what releases the provider's own awaiting handler; dropping them left
-   * it waiting on a promise that could never settle. */
-  settleApprovals(): void {
-    const outstanding = [this.pendingApproval, ...this.approvalQueue];
-    if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
-    this.approvalGuardTimer = undefined;
-    this.pendingApproval = undefined;
-    this.approvalQueue = [];
-    this.approvalRestoreLabel = undefined;
-    this.approvalsAnswered = 0;
-    this.restoreTellingDraft();
-    this.resumeClock();
-    for (const item of outstanding) item?.resolve(false);
-  }
+  settleApprovals(...args: Parameters<typeof settleApprovals>): ReturnType<typeof settleApprovals> { return settleApprovals.apply(this, args); }
 
   /** Esc on an empty composer, while a turn is parked for the quota reset:
    * the interactive loop's way to stop waiting (one press, then cleared). */
