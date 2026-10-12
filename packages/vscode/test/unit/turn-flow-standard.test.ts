@@ -52,6 +52,14 @@ describe('a mid-turn snapshot (V1)', () => {
   });
 });
 
+describe('a lost bridge', () => {
+  it('clears the transient flags only a live bridge could clear', () => {
+    const model: ChatModel = { ...emptyModel(), busy: 'working', signIn: { id: 'x', name: 'Gateway' }, queued: [{ id: 'q', text: 'later', command: false }], submissions: [{ id: 's', text: 'hi' }] };
+    const lost = connectionLost(model);
+    expect(lost).toMatchObject({ busy: undefined, signIn: undefined, queued: [], submissions: [] });
+  });
+});
+
 describe('the sticky prompt (V2)', () => {
   it('is dropped once the durable record holds it', () => {
     const lost = connectionLost(begin());
