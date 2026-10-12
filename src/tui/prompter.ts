@@ -81,6 +81,7 @@ import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTP
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
+import { notice, showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -1088,34 +1089,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.schedulePaint();
   }
 
-  /** A scrollable viewer in the live region. It used to keep only the last six
-   * lines of the body, which cut /help and capability listings to their tail.
-   * The whole body is kept; the prompt scrolls it (Up/Down/PgUp/PgDn while the
-   * draft is empty) and q, Esc or Enter closes it. */
-  panel(title: string, body: string): void {
-    const lines = sanitizeTerminalText(body, { keepSgr: true }).split('\n').map((line) => line.trimEnd());
-    while (lines.length && !lines[0]) lines.shift();
-    while (lines.length && !lines[lines.length - 1]) lines.pop();
-    this.panelState = { title: sanitizeTerminalText(title, { keepSgr: true, singleLine: true }), lines, offset: 0, page: 1, total: lines.length };
-    this.repaint({ keepPalette: false });
-  }
+  panel(...args: Parameters<typeof panel>): ReturnType<typeof panel> { return panel.apply(this, args); }
 
-  /** True when the key was a panel command. Only consulted on an empty draft,
-   * so none of these keys is ever taken away from text being typed. */
-  panelKey(key: string): boolean {
-    const panel = this.panelState;
-    if (!panel) return false;
-    const last = Math.max(0, panel.total - panel.page);
-    const scrollTo = (offset: number): boolean => { panel.offset = Math.max(0, Math.min(last, offset)); return true; };
-    if (key === '\u001b[A') return scrollTo(panel.offset - 1);
-    if (key === '\u001b[B') return scrollTo(panel.offset + 1);
-    if (key === '\u001b[5~') return scrollTo(panel.offset - Math.max(1, panel.page - 1));
-    if (key === '\u001b[6~' || key === ' ') return scrollTo(panel.offset + Math.max(1, panel.page - 1));
-    if (key === 'g') return scrollTo(0);
-    if (key === 'G') return scrollTo(last);
-    if (key === 'q' || key === 'Q' || key === '\u001b' || key === '\r') { this.panelState = undefined; return true; }
-    return false;
-  }
+  panelKey(...args: Parameters<typeof panelKey>): ReturnType<typeof panelKey> { return panelKey.apply(this, args); }
 
   /** What the band showing says, or undefined with no band up: work done
    * on a turn's way in (a local model loading) borrows that band. */
@@ -2918,27 +2894,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   forgetScreenPosition(...args: Parameters<typeof forgetScreenPosition>): ReturnType<typeof forgetScreenPosition> { return forgetScreenPosition.apply(this, args); }
 
-  notice(text: string): void {
-    this.showTransientNotice(text, NOTICE_MS, () => this.repaint());
-    this.repaint();
-  }
+  notice(...args: Parameters<typeof notice>): ReturnType<typeof notice> { return notice.apply(this, args); }
 
-  showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
-    this.clearTransientNotice();
-    this.transientNotice = text;
-    this.transientNoticeTimer = setTimeout(() => {
-      this.transientNoticeTimer = undefined;
-      this.transientNotice = undefined;
-      if (!this.closed && !this.suspended) redraw();
-    }, durationMs);
-    this.transientNoticeTimer.unref();
-  }
+  showTransientNotice(...args: Parameters<typeof showTransientNotice>): ReturnType<typeof showTransientNotice> { return showTransientNotice.apply(this, args); }
 
-  clearTransientNotice(): void {
-    if (this.transientNoticeTimer) clearTimeout(this.transientNoticeTimer);
-    this.transientNoticeTimer = undefined;
-    this.transientNotice = undefined;
-  }
+  clearTransientNotice(...args: Parameters<typeof clearTransientNotice>): ReturnType<typeof clearTransientNotice> { return clearTransientNotice.apply(this, args); }
 
   suspendToShell(...args: Parameters<typeof suspendToShell>): ReturnType<typeof suspendToShell> { return suspendToShell.apply(this, args); }
 
