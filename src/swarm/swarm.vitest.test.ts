@@ -44,7 +44,7 @@ function host(extra: Partial<HarnessSession> = {}): HarnessSession {
   return {
     id: 'host', conversationId: 'host', route: 'local', accountId: 'claude-acct', provider: 'anthropic', model: 'sonnet',
     effort: 'medium', permissionMode: 'ask', createdAt: ISO, updatedAt: ISO, status: 'active',
-    nativeHarness: 'claude', swarm: ['lean'], ...extra,
+    nativeHarness: 'claude', swarm: true, ...extra,
   } as HarnessSession;
 }
 
@@ -388,11 +388,9 @@ describe('a delegation', () => {
     expect(result).toBeNull();
   });
 
-  it('stays off until this conversation turns swarm on, and a saved preset list still counts as on', async () => {
+  it('stays off until this conversation turns swarm on, ', async () => {
     expect(swarmIsOn({})).toBe(false);
-    expect(swarmIsOn({ swarm: [] })).toBe(false);
     expect(swarmIsOn({ swarm: true })).toBe(true);
-    expect(swarmIsOn({ swarm: ['lean'] })).toBe(true);
     const dir = await mkdtemp(join(tmpdir(), 'clikcode-swarm-'));
     process.env.CLIKCODE_HOME = dir;
     const cursor = account({ id: 'cursor', provider: 'cursor', label: 'Ada', usage: windows(38) });

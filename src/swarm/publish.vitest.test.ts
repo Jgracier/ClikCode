@@ -89,9 +89,4 @@ describe('swarm distribution across hosts', () => {
   it('defines SWARM_CLERK_ENV for preventing nested swarms', () => {
     expect(SWARM_CLERK_ENV).toBe('CLIKCODE_SWARM_CLERK');
   });
-
-  it('does not limit parallel workers in default swarm policy', () => {
-    expect(SWARM_POLICY.maxParallel).toBeUndefined();
-    expect(SWARM_POLICY.maxWorkers).toBeUndefined();
-  });
 });

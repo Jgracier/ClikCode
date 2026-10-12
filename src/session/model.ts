@@ -271,9 +271,8 @@ export interface HarnessSession {
   shellNotes?: ShellNote[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;
-  /** Swarm is off until this conversation turns it on. A saved preset list
-   * from before the single switch still means on. */
-  swarm?: boolean | string[];
+  /** Swarm is off until this conversation turns it on. */
+  swarm?: boolean;
   /** The plan (todo list) the provider last published, and when. Kept so a
    * provider taking the conversation over learns what was still open. */
   plan?: { entries: Array<{ content: string; status?: string; priority?: string }>; at: string };

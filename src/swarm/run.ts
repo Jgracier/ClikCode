@@ -138,9 +138,6 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
   const { picked, reserved, modelArg } = opened;
   if (reserved.kind === 'attach') return cardResult(reserved.card, `Attached · ${picked.displayName}`, picked, role);
   if (reserved.kind === 'leased') return { output: reserved.message, isError: true, activityLabel: 'Path lease' };
-  if (reserved.kind === 'capped') {
-    return { output: 'The swarm is already at its parallel cap. Do this with your own tools.', activityLabel: 'Swarm cap' };
-  }
   const label = providerLabel(picked.displayName, role, description, modelArg);
   const swarm = { provider: picked.command, displayName: picked.displayName, role, usageLeft: Math.round(picked.leftPct) };
   await emit(input.host.id, { kind: 'tool-start', id: input.request.callId, label, agent: true, swarm }, input.onActivity);
@@ -192,7 +189,6 @@ export async function runSwarmDelegation(input: SwarmDelegation): Promise<ToolRu
 type Reservation =
   | { kind: 'attach'; card: SwarmCard }
   | { kind: 'leased'; message: string }
-  | { kind: 'capped' }
   | { kind: 'run'; workerId: string; brief: string };
 
 async function reserve(
@@ -205,12 +201,6 @@ async function reserve(
   const conflict = leaseConflict(board, role, paths);
   if (conflict) return { kind: 'leased', message: `Path lease: ${conflict}. Name different paths, or wait until that clerk finishes.` };
   const running = inflight.get(sessionId) ?? 0;
-  if (
-    (policy.maxParallel !== undefined && running >= policy.maxParallel)
-    || (policy.maxWorkers !== undefined && board.roster.filter((line) => line.status === 'working').length >= policy.maxWorkers)
-  ) {
-    return { kind: 'capped' };
-  }
   const workerId = randomUUID();
   const next: SwarmBoard = {
     ...board,
