@@ -84,12 +84,12 @@ describe('learning from turns as they happen', () => {
     expect(user.quotaRetryAt).toBe(new Date(firstStart + 10 * MINUTE + 5 * HOUR).toISOString());
   });
 
-  it('ranks by learned room for a harness that reports none, and by the vendor for one that does', () => {
+  it('ranks by the room the vendor reports, never by what was learned', () => {
     const { user, state } = history();
     recordQuotaRefusal(state, user, Object.assign(new Error('quota'), { stderrTail: 'Resets in 1h0m0s.' }), NOW);
-    expect(reportedRoom(state, user, NOW)).toBe(0);
+    expect(reportedRoom(user, NOW)).toBeUndefined();
     const codex = account('openai', { usage: { at: new Date(NOW).toISOString(), label: '5h 70% left', windows: [{ name: '5h', usedPct: 30, resetsAt: new Date(NOW + HOUR).toISOString() }] } as AiHarnessAccount['usage'] });
-    expect(reportedRoom(state, codex, NOW)).toBe(70);
+    expect(reportedRoom(codex, NOW)).toBe(70);
     expect(learnedReading(state, codex, NOW)).toBeUndefined();
   });
 });
