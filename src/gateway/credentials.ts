@@ -15,6 +15,7 @@ import {
   normalizeApiUrl,
   type AuthByUrl,
 } from '../constants.js';
+import type { AiHarnessAccount } from '../harness/definition.js';
 import { readCanonicalAuth, writeCanonicalAuth } from './local-auth.js';
 
 /** Resolve the gateway base URL: env override, then a saved non-local URL, then the default. */
@@ -76,4 +77,16 @@ export function saveGatewayAuth(config: Conf, apiKey: string, user: unknown): vo
   config.set('apiKey', apiKey);
   config.set('user', user);
   writeCanonicalAuth({ apiUrl: normalized, apiKey, updatedAt: new Date().toISOString(), user });
+}
+
+/** The API key for an account whose credential is an `env:NAME` reference. */
+export function localApiKey(account: AiHarnessAccount): string {
+  if (account.authKind !== 'api-key' || !account.credentialRef.startsWith('env:')) {
+    throw new Error('this account needs a supported local API-key resolver (env:NAME)');
+  }
+  const name = account.credentialRef.slice(4);
+  if (!/^[A-Z][A-Z0-9_]*$/.test(name)) throw new Error('invalid local environment credential reference');
+  const value = process.env[name];
+  if (!value) throw new Error(`local credential ${name} is not available in this harness process`);
+  return value;
 }

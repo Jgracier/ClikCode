@@ -10,7 +10,7 @@ vi.mock('../runtime/lazy-bridge.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../runtime/lazy-bridge.js')>(),
   streamLocalAiTurn: (request: unknown) => stream(request),
 }));
-vi.mock('../daemon/server.js', () => ({ localApiKey: () => 'test-key' }));
+vi.mock('../gateway/credentials.js', () => ({ localApiKey: () => 'test-key' }));
 
 const { readState } = await import('../session/state/read.js');
 const { writeState } = await import('../session/state/write.js');
