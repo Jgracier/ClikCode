@@ -524,6 +524,9 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
 export function connectionLost(model: ChatModel, patch: Partial<ChatModel> = {}): ChatModel {
   return {
     ...model, ...patch, running: false, live: undefined, approvals: [], ownTurn: undefined, pendingPrompt: undefined, turnUserIndex: undefined,
+    // Only a live bridge ends these: a 'signing in…' or busy label, the queue
+    // it was holding and the submissions it had yet to answer.
+    busy: undefined, signIn: undefined, queued: [], submissions: [],
   };
 }
 

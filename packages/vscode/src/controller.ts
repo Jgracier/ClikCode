@@ -13,7 +13,7 @@ import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
-import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
+import type { FileDiff, IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { applyHunks, fileHunks, turnChanges, unwindChanges } from './text';
@@ -309,7 +309,7 @@ export class ClikCodeController implements vscode.Disposable {
         // The turn keeps its place on screen: the worker is still running it,
         // and the new bridge's snapshot says where it got to (and re-asks any
         // approval it is waiting on).
-        this.setModel({ ...this.model, connection: 'starting', approvals: [], connectionError: undefined });
+        this.setModel({ ...this.model, connection: 'starting', approvals: [], busy: undefined, signIn: undefined, connectionError: undefined });
         setTimeout(() => { if (!this.disposed && !this.bridge) void this.ensureStarted(); }, 500);
         return;
       }
@@ -712,7 +712,19 @@ export class ClikCodeController implements vscode.Disposable {
     if (epoch !== this.prepareEpoch) return;
     for (const path of this.images.keys()) if (text.includes(path)) this.images.set(path, true);
     if ((during || this.model.running) && !/^[/!]/.test(text.trim())) this.setModel(typedDuringTurn(this.model, id, text.trim()));
-    bridge.send({ type: 'send', text, id });
+    if (!bridge.send({ type: 'send', text, id })) {
+      this.setModel(rejectedPrompt(this.model));
+      if (ordinary) this.post({ type: 'setDraft', text });
+      this.note('ClikCode is not connected; your message was not sent.', 'error');
+    }
+  }
+
+  /** Hands a request to the bridge; when it is gone the user is told, not left
+   * waiting on something that will never be heard. */
+  private deliver(request: IdeRequest, what: string): boolean {
+    if (this.bridge?.send(request)) return true;
+    this.note(`${what} was not delivered: ClikCode is not connected. Try again once it has reconnected.`, 'warning');
+    return false;
   }
 
   /** Bumped by a Stop pressed before a turn exists: a send still being
@@ -728,13 +740,13 @@ export class ClikCodeController implements vscode.Disposable {
       this.setModel({ ...rejectedPrompt(this.model), submissions: [] });
       if (restoreDraft) this.post({ type: 'setDraft', text });
     }
-    this.bridge?.send({ type: 'cancel', restoreDraft });
+    if (!this.deliver({ type: 'cancel', restoreDraft }, 'Stop')) return;
     this.setModel(stoppingTurn(this.model));
   }
 
   /** A question answered, or dismissed (cancelled). */
   answerQuestion(id: string, result: HarnessQuestionResult): void {
-    this.bridge?.send({ type: 'question-response', id, result });
+    this.deliver({ type: 'question-response', id, result }, 'Your answer');
     this.setModel(answeredApproval(this.model, id, { outcome: result.kind === 'answered' ? 'answered' : 'declined' }));
   }
 
@@ -747,7 +759,7 @@ export class ClikCodeController implements vscode.Disposable {
       if (approved === false) this.answerQuestion(id, { kind: 'cancelled' });
       return;
     }
-    this.bridge?.send({ type: 'approval-response', id, approved });
+    this.deliver({ type: 'approval-response', id, approved }, 'Your answer');
     this.setModel(answeredApproval(this.model, id, {
       outcome: approved === false ? 'denied' : 'approved', ...(approved === 'always' ? { always: true } : {}), ...(told ? { told } : {}),
     }));
