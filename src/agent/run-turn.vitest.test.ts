@@ -407,6 +407,14 @@ describe('runGatewayHarnessTurn', () => {
     const denied = unattended.client.requests[1].items.at(-1);
     expect(denied?.type === 'tool_result' && denied.output).toMatch(/no approver is attached/);
 
+    // An approver that answers no (a script's, or the user's): the model is told the action was not
+    // approved -- never that "the user declined" when nobody was asked -- and the file is not written.
+    const refused = harness([{ toolCalls: [write] }, { text: 'ok' }], { permissionMode: 'ask', onApproval: async () => false });
+    await runGatewayHarnessTurn(refused.input);
+    const notApproved = refused.client.requests[1].items.at(-1);
+    expect(notApproved?.type === 'tool_result' && notApproved.output).toMatch(/not approved.*no one was available/);
+    await expect(fs.readFile(path.join(cwd, 'new.txt'), 'utf8')).rejects.toThrow();
+
     const approved = harness([{ toolCalls: [write] }, { text: 'ok' }], { permissionMode: 'ask', onApproval: async () => true });
     await runGatewayHarnessTurn(approved.input);
     expect(await fs.readFile(path.join(cwd, 'new.txt'), 'utf8')).toBe('x\n');

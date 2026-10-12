@@ -61,9 +61,8 @@ describe('vendor-sandbox', () => {
     mkdirSync(join(real, '.config', 'x'), { recursive: true });
     writeFileSync(join(real, '.config', 'x', 'auth.json'), 'ok');
     const probe = `process.stdout.write(require('fs').readFileSync(process.env.HOME + '/.config/x/auth.json', 'utf8'))`;
-    const run = spawnSync('node', [script, '--auth', 'devin', '--link', '.config/x/auth.json', '--', 'node', '-e', probe], { env: { ...process.env, HOME: real, TMPDIR: out }, encoding: 'utf8' });
-    expect(run.stderr).toMatch(/devin declares no sign-in files.*--link <~\/path>/);
-    expect(run.stderr).toContain('WINDSURF_API_KEY');
+    const run = spawnSync('node', [script, '--auth', 'goose', '--link', '.config/x/auth.json', '--', 'node', '-e', probe], { env: { ...process.env, HOME: real, TMPDIR: out }, encoding: 'utf8' });
+    expect(run.stderr).toMatch(/goose declares no sign-in files.*--link <~\/path>/);
     expect(run.stdout).toBe('ok');
   }, 30_000);
 });

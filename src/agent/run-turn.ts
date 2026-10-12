@@ -399,7 +399,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         return input.onApproval!(prompt.title, prompt.detail, rule, prompt.diff ? { diff: prompt.diff } : undefined);
       });
       const approved = await abortable(ask, signal);
-      if (!approved) return finish({ output: 'The user declined this action. Do not retry it; ask what they would prefer or take a different approach.', isError: true });
+      if (!approved) return finish({ output: 'This action was not approved: the user declined it, or no one was available to answer (an unattended run). Do not retry it; say what you could not do, and ask what they would prefer or take a different approach.', isError: true });
       // Persisted BEFORE the tool runs, so a rule the user just agreed to is
       // already in force if this same call asks again -- and a failed write
       // only costs the remembering, never the approval they already gave.
