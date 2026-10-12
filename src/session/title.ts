@@ -159,6 +159,15 @@ export function stripRepeatedTitles(text: string): string {
   return text.replace(new RegExp(`(^|\\n)[ \\t]*${OPEN}[\\s\\S]*?${CLOSE}[ \\t]*\\r?\\n?`, 'g'), '$1').replace(/^\n+/, '');
 }
 
+/** A reply with the title marker taken off it. Only a turn that asked for a
+ * name has one; `stripRepeats` also drops a marker repeated inside the same
+ * multi-step reply, which is the same request, not a second naming. */
+export function replyWithoutTitle(reply: string, asked: boolean, stripRepeats = false): { text: string; title?: string } {
+  if (!asked) return { text: reply };
+  const extracted = extractSessionTitle(reply);
+  return { ...extracted, text: stripRepeats ? stripRepeatedTitles(extracted.text) : extracted.text };
+}
+
 /** How much of a reply has to arrive before it is clear no title is coming:
  * the open tag, plus room for a model that pads it with a word or two first. */
 const DECIDE_AFTER = OPEN.length + 64;

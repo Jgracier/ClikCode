@@ -7,6 +7,7 @@ import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import { cliThreadTransport, type HarnessTurnTransport } from '../harness/transport/select.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
+import { setPlanMode } from './turn-steps.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { runCodexAppServerTurn, type CodexAppServerTurnInput, type CodexSession } from '../harness/transport/codex-app-server.js';
 import { runAcpTurn, type AcpSession, type AcpTurnInput } from '../harness/transport/acp-client.js';
@@ -207,12 +208,9 @@ function acpLaunchInput(input: {
     // agent leaving it -- its plan approved -- turns the chat's off.
     ...((session.planMode || planStored) && harness.acp?.planModeId ? {
       planMode: true,
-      onPlanModeExit: () => {
-        delete session.planMode;
+      onPlanModeExit: () => setPlanMode(session, checkpoint, prompter, false, () => {
         if (planOption && session.harnessOptions) delete session.harnessOptions[planOption.option];
-        checkpoint?.touch();
-        prompter?.render(session);
-      },
+      }),
     } : {}),
     modelProviderSeparator: harness.modelProviderSeparator,
     plansListModels: Boolean(harness.freePlan?.listed),
@@ -227,6 +225,14 @@ function acpLaunchInput(input: {
   };
 }
 
+/** A standby child for `account`, opened by `prepare`: true once it is ready. */
+function standbyOf(
+  input: { harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; environment: Record<string, string> },
+  kind: Parameters<typeof openStandby>[2], prepare: Parameters<typeof openStandby>[4],
+): Promise<boolean> {
+  return openStandby(input.session.id, input.account.id, kind, vendorChildKey(input.harness, input.account, input.environment, input.session.workspace), prepare).ready;
+}
+
 /** Open `account`'s ACP session for this conversation up to the prompt, on a
  * standby child, while the current account's turn runs: a failover to it
  * then starts at the prompt. The thread must already be in its profile. */
@@ -235,8 +241,7 @@ export function prepareAcpStandby(input: {
   environment: Record<string, string>; mcpServers?: readonly Record<string, unknown>[];
 }): Promise<boolean> {
   const launch = acpLaunchInput(input);
-  return openStandby(input.session.id, input.account.id, 'acp', vendorChildKey(input.harness, input.account, input.environment, input.session.workspace),
-    async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); }).ready;
+  return standbyOf(input, 'acp', async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });
 }
 
 /** What a Codex app-server turn is launched and opened with, for a turn and
@@ -278,6 +283,5 @@ export function prepareCodexStandby(input: {
   environment: Record<string, string>;
 }): Promise<boolean> {
   const launch = codexLaunchInput(input).input;
-  return openStandby(input.session.id, input.account.id, 'codex-app-server', vendorChildKey(input.harness, input.account, input.environment, input.session.workspace),
-    async (child) => { await (child as CodexSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); }).ready;
+  return standbyOf(input, 'codex-app-server', async (child) => { await (child as CodexSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });
 }

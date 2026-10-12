@@ -1,5 +1,5 @@
 /** Durable turn state, completion, and interrupted-turn recovery. */
-import { extractSessionTitle, normalizeSessionTitle } from '../session/title.js';
+import { normalizeSessionTitle, replyWithoutTitle } from '../session/title.js';
 import type { HarnessSession, HarnessState, OpenThought, TurnMark } from '../session/model.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { LiveTurnSubmission } from './live-input.js';
@@ -317,7 +317,7 @@ export async function completeTurnCheckpoint(
     asked?: boolean;
   } = {},
 ): Promise<string> {
-  const answer = sources.asked ? extractSessionTitle(response) : { text: response };
+  const answer = replyWithoutTitle(response, Boolean(sources.asked));
   session.attachments = [];
   session.shellNotes = [];
   await nameSession(session, { ...sources, title: sources.title ?? answer.title });

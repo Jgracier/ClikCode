@@ -8,12 +8,12 @@ import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
 import { localApiKey } from '../gateway/credentials.js';
-import { classifyAccountFailure } from './failover.js';
+import { switchAccountAfterFailure } from './account-switch.js';
+import { unfinishedUsageRecorder } from './turn-steps.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
 import { matchesDirectTurnModel, turnAccounts } from './account-routing.js';
-import { recordInvocation, recordUnfinishedInvocation, turnSink } from './turn-output.js';
+import { recordInvocation, turnSink } from './turn-output.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import type { prepareAttachments } from '../session/attachments.js';
 
@@ -50,13 +50,13 @@ export async function sendDirectApiTurn(input: {
   // generated and billed: counted from the text (about four characters a token).
   let streamedChars = 0;
   let promptChars = 0;
-  const recordUnfinished = (ended: 'stopped' | 'error'): void => {
+  const recordUnfinished = unfinishedUsageRecorder(state, checkpoint, () => {
     const output = Math.ceil(streamedChars / 4);
     const input = Math.ceil(promptChars / 4);
     streamedChars = 0;
-    if (!output) return;
-    if (recordUnfinishedInvocation(state, { sessionId: session.id, accountId: account.id, provider: session.provider ?? account.provider, model, startedAt, usage: { input, output } }, ended)) checkpoint.touch();
-  };
+    if (!output) return undefined;
+    return { sessionId: session.id, accountId: account.id, provider: session.provider ?? account.provider, model, startedAt, usage: { input, output } };
+  });
   try {
   await accounts.start();
   const invoke = (active: AiHarnessAccount) => {
@@ -88,13 +88,7 @@ export async function sendDirectApiTurn(input: {
       if (isTurnCancelled(error) || signal?.aborted) { recordUnfinished('stopped'); throw turnCancelledError(); }
       // This attempt's tokens were spent whether the turn then moves on or ends.
       recordUnfinished('error');
-      const failureKind = classifyAccountFailure(error);
-      const switchAt = Date.now();
-      const to = await accounts.after(error, failureKind, signal);
-      const chooseMs = Date.now() - switchAt;
-      const leftId = account.id;
-      await accounts.switchTo(to, failureKind);
-      lifecycle('worker.switch', { harness: 'direct', from: leftId.slice(0, 8), to: to.id.slice(0, 8), why: failureKind, chooseMs, recordMs: Date.now() - switchAt - chooseMs });
+      await switchAccountAfterFailure({ accounts, from: account, failure: error, signal, harness: 'direct' });
     }
   }
   const invocation = recordInvocation(state, {
