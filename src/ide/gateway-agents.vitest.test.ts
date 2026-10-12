@@ -15,8 +15,8 @@ vi.mock('../gateway/agents.js', () => ({ gatewayAgents: roster }));
 vi.mock('../gateway/models.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../gateway/models.js')>(),
   // Asked afresh on every open: the saved copy must not be what the menu shows.
-  gatewayModels: async () => ({ automatic: 'model-a', models: [{ id: 'model-a', access: 'subscription' }, { id: 'model-b' }] }),
-  savedGatewayModels: async () => ({ automatic: 'stale', models: [{ id: 'stale' }] }),
+  gatewayModels: async () => ({ auto: null, models: [{ id: 'model-a', access: 'subscription' }, { id: 'model-b' }] }),
+  savedGatewayModels: async () => ({ auto: null, models: [{ id: 'stale' }] }),
 }));
 
 const { modelList } = await import('./queries.js');

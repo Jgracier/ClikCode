@@ -140,9 +140,8 @@ async function setAutoTopUp(apiUrl: string, apiKey: string, value: string, fetch
  * first -- what `/model` and `sessions set --model` choose from. */
 export async function aiGatewayModels(config: Conf): Promise<void> {
   const { gatewayModels, gatewayPriceLabel } = await import('../../gateway/models.js');
-  const { automatic, models } = await gatewayModels({ config, fresh: true });
+  const { models } = await gatewayModels({ config, fresh: true });
   emitResult({
-    automatic,
     // The model, its price and what it can do: which provider serves it is the Gateway's decision.
     models: models.map((model) => ({
       id: model.id,

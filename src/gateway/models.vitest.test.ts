@@ -15,7 +15,7 @@ const { chooseGatewayModel } = await import('../commands/ai/sessions.js');
 const WIRE = {
   object: 'list',
   data: [
-    { id: 'auto', object: 'model', created: 0, owned_by: 'clikdeploy', root: 'qwen/qwen3.8-27b', context_length: 131_072 },
+    { id: 'auto', object: 'model', created: 0, owned_by: 'clikdeploy', context_length: 131_072, max_output_tokens: 16_000, capabilities: { vision: true } },
     {
       id: 'gpt-5.6-sol', object: 'model', created: 0, owned_by: 'openai', context_length: 400_000,
       pricing: { prompt: '0.000003', completion: '0.000015', input_per_mtok: 3, output_per_mtok: 15, full_input_per_mtok: 4, full_output_per_mtok: 20, discount_percent: 25 },
@@ -30,7 +30,7 @@ const WIRE = {
 };
 /** ...and the list ClikCode makes of it. */
 const LIST = {
-  automatic: 'qwen/qwen3.8-27b',
+  auto: { contextWindow: 131_072, maxOutput: 16_000, vision: true },
   models: [
     { id: 'gpt-5.6-sol', contextWindow: 400_000, price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 25, charged: { inMTok: 3, outMTok: 15 } } },
     { id: 'qwen/qwen3.8-27b', access: 'free', contextWindow: 131_072 },

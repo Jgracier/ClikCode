@@ -85,7 +85,7 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
       agents: agents.map((agent) => ({ id: agent.id, name: agent.name, detail: `Runs on ClikDeploy${agent.description ? ` · ${agent.description}` : ''}`, current: agent.id === currentAgent })),
       ...(agentsError ? { agentsError } : {}),
       models: [
-        { id: 'auto', label: 'Automatic', detail: `the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}`, current: session?.route === 'gateway' && !current },
+        { id: 'auto', label: 'Automatic', detail: 'the Gateway chooses', current: session?.route === 'gateway' && !current },
         ...list.models.map((model) => ({ id: model.id, label: gatewayModelLabel(model), ...(gatewayModelDetail(model) ? { detail: gatewayModelDetail(model) } : {}), current: model.id === current })),
       ],
     };

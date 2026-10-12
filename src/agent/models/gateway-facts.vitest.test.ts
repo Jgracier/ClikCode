@@ -31,10 +31,17 @@ describe('Gateway turn startup', () => {
 
   it('fetches missing vision facts when an image needs them', async () => {
     catalog.saved.mockResolvedValue(undefined);
-    catalog.fresh.mockResolvedValue({ automatic: 'vision-model', models: [{ id: 'vision-model', vision: true, contextWindow: 100_000 }] });
+    catalog.fresh.mockResolvedValue({ auto: null, models: [{ id: 'vision-model', vision: true, contextWindow: 100_000 }] });
     const client = await modelClientForSession(session(["/tmp/shot.png"]), { get: () => undefined } as never);
     expect(catalog.fresh).toHaveBeenCalledOnce();
     expect(client.acceptsImages).toBe(true);
     expect(client.contextHints?.contextWindow).toBe(100_000);
+  });
+
+  it('runs Automatic under the facts the Gateway lists for auto, never a named model\'s', async () => {
+    catalog.saved.mockResolvedValue({ auto: { contextWindow: 64_000, vision: true }, models: [{ id: 'other', contextWindow: 999_000 }] });
+    const client = await modelClientForSession({ ...session(), model: null } as HarnessSession, { get: () => undefined } as never);
+    expect(client.contextHints?.contextWindow).toBe(64_000);
+    expect(client.acceptsImages).toBe(true);
   });
 });

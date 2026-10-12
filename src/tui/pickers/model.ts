@@ -219,7 +219,7 @@ export function gatewayPickerRows(list: GatewayModelList, agents: readonly Gatew
     ...agentRows,
     { label: currentAgent ? 'Agent default' : 'Automatic', detail: currentAgent
       ? `${current ? '' : '· current '}· use this agent's configured pin or router`
-      : `${current ? '' : '· current '}· the Gateway chooses${list.automatic ? ` (now ${list.automatic})` : ''}`,
+      : `${current ? '' : '· current '}· the Gateway chooses`,
       value: { kind: 'model' as const, id: 'auto' }, group: 'Models' },
     ...list.models.map((model) => {
       const price = gatewayModelDetail(model);
