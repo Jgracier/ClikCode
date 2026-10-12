@@ -72,8 +72,12 @@ export async function runAgentTurn(input: {
   const modelClientForStep = async () => {
     const stored = (await readState({ transcripts: [] })).sessions.find((item) => item.id === session.id);
     if (!stored || isClikCodeAgent(stored)) {
-      if (stored && stored.model !== session.model) {
+      // Model, effort and speed are read back before every model step: a change made while the turn
+      // runs applies to the next call, not to the next turn.
+      if (stored && (stored.model !== session.model || stored.effort !== session.effort || stored.speed !== session.speed)) {
         session.model = stored.model;
+        session.effort = stored.effort;
+        session.speed = stored.speed;
         modelClient = await modelClientForSession(session, config);
         return modelClient;
       }

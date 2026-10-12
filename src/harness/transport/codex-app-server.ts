@@ -30,6 +30,8 @@ export interface CodexAppServerTurnInput extends HarnessTurnObserver {
   model?: string | null;
   effort?: string;
   permissionMode: AiHarnessPermissionMode;
+  /** The mode as it stands when Codex asks to run something: a switch made while the turn runs applies to the next ask. */
+  currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
   images?: readonly string[];
   environment?: Readonly<Record<string, string>>;
   signal?: AbortSignal;
@@ -660,7 +662,9 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       // the background turn, under the permission mode of the last turn.
       const stream: Stream | undefined = turn ?? this.background ?? this.openBackground('vendor-turn');
       if (!stream) return answer(false, true);
-      const permissionMode = turn?.input.permissionMode ?? this.lastPermissionMode;
+      const readLive = turn?.input.currentPermissionMode;
+      const liveMode = readLive ? await readLive().catch(() => undefined) : undefined; // fail-open-ok: the mode the turn started with still stands.
+      const permissionMode = liveMode ?? turn?.input.permissionMode ?? this.lastPermissionMode;
       if (permissionMode === 'bypass') return answer(true);
       // `auto` delegates routine review to Codex's own auto_review reviewer.
       // Whatever still reaches the client is, by construction, something the

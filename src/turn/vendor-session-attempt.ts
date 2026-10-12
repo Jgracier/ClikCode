@@ -1,7 +1,7 @@
 /** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import chalk from 'chalk';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import { cliThreadTransport, type HarnessTurnTransport } from '../harness/transport/select.js';
@@ -20,11 +20,17 @@ import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/laz
 import { swarmIsOn } from '../swarm/policy.js';
 import { swarmAcpMcpServers, swarmCodexConfig } from '../swarm/publish.js';
 import { closePersistentTransport, openStandby, persistentTransportFor, vendorChildKey } from './vendor-process.js';
+import { loadIndex } from '../session/state/index-file.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
 /** Per chat, the unapplied options last said (see the app-server branch). */
 const ignoredOptionsSaid = new Map<string, string>();
+
+/** The conversation's permission mode as the user has it now (/permissions writes the index while a turn runs). */
+async function storedPermissionMode(sessionId: string): Promise<AiHarnessPermissionMode | undefined> {
+  return (await loadIndex())?.sessions.find((item) => item.id === sessionId)?.permissionMode;
+}
 
 export async function runVendorSessionAttempt(input: {
   harness: AiLocalHarnessDefinition;
@@ -194,6 +200,7 @@ function acpLaunchInput(input: {
     extraArgv: [...launch.optionArgv, ...optionArgv],
     ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
     cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
+    currentPermissionMode: () => storedPermissionMode(session.id),
     ...(additionalDirectories.length ? { additionalDirectories } : {}),
     acp: harness.acp,
     // Plan mode as an ACP session mode (catalog acp.planModeId); the
@@ -249,6 +256,7 @@ function codexLaunchInput(input: {
     input: {
       binary: harness.binary, nativeSessionId: session.nativeSessionId,
       cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask', environment,
+      currentPermissionMode: () => storedPermissionMode(session.id),
       ...(Object.keys(configOverrides).length ? { configOverrides } : {}),
       ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
       // Codex reports its own quota on this connection during the turn,

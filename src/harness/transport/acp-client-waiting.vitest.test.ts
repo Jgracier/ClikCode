@@ -78,6 +78,26 @@ describe('the idle watchdog on an ACP prompt', () => {
   });
 });
 
+describe('a permission switch made while an ACP turn runs', () => {
+  const run = async (live?: 'bypass' | 'ask') => {
+    const asked = vi.fn(async () => true);
+    const session = createAcpSession({ idleMs: 2000 });
+    try {
+      await session.runTurn(input([[{ permission: true }, { after: 50, update: chunk('ok') }, { answer: true }]], {
+        onApproval: asked,
+        ...(live ? { currentPermissionMode: async () => live } : {}),
+      }));
+    } finally { await session.close(); }
+    return asked.mock.calls.length;
+  };
+
+  it('applies to the next tool the agent asks about, not only the next turn', async () => {
+    expect(await run()).toBe(1); // started in ask, still ask: the user is asked
+    expect(await run('bypass')).toBe(0); // switched to bypass mid-turn: not asked
+    expect(await run('ask')).toBe(1);
+  });
+});
+
 describe('updates an ACP agent sends between prompts', () => {
   it('lets an Agent tool finish after its parent request runs out of usage', async () => {
     const turns: VendorBackgroundTurn[] = [];

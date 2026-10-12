@@ -72,6 +72,8 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   nativeSessionId?: string;
   environment: Readonly<Record<string, string>>;
   permissionMode: AiHarnessPermissionMode;
+  /** The mode as it stands when the agent asks to run a tool: a switch made while the turn runs applies to the next ask. */
+  currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
   model?: string | null;
   effort?: string | null;
   /** The harness's catalog ACP entry: how model, effort and permission mode
@@ -1482,7 +1484,9 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       const choice = exit.choices.find((candidate) => candidate.name === picked);
       return choice ? optionAnswer(choice.optionId) : cancelled;
     }
-    const plan = acpPermissionPlan(turn?.input.permissionMode ?? 'ask', params);
+    const readLive = turn?.input.currentPermissionMode;
+      const liveMode = readLive ? await readLive().catch(() => undefined) : undefined; // fail-open-ok: the mode the turn started with still stands.
+    const plan = acpPermissionPlan(liveMode ?? turn?.input.permissionMode ?? 'ask', params);
     let accepted = plan.action === 'allow';
     // The call being asked about is open from here, whether or not the agent
     // announced it first: a steer now would cancel it once it runs.

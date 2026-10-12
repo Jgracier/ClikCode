@@ -12,12 +12,13 @@ import type { HarnessSession } from '../session/model.js';
 import { agentTurnFailureKind } from './failover.js';
 
 const gateway = vi.hoisted(() => ({ url: '', key: 'stale', logins: 0 }));
+const modelClients = vi.hoisted(() => [] as string[]);
 vi.mock('../agent/models/for-session.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../agent/models/for-session.js')>();
   return {
     ...actual,
     gatewayConnection: () => ({ baseUrl: gateway.url, apiKey: gateway.key }),
-    modelClientForSession: async (session: HarnessSession) => actual.gatewayModelClient({ baseUrl: gateway.url, apiKey: gateway.key, sessionId: session.id, contextWindow: 32768 }),
+    modelClientForSession: async (session: HarnessSession) => modelClients.push(`${session.effort}/${session.speed}`) && actual.gatewayModelClient({ baseUrl: gateway.url, apiKey: gateway.key, sessionId: session.id, contextWindow: 32768 }),
   };
 });
 vi.mock('../gateway/mcp.js', () => ({ routeMcpServers: () => [] }));
@@ -117,6 +118,56 @@ describe('a Gateway turn refused for the account', () => {
     expect(session.messages?.at(-1)?.content).toBe('answered');
     const memory = readFileSync(new ConversationStore(stateDirectory(), 's1').file, 'utf8');
     expect(memory.split('\n').filter((line) => line.includes('"role":"user"')).length).toBe(1);
+  }, 30_000);
+});
+
+describe('settings changed while a Gateway turn runs', () => {
+  const previousHome = process.env.CLIKCODE_HOME;
+  it('the next model call uses the new effort and speed, not the turn\'s first', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'cc-agent-live-'));
+    process.env.CLIKCODE_HOME = home;
+    const seen: string[] = [];
+    let calls = 0;
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on('end', async () => {
+        calls += 1;
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        if (calls === 1) {
+          // The user changes effort and speed while this first model call is being answered.
+          const state = await readState();
+          const live = state.sessions.find((item) => item.id === 's1')!;
+          live.effort = 'high'; live.speed = 'fast';
+          await writeState(state);
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'list_dir', arguments: JSON.stringify({ path: home }) } }] } }] })}\n\n`);
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
+        } else {
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'done' } }] })}\n\n`);
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`);
+        }
+        res.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    gateway.url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    modelClients.length = 0;
+    try {
+      const state = await readState();
+      state.sessions.push({
+        id: 's1', conversationId: 's1', route: 'gateway', accountId: null, provider: 'gateway', model: null, effort: 'low', speed: 'default',
+        permissionMode: 'bypass', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+        status: 'active', workspace: home, title: 'named', name: 'named', nameSource: 'user',
+      } as HarnessSession);
+      await writeState(state);
+      await runSessionTurn(config, 's1', 'go', undefined, {});
+      expect(modelClients).toEqual(['low/default', 'high/fast']);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve) => server.close(resolve));
+      if (previousHome === undefined) delete process.env.CLIKCODE_HOME;
+      else process.env.CLIKCODE_HOME = previousHome;
+      rmSync(home, { recursive: true, force: true });
+    }
   }, 30_000);
 });
 
