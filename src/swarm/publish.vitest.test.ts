@@ -43,10 +43,10 @@ describe('swarm distribution across hosts', () => {
     expect(swarmRidesTurn(codex)).toBe(true);
     expect(swarmRidesTurn(amp)).toBe(true);
     expect(swarmRidesTurn(pi)).toBe(true);
+    expect(swarmRidesTurn(command)).toBe(true); // speaks ACP
 
     // Needs vendor provisioning because harness has mcp add but no per-turn channel:
     expect(swarmRidesTurn(antigravity)).toBe(false);
-    expect(swarmRidesTurn(command)).toBe(false);
     expect(swarmRidesTurn(openclaw)).toBe(false);
   });
 
