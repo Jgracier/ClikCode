@@ -10,8 +10,6 @@
 import { stripVTControlCharacters } from 'node:util';
 import { searchConversations } from '../../search/engine.js';
 import { searchResultsPayload } from '../../search/navigate.js';
-import { runsOn } from '../../search/format.js';
-import { hindsightPanelText } from './hindsight-panel.js';
 import { shownSummary } from '../../session/conversation-summary.js';
 import { changesPath, fileTurnRows, fileTurnsText, isChangesPath } from './file-changes.js';
 import { clikCodeAgentLabel, isAiHarnessRoute, isClikCodeAgent, isGatewayService, ROUTE_CHOICES_TEXT } from '../../session/route.js';
@@ -242,11 +240,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
       panel: 'history', messages: textTranscript(sessionTranscriptMessages(session)),
       ...(summary ? { summary: { through: summary.through, source: summary.source, text: summary.text } } : {}),
     });
-  },
-  hindsight: async ({ session }) => {
-    const records = await readTurnChanges(stateDirectory(), session.id);
-    const originFallback = runsOn({ provider: session.provider ?? null, model: session.model ?? null, ...(session.nativeHarness ? { harness: session.nativeHarness } : {}) });
-    return emitHarnessOutput({ panel: 'hindsight', text: hindsightPanelText(sessionTranscriptMessages(session), records, { originFallback }) });
   },
   copy: async ({ session }) => {
     const via = await copyToClipboard(lastAnswer(session));

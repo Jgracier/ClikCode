@@ -33,7 +33,6 @@ describe('formatToolRow is the single shape', () => {
     expect(formatToolRow('mcp__clikcode-conversations__search_conversations', 'webhook')).toBe('Search conversation webhook');
     expect(formatToolRow('mcp__clikcode-conversations__read_conversation', 'id=365f1f74')).toBe('Read conversation id=365f1f74');
     expect(formatToolRow('search_conversations', 'webhook')).toBe('Search conversation webhook');
-    expect(formatToolRow('hindsight')).toBe('Hindsight');
     expect(formatToolRow('active_conversations')).toBe('Active conversations');
   });
 

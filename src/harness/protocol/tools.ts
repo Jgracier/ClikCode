@@ -34,7 +34,6 @@ const CONVERSATION_ROWS: Record<string, string> = {
   search_conversations: 'Search conversation',
   read_conversation: 'Read conversation',
   active_conversations: 'Active conversations',
-  hindsight: 'Hindsight',
 };
 
 function conversationRow(name: string): string | undefined {

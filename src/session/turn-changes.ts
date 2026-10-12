@@ -1,7 +1,7 @@
 /** One record per turn that ran, kept on disk per conversation, so /redo
  * puts back the edits of the conversation's actual turns from any window --
  * the turn ran in a worker or a script, /redo runs wherever it is typed --
- * and /changes, /hindsight and `/changes <path>` can say what each turn edited.
+ * and /changes and `/changes <path>` can say what each turn edited.
  *
  * Every turn is recorded where every turn path goes through (the turn
  * journal, turn/turn-journal.ts), a turn with no edits too: otherwise an undo

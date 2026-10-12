@@ -300,7 +300,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 46 commands. Ten are pinned
+Pressing `/` opens a searchable list of ClikCode's 45 commands. Ten are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, start over, change what needs your
 approval, then settings, sessions, status and help. (The terminal leaves
@@ -330,7 +330,6 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
 | `/compact [focus]` | summarize the conversation and continue in a fresh native session (a vendor tool; ClikCode's own agent compacts by itself) |
 | `/history` | show this conversation; a summary carried for its opening turns comes first |
-| `/hindsight` | this conversation cut into topics, newest first, with the files each one changed, numbered by your prompts — the numbers `/fork @N` and `/redo @N` take |
 | `/copy` | copy the last answer |
 | `/export [path]` | write the transcript as markdown |
 | `/changes [N\|path]` | each turn's file edits, newest first; `N` shows that turn's diff. With a path, every turn in any conversation that edited that file, newest first: pick one and its conversation opens at that turn (↑↓ to the others) |
@@ -341,7 +340,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | `/exit` (also `/quit`) | save and leave |
 
 Every turn's file changes are recorded for the whole conversation, so
-`/changes`, `/hindsight` and `/redo` reach back to its first turn. The record
+`/changes` and `/redo` reach back to its first turn. The record
 of an old turn keeps its files and line counts, but once a conversation's log
 passes 2 MiB the oldest turns' diff text is dropped; such a turn is listed,
 not reversed.
