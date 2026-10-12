@@ -7,10 +7,13 @@
 
 import { writeSync } from 'node:fs';
 import { stdin as input, stdout as output } from 'node:process';
-import { FOCUS_REPORTING_OFF, POP_TITLE, progressSequence } from './terminal-signals.js';
+import { FOCUS_REPORTING_OFF, POP_TITLE, PUSH_TITLE, progressSequence } from './terminal-signals.js';
 
 /** An in-place build reload inherits the current terminal screen and title. */
 export const REEXEC_TERMINAL_ENV = 'CLIKCODE_KEEP_TERMINAL_ON_REEXEC';
+
+/** Take the alternate screen and clear it. */
+export const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
 
 export const terminalModes: {
   bracketedPaste: boolean;
@@ -34,6 +37,30 @@ export const terminalModes: {
   bracketedPaste: false, kittyKeyboard: false, wheelReporting: false, alternateScreen: false, rawMode: false, painted: false, uiStarted: false,
   titlePushed: false, progress: false,
 };
+
+/** Take the alternate screen if this UI is not on it already. */
+export function enterAlternateScreen(): void {
+  if (terminalModes.alternateScreen) return;
+  output.write(ENTER_ALTERNATE_SCREEN);
+  terminalModes.alternateScreen = true;
+}
+
+/** Save the shell's title, once per taking of the terminal; whether this call
+ * was the one that saved it. */
+export function pushShellTitle(): boolean {
+  if (!output.isTTY || terminalModes.titlePushed) return false;
+  output.write(PUSH_TITLE);
+  terminalModes.titlePushed = true;
+  return true;
+}
+
+/** The terminal handed back on a normal close: the read modes off, the
+ * alternate screen left, the title and progress given back. */
+export function giveBackTerminal(readModesOff: string): void {
+  output.write(`${readModesOff}` + terminalTeardown(terminalModes.alternateScreen) + signalsTeardown());
+  terminalModes.alternateScreen = false;
+  terminalModes.painted = false;
+}
 
 /** The title and progress indicator handed back: progress cleared, the
  * shell's title popped. Only what was set; the record is cleared, so a
