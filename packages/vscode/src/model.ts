@@ -53,6 +53,7 @@ export function providerDisplayName(model: ChatModel, known?: ReadonlyArray<{ id
   if (current) return current.name;
   const listed = known?.find((item) => item.id === model.providerId)?.name;
   if (listed) return listed;
+  if (model.providerName) return model.providerName;
   const harness = model.harness;
   return harness ? harness.replace(/(^|[-_ ])(\w)/g, (_match, space: string, letter: string) => `${space ? ' ' : ''}${letter.toUpperCase()}`) : undefined;
 }
@@ -117,9 +118,9 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
         revision: typeof event.revision === 'number' ? event.revision : 1,
       };
     case 'session':
-      return applySession(model, event.session, event.account, event.modelLabel);
+      return applySession(model, event.session, event.account, event.modelLabel, { id: event.providerId, name: event.providerName });
     case 'worker':
-      return applyWorkerEvent(model, event.sessionId, event.event);
+      return applyWorkerEvent(model, event.sessionId, event.event, event.level);
     case 'turn-start':
       if (model.sessionId && event.sessionId !== model.sessionId) return model;
       return { ...model, running: true, ownTurn: true, pendingPrompt: event.prompt, queued: model.queued.filter((item) => item.id !== event.queuedTurnId) };
@@ -140,7 +141,7 @@ export function applyEvent(model: ChatModel, event: IdeEvent): ChatModel {
     case 'panel':
       return withNote(model, { kind: 'panel', title: stripAnsi(event.title), text: stripAnsi(event.body) });
     case 'output': {
-      const shown = formatOutput(event.payload);
+      const shown = formatOutput(event.payload, event.formatted);
       if (shown.kind === 'panel') return withNote(model, { kind: 'panel', title: shown.title, text: shown.body });
       if (shown.kind === 'notice') return withNote(model, { kind: 'notice', level: shown.level, text: shown.text });
       return model;

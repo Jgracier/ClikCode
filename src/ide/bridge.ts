@@ -13,6 +13,7 @@
  */
 import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
+import { stripVTControlCharacters } from 'node:util';
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -45,7 +46,8 @@ import { slashControls, slashHelpText, slashPalette, TERMINAL_ONLY_COMMANDS } fr
 import { lastAnswer } from '../tui/slash/handlers.js';
 import { conversationCost } from '../tui/slash/usage-report.js';
 import { browseSearch, walkTurns, type MentionScreen } from '../tui/slash/search-browse.js';
-import { emitHarnessOutput } from '../harness/output.js';
+import { emitHarnessOutput, panelParts, renderPanelText } from '../harness/output.js';
+import { noticeLevel } from './notice-level.js';
 import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
 import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
 import { withArgValues } from '../tui/slash/arg-values.js';
@@ -436,7 +438,7 @@ export class IdeBridge {
   }
 
   private onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {
-    this.channel.send({ type: 'worker', sessionId, event });
+    this.channel.send({ type: 'worker', sessionId, event, ...(event.type === 'note' || event.type === 'notice' ? { level: noticeLevel(event.message) } : {}) });
     switch (event.type) {
       case 'waiting-start':
         this.workerTurnRunning = true;
@@ -937,7 +939,11 @@ export function captureStdout(channel: IdeChannel, stream: NodeJS.WriteStream = 
       buffer = buffer.slice(newline + 1);
       let payload: unknown;
       try { payload = JSON.parse(line); } catch { payload = undefined; }
-      if (payload && typeof payload === 'object' && !Array.isArray(payload)) channel.send({ type: 'output', payload: payload as Record<string, unknown> });
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const record = payload as Record<string, unknown>;
+        const text = renderPanelText(record);
+        channel.send({ type: 'output', payload: record, ...(text === undefined ? {} : { formatted: panelParts(stripVTControlCharacters(text)) }) });
+      }
       else if (line.trim()) log(line);
     }
     const done = typeof encoding === 'function' ? encoding : callback;
