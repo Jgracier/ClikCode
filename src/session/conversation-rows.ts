@@ -12,7 +12,6 @@
  * What a row says it is doing is conversation-state.ts.
  */
 
-import { hostname } from 'node:os';
 import type { HarnessSession } from './model.js';
 import { sessionActivity, type WorkerLiveness } from './liveness.js';
 import type { ConversationSection } from './conversation-state.js';
@@ -62,13 +61,14 @@ export interface ConversationRow {
 export interface ConversationRowFacts {
   /** Which sessions have a worker process (liveWorkerSessions). */
   workerIsLive?: WorkerLiveness;
+  /** Which sessions another client has open without a worker (liveWorkers). */
+  isOpen?: WorkerLiveness;
   /** Which live workers have an approval waiting (liveWorkers). */
   awaitingYou?: WorkerLiveness;
   /** Transcript turns of live-worker sessions (livePendingTurns). */
   pending?: ReadonlyMap<string, PendingTurn>;
   currentId?: string;
   now?: number;
-  host?: string;
 }
 
 const timestamp = (value: string): number => {
@@ -101,7 +101,6 @@ export function groupByConversation(sessions: readonly HarnessSession[]): Map<st
  * chats count as conversations at all (blank ones) is the caller's filter. */
 export function conversationRows(sessions: readonly HarnessSession[], facts: ConversationRowFacts = {}): ConversationRow[] {
   const now = facts.now ?? Date.now();
-  const host = facts.host ?? hostname();
   const workerIsLive = facts.workerIsLive ?? (() => false);
   const rows: ConversationRow[] = [];
   for (const [root, chats] of groupByConversation(sessions)) {
@@ -116,12 +115,12 @@ export function conversationRows(sessions: readonly HarnessSession[], facts: Con
     let pending: PendingTurn | undefined;
     for (const session of chats) {
       const turn = facts.pending?.get(session.id);
-      const doing = sessionActivity(session, workerIsLive, now, host, turn);
+      const doing = sessionActivity(session, workerIsLive, turn, facts.isOpen);
       if (doing === 'working' && turn) { activity = 'working'; pending = turn; break; }
       if (doing) activity = doing;
     }
-    // The chat open here is active by definition; a claim only says whether
-    // someone ELSE holds it, so it would not show up by liveness alone.
+    // The chat open here is active by definition; a presence record only says whether
+    // someone ELSE shows it, so it would not show up by liveness alone.
     if (!activity && current) activity = 'idle';
     const needsYou = Boolean(facts.awaitingYou && chats.some((session) => facts.awaitingYou!(session.id)));
     const section: ConversationSection = activity === 'working' ? 'working' : recencySection(updatedAtMs, now);

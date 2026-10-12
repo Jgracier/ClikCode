@@ -4,7 +4,7 @@
  * Deleting a chat used to remove its row and transcript only. The agent
  * loop's own history (sessions/<id>/harness.jsonl), its file checkpoints for
  * /undo (checkpoints/<id>), the turn-change log (turn-changes/<id>.json) and
- * the claim stayed behind: 176 of 178 harness histories and 135 of 136
+ * the turn-change log stayed behind: 176 of 178 harness histories and 135 of 136
  * checkpoint directories on one machine belonged to chats long gone. */
 
 import { readdir, rm, stat } from 'node:fs/promises';
@@ -12,8 +12,7 @@ import { join } from 'node:path';
 import { safeRecordFileName, sessionsDirectory, stateDirectory } from './paths.js';
 
 /** The names each store gives a session id -- the same rules those stores
- * use (agent/conversation.ts, agent/file-checkpoints.ts, session/turn-changes.ts,
- * session/claims.ts), restated so this file reaches every one without
+ * use (agent/conversation.ts, agent/file-checkpoints.ts, session/turn-changes.ts), restated so this file reaches every one without
  * depending on any. */
 function artifactPaths(id: string): string[] {
   const root = stateDirectory();
@@ -22,7 +21,6 @@ function artifactPaths(id: string): string[] {
   const paths = [
     join(root, 'turn-changes', `${record}.json`),
     join(root, 'turn-changes', `${record}.json.lock`),
-    join(root, 'claims', `${record}.json`),
     join(sessionsDirectory(), `${record}.lock`),
     join(sessionsDirectory(), `${record}.resume-in.lock`),
     // Normally removed with the transcript; one a build that predates it
@@ -61,7 +59,7 @@ export async function sessionIdsWithArtifacts(): Promise<Set<string>> {
 export async function removeStrandedFiles(olderThanMs: number, now = Date.now()): Promise<number> {
   const root = stateDirectory();
   let removed = 0;
-  for (const directory of [root, sessionsDirectory(), join(root, 'claims'), join(root, 'turn-changes'), join(root, 'cache')]) {
+  for (const directory of [root, sessionsDirectory(), join(root, 'turn-changes'), join(root, 'cache')]) {
     for (const name of await readdir(directory).catch(() => [] as string[])) {
       const legacyLock = directory === sessionsDirectory() && /^[^.]+\.lock$/.test(name);
       if (!/\.(tmp|new)$/.test(name) && !legacyLock) continue;

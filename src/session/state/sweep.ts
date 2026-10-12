@@ -2,19 +2,16 @@
  *
  * Deleting a chat removes everything it had (writeState ->
  * forgetSessionArtifacts). This pass is for what older builds, crashes and
- * other processes left: artifacts of chats that no longer exist, claims of
- * dead processes, temporaries a crash stranded, stored empty chats, and the
+ * other processes left: artifacts of chats that no longer exist, temporaries a crash stranded, stored empty chats, and the
  * journals of turns whose process died long ago. Bounded and best-effort:
  * nothing depends on it running, and a failure only means the next one
  * tries again. */
 
-import { stat, utimes, writeFile } from 'node:fs/promises';
+import { rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { blankChatSweepable } from '../blank.js';
-import { sessionClaimIsLive } from '../claim.js';
-import { pruneSessionClaims } from '../claims.js';
 import { sessionFromIndex } from '../list-facts.js';
-import { liveWorkerSessions } from '../liveness.js';
+import { liveWorkers } from '../liveness.js';
 import type { HarnessSession } from '../model.js';
 import { ensurePrivateDirectory } from '../store/files.js';
 import { forgetSessionArtifacts, removeStrandedFiles, sessionIdsWithArtifacts } from '../store/forget.js';
@@ -33,12 +30,12 @@ const STALE_TURN_MS = 24 * HOUR_MS;
 /** At most this many orphans are removed per pass. */
 const MAX_ORPHANS = 500;
 
-export interface SweepReport { orphans: number; claims: number; stranded: number; blank: number; settled: number }
+export interface SweepReport { orphans: number; stranded: number; blank: number; settled: number }
 
 /** A turn journal nothing is running, old enough that no one is waiting on it. */
-function staleTurn(session: HarnessSession, workerIsLive: (id: string) => boolean, now: number): boolean {
+function staleTurn(session: HarnessSession, workerIsLive: (id: string) => boolean, isOpen: (id: string) => boolean, now: number): boolean {
   const pending = session.pendingTurn;
-  if (!pending || session.resumeAt || workerIsLive(session.id) || sessionClaimIsLive(session, now)) return false;
+  if (!pending || session.resumeAt || workerIsLive(session.id) || isOpen(session.id)) return false;
   return now - (Date.parse(pending.updatedAt ?? pending.startedAt) || 0) > STALE_TURN_MS;
 }
 
@@ -48,19 +45,19 @@ async function oldEnough(path: string, now: number): Promise<boolean> {
 }
 
 export async function sweepState(now = Date.now()): Promise<SweepReport> {
-  const report: SweepReport = { orphans: 0, claims: 0, stranded: 0, blank: 0, settled: 0 };
+  const report: SweepReport = { orphans: 0, stranded: 0, blank: 0, settled: 0 };
   report.stranded = await removeStrandedFiles(HOUR_MS, now);
 
   const state = await readState();
-  const workerIsLive = await liveWorkerSessions();
+  const { isLive: workerIsLive, isOpen } = await liveWorkers();
   let changed = false;
   // Empty chats left on disk (with or without a transcript file), under the
   // same rule as every other blank sweep: never one something may be using.
-  const kept = state.sessions.filter((session) => !sessionFromIndex(session) || !blankChatSweepable(session, workerIsLive, now));
+  const kept = state.sessions.filter((session) => !sessionFromIndex(session) || !blankChatSweepable(session, workerIsLive, now, isOpen));
   report.blank = state.sessions.length - kept.length;
   if (report.blank) { state.sessions = kept; changed = true; }
   for (const session of state.sessions) {
-    if (!staleTurn(session, workerIsLive, now)) continue;
+    if (!staleTurn(session, workerIsLive, isOpen, now)) continue;
     session.messages = sessionTranscriptMessages(session);
     delete session.pendingTurn;
     report.settled += 1;
@@ -68,8 +65,8 @@ export async function sweepState(now = Date.now()): Promise<SweepReport> {
   }
   if (changed) await writeState(state);
 
-  const known = new Set(state.sessions.map((session) => session.id));
-  report.claims = await pruneSessionClaims(known).catch(() => 0);
+  // Presence records of builds that kept them as claims/<id>.json: nothing reads them.
+  await rm(join(stateDirectory(), 'claims'), { recursive: true, force: true }).catch(() => undefined);
   // Every name a live chat's artifacts can have (the stores encode ids).
   const names = new Set(state.sessions.flatMap((session) => [session.id, safeRecordFileName(session.id), session.id.replace(/[^A-Za-z0-9._-]/g, '_')]));
   const root = stateDirectory();

@@ -43,7 +43,6 @@ import { TERMINAL } from '../../tui/active-terminal.js';
 import { emitHarnessOutput } from '../../harness/output.js';
 import { TerminalHarnessPrompter } from '../../tui/prompter.js';
 import { terminalUiSupported } from '../../tui/capabilities.js';
-import { SESSION_CLAIM_TTL_MS } from '../../session/claim.js';
 import { activateSession, afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, releaseConversationClaim, resolveSessionModel } from '../../session/attach.js';
 import { slashPalette } from '../../tui/slash/registry.js';
 import { runningActivityLabel, sessionTranscriptMessages } from '../../turn/checkpoint.js';
@@ -211,7 +210,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   }
   // Any number of shells can have this same chat open; the shared worker
   // (worker/turn-bridge.ts) is what actually serializes turns, steering into
-  // one already running rather than racing it. The claim below is informational
+  // one already running rather than racing it. The presence record below is informational
   // bookkeeping only -- which shell most recently opened this chat -- never a
   // lock that keeps another shell from typing.
   if (activateSession(session)) await writeState(state);
@@ -250,12 +249,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     }).catch(() => { /* Usage is optional provider metadata. */ });
   };
   refreshUsage(session, state);
-  // The claim's heartbeat: this terminal holds the conversation while it is
-  // open; a killed one stops renewing and frees it (session/claims.ts).
-  const claimInterval = setInterval(() => {
-    void claimConversation(id).catch(() => undefined);
-  }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
-  claimInterval.unref();
   // This process's own build, fingerprinted once at startup the same way a
   // session worker's is (registry.ts). The terminal cannot hot-swap the code
   // it has loaded. When a newer build is on disk, this process re-execs onto
@@ -269,7 +262,6 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
   /** Let go on both ways out: leaving, and handing over to a newer build. */
   const releaseWindow = async (): Promise<void> => {
     if (usageInterval) clearInterval(usageInterval);
-    clearInterval(claimInterval);
     await closeAllWorkerClients().catch(() => undefined);
     await closePersistentTransport().catch(() => undefined);
     // Nothing it showed keeps a local model up, even if this process lives
@@ -777,7 +769,7 @@ async function aiSessionInteractiveInner(config: Conf, id: string): Promise<void
     await releaseWindow();
     // Hand the conversation back so the next terminal can resume it, and do
     // not store one closed without ever being started. Best effort: a failed
-    // release only means the claim expires on its own TTL.
+    // release only means the record goes stale on its own.
     await leaveConversation(id);
     if (TERMINAL.active === terminal) TERMINAL.active = undefined;
     rl.close();

@@ -202,7 +202,7 @@ export async function interactiveSessionPicker(
   // that ClikCode simply never routed a turn through yet.
   // A conversation another terminal is driving right now used to be dropped
   // from this list outright, on the theory that both terminals would then
-  // render and steer the same chat. In practice a claim's heartbeat only
+  // render and steer the same chat. In practice a presence record's refresh only
   // proves its process is still running, not that anyone is still watching
   // it -- ai.ts ignores SIGHUP for the whole session lifetime so a flaky SSH
   // connection survives it, which means a dropped connection (closing the
@@ -210,7 +210,7 @@ export async function interactiveSessionPicker(
   // heartbeating forever. That silently hid the conversation from every
   // future /resume, indistinguishable from data loss. It is listed and
   // annotated instead below; selecting it takes it over the same way opening
-  // any session already does (claimSession is unconditional).
+  // any session already does (claimConversation is unconditional).
   const sessions = state.sessions
     // On the board the composer is how a chat starts, so the empty one this
     // window just opened is not listed: on a phone that has just connected it
@@ -229,7 +229,7 @@ export async function interactiveSessionPicker(
   // the same rows the editor's history menu draws).
   let rows: ConversationRow[] = [];
   const fillActivity = (): void => {
-    rows = conversationRows(sessions, { workerIsLive, awaitingYou: workers.awaitingYou, pending: pendingById, currentId });
+    rows = conversationRows(sessions, { workerIsLive, isOpen: workers.isOpen, awaitingYou: workers.awaitingYou, pending: pendingById, currentId });
   };
   fillActivity();
 
