@@ -28,6 +28,41 @@ import { stateDirectory } from '../session/store/paths.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 
+/** The account and model as the user has them now, before each model step.
+ * Leaving this agent route hands the conversation to that account without
+ * ending it. A client that cannot be rebuilt keeps the previous one: a bad
+ * setting reaches the user as a notice, not as a thrown turn. */
+export function stepClientRefresher(input: {
+  session: HarnessSession; config: Conf; agentModel: string | undefined;
+  current: () => Awaited<ReturnType<typeof modelClientForSession>>;
+  adopt: (client: Awaited<ReturnType<typeof modelClientForSession>>) => void;
+  notice: (message: string) => void;
+}) {
+  const { session, config } = input;
+  return async () => {
+    const stored = (await readState({ transcripts: [] })).sessions.find((item) => item.id === session.id);
+    if (stored && !isClikCodeAgent(stored)) return 'switch' as const;
+    // Model, effort and speed are read back before every model step: a change made while the turn
+    // runs applies to the next call, not to the next turn.
+    if (!stored || (stored.model === session.model && stored.effort === session.effort && stored.speed === session.speed)) return undefined;
+    const before = { model: session.model, effort: session.effort, speed: session.speed };
+    session.model = stored.model;
+    session.effort = stored.effort;
+    session.speed = stored.speed;
+    try {
+      // The same effective session the turn started with: the agent's own
+      // model, unless the conversation chose one.
+      const next = await modelClientForSession(input.agentModel && !session.model ? { ...session, model: input.agentModel } : session, config);
+      input.adopt(next);
+      return next;
+    } catch (error) {
+      Object.assign(session, before);
+      input.notice(`Could not apply the new model settings; this turn continues with the previous ones: ${error instanceof Error ? error.message : String(error)}`);
+      return input.current();
+    }
+  };
+}
+
 /** A turn on a route that runs ClikCode's own agent: the Gateway, or
  * ClikCode Local. */
 export async function runAgentTurn(input: {
@@ -61,7 +96,7 @@ export async function runAgentTurn(input: {
   // terminal, on stderr headless. In a worker the terminal already brought
   // it up, so this is a silent join.
   const localHooks = session.route === 'clikcode-local' ? localModelTurnHooks(session.id) : undefined;
-  let modelClient;
+  let modelClient: Awaited<ReturnType<typeof modelClientForSession>>;
   // The agent's own model, unless the conversation chose one.
   const modelSession = agent?.model && !session.model ? { ...session, model: agent.model } : session;
   try { modelClient = await modelClientForSession(modelSession, config, localHooks); }
@@ -69,22 +104,10 @@ export async function runAgentTurn(input: {
   /** The account and model as the user has them now, before each model
    * step. Leaving this agent route hands the conversation to that account
    * without ending it. */
-  const modelClientForStep = async () => {
-    const stored = (await readState({ transcripts: [] })).sessions.find((item) => item.id === session.id);
-    if (!stored || isClikCodeAgent(stored)) {
-      // Model, effort and speed are read back before every model step: a change made while the turn
-      // runs applies to the next call, not to the next turn.
-      if (stored && (stored.model !== session.model || stored.effort !== session.effort || stored.speed !== session.speed)) {
-        session.model = stored.model;
-        session.effort = stored.effort;
-        session.speed = stored.speed;
-        modelClient = await modelClientForSession(session, config);
-        return modelClient;
-      }
-      return undefined;
-    }
-    return 'switch' as const;
-  };
+  const modelClientForStep = stepClientRefresher({
+    session, config, agentModel: agent?.model ?? undefined,
+    current: () => modelClient, adopt: (next) => { modelClient = next; }, notice: (message) => prompter?.activity(chalk.yellow(message)),
+  });
   const agentServer = agent ? agentMcpServer(config, agent) : undefined;
   const startedAt = Date.now();
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
