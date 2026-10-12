@@ -470,6 +470,10 @@ export function withNote(model: ChatModel, note: Omit<Note, 'after'>): ChatModel
 
 export function applySession(model: ChatModel, session: HarnessSession, account?: string, label?: IdeModelLabel): ChatModel {
   if (model.sessionId && model.sessionId !== session.id) model = freshFor(model);
+  // An empty chat that moves to another provider starts clean: what was said about the last one (a
+  // cancelled sign-in) is not about this one, and would otherwise keep the welcome off the page.
+  else if (model.sessionId === session.id && model.providerId !== undefined && model.providerId !== providerIdOf(session)
+    && !model.messages.length && !model.running && !model.pendingPrompt && model.notes.length) model = { ...model, notes: [] };
   const pending = session.pendingTurn;
   return {
     ...model,

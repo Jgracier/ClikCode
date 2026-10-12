@@ -72,7 +72,7 @@ import { exportTranscript } from './export-transcript.js';
 import { nativeManagerListing } from './native-manager.js';
 import { initPrompt, readMemoryFile, reviewPrompt } from './memory.js';
 import { addSessionDirectory, changeSessionWorkspace, workspaceDiff } from './workspace.js';
-import { isShellCommandLine, runShellCommand, shellMessageContent, type ShellNote } from '../../commands/ai/shell-run.js';
+import { isShellCommandLine, runShellCommand, SHELL_HEADLESS_TIMEOUT_MS, shellMessageContent, type ShellNote } from '../../commands/ai/shell-run.js';
 import { clearQuotaMark } from '../../harness/accounts/usage-reading.js';
 import { GATEWAY_DEFAULT_EFFORT, GATEWAY_EFFORTS } from '../../gateway/options.js';
 import { cliThreadTransport } from '../../harness/transport/select.js';
@@ -736,9 +736,9 @@ async function resolveLocalModelFor(
  * and a shell note (so a resumed native-harness thread, which never replays
  * ClikCode's transcript, still does; see shellContextBlock in
  * turn/session-turn.ts). `signal` kills the command's process tree. */
-export async function runShellLine(id: string, command: string, signal?: AbortSignal): Promise<ShellNote> {
+export async function runShellLine(id: string, command: string, signal?: AbortSignal, options: { timeoutMs?: number } = {}): Promise<ShellNote> {
   const workspace = (await readState({ transcripts: [] })).sessions.find((item) => item.id === id)?.workspace ?? process.cwd();
-  const result = await runShellCommand(command, workspace, signal);
+  const result = await runShellCommand(command, workspace, signal, options);
   const note: ShellNote = { command, output: result.output, exitCode: result.exitCode, at: new Date().toISOString() };
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
@@ -764,7 +764,7 @@ export async function aiSessionCommand(id: string, input: string, options: { inf
   if (isShellCommandLine(text)) {
     const command = text.slice(1).trim();
     if (!command) throw new Error('Type `!<command>` to run it, e.g. `!git status`.');
-    const note = await runShellLine(id, command, options.signal);
+    const note = await runShellLine(id, command, options.signal, { timeoutMs: SHELL_HEADLESS_TIMEOUT_MS });
     emitHarnessOutput({ panel: 'shell', text: shellMessageContent(note) });
     return id;
   }
