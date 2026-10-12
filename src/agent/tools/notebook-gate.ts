@@ -81,6 +81,7 @@ function mentionsNotebook(item: ConversationItem): boolean {
     case 'text': case 'summary': return NOTEBOOK_MENTION.test(item.text);
     case 'tool_call': return NOTEBOOK_MENTION.test(JSON.stringify(item.args));
     case 'tool_result': return NOTEBOOK_MENTION.test(item.output);
+    case 'reasoning': return false;
   }
 }
 

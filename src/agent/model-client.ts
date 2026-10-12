@@ -36,7 +36,19 @@ export type ConversationItem =
   /** `images` are what the tool showed the model (read_file on a picture);
    * `output` still describes them in words for a client that cannot see. */
   | { type: 'tool_result'; id: string; name: string; output: string; isError?: boolean; images?: readonly ImageInput[] }
-  | { type: 'summary'; text: string };
+  | { type: 'summary'; text: string }
+  /** A reasoning block the model produced, with the vendor's signature (or redacted form). Sent back
+   * on the next step, and only to the model that produced it (`model`): a signature is valid for its vendor alone. */
+  | ({ type: 'reasoning' } & ReasoningBlock);
+
+/** A finished reasoning block that can be sent back: only blocks carrying a signature or redacted data are kept. */
+export interface ReasoningBlock {
+  text: string;
+  signature?: string;
+  redactedData?: string;
+  /** The model the request named when it produced this block. */
+  model: string;
+}
 
 export interface ToolSpec {
   name: string;
@@ -88,6 +100,8 @@ export interface ModelStepResult {
   usage: TokenUsage;
   servedModel?: string;
   contextWindow?: number;
+  /** Reasoning blocks of this step with their signatures, to be kept in the conversation. */
+  reasoning?: ReasoningBlock[];
 }
 
 export interface ModelClient {

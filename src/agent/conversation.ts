@@ -50,6 +50,7 @@ function isItem(value: unknown): value is ConversationItem {
     case 'tool_call': return typeof item.id === 'string' && typeof item.name === 'string' && !!item.args && typeof item.args === 'object';
     case 'tool_result': return typeof item.id === 'string' && typeof item.name === 'string' && typeof item.output === 'string';
     case 'summary': return typeof item.text === 'string';
+    case 'reasoning': return typeof item.text === 'string' && typeof item.model === 'string' && (typeof item.signature === 'string' || typeof item.redactedData === 'string');
     default: return false;
   }
 }

@@ -628,7 +628,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
         ? { ...call, argumentsError: `the reply reached the output limit while these arguments were being written, so they are incomplete. Make the call again with less in it, for example a large file written in several smaller edits` }
         : call);
       settleUnrun(new Set(calls.map((call) => call.id)), 'not run');
-      const produced: ConversationItem[] = [];
+      const produced: ConversationItem[] = (step.reasoning ?? []).map((block): ConversationItem => ({ type: 'reasoning', ...block }));
       if (stepText.trim()) {
         produced.push({ type: 'text', role: 'assistant', text: stepText });
         if (continuesCutAnswer && segments.length) segments[segments.length - 1] = `${segments[segments.length - 1]}${stepText}`.trim();
