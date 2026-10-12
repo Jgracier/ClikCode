@@ -18,7 +18,7 @@ describe('the composer has room to breathe', () => {
    * and the rule above the composer sitting on the answer's last line.
    */
   it('opens the resting composer with a clear row', async () => {
-    const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../prompter/paint/footer.ts', import.meta.url), 'utf8');
     const footer = source.slice(source.indexOf('const footer: string[] = [];'));
     const firstPush = footer.slice(0, footer.indexOf('footer.push(...noticeShown'));
     expect(firstPush, 'the footer must open with a blank row').toContain("footer.push('')");
@@ -28,14 +28,14 @@ describe('the composer has room to breathe', () => {
     // Every gap was one row -- between messages and between the paragraphs
     // inside them alike -- so a new question read as one more paragraph of
     // the answer above it. Reported four times as "no buffer".
-    const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../prompter/paint/transcript.ts', import.meta.url), 'utf8');
     expect(source).toContain("if (message.role === 'user' && index > 0) emit([''])");
   });
 
   it('does not add that row while a turn is generating', async () => {
     // The generating band already carries a blank, budgeted into the height.
     // A second one there doubles the gap and pushes an answer row off screen.
-    const source = await readFile(new URL('../prompter.ts', import.meta.url), 'utf8');
+    const source = await readFile(new URL('../prompter/paint/footer.ts', import.meta.url), 'utf8');
     expect(source).toContain("if (!this.turn) footer.push('')");
   });
 });

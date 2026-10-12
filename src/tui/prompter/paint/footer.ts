@@ -19,19 +19,19 @@ export type FooterInput = {
 };
 
 /** The footer's rows and where the composer starts in them. */
-export function buildFooter(p: TerminalHarnessPrompter, input: FooterInput): { footer: string[]; composerStart: number } {
+export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): { footer: string[]; composerStart: number } {
   const { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands } = input;
   const {
     noticeShown, noticeRows, waitingRows, paletteRows: paletteCapacity, indicatorRows, indicatorText, approvalRows,
     thoughtRows, signInRows, planRows, panelRows, composerRows,
   } = bands;
-  const meta = p.statusText(inner);
+  const meta = this.statusText(inner);
   const footer: string[] = [];
   // The resting composer starts with a clear row, or its rule sits directly
   // on the last line of the answer. While a turn runs the generating band
   // already carries its own blank, budgeted into the height -- adding a
   // second one there would double the gap and push an answer row off.
-  if (!p.turn) footer.push('');
+  if (!this.turn) footer.push('');
   footer.push(...noticeShown.slice(0, noticeRows).map((row) => `  ${chalk.yellow(row)}`));
   if (paletteCapacity) {
     footer.push(...paletteBandRows(options as readonly PaletteEntry[], selected, paletteCapacity, width, {
@@ -44,8 +44,8 @@ export function buildFooter(p: TerminalHarnessPrompter, input: FooterInput): { f
   footer.push(...approvalRows, ...midRows);
   // The generating band: a blank above the status where the height has the
   // row for it. The status itself is always drawn while a turn runs.
-  const statusBlank = waitingRows >= 2 && p.turn ? '' : undefined;
-  const statusRow = p.turn ? `  ${visibleSlice(p.waitingLine(p.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
+  const statusBlank = waitingRows >= 2 && this.turn ? '' : undefined;
+  const statusRow = this.turn ? `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
   if (statusBlank !== undefined) footer.push(statusBlank);
   if (statusRow !== undefined) footer.push(statusRow);
   // Background terminals the vendor runs: one dim row under the status,
@@ -56,7 +56,7 @@ export function buildFooter(p: TerminalHarnessPrompter, input: FooterInput): { f
   // Usage lives on the upper composer border, mirroring the title on the
   // lower border. A spent window replaces the percentage with the reset
   // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
-  const usageRule = paintUsageRule(rowWidth, composerUsageLabel(p.usageLabel, p.usageResetLabel));
+  const usageRule = paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel));
   footer.push(usageRule);
   let composerStart = footer.length;
   const composerFooter: string[] = [];
