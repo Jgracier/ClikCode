@@ -97,6 +97,19 @@ const BARE_TAG = /^(?:latest|free|beta|nightly|\d[\w.]*)$/i;
 export function modelLabel(model: string, ...owners: ReadonlyArray<string | null | undefined>): string;
 export function modelLabel(model: string | null | undefined, ...owners: ReadonlyArray<string | null | undefined>): string | undefined;
 export function modelLabel(model: string | null | undefined, ...owners: ReadonlyArray<string | null | undefined>): string | undefined {
+  const label = ownerlessLabel(model, owners);
+  return label ? withoutFreeTag(label) : label;
+}
+
+/** A model name as people read it: a vendor's "free" tag (`mimo-v2.5-free`,
+ * `model:free`, `model (free)`) says how it is billed upstream, not which
+ * model it is. Display only: the id sent to the vendor is never altered. */
+export function withoutFreeTag(name: string): string {
+  const bare = name.replace(/(?:[-:_]free|\s*\(free\))$/i, '');
+  return bare || name;
+}
+
+function ownerlessLabel(model: string | null | undefined, owners: ReadonlyArray<string | null | undefined>): string | undefined {
   if (!model) return model ?? undefined;
   const match = /^([^\s/:]+)([/:])(.+)$/.exec(model);
   if (!match) return model;

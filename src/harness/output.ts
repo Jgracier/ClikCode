@@ -35,8 +35,8 @@ export function sessionModelLabel(session: HarnessSession, model: string | null 
     const agent = session.gatewayAgentName ?? 'Agent';
     return model ? `${agent} · ${model}` : agent;
   }
-  // Automatic names the model the Gateway picked once one has answered.
-  if (session.route === 'gateway') return model && !session.model ? `Automatic · ${model}` : model ?? undefined;
+  // Automatic is "Automatic" everywhere: which model the Gateway routed to is its business, and it does not say.
+  if (session.route === 'gateway') return session.model ? model ?? session.model : 'Automatic';
   return nativeModelLabel(session.nativeHarness, model);
 }
 

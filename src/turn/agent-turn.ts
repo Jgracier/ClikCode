@@ -173,6 +173,8 @@ export async function runAgentTurn(input: {
           prompter?.render(session);
         },
         onServedModel: (served) => {
+          // Automatic stays Automatic: a Gateway that names its pick is not echoed back onto the chat.
+          if (!session.model && !session.gatewayAgentId) return;
           session.reported = { ...session.reported, at: new Date().toISOString(), model: served };
           checkpoint.touch();
           prompter?.render(session);

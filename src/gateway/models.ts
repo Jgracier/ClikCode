@@ -9,6 +9,7 @@ import Conf from 'conf';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { withoutFreeTag } from '../harness/model-label.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { gatewayConnection } from '../agent/models/for-session.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
@@ -39,7 +40,8 @@ const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
 
 /** A model as a row names it: `claude-opus-5-5 (subscription)` where the Gateway says which tier serves it. */
 export function gatewayModelLabel(model: GatewayModel): string {
-  return model.access ? `${model.id} (${model.access})` : model.id;
+  const name = withoutFreeTag(model.id);
+  return model.access ? `${name} (${model.access})` : name;
 }
 
 export interface GatewayModelPrice {
@@ -48,9 +50,13 @@ export interface GatewayModelPrice {
   charged: { inMTok: number; outMTok: number };
 }
 
+/** What the Gateway says about Automatic itself. Never which model it picks:
+ * the Gateway does not say, and the client must not show or lean on it. */
+export interface GatewayAutoFacts { contextWindow?: number; maxOutput?: number; vision?: boolean }
+
 export interface GatewayModelList {
-  /** What the Gateway picks when nothing is chosen. */
-  automatic: string | null;
+  /** The facts the Gateway lists for `auto`; null from a Gateway that lists none. */
+  auto: GatewayAutoFacts | null;
   models: GatewayModel[];
   /** The super admin's subscription switch (subscriptions.ts), as the list was asked for. Absent for
    * everyone else: its presence is what shows the switch. */
@@ -179,9 +185,9 @@ export async function gatewayModels(
 export const GATEWAY_AUTO_MODEL = 'auto';
 
 /** OpenAI's model list, as the Gateway sends it, to the list ClikCode shows:
- * `auto` names the automatic pick (its `root`) rather than being a row. */
+ * `auto` is not a row: it supplies the facts Automatic runs under. */
 export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList {
-  let automatic: string | null = null;
+  let auto: GatewayAutoFacts | null = null;
   const models: GatewayModel[] = [];
   for (const raw of data) {
     if (!raw || typeof raw !== 'object') continue;
@@ -193,7 +199,13 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
     // Embedding models share the list; a conversation cannot run on one.
     if (entry.type === 'embedding') continue;
     if (entry.id === GATEWAY_AUTO_MODEL) {
-      if (typeof entry.root === 'string' && entry.root) automatic = entry.root;
+      const contextWindow = typeof entry.context_length === 'number' && entry.context_length > 0 ? entry.context_length : undefined;
+      const maxOutput = typeof entry.max_output_tokens === 'number' && entry.max_output_tokens > 0 ? entry.max_output_tokens : undefined;
+      auto = {
+        ...(contextWindow ? { contextWindow } : {}),
+        ...(maxOutput ? { maxOutput } : {}),
+        ...(entry.capabilities?.vision === true ? { vision: true } : {}),
+      };
       continue;
     }
     const pricing = entry.pricing;
@@ -218,7 +230,7 @@ export function fromOpenAIModelList(data: readonly unknown[]): GatewayModelList 
         : {}),
     });
   }
-  return { automatic, models };
+  return { auto, models };
 }
 
 /** Test seam. */

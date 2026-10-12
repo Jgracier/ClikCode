@@ -350,12 +350,12 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
     // provider -- subscription, then free, then paid -- and never another model.
     if (isGatewayService(session)) {
       if (!value) {
-        const { models, automatic } = await gatewayModels();
+        const { models } = await gatewayModels();
         return emitHarnessOutput({
           panel: 'models',
           // The model and its price only: which provider serves it is the Gateway's decision.
           models: models.map((model) => ({ model: model.id, label: gatewayModelLabel(model), price: gatewayModelDetail(model) })),
-          selected: session.model ?? automatic,
+          selected: session.model ?? 'Automatic',
         });
       }
       session.model = trusted && !isAutomaticModelWord(value) ? value : await chooseGatewayModel(value);

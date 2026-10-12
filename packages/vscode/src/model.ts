@@ -482,7 +482,8 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     title: session.name,
     harness: session.route === 'gateway' ? 'ClikDeploy Gateway' : session.route === 'clikcode-local' ? 'ClikCode Local' : session.nativeHarness,
     providerId: providerIdOf(session),
-    model: session.reported?.model ?? session.model ?? undefined,
+    // Automatic reads as the Gateway's own `auto`, never as a model it routed to.
+    model: session.route === 'gateway' && !session.model && !session.gatewayAgentId ? 'auto' : session.reported?.model ?? session.model ?? undefined,
     account,
     agentId: session.route === 'gateway' ? session.gatewayAgentId : undefined,
     effort: session.route === 'gateway' ? undefined : session.effort || undefined,

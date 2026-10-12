@@ -5,7 +5,7 @@ vi.mock('../../gateway/credentials.js', () => ({
   getApiUrl: () => 'https://gateway.example',
   getApiKeyForUrl: () => 'test-key',
 }));
-vi.mock('../../gateway/models.js', () => ({ gatewayModels: async () => ({ automatic: 'gpt', models: [{ id: 'gpt' }] }) }));
+vi.mock('../../gateway/models.js', () => ({ gatewayModels: async () => ({ auto: null, models: [{ id: 'gpt' }] }) }));
 
 const { modelClientForSession } = await import('./for-session.js');
 
