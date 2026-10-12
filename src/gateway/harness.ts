@@ -120,6 +120,7 @@ export async function runGatewayHarnessSessionTurn(
     // Plan mode (Settings): research only until the user approves a plan.
     planMode: session.planMode === true,
     ...(input.onPlanModeExit ? { onPlanModeExit: input.onPlanModeExit } : {}),
+    ...(input.onPlanModeEnter ? { onPlanModeEnter: input.onPlanModeEnter } : {}),
     // /permissions writes the index from the user's terminal while this turn
     // runs in the worker: read the mode back before each tool call so a switch
     // (ask -> bypass) applies to the rest of this turn.

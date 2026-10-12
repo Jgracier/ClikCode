@@ -166,6 +166,12 @@ export async function runAgentTurn(input: {
           checkpoint.touch();
           prompter?.render(session);
         },
+        // The agent asked to plan and the user agreed: the chat stays in plan mode.
+        onPlanModeEnter: () => {
+          session.planMode = true;
+          checkpoint.touch();
+          prompter?.render(session);
+        },
         onServedModel: (served) => {
           session.reported = { ...session.reported, at: new Date().toISOString(), model: served };
           checkpoint.touch();
