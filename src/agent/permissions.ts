@@ -13,7 +13,9 @@ import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { updateJsonFile } from '../session/store/json-file.js';
 
 type PermissionVerdict = 'allow' | 'ask' | 'deny';
-interface PermissionDecision { decision: PermissionVerdict; reason: string }
+/** `invalidArguments`: the call named no usable path (empty, or with a NUL byte). That is a mistake in the call, not a
+ * refusal: the model is told to correct it and try again, not that it may not. */
+export interface PermissionDecision { decision: PermissionVerdict; reason: string; invalidArguments?: true }
 
 interface PermissionRule { tool: string; specifier?: string; raw: string }
 /** `deny` beats everything but a hard deny's own refusal (it holds in bypass
@@ -166,7 +168,7 @@ function decide(request: PermissionRequest): PermissionDecision {
   const { tool, args, mode, planMode, scope } = request;
   let resolved: ResolvedPath[];
   try { resolved = (tool.paths?.(args) ?? []).map((entry) => resolvePath(entry, scope)); } catch (error) {
-    return { decision: 'deny', reason: error instanceof Error ? error.message : 'invalid path' };
+    return { decision: 'deny', reason: error instanceof Error ? error.message : 'invalid path', invalidArguments: true };
   }
 
   // 1. Hard denies hold in every mode, bypass included.

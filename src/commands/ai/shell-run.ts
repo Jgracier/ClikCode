@@ -28,11 +28,13 @@ export interface ShellRunResult {
   timedOut: boolean;
 }
 
-/** Output is capped to something a prompt can hold; the rest is noted, not
- * dropped from the terminal -- the scrollback the command just wrote is still
- * there, and the note names the fact that the context was truncated. */
+/** What of a command's output goes into the conversation: the first and last half of this many
+ * characters, with a count of what was left out between. The END of the output is the part that
+ * matters (the failing test, the build's last error), so it is always kept. */
 export const SHELL_OUTPUT_MAX_BYTES = 8000;
-const SHELL_TIMEOUT_MS = 120_000;
+/** The bound on a command with nobody to press Esc (a piped or argv `!` call). The interactive
+ * composer sets none: the command is the user's own and Esc stops it. */
+export const SHELL_HEADLESS_TIMEOUT_MS = 30 * 60_000;
 export const SHELL_KILL_GRACE_MS = 1500;
 
 export function shellInvocation(command: string): { file: string; args: string[] } {
@@ -40,25 +42,43 @@ export function shellInvocation(command: string): { file: string; args: string[]
   return { file: existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', args: ['-c', command] };
 }
 
-/** Head and tail of an over-long output, with an honest count in between. */
-function cappedOutput(text: string): string {
-  const bytes = Buffer.byteLength(text);
-  if (bytes <= SHELL_OUTPUT_MAX_BYTES) return text;
-  const half = Math.floor(SHELL_OUTPUT_MAX_BYTES / 2);
-  return `${text.slice(0, half)}\n\n… [${bytes - half * 2} bytes of output truncated; the full output is in your terminal scrollback] …\n\n${text.slice(-half)}`.trimEnd();
+/** The first half and the rolling last half of a command's output, so memory stays bounded however
+ * much it prints and the end is never the part that is lost. */
+class OutputWindow {
+  private head = '';
+  private tail = '';
+  private total = 0;
+  private readonly half = Math.floor(SHELL_OUTPUT_MAX_BYTES / 2);
+
+  push(chunk: string): void {
+    this.total += chunk.length;
+    let rest = chunk;
+    if (this.head.length < this.half) {
+      const room = this.half - this.head.length;
+      this.head += rest.slice(0, room);
+      rest = rest.slice(room);
+    }
+    if (rest) this.tail = (this.tail + rest).slice(-this.half);
+  }
+
+  text(): string {
+    const omitted = this.total - this.head.length - this.tail.length;
+    if (omitted <= 0) return `${this.head}${this.tail}`.replace(/\s+$/, '');
+    return `${this.head}\n\n… [${omitted} characters of output omitted from the middle; narrow the command (| tail, | grep) to see them] …\n\n${this.tail}`.trimEnd();
+  }
 }
 
 /** Run a command with the caller's own environment in the given workspace,
- * killing the whole process group on timeout or cancel. Cancellation via
+ * killing the whole process group on cancel, or on `options.timeoutMs` when a caller sets one. Cancellation via
  * `signal` (the composer's Escape) stops the tree, so a `!sleep 999` cannot
  * outlive the keystroke that dismissed it. */
-export function runShellCommand(command: string, cwd: string, signal?: AbortSignal): Promise<ShellRunResult> {
+export function runShellCommand(command: string, cwd: string, signal?: AbortSignal, options: { timeoutMs?: number } = {}): Promise<ShellRunResult> {
   const detached = process.platform !== 'win32';
   const { file, args } = shellInvocation(command);
   return new Promise((resolve) => {
     const child = spawnPortable(file, args, { cwd, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'], detached, windowsHide: true });
-    let combined = '';
-    const onData = (chunk: string): void => { if (Buffer.byteLength(combined, 'utf8') < SHELL_OUTPUT_MAX_BYTES * 2) combined += chunk; };
+    const window = new OutputWindow();
+    const onData = (chunk: string): void => window.push(chunk);
     let timedOut = false;
     const killTree = (): void => {
       killProcessTreePortable(child, 'SIGTERM', detached);
@@ -71,13 +91,13 @@ export function runShellCommand(command: string, cwd: string, signal?: AbortSign
       timer.unref();
       child.once('close', () => clearTimeout(timer));
     };
-    const timer = setTimeout(() => { timedOut = true; killTree(); }, SHELL_TIMEOUT_MS);
+    const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => { timedOut = true; killTree(); }, options.timeoutMs);
     const abort = (): void => killTree();
     if (signal) signal.addEventListener('abort', abort, { once: true });
     child.stdout!.setEncoding('utf8').on('data', onData);
     child.stderr!.setEncoding('utf8').on('data', onData);
     const cleanup = (): void => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       if (signal) signal.removeEventListener('abort', abort);
     };
     child.once('error', (error) => {
@@ -86,7 +106,7 @@ export function runShellCommand(command: string, cwd: string, signal?: AbortSign
     });
     child.once('close', (code) => {
       cleanup();
-      resolve({ command, output: cappedOutput(combined.replace(/\s+$/, '')), exitCode: code, timedOut });
+      resolve({ command, output: window.text(), exitCode: code, timedOut });
     });
   });
 }

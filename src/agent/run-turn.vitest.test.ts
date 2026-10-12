@@ -198,6 +198,20 @@ describe('runGatewayHarnessTurn', () => {
     expect(done?.durationMs).toBeGreaterThanOrEqual(0);
   });
 
+  it('tells the model an empty path is a mistake in the call to correct, not a permission it lacks', async () => {
+    const h = harness([{ toolCalls: [{ name: 'read_file', args: { path: '' } }] }, { text: 'ok' }]);
+    await runGatewayHarnessTurn(h.input);
+    const result = h.client.requests[1].items.at(-1);
+    const output = result?.type === 'tool_result' ? result.output : '';
+    expect(output).toMatch(/^Invalid arguments: A non-empty path is required\. Correct the call and try again\./);
+    expect(output).not.toMatch(/Permission denied|Do not retry/);
+    // A real refusal still says so.
+    const denied = harness([{ toolCalls: [{ name: 'read_file', args: { path: '~/.ssh/id_rsa' } }] }, { text: 'ok' }]);
+    await runGatewayHarnessTurn(denied.input);
+    const refused = denied.client.requests[1].items.at(-1);
+    expect(refused?.type === 'tool_result' && refused.output).toMatch(/^Permission denied/);
+  });
+
   it('is not cut off by a step count: a long run of distinct work finishes on its own', async () => {
     const h = harness([], {}, (_request, index) => index < 89
       ? { toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `walk${index}` }] }
@@ -745,7 +759,12 @@ describe('runGatewayHarnessTurn', () => {
     const driven = async <T,>(work: Promise<T>): Promise<T> => {
       let settled = false;
       void work.then(() => { settled = true; }, () => { settled = true; });
-      for (let guard = 0; !settled && guard < 2000; guard++) await vi.advanceTimersByTimeAsync(1000);
+      // Time moves only when the turn is actually waiting on a timer; otherwise real file I/O gets the turn.
+      // Advancing blindly outran that I/O on a busy machine.
+      for (let guard = 0; !settled && guard < 500_000; guard++) {
+        if (vi.getTimerCount() > 0) await vi.advanceTimersByTimeAsync(1000);
+        else await new Promise<void>((resolve) => setImmediate(resolve));
+      }
       return work;
     };
     beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); vi.spyOn(Math, 'random').mockReturnValue(0.5); });

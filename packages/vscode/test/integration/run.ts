@@ -6,10 +6,11 @@
  * The suite talks to a real ClikCode: the build at ../../dist/index.js (or
  * CLIKCODE_TEST_ENTRY), with CLIKCODE_HOME in a temporary directory so the
  * user's own chats are never touched. The vendor CLIs it drives get
- * temporary XDG data and state directories too: OpenCode keeps its chats
- * there, and every run otherwise left two in the user's own list. The free
- * model the suite uses needs no sign-in, so nothing from the real home is
- * needed.
+ * temporary XDG data, state, config and cache directories too: OpenCode keeps its chats in
+ * the data directory, and every run otherwise left two in the user's own list; its config
+ * directory held the user's own provider credentials, which made the free model answer
+ * "Invalid credential". The free model the suite uses needs no sign-in, so nothing from the
+ * real home is needed.
  *
  * CLIKCODE_IT_SUITE=screens runs the screenshot tour instead (README and
  * walkthrough images), in CLIKCODE_IT_THEME (dark|light|hc|hc-light), with demo accounts
@@ -77,7 +78,7 @@ async function main(): Promise<void> {
     ...(existsSync(local) ? { vscodeExecutablePath: local } : {}),
     extensionDevelopmentPath,
     extensionTestsPath,
-    extensionTestsEnv: { CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_OPENED: join(root, 'opened'), CLIKCODE_IT_HOLD: join(root, 'hold-login'), CLIKCODE_IT_FAKE_BIN: fakeBin, FAKE_LOGIN_HOLD: process.env.FAKE_LOGIN_HOLD ?? '', CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
+    extensionTestsEnv: { CLIKCODE_IT_VENDOR: process.env.CLIKCODE_IT_VENDOR ?? '', CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), XDG_CONFIG_HOME: join(root, 'vendor-config'), XDG_CACHE_HOME: join(root, 'vendor-cache'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_OPENED: join(root, 'opened'), CLIKCODE_IT_HOLD: join(root, 'hold-login'), CLIKCODE_IT_FAKE_BIN: fakeBin, FAKE_LOGIN_HOLD: process.env.FAKE_LOGIN_HOLD ?? '', CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
     launchArgs: [
       workspace,
       '--user-data-dir', join(root, 'user-data'),

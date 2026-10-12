@@ -397,7 +397,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     });
 
     const verdict = decidePermission({ tool, args: call.args, mode: await permissionModeNow(), rules: turnRules.current, planMode: session.plan.active, scope, hasApprover: !!input.onApproval });
-    if (verdict.decision === 'deny') return finish({ output: `Permission denied: ${verdict.reason}. Do not retry this call; choose another approach or tell the user what you need.`, isError: true });
+    if (verdict.decision === 'deny') {
+      if (verdict.invalidArguments) return finish({ output: `Invalid arguments: ${verdict.reason}. Correct the call and try again.`, isError: true });
+      return finish({ output: `Permission denied: ${verdict.reason}. Do not retry this call; choose another approach or tell the user what you need.`, isError: true });
+    }
     if (verdict.decision === 'ask') {
       // The rule this call could be answered with once and for all, e.g.
       // `Bash(npm test:*)`. Absent where no honest rule can be formed -- a

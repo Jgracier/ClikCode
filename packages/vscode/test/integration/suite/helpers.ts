@@ -5,10 +5,31 @@ import * as vscode from 'vscode';
 import type { ClikCodeApi } from '../../../src/extension';
 import type { ChatModel } from '../../../src/model';
 
+/** The vendor turned a finished turn away. A free model that answers "Invalid credential" now and
+ * then (reproduced with the vendor's own CLI, outside ClikCode) says nothing about the extension. */
+export class VendorRefused extends Error {}
+
+const refusalNotes = (model: ChatModel) => model.notes.filter((note) => note.level === 'error' && /upstream request failed|invalid credential/i.test(note.text));
+
+/** Watches for a refusal that arrives AFTER this call: one a finished earlier turn left in the notes
+ * is not this turn's. Take it before the message is sent. */
+export function vendorRefusalSince(model: ChatModel): (model: ChatModel) => string | undefined {
+  const before = refusalNotes(model).length;
+  return (now) => {
+    if (now.running) return undefined;
+    const notes = refusalNotes(now);
+    return notes.length > before ? notes[notes.length - 1]!.text : undefined;
+  };
+}
+
 export function until(
   source: { state: ChatModel; onDidChange: vscode.Event<ChatModel> }, test: (model: ChatModel) => boolean, what: string, timeoutMs = 60_000,
+  /** A reason to stop waiting at once, in place of the timeout. */
+  giveUp?: (model: ChatModel) => string | undefined,
 ): Promise<ChatModel> {
   if (test(source.state)) return Promise.resolve(source.state);
+  const early = giveUp?.(source.state);
+  if (early) return Promise.reject(new VendorRefused(early));
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       listener.dispose();
@@ -18,7 +39,11 @@ export function until(
       reject(new Error(`timed out waiting for ${what}; turn: ${turn}; state: ${JSON.stringify({ ...source.state, messages: source.state.messages.slice(-3), notes: source.state.notes.slice(-3).map((note) => ({ ...note, text: note.text.slice(0, 200) })) }).slice(0, 2500)}`));
     }, timeoutMs);
     const listener = source.onDidChange((model) => {
-      if (!test(model)) return;
+      if (!test(model)) {
+        const reason = giveUp?.(model);
+        if (reason) { clearTimeout(timer); listener.dispose(); reject(new VendorRefused(reason)); }
+        return;
+      }
       clearTimeout(timer);
       listener.dispose();
       resolve(model);
