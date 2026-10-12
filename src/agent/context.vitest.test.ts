@@ -142,4 +142,26 @@ describe('instruction files', () => {
     expect(prompt.indexOf('PROJECT-AGENTS')).toBeLessThan(prompt.indexOf('MY-LOCAL'));
     await fs.rm(w.root, { recursive: true, force: true });
   });
+
+  it('says which instruction files were left out once the budget is spent, and names no file that does not exist', async () => {
+    const w = await workspace();
+    // The user's own file alone spends the whole 32 KB budget; the project's files come after it.
+    await fs.writeFile(path.join(w.home, '.claude', 'CLAUDE.md'), `${'rule of the house\n'.repeat(3000)}`);
+    await fs.writeFile(path.join(w.cwd, 'AGENTS.md'), 'PROJECT-AGENTS-BODY');
+    await fs.writeFile(path.join(w.cwd, 'CLAUDE.local.md'), 'LOCAL-BODY');
+    const prompt = await w.prompt();
+    expect(prompt).toContain('[truncated]');
+    expect(prompt).not.toContain('PROJECT-AGENTS-BODY');
+    expect(prompt).toMatch(/2 more instruction files were not loaded because the 32 KB instruction budget is used up: .*AGENTS\.md.*CLAUDE\.local\.md/);
+    // CLAUDE.md and .claude/CLAUDE.md do not exist here: they are not reported.
+    expect(prompt.match(/not loaded because[^\n]*/)?.[0]).not.toMatch(/\.claude\/CLAUDE\.md|[^.]CLAUDE\.md/);
+    await fs.rm(w.root, { recursive: true, force: true });
+  });
+
+  it('says nothing about omissions when everything fits', async () => {
+    const w = await workspace();
+    await fs.writeFile(path.join(w.cwd, 'AGENTS.md'), 'SMALL');
+    expect(await w.prompt()).not.toMatch(/not loaded because/);
+    await fs.rm(w.root, { recursive: true, force: true });
+  });
 });

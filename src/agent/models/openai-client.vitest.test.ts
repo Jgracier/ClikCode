@@ -301,11 +301,31 @@ describe('a request fitted to the server', () => {
 
   it('trims tools and schemas and cuts the system prompt instead of being refused', () => {
     const tool = (name: string, description = 'd') => ({ name, description, parameters: { type: 'object', properties: { a: { type: 'string', description } } } });
-    const fitted = fitToLimits('s'.repeat(100), [tool('a'), tool('big', 'x'.repeat(500)), tool('c'), tool('d')], { tools: 3, schemaBytes: 200, systemBytes: 80 });
+    const fitted = fitToLimits('s'.repeat(400), [tool('a'), tool('big', 'x'.repeat(500)), tool('c'), tool('d')], { tools: 3, schemaBytes: 200, systemBytes: 300 });
     expect(fitted.tools.map((entry) => entry.name)).toEqual(['a', 'big', 'c']);
     expect(fitted.tools[1]!.parameters).toEqual({ type: 'object', properties: { a: { type: 'string' } } });
-    expect(Buffer.byteLength(fitted.system)).toBeLessThanOrEqual(80);
+    expect(Buffer.byteLength(fitted.system)).toBeLessThanOrEqual(300);
     expect(fitted.system).toMatch(/cut to fit/);
+    // What was left out is said, inside the system limit: a tool the model was promised is not silently gone.
+    expect(fitted.system).toMatch(/1 tool was not offered.*: d\.\]$/s);
+  });
+
+  it('says nothing about tools when every one fits', () => {
+    const fitted = fitToLimits('system', [{ name: 'a', description: 'd', parameters: { type: 'object', properties: {} } }], { tools: 3, systemBytes: 1000 });
+    expect(fitted.system).toBe('system');
+  });
+
+  it('asks the loop to compact a conversation with more ITEMS than one request may carry, though it has fewer messages', async () => {
+    // One assistant message carrying three calls is one chat message and four items.
+    const items: ConversationItem[] = [
+      { type: 'text', role: 'user', text: 'go' },
+      { type: 'text', role: 'assistant', text: 'working' },
+      ...[1, 2, 3].map((n): ConversationItem => ({ type: 'tool_call', id: `c${n}`, name: 'read_file', args: {} })),
+      ...[1, 2, 3].map((n): ConversationItem => ({ type: 'tool_result', id: `c${n}`, name: 'read_file', output: 'ok' })),
+    ];
+    const error = await new OpenAIModelClient({ baseUrl, model: 'm', limits: { messages: 100, items: 6 } }).step(request(items)).catch((caught: unknown) => caught);
+    expect(error).toMatchObject({ code: 'CONTEXT_TOO_LARGE' });
+    expect(received).toHaveLength(0);
   });
 
   it('asks the loop to compact a conversation with more messages than one request may carry', async () => {

@@ -2,10 +2,11 @@ import { changed } from './line-diff.test-support.js';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { ConversationStore } from './conversation.js';
-import { runGatewayHarnessTurn } from './run-turn.js';
+import { retryDelaySeconds, runGatewayHarnessTurn, stepRecovery } from './run-turn.js';
+import { MAX_REQUEST_ITEMS } from './context.js';
 import { disposeSessionState, formatShellNotifications, sessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import { type GatewayHarnessTurnInput } from './model-client.js';
@@ -197,15 +198,15 @@ describe('runGatewayHarnessTurn', () => {
     expect(done?.durationMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('stops at maxSteps', async () => {
-    const h = harness([], { maxSteps: 3 }, (_request, index) => ({ toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `loop${index}` }] }));
+  it('is not cut off by a step count: a long run of distinct work finishes on its own', async () => {
+    const h = harness([], {}, (_request, index) => index < 89
+      ? { toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `walk${index}` }] }
+      : { text: 'All ninety steps done.' });
     const result = await runGatewayHarnessTurn(h.input);
-    expect(result.steps).toBe(3);
-    expect(result.stopReason).toBe('max-steps');
-    expect(result.text).toMatch(/Stopped after 3 steps/);
+    expect(result).toMatchObject({ steps: 90, stopReason: 'completed', text: 'All ninety steps done.' });
   });
 
-  it('detects no progress: tells the model after 3 identical failures, then stops', async () => {
+  it('detects no progress: tells the model after 3 identical failures with nothing changed, then stops', async () => {
     const failing = { name: 'read_file', args: { path: 'missing.txt' } };
     const h = harness([{ toolCalls: [failing] }, { toolCalls: [failing] }, { toolCalls: [failing] }, { text: 'I cannot find missing.txt.', toolCalls: [failing] }]);
     const result = await runGatewayHarnessTurn(h.input);
@@ -216,9 +217,35 @@ describe('runGatewayHarnessTurn', () => {
     expect(last.tools.length).toBeGreaterThan(0);
     expect(last.toolChoice).toBe('none');
     const notice = last.items[last.items.length - 1];
-    expect(notice.type === 'text' && notice.text).toMatch(/failed 3 times with identical arguments/);
+    expect(notice.type === 'text' && notice.text).toMatch(/failed 3 times in a row with identical arguments and nothing changed/);
     // The tool call the model tried to sneak into the final reply never ran.
     expect(h.events.filter((event) => event.kind === 'tool-start')).toHaveLength(3);
+  });
+
+  it('is not a stall when work happened between the failures: edit, rerun, edit, rerun is the normal loop', async () => {
+    const failing = { name: 'read_file', args: { path: 'out.txt' } };
+    const write = (n: number) => ({ name: 'write_file', args: { path: `fix${n}.txt`, content: `${n}\n` } });
+    const h = harness([
+      { toolCalls: [failing] }, { toolCalls: [failing] }, { toolCalls: [write(1)] },
+      { toolCalls: [failing] }, { toolCalls: [failing] }, { toolCalls: [write(2)] },
+      { toolCalls: [failing] }, { text: 'Done after three rounds.' },
+    ]);
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result).toMatchObject({ stopReason: 'completed', text: 'Done after three rounds.' });
+    expect(h.events.filter((event) => event.kind === 'tool-start')).toHaveLength(7);
+    expect(h.client.requests.every((request) => request.toolChoice !== 'none')).toBe(true);
+  });
+
+  it('a successful read forgets only its own failures', async () => {
+    await fs.writeFile(path.join(cwd, 'ok.txt'), 'fine\n');
+    const missing = { name: 'read_file', args: { path: 'missing.txt' } };
+    const present = { name: 'read_file', args: { path: 'ok.txt' } };
+    const h = harness([
+      { toolCalls: [missing] }, { toolCalls: [present] }, { toolCalls: [missing] }, { toolCalls: [present] }, { toolCalls: [missing] },
+      { text: 'Still failing.', toolCalls: [missing] },
+    ]);
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result).toMatchObject({ stopReason: 'no-progress' });
   });
 
   it('abort mid-tool kills the whole process group and throws ERR_TURN_CANCELLED', async () => {
@@ -647,6 +674,41 @@ describe('runGatewayHarnessTurn', () => {
     expect(h.client.requests).toHaveLength(1);
   });
 
+  describe('a long conversation of small items', () => {
+    // Tokens are nowhere near the window; only the entry count is. Eliding old results shortens
+    // items without removing them, so the Gateway's bound on a request's item count is reached by
+    // item count alone unless the loop summarizes on it.
+    const seed = async (h: Harness, count: number) => {
+      const store = path.join(stateDir, 'sessions', h.input.sessionId);
+      await fs.mkdir(store, { recursive: true });
+      const lines = Array.from({ length: count }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
+      await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
+    };
+
+    it(`is summarized once it passes ${MAX_REQUEST_ITEMS} items, so no request nears the Gateway's bound`, async () => {
+      const phases: string[] = [];
+      const h = harness([], { onPhase: (phase) => phases.push(phase) }, (request) => (request.tools.length === 0 ? { text: 'SUMMARY of the long history' } : { text: 'answered' }));
+      Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
+      await seed(h, MAX_REQUEST_ITEMS + 100);
+      const result = await runGatewayHarnessTurn(h.input);
+      expect(result.stopReason).toBe('completed');
+      expect(phases).toContain('compacting context');
+      const real = h.client.requests.find((request) => request.tools.length > 0)!;
+      expect(real.items.length).toBeLessThan(50);
+      expect(real.items.some((item) => item.type === 'summary')).toBe(true);
+    });
+
+    it('is left alone below that count', async () => {
+      const phases: string[] = [];
+      const h = harness([{ text: 'answered' }], { onPhase: (phase) => phases.push(phase) });
+      Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
+      await seed(h, MAX_REQUEST_ITEMS - 100);
+      await runGatewayHarnessTurn(h.input);
+      expect(phases).not.toContain('compacting context');
+      expect(h.client.requests).toHaveLength(1);
+    });
+  });
+
   it('compacts when the reported context passes 80% of the window', async () => {
     await fs.writeFile(path.join(cwd, 'big.txt'), `${'line of filler text\n'.repeat(400)}`);
     const phases: string[] = [];
@@ -678,20 +740,66 @@ describe('runGatewayHarnessTurn', () => {
   describe('a model step that fails before saying anything', () => {
     const gatewayError = (code: string, extra: Record<string, unknown> = {}) => Object.assign(new Error(`gateway: ${code}`), { code, kind: 'other', retryAfter: 0, ...extra });
 
-    it('is sent again on a transient failure, and the turn completes', async () => {
+    // The backoff runs on the real timers in production; here the clock is driven and the jitter fixed
+    // (0.5 is the middle of it), so each wait is exactly the backoff's step.
+    const driven = async <T,>(work: Promise<T>): Promise<T> => {
+      let settled = false;
+      void work.then(() => { settled = true; }, () => { settled = true; });
+      for (let guard = 0; !settled && guard < 2000; guard++) await vi.advanceTimersByTimeAsync(1000);
+      return work;
+    };
+    beforeEach(() => { vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }); vi.spyOn(Math, 'random').mockReturnValue(0.5); });
+    afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+    it('is sent again on a transient failure, with a growing wait, and the turn completes', async () => {
       const phases: string[] = [];
       const h = harness([{ error: gatewayError('MODEL_ERROR') }, { error: gatewayError('incomplete_stream') }, { text: 'PONG' }], { onPhase: (phase) => phases.push(phase) });
-      const result = await runGatewayHarnessTurn(h.input);
+      const result = await driven(runGatewayHarnessTurn(h.input));
       expect(result).toMatchObject({ text: 'PONG', stopReason: 'completed' });
       expect(h.client.requests).toHaveLength(3);
-      expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 0s', 'retrying in 0s']);
+      expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 1s', 'retrying in 2s']);
     });
 
-    it('gives up after two retries and reports the failure', async () => {
-      const h = harness([], {}, { error: gatewayError('MODEL_RATE_LIMITED') });
-      const result = await runGatewayHarnessTurn(h.input);
+    it('keeps retrying for the whole patience budget, then reports the failure', async () => {
+      const phases: string[] = [];
+      const h = harness([], { onPhase: (phase) => phases.push(phase) }, { error: gatewayError('MODEL_RATE_LIMITED') });
+      const result = await driven(runGatewayHarnessTurn(h.input));
       expect(result).toMatchObject({ isError: true, stopReason: 'model-error', text: 'gateway: MODEL_RATE_LIMITED' });
-      expect(h.client.requests).toHaveLength(3);
+      const waits = phases.filter((phase) => phase.startsWith('retrying')).map((phase) => Number(/in (\d+)s/.exec(phase)?.[1]));
+      expect(waits.slice(0, 7)).toEqual([1, 2, 4, 8, 16, 30, 30]);
+      expect(waits.reduce((sum, wait) => sum + wait, 0)).toBeLessThanOrEqual(300);
+      expect(h.client.requests).toHaveLength(waits.length + 1);
+    });
+
+    it('honours a longer Retry-After than the backoff, and never a shorter one than the backoff', async () => {
+      const phases: string[] = [];
+      const h = harness([{ error: gatewayError('MODEL_ERROR', { retryAfter: 20 }) }, { error: gatewayError('MODEL_ERROR', { retryAfter: 0 }) }, { text: 'ok' }], { onPhase: (phase) => phases.push(phase) });
+      await driven(runGatewayHarnessTurn(h.input));
+      expect(phases.filter((phase) => phase.startsWith('retrying'))).toEqual(['retrying in 20s', 'retrying in 2s']);
+    });
+
+    it('stops waiting the moment the turn is cancelled', async () => {
+      const controller = new AbortController();
+      const h = harness([], { signal: controller.signal }, { error: gatewayError('MODEL_ERROR') });
+      const turn = runGatewayHarnessTurn(h.input);
+      await vi.advanceTimersByTimeAsync(10);
+      controller.abort();
+      await expect(turn).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    });
+
+    it('retryDelaySeconds: backoff 1, 2, 4 ... capped at 30, jittered within 20%, and a server hint is a floor', () => {
+      expect([1, 2, 3, 4, 5, 6, 7, 8].map((attempt) => retryDelaySeconds(attempt, undefined, () => 0.5))).toEqual([1, 2, 4, 8, 16, 30, 30, 30]);
+      expect(retryDelaySeconds(3, undefined, () => 0)).toBeCloseTo(3.2);
+      expect(retryDelaySeconds(3, undefined, () => 1)).toBeCloseTo(4.8);
+      expect(retryDelaySeconds(1, 45, () => 0.5)).toBe(45);
+      expect(retryDelaySeconds(1, 9999, () => 0.5)).toBe(120);
+      expect(retryDelaySeconds(2, 0, () => 0.5)).toBe(2);
+    });
+
+    it('treats the Gateway\'s item-count refusal as a reason to compact, not as the answer', () => {
+      const refusal = Object.assign(new Error('Invalid request at items: items exceeds 2000 entries'), { statusCode: 400 });
+      expect(stepRecovery(refusal)).toBe('compact');
+      expect(stepRecovery(Object.assign(new Error('Invalid request at tools: bad schema'), { statusCode: 400 }))).toBeUndefined();
     });
 
     it('is never resent once text has streamed', async () => {

@@ -18,9 +18,6 @@ import { claudeToolName } from './hooks.js';
 const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(['read_file', 'list_dir', 'glob', 'grep', 'lsp', 'web_fetch', 'web_search', 'list_mcp_resources', 'read_mcp_resource']);
 const WORK_BLOCKED_TOOL_NAMES: ReadonlySet<string> = new Set(['task', 'agent', 'agent_send', 'agent_wait', 'ask_user', 'exit_plan_mode', 'enter_plan_mode', 'list_agents', 'monitor', 'schedule_wakeup']);
 
-export const SUBAGENT_MAX_STEPS = 20;
-const WORK_SUBAGENT_MAX_STEPS = 60;
-
 const USAGE_FIELDS = ['input', 'output', 'cached', 'cacheWrite', 'reasoning', 'costMicroUsd'] as const;
 
 export interface SubagentRequest extends SubagentCall {
@@ -42,7 +39,6 @@ interface SubagentRunnerOptions {
   approve?: Approver;
   /** Usage the sub-agent spent since the last call; the parent adds it to its ledger. */
   onUsage(delta: TokenUsage): void;
-  maxSteps?: number;
   /** The parent turn owns the file checkpoint and project instructions. */
   checkpoint: { sessionId: string; turnId: string };
   workSystem: string;
@@ -87,15 +83,9 @@ function usageDelta(current: TokenUsage, previous: TokenUsage): TokenUsage {
 }
 
 /** What the parent's model gets back: the answer, not the working. */
-function answerFrom(result: GatewayHarnessTurnResult, transcript: readonly ConversationItem[], maxSteps: number): ToolRunResult {
+function answerFrom(result: GatewayHarnessTurnResult, transcript: readonly ConversationItem[]): ToolRunResult {
   if (result.stopReason === 'model-error') return { output: `The sub-agent failed: ${result.text}`, isError: true };
   if (result.stopReason === 'account-switch') return { output: 'The sub-agent stopped at an account or provider switch. Its completed work is in the trace.', isError: true };
-  if (result.stopReason === 'max-steps') {
-    // The loop's own closing note ("send another message") is addressed to a
-    // user; it is the last item, and the parent gets its own note instead.
-    const findings = assistantTexts(transcript.slice(0, -1)).join('\n\n');
-    return { output: `${findings || '(No findings were written.)'}\n\n[The sub-agent stopped at its ${maxSteps}-step limit before finishing, so this is partial. Narrow the question, or continue the research directly.]` };
-  }
   // The answer is what was said after the last tool result: earlier text is
   // narration ("Looking at the config...") the parent does not need.
   let lastResult = -1;
@@ -107,7 +97,6 @@ function answerFrom(result: GatewayHarnessTurnResult, transcript: readonly Conve
 
 export function createSubagentRunner(options: SubagentRunnerOptions): (request: SubagentRequest) => Promise<ToolRunResult> {
   const { parent } = options;
-  const maxSteps = options.maxSteps ?? SUBAGENT_MAX_STEPS;
 
   return async (request) => {
     const work = request.kind === 'work';
@@ -153,7 +142,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
           },
         } : {}),
         stateDir: parent.stateDir,
-        tools, maxSteps: work ? WORK_SUBAGENT_MAX_STEPS : maxSteps,
+        tools,
         subagent: {
           system: `${work ? `${options.workSystem}\n\n# Delegated task\nComplete the task you were given and report the changes and verification to the parent agent. Your tool calls are visible in the chat. You cannot start another agent or ask the user a question.${worktree ? worktreeNote(worktree, parent.cwd) : ''}` : subagentSystemPrompt(parent)}${request.agentType ? `\n\n# Agent: ${request.agentType.name}\n${request.agentType.prompt}` : ''}`,
           transcriptFile, parentSessionId: parent.sessionId, kind: work ? 'work' : 'research',
@@ -181,7 +170,7 @@ export function createSubagentRunner(options: SubagentRunnerOptions): (request: 
           options.onUsage(delta);
         },
       });
-      const answer = answerFrom(result, await store.load(), work ? WORK_SUBAGENT_MAX_STEPS : maxSteps);
+      const answer = answerFrom(result, await store.load());
       if (worktree) {
         // Its shells stop before its changes are committed, not halfway through.
         disposeSessionState(parent.stateDir, sessionId);

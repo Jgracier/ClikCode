@@ -22,6 +22,11 @@ export const DEFAULT_CONTEXT_WINDOW = 128_000;
 export const COMPACTION_THRESHOLD = 0.8;
 const MEMORY_CAP_BYTES = 32 * 1024;
 const KEEP_RECENT_ITEMS = 6;
+/** Most conversation items sent in one request. The Gateway refuses more than 2000 with a plain 400,
+ * and eliding old tool results shortens items without removing them, so a long run of small calls
+ * can reach the bound while using a fraction of the context window. Summarizing at this count
+ * leaves room for what one step adds (up to 64 calls, each a call item and a result item). */
+export const MAX_REQUEST_ITEMS = 1500;
 
 // The instructions, by section. Lean and full send all of them, joined by a
 // blank line, exactly as before profiles existed; minimal leaves out the two
@@ -162,8 +167,14 @@ async function loadMemoryChain(input: { cwd: string; userConfigDir: string; home
   const seen = new Set<string>();
   const scope = { cwd: input.cwd, addDirs: [], stateDir: input.userConfigDir, homeDir: input.homeDir };
   let remaining = MEMORY_CAP_BYTES;
+  /** Files found but not loaded because the budget was already spent: said in the prompt, never dropped in silence. */
+  const omitted: string[] = [];
   const add = async (file: string, depth: number): Promise<boolean> => {
-    if (remaining <= 0 || seen.has(file)) return false;
+    if (seen.has(file)) return false;
+    if (remaining <= 0) {
+      if (await fs.stat(file).then((entry) => entry.isFile(), () => false)) omitted.push(file);
+      return false;
+    }
     const text = await readCapped(file, remaining);
     if (text === undefined) return false;
     seen.add(file);
@@ -189,6 +200,12 @@ async function loadMemoryChain(input: { cwd: string; userConfigDir: string; home
   for (const dir of dirs) {
     await first([path.join(dir, 'AGENTS.md'), path.join(dir, 'CLAUDE.md'), path.join(dir, '.claude', 'CLAUDE.md')]);
     await add(path.join(dir, 'CLAUDE.local.md'), 0);
+  }
+  if (omitted.length) {
+    out.push({
+      file: 'instruction budget',
+      text: `${omitted.length} more instruction file${omitted.length === 1 ? ' was' : 's were'} not loaded because the ${MEMORY_CAP_BYTES / 1024} KB instruction budget is used up: ${omitted.slice(0, 5).join(', ')}${omitted.length > 5 ? ', …' : ''}. Read them with read_file if the task needs them.`,
+    });
   }
   return out;
 }
@@ -362,6 +379,8 @@ interface CompactionInput {
   keepRecent?: number;
   /** When given, stage 2 only runs if stage 1 left the context above it. */
   targetTokens?: number;
+  /** Stage 1 alone is not enough while there are more items than this: eliding shortens items, it does not remove them. */
+  maxItems?: number;
   system?: string;
 }
 
@@ -377,7 +396,7 @@ export async function compactConversation(input: CompactionInput): Promise<Compa
   const keepRecent = input.keepRecent ?? KEEP_RECENT_ITEMS;
   const elided = elideOldToolResults(input.items, keepRecent);
   const changed = elided.some((item, index) => item !== input.items[index]);
-  if (input.targetTokens !== undefined && estimateContextTokens(input.system ?? '', elided) < input.targetTokens) {
+  if (input.targetTokens !== undefined && estimateContextTokens(input.system ?? '', elided) < input.targetTokens && (input.maxItems === undefined || elided.length <= input.maxItems)) {
     return { items: elided, stage: changed ? 'elided' : 'none' };
   }
   const cut = safeCut(elided, keepRecent);

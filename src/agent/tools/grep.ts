@@ -21,7 +21,9 @@ interface GrepArgs {
 }
 
 const DEFAULT_HEAD_LIMIT = 200;
+/** The Node fallback reads a file whole; a larger one is reported as not searched, never skipped in silence. */
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_RG_OUTPUT_CHARS = 4 * 1024 * 1024;
 let ripgrepAvailable: Promise<boolean> | undefined;
 
 function hasRipgrep(): Promise<boolean> {
@@ -48,7 +50,7 @@ async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolConte
   // node_modules never are. --sort path: ripgrep's threaded walk returns
   // files in a different order each run, and an unstable tool result breaks
   // the prompt-cache prefix of every later step (the Node walker sorts too).
-  const argv = ['--color', 'never', '--no-messages', '--max-filesize', '5M', '--no-require-git', '--hidden', '--sort', 'path', '--glob', '!**/.git/**', '--glob', '!**/node_modules/**'];
+  const argv = ['--color', 'never', '--no-messages', '--no-require-git', '--hidden', '--sort', 'path', '--glob', '!**/.git/**', '--glob', '!**/node_modules/**'];
   if (mode === 'files') argv.push('--files-with-matches');
   else if (mode === 'count') argv.push('--count');
   else { argv.push('--line-number', '--no-heading', '--with-filename'); if (args.context) argv.push('--context', String(args.context)); }
@@ -64,9 +66,10 @@ async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolConte
     ctx.signal?.addEventListener('abort', abort, { once: true });
     child.stdout!.setEncoding('utf8');
     child.stderr!.setEncoding('utf8');
+    let outputCut = false;
     child.stdout!.on('data', (chunk: string) => {
       stdout += chunk;
-      if (stdout.length > 4 * 1024 * 1024) abort();
+      if (stdout.length > MAX_RG_OUTPUT_CHARS) { outputCut = true; abort(); }
     });
     child.stderr!.on('data', (chunk: string) => { stderr = `${stderr}${chunk}`.slice(-2000); });
     child.once('error', reject);
@@ -78,7 +81,8 @@ async function grepWithRipgrep(args: GrepArgs, root: string, ctx: Pick<ToolConte
       const relativeRoot = path.relative(ctx.cwd, root);
       const shownRoot = relativeRoot === '' ? '' : !relativeRoot.startsWith('..') && !path.isAbsolute(relativeRoot) ? `${relativeRoot}${path.sep}` : prefix;
       const lines = stdout.split(/\r?\n/).filter(Boolean).map((line) => line.startsWith(prefix) ? `${shownRoot}${line.slice(prefix.length)}` : line);
-      resolve({ output: limitLines(lines, args.head_limit ?? DEFAULT_HEAD_LIMIT) });
+      const shown = limitLines(lines, args.head_limit ?? DEFAULT_HEAD_LIMIT);
+      resolve({ output: outputCut ? `${shown}\n… the search stopped after ${MAX_RG_OUTPUT_CHARS / (1024 * 1024)} MB of matches; narrow the pattern, the path or glob.` : shown });
     });
   });
 }
@@ -92,6 +96,7 @@ async function grepWithNode(args: GrepArgs, root: string, ctx: Pick<ToolContext,
   const limit = args.head_limit ?? DEFAULT_HEAD_LIMIT;
   const context = Math.max(0, Math.min(args.context ?? 0, 10));
   const out: string[] = [];
+  const tooBig: string[] = [];
   const stat = await fs.stat(root);
   const files = stat.isFile()
     ? (async function* single() { yield { absolute: root, relative: path.basename(root) }; })()
@@ -102,7 +107,7 @@ async function grepWithNode(args: GrepArgs, root: string, ctx: Pick<ToolContext,
     if (args.glob && !matchGlob(args.glob, file.relative)) continue;
     let buffer: Buffer;
     try {
-      if ((await fs.stat(file.absolute)).size > MAX_FILE_BYTES) continue;
+      if ((await fs.stat(file.absolute)).size > MAX_FILE_BYTES) { tooBig.push(displayPath(file.absolute, ctx)); continue; }
       buffer = await fs.readFile(file.absolute);
     } catch { continue; }
     if (looksBinary(buffer)) continue;
@@ -121,7 +126,9 @@ async function grepWithNode(args: GrepArgs, root: string, ctx: Pick<ToolContext,
       }
     }
   }
-  return { output: limitLines(out, limit) };
+  const shown = limitLines(out, limit);
+  const note = tooBig.length ? `\n… ${tooBig.length} file${tooBig.length === 1 ? '' : 's'} over ${MAX_FILE_BYTES / (1024 * 1024)} MB not searched (ripgrep is not installed): ${tooBig.slice(0, 5).join(', ')}${tooBig.length > 5 ? ', …' : ''}` : '';
+  return { output: shown + note };
 }
 
 export const grepTool = defineTool<GrepArgs>({

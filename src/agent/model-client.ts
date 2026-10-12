@@ -176,7 +176,6 @@ export interface GatewayHarnessTurnInput {
   /** Home directory used for `~` expansion and the write-deny list.
    * Defaults to os.homedir(); tests inject a temp dir. */
   homeDir?: string;
-  maxSteps?: number;
   /** Default context window when the model client reports none. */
   contextWindow?: number;
   /** The session's own context profile setting. CLIKCODE_CONTEXT_PROFILE
@@ -234,7 +233,7 @@ export interface GatewayHarnessTurnResult {
   usage: TokenUsage;
   steps: number;
   /** Why the loop ended. */
-  stopReason: 'completed' | 'max-steps' | 'no-progress' | 'model-error' | 'account-switch';
+  stopReason: 'completed' | 'no-progress' | 'model-error' | 'account-switch';
   /** The context profile the turn ran under, so usage can be attributed to it. */
   contextProfile?: ContextProfileName;
 }
