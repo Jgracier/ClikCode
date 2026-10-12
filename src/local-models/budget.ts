@@ -73,7 +73,7 @@ export function vramReserve(vramBytes: number): number {
  * maturity on each. A Vulkan GPU needs a Vulkan loader to be driven at all;
  * ROCm is only reported where rocm-smi or amd-smi exist, so its userspace
  * is installed. */
-export function usableGpus(hardware: HardwareProfile): GpuInfo[] {
+function usableGpus(hardware: HardwareProfile): GpuInfo[] {
   const candidates = hardware.gpus.filter((gpu) => gpu.backend === 'metal'
     || ((gpu.integrated ? (gpu.addressableBytes ?? 0) > 0 : gpu.vramBytes > 0) && (gpu.backend !== 'vulkan' || hardware.vulkanLoader)));
   for (const backend of ['metal', 'cuda', 'rocm', 'vulkan'] as const) {

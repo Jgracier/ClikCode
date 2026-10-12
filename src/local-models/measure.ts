@@ -55,7 +55,7 @@ export async function writeMeasurement(machine: string, modelId: string, measure
 
 /** The footprints the supervisor recorded for a model on this machine
  * (keyed as footprintKey), in the store's own words. */
-export type FootprintStore = Record<string, Record<string, Footprint>>;
+type FootprintStore = Record<string, Record<string, Footprint>>;
 
 export function footprintKey(config: Pick<Footprint, 'context' | 'cacheType' | 'parallel' | 'vision'>): string {
   return `${config.context}|${config.cacheType}|${config.parallel}|${config.vision ? 'vision' : 'text'}`;
@@ -73,7 +73,7 @@ export async function readFootprints(machine: string, modelIds: readonly string[
 }
 
 /** About 700 tokens: 240 numbers of one to four digits with separators. */
-export function measurementPrompt(): string {
+function measurementPrompt(): string {
   const numbers = Array.from({ length: 240 }, (_, index) => `${index * 7 + 3}`).join(', ');
   return `Here is a list of numbers: ${numbers}.\nDescribe the pattern in these numbers in a few sentences.`;
 }

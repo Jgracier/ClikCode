@@ -367,7 +367,7 @@ async function writeHermesThread(record: CanonicalRecord, context: NativeThreadW
 
 /** Verified on Hermes 0.20.5 (2026-10-04, vendor-sandbox): see the store's
  *  `writer` below. */
-export const hermesThreadWriter: NativeThreadWriter = {
+const hermesThreadWriter: NativeThreadWriter = {
   testedVersions: HERMES_IMPORT_SPEC.testedVersions,
   versionOk: (context) => testedVersion(HERMES_IMPORT_SPEC.testedVersions)(context),
   write: writeHermesThread,

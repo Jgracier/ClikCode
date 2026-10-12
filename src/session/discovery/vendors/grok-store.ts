@@ -185,7 +185,7 @@ export function grokThreadFiles(record: CanonicalRecord, options: GrokThreadOpti
  *  call as run_terminal_command, the Claude Edit as search_replace); and
  *  `grok -p --resume <id>` on another written thread answered "The codeword
  *  you gave me is OSPREY-58. notes.txt says the launch window is Thursday." */
-export const grokThreadWriter: NativeThreadWriter = {
+const grokThreadWriter: NativeThreadWriter = {
   testedVersions: ['1.0.46'],
   versionOk: testedVersion(['1.0.46']),
   async write(record, context) {

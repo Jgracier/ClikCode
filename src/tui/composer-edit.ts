@@ -108,4 +108,4 @@ export function editWaitingComposer(value: string, cursor: number, key: string):
 
 /** What `!` on an empty composer becomes (the command is trimmed, so the
  * space is only where typing starts). */
-export const SHELL_PREFIX = '! ';
+const SHELL_PREFIX = '! ';

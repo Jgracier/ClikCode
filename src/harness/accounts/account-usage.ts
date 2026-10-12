@@ -227,7 +227,7 @@ export function accountUsageCanBeAsked(account: AiHarnessAccount): boolean {
  * days old because nothing asked again, and a sign-in the vendor rejected
  * went unnoticed. Longer than USAGE_RECHECK_MS because there are many -- a
  * hundred accounts on a one-minute clock is a vendor process a second. */
-export const USAGE_IDLE_RECHECK_MS = 15 * 60_000;
+const USAGE_IDLE_RECHECK_MS = 15 * 60_000;
 
 /** Signed-in accounts on a harness that can be asked, due to be read again:
  * one held out of turns (a refusal on record, dated or not, or a spent

@@ -8,7 +8,7 @@ import { waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
 import type { ToolCategory } from '../../harness/prompter.js';
 import { TOOL_CATEGORY } from '../../harness/protocol/tool-category.js';
 
-export { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent };
+export { composerUsageLabel, usageRemainingPercent };
 
 /** Fill a terminal-width rule from the left and pin a short label to its
  * right edge. Both composer borders use this same layout: usage above and
@@ -50,7 +50,7 @@ export function liveConversationLines(lines: readonly string[], live: boolean): 
  * dashes in the terminal's own foreground, and only the label at the right
  * edge painted, because it says something -- how much allowance is left,
  * which conversation this is. */
-export function paintLabeledRule(
+function paintLabeledRule(
   width: number, label: string | undefined, paint: (text: string) => string,
 ): string {
   // Unstyled, not dim: dim made the frame recede so far it read as absent.

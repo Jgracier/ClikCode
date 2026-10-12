@@ -142,7 +142,7 @@ export async function readClaudeHooks(cwd: string, home: string = homedir(), opt
 
 /** The commands the workspace's own settings would run, for the trust
  * question. Empty when it declares none (or only repeats the user's file). */
-export async function projectHookCommands(cwd: string, home: string = homedir()): Promise<string[]> {
+async function projectHookCommands(cwd: string, home: string = homedir()): Promise<string[]> {
   const user = await realpath(userHookFile(home)).catch(() => path.resolve(userHookFile(home)));
   const files: string[] = [];
   for (const file of projectHookFiles(cwd)) {

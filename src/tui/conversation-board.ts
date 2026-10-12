@@ -54,7 +54,7 @@ export type BoardEffect =
   | { kind: 'actions' | 'delete'; option: PickerOption<string> };
 
 /** A `/` draft shows the commands it matches in place of the conversations. */
-export function boardShowsCommands(state: BoardState): boolean {
+function boardShowsCommands(state: BoardState): boolean {
   return state.draft.startsWith('/');
 }
 

@@ -18,7 +18,7 @@ export interface ConversationToolContext {
   now?: number;
 }
 
-export interface ConversationToolResult { text: string; isError?: boolean }
+interface ConversationToolResult { text: string; isError?: boolean }
 
 export interface ConversationTool {
   name: 'search_conversations' | 'read_conversation' | 'active_conversations';

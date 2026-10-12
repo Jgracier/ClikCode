@@ -22,6 +22,6 @@ export function conversationLabel(option: Pick<PickerOption<string>, 'label' | '
 
 /** A running turn's spinner in the conversation list: the same two-cell
  * spinner as the waiting line, yellow once the turn has stalled. */
-export function workingSpinner(frame: number, activity: Exclude<RowActivity, 'needs-you'>): string {
+function workingSpinner(frame: number, activity: Exclude<RowActivity, 'needs-you'>): string {
   return (activity === 'stalled' ? chalk.yellow : chalk.green)(waitingSpinnerGlyph(frame));
 }

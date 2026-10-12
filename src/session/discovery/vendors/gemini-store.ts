@@ -219,7 +219,7 @@ async function geminiProjectDirectory(geminiDirectory: string, workspace: string
  *  threads as much as a written one -- fails "No previous sessions found for
  *  this project", and the load has already reset that file to its first
  *  message, so the thread is lost to the CLI as well. */
-export const geminiThreadWriter: NativeThreadWriter = {
+const geminiThreadWriter: NativeThreadWriter = {
   testedVersions: ['0.62.0'],
   versionOk: testedVersion(['0.62.0']),
   async write(record, context) {

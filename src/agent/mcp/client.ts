@@ -7,7 +7,7 @@ import { openTransport, type McpTransport, type McpTransportHandlers } from './t
 /** The revision this client is written against. A server answering with an
  * older one it supports is fine: the only methods used here have not changed
  * shape since the first revision. */
-export const MCP_PROTOCOL_VERSION = '2025-06-18';
+const MCP_PROTOCOL_VERSION = '2025-06-18';
 
 export interface McpToolInfo {
   name: string;

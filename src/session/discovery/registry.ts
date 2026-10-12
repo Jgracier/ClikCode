@@ -6,14 +6,13 @@ import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { discoverClaudeFsSessions, readClaudeFsTranscript } from './vendors/claude.js';
 import { discoverCodexFsSessions, readCodexFsTranscript } from './vendors/codex.js';
 import { discoverCursorFsSessions } from './vendors/cursor.js';
-import { nativeDataRoot, type NativeSessionEnvironment, type NativeSessionFile } from './stores.js';
+import { type NativeSessionEnvironment, type NativeSessionFile } from './stores.js';
 import { readOpencodeTranscript } from './vendors/opencode.js';
 import { discoverPiFsSessions } from './vendors/pi.js';
 import { DiscoveredNativeSession } from './discovered-session.js';
 import type { NativeSessionStore } from './stores.js';
 
 export type { NativeSessionEnvironment, NativeSessionFile } from './stores.js';
-export { nativeDataRoot };
 import { claudeSessionStore } from './vendors/claude-store.js';
 import { codexSessionStore } from './vendors/codex-store.js';
 import { codexThreadWriter } from './vendors/codex-writer.js';

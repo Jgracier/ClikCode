@@ -58,8 +58,8 @@ export interface WatchState {
   lastAt?: number;
 }
 
-export type WatchLevel = 'ok' | 'low' | 'critical';
-export type WatchAction = 'none' | 'wait' | 'shrink' | 'stop';
+type WatchLevel = 'ok' | 'low' | 'critical';
+type WatchAction = 'none' | 'wait' | 'shrink' | 'stop';
 
 export interface WatchInput {
   sample: MemorySample;

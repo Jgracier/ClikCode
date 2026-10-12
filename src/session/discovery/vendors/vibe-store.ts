@@ -141,7 +141,7 @@ export function vibeThreadFiles(record: CanonicalRecord, options: VibeThreadOpti
 
 /** Verified against vibe 2.25.7: see the module comment; live proof in the
  *  commit that added this. */
-export const vibeThreadWriter: NativeThreadWriter = {
+const vibeThreadWriter: NativeThreadWriter = {
   testedVersions: ['2.25.7'],
   versionOk: testedVersion(['2.25.7']),
   async write(record, context) {

@@ -14,7 +14,7 @@
 import { lifecycle } from './lifecycle-log.js';
 
 /** The moments, in the order they happen on the path. */
-export const TURN_MARKS = [
+const TURN_MARKS = [
   'submit', 'accepted', 'account', 'spawned', 'ready', 'prompt-sent',
   'first-byte', 'first-event', 'first-text', 'first-paint', 'first-text-paint', 'end',
 ] as const;

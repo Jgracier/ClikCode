@@ -242,7 +242,7 @@ export function pastePlaceholder(text: string, index: number): string | undefine
 }
 
 /** A turn this long ends on its summary line even if it ran no tools. */
-export const END_SUMMARY_MS = 10_000;
+const END_SUMMARY_MS = 10_000;
 
 /** Whether a turn ends on the summary line: it did real work -- ran a tool,
  * or took a while. A quick answer needs no "Worked for 2s" under it. */

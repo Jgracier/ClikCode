@@ -45,14 +45,14 @@ export function antigravityConversationsRoot(environment: NativeSessionEnvironme
 }
 
 /** agy builds whose conversation layout this writer was verified against. */
-export const ANTIGRAVITY_WRITER_TESTED_VERSIONS = ['1.2.16'] as const;
+const ANTIGRAVITY_WRITER_TESTED_VERSIONS = ['1.2.16'] as const;
 
 // ---- protobuf, encode only ------------------------------------------------
 
 /** One field: number and value. A value of undefined, 0, false or '' is the
  * proto3 default and is left out, as agy's own Go encoder leaves it out. */
 export type ProtoField = readonly [number, ProtoValue];
-export type ProtoValue = number | boolean | string | Uint8Array | readonly ProtoField[] | undefined;
+type ProtoValue = number | boolean | string | Uint8Array | readonly ProtoField[] | undefined;
 
 function varint(value: number, out: number[]): void {
   let rest = value;
@@ -169,7 +169,7 @@ export interface AntigravityThreadOptions {
   callId?: () => string;
 }
 
-export interface AntigravityStepRow {
+interface AntigravityStepRow {
   idx: number;
   stepType: number;
   metadata: Buffer;

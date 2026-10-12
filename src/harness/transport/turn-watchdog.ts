@@ -8,9 +8,9 @@
  * deciding an approval the vendor is waiting on us, so the clock is paused. */
 
 /** A turn whose vendor has said nothing at all for this long is wedged. */
-export const PERSISTENT_TURN_IDLE_MS = 10 * 60 * 1000;
+const PERSISTENT_TURN_IDLE_MS = 10 * 60 * 1000;
 /** A silent tool is given this long. */
-export const PERSISTENT_TOOL_IDLE_MS = 60 * 60 * 1000;
+const PERSISTENT_TOOL_IDLE_MS = 60 * 60 * 1000;
 
 export interface TurnWatchdogOptions {
   /** Ordinary silence budget. Default: CLIKCODE_TURN_IDLE_TIMEOUT_MS, else

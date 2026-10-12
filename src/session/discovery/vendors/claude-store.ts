@@ -53,7 +53,7 @@ async function writeClaudeThread(record: CanonicalRecord, context: NativeThreadW
   return { nativeId: sessionId };
 }
 
-export const claudeThreadWriter: NativeThreadWriter = {
+const claudeThreadWriter: NativeThreadWriter = {
   testedVersions: CLAUDE_TESTED_VERSIONS,
   versionOk: (context) => testedVersion(CLAUDE_TESTED_VERSIONS)(context),
   write: writeClaudeThread,

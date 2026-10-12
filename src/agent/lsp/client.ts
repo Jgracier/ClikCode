@@ -43,7 +43,7 @@ export class MessageDecoder {
   }
 }
 
-export class LspRequestError extends Error {
+class LspRequestError extends Error {
   constructor(message: string, readonly code?: number) { super(message); }
 }
 

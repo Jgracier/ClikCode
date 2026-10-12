@@ -38,7 +38,7 @@ export function sessionProviderHasUsage(accounts: readonly AiHarnessAccount[], p
   return accounts.some((account) => account.provider === provider && matchesVendorTurn(account) && accountHasUsage(account));
 }
 
-export async function sameProviderCanTakeTurn(id: string): Promise<boolean> {
+async function sameProviderCanTakeTurn(id: string): Promise<boolean> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   return session ? sessionProviderHasUsage(state.accounts, session.provider) : false;
@@ -64,7 +64,7 @@ const WAIT_FOR_RESET = '\u0000wait';
  * wait for this provider's reset (parked on the session; the worker sends it
  * then), or undefined when there is nowhere to go or the user backs out (the
  * chat then stays as it was). */
-export async function interactiveResumeInPicker(
+async function interactiveResumeInPicker(
   rl: HarnessPrompter, id: string, prompt: string, sent = prompt, now: number = Date.now(),
 ): Promise<ResumedIn | { waiting: ResumeAt } | undefined> {
   // Index for every chat's last model; this chat's transcript is not needed
@@ -107,7 +107,7 @@ export async function interactiveResumeInPicker(
 
 /** Parks the turn on the session until `reset`: what to send then is decided
  * now, against the interrupted turn on record (resumePromptForPendingTurn). */
-export async function waitForReset(id: string, reset: Date, prompt: string, sent = prompt, now: number = Date.now()): Promise<ResumeAt> {
+async function waitForReset(id: string, reset: Date, prompt: string, sent = prompt, now: number = Date.now()): Promise<ResumeAt> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
   if (!session) throw new Error(`AI session "${id}" was not found`);

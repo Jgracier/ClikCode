@@ -3,7 +3,7 @@ import { defineTool } from '../tool-contract.js';
 interface AskUserArgs { question: string; options?: string[]; multiSelect?: boolean }
 
 /** The question as the user reads it: numbered options, and how to answer. */
-export function formatQuestion(args: AskUserArgs): string {
+function formatQuestion(args: AskUserArgs): string {
   const options = (args.options ?? []).map((option) => option.trim()).filter(Boolean);
   if (!options.length) return args.question.trim();
   const how = args.multiSelect ? 'Reply with the numbers you want, or in your own words.' : 'Reply with a number, or in your own words.';

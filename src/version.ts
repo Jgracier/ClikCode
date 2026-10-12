@@ -11,7 +11,7 @@
  */
 declare const __CLIKCODE_VERSION__: string | undefined;
 
-export const CLIKCODE_VERSION_FALLBACK = '0.0.0-dev';
+const CLIKCODE_VERSION_FALLBACK = '0.0.0-dev';
 
 export const CLIKCODE_VERSION: string =
   typeof __CLIKCODE_VERSION__ === 'string' && __CLIKCODE_VERSION__

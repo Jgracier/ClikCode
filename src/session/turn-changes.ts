@@ -48,7 +48,7 @@ export interface TurnChangeRecord {
 /** Bytes of a log's JSON before its oldest turns' diff text goes (the
  * records stay). A record without its lines is a few hundred bytes, so a
  * conversation of thousands of turns still reads in a moment. */
-export const DIFF_TEXT_BUDGET = 2 * 1024 * 1024;
+const DIFF_TEXT_BUDGET = 2 * 1024 * 1024;
 
 /** `records` within `budget` bytes of JSON: the oldest turns' diff lines are
  * dropped first, newest kept whole, every record kept. */
@@ -140,7 +140,7 @@ export class TurnRecorder {
 /** Collects one turn's reported changes from its activity events. A call
  * reported finished more than once (an update after the result) counts
  * once, with its last diff: reversing the same edit twice would fail. */
-export class TurnChangeCollector {
+class TurnChangeCollector {
   private readonly byCall = new Map<string, FileDiff[]>();
   private readonly order: Array<string | FileDiff[]> = [];
 

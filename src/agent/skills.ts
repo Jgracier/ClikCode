@@ -32,7 +32,7 @@ const FRONTMATTER_READ_BYTES = 16 * 1024;
 const MAX_NAME_CHARS = 64;
 const CACHE_ENTRIES = 16;
 
-export type SkillSource = 'project' | 'project-claude' | 'user' | 'user-claude' | 'plugin';
+type SkillSource = 'project' | 'project-claude' | 'user' | 'user-claude' | 'plugin';
 
 export interface Skill {
   name: string;
@@ -45,7 +45,7 @@ export interface Skill {
   pluginRoot?: string;
 }
 
-export interface SkippedSkill { file: string; reason: string }
+interface SkippedSkill { file: string; reason: string }
 
 export interface SkillCatalog {
   skills: Skill[];

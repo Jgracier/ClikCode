@@ -31,7 +31,7 @@ export function sessionTitleSource(harness: AiLocalHarnessDefinition | undefined
 
 /** The one request a chat may spend. Spent whether or not a title comes back,
  * so a chat is asked once and then never again. */
-export const TITLE_REQUEST_ATTEMPTS = 1;
+const TITLE_REQUEST_ATTEMPTS = 1;
 
 /** Words that never tell you what a chat is about. */
 const TITLE_FILLER = new Set([
@@ -78,7 +78,7 @@ export function prepareSessionTitle(
  * one prompt -- so a retry that replaced that prompt (with "carry on", or with
  * a retelling of the interrupted turn) is not asking any more, whatever the
  * turn intended when it started. */
-export function promptAsksForTitle(prompt: string): boolean {
+function promptAsksForTitle(prompt: string): boolean {
   return prompt.includes(OPEN);
 }
 

@@ -20,7 +20,7 @@ import { testedVersion } from './thread-writer-files.js';
 
 /** The Claude Code build the imported records claim to come from: the one
  * whose layout both importers were verified on. */
-export const CLAUDE_THREAD_VERSION = '2.1.288';
+const CLAUDE_THREAD_VERSION = '2.1.288';
 
 
 

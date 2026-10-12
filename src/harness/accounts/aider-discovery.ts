@@ -25,7 +25,7 @@ import { atomicWriteFile } from '../../session/store/files.js';
 import { stateDirectory } from '../../session/store/paths.js';
 
 /** The key Aider reads for each provider, and the prefix of its models. */
-export const AIDER_PROVIDERS: readonly { env: string; prefix: string; label: string }[] = [
+const AIDER_PROVIDERS: readonly { env: string; prefix: string; label: string }[] = [
   { env: 'OPENROUTER_API_KEY', prefix: 'openrouter/', label: 'OpenRouter' },
   { env: 'ANTHROPIC_API_KEY', prefix: 'anthropic/', label: 'Anthropic' },
   { env: 'OPENAI_API_KEY', prefix: 'openai/', label: 'OpenAI' },
@@ -89,7 +89,7 @@ async function openRouterList(): Promise<string> {
 }
 
 /** The providers Aider has a key for, in this environment. */
-export async function aiderKeyedProviders(environment: Readonly<Record<string, string>>): Promise<typeof AIDER_PROVIDERS[number][]> {
+async function aiderKeyedProviders(environment: Readonly<Record<string, string>>): Promise<typeof AIDER_PROVIDERS[number][]> {
   const home = environment.HOME || homedir();
   const keys = { ...parseEnvFile(await readFile(join(home, '.aider', 'oauth-keys.env'), 'utf8').catch(() => '')), ...environment };
   return AIDER_PROVIDERS.filter((provider) => keys[provider.env]?.trim());

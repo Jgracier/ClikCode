@@ -4,12 +4,12 @@
 
 export type SwarmRole = 'explore' | 'implement' | 'review';
 
-export interface SwarmFact {
+interface SwarmFact {
   path: string;
   text: string;
 }
 
-export interface SwarmRosterLine {
+interface SwarmRosterLine {
   id: string;
   provider: string;
   role: SwarmRole;
@@ -123,7 +123,7 @@ function withRest(summary: string, clipped: boolean, paths: readonly string[]): 
 }
 
 /** True when an implementer already holds this path, a parent, a child, or the whole workspace (`*`). */
-export function pathsOverlap(left: string, right: string): boolean {
+function pathsOverlap(left: string, right: string): boolean {
   const a = left.trim().replace(/\/+$/, '');
   const b = right.trim().replace(/\/+$/, '');
   if (!a || !b || a === '*' || b === '*') return true;

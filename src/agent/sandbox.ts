@@ -12,7 +12,6 @@ import os from 'node:os';
 import path from 'node:path';
 
 export type SandboxMode = 'off' | 'workspace';
-export const SANDBOX_MODES: readonly SandboxMode[] = ['off', 'workspace'];
 
 /** A session's stored setting: unset (and any legacy value) is the default,
  * `workspace`; only an explicit `off` turns it off. */

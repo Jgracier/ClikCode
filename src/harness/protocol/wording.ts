@@ -5,7 +5,7 @@
  * Chalk free and dependency free, so the webview bundle can import it.
  */
 
-export const ACTIONS = {
+const ACTIONS = {
   /** End the running turn. Ctrl+C, the stop button, and the palette's
    *  command. Esc does too, once the turn has an answer. Before that, Esc
    *  puts the prompt back in the composer. */

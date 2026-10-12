@@ -136,7 +136,7 @@ export function droidThreadLines(record: CanonicalRecord, options: DroidThreadOp
   return `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`;
 }
 
-export const droidThreadWriter: NativeThreadWriter = {
+const droidThreadWriter: NativeThreadWriter = {
   testedVersions: ['0.223.0'],
   versionOk: testedVersion(['0.223.0']),
   async write(record, context) {

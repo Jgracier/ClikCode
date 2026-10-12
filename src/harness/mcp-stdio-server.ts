@@ -70,7 +70,7 @@ export function serveStdioMcp(
  * own when it asks for one of these, else the newest. */
 const SUPPORTED_PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 
-export interface McpTool {
+interface McpTool {
   name: string;
   description: string;
   inputSchema: unknown;

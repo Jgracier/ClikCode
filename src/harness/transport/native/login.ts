@@ -27,7 +27,7 @@ export function withSignInScreen<T>(screen: SignInScreen, work: () => Promise<T>
 
 /** No screen of ClikCode's: the link printed (copied where no browser is
  * local, opened where one is), questions read from stdin. */
-export function plainSignInScreen(name: string): SignInScreen {
+function plainSignInScreen(name: string): SignInScreen {
   let opened = false;
   const controller = new AbortController();
   const line = async (prompt: string): Promise<string> => {

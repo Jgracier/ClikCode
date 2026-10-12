@@ -64,7 +64,7 @@ interface ImportReport {
 
 /** Verified against OpenClaw 2026.9.6: see the module comment; live proof in
  *  the commit that added this. */
-export const openClawThreadWriter: NativeThreadWriter = {
+const openClawThreadWriter: NativeThreadWriter = {
   testedVersions: ['2026.9.6'],
   versionOk: testedVersion(['2026.9.6']),
   async write(record, context) {

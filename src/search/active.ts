@@ -15,7 +15,7 @@ import { readTurnActivities } from '../turn/turn-activities.js';
 import { conversationGroups, conversationTitle } from './conversations.js';
 
 /** A chat that changed this recently counts as recent work, live or not. */
-export const RECENT_WITHIN_MS = 2 * 60 * 60 * 1000;
+const RECENT_WITHIN_MS = 2 * 60 * 60 * 1000;
 
 export interface ActiveConversation {
   conversationId: string;

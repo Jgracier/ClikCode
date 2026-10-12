@@ -76,7 +76,7 @@ export function fileDiff(before: string, after: string, options: { path?: string
 /** The files of a unified diff a vendor already computed (Codex's file
  * changes), numbered from its hunk headers. Text with no hunk header and no
  * +/- lines is a new file's whole content. */
-export function unifiedFileDiffs(diff: string, options: { path?: string; change?: FileDiff['change']; cap?: number } = {}): FileDiff[] {
+function unifiedFileDiffs(diff: string, options: { path?: string; change?: FileDiff['change']; cap?: number } = {}): FileDiff[] {
   const cap = options.cap ?? FILE_DIFF_LINE_CAP;
   const text = diff.replace(/\r?\n$/, '');
   if (!/^@@ |^[-+]/m.test(text)) return [fileDiff('', text, { ...options, numbered: true, change: options.change ?? 'add' })];

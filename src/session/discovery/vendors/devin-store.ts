@@ -85,7 +85,7 @@ const NODE_COLUMNS = ['session_id', 'node_id', 'parent_node_id', 'chat_message',
 
 /** Verified against devin 3000.11.3 (2026-10-04): see the module comment;
  *  live proof in the commit that added this. */
-export const devinThreadWriter: NativeThreadWriter = {
+const devinThreadWriter: NativeThreadWriter = {
   testedVersions: ['3000.11.3'],
   versionOk: testedVersion(['3000.11.3']),
   async write(record, context) {
@@ -144,7 +144,7 @@ export const devinThreadWriter: NativeThreadWriter = {
  *  ('carried'; A's chain and B's own session unchanged), and ClikCode's ACP resume of
  *  that id in B answered MAPLE2A. After a second turn in B ("remember the
  *  number 110") it was carried back, and A's resume answered "MAPLE2A 110". */
-export const devinCarry: SqliteCarrySpec = {
+const devinCarry: SqliteCarrySpec = {
   database: (environment) => join(devinRoot(environment), 'sessions.db'),
   session: { table: 'sessions', key: 'id', identity: ['created_at'] },
   rows: [

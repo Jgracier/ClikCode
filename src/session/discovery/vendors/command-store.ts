@@ -156,7 +156,7 @@ export function commandThreadLines(record: CanonicalRecord, options: CommandThre
  *  and I read notes.txt and edited src/app.ts." -- every written message,
  *  the Codex shell call as `shell_command` and the Claude Grep as `grep`,
  *  went to the model, and the turn was appended to the same file. */
-export const commandThreadWriter: NativeThreadWriter = {
+const commandThreadWriter: NativeThreadWriter = {
   testedVersions: ['1.74.1'],
   // Exact: on 1.74.3 a thread written for 1.74.1 is "No session found to
   // resume" (verify-thread-writer, 2026-10-10), so the conversation is retold.

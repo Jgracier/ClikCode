@@ -25,7 +25,7 @@ export const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
 
 const SECTION_RANK: Readonly<Record<ConversationSection, number>> = { working: 0, active: 1, past: 2 };
 
-export function sectionRank(section: ConversationSection): number {
+function sectionRank(section: ConversationSection): number {
   return SECTION_RANK[section];
 }
 

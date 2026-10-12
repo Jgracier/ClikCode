@@ -696,7 +696,7 @@ export class SignInCancelled extends Error {
 /** `: <the vendor's last line>`, the reason a failed sign-in gives -- never a
  * line holding an answer to a secret question (it is the prompt with the
  * typed key echoed on it), nor the prompt that asked for one. */
-export function failureReason(raw: string, secrets: readonly string[]): string {
+function failureReason(raw: string, secrets: readonly string[]): string {
   const said = screenLines(raw).map((line) => line.trim()).filter(Boolean)
     .filter((line) => !secrets.some((secret) => line.includes(secret)) && !(secrets.length && isSecret(line)))
     .pop();

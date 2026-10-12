@@ -41,7 +41,7 @@
 import type { ToolSpec } from './model-client.js';
 
 export type ContextProfileName = 'minimal' | 'lean' | 'full';
-export const CONTEXT_PROFILES: readonly ContextProfileName[] = ['minimal', 'lean', 'full'];
+const CONTEXT_PROFILES: readonly ContextProfileName[] = ['minimal', 'lean', 'full'];
 
 /** Forces a profile for every turn in this process, over a session's own
  * setting and the automatic choice: an evaluation must be able to pin each

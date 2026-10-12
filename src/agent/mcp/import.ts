@@ -53,8 +53,8 @@ const EARLIER_VENDOR_NAMES: Readonly<Record<string, string>> = {
 
 export const IMPORT_MARKER_FILE = 'mcp-import.json';
 
-export interface ImportedServer { name: string; from: string }
-export interface SkippedServer { name: string; from: string; reason: string }
+interface ImportedServer { name: string; from: string }
+interface SkippedServer { name: string; from: string; reason: string }
 export interface McpImportResult {
   /** False when the import had already run, or could not run (see problem). */
   ran: boolean;
@@ -191,7 +191,7 @@ async function readServerTable(path: string, source: VendorSource): Promise<Reco
  * A profile is either a fake HOME or the vendor's own config root
  * (`CODEX_HOME`, `QWEN_HOME`). Both shapes are checked: a missing path adds
  * nothing, and a name found in either one counts as already there. */
-export function vendorConfigCandidates(
+function vendorConfigCandidates(
   source: VendorSource, home: string, profile?: { env: string; path: string },
 ): string[] {
   // An isolated profile is all the harness reads: the user's own file is not

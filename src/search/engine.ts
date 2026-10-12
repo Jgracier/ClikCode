@@ -108,7 +108,7 @@ export function recencyBoost(updatedAtMs: number, now: number): number {
 
 /** Where one message mentions the query. Exact occurrences when it has
  * any; otherwise one mention at the first word, when it holds them all. */
-export function messageMentions(message: MessageDoc, query: ParsedQuery): Array<{ offset: number; length: number; exact: boolean }> {
+function messageMentions(message: MessageDoc, query: ParsedQuery): Array<{ offset: number; length: number; exact: boolean }> {
   const found: Array<{ offset: number; length: number; exact: boolean }> = [];
   const phrase = query.phrase;
   phrase.lastIndex = 0;

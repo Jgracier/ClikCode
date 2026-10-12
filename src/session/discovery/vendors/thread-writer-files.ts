@@ -107,7 +107,7 @@ export function callCommand(call: CanonicalToolCall): string | undefined {
 }
 
 /** A call's diff as unified-diff-ish text, for a result the model reads. */
-export function diffText(call: CanonicalToolCall): string {
+function diffText(call: CanonicalToolCall): string {
   return (call.diff ?? []).map((file) => {
     const body = file.lines.map((line) => (
       line.kind === 'added' ? `+${line.text}` : line.kind === 'removed' ? `-${line.text}` : line.kind === 'gap' ? '@@' : ` ${line.text}`)).join('\n');
@@ -134,7 +134,7 @@ export function callResultText(call: CanonicalToolCall): string {
 }
 
 /** A call the vendor has no tool for, told as text in the answer. */
-export function callAsText(call: CanonicalToolCall): string {
+function callAsText(call: CanonicalToolCall): string {
   const status = call.status === 'failed' ? ' (failed)' : call.status === 'unfinished' ? ' (unfinished)' : '';
   const result = callResultText(call);
   return `[${call.label}]${status}\n${result.split('\n').map((line) => `> ${line}`).join('\n')}`;

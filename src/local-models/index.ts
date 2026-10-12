@@ -85,7 +85,7 @@ async function readPreference(): Promise<string | undefined> {
 }
 
 /** Remember (or, with undefined, forget) the user's model pick. */
-export async function setLocalModelPreference(modelId: string | undefined): Promise<void> {
+async function setLocalModelPreference(modelId: string | undefined): Promise<void> {
   if (!modelId) { await rm(preferencesFile(), { force: true }); return; }
   if (!catalogModel(modelId)) throw new Error(`${modelId} is not a ClikCode Local model.`);
   await mkdir(dirname(preferencesFile()), { recursive: true });

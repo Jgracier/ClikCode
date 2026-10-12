@@ -20,12 +20,12 @@ import { downloadVerified, formatBytes, type DownloadProgress } from './download
 import { runtimesDir } from './paths.js';
 import type { GpuBudget } from './budget.js';
 
-export const LLAMA_CPP_TAG = 'b11194';
+const LLAMA_CPP_TAG = 'b11194';
 // b11194 was built from llama.cpp commit 9f70b2cecd1a9a3f73ac525c47ca22a6ee9a7b69.
 
-export type RuntimeBackend = 'cpu' | GpuBackend;
+type RuntimeBackend = 'cpu' | GpuBackend;
 
-export interface RuntimeAsset { name: string; sizeBytes: number; sha256: string }
+interface RuntimeAsset { name: string; sizeBytes: number; sha256: string }
 
 export interface RuntimeBuild {
   key: string;
@@ -102,7 +102,7 @@ export function selectRuntimeBuild(hardware: Pick<HardwareProfile, 'platform' | 
   return builds.find((build) => build.backend === 'cpu' || build.backend === 'metal');
 }
 
-export function runtimeDir(build: RuntimeBuild): string {
+function runtimeDir(build: RuntimeBuild): string {
   return join(runtimesDir(), LLAMA_CPP_TAG, build.key);
 }
 

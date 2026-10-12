@@ -11,7 +11,7 @@ import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
 /** A call its turn was stopped under (HarnessActivityEvent.stopped). */
-export const STOPPED_GLYPH = '■';
+const STOPPED_GLYPH = '■';
 
 export function renderActivityLine(event: HarnessActivityEvent): string[] {
   if (event.kind === 'thinking') return [`  ${chalk.cyan('thinking')} ${chalk.dim(event.label)}`];
@@ -107,7 +107,7 @@ export function outputPreviewRows(event: HarnessActivityEvent, budget: number): 
 }
 
 /** commandOutputPreview's choice, painted: head, `… N lines hidden`, tail. */
-export function commandPreviewRows(preview: CommandPreview): string[] {
+function commandPreviewRows(preview: CommandPreview): string[] {
   const row = (line: string): string => `    ${chalk.dim(line)}`;
   const note = preview.hidden > 0 ? [row(`\u2026 ${preview.hidden} line${preview.hidden === 1 ? '' : 's'} hidden`)] : [];
   return [...preview.head.map(row), ...note, ...preview.tail.map(row)];

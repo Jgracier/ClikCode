@@ -8,8 +8,8 @@ import { cancelWakeups, scheduleWakeup } from '../session-state.js';
 
 interface WakeupArgs { delay_seconds?: number; prompt?: string; reason?: string; stop?: boolean }
 
-export const MIN_WAKEUP_SECONDS = 60;
-export const MAX_WAKEUP_SECONDS = 3600;
+const MIN_WAKEUP_SECONDS = 60;
+const MAX_WAKEUP_SECONDS = 3600;
 
 export const scheduleWakeupTool = defineTool<WakeupArgs>({
   name: 'schedule_wakeup',

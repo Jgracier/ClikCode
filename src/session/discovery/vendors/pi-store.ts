@@ -127,7 +127,7 @@ export function piThreadLines(record: CanonicalRecord, options: PiThreadOptions)
  *  answered "The codeword was PELICAN-73, and I read notes.txt and changed
  *  src/app.ts." -- Pi replayed every written message, the Codex shell call
  *  as its own `bash` call, and appended the new turn to the same file. */
-export const piThreadWriter: NativeThreadWriter = {
+const piThreadWriter: NativeThreadWriter = {
   testedVersions: ['0.87.0'],
   versionOk: testedVersion(['0.87.0']),
   async write(record, context) {

@@ -25,7 +25,7 @@ import { pidIsAlive } from '../session/store/locks.js';
 
 /** The command line of a process, to tell a live llama-server from a
  * recycled pid before stopping it. */
-export function commandLine(pid: number): Promise<string> {
+function commandLine(pid: number): Promise<string> {
   return new Promise((resolve) => {
     if (process.platform === 'linux') {
       readFile(`/proc/${pid}/cmdline`).then((buffer) => resolve(buffer.toString().replace(/\0/g, ' ')), () => resolve(''));
@@ -43,18 +43,18 @@ function leasesDir(modelId: string): string { return join(serverDir(modelId), 'l
 
 /** Lease files, one per process and session: `<pid>-<session>.json` in a
  * directory of their holder's choosing (a model's server). */
-export function leaseFile(directory: string, sessionId: string): string {
+function leaseFile(directory: string, sessionId: string): string {
   return join(directory, `${process.pid}-${safeName(sessionId)}.json`);
 }
 
-export async function writeLeaseFile(directory: string, sessionId: string): Promise<void> {
+async function writeLeaseFile(directory: string, sessionId: string): Promise<void> {
   await mkdir(directory, { recursive: true });
   await writeFile(leaseFile(directory, sessionId), JSON.stringify({ pid: process.pid, session: sessionId, at: new Date().toISOString() }));
 }
 
 /** Whether a live process holds a lease in `directory` -- for this session
  * only, when one is named; other than this process, when `elsewhere`. */
-export async function leaseHeld(directory: string, options: { sessionId?: string; elsewhere?: boolean } = {}): Promise<boolean> {
+async function leaseHeld(directory: string, options: { sessionId?: string; elsewhere?: boolean } = {}): Promise<boolean> {
   const suffix = options.sessionId === undefined ? '' : `-${safeName(options.sessionId)}.json`;
   for (const name of await readdir(directory).catch(() => [] as string[])) {
     if (!name.endsWith(suffix)) continue;
@@ -66,7 +66,7 @@ export async function leaseHeld(directory: string, options: { sessionId?: string
 
 /** This process's leases in one directory, removed synchronously -- for an
  * exit handler, where nothing asynchronous runs. */
-export function removeOwnLeasesSync(directory: string): void {
+function removeOwnLeasesSync(directory: string): void {
   let names: string[] = [];
   try { names = readdirSync(directory); } catch { return; }
   for (const name of names) if (name.startsWith(`${process.pid}-`)) rmSync(join(directory, name), { force: true });
@@ -187,7 +187,7 @@ export interface ShrinkStep {
   footprintKey: string;
 }
 
-export interface MemoryWatchConfig {
+interface MemoryWatchConfig {
   /** Spare memory (see memwatch.ts) kept for other programs. */
   bufferBytes: number;
   sampleMs: number;

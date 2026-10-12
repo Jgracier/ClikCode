@@ -18,7 +18,7 @@ export interface MentionStop {
   index: number;
 }
 
-export const BROWSE_HINT = '↑↓ next/previous · tab next chat · esc done';
+const BROWSE_HINT = '↑↓ next/previous · tab next chat · esc done';
 
 export class MentionBrowser {
   private chat = 0;

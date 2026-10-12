@@ -61,7 +61,7 @@ export function aiderHistoryMarkdown(record: CanonicalRecord, now: Date): string
  *  and answered "The codeword was PELICAN-73, and I read notes.txt and
  *  changed src/app.ts." Text only: the calls reach Aider as the answer's
  *  text, which is all its history holds. */
-export const aiderThreadWriter: NativeThreadWriter = {
+const aiderThreadWriter: NativeThreadWriter = {
   testedVersions: ['0.86.2'],
   versionOk: testedVersion(['0.86.2']),
   async write(record) {

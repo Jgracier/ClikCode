@@ -17,7 +17,7 @@ import { readTurnActivities } from './turn-activities.js';
  * A /rename is the user's and is left alone; everything else is provisional
  * until a real title arrives, and a turn that produces none simply leaves the
  * chat unnamed without requesting another title. */
-export async function nameSession(
+async function nameSession(
   session: HarnessSession,
   sources: { title?: string; vendor?: () => Promise<string | undefined> },
 ): Promise<void> {

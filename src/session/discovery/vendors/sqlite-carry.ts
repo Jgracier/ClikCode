@@ -40,7 +40,7 @@ export type CarryDb = { exec(sql: string): void; prepare(sql: string): Statement
 export type CarrySchema = 'main' | 'src';
 
 /** A table holding the session's rows, keyed by the column naming it. */
-export interface SqliteCarryTable {
+interface SqliteCarryTable {
   table: string;
   key: string;
   /** Columns the destination assigns itself (AUTOINCREMENT ids). */
@@ -88,7 +88,7 @@ export function progressQuery(sql: string): SqliteCarrySpec['progress'] {
 
 /** Node 22 -- this package's floor -- has node:sqlite only behind
  *  --experimental-sqlite; without it a carry is a clean "no". */
-export async function openCarryDatabase(path: string): Promise<CarryDb | undefined> {
+async function openCarryDatabase(path: string): Promise<CarryDb | undefined> {
   try {
     const sqlite = await import('node:sqlite') as unknown as { DatabaseSync: new (path: string) => CarryDb };
     return new sqlite.DatabaseSync(path);

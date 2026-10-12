@@ -9,7 +9,7 @@ import { accessSync, constants, realpathSync } from 'node:fs';
 import type { McpServerEntry } from '../harness/mcp-registry.js';
 
 export const CONVERSATIONS_MCP_NAME = 'clikcode-conversations';
-export const CONVERSATIONS_MCP_COMMAND = 'conversations-mcp';
+const CONVERSATIONS_MCP_COMMAND = 'conversations-mcp';
 
 function executable(path: string): boolean {
   try { accessSync(path, constants.X_OK); return true; } catch { return false; }

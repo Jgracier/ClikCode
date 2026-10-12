@@ -37,7 +37,7 @@ export interface GatewayModel {
   access?: GatewayAccess;
 }
 
-export type GatewayAccess = 'subscription' | 'free' | 'paid';
+type GatewayAccess = 'subscription' | 'free' | 'paid';
 const ACCESS = new Set<string>(['subscription', 'free', 'paid']);
 
 /** A model as a row names it: `claude-opus-5-5 (subscription)` where the Gateway says which tier serves it. */
@@ -73,7 +73,7 @@ export interface GatewayModelPrice {
 
 /** What the Gateway says about Automatic itself. Never which model it picks:
  * the Gateway does not say, and the client must not show or lean on it. */
-export interface GatewayAutoFacts { contextWindow?: number; maxOutput?: number; vision?: boolean }
+interface GatewayAutoFacts { contextWindow?: number; maxOutput?: number; vision?: boolean }
 
 export interface GatewayModelList {
   /** The facts the Gateway lists for `auto`; null from a Gateway that lists none. */
@@ -202,7 +202,7 @@ export async function gatewayModels(
 }
 
 /** The id the Gateway takes for "you choose". */
-export const GATEWAY_AUTO_MODEL = 'auto';
+const GATEWAY_AUTO_MODEL = 'auto';
 
 /** OpenAI's model list, as the Gateway sends it, to the list ClikCode shows:
  * `auto` is not a row: it supplies the facts Automatic runs under. */

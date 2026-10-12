@@ -35,9 +35,9 @@ export const SHELL_OUTPUT_MAX_BYTES = 8000;
 /** The bound on a command with nobody to press Esc (a piped or argv `!` call). The interactive
  * composer sets none: the command is the user's own and Esc stops it. */
 export const SHELL_HEADLESS_TIMEOUT_MS = 30 * 60_000;
-export const SHELL_KILL_GRACE_MS = 1500;
+const SHELL_KILL_GRACE_MS = 1500;
 
-export function shellInvocation(command: string): { file: string; args: string[] } {
+function shellInvocation(command: string): { file: string; args: string[] } {
   if (process.platform === 'win32') return { file: process.env.ComSpec || 'cmd.exe', args: ['/d', '/s', '/c', command] };
   return { file: existsSync('/bin/bash') ? '/bin/bash' : '/bin/sh', args: ['-c', command] };
 }

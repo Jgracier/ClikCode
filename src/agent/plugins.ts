@@ -28,12 +28,12 @@ import type { HookConfig } from './hooks.js';
 import { parseMcpServerEntry, type McpServerSpec } from './mcp/config.js';
 import { parseFrontmatter } from './skills.js';
 
-export const PLUGIN_MANIFEST = path.join('.claude-plugin', 'plugin.json');
+const PLUGIN_MANIFEST = path.join('.claude-plugin', 'plugin.json');
 const REGISTRY_FILE = 'plugins.json';
 const MAX_AGENT_FILES = 100;
 const MAX_FILE_BYTES = 256 * 1024;
 
-export interface PluginRegistry {
+interface PluginRegistry {
   /** Enable/disable choices made in ClikCode for Claude Code's plugins, by Claude's id. */
   claude: Record<string, { enabled: boolean }>;
 }
@@ -71,32 +71,32 @@ function readJson(file: string): unknown {
   }
 }
 
-export function pluginsDirectory(stateDir: string): string {
+function pluginsDirectory(stateDir: string): string {
   return path.join(stateDir, 'plugins');
 }
 
-export function pluginRegistryPath(stateDir: string): string {
+function pluginRegistryPath(stateDir: string): string {
   return path.join(pluginsDirectory(stateDir), REGISTRY_FILE);
 }
 
-export function readPluginRegistry(stateDir: string): PluginRegistry {
+function readPluginRegistry(stateDir: string): PluginRegistry {
   const raw = readJson(pluginRegistryPath(stateDir));
   const table = (key: string) => (isRecord(raw) && isRecord(raw[key]) ? raw[key] : {});
   return { claude: table('claude') as PluginRegistry['claude'] };
 }
 
-export function claudePluginsDirectory(home: string = homedir()): string {
+function claudePluginsDirectory(home: string = homedir()): string {
   return path.join(home, '.claude', 'plugins');
 }
 
 // ── manifest ─────────────────────────────────────────────────────────────────
 
-export interface PluginManifest {
+interface PluginManifest {
   name?: string; version?: string; description?: string;
   commands?: unknown; agents?: unknown; skills?: unknown; hooks?: unknown; mcpServers?: unknown;
 }
 
-export function readPluginManifest(root: string): PluginManifest | undefined {
+function readPluginManifest(root: string): PluginManifest | undefined {
   const raw = readJson(path.join(root, PLUGIN_MANIFEST));
   return isRecord(raw) ? raw as PluginManifest : undefined;
 }
@@ -184,13 +184,13 @@ function isDirectory(file: string): boolean {
 }
 
 /** Directories of `<name>/SKILL.md` folders. */
-export function pluginSkillDirs(plugin: Pick<InstalledPlugin, 'root'>): string[] {
+function pluginSkillDirs(plugin: Pick<InstalledPlugin, 'root'>): string[] {
   const manifest = readPluginManifest(plugin.root);
   return [...new Set([path.join(plugin.root, 'skills'), ...manifestPaths(plugin.root, manifest?.skills)])].filter(isDirectory);
 }
 
 /** Directories of `*.md` command templates. */
-export function pluginCommandDirs(plugin: Pick<InstalledPlugin, 'root'>): string[] {
+function pluginCommandDirs(plugin: Pick<InstalledPlugin, 'root'>): string[] {
   const manifest = readPluginManifest(plugin.root);
   return [...new Set([path.join(plugin.root, 'commands'), ...manifestPaths(plugin.root, manifest?.commands)])].filter(isDirectory);
 }
@@ -217,7 +217,7 @@ function readAgentFile(file: string, plugin: Pick<InstalledPlugin, 'root' | 'nam
   return { name, description, prompt, plugin: plugin.name, ...(tools ? { tools } : {}) };
 }
 
-export function pluginAgents(plugin: Pick<InstalledPlugin, 'root' | 'name'>): PluginAgent[] {
+function pluginAgents(plugin: Pick<InstalledPlugin, 'root' | 'name'>): PluginAgent[] {
   const manifest = readPluginManifest(plugin.root);
   const files: string[] = [];
   for (const entry of [path.join(plugin.root, 'agents'), ...manifestPaths(plugin.root, manifest?.agents)]) {
@@ -237,7 +237,7 @@ export function pluginDataDir(stateDir: string, id: string): string {
 
 /** hooks/hooks.json and the manifest's `hooks` (a path, a table, or a list of
  * either), commands expanded and given the plugin's environment. */
-export function pluginHooks(plugin: Pick<InstalledPlugin, 'root' | 'id'>, stateDir: string): HookConfig {
+function pluginHooks(plugin: Pick<InstalledPlugin, 'root' | 'id'>, stateDir: string): HookConfig {
   const manifest = readPluginManifest(plugin.root);
   const dataDir = pluginDataDir(stateDir, plugin.id);
   const sources: unknown[] = [];
@@ -286,12 +286,12 @@ function expandDeep(value: unknown, root: string, dataDir: string): unknown {
 
 /** Claude Code's name for a plugin's server, so its tools are named
  * `mcp__plugin_<plugin>_<server>__<tool>` here as there (hook matchers carry over). */
-export function pluginServerName(plugin: string, server: string): string {
+function pluginServerName(plugin: string, server: string): string {
   return `plugin:${plugin}:${server}`;
 }
 
 /** .mcp.json and the manifest's `mcpServers` (a path or a table). */
-export function pluginMcpServers(plugin: Pick<InstalledPlugin, 'root' | 'name' | 'id'>, stateDir: string): McpServerSpec[] {
+function pluginMcpServers(plugin: Pick<InstalledPlugin, 'root' | 'name' | 'id'>, stateDir: string): McpServerSpec[] {
   const manifest = readPluginManifest(plugin.root);
   const dataDir = pluginDataDir(stateDir, plugin.id);
   const tables: unknown[] = [readJson(path.join(plugin.root, '.mcp.json'))];
@@ -327,7 +327,7 @@ export function enabledPluginAgents(roots: PluginRoots): PluginAgent[] {
 }
 
 /** An agent by its bare or `plugin:agent` name. */
-export function findPluginAgent(roots: PluginRoots, type: string): PluginAgent | undefined {
+function findPluginAgent(roots: PluginRoots, type: string): PluginAgent | undefined {
   const agents = enabledPluginAgents(roots);
   return agents.find((agent) => agent.name === type || `${agent.plugin}:${agent.name}` === type);
 }

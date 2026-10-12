@@ -20,7 +20,7 @@ import { activityResult, explores, exploreSummary, tensedLabel } from '../../har
 import { TOOL_CATEGORY_STYLE } from '../../harness/protocol/tool-category-style.js';
 
 /** Calls listed under a merged row. */
-export const EXPLORE_SHOWN_CALLS = 3;
+const EXPLORE_SHOWN_CALLS = 3;
 
 export type GroupRow = { key: string; event: HarnessActivityEvent; responseOffset?: number };
 

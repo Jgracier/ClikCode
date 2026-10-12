@@ -2,7 +2,7 @@
  * Error catalog and the one problem+json (RFC 7807) decoder for Gateway responses.
  */
 
-export type ErrorSeverity = 'info' | 'warning' | 'error' | 'critical';
+type ErrorSeverity = 'info' | 'warning' | 'error' | 'critical';
 
 export interface ErrorCatalogEntry {
   message: string;
@@ -72,7 +72,7 @@ export const ERROR_CATALOG: Record<string, ErrorCatalogEntry> = {
 };
 
 /** Structured, user-safe detail payload attached to a problem. */
-export interface ProblemDetails {
+interface ProblemDetails {
   [key: string]: unknown;
 }
 

@@ -204,7 +204,7 @@ interface Captured { code: number | null; output: string }
  * POSIX the child leads its own session, so an installer that opens
  * /dev/tty to ask a question gets no terminal instead of the user's keyboard
  * under ClikCode's screen. */
-export function runInstallCommand(
+function runInstallCommand(
   command: string, args: readonly string[],
   options: { env?: NodeJS.ProcessEnv; timeoutMs?: number; cwd?: string } = {},
 ): Promise<Captured> {
