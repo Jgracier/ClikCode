@@ -239,8 +239,18 @@ export function withChildTool<T extends Pick<HarnessActivityEvent, 'childTools' 
 ): T {
   if (child.kind !== 'tool-start') return parent;
   if (!child.id) return { ...parent, childTools: (parent.childTools ?? 0) + 1 };
-  if (parent.childCallIds?.has(child.id)) return parent;
-  return { ...parent, childCallIds: new CallIdSet([...(parent.childCallIds ?? []), child.id]), childTools: (parent.childTools ?? 0) + 1 };
+  const counted = callIds(parent.childCallIds);
+  if (counted.has(child.id)) return parent;
+  return { ...parent, childCallIds: new CallIdSet([...counted, child.id]), childTools: (parent.childTools ?? 0) + 1 };
+}
+
+/** The ids a row holds, whatever shape a copy left them in: a row that went through a clone or a
+ * serializer arrives with a plain object or an array where the Set was, and `.has` on it threw --
+ * the VS Code panel then dropped every event of that turn, and opening such a chat did nothing. */
+function callIds(held: unknown): ReadonlySet<string> {
+  if (held instanceof Set) return held as ReadonlySet<string>;
+  if (Array.isArray(held)) return new CallIdSet(held.filter((id): id is string => typeof id === 'string'));
+  return new CallIdSet();
 }
 
 /** What every surface orders a turn's rows by (standard 1): `responseOffset`

@@ -49,3 +49,18 @@ describe("a sub-agent's tool uses (standard 5)", () => {
     expect(JSON.parse(JSON.stringify(agent))).toEqual({ kind: 'tool-start', label: 'Task(look)', id: 'agent', agent: true, childTools: 1 });
   });
 });
+
+describe('a sub-agent row whose counted ids went through a copy', () => {
+  it('still counts by id, whatever shape the ids arrived in, and never throws', () => {
+    const start = { kind: 'tool-start' as const, id: 'c1' };
+    for (const held of [{}, ['c1'], undefined]) {
+      const parent = { childTools: 1, childCallIds: held as never };
+      const once = withChildTool(parent, start);
+      expect(() => withChildTool(once, start)).not.toThrow();
+      expect(withChildTool(once, start).childTools).toBe(once.childTools);
+      expect(withChildTool(once, { kind: 'tool-start', id: 'c2' }).childTools).toBe((once.childTools ?? 0) + 1);
+    }
+    // An array that already holds the id: not counted again.
+    expect(withChildTool({ childTools: 1, childCallIds: ['c1'] as never }, start).childTools).toBe(1);
+  });
+});
