@@ -146,7 +146,7 @@ const SERVER_LIST_TTL_MS = 300_000;
 
 function serverModelList(harness: AiLocalHarnessDefinition): boolean {
   // Copilot's account list moves with its quota (spent chat lists `auto` alone).
-  return harness.command === 'copilot' || (!listsModelsLive(harness) && !harness.acp?.liveModelList && Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false)));
+  return Boolean(harness.modelsDevCatalog) || (!listsModelsLive(harness) && !harness.acp?.liveModelList && Boolean(harness.modelDiscoveryArgv || (harness.acp && harness.acp.listsModels !== false)));
 }
 
 /** The catalog is the list an ACP session offers, so each live session
@@ -157,7 +157,7 @@ function serverModelList(harness: AiLocalHarnessDefinition): boolean {
  * that provider's models. */
 function listsModelsLive(harness: AiLocalHarnessDefinition): boolean {
   // Codex: its running app-server answers `model/list` (transport/codex-app-server.ts).
-  if (harness.command === 'codex') return true;
+  if (harness.nativeOperations?.includes('model-list')) return true;
   if (harness.acp?.liveModelList) return true;
   return Boolean(harness.acp && harness.acp.listsModels !== false && !harness.acp.providerConfigId && !harness.modelDiscoveryArgv);
 }
@@ -173,15 +173,8 @@ async function fileIdentity(path: string | undefined): Promise<string> {
 function catalogProfileRoot(harness: AiLocalHarnessDefinition, account?: AiHarnessAccount): string | undefined {
   return account?.nativeProfile?.path
     ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined)
-    ?? (harness.command === 'codex' ? join(homedir(), '.codex')
-      : harness.command === 'claude' ? join(homedir(), '.claude')
-        : harness.command === 'hermes' ? join(homedir(), '.hermes')
-          : harness.command === 'openclaw' ? join(homedir(), '.openclaw')
-            : harness.command === 'vibe' ? join(homedir(), '.vibe') : undefined);
+    ?? (harness.nativeStateDir ? join(homedir(), harness.nativeStateDir) : undefined);
 }
-
-/** Harnesses whose list comes from the models.dev catalog. */
-const MODELS_DEV_HARNESSES: ReadonlySet<string> = new Set(['copilot', 'goose']);
 
 /** Every file nativeModelCatalogUncached reads, as identities. Kept beside the reader it describes: a file read
  * there and not listed here is a value that can go stale unnoticed. */
@@ -192,15 +185,11 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     // Code, the alias table read out of the bundle itself.
     await resolveBinaryPath(harness.binary),
     ...(harness.acp?.binary ? [await resolveBinaryPath(harness.acp.binary)] : []),
-    ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
-    ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
-    ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json'), join(root, '.env')] : []),
+    ...(root ? (harness.modelCatalogFiles ?? []).map((file) => join(root, ...file.split('/'))) : []),
+    ...(harness.modelCatalogHomeFiles ?? []).map((file) => join(homedir(), ...file.split('/'))),
     // OpenClaw's sign-ins live in the agent's SQLite auth store.
-    ...(harness.command === 'openclaw' && root ? [join(root, 'openclaw.json'), join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')] : []),
-    ...(harness.command === 'vibe' && root ? [join(root, 'config.toml')] : []),
-    ...(harness.command === 'goose' ? [join(homedir(), '.config', 'goose', 'config.yaml'), join(homedir(), '.config', 'goose', 'secrets.yaml')] : []),
     // The models.dev catalog a list was read from: a newer copy is a new list.
-    ...(MODELS_DEV_HARNESSES.has(harness.command) ? modelsDevFiles() : []),
+    ...(harness.modelsDevCatalog ? modelsDevFiles() : []),
     ...(harness.command === 'aider' ? [openRouterCacheFile()] : []),
     // A sign-in changes which models a vendor lists (Pi, Qwen, Cline): its
     // credential files are part of what the list was read from.
@@ -408,7 +397,7 @@ async function discoverModelCatalog(
   // empty was offline, not empty: remembered, it stayed empty until Copilot
   // itself was updated. Asked again next time instead (a failed `models`
   // run is the same: no list is not an empty list).
-  if (!result.models.length && (MODELS_DEV_HARNESSES.has(harness.command) || harness.command === 'aider' || harness.acp || harness.modelDiscoveryArgv)) return result;
+  if (!result.models.length && (harness.modelsDevCatalog || harness.command === 'aider' || harness.acp || harness.modelDiscoveryArgv)) return result;
   await rememberCatalog(harness, account, fingerprint, result);
   return result;
 }

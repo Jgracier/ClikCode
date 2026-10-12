@@ -404,3 +404,22 @@ describe('a spent plan filed under a rate-limit kind', () => {
     expect(classifyAccountFailure(new Error('429 too many requests'), { statusCode: 429 })).toBe('temporarily-throttled');
   });
 });
+
+describe("a vendor's declared failure wording classifies the failure", () => {
+  const copilot = { pattern: '^Error: .+ \\(Request ID: [0-9A-Fa-f:]+\\)$' };
+  const auggie = { pattern: '^\\s*(?:⚠️\\s*)?\\*{0,2}You have run out of usage for\\b', status: 402 };
+  const hermes = { pattern: '^(?:API call failed after \\d+ retries: )?HTTP (\\d{3})\\b' };
+
+  it('reads the status a harness pattern names when no structured status came', () => {
+    expect(classifyAccountFailure(new Error('⚠️ **You have run out of usage for this month'), { replyErrorPatterns: [auggie] })).toBe('quota-exhausted');
+    expect(classifyAccountFailure(new Error('HTTP 401 invalid key'), { replyErrorPatterns: [hermes] })).toBe('authentication-required');
+  });
+
+  it('reads the status a pattern captures, ahead of loose wording', () => {
+    expect(classifyAccountFailure(new Error('API call failed after 3 retries: HTTP 402 no balance'), { replyErrorPatterns: [hermes] })).toBe('quota-exhausted');
+  });
+
+  it('leaves a pattern with no status alone', () => {
+    expect(classifyAccountFailure(new Error('Error: something odd (Request ID: AB:12)'), { replyErrorPatterns: [copilot] })).toBe('other');
+  });
+});

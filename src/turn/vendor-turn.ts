@@ -164,9 +164,12 @@ export async function sendVendorTurn(input: {
   if (titleRequest) turnText = titleRequest.prompt;
   const supportsImages = harnessSupportsImages(harness);
   const images = supportsImages ? prepared.images : [];
-  const imageNote = prepared.images.length && !supportsImages
-    ? `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`
-    : '';
+  const imageListing = `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
+  const imageNote = prepared.images.length && !supportsImages ? imageListing : '';
+  // An ACP agent takes the images as blocks; if it does not advertise them the
+  // turn lands on the CLI, which (no attach flag) is told where the files are.
+  const cliCarriesImages = Boolean(harness.imageArgvPrefix);
+  const cliImageNote = images.length && !cliCarriesImages ? imageListing : '';
   turnText += imageNote;
   /** What the request carried besides its words. A retry on a fresh thread
    * retells the conversation from ClikCode's copy, which holds only what was
@@ -544,7 +547,7 @@ export async function sendVendorTurn(input: {
     // all five instead of the ones someone remembered.
     titleStream = titleStreamForAttempt(titleStream, turnText);
     const runStructuredCliTurn = (): Promise<NativeTurnResult> => runVendorCliAttempt({
-      harness, session, turnText, model, environment, images, signal, run, checkpoint,
+      harness, session, turnText: `${turnText}${cliImageNote}`, model, environment, images: cliCarriesImages ? images : [], signal, run, checkpoint,
       effort: turnEffort(), sharedObserver,
       onOutputStart: () => { cliOutputStarted = true; },
       onStreamError: (error) => { streamError = error; },
@@ -664,6 +667,7 @@ export async function sendVendorTurn(input: {
         errorKind: result.errorKind ?? carried.errorKind ?? streamError?.kind,
         ...(result.rateLimitStatus ? { rateLimitStatus: result.rateLimitStatus } : {}),
         ...(declared ? { isResultError: declared.isResultError } : {}),
+        ...(harness.replyErrorPatterns ? { replyErrorPatterns: harness.replyErrorPatterns } : {}),
       });
       // Every path from here retries or ends the turn: this attempt is over.
       recordUnfinishedAttempt('error');

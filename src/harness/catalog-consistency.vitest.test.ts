@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { NATIVE_USAGE_PROBES } from './accounts/usage-probes.js';
 import { HOME_REDIRECT_ENV_DEFAULTS, harnessSupportsPermissionMode, allLocalHarnesses, harnessAcpLaunch, harnessSupportsEffort, harnessSupportsImages, localHarnessCapabilityManifest } from '@clikcode/router/ai-local-harness';
 
 /**
@@ -144,5 +145,101 @@ describe('every declared capability is usable', () => {
     for (const command of ['opencode', 'kilo']) expect(byCommand.get(command)?.acp?.planModeId, command).toBe('plan');
     // grok 1.0.50 accepts none|minimal|low|medium|high|xhigh|max.
     expect(byCommand.get('grok')?.effortValues).toContain('xhigh');
+  });
+
+  it('derives image support from the CLI flag or from ACP, never from a name', () => {
+    const byCommand = new Map(harnesses.map((h) => [h.command, h]));
+    // ACP agents that advertise promptCapabilities.image (initialize, probed 2026-10-11) get real image blocks.
+    for (const command of ['claude', 'gemini', 'goose', 'cursor', 'opencode', 'kilo', 'droid', 'cline', 'qwen', 'kimi', 'devin', 'vibe']) {
+      expect(harnessSupportsImages(byCommand.get(command)!), command).toBe(true);
+    }
+    // Grok Build's initialize says image:false and it has no attach flag.
+    expect(harnessSupportsImages(byCommand.get('grok')!)).toBe(false);
+    // A CLI-only harness without an attach flag carries none.
+    expect(harnessSupportsImages(byCommand.get('cn')!)).toBe(false);
+    expect(harnessSupportsImages(byCommand.get('openclaw')!)).toBe(false);
+  });
+
+  it('only declares a plan mode the runtime can switch on', () => {
+    // A plan switch is either an ACP session mode (acp.planModeId) or a CLI option with argv.
+    for (const h of harnesses.filter((entry) => entry.planMode)) {
+      const option = localHarnessCapabilityManifest(h).options.find((candidate) => candidate.id === h.planMode!.option);
+      expect(Boolean(h.acp?.planModeId) || Boolean(option?.argv?.length), `${h.command}: planMode with no planModeId and no CLI option argv`).toBe(true);
+    }
+    // A harness whose preferred transport is ACP and whose plan mode exists there must name the session mode.
+    for (const command of ['cursor', 'kimi', 'droid', 'cline', 'command', 'devin', 'qwen', 'junie', 'opencode', 'kilo', 'claude']) {
+      expect(harnesses.find((h) => h.command === command)?.acp?.planModeId, command).toBeTruthy();
+    }
+  });
+
+  it('never leaves a permission mapping unreachable or an ACP mode unowned', () => {
+    for (const h of harnesses) {
+      for (const mode of Object.keys(h.acp?.permissionArgv ?? {})) expect(h.permissionModes, `${h.command}: acp.permissionArgv.${mode}`).toContain(mode);
+      for (const mode of Object.keys(h.acp?.permissionModeIds ?? {})) expect(h.permissionModes, `${h.command}: acp.permissionModeIds.${mode}`).toContain(mode);
+    }
+    // Two ClikCode modes on one ACP mode id (Cline: its modes are plan|act, not permission levels) must differ at launch.
+    for (const h of harnesses) {
+      const ids = h.acp?.permissionModeIds ?? {};
+      const seen = new Map<string, string>();
+      for (const [mode, id] of Object.entries(ids)) {
+        const other = seen.get(id);
+        if (other) expect(JSON.stringify(h.permissionArgv?.[mode as 'ask']?.argv), `${h.command}: ${mode} and ${other} share ACP mode ${id}`).not.toBe(JSON.stringify(h.permissionArgv?.[other as 'ask']?.argv));
+        seen.set(id, mode);
+      }
+    }
+  });
+
+  it('maps Kimi onto what `kimi --help` and its ACP session say', () => {
+    const kimi = harnesses.find((h) => h.command === 'kimi')!;
+    // --yolo is "Ask When Needed", --auto is "Never Ask"; Ask is the unflagged default, --plan is plan mode.
+    expect(kimi.permissionArgv).toEqual({ ask: { argv: [] }, bypass: { argv: ['--auto'] }, auto: { argv: ['--yolo'] } });
+    expect(kimi.acp?.permissionModeIds).toEqual({ ask: 'default', auto: 'yolo', bypass: 'auto' });
+    expect(kimi.acp?.planModeId).toBe('plan');
+    expect(kimi.acp?.effortConfigId).toBe('thinking');
+    expect(kimi.planMode).toEqual({ option: 'plan', value: true });
+  });
+
+  it('gives every harness one stated answer about reading its quota, matching the probe table', () => {
+    for (const h of harnesses) {
+      expect(h.quotaProbe, `${h.command} must declare quotaProbe: true or { none: reason }`).toBeDefined();
+      if (h.quotaProbe === true) expect(NATIVE_USAGE_PROBES[h.command], `${h.command} claims a quota probe`).toBeTypeOf('function');
+      else {
+        expect(NATIVE_USAGE_PROBES[h.command], `${h.command} has a probe but says none`).toBeUndefined();
+        expect((h.quotaProbe as { none: string }).none.length, `${h.command} needs a reason`).toBeGreaterThan(10);
+      }
+    }
+    for (const command of Object.keys(NATIVE_USAGE_PROBES)) expect(harnesses.find((h) => h.command === command)?.quotaProbe, command).toBe(true);
+  });
+
+  it('gives every harness with a vendor sign-in a way to start it', () => {
+    for (const h of harnesses.filter((entry) => entry.localAuth.includes('vendor-cli'))) {
+      const way = h.loginArgv !== undefined || h.loginKeyCommand !== undefined || (h.authEnv?.length ?? 0) > 0;
+      expect(way, `${h.command} lists vendor-cli sign-in but declares no loginArgv, key command or env key`).toBe(true);
+    }
+  });
+});
+
+describe('vendor knowledge lives in the catalog, not in branches', () => {
+  it('writes the provider menu labels the key-route menus agree on once', () => {
+    const labels = (command: string, provider: string) => harnesses.find((h) => h.command === command)?.loginKeyRoutes
+      ?.find((route) => 'provider' in route && route.provider === provider)?.choose.at(-1);
+    for (const provider of ['anthropic', 'openrouter', 'groq', 'cerebras', 'huggingface', 'mistral', 'deepseek', 'zai']) {
+      const shared = labels('cline', provider);
+      expect(shared, provider).toBeTruthy();
+      expect(labels('opencode', provider), `opencode:${provider}`).toBe(shared);
+      expect(labels('kilo', provider), `kilo:${provider}`).toBe(shared);
+      expect(labels('pi', provider), `pi:${provider}`).toBe(shared);
+    }
+  });
+
+  it('declares where each vendor model catalog is read from', () => {
+    const byCommand = new Map(harnesses.map((h) => [h.command, h]));
+    for (const command of ['codex', 'claude', 'hermes', 'openclaw', 'vibe']) {
+      expect(byCommand.get(command)?.nativeStateDir, command).toMatch(/^\./);
+      expect(byCommand.get(command)?.modelCatalogFiles?.length, command).toBeGreaterThan(0);
+    }
+    expect(byCommand.get('copilot')?.modelsDevCatalog).toBe(true);
+    expect(byCommand.get('goose')?.modelsDevCatalog).toBe(true);
+    expect(byCommand.get('hermes')?.effortHelpArgv).toEqual(['chat', '--help']);
   });
 });
