@@ -1476,6 +1476,28 @@ SCENARIOS = {
     # closing its sign-in choice leaves the conversation where it was.
     # A Gateway chat shows what its calls are paid from in the composer's upper right, where a vendor
     # chat shows its plan window: the balance, or that the account is not metered.
+    # The same turn through ClikCode's own agent (the Gateway) and through a native harness draws the same rows.
+    'gateway-tool-turn-rows': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing',
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-TOOLS GW-HEAD go'), ('wait_for', 'Worked for', 40), ('settle', 2)],
+        'watch': [], 'final_contains': ['Thought for', '· Planning', 'Read 2 files', 'Read alpha.txt', 'Read beta.txt', 'Both reads came back fine.', 'Worked for', '$0.0052'],
+        'never': ['Error:'],
+    },
+    'gateway-transient-5xx-retries': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing',
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-5XX go'), ('wait_for', 'Starting the work now.', 40), ('settle', 2)],
+        'watch': [], 'final_contains': ['Starting the work now.'], 'never': ['upstream unavailable', 'Error:'],
+    },
+    'gateway-esc-stops-the-turn': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing',
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-SLOW go'), ('wait_for', 'word3', 20), ('keys', '\x1b'), ('settle', 3)],
+        'watch': [], 'final_contains': ['Stopped'], 'never': ['word49'],
+    },
+    'gateway-steer-gets-its-own-answer': {
+        'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'timing',
+        'steps': [('keys', '\r'), ('settle', 3), ('type', 'GW-SLOW go'), ('wait_for', 'word3', 20), ('type', 'steer-now please'), ('wait_for', 'Steer received, adjusting.', 30), ('settle', 2)],
+        'watch': [], 'final_contains': ['steer-now please', 'Steer received, adjusting.'], 'never': ['Error:'],
+    },
     'gateway-credit-on-composer': {
         'turns': [{}], 'harness': 'grok', 'setup': gateway_fake(), 'startup': 5, 'no_dup_check': 'static screen',
         'steps': [('keys', '\r'), ('settle', 4)],
