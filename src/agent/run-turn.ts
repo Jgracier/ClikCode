@@ -178,7 +178,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     input.subagent ? input.subagent.system
       : (tools.some((tool) => tool.name === SKILL_TOOL) ? discoverSkills({ cwd, stateDir: input.stateDir, homeDir, turnId }) : Promise.resolve({ skills: [] }))
         .then((catalog) => buildSystemPrompt({
-          cwd, addDirs, userConfigDir: input.userConfigDir ?? input.stateDir,
+          cwd, addDirs, homeDir, userConfigDir: input.userConfigDir ?? input.stateDir,
           skillsSection: [
             skillsPromptSection(catalog.skills, profile),
             // Plugin agent types, when a tool can start one.
