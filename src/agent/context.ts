@@ -15,7 +15,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnPortable, terminatePortable } from '../harness/transport/spawn.js';
 import type { ConversationItem, ModelClient, TokenUsage } from './model-client.js';
-import { OUTPUT_CAPS } from './security.js';
+import { OUTPUT_CAPS, readDenyReason, resolvePath } from './security.js';
 import { CONVERSATION_TOOLS_NOTE } from '../search/tools.js';
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -32,6 +32,20 @@ const WORKING_METHOD = `# Working method
 - Make the smallest change that fully solves the task, in the style of the surrounding code. Do not refactor, rename or reformat what you were not asked to touch.
 - Every step is a full model round trip, so make each one count: issue together every call you can already decide. Search and read the files you know you will need in one step (read-only calls run in parallel). Once you know the whole change, make all of its edits, across every file, in one step, ending with the command that checks them (calls that change things run in the order given).
 - After changing code, verify it when the project offers a way (type-check, tests, build) and fix what you broke.`;
+const DOING_TASKS = `# Doing tasks
+- An exploratory question ("how should we", "what do you think") gets an answer of a few sentences with a recommendation and its main tradeoff, not an implementation. Change files only once the user has asked for the change.
+- Do what was asked and no more: no extra features, speculative abstractions, error handling for cases that cannot happen, or compatibility shims. Delete what you are sure is unused instead of leaving it renamed or commented out.
+- Prefer editing an existing file to creating one. Add a comment only when the reason for the code would surprise a reader.
+- Write code that is safe against injection and the other common vulnerabilities, and fix any you notice you wrote.
+- Say what you verified (ran, read) and what you only believe. Type-checks and tests prove the code runs, not that a feature works: if you could not exercise it, say so.`;
+const RISKY_ACTIONS = `# Risky actions
+- Editing files and running tests are local and reversible; do them freely. Before anything hard to undo or visible to others -- deleting branches or data, force-pushing, resetting over uncommitted work, publishing, messaging, commenting on issues or pull requests, changing CI or shared infrastructure -- say what you are about to do and get the user's go-ahead.
+- Approval once covers that action, not the same action later or elsewhere. Standing permission is what the user wrote in their instruction files.
+- On an obstacle, find the cause; do not clear it with a destructive shortcut or a bypassed check. Unfamiliar files or branches may be the user's work: look first, and move aside rather than delete when unsure.`;
+const GIT = `# Git
+- Commit, push or open a pull request only when asked. Never change git config, skip hooks (\`--no-verify\`) or signing, or force-push a shared branch.
+- Stage the files you changed by name, then check \`git status\` for anything you did not mean to include (secrets, build output). Make a new commit rather than amending one that is already pushed.
+- Use non-interactive git: no \`-i\`, no editor. Use \`gh\` for GitHub.`;
 const EDITING_FILES = `# Editing files
 - edit_file and multi_edit need only the exact text, as seen in read_file or grep output: a grep line is enough to edit that line, with no read first. write_file over an existing file needs a read_file first.
 - Never write secrets into files, and never edit .git internals.`;
@@ -70,8 +84,8 @@ const SAFETY_WITHOUT_TOOL_SECTIONS = `${SAFETY}
 /** The fixed instructions at the head of the system prompt. */
 export function staticInstructions(toolUsageGuidance = true): string {
   return (toolUsageGuidance
-    ? [INTRO, WORKING_METHOD, EDITING_FILES, SHELL, SAFETY, COMMUNICATION, FORMATTING]
-    : [INTRO, WORKING_METHOD, SAFETY_WITHOUT_TOOL_SECTIONS, COMMUNICATION, FORMATTING]).join('\n\n');
+    ? [INTRO, DOING_TASKS, WORKING_METHOD, EDITING_FILES, SHELL, RISKY_ACTIONS, GIT, SAFETY, COMMUNICATION, FORMATTING]
+    : [INTRO, DOING_TASKS, WORKING_METHOD, RISKY_ACTIONS, GIT, SAFETY_WITHOUT_TOOL_SECTIONS, COMMUNICATION, FORMATTING]).join('\n\n');
 }
 
 export const PLAN_MODE_INSTRUCTIONS = `# Plan mode is ACTIVE
@@ -82,6 +96,8 @@ interface SystemPromptInput {
   addDirs?: readonly string[];
   /** Directory holding the user-level AGENTS.md. */
   userConfigDir: string;
+  /** The user's home, for `~/.claude/CLAUDE.md` and `@~/...` imports. */
+  homeDir?: string;
   planMode?: boolean;
   /** Rendered "# Skills" section (skills.ts); empty or absent adds nothing. */
   skillsSection?: string;
@@ -127,23 +143,42 @@ async function readCapped(file: string, remaining: number): Promise<string | und
   }
 }
 
-/** User AGENTS.md, then AGENTS.md (or, failing that, CLAUDE.md) for each
- * directory from the repository root down to cwd. Outer first, so the most
- * specific instructions come last and win. */
-async function loadMemoryChain(input: { cwd: string; userConfigDir: string; repoRoot?: string }): Promise<{ file: string; text: string }[]> {
+const MAX_IMPORT_DEPTH = 5;
+
+/** `@path` mentions in an instruction file, outside code spans and fences. */
+function importPaths(text: string): string[] {
+  const prose = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+  return [...prose.matchAll(/(?:^|\s)@((?:~\/|\.{1,2}\/|\/)?[\w.-][^\s]*)/g)].map((match) => match[1]!.replace(/[.,;:)]+$/, ''));
+}
+
+/** AGENTS.md (or, failing that, CLAUDE.md), then CLAUDE.local.md, for the
+ * user and for each directory from the repository root down to cwd; the
+ * user's `~/.claude/CLAUDE.md` is read when there is no user AGENTS.md. Outer
+ * first, so the most specific instructions come last and win. A file's
+ * `@path` imports follow it, to a depth of five, never into a location the
+ * model may not read. */
+async function loadMemoryChain(input: { cwd: string; userConfigDir: string; homeDir: string; repoRoot?: string }): Promise<{ file: string; text: string }[]> {
   const out: { file: string; text: string }[] = [];
+  const seen = new Set<string>();
+  const scope = { cwd: input.cwd, addDirs: [], stateDir: input.userConfigDir, homeDir: input.homeDir };
   let remaining = MEMORY_CAP_BYTES;
-  const take = async (candidates: string[]): Promise<void> => {
-    for (const file of candidates) {
-      if (remaining <= 0) return;
-      const text = await readCapped(file, remaining);
-      if (text === undefined) continue;
-      remaining -= Buffer.byteLength(text);
-      out.push({ file, text });
-      return;
+  const add = async (file: string, depth: number): Promise<boolean> => {
+    if (remaining <= 0 || seen.has(file)) return false;
+    const text = await readCapped(file, remaining);
+    if (text === undefined) return false;
+    seen.add(file);
+    remaining -= Buffer.byteLength(text);
+    out.push({ file, text });
+    if (depth >= MAX_IMPORT_DEPTH) return true;
+    for (const target of importPaths(text)) {
+      const absolute = path.resolve(path.dirname(file), target.startsWith('~') ? path.join(input.homeDir, target.slice(1)) : target);
+      try { if (readDenyReason(resolvePath(absolute, scope), scope)) continue; } catch { continue; }
+      await add(absolute, depth + 1);
     }
+    return true;
   };
-  await take([path.join(input.userConfigDir, 'AGENTS.md')]);
+  const first = async (candidates: string[]): Promise<void> => { for (const file of candidates) if (await add(file, 0)) return; };
+  await first([path.join(input.userConfigDir, 'AGENTS.md'), path.join(input.homeDir, '.claude', 'CLAUDE.md')]);
   const cwd = path.resolve(input.cwd);
   const root = input.repoRoot && !path.relative(input.repoRoot, cwd).startsWith('..') ? path.resolve(input.repoRoot) : cwd;
   const dirs: string[] = [];
@@ -151,14 +186,17 @@ async function loadMemoryChain(input: { cwd: string; userConfigDir: string; repo
     dirs.unshift(dir);
     if (dir === root || path.dirname(dir) === dir) break;
   }
-  for (const dir of dirs) await take([path.join(dir, 'AGENTS.md'), path.join(dir, 'CLAUDE.md')]);
+  for (const dir of dirs) {
+    await first([path.join(dir, 'AGENTS.md'), path.join(dir, 'CLAUDE.md'), path.join(dir, '.claude', 'CLAUDE.md')]);
+    await add(path.join(dir, 'CLAUDE.local.md'), 0);
+  }
   return out;
 }
 
 export async function buildSystemPrompt(input: SystemPromptInput): Promise<string> {
   const git = input.git ?? runGit;
   const repoRoot = (await git(['rev-parse', '--show-toplevel'], input.cwd))?.trim() || undefined;
-  const memory = await loadMemoryChain({ cwd: input.cwd, userConfigDir: input.userConfigDir, repoRoot });
+  const memory = await loadMemoryChain({ cwd: input.cwd, userConfigDir: input.userConfigDir, homeDir: input.homeDir ?? os.homedir(), repoRoot });
 
   const sections: string[] = [staticInstructions(input.toolUsageGuidance ?? true)];
   if (input.agentInstructions?.trim()) {
