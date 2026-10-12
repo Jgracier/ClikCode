@@ -14,5 +14,8 @@ export default defineConfig({
     pool: 'forks',
     // Its own empty home per test file: see vitest.setup.ts.
     setupFiles: ['./vitest.setup.ts'],
+    // The publish build runs the whole suite on a shared host and sets this: a test that fails
+    // once under load and passes on a retry is not a broken build. Unset (the default), no retries.
+    retry: Number(process.env.CLIKCODE_TEST_RETRY) || 0,
   },
 });
