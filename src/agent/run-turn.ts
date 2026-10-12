@@ -404,7 +404,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       // already in force if this same call asks again -- and a failed write
       // only costs the remembering, never the approval they already gave.
       if (approved === 'always' && rule) {
-        turnRules.current = await addPermissionAllowRule(ctx.cwd, rule).catch(() => ({ allow: [...turnRules.current.allow, ...parsePermissionRules([rule]).allow] }));
+        turnRules.current = { ...turnRules.current, allow: await addPermissionAllowRule(ctx.cwd, rule).catch(() => [...turnRules.current.allow, ...parsePermissionRules([rule]).allow]) };
       }
     }
 
