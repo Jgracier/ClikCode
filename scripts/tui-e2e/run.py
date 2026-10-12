@@ -114,6 +114,36 @@ def table_misaligned(text):
         group = []
     return None
 
+
+def gateway_fake(mode_env=None):
+    """`setup` for a scenario that runs ClikCode's OWN agent through the fake
+    Gateway (fake-gateway.mjs): a loopback OpenAI-compatible server, reached
+    through the same configuration the real route reads (CLIKCODE_GATEWAY_URL
+    and the canonical auth file, src/gateway/credentials.ts) inside the
+    scenario's own HOME. The key is a placeholder that only this fake accepts."""
+    def setup(context):
+        import subprocess
+        port_file = os.path.join(context['root'], 'gateway-port')
+        log_file = os.path.join(context['root'], 'gateway.jsonl')
+        server = subprocess.Popen(['node', os.path.join(REPO, 'scripts', 'tui-e2e', 'fake-gateway.mjs'), port_file],
+                                  stdout=subprocess.DEVNULL, env={**os.environ, 'GATEWAY_FAKE_LOG': log_file})
+        context['servers'] = [server]
+        for _ in range(100):
+            if os.path.exists(port_file) and open(port_file).read().strip(): break
+            time.sleep(0.05)
+        url = f"http://127.0.0.1:{open(port_file).read().strip()}"
+        for name in ('alpha.txt', 'beta.txt'): open(os.path.join(context['workspace'], name), 'w').write(f'contents of {name}\n')
+        auth_dir = os.path.join(context['home'], '.config', 'clikcode')
+        os.makedirs(auth_dir, exist_ok=True)
+        json.dump({'apiUrl': url, 'apiKey': 'fake-gateway-key', 'updatedAt': '2026-01-01T00:00:00.000Z'}, open(os.path.join(auth_dir, 'auth.json'), 'w'))
+        context['env'].update({'CLIKCODE_GATEWAY_URL': url, 'XDG_CONFIG_HOME': os.path.join(context['home'], '.config'), 'GATEWAY_FAKE_LOG': log_file, **(mode_env or {})})
+        context['stop_servers'] = lambda: [server.kill() for server in context['servers']]
+        GATEWAY_STOPS.append(context['stop_servers'])
+    return setup
+
+
+GATEWAY_STOPS = []
+
 TWO_BLOCKS = {'blocks': ['Checking the workspace first.', 'The final commit is live.']}
 
 # Each step: ('type', text) types and presses Enter; ('wait_for', text, secs)
@@ -2362,6 +2392,7 @@ def run(name, spec, entry, keep):
                     if text == last: continue
                     last = text
                     log.write(f'===== {t:.2f}s #{number}\n' + '\n'.join(line.rstrip() for line in text.split('\n') if line.strip()) + '\n')
+    while GATEWAY_STOPS: GATEWAY_STOPS.pop()()
     if not problems and not keep: shutil.rmtree(root, ignore_errors=True)
     return problems, root, final
 
