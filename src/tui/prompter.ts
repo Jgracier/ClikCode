@@ -17,8 +17,8 @@ import { closeOpenHyperlink } from './render/hyperlinks.js';
 import { createStreamingBlockParser } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
 import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visiblePathTail, visibleSlice, visibleTail } from './render/width.js';
-import { installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, signalsTeardown, terminalModes, terminalPrepare, terminalTeardown } from './restore.js';
-import { PUSH_TITLE, notifySequence, progressSequence, shouldNotify, titleSequence, windowTitle, type FocusState } from './terminal-signals.js';
+import { ENTER_ALTERNATE_SCREEN, installTerminalRestoreSignals, REEXEC_TERMINAL_ENV, restoreTerminal, terminalModes, terminalPrepare } from './restore.js';
+import type { FocusState } from './terminal-signals.js';
 import { compactPath, sessionProviderLabel } from '../harness/protocol/labels.js';
 import { sessionModelLabel } from '../harness/output.js';
 import { stripRepeatedTitles } from '../session/title.js';
@@ -71,7 +71,7 @@ import { reducedMotion } from './capabilities.js';
 import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, inKeyBatch, onKeyBatchEnd, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
-import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOff, sessionModesOn, setTerminalRawMode, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
+import { SWIPE_ROWS, enterInputModes, isMouseEvent, popReadModes, redrawPreamble, sessionModesOn, takeQueuedModes, wheelScrollRows, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
@@ -79,7 +79,8 @@ import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRu
 import { formatElapsed } from '../harness/protocol/format.js';
 import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js';
 import { userError } from '../harness/protocol/errors.js';
-import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, SCROLL_DRAIN_MIN, SCROLL_DRAIN_MS, ENTER_ALTERNATE_SCREEN, ALTERNATE_TRANSCRIPT_ROWS, SELECTION_SCROLL_MS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
+import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, SCROLL_DRAIN_MIN, SCROLL_DRAIN_MS, ALTERNATE_TRANSCRIPT_ROWS, SELECTION_SCROLL_MS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
+import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -1543,73 +1544,23 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     turn?.ended?.();
   }
 
-  /** The screen back from whoever had it (the shell after Ctrl+Z, a vendor
-   * login): the alternate screen, the transcript rewrapped if they resized
-   * it -- a phone's keyboard does -- and the next frame drawn whole. */
-  retakeScreen(): void {
-    this.suspended = false;
-    if (!terminalModes.alternateScreen) {
-      output.write(ENTER_ALTERNATE_SCREEN);
-      terminalModes.alternateScreen = true;
-    }
-    this.rewrapIfWidthChanged();
-    this.forgetScreenPosition();
-    this.retakeTerminalSignals();
-  }
+  retakeScreen(...args: Parameters<typeof retakeScreen>): ReturnType<typeof retakeScreen> { return retakeScreen.apply(this, args); }
 
-  /** Back from a hand-over (a `!` command, a picker that left the screen,
-   * Ctrl+Z): every session mode on again, the title taken, and the next
-   * frame drawn as after a resize -- the screen may well have changed size,
-   * and was certainly drawn on by something else. */
-  retakeTerminalSignals(): void {
-    if (!output.isTTY) return;
-    output.write(sessionModesOn());
-    this.takeTerminalTitle();
-    this.requestRedraw('resize');
-  }
+  retakeTerminalSignals(...args: Parameters<typeof retakeTerminalSignals>): ReturnType<typeof retakeTerminalSignals> { return retakeTerminalSignals.apply(this, args); }
 
   /** A resize outranks a repair: it does all a repair does, and more. */
   requestRedraw(redraw: Redraw): void {
     if (this.pendingRedraw !== 'resize') this.pendingRedraw = redraw;
   }
 
-  /** Save the shell's title, once per taking of the terminal. */
-  takeTerminalTitle(): void {
-    if (!output.isTTY || terminalModes.titlePushed) return;
-    output.write(PUSH_TITLE);
-    terminalModes.titlePushed = true;
-    this.terminalTitle = undefined;
-  }
+  takeTerminalTitle(...args: Parameters<typeof takeTerminalTitle>): ReturnType<typeof takeTerminalTitle> { return takeTerminalTitle.apply(this, args); }
 
-  /** The window title and the tab's progress indicator, kept in step with
-   * the turn: whether it is working or waiting for the user, and the
-   * conversation's name. Only what changed, for the next frame to carry
-   * (pendingSignals), and never off a TTY. The title holds still while a turn
-   * runs -- the progress indicator is what moves -- so a spinner tick writes
-   * nothing here. */
-  terminalSignals(): string {
-    if (!output.isTTY || this.suspended || this.closed || !terminalModes.titlePushed) return '';
-    const running = Boolean(this.turn);
-    const title = windowTitle({
-      running, asking: Boolean(this.pendingApproval),
-      ...(this.currentSession?.name ? { name: this.currentSession.name } : {}),
-    });
-    let sequence = '';
-    if (title !== this.terminalTitle) { sequence += titleSequence(title); this.terminalTitle = title; }
-    if (running !== terminalModes.progress) { sequence += progressSequence(running); terminalModes.progress = running; }
-    return sequence;
-  }
+  terminalSignals(...args: Parameters<typeof terminalSignals>): ReturnType<typeof terminalSignals> { return terminalSignals.apply(this, args); }
   /** Title and progress sequences owed to the terminal, written inside the
    * next synchronized frame rather than on their own beside it. */
   pendingSignals = '';
 
-  /** Something needs the user -- a turn ended, an approval waits -- and the
-   * terminal said it lost focus long enough ago: tell them (OSC 9 and a
-   * bell). A terminal that never reports focus is never notified. */
-  notifyIfAway(message: string): void {
-    if (!output.isTTY || this.suspended || this.closed || !shouldNotify(this.focus, Date.now())) return;
-    output.write(notifySequence(message));
-  }
+  notifyIfAway(...args: Parameters<typeof notifyIfAway>): ReturnType<typeof notifyIfAway> { return notifyIfAway.apply(this, args); }
 
   /** This turn's own calls: the anchor is reused when a turn left no
    * message, so the sequence decides. */
@@ -3238,32 +3189,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.transientNotice = undefined;
   }
 
-  /** Ctrl+Z. Raw mode swallows the terminal's own job control, so do what it
-   * would have done: give the terminal back exactly as close() would, stop
-   * this process, and rebuild the live region below whatever the shell printed
-   * once `fg` continues it. */
-  suspendToShell(): void {
-    if (this.suspended || this.closed) return;
-    this.suspended = true;
-    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
-    this.responsePaintTimer = undefined;
-    this.pendingLive = undefined;
-    setTerminalRawMode(false);
-    // Whoever takes the terminal takes the main screen with it: a vendor
-    // login prompt drawn on our alternate screen would vanish with it.
-    output.write(sessionModesOff(true));
-    terminalModes.alternateScreen = false;
-    process.once('SIGCONT', this.onContinue);
-    process.kill(process.pid, 'SIGTSTP');
-  }
+  suspendToShell(...args: Parameters<typeof suspendToShell>): ReturnType<typeof suspendToShell> { return suspendToShell.apply(this, args); }
 
-  readonly onContinue = (): void => {
-    if (this.closed) return;
-    this.retakeScreen();
-    this.resumeInput?.();
-    if (this.turn) this.paint(this.turn.draft, [], 0, '› ', this.turn.cursor);
-    else this.repaint();
-  };
+  readonly onContinue = (...args: Parameters<typeof onContinue>): ReturnType<typeof onContinue> => onContinue.apply(this, args);
 
   /** Remove a completed palette/picker as one frame. Painting an empty
    * composer here left its borders/status rows alive while the selected slash
@@ -3640,68 +3568,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       && !this.turn && !this.composer.text && !this.queuedDraft;
   }
 
-  close(): void {
-    if (this.closed) return;
-    lifecycle('window.close');
-    this.closed = true;
-    this.pendingLive = undefined;
-    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
-    this.responsePaintTimer = undefined;
-    this.stopWaiting(false);
-    this.clearTransientNotice();
-    if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
-    this.resizePaintTimer = undefined;
-    this.stopScrollBatch?.();
-    this.stopScrollBatch = undefined;
-    this.stopDrainBatch?.();
-    this.stopDrainBatch = undefined;
-    if (this.scrollDrainTimer) clearTimeout(this.scrollDrainTimer);
-    this.scrollDrainTimer = undefined;
-    this.pendingScroll = 0;
+  close(...args: Parameters<typeof close>): ReturnType<typeof close> { return close.apply(this, args); }
 
-    input.off('data', KEEP_STDIN_FLOWING);
-    this.stopFocusReports?.();
-    process.off('SIGWINCH', this.onResize);
-    process.off('SIGCONT', this.onContinue);
-    process.off('exit', restoreTerminal);
-    setTerminalRawMode(false);
-    input.pause();
-    // The alternate screen is handed back and the shell's own screen returns
-    // untouched. The conversation is on disk -- `/resume` reopens it.
-    output.write(
-      `${popReadModes()}`
-      + terminalTeardown(terminalModes.alternateScreen)
-      + signalsTeardown(),
-    );
-    terminalModes.alternateScreen = false;
-    terminalModes.painted = false;
-  }
+  suspend(...args: Parameters<typeof suspend>): ReturnType<typeof suspend> { return suspend.apply(this, args); }
 
-  /** Hands the real terminal to a vendor CLI's own interactive flow (typically
-   * login) without tearing the session down, so ClikCode's UI can resume in
-   * place once that process exits. */
-  async suspend(): Promise<void> {
-    lifecycle('window.suspend');
-    this.suspended = true;
-    this.pendingLive = undefined;
-    this.forgetScreenPosition();
-    if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
-    this.responsePaintTimer = undefined;
-    setTerminalRawMode(false);
-    input.pause();
-    // Remove the composer and footer before handing over, so the vendor's
-    // output continues directly under the conversation instead of being typed
-    // across this UI's status rows. Handed over once the modes are written --
-    // where a TTY write is asynchronous (Windows) the child must not start
-    // ahead of them -- rather than after a guessed 50ms.
-    await new Promise<void>((resolveWritten) => { output.write(sessionModesOff(false), () => resolveWritten()); });
-  }
-
-  resume(): void {
-    if (this.closed) return;
-    lifecycle('window.resume');
-    this.retakeScreen();
-    if (input.isTTY) input.resume();
-    this.repaint({ keepPalette: false });
-  }
+  resume(...args: Parameters<typeof resume>): ReturnType<typeof resume> { return resume.apply(this, args); }
 }

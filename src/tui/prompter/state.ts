@@ -20,8 +20,6 @@ export const SCROLL_DRAIN_MIN = 4;
 /** One frame, roughly: the gap between drains of an outstanding scroll. */
 export const SCROLL_DRAIN_MS = 16;
 
-export const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
-
 /** Rows kept above the viewport so scrolling back inside a conversation still
  * has somewhere to scroll to. */
 export const ALTERNATE_TRANSCRIPT_ROWS = 2000;
