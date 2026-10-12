@@ -285,7 +285,6 @@ when you would rather type than pick.
 | `clikcode mcp add` / `list` / `remove` / `login` / `logout` / `targets` | One MCP server for every tool (below) |
 | `clikcode plugin list` / `enable <plugin>` / `disable <plugin>` | Which of Claude Code's plugins ClikCode's own agent uses |
 | `clikcode acp add <command> <binary> [-- <flags>]` / `acp list` / `acp remove` | An ACP agent the catalog does not ship |
-| `clikcode start` / `status` / `stop` | The optional local control API (below) |
 | `clikcode gateway login [--github]` / `gateway status` / `gateway models` | ClikDeploy Gateway sign-in (Google by default), and the models it offers |
 | `clikcode gateway usage [--days N]` | Your AI use and credit as ClikDeploy Gateway records it: every call, by surface and model |
 | `clikcode gateway credit [--amount USD]` | Add AI credit: opens a Stripe checkout ($5–$500). Paying it also saves your card for automatic top-ups when credit runs low |
@@ -448,31 +447,16 @@ Everything it owns is under `~/.clikcode`, readable only by you (directories
 
 - `index.json` — accounts (labels and credential *references*), the session
   index, usage records and the installation id
-- `secrets.json` — the local control API token and this device's key
+- `secrets.json` — this device's key
 - `sessions/` — session records and history
 - `turn-changes/` — each conversation's per-turn file changes (`/changes`, `/redo`)
 - `profiles/<harness>/<account-id>/` — per-account vendor configuration roots
-- `runtime.json`, `runtime.lock` — present only while the control API is running
 - `crash.log` — uncaught errors
 
 Set `CLIKCODE_HOME` to relocate the state directory (tests, portable installs).
 `crash.log` and a gateway credential, if you sign in, always live outside it:
 `~/.clikcode/crash.log`, `~/.config/clikcode/auth.json` (or under
 `$XDG_CONFIG_HOME`) and `~/.clikcode/api-key`.
-
-## Letting other programs drive it
-
-An editor, a script or another agent can drive ClikCode over a small HTTP API.
-`clikcode start` runs it; `clikcode status` and `clikcode stop` inspect and
-stop it. It stays off until you start it.
-
-- Binds to `127.0.0.1` only, on an OS-assigned port (or `--port`); the URL is
-  printed and recorded in `~/.clikcode/runtime.json`.
-- `GET /v1/health` is unauthenticated. Every other route (`/v1/accounts`,
-  `/v1/device`, `/v1/models`, `/v1/sessions`, `/v1/usage`, `/v1/chat`) requires
-  `Authorization: Bearer <token>`, a per-installation token kept in
-  `secrets.json`. Requests whose `Host` is not loopback are refused.
-- Responses never contain credential material.
 
 ## Tuning and accessibility
 
@@ -518,7 +502,7 @@ Three packages, one lockfile:
   `commands/` (the verbs), `session/` and `turn/` (state and the turn loop),
   `agent/` (ClikCode's own coding agent: tools, permissions, checkpoints),
   `harness/` (driving the vendor CLIs over argv/ACP/app-server),
-  `gateway/` (the gateway adapter), `tui/`, `daemon/`, `runtime/`.
+  `gateway/` (the gateway adapter), `tui/`, `runtime/`.
 - `packages/clikrouter` (`@clikcode/router`) — provider-agnostic request
   normalization and router selection across dozens of providers, consumed as source
   and bundled into `dist/*.cjs`.

@@ -7,7 +7,7 @@ import { textTranscript } from './turn-activities.js';
 import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { streamLocalAiTurn } from '../runtime/lazy-bridge.js';
-import { localApiKey } from '../daemon/server.js';
+import { localApiKey } from '../gateway/credentials.js';
 import { classifyAccountFailure } from './failover.js';
 import { recordSuccessfulAccountTurn } from './account-outcome.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';

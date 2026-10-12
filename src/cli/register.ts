@@ -17,7 +17,6 @@ import { localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy
 import { startOrResumeChat } from '../commands/ai/harness.js';
 import { aiSessionClose, aiSessionCreate, aiSessionSet, aiSessionShow, aiSessionsList } from '../commands/ai/sessions.js';
 import { aiGatewayModels, aiGatewayStatus, aiGatewayUsage, aiGatewayCredit, aiModelsList, aiUsage } from '../commands/ai/status.js';
-import { aiStart, aiStatus, aiStop } from '../daemon/server.js';
 import { gatewayLogin } from '../commands/gateway.js';
 import { runSessionWorker } from '../worker/session-worker.js';
 
@@ -45,11 +44,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
       if (!result) throw new Error('usage: clikcode search <words>');
       emitHarnessOutput(searchResultsPayload(result));
     });
-  program.command('start').description('Start the optional loopback-only control API')
-    .option('--port <port>', 'Optional explicit loopback port; default is OS-assigned')
-    .action((options) => aiStart(config, options));
-  program.command('status').description('Show the optional local control API runtime').action(aiStatus);
-  program.command('stop').description('Stop this ClikCode installation’s optional control API').action(aiStop);
   program.command('doctor').description('Inspect installed harness versions and centralized capabilities').action(aiDoctor);
   program.command('logs').description('What every ClikCode window, worker and editor bridge did, in order (the lifecycle log)')
     .option('--session <id>', 'Only this conversation (an id or the start of one)')

@@ -15,7 +15,7 @@ below come from Claude Code 2.1.296 (recorded sessions in `~/.claude/projects`, 
 | Claude `ToolSearch` | not applicable | `load_mcp_tools` | ClikCode loads every built-in schema each turn; only MCP tools are deferred, and `load_mcp_tools` (`mcp/deferred.ts`) is that mechanism. |
 | Claude `TaskStop` `{task_id}` | alias | `kill_bash` | Stops a background shell, including a monitor. A background agent cannot be stopped separately: it ends with the turn (cancellation). |
 | Claude `TaskOutput` `{task_id, block, timeout}` | alias | `bash_output`, `agent_wait`, `wait` | Shell output so far; an agent's result with a timeout; blocking on a shell's exit or output. |
-| Claude `CronCreate/Delete/List` | not built | `schedule_wakeup` | A cron needs a scheduler that survives the worker; workers exit when idle (`IDLE_EXIT_MS`) and nothing in `src/daemon` fires work for a conversation. Doing it honestly needs a durable scheduler, not a timer in a process that may stop. |
+| Claude `CronCreate/Delete/List` | not built | `schedule_wakeup` | A cron needs a scheduler that survives the worker; workers exit when idle (`IDLE_EXIT_MS`) and nothing fires work for a conversation. Doing it honestly needs a durable scheduler, not a timer in a process that may stop. |
 | Claude `ReportFindings` | not applicable | none | Renders code-review findings in Claude's own host UI; ClikCode has no such surface. |
 | Claude `Workflow` `{scriptPath, args}` | not applicable | none | Launches Claude's `.claude/workflows/*.mjs` scripts in its own runtime. |
 | Claude `SendMessage`, Codex `send_message` / `followup_task` | already covered | `agent_send` | |
