@@ -140,7 +140,7 @@ if (argv[0] === 'agent' && argv.includes('stdio')) {
     cancelled = false;
     // `refuse`: the vendor turns the prompt away with this message (a quota
     // refusal, say), as an error answer to session/prompt.
-    if (turn.refuse) { send({ id, error: { code: -32000, message: turn.refuse } }); return; }
+    if (turn.refuse) { send({ id, error: { code: -32603, message: turn.refuse } }); return; }
     running = true;
     steered = [];
     const tool = async (toolCallId, command, result, ms) => {
