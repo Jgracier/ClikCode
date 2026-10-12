@@ -18,9 +18,9 @@
  */
 import type { ConversationSection, TurnFacts } from '../session/conversation-state.js';
 import type { HarnessSession } from '../session/model.js';
-import type { ClientCommand, WorkerEvent } from '../worker/protocol.js';
+import type { WorkerEvent } from '../worker/protocol.js';
 
-export type { ClientCommand, WorkerEvent };
+export type { WorkerEvent };
 
 /** One row of a picker. `actions` and `deleteAction` are the row's Tab
  * and Delete actions in the terminal picker; `inline` is a setting cycled in
@@ -196,7 +196,7 @@ export interface IdeConversation {
   current: boolean;
 }
 
-export interface IdeUsageWindow { name: string; usedPct: number; resetsAt?: string }
+interface IdeUsageWindow { name: string; usedPct: number; resetsAt?: string }
 
 export interface IdeAccount {
   id: string;
