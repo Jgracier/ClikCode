@@ -9,14 +9,15 @@ import { readState } from '../session/state/read.js';
 import { discardInterruptedTurn } from './turn-journal.js';
 import { agentTurnUsage, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
-import { extractSessionTitle, stripRepeatedTitles, prepareSessionTitle } from '../session/title.js';
+import { prepareSessionTitle, replyWithoutTitle } from '../session/title.js';
 import { localModelTurnHooks } from '../commands/ai/local-model.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
-import { recordInvocation, recordUnfinishedInvocation, showStopReason } from './turn-output.js';
+import { setPlanMode, unfinishedUsageRecorder } from './turn-steps.js';
+import { recordInvocation, showStopReason } from './turn-output.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import chalk from 'chalk';
 import { agentTurnFailureKind } from './failover.js';
@@ -122,16 +123,16 @@ export async function runAgentTurn(input: {
   let turnUsage: TurnUsage | undefined;
   /** The turn's usage went into the invocation log: once, however it ended. */
   let usageRecorded = false;
-  const recordUnfinished = (ended: 'stopped' | 'error'): void => {
-    if (usageRecorded) return;
+  const recordUnfinished = unfinishedUsageRecorder(state, undefined, () => {
+    if (usageRecorded) return undefined;
     usageRecorded = true;
     // Every model step reported its running total through onUsage: a turn
     // stopped, failed or handed on mid-way spent that much all the same.
-    recordUnfinishedInvocation(state, {
+    return {
       sessionId: session.id, accountId: attributedTo, provider: session.provider ?? attributedTo,
       model: (gatewayService ? session.reported?.model : undefined) ?? session.model, startedAt, usage: turnUsage,
-    }, ended);
-  };
+    };
+  });
   // The agent remembers what it ran itself. Turns that ran elsewhere -- the
   // conversation moved here from another harness, or was away on one since --
   // go into its memory first (agent-history.ts), so the model the Gateway
@@ -188,17 +189,9 @@ export async function runAgentTurn(input: {
         // goes (vendor-cli-attempt.ts): the status line and the editor name it,
         // and for Automatic it is the only place that says which model it was.
         // The plan was approved: the chat leaves plan mode, saved with the turn.
-        onPlanModeExit: () => {
-          delete session.planMode;
-          checkpoint.touch();
-          prompter?.render(session);
-        },
+        onPlanModeExit: () => setPlanMode(session, checkpoint, prompter, false),
         // The agent asked to plan and the user agreed: the chat stays in plan mode.
-        onPlanModeEnter: () => {
-          session.planMode = true;
-          checkpoint.touch();
-          prompter?.render(session);
-        },
+        onPlanModeEnter: () => setPlanMode(session, checkpoint, prompter, true),
         onServedModel: (served) => {
           // Automatic stays Automatic: a Gateway that names its pick is not echoed back onto the chat.
           if (!session.model && !session.gatewayAgentId) return;
@@ -230,9 +223,8 @@ export async function runAgentTurn(input: {
         await discardInterruptedTurn(session.id, text);
         return 'resend';
       }
-      const extracted = titleStream ? extractSessionTitle(harnessTurn.text) : { text: harnessTurn.text };
-      const named = titleStream ? stripRepeatedTitles(extracted.text) : extracted.text;
-      await completeTurnCheckpoint(session, checkpoint, named, { title: titleStream?.title ?? extracted.title, asked: false });
+      const extracted = replyWithoutTitle(harnessTurn.text, titleStream !== undefined, true);
+      await completeTurnCheckpoint(session, checkpoint, extracted.text, { title: titleStream?.title ?? extracted.title, asked: false });
       return 'continue';
     }
     if (harnessTurn.isError) {
@@ -265,9 +257,8 @@ export async function runAgentTurn(input: {
     // The marker is taken off only the turn that asked for it. A repeated
     // marker inside that same multi-step reply is the same request, not a
     // second naming.
-    const extracted = titleStream ? extractSessionTitle(harnessTurn.text) : { text: harnessTurn.text };
-    const named = titleStream ? stripRepeatedTitles(extracted.text) : extracted.text;
-    const completedText = await completeTurnCheckpoint(session, checkpoint, named, { title: titleStream?.title ?? extracted.title, asked: false });
+    const extracted = replyWithoutTitle(harnessTurn.text, titleStream !== undefined, true);
+    const completedText = await completeTurnCheckpoint(session, checkpoint, extracted.text, { title: titleStream?.title ?? extracted.title, asked: false });
     showStopReason(prompter, usage.stopReason);
     if (!prompter) {
       emitHarnessOutput({

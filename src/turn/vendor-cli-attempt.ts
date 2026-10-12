@@ -18,7 +18,8 @@ import { reportStructuredLine } from '../harness/events/structured.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
 import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
-import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, waitForHeldVendorSubagents, type HeldVendor } from '../harness/transport/native/held-vendor.js';
+import { settleHeldVendor } from './turn-steps.js';
+import { holdVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
 import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -56,11 +57,7 @@ export async function runVendorCliAttempt(input: {
   // A previous turn's vendor may still be running background work. Let its
   // Agent calls and follow-up finish before closing stdin; Claude kills
   // running Agent calls when that input closes.
-  if (hasHeldVendorProcess(session.id)) {
-    prompter?.phase('waiting for running work');
-    await waitForHeldVendorSubagents(session.id, signal);
-    await releaseHeldVendorProcess(session.id);
-  }
+  await settleHeldVendor(session.id, prompter, signal);
   const cliHarness: AiLocalHarnessDefinition = harness.fallbackTurn && await usesFallbackTurn(harness)
     ? { ...harness, turn: harness.fallbackTurn } : harness;
   const turn = cliHarness.turn;
