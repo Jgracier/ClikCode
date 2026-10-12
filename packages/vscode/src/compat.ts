@@ -41,6 +41,24 @@ export function bridgeCompatibility(
   return { ok: true };
 }
 
+/** What the extension build recorded about the ClikCode it was made against
+ * (scripts/build.mjs); absent when run from source, as in the tests. */
+declare const __CLIKCODE_BUILT_AGAINST__: { protocol: number; revision: number; commit: string } | undefined;
+export const BUILT_AGAINST = typeof __CLIKCODE_BUILT_AGAINST__ === 'undefined' ? undefined : __CLIKCODE_BUILT_AGAINST__;
+
+/** One line for a bridge that works but is not the revision this bundle was
+ * built against (a newer ClikCode with additive changes the bundle does not
+ * know, or an older one): version skew made visible rather than silent. */
+export function versionSkew(
+  ready: { version: string; revision?: unknown },
+  expected: { revision: number } = IDE_PROTOCOL,
+  built: { commit: string } | undefined = BUILT_AGAINST,
+): string | undefined {
+  const revision = typeof ready.revision === 'number' && Number.isInteger(ready.revision) ? ready.revision : 1;
+  if (revision === expected.revision) return undefined;
+  return `ClikCode ${ready.version} speaks bridge revision ${revision}; this extension was built for revision ${expected.revision}${built ? ` (ClikCode ${built.commit})` : ''}. Some features may be missing until both are updated.`;
+}
+
 /** A ClikCode from before `ide-bridge` existed rejects the command outright
  * (commander's "unknown command" on stderr) and exits before `ready`. */
 export function bridgeCommandMissing(log: readonly string[]): boolean {
