@@ -40,11 +40,19 @@ export function scopeUnitName(sessionId: string, pid: number): string {
   return `clikcode-worker-${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${pid}.scope`;
 }
 
-export function adoptArgs(unit: string, pid: number): string[] {
+/** One worker's own ceiling, as shares of RAM: below the agent slice's, so a single
+ * conversation that balloons is throttled -- and at the last, killed inside -- on its own.
+ * MEASURED 2026-10-12: one worker (a scratch-home benchmark) reached 32.1G, the slice sat at its
+ * 40.8G MemoryMax with every allocation throttled, and every other chat's vendor took six minutes
+ * to start a turn -- a Claude and a Codex session alike -- until that one worker ended. */
+export const WORKER_MEMORY_SHARES = { high: 0.35, max: 0.45 } as const;
+
+export function adoptArgs(unit: string, pid: number, ramBytes: number = totalmem()): string[] {
+  const bytes = (share: number): string => String(Math.floor(ramBytes * share));
   return [
     '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
     'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
-    unit, 'fail', '4',
+    unit, 'fail', '6',
     'PIDs', 'au', '1', String(pid),
     'Slice', 's', AGENT_SLICE,
     'CollectMode', 's', 'inactive-or-failed',
@@ -52,6 +60,8 @@ export function adoptArgs(unit: string, pid: number): string[] {
     // when the kernel kills any one process in it at the slice's ceiling.
     // The test run that hit the ceiling is what should die, alone.
     'OOMPolicy', 's', 'continue',
+    'MemoryHigh', 't', bytes(WORKER_MEMORY_SHARES.high),
+    'MemoryMax', 't', bytes(WORKER_MEMORY_SHARES.max),
     '0',
   ];
 }
