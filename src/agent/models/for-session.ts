@@ -12,8 +12,6 @@ import { gatewaySubscriptionsOn, subscriptionsHeader } from '../../gateway/subsc
 import { STREAM_IDLE_TIMEOUT_MS } from './gateway-client.js';
 import { gatewayStepOptions } from '../../gateway/options.js';
 import { ensureLocalModel, releaseLocalModelsOnExit, type LocalModelProgress } from '../../local-models/index.js';
-import { prefixCacheFor } from '../../local-models/prefix-cache.js';
-import { recordLocalTurnTiming } from '../../local-models/turn-timings.js';
 import { CLIKCODE_LOCAL_LABEL } from '../../session/route.js';
 import { getApiKeyForUrl, getApiUrl } from '../../gateway/credentials.js';
 import { harnessCommand } from '../../session/state/paths.js';
@@ -178,9 +176,6 @@ export async function modelClientForSession(session: HarnessSession, config: Con
     // engine's default) and lets the status line name it. Persisted with
     // the turn's own state write.
     if (!session.model) session.model = endpoint.model;
-    // CLIKCODE_LOCAL_PREFIX_CACHE=off reads the prefix from scratch on every
-    // start, to rule the cache out when something looks wrong.
-    const prefixes = endpoint.prefixCacheDir && process.env.CLIKCODE_LOCAL_PREFIX_CACHE !== 'off' ? prefixCacheFor(Number(new URL(endpoint.baseUrl).port), endpoint.prefixCacheDir, endpoint.promptPerSecond ? { promptPerSecond: endpoint.promptPerSecond } : {}) : undefined;
     return new OpenAIModelClient({
       // The engine's URL ends in /v1 and the client appends /v1 itself.
       baseUrl: endpoint.baseUrl.replace(/\/v1\/?$/, ''), model: endpoint.model,
@@ -189,10 +184,6 @@ export async function modelClientForSession(session: HarnessSession, config: Con
       // unchanged history should be read once, on every supported machine.
       body: { cache_prompt: true },
       ...(endpoint.promptPerSecond ? { promptPerSecond: endpoint.promptPerSecond } : {}),
-      // A cold server reads the system prompt and tools from a saved state
-      // instead of from scratch (prefix-cache.ts).
-      ...(prefixes ? { beforeRequest: (payload: Parameters<typeof prefixes.prepare>[0], signal?: AbortSignal) => prefixes.prepare(payload, signal) } : {}),
-      onTimings: (timings, elapsedMs) => { void recordLocalTurnTiming(endpoint.model, timings, elapsedMs); },
     });
   }
   throw new Error(`a ${session.route} session runs a vendor harness, not ClikCode's own agent`);

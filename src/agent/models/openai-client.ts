@@ -36,12 +36,6 @@ export interface OpenAIModelClientOptions {
   /** Display name for error messages. */
   label?: string;
   fetchImpl?: typeof fetch;
-  /** Optional server timings and total step time, including prompt-cache preparation. */
-  onTimings?: (timings: LlamaTimings, elapsedMs: number) => void;
-  /** Runs before each request with what it will send (ClikCode Local
-   * restores a saved system+tools prefix here). Its failure is swallowed:
-   * the request itself then pays whatever it saved. */
-  beforeRequest?: (payload: { messages: ChatMessage[]; tools?: unknown[] }, signal?: AbortSignal) => Promise<void>;
   /** Longest silence once the answer has started (STREAM_IDLE_TIMEOUT_MS). */
   idleTimeoutMs?: number;
   /** Longest wait for the first chunk. Far longer than the idle limit: a
@@ -317,7 +311,6 @@ export class OpenAIModelClient implements ModelClient {
   }
 
   async step(request: ModelStepRequest): Promise<ModelStepResult> {
-    const startedAt = performance.now();
     const { options } = this;
     const doFetch = options.fetchImpl ?? fetch;
     const fitted = options.limits ? fitToLimits(request.system, request.tools, options.limits) : { system: request.system, tools: request.tools };
@@ -330,13 +323,6 @@ export class OpenAIModelClient implements ModelClient {
     }
     const tools = toolsBody(fitted.tools, request.toolChoice);
     const maxTokens = this.maxTokens(JSON.stringify(messages) + JSON.stringify(tools.tools ?? []));
-    if (options.beforeRequest) {
-      try { await options.beforeRequest({ messages, ...(tools.tools ? { tools: tools.tools } : {}) }, request.signal); } catch (error) {
-        if (request.signal?.aborted) throw turnCancelledError();
-        // fail-open-ok: preparation only saves time; the request reads what it has to
-        void error;
-      }
-    }
     let response: Response;
     try {
       response = await doFetch(this.endpoint(), {
@@ -477,7 +463,6 @@ export class OpenAIModelClient implements ModelClient {
     if (stopReason === undefined && !done) throw new ModelClientError(`${this.label} stream ended before the answer finished`, { kind: 'other', code: 'incomplete_stream' });
 
     if (timings) {
-      options.onTimings?.(timings, performance.now() - startedAt);
       // llama-server without usage: its timings carry the same counts.
       const prompt = numberOf(timings.prompt_n);
       const cached = numberOf(timings.cache_n);
