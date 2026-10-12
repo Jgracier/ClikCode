@@ -108,6 +108,7 @@ export function gatewayPriceLabel(price: GatewayModelPrice): string {
 }
 
 const TTL_MS = 60_000;
+const MODELS_TIMEOUT_MS = 15_000;
 let cached: { baseUrl: string; auth: string; subscriptions: boolean; at: number; list: GatewayModelList } | undefined;
 
 /** The model list includes account-specific access and prices. Keep a digest,
@@ -176,17 +177,29 @@ export function isAutomaticModelWord(value: string): boolean {
 }
 
 export async function gatewayModels(
-  options: { config?: Conf; fetchImpl?: typeof fetch; fresh?: boolean } = {},
+  options: { config?: Conf; fetchImpl?: typeof fetch; fresh?: boolean; timeoutMs?: number } = {},
 ): Promise<GatewayModelList> {
   const config = options.config ?? new Conf({ projectName: 'clikcode', configFileMode: 0o600 });
   const { baseUrl, apiKey } = gatewayConnection(config);
   const auth = authDigest(apiKey);
   const subscriptions = gatewaySubscriptionsOn(config);
   if (!options.fresh && cached && cached.baseUrl === baseUrl && cached.auth === auth && cached.subscriptions === subscriptions && Date.now() - cached.at < TTL_MS) return cached.list;
-  const response = await (options.fetchImpl ?? fetch)(`${baseUrl}/v1/models`, {
-    headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT, ...subscriptionsHeader(subscriptions) },
-  });
-  const body = await response.json().catch(() => undefined) as { data?: unknown; error?: unknown; clikcode?: { subscriptions?: unknown } } | undefined;
+  let response: Response;
+  let body: { data?: unknown; error?: unknown; clikcode?: { subscriptions?: unknown } } | undefined;
+  try {
+    // Bounded: a Gateway that accepts the connection and never answers must not hold /model, or a turn's first image, forever.
+    const signal = AbortSignal.timeout(options.timeoutMs ?? MODELS_TIMEOUT_MS);
+    response = await (options.fetchImpl ?? fetch)(`${baseUrl}/v1/models`, {
+      headers: { authorization: `Bearer ${apiKey}`, accept: 'application/json', 'user-agent': CLIKCODE_USER_AGENT, ...subscriptionsHeader(subscriptions) },
+      signal,
+    });
+    body = await response.json().catch(() => undefined) as typeof body;
+  } catch (error) {
+    // A Gateway that does not answer in time: the last list received is better than none.
+    const saved = await savedGatewayModels({ config });
+    if (saved) return saved;
+    throw error;
+  }
   if (!response.ok || !Array.isArray(body?.data)) {
     // A Gateway that predates its OpenAI-compatible API answers 404.
     const error = body?.error;
