@@ -407,8 +407,9 @@ SCENARIOS = {
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.',
                   'also look at the tests', 'Queued one answered now.'],
     },
+    # A structured-CLI harness on the generic JSON reader (Command Code moved to ACP, so OpenClaw stands in).
     'generic-json-two-blocks': {
-        'harness': 'cmdc', 'family': 'generic',
+        'harness': 'openclaw', 'family': 'generic',
         'turns': [TWO_BLOCKS],
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 30), ('settle', 4)],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
@@ -1335,13 +1336,17 @@ SCENARIOS = {
     # opened with), and Settings stays open on the row (it closed).
     'settings-default-saves-shown-value': {
         'turns': [TWO_BLOCKS],
+        # Effort is the fifth row (Resume is first); Enter opens its picker, and the value shown after
+        # choosing High is the value "Make default for every harness" must save.
         'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
                   *[step for _ in range(4) for step in (('keys', '\x1b[B'), ('settle', 0.3))],
-                  ('keys', '4'), ('settle', 0.5), ('keys', '\t'), ('wait_for', 'Make default for every harness', 10), ('settle', 0.5),
+                  ('keys', '\r'), ('wait_for', 'Reasoning effort', 10), ('settle', 0.5),
+                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('settle', 1),
+                  ('keys', '\t'), ('wait_for', 'Make default for every harness', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'Default saved', 10), ('settle', 1.5), ('snap', 'after'),
                   ('keys', '\x1b'), ('settle', 1)],
         'watch': [], 'final_contains': ['Default saved · Effort for every harness: high'],
-        'snap_contains': {'after': ['❯ Effort', '● High']}, 'never': ['for every harness: medium'],
+        'snap_contains': {'after': ['❯ Effort  High']}, 'never': ['for every harness: medium'],
     },
     # Esc on a one-line question ("Conversation name ›", "File to attach ›")
     # cancels it: the next thing typed is a message again, not its answer.
@@ -1522,7 +1527,7 @@ SCENARIOS = {
         'turns': [TWO_BLOCKS],
         'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('snap', 'plain'),
-                  *[step for _ in range(3) for step in (('keys', '\x1b[B'), ('settle', 0.3))], ('settle', 0.5), ('snap', 'inline')],
+                  *[step for _ in range(4) for step in (('keys', '\x1b[B'), ('settle', 0.3))], ('settle', 0.5), ('snap', 'inline')],
         'watch': [], 'snap_contains': {'plain': ['\n  Model  grok-4'], 'inline': ['\n  Model  grok-4', 'enter next', 'tab options']},
         'snap_lacks': {'inline': ['\n    Model']},
     },
