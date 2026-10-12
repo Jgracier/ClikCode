@@ -1,6 +1,5 @@
 /** Select a usable account for a turn or a failover. */
 import { USAGE_RECHECK_MS, accountCanTakeTurn, quotaRefusalHolds, usageReadingIsCurrent, vendorWindows } from '../harness/accounts/usage-reading.js';
-import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { isDirectModelProvider } from '../runtime/lazy-bridge.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
@@ -41,13 +40,11 @@ export function providerHasAccountForTurn(
 }
 
 /** Room left on this account, in percent: the tightest window that can stop
- * it, from the vendor's reading while it is current -- or, for a harness that
- * reports none, from what its refusals have taught. Undefined when neither
- * says. Ranking only: whether the account may be tried at all is
- * accountQuotaSpent, and a learned figure never decides that. */
-export function reportedRoom(state: HarnessState, account: AiHarnessAccount, now: number = Date.now()): number | undefined {
-  const vendor = vendorWindows(account).filter((window) => !window.advisory);
-  const windows = vendor.length ? vendor : learnedReading(state, account, now)?.windows ?? [];
+ * it, from the vendor's reading while it is current. Undefined when the
+ * vendor reports none. Ranking only: whether the account may be tried at all
+ * is accountQuotaSpent. */
+export function reportedRoom(account: AiHarnessAccount, now: number = Date.now()): number | undefined {
+  const windows = vendorWindows(account).filter((window) => !window.advisory);
   if (!windows.length || !usageReadingIsCurrent({ windows }, now)) return undefined;
   return Math.min(...windows.map((window) => Math.max(0, 100 - window.usedPct)));
 }
@@ -74,7 +71,7 @@ export function nextUsableFailoverAccount(
   attempted: ReadonlyMap<string, number>,
   now: number = Date.now(),
 ): AiHarnessAccount | undefined {
-  const room = (account: AiHarnessAccount): number => reportedRoom(state, account, now) ?? -1;
+  const room = (account: AiHarnessAccount): number => reportedRoom(account, now) ?? -1;
   return state.accounts
     // One this turn already tried is tried again only once the reset its
     // refusal named has passed: "All accounts exhausted" was said a minute
