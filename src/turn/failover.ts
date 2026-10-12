@@ -10,7 +10,7 @@ export type AccountFailureKind = 'quota-exhausted' | 'temporarily-throttled' | '
 /** Machine-readable failure signals. Always preferred over wording: a status
  * code or a vendor error type cannot be produced by the model talking about
  * rate limits. */
-interface AccountFailureSignals {
+export interface AccountFailureSignals {
   /** HTTP/API status (Claude's `api_error_status`, a gateway response status). */
   statusCode?: number;
   /** Vendor error type/code, e.g. 'authentication_error', 'rate_limit_error',
@@ -23,6 +23,22 @@ interface AccountFailureSignals {
   rateLimitStatus?: string;
   /** The vendor CLI's stderr, when the caller has it separately. */
   stderrText?: string;
+  /** The harness's own declared reply-error patterns (catalog `replyErrorPatterns`):
+   * a vendor whose failed call is worded in its own way names the HTTP status here,
+   * read when no structured status came with the failure. */
+  replyErrorPatterns?: readonly { pattern: string; status?: number }[];
+}
+
+/** The status a vendor's declared failure wording stands for, if the text is one. */
+function declaredReplyStatus(patterns: AccountFailureSignals['replyErrorPatterns'], text: string): number | undefined {
+  const reply = text.trim();
+  for (const entry of patterns ?? []) {
+    const match = new RegExp(entry.pattern).exec(reply);
+    if (!match) continue;
+    const captured = match[1] ? Number(match[1]) : undefined;
+    return captured !== undefined && Number.isFinite(captured) ? captured : entry.status;
+  }
+  return undefined;
 }
 
 // 'no auth type is selected' is Qwen Code's own wording (captured verbatim
@@ -366,7 +382,7 @@ export function classifyAccountFailure(error: unknown, signals: AccountFailureSi
   // Status embedded in the vendor's own diagnostic text. Not in `message`
   // once streams exist: that string can carry the model's stdout, and a
   // sentence about a 402 is not the account running out.
-  const effectiveStatus = status ?? (text ? embeddedStatus(text) : undefined);
+  const effectiveStatus = status ?? (text ? declaredReplyStatus(signals.replyErrorPatterns, text) ?? embeddedStatus(text) : undefined);
   if (effectiveStatus === 401) return 'authentication-required';
   // A 402 that says the plan is absent (Droid: "No active subscription found") is the
   // account's eligibility, not a spent quota: another account may be fine, and this

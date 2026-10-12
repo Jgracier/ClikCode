@@ -381,9 +381,8 @@ describe('local harness catalog', () => {
     }
   });
 
-  it('declares image-attachment support only where a real flag exists, and drops images silently otherwise', () => {
+  it('puts an image on the one-shot argv only where a real attach flag exists (ACP carries it as a block)', () => {
     expect(harnessSupportsImages(localHarnessForCommand('codex')!)).toBe(true);
-    expect(harnessSupportsImages(localHarnessForCommand('claude')!)).toBe(false);
     expect(nativeHarnessTurnArgv(localHarnessForCommand('claude')!, { prompt: 'inspect', nativeSessionId: 'new-id', createdHere: true, images: ['/tmp/screen.png'] }))
       .not.toContain('/tmp/screen.png');
   });
@@ -694,5 +693,15 @@ describe('harness modes read from the installed vendors (2026-10-10)', () => {
     const auggie = localHarnessForCommand('auggie')!;
     expect(nativeHarnessTurnArgv(auggie, { prompt: 'hi', model: 'haiku4.5', effort: 'medium' })).not.toContain('--reasoning-effort');
     expect(nativeHarnessTurnArgv(auggie, { prompt: 'hi', model: 'sonnet4.6', effort: 'medium' })).toContain('--reasoning-effort');
+  });
+});
+
+describe('image support follows the transport', () => {
+  it('lets ACP harnesses attempt image blocks and records the one verified not to take them', () => {
+    expect(harnessSupportsImages(localHarnessForCommand('claude')!)).toBe(true);
+    expect(localHarnessForCommand('claude')!.imageArgvPrefix).toBeUndefined();
+    expect(harnessSupportsImages(localHarnessForCommand('grok')!)).toBe(false);
+    expect(localHarnessForCommand('grok')!.acp?.promptImages).toBe(false);
+    expect(harnessSupportsImages(localHarnessForCommand('codex')!)).toBe(true);
   });
 });
