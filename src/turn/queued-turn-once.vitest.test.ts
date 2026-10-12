@@ -15,6 +15,17 @@ import { writeState } from '../session/state/write';
 import type { HarnessSession } from '../session/model';
 
 const engine = vi.hoisted(() => ({ ensureLocalModel: vi.fn() }));
+const disk = vi.hoisted(() => ({ failWrites: false }));
+vi.mock('../session/state/write', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../session/state/write')>();
+  return {
+    ...actual,
+    writeState: async (state: never) => {
+      if (disk.failWrites) throw new Error('disk full');
+      return actual.writeState(state);
+    },
+  };
+});
 vi.mock('../local-models/index', async (importOriginal) => ({
   ...await importOriginal<typeof import('../local-models/index')>(),
   ensureLocalModel: engine.ensureLocalModel,
@@ -75,5 +86,21 @@ describe('a queued turn submitted twice', () => {
     expect(session.pendingTurn).toBeUndefined();
     expect(session.messages?.filter((message) => message.role === 'user').map((message) => message.content)).toEqual(['do the thing']);
     expect(session.messages?.filter((message) => message.role === 'assistant')).toHaveLength(1);
+  });
+
+  it('does not run a queued turn whose first durable write failed: the entry stays queued', async () => {
+    disk.failWrites = true;
+    try {
+      await expect(runSessionTurn(config, 's1', 'do the thing', undefined, { queuedTurnId: 'q1' })).rejects.toThrow('disk full');
+    } finally {
+      disk.failWrites = false;
+    }
+    expect(requests).toBe(0);
+    const session = (await readState()).sessions.find((item) => item.id === 's1')!;
+    expect(session.queuedTurns?.map((item) => item.id)).toEqual(['q1']);
+    expect(session.pendingTurn).toBeUndefined();
+    // Once the disk is back the same entry runs, exactly once.
+    await runSessionTurn(config, 's1', 'do the thing', undefined, { queuedTurnId: 'q1' });
+    expect(requests).toBe(1);
   });
 });

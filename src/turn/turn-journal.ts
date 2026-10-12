@@ -1,4 +1,5 @@
 /** Durable turn state, completion, and interrupted-turn recovery. */
+import { cloneData } from '../session/store/data.js';
 import { normalizeSessionTitle, replyWithoutTitle } from '../session/title.js';
 import type { HarnessSession, HarnessState, OpenThought, TurnMark } from '../session/model.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -119,12 +120,32 @@ export class DurableTurnCheckpoint {
     // Taking a queued turn off the queue is what claims it. One already gone
     // was run by another submit of the same entry (a second window whose
     // read of the queue predates that run): running it again is the double.
+    const before = queuedTurnId ? { queuedTurns: session.queuedTurns, pendingTurn: cloneData(session.pendingTurn), messages: session.messages, updatedAt: session.updatedAt } : undefined;
     if (queuedTurnId && !consumeSessionTurn(session, queuedTurnId)) throw queuedTurnAlreadyRunError(queuedTurnId);
     const checkpoint = new DurableTurnCheckpoint(state, session);
     beginPendingTurn(session, prompt, new Date().toISOString());
-    // A state file that cannot be written must not stop the vendor from running:
-    // the turn proceeds in memory and every later write retries (`dirty`).
-    await checkpoint.enqueue().catch((error: unknown) => checkpoint.persistFailed('start', error));
+    try {
+      await checkpoint.enqueue();
+    } catch (error) {
+      if (!before) {
+        // A state file that cannot be written must not stop the vendor from running:
+        // the turn proceeds in memory and every later write retries (`dirty`).
+        checkpoint.persistFailed('start', error);
+        return checkpoint;
+      }
+      // A queued turn is consumed by this very write. If it did not land the
+      // entry is still queued on disk, and running anyway would let it run
+      // again: the turn does not start, and the entry stays (restored here,
+      // so a later write of this state does not drop it) for the caller to
+      // report as stalled.
+      checkpoint.persistFailed('start', error);
+      session.queuedTurns = before.queuedTurns;
+      if (!session.queuedTurns) delete session.queuedTurns;
+      if (before.pendingTurn) session.pendingTurn = before.pendingTurn; else delete session.pendingTurn;
+      if (before.messages) session.messages = before.messages; else delete session.messages;
+      session.updatedAt = before.updatedAt;
+      throw error;
+    }
     return checkpoint;
   }
 
