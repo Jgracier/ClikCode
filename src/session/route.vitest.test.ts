@@ -67,7 +67,7 @@ describe('a ClikCode Local session is ClikCode\'s own agent', () => {
   });
 
   it('has no vendor-harness slash commands, and says why in its own name', () => {
-    for (const name of ['native', 'login', 'effort', 'options']) {
+    for (const name of ['login', 'effort', 'options']) {
       const availability = resolveSlashCommand(name)!.availability(local(), undefined);
       expect(availability.available, `/${name} offered on ClikCode Local`).toBe(false);
       expect(availability.reason).toContain('ClikCode Local');

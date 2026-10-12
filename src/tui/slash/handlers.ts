@@ -623,11 +623,6 @@ const HEADLESS_SLASH_HANDLERS: Record<SlashHandlerKey, HeadlessSlashHandler> = {
   resume: INTERACTIVE_ONLY('resume'),
   options: INTERACTIVE_ONLY('options'),
   capabilities: async ({ session }) => emitHarnessOutput({ panel: 'capabilities', text: capabilitiesText(session) }),
-  native: async ({ id, session, args }) => {
-    if (!args) throw new Error('usage: /native <text>  (or //text)');
-    if (isClikCodeAgent(session)) throw new Error('Native harness commands apply only to local harnesses.');
-    await sendSessionTurn(id, args);
-  },
   compact: async ({ id, session, args }) => compactConversation(id, session, args, sendSessionTurn),
   context: async ({ session }) => emitHarnessOutput({ panel: 'context', text: contextUsageText(session), usage: session.lastUsage ?? null }),
   export: async ({ session, words }) => {

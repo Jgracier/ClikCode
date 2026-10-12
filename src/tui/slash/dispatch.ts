@@ -393,10 +393,6 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     },
     review: async () => ({ prompt: reviewPrompt(args), echo: false }),
     init: async () => ({ prompt: initPrompt(session), echo: false }),
-    native: async () => {
-      if (!args) throw new Error('usage: /native <text>  (or //text)');
-      return { prompt: args, echo: true };
-    },
     compact: async () => {
       // No confirmation line: the compacted conversation on screen is that.
       const compacted = await compactConversation(id, session, args, (targetId, promptText) => host.runTurn(targetId, promptText));
