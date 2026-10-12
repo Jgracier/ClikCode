@@ -61,7 +61,7 @@ import { LiveChildren } from './render/child-rows.js';
 import { enterAgainSends, hasDurableSteer, liveTurnSpan, STEER_WORDS, steerTranscriptRows, type SteerRow, type WaitingMessage } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { markTurn, turnMarkOpen } from '../runtime/turn-latency.js';
-import { highlightWords, rowOfOccurrence, type MentionFocus } from './render/search-focus.js';
+import { highlightWords, type MentionFocus } from './render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow, type Selection } from './render/selection.js';
 import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
@@ -80,6 +80,7 @@ import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js'
 import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
+import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -2838,68 +2839,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     });
   }
 
-  /** /search: show `session` at one mention, its words highlighted and
-   * `focus.status` under it. The view moves to the mention on the frame
-   * that draws it -- rewriting the conversation from an earlier message
-   * first when the mention is older than what is on screen. */
-  showMention(session: HarnessSession, focus: MentionFocus): void {
-    this.mentionFocus = { ...focus, sessionId: session.id, jumped: false };
-    if (this.currentSession?.id === session.id && !this.messageLines.has(focus.messageIndex)) this.emitted.requestReseed();
-    this.render(session);
-  }
+  showMention(...args: Parameters<typeof showMention>): ReturnType<typeof showMention> { return showMention.apply(this, args); }
 
-  /** The next key while browsing mentions: Up/Down move between them, Tab
-   * goes to the next conversation, Esc (or Enter) ends it. Page keys and
-   * the wheel still scroll. */
-  mentionKey(): Promise<'next' | 'previous' | 'chat' | 'done'> {
-    return new Promise((resolve) => {
-      let stop: () => void = () => {};
-      const listen = (): void => {
-        stop = takeTerminalKeys((key) => {
-          const action = key === '\u001b[A' ? 'previous' as const : key === '\u001b[B' ? 'next' as const : key === '\t' ? 'chat' as const
-            : key === '\u001b' || key === '\r' || key === '\u0003' ? 'done' as const : undefined;
-          if (!action) {
-            if (key === '\u000c') { this.requestRedraw('repair'); this.forgetScreenPosition(); this.repaint(); return; }
-            this.handleScrollKey(key);
-            return;
-          }
-          stop();
-          this.resumeInput = undefined;
-          output.write(popReadModes());
-          resolve(action);
-        });
-        output.write(enterInputModes());
-      };
-      this.resumeInput = () => { stop(); listen(); };
-      listen();
-    });
-  }
+  mentionKey(...args: Parameters<typeof mentionKey>): ReturnType<typeof mentionKey> { return mentionKey.apply(this, args); }
 
-  /** Browsing is over: the view stays at the mention, its words stay
-   * highlighted until the next line is sent, and the status line goes. */
-  endMention(): void {
-    if (!this.mentionFocus) return;
-    this.mentionFocus = { ...this.mentionFocus, status: undefined };
-    this.repaint();
-  }
+  endMention(...args: Parameters<typeof endMention>): ReturnType<typeof endMention> { return endMention.apply(this, args); }
 
-  /** Puts the mention a few rows below the top of the view, once, on the
-   * first frame whose transcript holds it. */
-  jumpToMention(above: number): void {
-    const focus = this.mentionFocus;
-    if (!focus || focus.jumped || this.currentSession?.id !== focus.sessionId) return;
-    const start = this.messageLines.get(focus.messageIndex);
-    if (start === undefined) return;
-    const from = start - this.alternateTrimmed;
-    if (from < 0 || from >= this.alternateTranscript.length) return;
-    const nextStart = this.messageLines.get(focus.messageIndex + 1);
-    const to = nextStart === undefined ? this.alternateTranscript.length : Math.min(this.alternateTranscript.length, nextStart - this.alternateTrimmed);
-    const found = focus.words[0] ? rowOfOccurrence(this.alternateTranscript.slice(from, to), focus.words[0], focus.occurrence) : undefined;
-    const row = from + (found ?? 0);
-    const first = Math.max(0, row - 3);
-    this.alternateScrollback = Math.max(0, this.alternateTranscript.length - above - first);
-    focus.jumped = true;
-  }
+  jumpToMention(...args: Parameters<typeof jumpToMention>): ReturnType<typeof jumpToMention> { return jumpToMention.apply(this, args); }
 
   scrollTranscript(...args: Parameters<typeof scrollTranscript>): ReturnType<typeof scrollTranscript> { return scrollTranscript.apply(this, args); }
 
