@@ -192,6 +192,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (vendorWorkSince !== undefined) return 'the vendor is still running work it started';
     if (runningShellCount(agentSession) > 0) return 'a background shell is running';
     if (agentSession.notifications.length) return 'a notification is on its way to the model';
+    if (agentSession.wakeups.size) return 'a scheduled wakeup is pending';
     return undefined;
   };
 
@@ -236,14 +237,16 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = undefined;
     noteIdle(turnRunning ? 'held: a turn is running' : vendorBackground.busy ? 'held: vendor background work'
-      : observer.attachedCount > 0 ? `held: ${observer.attachedCount} window(s) attached` : agentSession.notifications.length ? 'held: a notification to deliver'
+      : observer.attachedCount > 0 ? `held: ${observer.attachedCount} window(s) attached` : agentSession.notifications.length ? 'held: a notification to deliver' : agentSession.wakeups.size ? `held: ${agentSession.wakeups.size} scheduled wakeup(s)`
         : resumeWaiter.pending ? 'held: waiting for a quota reset' : hasHeldVendorProcess(sessionId) ? 'held: a vendor finishing background work'
           : runningShellCount(agentSession) > 0 ? `held: ${runningShellCount(agentSession)} background shell(s)` : `idle: exits in ${Math.round(IDLE_EXIT_MS / 1000)}s`);
     // A newer build asked for this worker while it was busy: the moment it is
     // not, it goes, and the next window to need one starts that build.
     if (retireWhenIdle && !retireBlocker()) retireIfFree();
     else leaveIfStaleBuild();
-    if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length) return;
+    // A scheduled wakeup is owed to the model: the worker that holds its
+    // timer must stay up to fire it (the longest is an hour).
+    if (turnRunning || vendorBackground.busy || observer.attachedCount > 0 || agentSession.notifications.length || agentSession.wakeups.size) return;
     // A turn parked for a quota reset: this worker is what sends it.
     if (resumeWaiter.pending) return;
     // A vendor kept running for its own background work (held-vendor.ts):

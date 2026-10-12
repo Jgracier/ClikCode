@@ -20,6 +20,7 @@ export interface PermissionRules { allow: readonly PermissionRule[] }
 
 export const NO_RULES: PermissionRules = { allow: [] };
 const EXIT_PLAN_MODE_TOOL = 'exit_plan_mode';
+const ENTER_PLAN_MODE_TOOL = 'enter_plan_mode';
 const BASH_TOOL = 'bash';
 
 /** `Bash(git status:*)`, `Edit(src/**)`, `WebFetch(domain:example.com)`, or a
@@ -152,6 +153,10 @@ function decide(request: PermissionRequest): PermissionDecision {
   // use this same permission mode and approver, including their diff previews.
   if (tool.name === 'agent') return { decision: 'allow', reason: 'the delegated tools are approved individually' };
 
+  // Entering plan mode narrows what the agent may do, but it is the user's
+  // setting: they are asked, unless the session already bypasses questions.
+  if (tool.name === ENTER_PLAN_MODE_TOOL && mode !== 'bypass') return { decision: 'ask', reason: 'the agent wants to plan before changing anything' };
+
   // 3. Bypass.
   if (mode === 'bypass') return { decision: 'allow', reason: 'bypass mode' };
 
@@ -192,7 +197,7 @@ export function decidePermission(request: PermissionRequest): PermissionDecision
 
 /** Tools the model is even shown. Plan mode hides what it would refuse. */
 export function visibleTools(tools: readonly ToolDefinition[], planMode: boolean): ToolDefinition[] {
-  return tools.filter((tool) => planMode ? tool.class !== 'write' && tool.class !== 'exec' : tool.name !== EXIT_PLAN_MODE_TOOL);
+  return tools.filter((tool) => planMode ? tool.class !== 'write' && tool.class !== 'exec' && tool.name !== ENTER_PLAN_MODE_TOOL : tool.name !== EXIT_PLAN_MODE_TOOL);
 }
 
 // ── approval text ────────────────────────────────────────────────────────────
@@ -215,6 +220,7 @@ export async function buildApprovalPrompt(
     return { title: 'Approve command', detail: lines.join('\n') };
   }
   if (tool.name === EXIT_PLAN_MODE_TOOL) return { title: 'Approve plan', detail: String(args.plan ?? '') };
+  if (tool.name === ENTER_PLAN_MODE_TOOL) return { title: 'Enter plan mode', detail: `The agent wants to research and plan first: it can read, search and fetch, but not change files or run commands until you approve its plan.\nwhy: ${reason}` };
   const paths = tool.paths?.(args) ?? [];
   let diff: import('./line-diff.js').FileDiff[] | undefined;
   let unavailable: string | undefined;

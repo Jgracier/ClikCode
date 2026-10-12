@@ -6,14 +6,18 @@ import { agentSendTool, agentWaitTool } from './agent-messaging.js';
 import { bashInputTool, bashOutputTool, bashTool, killBashTool } from './bash.js';
 import { conversationTools } from './conversations.js';
 import { editFileTool } from './edit-file.js';
+import { enterPlanModeTool } from './enter-plan-mode.js';
 import { exitPlanModeTool } from './exit-plan-mode.js';
 import { globTool } from './glob.js';
 import { grepTool } from './grep.js';
+import { listAgentsTool } from './list-agents.js';
 import { listDirTool } from './list-dir.js';
 import { lspTool } from './lsp.js';
+import { monitorTool } from './monitor.js';
 import { multiEditTool } from './multi-edit.js';
 import { notebookEditTool } from './notebook.js';
 import { readFileTool } from './read-file.js';
+import { scheduleWakeupTool } from './schedule-wakeup.js';
 import { skillTool } from './skill.js';
 import { taskTool } from './task.js';
 import { todoWriteTool } from './todo-write.js';
@@ -26,9 +30,9 @@ export function defaultTools(): ToolDefinition[] {
   return [
     readFileTool, listDirTool, globTool, grepTool, lspTool,
     writeFileTool, editFileTool, multiEditTool, notebookEditTool,
-    bashTool, bashOutputTool, bashInputTool, killBashTool, waitTool,
-    webFetchTool, webSearchTool, todoWriteTool, exitPlanModeTool, skillTool,
-    taskTool, agentTool, agentSendTool, agentWaitTool, askUserTool, ...conversationTools,
+    bashTool, bashOutputTool, bashInputTool, killBashTool, waitTool, monitorTool, scheduleWakeupTool,
+    webFetchTool, webSearchTool, todoWriteTool, enterPlanModeTool, exitPlanModeTool, skillTool,
+    taskTool, agentTool, agentSendTool, agentWaitTool, listAgentsTool, askUserTool, ...conversationTools,
   ];
 }
 

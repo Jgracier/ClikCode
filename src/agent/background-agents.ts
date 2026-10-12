@@ -94,6 +94,14 @@ export class BackgroundAgents {
     return out;
   }
 
+  /** Every agent this turn started, in start order. */
+  list(): Array<{ id: string; label: string; status: 'running' | 'finished' | 'failed'; delivered: boolean }> {
+    return [...this.agents.values()].map((agent) => ({
+      id: agent.id, label: agent.label, delivered: agent.delivered,
+      status: !agent.result ? 'running' : agent.result.isError ? 'failed' : 'finished',
+    }));
+  }
+
   running(): number {
     let count = 0;
     for (const agent of this.agents.values()) if (!agent.result) count++;

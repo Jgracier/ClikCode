@@ -419,6 +419,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       result = { output: error instanceof Error ? error.message : String(error), isError: true };
     }
     if (wasPlanning && !session.plan.active) input.onPlanModeExit?.(session.plan.approvedPlan ?? '');
+    if (!wasPlanning && session.plan.active) input.onPlanModeEnter?.();
     const rewritten = await abortable(Promise.resolve(input.hooks?.postToolUse?.(call, result, turnHookInfo)), signal);
     if (rewritten && typeof rewritten.output === 'string') result = { ...result, output: rewritten.output };
     return finish(result);
@@ -483,7 +484,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       // told it would hear about them rather than poll, so it hears here.
       const finished = input.subagent ? [] : takeShellNotifications(session);
       if (finished.length) {
-        for (const note of finished) input.onActivity?.({ kind: 'tool-done', label: `${note.shellId} ${note.reason ? 'stopped' : 'exited'}: ${note.command}`, id: `shell-exit-${note.shellId}`, category: 'run' });
+        for (const note of finished) input.onActivity?.({ kind: 'tool-done', label: `${note.shellId} ${note.kind === 'wakeup' ? 'woke' : note.kind === 'output' ? 'output' : note.reason ? 'stopped' : 'exited'}: ${note.command}`, id: `shell-exit-${note.shellId}-${note.at}`, category: 'run' });
         await append({ type: 'text', role: 'user', text: formatShellNotifications(finished) });
       }
       // Background agents that finished without the model waiting for them.

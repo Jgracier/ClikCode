@@ -182,6 +182,9 @@ export interface GatewayHarnessTurnInput {
   /** Fired when the user approves a plan and plan mode switches off mid-turn,
    * so the caller can stop passing `planMode: true` on later turns. */
   onPlanModeExit?: (plan: string) => void;
+  /** Fired when the agent itself enters plan mode (enter_plan_mode, approved
+   * by the user), so the chat keeps it on for later turns. */
+  onPlanModeEnter?: () => void;
   /** MCP / skills plug in here later. */
   extraTools?: readonly ToolDefinition[];
   hooks?: HarnessHooks;

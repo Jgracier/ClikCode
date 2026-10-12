@@ -16,7 +16,7 @@ import { claudeToolName } from './hooks.js';
 /** By name, not by class: `read` also covers bash_output and task itself,
  * and an MCP tool's class says nothing about what the server does. */
 const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(['read_file', 'list_dir', 'glob', 'grep', 'lsp', 'web_fetch', 'web_search', 'list_mcp_resources', 'read_mcp_resource']);
-const WORK_BLOCKED_TOOL_NAMES: ReadonlySet<string> = new Set(['task', 'agent', 'agent_send', 'agent_wait', 'ask_user', 'exit_plan_mode']);
+const WORK_BLOCKED_TOOL_NAMES: ReadonlySet<string> = new Set(['task', 'agent', 'agent_send', 'agent_wait', 'ask_user', 'exit_plan_mode', 'enter_plan_mode', 'list_agents', 'monitor', 'schedule_wakeup']);
 
 export const SUBAGENT_MAX_STEPS = 20;
 const WORK_SUBAGENT_MAX_STEPS = 60;
