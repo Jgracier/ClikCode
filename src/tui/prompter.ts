@@ -30,14 +30,13 @@ import { readTurnMarks } from '../turn/turn-marks.js';
 import { TurnTranscript, type SettlingTool } from '../turn/transcript.js';
 import { nativeModelLabel } from '../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../local-models/catalog.js';
-import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js';
 import type { HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
-import { ActivityEntry, collapseToolRuns, commonPrefixLength, rebaseActivityOffsets, settleDecisionEntry, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
-import { openToolsStatus, toolUses, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnWaits, liveWaitKind, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
+import { ActivityEntry, collapseToolRuns, commonPrefixLength, rebaseActivityOffsets, settleDecisionEntry, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
+import { toolUses, turnElapsedMs, type OpenTool, liveWaitKind, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
 import { logProcessWarnings } from './warnings.js';
-import { answerWriting, backgroundTerminalsLabel, isApprovalWaitPhase, liveTokenTarget, reasoningBody, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
+import { answerWriting, backgroundTerminalsLabel, reasoningBody, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
 import { accountSwitchLine } from '../turn/failover.js';
 import { waitStalled } from '../harness/protocol/turn-pace.js';
@@ -45,11 +44,10 @@ import { paintStatus } from './render/status-line.js';
 import { expandPastes, insertPaste, keptPastes, removePlaceholderAt, type DraftWithPastes, type HeldPaste } from './render/held-pastes.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from './render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../harness/protocol/tool-category-style.js';
-import { NOTICE_MS, PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
+import { PAINT_COALESCE_MS } from '../harness/protocol/timings.js';
 import { ApprovalRequest, approvalBlockRows } from './render/approval-block.js';
 import { APPROVAL_GUARD_MS, approvalKeyAction } from './render/approval-keys.js';
 import { questionBlockRows } from './render/question-block.js';
-import type { BackgroundWork } from '../harness/protocol/background-agents.js';
 import { APPROVAL_MIN_ROWS, fitFooterForApproval, frameRowBudget } from './render/frame-budget.js';
 import { fitHint, paletteRows as paletteBandRows, panelRows as panelBandRows } from './render/footer-rows.js';
 import { runOptionPicker, type OptionPickerHost, type PaletteLayout } from './option-picker.js';
@@ -57,16 +55,14 @@ import { runConversationBoard, type BoardResult, type ConversationBoardSettings 
 import { EmittedTranscript } from './render/emitted-transcript.js';
 import { reseedStartIndex } from './render/reseed-window.js';
 import { LiveChildren } from './render/child-rows.js';
-import { enterAgainSends, hasDurableSteer, liveTurnSpan, STEER_WORDS, steerTranscriptRows, type SteerRow, type WaitingMessage } from './render/steer-rows.js';
+import { enterAgainSends, hasDurableSteer, liveTurnSpan, STEER_WORDS, steerTranscriptRows, type SteerRow } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { markTurn, turnMarkOpen } from '../runtime/turn-latency.js';
 import { highlightWords, type MentionFocus } from './render/search-focus.js';
 import { highlightSelectionAt, scrollShift, shiftedRow, type Selection } from './render/selection.js';
-import { commandLineTypedDuringTurn } from './waiting-slash.js';
 import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
 import { isClikCodeNotice } from '../session/clikcode-notice.js';
 import { reducedMotion } from './capabilities.js';
-import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, onTerminalFocus, takeTerminalKeys, waitingEnterAction, waitingInputAction } from './input-decoder.js';
 import { SWIPE_ROWS, enterInputModes, popReadModes, redrawPreamble, sessionModesOn, takeQueuedModes, type Redraw } from './modes.js';
@@ -75,7 +71,7 @@ import { callRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { formatElapsed } from '../harness/protocol/format.js';
-import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js';
+import { keyHint, keyHintFor } from '../harness/protocol/wording.js';
 import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
@@ -83,6 +79,7 @@ import { showMention, mentionKey, endMention, jumpToMention } from './prompter/m
 import { notice, showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
+import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -424,129 +421,17 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
   };
 
-  /** A key typed into the waiting composer. */
-  editTurnDraft(turn: WaitingTurn, key: string): void {
-    const edited = editWaitingComposer(turn.draft, turn.cursor, key);
-    if (!edited.changed) return;
-    turn.draft = edited.value;
-    turn.cursor = edited.cursor;
-    this.updateWaiting();
-  }
+  editTurnDraft(...args: Parameters<typeof editTurnDraft>): ReturnType<typeof editTurnDraft> { return editTurnDraft.apply(this, args); }
 
-  /** User messages still waiting, oldest first. A command and a background
-   *  notice stay in the queue: Esc does not edit them, and Enter again does
-   *  not send them. One still being submitted (`sending`) is not waiting. */
-  waitingUserMessages(): Array<{ id: string; text: string } & WaitingMessage> {
-    const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command' && item.kind !== 'notification');
-    const startedAt = this.currentSession?.pendingTurn?.startedAt;
-    const unsteered = (id: string): WaitingMessage => (this.waitingSubmissions.some((item) => item.id === id && item.unsteered) ? { unsteered: true } : {});
-    return [
-      ...stored.map((item) => ({ id: item.id, text: item.text, ...(item.heldForTurn && item.heldForTurn === startedAt ? { held: true } : {}), ...unsteered(item.id) })),
-      ...this.waitingSubmissions.filter((item) => item.state === 'queued' && item.id && !stored.some((entry) => entry.id === item.id))
-        .map((item) => ({ id: item.id!, text: item.text, ...unsteered(item.id!) })),
-    ];
-  }
+  waitingUserMessages(...args: Parameters<typeof waitingUserMessages>): ReturnType<typeof waitingUserMessages> { return waitingUserMessages.apply(this, args); }
 
-  /** A message typed during this turn is waiting with its row on screen,
-   * and Enter on nothing would put it into the chat (enterAgainSends). One
-   * still being submitted has not been answered yet: a quick double Enter
-   * must not send it twice. */
-  enterAgainReady(): boolean {
-    return enterAgainSends(this.waitingUserMessages());
-  }
+  enterAgainReady(...args: Parameters<typeof enterAgainReady>): ReturnType<typeof enterAgainReady> { return enterAgainReady.apply(this, args); }
 
-  /** The turn has an answer: text, or a tool. A thought is not one. */
-  turnHasAnswer(): boolean {
-    if (this.liveResponse.trim()) return true;
-    if (this.activeTools.size > 0) return true;
-    return this.activityEntries.some((entry) => entry.event && entry.event.kind !== 'thinking');
-  }
+  turnHasAnswer(...args: Parameters<typeof turnHasAnswer>): ReturnType<typeof turnHasAnswer> { return turnHasAnswer.apply(this, args); }
 
-  /** Esc mid-turn: the newest message still waiting -- queued, or held for
-   * the turn's next pause -- comes back into the composer, ahead of anything
-   * typed, and is gone from the queue. Nothing running is touched. One
-   * already on its way into the turn stays where it is. True when there was
-   * a message to take, so Esc does not also stop the turn. */
-  takeBackWaiting(): boolean {
-    const turn = this.turn;
-    if (!turn?.takeBack) return false;
-    const last = this.waitingUserMessages().at(-1);
-    if (!last) return false;
-    void turn.takeBack(last.id).then((outcome) => {
-      if (outcome !== 'removed') return;
-      this.waitingSubmissions = this.waitingSubmissions.filter((item) => item.id !== last.id);
-      if (this.currentSession?.queuedTurns) this.currentSession.queuedTurns = this.currentSession.queuedTurns.filter((item) => item.id !== last.id);
-      if (this.turn) {
-        this.turn.draft = this.turn.draft ? `${last.text}\n${this.turn.draft}` : last.text;
-        this.turn.cursor = last.text.length;
-        this.updateWaiting();
-      } else this.queuedDraft = this.queuedDraft ? `${last.text}\n${this.queuedDraft}` : last.text;
-    }, () => undefined);
-    return true;
-  }
+  takeBackWaiting(...args: Parameters<typeof takeBackWaiting>): ReturnType<typeof takeBackWaiting> { return takeBackWaiting.apply(this, args); }
 
-  /** A message typed during the turn, sent: steered into it or queued
-   * behind it (the harness decides; its row says which), or a slash line,
-   * which is ClikCode's own command. */
-  submitWaiting(text: string, allowCommand = true): void {
-    const turn = this.turn;
-    if (!turn?.submit) {
-      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
-      return;
-    }
-    // A slash line is ClikCode's own command and never text for the model.
-    // Handed to the caller to route (see waiting-slash.ts and slash/queue.ts);
-    // a line the router decides is really conversation comes back 'queued'.
-    const asCommand = allowCommand && Boolean(commandLineTypedDuringTurn(text)) && Boolean(turn.command);
-    const submit = asCommand ? turn.command! : turn.submit;
-    // No selection mid-turn -- the arrows scroll the answer -- so a partly
-    // typed value means the best match: `/model op` applies opus.
-    const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
-    const localId = ++this.waitingSubmissionId;
-    // A message gets a row, because the user needs to know where their words
-    // went. A command is acknowledged too -- `/model sonnet · applied`, or
-    // when it runs -- as a transient line once it has been taken: typed words
-    // that simply vanish read as ignored (Claude Code acknowledges them).
-    if (!asCommand) {
-      this.waitingSubmissions.push({
-        localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
-      });
-    }
-    this.updateWaiting();
-    const write = submit(line).then((result) => {
-      const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
-      if (item) {
-        item.state = result.disposition;
-        item.id = result.submission.id;
-        // Its place in the turn is the moment it was acknowledged: rows that
-        // began before sort above it, rows that began after sort below
-        // (standard 1.5), not where it was typed.
-        if (result.disposition === 'steered') item.ack = { sequence: ++this.timelineSequence, responseOffset: this.liveResponse.length };
-        if (result.unsteered) item.unsteered = true;
-      } else if (asCommand && result.disposition === 'command') {
-        this.showTransientNotice(commandAck(line, result.commandOutcome), NOTICE_MS, () => this.updateWaiting());
-      } else if (asCommand) {
-        // The router decided the line was conversation after all: it is a
-        // message, with its row, as if it had never looked like a command.
-        this.waitingSubmissions.push({
-          localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
-          state: result.disposition, id: result.submission.id, ...(result.unsteered ? { unsteered: true } : {}),
-        });
-      }
-      this.updateWaiting();
-    }).catch(() => {
-      const item = this.waitingSubmissions.find((entry) => entry.localId === localId);
-      if (item) item.state = 'error';
-      if (this.turn && !this.turn.draft) {
-        this.turn.draft = text;
-        this.turn.cursor = text.length;
-      }
-      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
-      this.updateWaiting();
-    });
-    this.waitingSubmissionWrites.add(write);
-    void write.finally(() => this.waitingSubmissionWrites.delete(write));
-  }
+  submitWaiting(...args: Parameters<typeof submitWaiting>): ReturnType<typeof submitWaiting> { return submitWaiting.apply(this, args); }
 
   answerApproval(...args: Parameters<typeof answerApproval>): ReturnType<typeof answerApproval> { return answerApproval.apply(this, args); }
 
@@ -894,30 +779,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   panelKey(...args: Parameters<typeof panelKey>): ReturnType<typeof panelKey> { return panelKey.apply(this, args); }
 
-  /** What the band showing says, or undefined with no band up: work done
-   * on a turn's way in (a local model loading) borrows that band. */
-  waitingLabel(): string | undefined {
-    return this.turn?.label;
-  }
+  waitingLabel(...args: Parameters<typeof waitingLabel>): ReturnType<typeof waitingLabel> { return waitingLabel.apply(this, args); }
 
-  /** Progress on a wait already showing ("downloading… 42%"), without
-   * restarting it the way startWaiting does. */
-  updateWaitingLabel(message: string): void {
-    if (!this.turn) return;
-    this.turn.label = message;
-    // Progress is activity: a download moving is not a wait gone quiet.
-    this.turn.activeAt = Date.now();
-    this.updateWaiting();
-  }
+  updateWaitingLabel(...args: Parameters<typeof updateWaitingLabel>): ReturnType<typeof updateWaitingLabel> { return updateWaitingLabel.apply(this, args); }
 
-  /** A turn this window joined mid-way: count from when it really started,
-   * and say what it is running, instead of "thinking (0s)". */
-  joinedWaiting(startedAt?: number, activity?: string): void {
-    if (!this.turn) return;
-    if (startedAt !== undefined) this.turn.clock = joinTurnClock(this.turn.clock, startedAt);
-    if (activity) this.turn.label = activity;
-    this.updateWaiting();
-  }
+  joinedWaiting(...args: Parameters<typeof joinedWaiting>): ReturnType<typeof joinedWaiting> { return joinedWaiting.apply(this, args); }
 
   /** A vendor sign-in on screen (commands/account.ts withSignIn): its link
    * and code above the waiting band, a code or key typed into the waiting
@@ -1039,287 +905,40 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     };
   }
 
-  startWaiting(
-    message: string,
-    onCancel?: (restoreDraft: boolean) => void,
-    onSubmit?: (text: string) => Promise<LiveTurnInputResult>,
-    onCommand?: (text: string) => Promise<LiveTurnInputResult>,
-    onLeave?: () => void,
-    onTakeBack?: (id: string) => Promise<TakeBackOutcome>,
-    onSendWaiting?: () => void,
-  ): void {
-    lifecycle('window.turn.start', { label: message.slice(0, 80), steerable: Boolean(onSubmit) });
-    // stopWaiting is also how a finished turn drops its prompt. Calling it
-    // here, a moment after Enter painted that prompt, used to drop the prompt
-    // with it -- the message flashed and was gone until a later snapshot
-    // happened to bring it back. This call is only resetting the previous
-    // turn's waiting state. The prompt belongs to the turn being started.
-    const submittedPrompt = this.submittedPrompt;
-    // The same turn, drawn early: it carries on, its clock and draft with it.
-    const early = this.turn?.early ? { ...this.turn } : undefined;
-    if (early) this.turn!.draft = '';
-    // Typed under the sign-in that opened as this message was sent (a
-    // provider's first use): it belongs to the turn starting now -- in its
-    // composer, and sent once the turn can take messages if Enter was
-    // pressed (typedAhead, replayed below). Handed to the composer after the
-    // turn instead, it vanished until the turn ended.
-    const underSignIn = !early && this.signedInJustNow ? this.queuedDraft : undefined;
-    this.signedInJustNow = false;
-    if (underSignIn !== undefined) this.queuedDraft = undefined;
-    this.stopWaiting(false);
-    this.submittedPrompt = submittedPrompt;
-    // A summary its turn never got to write (it ended with no answer) is
-    // not this turn's.
-    // Following again the very turn this window stepped out of, with nothing
-    // redrawn in between: what it wrote is in scrollback, so it carries on
-    // from there rather than starting the turn's view over beneath it.
-    const out = this.steppedOut;
-    this.steppedOut = undefined;
-    const rejoined = Boolean(out && this.currentSession?.id === out.sessionId && out.prompt === submittedPrompt
-      && (this.currentSession?.messages?.length ?? 0) === out.anchor);
-    // A new turn is the reader rejoining the conversation.
-    this.alternateScrollback = 0;
-    if (!rejoined) this.liveResponse = '';
-    // The last turn's plan, finished or left unfinished, is not this one's.
-    if (!rejoined) { this.planEntries = []; this.planStart = undefined; }
-    // A running turn always renders as stable messages, its submitted user
-    // prompt, then one live assistant slot. Keep that slot fixed for the
-    // whole turn: deriving it from sessionTranscriptMessages made the anchor
-    // grow after the first response delta, so later tools jumped below the
-    // assistant reply and appeared to arrive from nowhere.
-    // The caller paints the submitted user prompt before entering waiting
-    // mode, so the live assistant occupies the next array index exactly.
-    // Internal commands that do not display their synthetic prompt also append
-    // the transient assistant at this same index.
-    this.activityAnchor = this.currentSession?.messages?.length ?? 0;
-    const turn: WaitingTurn = {
-      label: message, clock: early?.clock ?? startTurnClock(Date.now()),
-      activeAt: early?.activeAt ?? Date.now(),
-      draft: early?.draft ?? underSignIn ?? '', cursor: early?.cursor ?? underSignIn?.length ?? 0, cancelled: false,
-      ...(onCancel ? { cancel: onCancel } : {}), ...(onSubmit ? { submit: onSubmit } : {}),
-      ...(onCommand ? { command: onCommand } : {}), ...(onLeave ? { leave: onLeave } : {}),
-      ...(onTakeBack ? { takeBack: onTakeBack } : {}),
-      ...(onSendWaiting ? { sendWaiting: onSendWaiting } : {}),
-    };
-    this.turn = turn;
-    this.waitingSubmissions = [];
-    this.turnSteers.clear();
-    this.waitingFrame = 0;
-    this.thought = undefined;
-    this.thoughtStart = undefined;
-    this.panelState = undefined;
-    // Whatever the previous turn retired belongs to the terminal now. This one
-    // starts owing everything it produces, and nothing from before it.
-    if (!rejoined) {
-      this.activeTools = new Map();
-      this.liveChildren.reset();
-      this.exploreGrouping.reset();
-      this.liveActivitiesShown = -1;
-      this.turnTranscript.reset();
-      this.emitted.liveAnswerSettled();
-      this.emitted.turnSequenceFloor = this.timelineSequence;
-      this.streamingBlocks = createStreamingBlockParser();
-    }
-    if (input.isTTY) {
-      const listen = (): void => {
-        turn.stopInput = takeTerminalKeys(this.onWaitingKey);
-        output.write(enterInputModes());
-      };
-      listen();
-      this.resumeInput = () => { turn.stopInput?.(); listen(); };
-    }
-    // With the draft it carried in (an early start's, or one typed under a
-    // sign-in): painted empty, it vanished until the next keystroke or tick.
-    this.paint(turn.draft, [], 0, '› ', turn.cursor);
-    this.scheduleWaitingTick();
-    const keys = onSubmit ? this.typedAhead.splice(0) : [];
-    if (keys.length) setImmediate(() => { for (const key of keys) if (this.turn === turn) this.onWaitingKey(key); });
-    const interrupt = early?.early?.interrupt;
-    if (interrupt && onCancel) {
-      turn.cancelled = true;
-      turn.label = interrupt.restoreDraft ? 'editing…' : 'stopping…';
-      onCancel(interrupt.restoreDraft);
-      this.updateWaiting();
-    }
-  }
+  startWaiting(...args: Parameters<typeof startWaiting>): ReturnType<typeof startWaiting> { return startWaiting.apply(this, args); }
 
-  /** A turn is on its way, but what runs it is not answering yet: the first
-   * message of a conversation waits on its worker starting, most of 150ms of
-   * a node process loading. The message and the spinner are drawn now;
-   * startWaiting then takes over the same clock and draft, and an interrupt
-   * pressed meanwhile. */
-  turnStarting(): void {
-    this.startWaiting('thinking');
-    if (this.turn) this.turn.early = {};
-  }
+  turnStarting(...args: Parameters<typeof turnStarting>): ReturnType<typeof turnStarting> { return turnStarting.apply(this, args); }
 
-  /** What the status line says about the newest open call, if any is open. */
-  toolStatus(): { phase: string; category?: ToolCategory } | undefined {
-    return this.activeTools.size ? openToolsStatus(this.activeTools) : undefined;
-  }
+  toolStatus(...args: Parameters<typeof toolStatus>): ReturnType<typeof toolStatus> { return toolStatus.apply(this, args); }
 
-  /** What the turn waits on besides the model, for the clock's decisions. */
-  turnWaits(): TurnWaits {
-    return { toolsRunning: this.activeTools.size > 0, approval: this.waitingOnUser() };
-  }
+  turnWaits(...args: Parameters<typeof turnWaits>): ReturnType<typeof turnWaits> { return turnWaits.apply(this, args); }
 
-  /** The wait is on the user -- an approval or a sign-in -- not the agent:
-   * the band holds still (a ● and no clock) until they act. */
-  waitingOnUser(): boolean {
-    return Boolean(this.pendingApproval) || this.signingIn;
-  }
+  waitingOnUser(...args: Parameters<typeof waitingOnUser>): ReturnType<typeof waitingOnUser> { return waitingOnUser.apply(this, args); }
 
-  scheduleWaitingTick(): void {
-    const turn = this.turn;
-    if (!turn) return;
-    if (turn.timer) clearTimeout(turn.timer);
-    turn.timer = undefined;
-    if (this.closed) return;
-    const now = Date.now();
-    // Reduced motion never animates: the band ticks for the clock alone.
-    this.waitingTickFast = !this.reducedMotion && turnAnimating(this.turnWaits());
-    const delay = nextTurnTickMs(turn.clock, now, this.waitingTickFast);
-    turn.timer = setTimeout(() => {
-      turn.timer = undefined;
-      if (this.turn !== turn || this.closed) return;
-      if (this.waitingTickFast) this.waitingFrame++;
-      this.stepTokens(turn);
-      // A tick that changes only the clock costs that one row: the frame
-      // writes only the rows that differ from the last.
-      this.updateWaiting();
-      this.scheduleWaitingTick();
-    }, delay);
-    turn.timer.unref();
-  }
+  scheduleWaitingTick(...args: Parameters<typeof scheduleWaitingTick>): ReturnType<typeof scheduleWaitingTick> { return scheduleWaitingTick.apply(this, args); }
 
-  /** The status line's token count takes a step toward what the turn has
-   * produced (see smoothTokens). Stepped on the tick, not on paint, so the
-   * speed does not depend on how many frames were drawn. */
-  stepTokens(turn: WaitingTurn): void {
-    // Reasoning is tokens too: the thought being had and the ones settled
-    // this turn (a settled mark copy carries its id as its label, not text).
-    const thoughtChars = (this.thought?.text.length ?? 0) + this.activityEntries.reduce((sum, entry) => (
-      entry.anchor === this.activityAnchor && entry.event?.kind === 'thinking' && entry.event.id === undefined
-        ? sum + (entry.event.label?.length ?? 0) : sum), 0);
-    const target = liveTokenTarget({ ...(turn.usage ? { usage: turn.usage } : {}), responseChars: this.liveResponse.length, thoughtChars });
-    turn.tokens = smoothTokens(turn.tokens ?? 0, target);
-  }
+  stepTokens(...args: Parameters<typeof stepTokens>): ReturnType<typeof stepTokens> { return stepTokens.apply(this, args); }
 
-  /** The usage the vendor has reported for the running turn (a running
-   * total). It feeds the status line's meter; nothing is drawn for it here. */
-  setTurnUsage(usage: TurnUsage): void {
-    if (this.turn) this.turn.usage = usage;
-  }
+  setTurnUsage(...args: Parameters<typeof setTurnUsage>): ReturnType<typeof setTurnUsage> { return setTurnUsage.apply(this, args); }
 
-  /** What the vendor says runs in the background, by kind (standard section
-   * 10). Only the terminals are drawn live, as one dim row under the status
-   * (`2 background terminals running`); agents and workflows are the end
-   * line's, from the saved turn. */
-  setBackgroundWork(work: BackgroundWork | undefined): void {
-    const terminals = work?.terminals && work.terminals > 0 ? Math.floor(work.terminals) : 0;
-    if (this.backgroundTerminals === terminals) return;
-    this.backgroundTerminals = terminals;
-    this.schedulePaint();
-  }
+  setBackgroundWork(...args: Parameters<typeof setBackgroundWork>): ReturnType<typeof setBackgroundWork> { return setBackgroundWork.apply(this, args); }
 
-  /** The turn waits on the user (an approval, a sign-in): its clock stops,
-   * and the time is not the turn going quiet. */
-  pauseClock(): void {
-    const turn = this.turn;
-    if (!turn) return;
-    turn.clock = pauseTurnClock(turn.clock, Date.now());
-    turn.activeAt = Date.now();
-    // Blocked on the user: the frame stops now, not at the next spinner tick.
-    if (turn.timer) this.scheduleWaitingTick();
-  }
+  pauseClock(...args: Parameters<typeof pauseClock>): ReturnType<typeof pauseClock> { return pauseClock.apply(this, args); }
 
-  /** Whatever the turn waited on the user for has been answered (or the
-   * turn ended under it). Another wait on the user still up keeps it held. */
-  resumeClock(): void {
-    const turn = this.turn;
-    if (turn?.clock.pausedAt === undefined || this.waitingOnUser()) return;
-    turn.clock = resumeTurnClock(turn.clock, Date.now());
-    // Time spent on the user's answer is not the turn going quiet.
-    turn.activeAt = Date.now();
-    if (turn.timer) this.scheduleWaitingTick();
-  }
+  resumeClock(...args: Parameters<typeof resumeClock>): ReturnType<typeof resumeClock> { return resumeClock.apply(this, args); }
 
   /** What the next prompt's composer opens with: a message that never
    * reached its turn, a cancelled one the worker hands back, or a `/`. */
   restoreDraft(value: string): void { this.queuedDraft = value; }
-  async flushWaitingSubmissions(): Promise<void> {
-    await Promise.allSettled([...this.waitingSubmissionWrites]);
-  }
+  flushWaitingSubmissions(...args: Parameters<typeof flushWaitingSubmissions>): ReturnType<typeof flushWaitingSubmissions> { return flushWaitingSubmissions.apply(this, args); }
 
-  /** This window stops following the running turn (← to the board); its
-   * worker carries on with it. Not the turn's end, so nothing of it is
-   * settled: treated as one, the half-streamed answer went into scrollback
-   * cut mid-word, and following the turn again drew it all a second time
-   * beneath. See steppedOut. */
-  leaveTurn(): void {
-    if (this.turn && this.currentSession) {
-      this.steppedOut = { sessionId: this.currentSession.id, ...(this.submittedPrompt !== undefined ? { prompt: this.submittedPrompt } : {}), anchor: this.activityAnchor };
-    }
-    this.stopWaiting();
-  }
+  leaveTurn(...args: Parameters<typeof leaveTurn>): ReturnType<typeof leaveTurn> { return leaveTurn.apply(this, args); }
 
-  /** The turn showing was stopped elsewhere -- from another window, or its
-   * worker is gone -- and ends as one stopped here does: what was still
-   * running did not finish, its line says "Stopped after", and it is not
-   * announced as finished. */
-  turnStopped(): void {
-    if (this.turn) this.turn.cancelled = true;
-  }
+  turnStopped(...args: Parameters<typeof turnStopped>): ReturnType<typeof turnStopped> { return turnStopped.apply(this, args); }
 
-  /** The turn showing now drives it, if a follow does (see WaitingTurn.ended). */
-  onWaitingEnded(ended: () => void): void {
-    if (this.turn) this.turn.ended = ended;
-  }
+  onWaitingEnded(...args: Parameters<typeof onWaitingEnded>): ReturnType<typeof onWaitingEnded> { return onWaitingEnded.apply(this, args); }
 
-  stopWaiting(refresh = true, why?: string): void {
-    const turn = this.turn;
-    if (turn) lifecycle('window.turn.end', { cancelled: turn.cancelled, ...(why ? { why } : {}) });
-    if (turn) {
-      if (turn.timer) clearTimeout(turn.timer);
-      turn.timer = undefined;
-      turn.stopInput?.();
-      this.resumeInput = undefined;
-    }
-    // Settled while the turn is still the current one: a "tell it instead"
-    // draft goes back into its composer, handed off below.
-    this.settleApprovals();
-    // A thought still being had when the turn ended stays, settled. Not
-    // when stepping out: the turn, and the thought, carry on.
-    if (!this.steppedOut) { this.settleThought(); this.settlePlan(); }
-    // Stopped: what was still running did not finish. Its row says so, as
-    // the worker's saved copy of the turn does (turn-journal.ts).
-    if (turn?.cancelled) this.activityEntries = stopEntries(this.activityEntries, (entry) => this.ofThisTurn(entry));
-    // A real turn's end -- one that took messages, not a wait on a download
-    // or a shell command -- and not stepping out of it. A stopped turn did
-    // not finish, and whoever stopped it knows. (Its closing line is drawn
-    // from the saved answer: see turnEndLine.)
-    if (turn?.submit && !this.steppedOut && !turn.cancelled) {
-      this.notifyIfAway(`${this.currentSession?.name || 'ClikCode'}: the turn has finished`);
-    }
-    this.turn = undefined;
-    this.backgroundTerminals = 0;
-    this.thought = undefined;
-    this.thoughtStart = undefined;
-    // Anything typed during the turn and not submitted is still the user's
-    // text. It lives in the turn's draft while the turn runs, and the composer
-    // that opens afterwards reads queuedDraft -- so without this handoff a
-    // message typed while the answer streamed was simply gone the moment the
-    // turn finished. Appended rather than assigned: a queued submission may
-    // already be waiting there, and neither should overwrite the other.
-    if (turn?.draft.trim()) {
-      this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${turn.draft}` : turn.draft;
-    }
-    // The turn is over: its prompt is a real message now, and holding the
-    // client's copy any longer would draw it twice.
-    this.submittedPrompt = undefined;
-    if (refresh && !this.closed) this.repaint({ keepPalette: false });
-    turn?.ended?.();
-  }
+  stopWaiting(...args: Parameters<typeof stopWaiting>): ReturnType<typeof stopWaiting> { return stopWaiting.apply(this, args); }
 
   retakeScreen(...args: Parameters<typeof retakeScreen>): ReturnType<typeof retakeScreen> { return retakeScreen.apply(this, args); }
 
@@ -1343,23 +962,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   settleSavedStops(...args: Parameters<typeof settleSavedStops>): ReturnType<typeof settleSavedStops> { return settleSavedStops.apply(this, args); }
 
-  /** The vendor is producing output: a phase reported before it is over. */
-  vendorAnswered(): void {
-    if (this.reportedPhase === undefined) return;
-    if (this.turn?.label === this.reportedPhase) this.turn.label = 'thinking';
-    this.reportedPhase = undefined;
-  }
+  vendorAnswered(...args: Parameters<typeof vendorAnswered>): ReturnType<typeof vendorAnswered> { return vendorAnswered.apply(this, args); }
 
-  phase(message: string): void {
-    const turn = this.turn;
-    if (!turn || turn.cancelled || turn.label === message) return;
-    // The band says "waiting for approval" while one is up; remember the phase
-    // for when it is answered instead of replacing that.
-    if (this.pendingApproval) { if (!isApprovalWaitPhase(message)) this.approvalRestoreLabel = message; return; }
-    turn.label = message;
-    this.reportedPhase = message;
-    this.updateWaiting();
-  }
+  phase(...args: Parameters<typeof phase>): ReturnType<typeof phase> { return phase.apply(this, args); }
 
   approval(...args: Parameters<typeof approval>): ReturnType<typeof approval> { return approval.apply(this, args); }
 
