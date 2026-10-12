@@ -751,6 +751,27 @@ describe('runGatewayHarnessTurn', () => {
     expect(history.every((item) => item.type !== 'tool_result' || !/elided/.test(item.output))).toBe(true);
   });
 
+  it('continues the turn when the compaction summary call fails', async () => {
+    const phases: string[] = [];
+    const h = harness([], { onPhase: (phase) => phases.push(phase) }, (request) => (request.tools.length === 0 ? { error: Object.assign(new Error('503 upstream'), { code: 'UPSTREAM', kind: 'other' }) } : { text: 'answered' }));
+    Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
+    const store = path.join(stateDir, 'sessions', h.input.sessionId);
+    await fs.mkdir(store, { recursive: true });
+    const lines = Array.from({ length: MAX_REQUEST_ITEMS + 100 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
+    await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result).toMatchObject({ stopReason: 'completed', text: 'answered' });
+    expect(phases.some((phase) => phase.startsWith('compaction failed'))).toBe(true);
+  });
+
+  it('saves text streamed during a step that then fails', async () => {
+    const h = harness([{ before: (request) => { request.onTextDelta('Half an answ'); }, error: Object.assign(new Error('boom'), { code: 'X', kind: 'other' }) }]);
+    const result = await runGatewayHarnessTurn(h.input);
+    expect(result.stopReason).toBe('model-error');
+    const persisted = await new ConversationStore(stateDir, h.input.sessionId).load();
+    expect(persisted.at(-1)).toMatchObject({ type: 'text', role: 'assistant', text: 'Half an answ' });
+  });
+
   describe('a model step that fails before saying anything', () => {
     const gatewayError = (code: string, extra: Record<string, unknown> = {}) => Object.assign(new Error(`gateway: ${code}`), { code, kind: 'other', retryAfter: 0, ...extra });
 
