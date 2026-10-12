@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { echoesRefusal } from './vendor-turn.js';
+import { echoesRefusal } from './vendor-recovery.js';
 
 describe('an attempt whose only text is the refusal it failed with', () => {
   const refusal = new Error("Internal error: You've hit your session limit · resets 3:50pm (America/Denver)");
