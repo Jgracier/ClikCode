@@ -141,7 +141,13 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
       const agents = (models?.agents ?? []).filter((agent) => !query || agent.name.toLowerCase().includes(query) || agent.detail?.toLowerCase().includes(query));
       const result: ListRow[] = [];
       if (agents.length && matching.length) result.push({ key: 'h:models', heading: true, render: () => <>Models<span class="count">{matching.length}</span></> });
-      result.push(...matching.map((item) => ({
+      let heading: string | undefined;
+      result.push(...matching.flatMap((item) => {
+        const grouped: ListRow[] = item.group && item.group !== heading
+          ? [{ key: `g:${item.group}`, heading: true, render: () => <>{item.group}</> }]
+          : [];
+        heading = item.group;
+        return [...grouped, {
         key: `m:${item.id}`,
         disabled: Boolean(item.unavailable),
         onSelect: () => apply(drill, item.id),
@@ -156,7 +162,8 @@ export function ProviderModelPicker(props: { mode: 'provider' | 'model'; model: 
             </div>
           );
         },
-      })));
+      }];
+      }));
       if (agents.length) {
         result.push({ key: 'h:agents', heading: true, render: () => <>Platform agents (remote)<span class="count">{agents.length}</span></> });
         for (const agent of agents) {

@@ -32,9 +32,9 @@ const WIRE = {
 const LIST = {
   auto: { contextWindow: 131_072, maxOutput: 16_000, vision: true },
   models: [
-    { id: 'gpt-5.6-sol', contextWindow: 400_000, price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 25, charged: { inMTok: 3, outMTok: 15 } } },
-    { id: 'qwen/qwen3.8-27b', access: 'free', contextWindow: 131_072 },
-    { id: 'claude-opus-5', vision: true, reasoning: true, maxOutput: 64000, tokensPerSecond: 71.3 },
+    { id: 'gpt-5.6-sol', maker: 'openai', contextWindow: 400_000, price: { full: { inMTok: 4, outMTok: 20 }, discountPercent: 25, charged: { inMTok: 3, outMTok: 15 } } },
+    { id: 'qwen/qwen3.8-27b', maker: 'qwen', access: 'free', contextWindow: 131_072 },
+    { id: 'claude-opus-5', maker: 'anthropic', vision: true, reasoning: true, maxOutput: 64000, tokensPerSecond: 71.3 },
   ],
 };
 
@@ -164,5 +164,16 @@ describe('choosing a Gateway model', () => {
   it('refuses a model the Gateway does not offer, and suggests near ones', async () => {
     await expect(chooseGatewayModel('gpt-5.6')).rejects.toThrow('Did you mean: gpt-5.6-sol');
     await expect(chooseGatewayModel('nothing-like-it')).rejects.toThrow('gateway models');
+  });
+});
+
+describe('models by maker', () => {
+  it('orders by the lab that made them, unknown last, and names the lab', async () => {
+    const { gatewayModelsByMaker, gatewayMakerName } = await import('./models.js');
+    const models = [{ id: 'x' }, { id: 'g', maker: 'openai' }, { id: 'c', maker: 'anthropic' }, { id: 'c2', maker: 'anthropic' }, { id: 'n', maker: 'nvidia' }];
+    expect(gatewayModelsByMaker(models).map((model) => model.id)).toEqual(['c', 'c2', 'n', 'g', 'x']);
+    expect(gatewayMakerName(models[1]!)).toBe('OpenAI');
+    expect(gatewayMakerName(models[0]!)).toBe('Other');
+    expect(gatewayMakerName({ id: 'm', maker: 'mistral' })).toBe('Mistral');
   });
 });

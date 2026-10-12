@@ -5,7 +5,7 @@ import { freePlanModels } from '../../harness/accounts/free-plan.js';
 import type { AiLocalHarnessDefinition, ModelCatalogResult } from '../../harness/definition.js';
 import type { HarnessPrompter, PickerOption } from '../../harness/prompter.js';
 import { isGatewayService } from '../../session/route.js';
-import { gatewayModelDetail, gatewayModelLabel, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
+import { gatewayMakerName, gatewayModelsByMaker, gatewayModelDetail, gatewayModelLabel, gatewayModels, savedGatewayModels } from '../../gateway/models.js';
 import { gatewayAgents, type GatewayAgent } from '../../gateway/agents.js';
 import { gatewaySubscriptionsOn, setGatewaySubscriptions } from '../../gateway/subscriptions.js';
 import type { GatewayModelList } from '../../gateway/models.js';
@@ -220,14 +220,14 @@ export function gatewayPickerRows(list: GatewayModelList, agents: readonly Gatew
     { label: currentAgent ? 'Agent default' : 'Automatic', detail: currentAgent
       ? `${current ? '' : '· current '}· use this agent's configured pin or router`
       : `${current ? '' : '· current '}· the Gateway chooses`,
-      value: { kind: 'model' as const, id: 'auto' }, group: 'Models' },
-    ...list.models.map((model) => {
+      value: { kind: 'model' as const, id: 'auto' }, group: 'Automatic' },
+    ...gatewayModelsByMaker(list.models).map((model) => {
       const price = gatewayModelDetail(model);
       return {
         label: gatewayModelLabel(model),
         detail: [model.id === current ? '· current' : '', price ? `· ${price}` : ''].filter(Boolean).join(' '),
         value: { kind: 'model' as const, id: model.id },
-        group: 'Models',
+        group: gatewayMakerName(model),
       };
     }),
   ];
