@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BridgeClient } from '../../src/bridge-client';
 import {
-  bridgeCommandMissing, bridgeCompatibility, IDE_PROTOCOL, INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND, tooOldToStartMessage,
+  bridgeCommandMissing, bridgeCompatibility, IDE_PROTOCOL, INSTALL_COMMAND, INSTALL_FALLBACK_COMMAND, tooOldToStartMessage, versionSkew,
 } from '../../src/compat';
 import pkg from '../../package.json';
 
@@ -72,5 +72,18 @@ describe('Open the conversation that edited this file', () => {
     const menus = pkg.contributes.menus as Record<string, Array<{ command: string; when?: string }>>;
     expect(menus['editor/context']!.find((item) => item.command === id)?.when).toBe('resourceScheme == file');
     expect(menus['explorer/context']!.find((item) => item.command === id)?.when).toContain('!explorerResourceIsFolder');
+  });
+});
+
+describe('version skew', () => {
+  it('says nothing when the bridge speaks the revision the bundle was built for', () => {
+    expect(versionSkew({ version: '1.0.0', revision: IDE_PROTOCOL.revision })).toBeUndefined();
+  });
+
+  it('says one line when the revision differs, with what the bundle was built against', () => {
+    const line = versionSkew({ version: '1.0.0', revision: IDE_PROTOCOL.revision + 1 }, IDE_PROTOCOL, { commit: 'abc1234' });
+    expect(line).toContain(`revision ${IDE_PROTOCOL.revision + 1}`);
+    expect(line).toContain('abc1234');
+    expect(line).not.toContain('\n');
   });
 });

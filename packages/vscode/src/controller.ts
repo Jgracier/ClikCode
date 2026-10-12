@@ -13,7 +13,7 @@ import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
 import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
-import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, type Remedy } from './compat';
+import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, versionSkew, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
 import { ChangeViews } from './controller/changes';
 import { AutoReconnect, BuildWatcher } from './controller/reconnect';
@@ -326,6 +326,10 @@ export class ClikCodeController implements vscode.Disposable {
           resolve();
         }
         this.onBridgeEvent(event);
+        if (event.type === 'ready') {
+          const skew = versionSkew(event);
+          if (skew && !this.model.notes.some((note) => note.text === skew)) { log.appendLine(`[${this.label}] ${skew}`); this.note(skew, 'warning'); }
+        }
       });
       bridge.once('exit', ({ code }) => {
         clearTimeout(timer);
