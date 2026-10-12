@@ -2,6 +2,7 @@
  * show in the chat: a panel, a one-line notice, or nothing when the result is
  * already visible elsewhere (a settings change shows in the header). */
 import { stripAnsi } from './text';
+import { isUsageExhaustedMessage } from '../../../src/turn/usage-exhausted';
 import { modelLabel } from './webview/format';
 
 /** A `models` panel row's model as the terminal prints it: the bridge's
@@ -44,7 +45,7 @@ export function formatOutput(payload: Record<string, unknown>): Shown {
     const message = stripAnsi(payload.message);
     // Running out of every account is an outcome, not a fault: show it as
     // plain informational chat text, not a warning or error banner.
-    const outcome = /^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/.test(message.trim());
+    const outcome = isUsageExhaustedMessage(message);
     return { kind: 'notice', text: message, level: outcome ? 'info' : 'error' };
   }
   if (panel === 'notice' && typeof payload.message === 'string') return { kind: 'notice', text: stripAnsi(payload.message), level: 'warning' };

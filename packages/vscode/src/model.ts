@@ -22,6 +22,7 @@ import type { TurnUsage } from '../../../src/harness/protocol/turn-usage';
 import { backgroundWorkOf, type BackgroundWork } from '../../../src/harness/protocol/background-agents';
 import { readTurnActivities } from '../../../src/turn/turn-activities';
 import { endsWithSummary, isApprovalWaitPhase, reasoningHeading, type Decision } from '../../../src/harness/protocol/turn-flow';
+import { isUsageExhaustedMessage } from '../../../src/turn/usage-exhausted';
 import { readTurnMarks } from '../../../src/turn/turn-marks';
 import { CHILDREN_SHOWN } from '../../../src/tui/render/child-rows';
 import { failureLine } from '../../../src/harness/protocol/stderr-line';
@@ -1021,7 +1022,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       const msg = failureLine(stripAnsi(event.message));
       // Exhaustion is an outcome, not a fault — show it as informational chat
       // text rather than a red error banner so it reads as part of the flow.
-      const exhausted = /^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/i.test(msg.trim());
+      const exhausted = isUsageExhaustedMessage(msg);
       return withNote(model, { kind: 'notice', level: exhausted ? 'info' : 'error', text: msg });
     }
     case 'submission':
