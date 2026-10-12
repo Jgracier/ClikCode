@@ -15,8 +15,7 @@ import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocal
 import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { modelIdFromLabel, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
-import { liveWorkerSessions, sessionIsLive } from '../../session/liveness.js';
-import { pruneSessionClaims } from '../../session/claims.js';
+import { liveWorkers, sessionIsLive } from '../../session/liveness.js';
 import { readState } from '../../session/state/read.js';
 import { resolveDefaultSettings } from '../../session/state/settings.js';
 import { writeState } from '../../session/state/write.js';
@@ -283,21 +282,15 @@ export async function aiSessionsList(): Promise<void> {
   // count), not every chat's history -- `sessions show <id>` has that.
   const state = await readState({ transcripts: [] });
   // `live` is computed here rather than read off the record, because nothing
-  // stores it: a session is live when a claim or a worker says so, and both
+  // stores it: a session is live when a presence record or a worker says so, and both
   // expire on their own. This replaced a `status` the worker wrote and a sweep
   // that corrected it -- see session/liveness.ts for why caching it was the
   // bug rather than the sweep being in the wrong place.
-  const workerIsLive = await liveWorkerSessions();
+  const { isLive: workerIsLive, isOpen } = await liveWorkers();
   // Blank chats are not listed: a launch that was closed without typing is
   // not a conversation anyone can go back to (session/blank.ts).
   const sessions = state.sessions.filter((session) => !isBlankConversation(session))
-    .map((session) => ({ ...session, live: sessionIsLive(session, workerIsLive) }));
-  // Claim FILES are the one thing that does need collecting: a killed process
-  // cannot delete its own, and no amount of correct logic makes that untrue.
-  // This is disk housekeeping, NOT state reconciliation -- a leftover claim
-  // file has never made a session look live, because claimIsHeld judges the
-  // heartbeat and the pid instead of trusting the file's existence.
-  await pruneSessionClaims(new Set(state.sessions.map((session) => session.id))).catch(() => 0);
+    .map((session) => ({ ...session, live: sessionIsLive(session, workerIsLive, isOpen) }));
   emitResult({ sessions });
 }
 

@@ -1,8 +1,6 @@
-/** Writing a HarnessState back, including the session claim the write
- * intends to take or release. */
+/** Writing a HarnessState back. */
 
-import { hostname } from 'node:os';
-import type { HarnessSession, HarnessState } from '../model.js';
+import type { HarnessState } from '../model.js';
 import { dropEphemeral, ephemeralSessions, holdEphemeral, sessionForceStored } from '../ephemeral.js';
 import { stampListFacts } from '../list-facts.js';
 import { isBlankConversation } from '../options.js';
@@ -10,39 +8,11 @@ import { sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { forgetSessionArtifacts } from '../store/forget.js';
 import { deleteSessionTranscript, readSessionTranscript, writeSessionTranscript, writeSessionTurn } from '../store/transcripts.js';
-import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from '../claims.js';
 import { HarnessStateVersionError, indexStructureChanged, loadIndex, storeIndex } from './index-file.js';
 import { capInvocations } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, StateBaselineData, baselineOf, baselineSession, indexFromWorking, mergedIndex, rememberBaseline } from './merge.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 import { HarnessSecrets, readSecretsFile, sameSecret, writeSecretsFile } from './secrets.js';
-
-/** Claims are owned by session-claims.ts. A caller that still expresses one by
- * editing `session.claim` and writing state is translated into the real
- * operation -- and only ever for this process's own claim, only ever forwards
- * in time. A snapshot can therefore no longer rewind a heartbeat. */
-async function applyClaimIntent(state: HarnessState, baseline: StateBaselineData | undefined): Promise<void> {
-  const host = hostname();
-  const present = new Set<string>();
-  for (const session of state.sessions ?? []) {
-    present.add(session.id);
-    // A draft has no file and no claim. Another terminal cannot open it.
-    if (isBlankConversation(session) && !sessionForceStored(session.id)) continue;
-    const before = baseline?.sessions.get(session.id)?.claim;
-    const after = session.claim;
-    if (sameData(before, after)) continue;
-    const mine = (claim: HarnessSession['claim']): boolean => !!claim && claim.pid === process.pid && claim.host === host;
-    if (mine(after)) {
-      const refreshed = await heartbeatSessionClaim(session.id, { heartbeatAt: after!.heartbeatAt });
-      if (!refreshed) await acquireSessionClaim(session.id, { heartbeatAt: after!.heartbeatAt });
-    } else if (!after && mine(before)) {
-      await releaseSessionClaim(session.id);
-    }
-  }
-  for (const [id, entry] of baseline?.sessions ?? []) {
-    if (!present.has(id) && entry.claim?.pid === process.pid && entry.claim.host === host) await releaseSessionClaim(id);
-  }
-}
 
 /** Applies this process's changes to whatever is on disk now, rather than
  * making the files equal the caller's copy.
@@ -143,8 +113,7 @@ export async function writeState(state: HarnessState): Promise<void> {
     for (const id of [...taken.sessions.keys()]) if (!kept.has(id)) taken.sessions.delete(id);
     written = taken;
   });
-  await applyClaimIntent(state, baseline);
-  // What else the deleted chats left (agent history, checkpoints, claims):
+  // What else the deleted chats left (agent history, checkpoints):
   // outside the lock, since a checkpoint directory can be large.
   for (const id of deleted) await forgetSessionArtifacts(id);
   // Later writes from this same object diff from what this one stored, not

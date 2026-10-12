@@ -189,8 +189,15 @@ export async function removeWorkerRecord(sessionId: string, token: string): Prom
  * appears complete or not at all), refreshed while held, released only by
  * its owner. A holder is gone when its pid is, or when it stopped refreshing
  * -- pids get reused -- except a worker that still answers on its socket (a
- * suspended laptop stalls every timer at once). */
-export type ConversationOwnerKind = 'worker' | 'turn';
+ * suspended laptop stalls every timer at once).
+ *
+ * `client` is presence, not execution: a terminal or editor chat showing the
+ * conversation before (or without) any worker. It is the same record under
+ * the same liveness rule, in its own `.open` file so it never competes with
+ * the worker for `.owner`. It is bookkeeping -- a second window may still
+ * open the chat -- and answers "is someone else showing this" for lists and
+ * for the sweeps that must not drop a chat in use. */
+export type ConversationOwnerKind = 'worker' | 'turn' | 'client';
 
 export interface ConversationOwner {
   pid: number;
@@ -209,14 +216,14 @@ export interface ConversationHold {
 const OWNER_REFRESH_MS = 10_000;
 const OWNER_STALE_MS = 60_000;
 
-function ownerPath(sessionId: string): string {
-  return join(workersDirectory(), `${sessionKey(sessionId)}.owner`);
+function ownerPath(sessionId: string, kind: ConversationOwnerKind = 'worker'): string {
+  return join(workersDirectory(), `${sessionKey(sessionId)}.${kind === 'client' ? 'open' : 'owner'}`);
 }
 
 function parseOwner(raw: string): ConversationOwner | undefined {
   try {
     const parsed = JSON.parse(raw) as Partial<ConversationOwner>;
-    return typeof parsed.pid === 'number' && typeof parsed.host === 'string' && (parsed.kind === 'worker' || parsed.kind === 'turn')
+    return typeof parsed.pid === 'number' && typeof parsed.host === 'string' && (parsed.kind === 'worker' || parsed.kind === 'turn' || parsed.kind === 'client')
       ? parsed as ConversationOwner : undefined;
   } catch {
     // fail-open-ok: an unreadable owner file identifies no one; age alone condemns it
@@ -224,8 +231,8 @@ function parseOwner(raw: string): ConversationOwner | undefined {
   }
 }
 
-async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefined): Promise<boolean> {
-  const modified = await stat(ownerPath(sessionId)).then((info) => info.mtimeMs, () => undefined);
+async function ownerIsLive(sessionId: string, owner: ConversationOwner | undefined, path = ownerPath(sessionId)): Promise<boolean> {
+  const modified = await stat(path).then((info) => info.mtimeMs, () => undefined);
   if (modified === undefined) return false;
   const fresh = Date.now() - modified < OWNER_STALE_MS;
   // A holder between create and write, or another machine's (a shared
@@ -248,7 +255,7 @@ export async function takeConversation(
   sessionId: string, kind: ConversationOwnerKind,
 ): Promise<{ hold: ConversationHold } | { holder: ConversationOwner }> {
   await ensureWorkersDirectory();
-  const path = ownerPath(sessionId);
+  const path = ownerPath(sessionId, kind);
   for (let attempt = 0; attempt < 50; attempt += 1) {
     const owner: ConversationOwner = { pid: process.pid, host: hostname(), kind, nonce: randomBytes(9).toString('hex'), at: new Date().toISOString() };
     const mine = JSON.stringify(owner);
@@ -265,14 +272,30 @@ export async function takeConversation(
     const raw = await readFile(path, 'utf8').catch(() => undefined);
     if (raw === undefined) continue; // Released between the two calls.
     const holder = parseOwner(raw);
-    if (holder && await ownerIsLive(sessionId, holder)) return { holder };
-    if (!holder && await ownerIsLive(sessionId, undefined)) {
+    if (holder && await ownerIsLive(sessionId, holder, path)) return { holder };
+    if (!holder && await ownerIsLive(sessionId, undefined, path)) {
       await new Promise((resolveWait) => setTimeout(resolveWait, 20));
       continue;
     }
     await breakStaleLock(path, raw);
   }
   throw new Error(`Could not settle who runs conversation ${sessionId}.`);
+}
+
+/** Which conversations another process has open (presence records, judged by
+ * the owner liveness rule), from one directory read. This process's own
+ * records do not count: it asks who ELSE is showing a chat. */
+export async function liveOpenConversations(): Promise<(sessionId: string) => boolean> {
+  const keys = new Set<string>();
+  const names = await readdir(workersDirectory()).catch(() => [] as string[]);
+  await Promise.all(names.filter((name) => name.endsWith('.open')).map(async (name) => {
+    const path = join(workersDirectory(), name);
+    const raw = await readFile(path, 'utf8').catch(() => undefined);
+    const owner = raw === undefined ? undefined : parseOwner(raw);
+    if (!owner || (owner.pid === process.pid && owner.host === hostname())) return;
+    if (await ownerIsLive('', owner, path)) keys.add(name.slice(0, -'.open'.length));
+  }));
+  return (sessionId) => keys.has(sessionKey(sessionId));
 }
 
 function holdOf(path: string, mine: string): ConversationHold {
@@ -296,8 +319,7 @@ function holdOf(path: string, mine: string): ConversationHold {
 
 /** The only liveness question that matters: can a connection actually be
  * opened. Not a PID check -- a PID can be reused by an unrelated process the
- * instant the real worker exits, and claim.ts/claims.ts (the machinery this
- * replaces) existed almost entirely to paper over exactly that kind of
+ * instant the real worker exits, and the claim files this registry replaced existed almost entirely to paper over exactly that kind of
  * false positive with host comparisons and heartbeat TTLs. A socket that
  * accepts a connection IS the worker; one that refuses or does not exist
  * is not, with nothing in between to get wrong. */

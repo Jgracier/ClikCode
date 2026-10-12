@@ -103,10 +103,6 @@ export interface HarnessSession {
    * history, not a piece of it. Set when the fork is made, and on a fork from
    * before the marker existed the first time it is read. */
   fork?: true;
-  /** The terminal currently driving this conversation. Present only while a
-   * process has it open, so a second terminal can tell a live chat from an
-   * idle one and never attach to the same conversation twice. */
-  claim?: { pid: number; host: string; startedAt: string; heartbeatAt: string };
   route: AiHarnessRoute;
   accountId: string | null;
   provider: string | null;

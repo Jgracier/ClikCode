@@ -2,21 +2,19 @@
  * A client attached to one conversation: the terminal loop
  * (commands/ai/interactive.ts) and the editor bridge (ide/bridge.ts) are both
  * this, with different screens. What they decide the same way lives here, so
- * the two cannot drift: the claim saying which client has the chat open, and
+ * the two cannot drift: the presence record saying which client has the chat open, and
  * what leaving it does.
  *
- * The claim is bookkeeping, never a lock: any number of clients can have a
+ * Presence is bookkeeping, never a lock: any number of clients can have a
  * chat open, and its worker serializes their turns (worker/turn-bridge.ts).
  */
 import { readState } from './state/read.js';
 import { writeState } from './state/write.js';
-import { sessionClaimIsLive } from './claim.js';
-import { acquireSessionClaim, heartbeatSessionClaim, releaseSessionClaim } from './claims.js';
-import { sessionForceStored } from './ephemeral.js';
+import { takeConversation, type ConversationHold } from '../worker/registry.js';
 import { blankChatSweepable, discardIfBlank, ensureSessionOnDisk } from './blank.js';
-import { liveWorkerSessions } from './liveness.js';
+import { liveWorkers } from './liveness.js';
 import { sweepStateDaily } from './state/sweep.js';
-import { chatNamed, isBlankConversation, latestChat } from './options.js';
+import { chatNamed, latestChat } from './options.js';
 import type { HarnessSession, HarnessState } from './model.js';
 import { launchSession } from '../commands/ai/sessions.js';
 import { sessionOrProviderHarness } from '../tui/slash/context.js';
@@ -73,8 +71,8 @@ export async function openConversation(
   // Empty chats are not conversations: the one this opens is not stored
   // until something happens in it, and earlier ones left behind go now --
   // but not one another process stored and is about to use.
-  const workerIsLive = await liveWorkerSessions();
-  state.sessions = state.sessions.filter((item) => !blankChatSweepable(item, workerIsLive));
+  const { isLive, isOpen } = await liveWorkers();
+  state.sessions = state.sessions.filter((item) => !blankChatSweepable(item, isLive, Date.now(), isOpen));
   const fresh = launchSession(state, workspace);
   state.sessions.push(fresh);
   await writeState(state);
@@ -98,33 +96,32 @@ export async function resolveSessionModel(id: string): Promise<void> {
   await writeState(state);
 }
 
-/** This client has the conversation open: taken on open and refreshed on a
- * timer (a third of the TTL). A claim another live client holds is left
- * alone; session/claims.ts would refuse it anyway.
+const presence = new Map<string, ConversationHold>();
+
+/** This client has the conversation open: a presence record in the worker
+ * registry (worker/registry.ts, kind `client`), refreshed by the registry
+ * itself for as long as it is held, so no caller keeps a heartbeat. Another
+ * live client's record is left alone and never released by us. Idempotent.
  *
- * Only the claim file is touched. Going through writeState took the global
- * state lock every 30 s in every open window and editor chat, to change
- * nothing in the index. */
+ * Only that file is touched. Going through writeState took the global state
+ * lock in every open window and editor chat, to change nothing in the index. */
 export async function claimConversation(id: string): Promise<void> {
-  // A claim is its own file (claims.ts), overlaid on the record: the
-  // conversation's history is not needed to take or refresh it.
-  const state = await readState({ transcripts: [] });
-  const session = state.sessions.find((item) => item.id === id);
-  if (!session || sessionClaimIsLive(session)) return;
-  // A draft has no file and no claim; writeState skips it the same way.
-  if (isBlankConversation(session) && !sessionForceStored(id)) return;
-  if (!await heartbeatSessionClaim(id)) await acquireSessionClaim(id);
+  const mine = presence.get(id);
+  if (mine && await mine.held()) return;
+  presence.delete(id);
+  const taken = await takeConversation(id, 'client');
+  if ('hold' in taken) presence.set(id, taken.hold);
 }
 
-/** Hands the conversation back. Only this process's own claim is released
- * (releaseSessionClaim checks), and nothing is written when there is none. */
+/** Hands the conversation back: only this process's own record goes. */
 export async function releaseConversationClaim(id: string): Promise<void> {
-  await releaseSessionClaim(id);
+  const mine = presence.get(id);
+  presence.delete(id);
+  await mine?.release();
 }
 
-/** This client stops showing a conversation: its claim goes, and one that
- * was never started is not kept. The claim first: it reads the record it
- * releases. */
+/** This client stops showing a conversation: its presence goes, and one that
+ * was never started is not kept. */
 export async function leaveConversation(id: string): Promise<void> {
   await releaseConversationClaim(id).catch(() => undefined);
   await discardIfBlank(id).catch(() => undefined);

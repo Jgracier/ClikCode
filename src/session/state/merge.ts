@@ -12,7 +12,7 @@ import type { StateIndex } from './index-file.js';
 import type { Invocation } from './invocations.js';
 import { HARNESS_STATE_VERSION } from './paths.js';
 
-export type SessionMeta = Omit<HarnessSession, 'messages' | 'pendingTurn' | 'claim'>;
+export type SessionMeta = Omit<HarnessSession, 'messages' | 'pendingTurn'>;
 
 type Identified = { id: string };
 
@@ -98,9 +98,9 @@ function mergeSessionMeta(baseline: SessionMeta | undefined, working: SessionMet
   return merged;
 }
 
-function splitSession(session: HarnessSession): { meta: SessionMeta; transcript: SessionTranscript; claim: HarnessSession['claim'] } {
-  const { messages: _messages, pendingTurn: _pendingTurn, claim, ...meta } = session;
-  return { meta, transcript: transcriptOf(session), claim };
+function splitSession(session: HarnessSession): { meta: SessionMeta; transcript: SessionTranscript } {
+  const { messages: _messages, pendingTurn: _pendingTurn, ...meta } = session;
+  return { meta, transcript: transcriptOf(session) };
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +110,6 @@ function splitSession(session: HarnessSession): { meta: SessionMeta; transcript:
 export interface BaselineSession {
   meta: SessionMeta;
   transcript: SessionTranscript;
-  claim?: HarnessSession['claim'];
   /** The working array `transcript.messages` was copied from. */
   messagesFrom?: ListSource<NonNullable<HarnessSession['messages']>[number]>;
 }
@@ -165,7 +164,7 @@ export type BaselinedState = HarnessState & { [STATE_BASELINE]?: StateBaselineDa
 /** One session as it is at this instant, sharing whatever `kept` already
  * holds unchanged (see baselineOf). */
 export function baselineSession(session: HarnessSession, kept: BaselineSession | undefined): BaselineSession {
-  const { meta, claim } = splitSession(session);
+  const { meta } = splitSession(session);
   // Messages left unset were not opened. That is not an empty transcript:
   // reuse the one this baseline already holds so a later write cannot
   // replace the file with nothing. A transcript that was opened and cleared
@@ -174,7 +173,6 @@ export function baselineSession(session: HarnessSession, kept: BaselineSession |
     return {
       meta: cloneData(meta),
       transcript: kept.transcript,
-      ...(claim ? { claim: cloneData(claim) } : {}),
       ...(kept.messagesFrom ? { messagesFrom: kept.messagesFrom } : {}),
     };
   }
@@ -186,7 +184,6 @@ export function baselineSession(session: HarnessSession, kept: BaselineSession |
   return {
     meta: cloneData(meta),
     transcript,
-    ...(claim ? { claim: cloneData(claim) } : {}),
     ...(messages.from ? { messagesFrom: messages.from } : {}),
   };
 }

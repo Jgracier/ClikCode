@@ -1,11 +1,12 @@
-import { mkdtempSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { afterTurnFailure, claimConversation, leaveConversation, openConversation, releaseConversationClaim } from './attach';
 import { readState } from './state/read';
 import { writeState } from './state/write';
-import { acquireSessionClaim } from './claims';
+import { liveOpenConversations } from '../worker/registry';
 import type { HarnessSession, HarnessState } from './model';
 
 const session = (overrides: Partial<HarnessSession> = {}): HarnessSession => ({
@@ -18,8 +19,12 @@ const stateWith = (...sessions: HarnessSession[]): HarnessState => ({
   globalSettings: { effort: 'medium', permissionMode: 'ask' },
 } as unknown as HarnessState);
 const stored = async (id = 's1'): Promise<HarnessSession | undefined> => (await readState({ transcripts: [id] })).sessions.find((item) => item.id === id);
-/** A live claim another client, on another host, holds. */
-const othersClaim = async (): Promise<void> => { await acquireSessionClaim('s1', { pid: 1, host: `${hostname()}-elsewhere` }); };
+const presenceFile = (id = 's1'): string => join(process.env.CLIKCODE_HOME!, 'workers', `${createHash('sha256').update(id).digest('hex').slice(0, 20)}.open`);
+/** A live presence record another client (the parent process) holds. */
+const othersPresence = (): void => {
+  mkdirSync(join(process.env.CLIKCODE_HOME!, 'workers'), { recursive: true });
+  writeFileSync(presenceFile(), JSON.stringify({ pid: process.ppid, host: hostname(), kind: 'client', nonce: 'other', at: new Date().toISOString() }));
+};
 
 describe('a client attached to a conversation', () => {
   const previousHome = process.env.CLIKCODE_HOME;
@@ -29,43 +34,32 @@ describe('a client attached to a conversation', () => {
     else process.env.CLIKCODE_HOME = previousHome;
   });
 
-  it('never takes a claim another live client holds, and never releases it', async () => {
+  it('never takes presence another live client holds, and never releases it', async () => {
     await writeState(stateWith(session()));
-    await othersClaim();
+    othersPresence();
+    const before = readFileSync(presenceFile(), 'utf8');
     await claimConversation('s1');
-    await claimConversation('s1'); // the heartbeat, too
+    await claimConversation('s1');
     await releaseConversationClaim('s1');
-    expect((await stored())?.claim?.pid).toBe(1);
+    expect(readFileSync(presenceFile(), 'utf8')).toBe(before);
+    expect((await liveOpenConversations())('s1')).toBe(true);
   });
 
-  it('keeps its own claim alive, and hands it back', async () => {
+  it('records its own presence once, and hands it back', async () => {
     await writeState(stateWith(session()));
     await claimConversation('s1');
-    const before = (await stored())!.claim!.heartbeatAt;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await claimConversation('s1');
-    expect((await stored())!.claim!.heartbeatAt > before).toBe(true);
+    await claimConversation('s1'); // idempotent: no second record, no timer
+    expect(JSON.parse(readFileSync(presenceFile(), 'utf8'))).toMatchObject({ pid: process.pid, kind: 'client' });
+    // Its own record is not "someone else has it open".
+    expect((await liveOpenConversations())('s1')).toBe(false);
     await releaseConversationClaim('s1');
-    expect((await stored())?.claim).toBeUndefined();
+    expect(existsSync(presenceFile())).toBe(false);
   });
 
-  it('refreshes its claim without the state lock another process holds', async () => {
-    await writeState(stateWith(session()));
-    await claimConversation('s1');
-    const before = (await stored())!.claim!.heartbeatAt;
-    // A live holder of the global lock: a long index write elsewhere.
-    const lock = join(process.env.CLIKCODE_HOME!, 'harness-state.json.lock');
-    writeFileSync(lock, JSON.stringify({ pid: process.ppid, host: hostname(), nonce: 'other', at: new Date().toISOString() }));
-    // Claims must not wait on the state lock at all; a hang here is the failure.
-    try {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      await claimConversation('s1');
-      await releaseConversationClaim('s1');
-      await claimConversation('s1');
-    } finally {
-      unlinkSync(lock);
-    }
-    expect((await stored())!.claim!.heartbeatAt > before).toBe(true);
+  it('needs neither the session record nor the state lock to take presence', async () => {
+    await claimConversation('not-in-the-index');
+    expect(existsSync(presenceFile('not-in-the-index'))).toBe(true);
+    await releaseConversationClaim('not-in-the-index');
   });
 
   it('leaving keeps a conversation with something in it', async () => {
@@ -74,7 +68,7 @@ describe('a client attached to a conversation', () => {
     await leaveConversation('s1');
     const left = await stored();
     expect(left).toBeDefined();
-    expect(left?.claim).toBeUndefined();
+    expect(existsSync(presenceFile())).toBe(false);
   });
 
   it('opens a fresh chat, and does not keep blank ones left behind', async () => {

@@ -11,28 +11,19 @@
  * the close command, `archived` is /archive, and nothing else writes it. It is
  * intent, it is durable, and no background process gets to overrule it.
  *
- * Liveness is the other question, and it is derived from the two records that
- * already answer it and already expire on their own:
+ * Liveness is the other question, and it is derived from the one registry
+ * (worker/registry.ts) that already answers it and expires on its own:
  *
- *   - the claim store -- a heartbeat with a TTL, plus pid liveness on this
- *     host, which is what lets another terminal take a crashed session over;
- *   - the worker registry -- a record naming a pid, which either exists or
- *     does not.
+ *   - a worker record naming a pid, which either exists or does not;
+ *   - a presence record (`client`) for a terminal or editor chat open with no
+ *     worker yet, judged by the same owner liveness rule as a worker's hold.
  *
  * Neither can be stale, because neither is a copy of anything: a dead pid is
- * simply not alive, whenever you ask. So there is nothing to reconcile, no
- * idle window to agree on in two places, and no window in which a record and
- * reality disagree.
- *
- * This is the pattern the claim store already used and that status never
- * followed -- `session.claim` is itself only a view projected on read, and
- * claimIsHeld computes rather than remembers.
+ * simply not alive, whenever you ask. So there is nothing to reconcile.
  */
 
-import { hostname } from 'node:os';
 import type { HarnessSession } from './model.js';
-import { sessionClaimIsLive } from './claim.js';
-import { listWorkerRecords } from '../worker/registry.js';
+import { listWorkerRecords, liveOpenConversations } from '../worker/registry.js';
 import { loadSessionFile } from './store/records.js';
 
 type PendingTurn = NonNullable<HarnessSession['pendingTurn']>;
@@ -44,18 +35,17 @@ export type WorkerLiveness = (sessionId: string) => boolean;
 /** True when some process is running this session right now.
  *
  *  Either signal alone is enough, and neither alone is sufficient: an
- *  interactive client takes a claim but a headless `sessions send` does not,
+ *  interactive client records presence but a headless `sessions send` does not,
  *  while a worker exists for both but is spawned lazily, so a session between
  *  creation and its first turn has neither. That is not a gap -- a session
  *  nothing is running is exactly what this reports. */
 export function sessionIsLive(
   session: HarnessSession,
   workerIsLive: WorkerLiveness,
-  now = Date.now(),
-  host = hostname(),
+  isOpen: WorkerLiveness = () => false,
 ): boolean {
   if (session.status !== 'active') return false;
-  return sessionClaimIsLive(session, now, host) || workerIsLive(session.id);
+  return isOpen(session.id) || workerIsLive(session.id);
 }
 
 /** Which sessions still have a worker process behind them.
@@ -70,10 +60,10 @@ export async function liveWorkerSessions(): Promise<(sessionId: string) => boole
 /** The same pass, and which live workers have an approval waiting on the
  * user: the record a worker keeps beside its pid (onAwaitingApproval), so a
  * list can say a conversation needs the user without attaching to it. */
-export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; awaitingYou: (sessionId: string) => boolean }> {
+export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; isOpen: WorkerLiveness; awaitingYou: (sessionId: string) => boolean }> {
   const live = new Set<string>();
   const awaiting = new Set<string>();
-  const records = await listWorkerRecords().catch(() => []);
+  const [records, isOpen] = await Promise.all([listWorkerRecords().catch(() => []), liveOpenConversations().catch(() => () => false)]);
   await Promise.all(records.map(async (record) => {
     try {
       process.kill(record.pid, 0);
@@ -84,7 +74,7 @@ export async function liveWorkers(): Promise<{ isLive: WorkerLiveness; awaitingY
     live.add(record.sessionId);
     if (record.awaitingApproval) awaiting.add(record.sessionId);
   }));
-  return { isLive: (sessionId) => live.has(sessionId), awaitingYou: (sessionId) => awaiting.has(sessionId) };
+  return { isLive: (sessionId) => live.has(sessionId), isOpen, awaitingYou: (sessionId) => awaiting.has(sessionId) };
 }
 
 /** The turn each live-worker session is generating, read from its transcript.
@@ -116,10 +106,9 @@ export async function livePendingTurns(
 export function sessionActivity(
   session: HarnessSession,
   workerIsLive: WorkerLiveness,
-  now = Date.now(),
-  host = hostname(),
   pending: HarnessSession['pendingTurn'] = session.pendingTurn,
+  isOpen: WorkerLiveness = () => false,
 ): 'working' | 'idle' | undefined {
-  if (!sessionIsLive(session, workerIsLive, now, host)) return undefined;
+  if (!sessionIsLive(session, workerIsLive, isOpen)) return undefined;
   return pending && !pending.failedAt && workerIsLive(session.id) ? 'working' : 'idle';
 }

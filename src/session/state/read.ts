@@ -9,7 +9,6 @@ import { markFromIndex, markTranscriptLoaded, sessionFromIndex, transcriptWasLoa
 import { cloneData, sameData } from '../store/data.js';
 import { withStateLock } from '../store/locks.js';
 import { readSessionTranscript } from '../store/transcripts.js';
-import { readSessionClaims, type SessionClaim } from '../claims.js';
 import { StateIndex, loadIndex, storeIndex } from './index-file.js';
 import { InvocationRollup, STATE_ROLLUPS } from './invocations.js';
 import { BaselinedState, DRAFT_BASELINE, STATE_BASELINE, baselineOf, rememberBaseline } from './merge.js';
@@ -19,20 +18,13 @@ import { HarnessSecrets, readLocalApiToken, readSecretsFile } from './secrets.js
 import { HARNESS_DEFAULT_SETTINGS, normalizedConversation, normalizedPermissionMode, normalizedSessionPermission, normalizedStatus } from './settings.js';
 import { writeState } from './write.js';
 
-function sessionClaimView(claim: SessionClaim): NonNullable<HarnessSession['claim']> {
-  return { pid: claim.pid, host: claim.host, startedAt: claim.startedAt, heartbeatAt: claim.heartbeatAt };
-}
-
 async function assembleState(index: StateIndex, secrets: HarnessSecrets, transcripts: 'all' | ReadonlySet<string>): Promise<HarnessState> {
-  const claims = await readSessionClaims();
   const sessions = await Promise.all(index.sessions.map(async (meta): Promise<HarnessSession> => {
     const load = transcripts === 'all' || transcripts.has(meta.id);
     const transcript = load ? await readSessionTranscript(meta.id) : undefined;
-    const claim = claims.get(meta.id);
     const session: HarnessSession = {
       ...cloneData(meta as HarnessSession),
       ...(transcript ?? {}),
-      ...(claim ? { claim: sessionClaimView(claim) } : {}),
     };
     // After the object exists: a spread would drop these, and a later write
     // tells "not opened" from "opened and empty" by them.

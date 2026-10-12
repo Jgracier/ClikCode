@@ -23,7 +23,6 @@ import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { planModeOnChat, setAgentPlanMode } from '../agent/plan-mode-setting.js';
-import { SESSION_CLAIM_TTL_MS } from '../session/claim.js';
 import { afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
 import { expandHomePath } from '../session/attachments.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
@@ -119,11 +118,9 @@ export class IdeBridge {
   }
 
   start(): void {
-    const claim = setInterval(() => { if (this.sessionId) void claimConversation(this.sessionId).catch(() => undefined); }, Math.floor(SESSION_CLAIM_TTL_MS / 3));
     const usage = setInterval(() => { if (this.shown) void this.refreshUsage().catch(() => undefined); }, USAGE_REFRESH_MS);
-    claim.unref();
     usage.unref();
-    this.timers.push(claim, usage);
+    this.timers.push(usage);
     this.channel.send({ type: 'ready', version: CLIKCODE_VERSION, protocol: IDE_PROTOCOL.version, revision: IDE_PROTOCOL.revision, ...(currentWorkerBuild() ? { build: currentWorkerBuild() } : {}), pid: process.pid });
   }
 

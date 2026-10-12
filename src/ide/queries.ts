@@ -133,7 +133,7 @@ export async function conversationList(state: HarnessState, currentId: string | 
     .filter((session) => session.id === currentId || !isBlankConversation(session));
   const workers = await liveWorkers();
   const pending = await livePendingTurns(sessions, workers.isLive);
-  return conversationRows(sessions, { workerIsLive: workers.isLive, awaitingYou: workers.awaitingYou, pending, ...(currentId ? { currentId } : {}) }).map((row): IdeConversation => {
+  return conversationRows(sessions, { workerIsLive: workers.isLive, isOpen: workers.isOpen, awaitingYou: workers.awaitingYou, pending, ...(currentId ? { currentId } : {}) }).map((row): IdeConversation => {
     const latest = row.latest;
     const opened = transcriptWasLoaded(latest) || latest.messages !== undefined || latest.pendingTurn !== undefined;
     const messages = opened ? textTranscript(sessionTranscriptMessages(latest)) : [];

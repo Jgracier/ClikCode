@@ -16,10 +16,9 @@
  * draft that was left on disk is still dropped the next time this process
  * writes state without that chat in hand (launch does this).
  */
-import { sessionClaimIsLive } from './claim.js';
 import { forceStoreSession, sessionForceStored, unforceStoreSession } from './ephemeral.js';
 import { sessionFromIndex } from './list-facts.js';
-import { liveWorkerSessions, type WorkerLiveness } from './liveness.js';
+import { liveWorkers, type WorkerLiveness } from './liveness.js';
 import type { HarnessSession } from './model.js';
 import { isBlankConversation } from './options.js';
 import { readState } from './state/read.js';
@@ -35,11 +34,13 @@ export const STORED_BLANK_GRACE_MS = 60 * 60_000;
 /** Whether a blank-chat sweep may drop `session`. A draft only this process
  * holds can always go (nothing is on disk). A stored empty chat goes only
  * when nothing could be about to use it: not stored by this process right
- * now, no live claim, no live worker, and untouched for the grace period. */
-export function blankChatSweepable(session: HarnessSession, workerIsLive: WorkerLiveness, now = Date.now()): boolean {
+ * now, no one else showing it, no live worker, and untouched for the grace period. */
+export function blankChatSweepable(
+  session: HarnessSession, workerIsLive: WorkerLiveness, now = Date.now(), isOpen: WorkerLiveness = () => false,
+): boolean {
   if (!isBlankConversation(session)) return false;
   if (!sessionFromIndex(session)) return true;
-  if (sessionForceStored(session.id) || sessionClaimIsLive(session, now) || workerIsLive(session.id)) return false;
+  if (sessionForceStored(session.id) || isOpen(session.id) || workerIsLive(session.id)) return false;
   return now - (Date.parse(session.updatedAt) || 0) > STORED_BLANK_GRACE_MS;
 }
 
@@ -62,7 +63,9 @@ export async function ensureSessionOnDisk(id: string): Promise<void> {
 export async function discardIfBlank(id: string): Promise<void> {
   const state = await readState({ transcripts: [id] });
   const session = state.sessions.find((item) => item.id === id);
-  if (!session || !blankChatSweepable(session, await liveWorkerSessions())) return;
+  if (!session) return;
+  const { isLive, isOpen } = await liveWorkers();
+  if (!blankChatSweepable(session, isLive, Date.now(), isOpen)) return;
   state.sessions = state.sessions.filter((item) => item.id !== id);
   await writeState(state);
 }

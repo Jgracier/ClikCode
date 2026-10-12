@@ -37,7 +37,7 @@ async function artifacts(id: string, ageMs = 0): Promise<string[]> {
 }
 
 describe('deleting a conversation', () => {
-  it('removes its agent history, checkpoints, change log and claim with it', async () => {
+  it('removes its agent history, checkpoints, and change log with it', async () => {
     root = await mkdtemp(join(tmpdir(), 'clikcode-forget-'));
     process.env.CLIKCODE_HOME = root;
     const state = await readState();
@@ -45,11 +45,9 @@ describe('deleting a conversation', () => {
     await writeState(state);
     const gone = await artifacts('gone');
     const kept = await artifacts('kept');
-    await mkdir(join(root, 'claims'), { recursive: true });
-    await writeFile(join(root, 'claims', 'gone.json'), '{}');
     state.sessions = state.sessions.filter((session) => session.id !== 'gone');
     await writeState(state);
-    for (const path of [...gone, join(root, 'claims', 'gone.json'), join(root, 'sessions', 'gone.json')]) expect(existsSync(path)).toBe(false);
+    for (const path of [...gone, join(root, 'sessions', 'gone.json')]) expect(existsSync(path)).toBe(false);
     for (const path of kept) expect(existsSync(path)).toBe(true);
   });
 });
@@ -78,10 +76,10 @@ describe('the housekeeping sweep', () => {
     await writeFile(join(root, 'claims', 'orphan.json'), JSON.stringify({ sessionId: 'orphan', pid: 999999, host: 'elsewhere', heartbeatAt: old, nonce: 'n' }));
 
     const report = await sweepState();
-    expect(report).toMatchObject({ orphans: 1, claims: 1, stranded: 2, settled: 1 });
+    expect(report).toMatchObject({ orphans: 1, stranded: 2, settled: 1 });
     for (const path of orphan) expect(existsSync(path)).toBe(false);
     for (const path of [...live, ...fresh]) expect(existsSync(path)).toBe(true);
-    expect(await readdir(join(root, 'claims'))).toEqual([]);
+    expect(existsSync(join(root, 'claims'))).toBe(false);
 
     resetHarnessStateCaches();
     const after = await readState();
