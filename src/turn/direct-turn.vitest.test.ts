@@ -82,4 +82,33 @@ describe('a direct API-key turn', () => {
     expect(stream).toHaveBeenCalledTimes(1);
     expect(session.accountId).toBe('first');
   });
+
+  const attempt = (state: Awaited<ReturnType<typeof seeded>>['state'], session: HarnessSession, signal?: AbortSignal) => sendDirectApiTurn({
+    state, session, account: state.accounts[0]!, model: 'claude-test', text: 'hello',
+    prepared: { textContext: '', images: [] } as never, turnText: 'hello', startedAt: Date.now(), ...(signal ? { signal } : {}), run: {},
+  });
+  const spent = async () => (await readState()).invocations ?? [];
+
+  it('records what a cancelled turn already streamed', async () => {
+    const { state, session } = await seeded();
+    const controller = new AbortController();
+    stream.mockImplementation(async (request: { onDelta: (text: string) => void }) => {
+      request.onDelta('x'.repeat(400));
+      controller.abort();
+      throw Object.assign(new Error('aborted'), { name: 'AbortError' });
+    });
+    await expect(attempt(state, session, controller.signal)).rejects.toMatchObject({ code: 'ERR_TURN_CANCELLED' });
+    expect(await spent()).toMatchObject([{ stopReason: 'stopped', outputTokens: 100 }]);
+  });
+
+  it('records what a failed turn already streamed', async () => {
+    const { state, session } = await seeded();
+    state.accounts.length = 1;
+    stream.mockImplementation(async (request: { onDelta: (text: string) => void }) => {
+      request.onDelta('y'.repeat(80));
+      throw new Error('upstream exploded');
+    });
+    await expect(attempt(state, session)).rejects.toThrow();
+    expect(await spent()).toMatchObject([{ stopReason: 'error', outputTokens: 20 }]);
+  });
 });
