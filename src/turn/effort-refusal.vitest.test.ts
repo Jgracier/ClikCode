@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isEffortRefusal } from './vendor-turn';
+import { isEffortRefusal } from './vendor-recovery';
 
 describe('a vendor refusing the reasoning level', () => {
   it('is recognized in the words the CLIs use', () => {
@@ -21,7 +21,7 @@ describe('a vendor refusing the reasoning level', () => {
 
 describe('a sign-in nobody can do here', () => {
   it('is recognized by the words a script or a window-less worker answers with', async () => {
-    const { signInNotPossibleHere } = await import('./vendor-turn');
+    const { signInNotPossibleHere } = await import('./vendor-sign-in');
     expect(signInNotPossibleHere(new Error('Amp is not signed in; run "clikcode accounts login <harness>" in a terminal'))).toBe(true);
     expect(signInNotPossibleHere(new Error('sign in to Amp needs an open ClikCode window'))).toBe(true);
     expect(signInNotPossibleHere(new Error('browser closed before the code arrived'))).toBe(false);
