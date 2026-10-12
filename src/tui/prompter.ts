@@ -11,7 +11,6 @@ import { commandPaletteMatches, completedCommandLine, composerRightArrowValue, e
 import { stdin as input, stdout as output } from 'node:process';
 import { noticeLines } from './render/wrap.js';
 import { composerLayout } from './render/composer-layout.js';
-import { closeOpenHyperlink } from './render/hyperlinks.js';
 import { createStreamingBlockParser } from './render/markdown.js';
 import { sanitizeTerminalText } from './render/text.js';
 import { nextCharacterIndex, previousCharacterIndex, terminalCellWidth, visibleSlice, visibleTail } from './render/width.js';
@@ -47,14 +46,13 @@ import { LiveChildren } from './render/child-rows.js';
 import { enterAgainSends, hasDurableSteer, liveTurnSpan, STEER_WORDS, steerTranscriptRows, type SteerRow } from './render/steer-rows.js';
 import { pendingPromptText } from './render/pending-prompt.js';
 import { markTurn, turnMarkOpen } from '../runtime/turn-latency.js';
-import { highlightWords, type MentionFocus } from './render/search-focus.js';
-import { highlightSelectionAt, scrollShift, shiftedRow, type Selection } from './render/selection.js';
+import type { MentionFocus } from './render/search-focus.js';
+import type { Selection } from './render/selection.js';
 import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows, renderMessageBlocks } from './render/message-blocks.js';
 import { isClikCodeNotice } from '../session/clikcode-notice.js';
 import { reducedMotion } from './capabilities.js';
-import { logCursorEvent } from './cursor-log.js';
 import { KEEP_STDIN_FLOWING, onTerminalFocus, takeTerminalKeys } from './input-decoder.js';
-import { SWIPE_ROWS, enterInputModes, popReadModes, redrawPreamble, sessionModesOn, takeQueuedModes, type Redraw } from './modes.js';
+import { SWIPE_ROWS, enterInputModes, popReadModes, sessionModesOn, type Redraw } from './modes.js';
 import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
@@ -72,6 +70,7 @@ import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, paintW
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clearTranscript } from './prompter/viewport.js';
 import { signInScreen } from './prompter/sign-in.js';
+import { renderFrame, flushFrame, flushAlternateFrame } from './prompter/frame-flush.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -1318,207 +1317,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The last frame's live rows made safe, by the row as built and the width. */
   safeLiveRows = { limit: 0, rows: new Map<string, string>() };
 
-  /** One frame: `finished` rows are retired into the transcript, and the live
-   * region below them is replaced. */
-  renderFrame(
-    finished: readonly string[], live: readonly string[], cursorRow: number, cursorColumn: number, hideCursor: boolean,
-  ): void {
-    // Last line of defence: whatever produced a row, the only escape sequences
-    // that reach the terminal are SGR colors, no row contains a control
-    // character that would move the cursor out from under the live region, and
-    // no row reaches the terminal's last column -- a row that fills it wraps
-    // into a second one wherever DECAWM-off is not honoured, and every
-    // relative motion in the frame after it is then one row out. The layout
-    // above already budgets for this; clipping here means a new row builder
-    // cannot reintroduce it.
-    const limit = Math.max(1, (output.columns || 100) - 1);
-    const safeRow = (row: string): string =>
-      closeOpenHyperlink(visibleSlice(sanitizeTerminalText(row, { keepSgr: true, singleLine: true }), limit));
-    // Most live rows are the same from one frame to the next (the footer, the
-    // answer's settled lines), so each is made safe once while it stays.
-    const known = this.safeLiveRows.limit === limit ? this.safeLiveRows.rows : new Map<string, string>();
-    const rows = new Map<string, string>();
-    const safeLive = live.map((row) => {
-      const safe = known.get(row) ?? safeRow(row);
-      rows.set(row, safe);
-      return safe;
-    });
-    this.safeLiveRows = { limit, rows };
-    // Frames that coalesce while a write drains accumulate their finished rows
-    // instead of replacing them. A live row dropped here is drawn again by the
-    // frame that replaces it; a retired row would simply be lost.
-    this.pendingFinished.push(...finished.map(safeRow));
-    this.pendingLive = { live: safeLive, cursorRow, cursorColumn, hideCursor };
-    if (!this.frameInFlight) this.flushFrame();
-  }
+  renderFrame(...args: Parameters<typeof renderFrame>): ReturnType<typeof renderFrame> { return renderFrame.apply(this, args); }
 
-  flushFrame(): void {
-    if (this.closed || this.suspended) return;
-    // A streaming answer may request a frame while the phone is still
-    // changing size. Keep its durable rows, but wait for the final geometry
-    // before drawing; repaintAfterResize supplies the fresh live rows.
-    if (this.resizePaintTimer) return;
-    const pending = this.pendingLive;
-    if (!pending) return;
-    this.pendingLive = undefined;
-    const finished = this.pendingFinished;
-    this.pendingFinished = [];
-    if (finished.length) {
-      this.secondLastFinishedRow = finished.length > 1 ? finished[finished.length - 2] : this.lastFinishedRow;
-      this.lastFinishedRow = finished[finished.length - 1];
-    }
-    this.flushAlternateFrame(finished, pending);
-  }
+  flushFrame(...args: Parameters<typeof flushFrame>): ReturnType<typeof flushFrame> { return flushFrame.apply(this, args); }
 
-  /** One screen, every row at an address.
-   *
-   * Retired rows go into `alternateTranscript` instead of the terminal's
-   * scrollback, the viewport shows its tail above the live region, and the
-   * cursor is parked with an absolute jump. Nothing here counts rows the
-   * terminal might count differently, so nothing here can drift. */
-  flushAlternateFrame(
-    finished: readonly string[],
-    pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
-  ): void {
-    if (finished.length) {
-      this.alternateTranscript.push(...finished);
-      // Someone reading stays where they are. The offset counts rows from the
-      // end of the transcript, so rows arriving at that end move the window
-      // forward by one per row -- the text walks out from under the reader
-      // while a turn streams, which is what "scrolling slips through previous
-      // messages" is. Growing the offset by the same count holds it still.
-      if (this.alternateScrollback > 0) this.alternateScrollback += finished.length;
-      // Trimming the front does not move the end, so it leaves the offset be.
-      // Never past a /search mention being looked at: a long way back in a
-      // long chat is exactly where one can be.
-      const focusLine = this.mentionFocus ? this.messageLines.get(this.mentionFocus.messageIndex) : undefined;
-      const excess = Math.min(this.alternateTranscript.length - ALTERNATE_TRANSCRIPT_ROWS,
-        focusLine === undefined ? Number.POSITIVE_INFINITY : focusLine - this.alternateTrimmed);
-      if (excess > 0) {
-        this.alternateTranscript.splice(0, excess);
-        this.alternateTrimmed += excess;
-      }
-    }
-    const height = this.viewportRows();
-    const live = pending.live.slice(-height);
-    const above = Math.max(0, height - live.length);
-    this.alternateAbove = above;
-    // Scrolled back, the live region gives up its rows to the transcript:
-    // looking at what went past is the whole point, and the composer is not
-    // what is being read. A frame at offset zero is the conversation as it
-    // happens.
-    // How far back this screen can actually show, which is not how far back
-    // the offset is allowed to go: `above` is the rows the transcript gets,
-    // and it grows with the screen. A phone hiding its keyboard hands back a
-    // third of the screen at once, so an offset that was inside the range a
-    // moment ago is suddenly past its end -- and every further swipe moves a
-    // number while the view stays pinned at the top, which reads as scrolling
-    // having stopped working. The offset is clamped to what can be shown.
-    this.jumpToMention(above);
-    const furthest = Math.max(0, this.alternateTranscript.length - above);
-    this.alternateScrollback = Math.min(this.alternateScrollback, furthest);
-    const scrolled = this.alternateScrollback;
-    const first = Math.max(0, this.alternateTranscript.length - above - scrolled);
-    const shownTranscript = this.alternateTranscript.slice(first, this.alternateTranscript.length - scrolled);
-    const shownLive = scrolled > 0 ? live.slice(0, Math.max(0, height - above)) : live;
-    let rows = [...shownTranscript, ...shownLive];
-    while (rows.length < height) rows.unshift('');
-    this.frameLayout = { live: [...live] };
-    if (this.mentionFocus?.words.length) {
-      const words = this.mentionFocus.words;
-      const transcriptRows = rows.length - shownLive.length;
-      rows = rows.map((row, index) => (index < transcriptRows ? highlightWords(row, words) : row));
-    }
-    if (this.selection) rows = highlightSelectionAt(rows, rows.map((_, row) => this.lineAtScreenRow(row)), this.selection);
-    // Only what changed. A keystroke changes the composer's row and nothing
-    // else, and rewriting the whole screen for it costs kilobytes per key on
-    // a phone link -- long enough for a client's own prediction popup to
-    // appear in the gap before the echo lands. Each row is addressed, so a
-    // partial update is exactly as safe as a whole one, which is the point of
-    // drawing here. `EL` per row: replaced, never overprinted.
-    const full = this.alternatePrevious.length !== rows.length;
-    // A scroll is a shift, and the terminal can do a shift itself.
-    //
-    // Row by row, a scroll changes every row on screen, so the diff below
-    // rewrites the whole thing: about 3.3KB at 63 rows against 1.6KB at 32 --
-    // and 63 rows is the keyboard-hidden height, the one case that never
-    // worked. The same UI drawing ~0.8KB frames receives the gesture at both
-    // heights. Cost per frame is the difference, and it scales with the screen.
-    //
-    // So when the new screen is the old one shifted -- which is exactly what a
-    // scroll produces -- the shift is handed to the terminal (SU/SD inside a
-    // region covering the transcript) and only the rows it exposed are drawn.
-    // Three rows instead of sixty-three.
-    //
-    // Claude Code never rewrites whole rows either: 4,182 relative motions in
-    // one captured session against 347 absolute jumps. This UI had zero.
-    // Only a transcript scroll hands the movement to the terminal. Other
-    // screens that happen to look shifted -- a palette opening, a picker
-    // closing -- are drawn, because SU inside a region discards what it pushes
-    // out and those are not rows this code can redraw from its own transcript.
-    const scrolling = this.paintingScroll;
-    this.paintingScroll = false;
-    const shift = full || !scrolling ? 0 : scrollShift(this.alternatePrevious, rows, above);
-    const updates: string[] = [];
-    // Rows the shift already drew, so the diff below does not draw them twice
-    // -- a frame carrying the same row twice is a duplicated prompt on screen.
-    let exposedFrom = -1;
-    let exposedTo = -1;
-    if (shift !== 0) {
-      const span = Math.abs(shift);
-      // Region over the transcript only, so the live region stays put; reset
-      // straight after, because a region left set confines every later frame.
-      updates.push(`\u001b[1;${above}r`);
-      updates.push(shift > 0 ? `\u001b[${span}S` : `\u001b[${span}T`);
-      updates.push('\u001b[r');
-      const exposed = shift > 0 ? rows.slice(above - span, above) : rows.slice(0, span);
-      exposedFrom = shift > 0 ? above - span : 0;
-      exposedTo = exposedFrom + span;
-      for (const [offset, row] of exposed.entries()) {
-        updates.push(`\u001b[${exposedFrom + offset + 1};1H${row}\u001b[K`);
-      }
-    }
-    for (const [index, row] of rows.entries()) {
-      if (!full && this.alternatePrevious[index] === row) continue;
-      if (index >= exposedFrom && index < exposedTo) continue;
-      if (shift !== 0 && index < above && shiftedRow(this.alternatePrevious, index, shift) === row) continue;
-      updates.push(`\u001b[${index + 1};1H${row}\u001b[K`);
-    }
-    this.alternatePrevious = rows;
-    const composerRow = rows.length - live.length + pending.cursorRow + 1;
-    // Parked whether or not the cursor is shown. DECTCEM is a request, and a
-    // client that draws its own caret regardless (phone clients do) puts it
-    // wherever this code last left it -- which, unparked, is the end of the
-    // block's last row: the status line, under the composer. Only the `?25h`
-    // below depends on whether the frame shows it.
-    const park = `\u001b[${Math.max(1, Math.min(height, composerRow))};${Math.max(1, pending.cursorColumn)}H`;
-    const modes = takeQueuedModes();
-    const signals = this.pendingSignals;
-    this.pendingSignals = '';
-    const showCursor = !pending.hideCursor;
-    // Nothing changed: nothing is written. A clock that ticks every second
-    // used to send a cursor hide, a park and a show each time regardless.
-    if (!updates.length && !modes && !signals && park === this.lastPark && showCursor === this.cursorShown) return;
-    // The preamble goes with rows, never alone: a clear with nothing after
-    // it would only blank the screen, so a resize or repair waits for them.
-    const draw = updates.length ? `${redrawPreamble(this.provisionalFrame ? undefined : this.pendingRedraw)}${updates.join('')}` : '';
-    if (updates.length && !this.provisionalFrame) this.pendingRedraw = undefined;
-    const cursor = showCursor && (updates.length || !this.cursorShown) ? '\u001b[?25h'
-      : !showCursor && !updates.length && this.cursorShown !== false ? '\u001b[?25l' : '';
-    // One synchronized update (DEC 2026): a terminal that supports it shows
-    // the frame whole or not at all, never half-drawn; one that does not
-    // ignores the two sequences. restoreTerminal closes it on any exit.
-    const frame = `\u001b[?2026h${modes}${signals}${draw}${park}${cursor}\u001b[?2026l`;
-    this.lastPark = park;
-    this.cursorShown = showCursor;
-    this.frameInFlight = true;
-    terminalModes.painted = true;
-    logCursorEvent(`alternate frame: height=${height} rows=${updates.length}/${rows.length} composer=${composerRow} col=${pending.cursorColumn}`);
-    output.write(frame, () => {
-      this.frameInFlight = false;
-      if (this.pendingLive && !this.closed && !this.suspended) this.flushFrame();
-    });
-  }
+  flushAlternateFrame(...args: Parameters<typeof flushAlternateFrame>): ReturnType<typeof flushAlternateFrame> { return flushAlternateFrame.apply(this, args); }
 
   showMention(...args: Parameters<typeof showMention>): ReturnType<typeof showMention> { return showMention.apply(this, args); }
 
