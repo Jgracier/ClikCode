@@ -62,7 +62,7 @@ import { callRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
 import { keyHint, keyHintFor } from '../harness/protocol/wording.js';
-import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
+import { EXIT_CONFIRM_MS, ALTERNATE_TRANSCRIPT_ROWS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
@@ -72,6 +72,7 @@ import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn,
 import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, paintWaiting, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
+import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clearTranscript } from './prompter/viewport.js';
 
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
@@ -267,45 +268,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   settleDecision(...args: Parameters<typeof settleDecision>): ReturnType<typeof settleDecision> { return settleDecision.apply(this, args); }
 
   restoreTellingDraft(...args: Parameters<typeof restoreTellingDraft>): ReturnType<typeof restoreTellingDraft> { return restoreTellingDraft.apply(this, args); }
-  readonly onResize = (): void => {
-    if (!this.closed) {
-      // The settled repaint redraws everything at the new size, and a change
-      // of width wraps the transcript again from its source first.
-      this.forgetScreenPosition();
-      logCursorEvent(`resize screen=${output.columns}x${output.rows} raw=${terminalModes.rawMode} alternate=${terminalModes.alternateScreen}`);
-      // A phone sends several size changes while its keyboard moves: one
-      // settled repaint carries the phone's resize sequence (redrawPreamble)
-      // inside its frame. Written here, the modes went out interleaved with
-      // frames in flight, once per intermediate size.
-      const first = !this.resizePaintTimer;
-      this.requestRedraw('resize');
-      // The first size of a burst is drawn at once, rows only: waiting out
-      // the settle left the old layout on a resized screen for 120ms. The
-      // phone's sequence still goes out once, with the settled frame.
-      if (first && !this.suspended) {
-        this.provisionalFrame = true;
-        try {
-          this.rewrapIfWidthChanged();
-          this.repaint();
-        } finally {
-          this.provisionalFrame = false;
-        }
-      }
-      // No height probe here: it jumps the cursor to the bottom-right corner
-      // and asks, at exactly the moment a swipe is being recognised. The size
-      // the terminal announces is what the layout uses.
-      this.repaintAfterResize();
-    }
-  };
+  readonly onResize = (...args: Parameters<typeof onResize>): ReturnType<typeof onResize> => onResize.apply(this, args);
 
-  /** Never taller than the screen actually is: a live region that overflows
-   * makes the walk back up to the composer clamp at the top edge, which is
-   * what parks the cursor on the status line and strands rows below it. The
-   * announced size is the ceiling -- a terminal that answers with more rows
-   * than it announced is not offering rows we may use. */
-  viewportRows(): number {
-    return Math.max(5, output.rows || 30);
-  }
+  viewportRows(...args: Parameters<typeof viewportRows>): ReturnType<typeof viewportRows> { return viewportRows.apply(this, args); }
 
   /** The repaint a resize needs, once the resize is over.
    *
@@ -330,50 +295,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The frame being drawn is a resize's immediate one: it leaves the
    * pending resize preamble to the settled frame. */
   provisionalFrame = false;
-  repaintAfterResize(): void {
-    if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
-    this.resizePaintTimer = setTimeout(() => {
-      this.resizePaintTimer = undefined;
-      lifecycle('window.resize', { cols: output.columns, rows: output.rows });
-      if (this.closed || this.suspended) return;
-      this.rewrapIfWidthChanged();
-      // Whole, whatever the immediate frame already drew: the preamble this
-      // frame carries clears the screen.
-      this.forgetScreenPosition();
-      this.repaint();
-    }, RESIZE_SETTLE_MS);
-    this.resizePaintTimer.unref();
-  }
+  repaintAfterResize(...args: Parameters<typeof repaintAfterResize>): ReturnType<typeof repaintAfterResize> { return repaintAfterResize.apply(this, args); }
 
-  /** A row retired at one width is wrong at any other. Narrower, it is wider
-   * than the screen: it wraps (or, with autowrap off, loses its tail) and
-   * every row below it lands one out. So the transcript is not re-clipped
-   * row by row but written again from its source -- the session's messages
-   * and this turn's state -- exactly as opening the conversation writes it. */
-  rewrapIfWidthChanged(): void {
-    const columns = output.columns || 0;
-    if (columns === this.transcriptColumns) return;
-    this.transcriptColumns = columns;
-    this.emitted.requestReseed();
-  }
+  rewrapIfWidthChanged(...args: Parameters<typeof rewrapIfWidthChanged>): ReturnType<typeof rewrapIfWidthChanged> { return rewrapIfWidthChanged.apply(this, args); }
 
-  /** Empty the transcript before the conversation is written again. What is
-   * above the live region is only ever the conversation being shown: another
-   * one, or this one at an old width, is dropped -- not pushed up behind a
-   * screenful of blank rows, where scrolling up found it. */
-  clearTranscript(): void {
-    // Line numbers stay unique across the rewrite, so nothing that holds one
-    // can land on a row it did not mean.
-    this.alternateTrimmed += this.alternateTranscript.length;
-    this.alternateTranscript.length = 0;
-    this.pendingFinished = [];
-    this.lastFinishedRow = undefined;
-    this.secondLastFinishedRow = undefined;
-    this.alternateScrollback = 0;
-    this.messageLines.clear();
-    this.stopSelectionScroll();
-    this.selection = undefined;
-  }
+  clearTranscript(...args: Parameters<typeof clearTranscript>): ReturnType<typeof clearTranscript> { return clearTranscript.apply(this, args); }
 
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
