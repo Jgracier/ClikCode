@@ -34,9 +34,8 @@ import type { LiveTurnInputResult, TakeBackOutcome } from '../turn/live-input.js
 import type { HarnessActivityEvent, HarnessPrompter, JournalState, MessageBlock, PickerOption, PickerSettings, ToolCategory } from '../harness/prompter.js';
 import type { HarnessSession, TranscriptMessage, TurnMark } from '../session/model.js';
 import { ActivityEntry, collapseToolRuns, commonPrefixLength, entryLines, rebaseActivityOffsets, settleDecisionEntry, stopEntries, transientAssistantRequired, upsertActivityEvent } from './render/activity-log.js';
-import { activityLifecyclePhase, openToolsStatus } from '../harness/protocol/activity-view.js';
+import { activityLifecyclePhase, openToolsStatus, toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnWaits, appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { outputPreviewRows, renderActivityLine } from '../harness/protocol/activity-line.js';
-import { toolUses, withChildTool, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, turnElapsedMs, type OpenTool, type TurnClock, type TurnWaits } from '../harness/protocol/activity-view.js';
 import { logProcessWarnings } from './warnings.js';
 import { answerWriting, backgroundTerminalsLabel, decisionRow, isApprovalWaitPhase, liveTokenTarget, reasoningBody, reasoningHeading, smoothTokens, tensedLabel, tokenMeterLabel, turnStatus } from '../harness/protocol/turn-flow.js';
 import { turnEndLine } from './render/turn-end-line.js';
@@ -77,193 +76,108 @@ import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
-import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js';
 import { userError } from '../harness/protocol/errors.js';
+import { EXIT_CONFIRM_MS, RESIZE_SETTLE_MS, SCROLL_DRAIN_MIN, SCROLL_DRAIN_MS, ENTER_ALTERNATE_SCREEN, ALTERNATE_TRANSCRIPT_ROWS, SELECTION_SCROLL_MS, LIVE_OUTPUT_LINES, type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter/state.js';
 
-const EXIT_CONFIRM_MS = 2000;
-
-/** How long a resize burst is given to finish before the settled redraw. A
- * phone dismissing its keyboard emits several SIGWINCHes a few tens of
- * milliseconds apart; this is longer than that gap. The first size of a
- * burst is drawn at once (onResize); this only decides when the burst is over. */
-const RESIZE_SETTLE_MS = 120;
-
-/** The least a pending scroll moves in one frame, so a drain always finishes.
- * Claude Code's value. */
-const SCROLL_DRAIN_MIN = 4;
-
-/** One frame, roughly: the gap between drains of an outstanding scroll. */
-const SCROLL_DRAIN_MS = 16;
-
-const ENTER_ALTERNATE_SCREEN = '\u001b[?1049h\u001b[2J\u001b[H';
-
-/** Rows kept above the viewport so scrolling back inside a conversation still
- * has somewhere to scroll to. */
-const ALTERNATE_TRANSCRIPT_ROWS = 2000;
-/** How often a drag held at the screen's edge scrolls the selection a line. */
-const SELECTION_SCROLL_MS = 60;
-
-/** Lines of a running tool's newest output shown under its spinner. */
-const LIVE_OUTPUT_LINES = 3;
-
-/** One paint's composer: its text and cursor, the prompt, and the options
- * (a picker's list or the slash palette) under it. */
-type ComposerFrame = {
-  text: string; options: readonly PickerOption<string>[]; selected: number; prompt: string; cursor: number;
-  palette?: PaletteLayout;
-};
-const EMPTY_COMPOSER: ComposerFrame = { text: '', options: [], selected: 0, prompt: '› ', cursor: 0 };
-
-/** Everything that exists only while a turn (or another wait: a download, a
- * shell command) is in flight. startWaiting creates it whole and stopWaiting
- * drops it whole, so no piece of one turn's state can outlive it into the
- * next. Its presence is what "running" means to the rest of the prompter. */
-type WaitingTurn = {
-  /** What the band says the turn is doing. */
-  label: string;
-  /** Elapsed less approvals, and the last delta or event, which is what
-   * "stalled" means (see activity-view.ts). */
-  clock: TurnClock;
-  /** When the turn last did anything -- a word, a thought, a call -- or an
-   * approval was answered: quiet past turn-pace's threshold and the spinner
-   * turns yellow, by the same rule as a stalled row in the conversation list. */
-  activeAt: number;
-  /** When answer text last arrived (a statusOrder tick): the status line says
-   * "writing" until a call starts after it (answerWriting). */
-  writingAt?: number;
-  /** When the latest call started (a statusOrder tick). */
-  callAt?: number;
-  /** The usage this turn has reported so far, and the token count the
-   * status line shows (stepped toward it each tick, never down). */
-  usage?: TurnUsage;
-  tokens?: number;
-  /** The composer typed into while the turn runs. */
-  draft: string;
-  cursor: number;
-  /** Ctrl+C, or Esc once the turn has an answer, has asked the turn to stop. */
-  cancelled: boolean;
-  cancel?: (restoreDraft: boolean) => void;
-  /** Put the oldest waiting user message into the chat (Enter again). */
-  sendWaiting?: () => void;
-  /** Take a waiting message back out of the queue (Esc): `removed` only when
-   * it is the user's again -- not already on its way into the turn. */
-  takeBack?: (id: string) => Promise<TakeBackOutcome>;
-  /** Absent for a wait that takes no messages. */
-  submit?: (text: string) => Promise<LiveTurnInputResult>;
-  command?: (text: string) => Promise<LiveTurnInputResult>;
-  /** Stop showing the running turn without stopping it (Left, empty draft). */
-  leave?: () => void;
-  timer?: NodeJS.Timeout;
-  stopInput?: () => void;
-  /** Drawn before the turn's own controls exist (turnStarting): what is
-   * typed is kept for it, and an interrupt is passed on once it can be. */
-  early?: { interrupt?: { restoreDraft: boolean } };
-  /** Told when this turn's display ends, by whoever ends it: the follow of a
-   * worker's turn (worker/turn-bridge.ts) lives exactly as long as the
-   * display it drives. When the two could disagree, the display ended and the
-   * follow kept waiting for the worker -- nothing read a key until the
-   * worker's turn ended, an hour on with sub-agents running. */
-  ended?: () => void;
-};
 
 export class TerminalHarnessPrompter implements HarnessPrompter {
-  private closed = false;
-  private history: string[] = [];
-  private currentSession?: HarnessSession;
-  private currentNotice?: string;
+  closed = false;
+  history: string[] = [];
+  currentSession?: HarnessSession;
+  currentNotice?: string;
   /** The composer as the last paint drew it, for repaint() to draw again. */
-  private composer: ComposerFrame = EMPTY_COMPOSER;
+  composer: ComposerFrame = EMPTY_COMPOSER;
   /** The turn (or other wait) in flight: see WaitingTurn. */
-  private turn?: WaitingTurn;
-  private waitingFrame = 0;
+  turn?: WaitingTurn;
+  waitingFrame = 0;
   /** Background terminals the vendor says are running (the footer indicator). */
-  private backgroundTerminals = 0;
+  backgroundTerminals = 0;
   /** Orders answer text against call starts for answerWriting: a counter, so
    * two events in one millisecond keep their order. */
-  private statusOrder = 0;
+  statusOrder = 0;
   /** Whether the pending tick is the spinner's (true) or the clock's. */
-  private waitingTickFast = false;
-  private activityEntries: ActivityEntry[] = [];
+  waitingTickFast = false;
+  activityEntries: ActivityEntry[] = [];
   /** A link sign-in's link and code, drawn above the waiting band while it
    * runs (linkWait). */
-  private signInLines: string[] = [];
+  signInLines: string[] = [];
   /** What the waiting composer is for while a sign-in asks for a code or a
    * key: Enter hands the draft here instead of to the turn. */
-  private signInInput?: { secret: boolean; optional?: boolean; alongside?: boolean; submit: (text: string) => void };
+  signInInput?: { secret: boolean; optional?: boolean; alongside?: boolean; submit: (text: string) => void };
   /** A sign-in is up: the wait is on the user, in their browser, so the band
    * holds still as it does for an approval -- a ●, the clock stopped. */
-  private signingIn = false;
+  signingIn = false;
   /** collapseToolRuns over activityEntries, redone only when they change. */
-  private collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
+  collapsedActivity?: { source: readonly ActivityEntry[]; entries: ActivityEntry[] };
   /** The steers this window drew into the running turn, by row id, kept past
    * the sources they were drawn from (the live submission is dropped when the
    * turn ends; the journal's copy is gone once the turn is saved). The saved
    * list then holds each as a user message of its own, and what was drawn
    * live is what decides which of those are copies (liveTurnSpan). */
-  private turnSteers = new Map<string, SteerRow>();
+  turnSteers = new Map<string, SteerRow>();
   /** The calls still open: the status line names the newest (toolStatus). */
-  private activeTools = new Map<string, OpenTool>();
+  activeTools = new Map<string, OpenTool>();
   /** The calls inside running sub-agents, one live slot each
    * (render/child-rows.ts). Drawn nested under the agent, never retired. */
-  private readonly liveChildren = new LiveChildren();
+  readonly liveChildren = new LiveChildren();
   /** Which of this turn's reads and searches share a row (explore-groups.ts). */
-  private readonly exploreGrouping = new ExploreGrouping();
-  private liveResponse = '';
-  private responsePaintTimer?: NodeJS.Timeout;
-  private frameInFlight = false;
+  readonly exploreGrouping = new ExploreGrouping();
+  liveResponse = '';
+  responsePaintTimer?: NodeJS.Timeout;
+  frameInFlight = false;
   /** Why the next frame that draws rows is drawn, when it is not routine:
    * after a resize, or a repair (Ctrl+L). See redrawPreamble. */
-  private pendingRedraw: Redraw | undefined;
-  private queuedDraft?: string;
+  pendingRedraw: Redraw | undefined;
+  queuedDraft?: string;
   /** A message typed and sent (Enter) under a sign-in's own wait, and any
    * keys after it: typed into the prompt that opens next, as if typed there,
    * so it is sent -- the wait has no turn to send it to. */
-  private typedAhead: string[] = [];
+  typedAhead: string[] = [];
   /** A sign-in's wait just ended: what was typed under it goes on into the
    * turn that starts next (startWaiting). */
-  private signedInJustNow = false;
+  signedInJustNow = false;
   /** The turn this window stepped out of (leaveTurn), still running in its
    * worker. What it already wrote to scrollback is remembered here, nothing
    * more of it is drawn while away, and following the same turn again
    * carries on from where scrollback stops. */
-  private steppedOut?: { sessionId: string; prompt?: string; anchor: number };
+  steppedOut?: { sessionId: string; prompt?: string; anchor: number };
   /** The highest index of the running turn's activities already shown (see
    * activityEvent's `live`), so replaying them on a (re)join adds only the
    * ones this window has not seen. */
-  private liveActivitiesShown = -1;
+  liveActivitiesShown = -1;
   /** What the last render said about `currentSession`'s journal. */
-  private journal: JournalState = { running: true };
+  journal: JournalState = { running: true };
   /** `id` arrives with the answer to the submission, and is the same id its
    * durable copy (a queued turn, a recorded steer) is stored under. */
-  private waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; ack?: { sequence: number; responseOffset: number }; state: 'sending' | 'queued' | 'steered' | 'error' | 'command'; unsteered?: boolean }> = [];
-  private waitingSubmissionId = 0;
-  private timelineSequence = 0;
-  private readonly waitingSubmissionWrites = new Set<Promise<void>>();
-  private suspended = false;
-  private readonly reducedMotion = reducedMotion();
-  private activityAnchor = 0;
+  waitingSubmissions: Array<{ localId: number; id?: string; text: string; responseOffset: number; sequence: number; ack?: { sequence: number; responseOffset: number }; state: 'sending' | 'queued' | 'steered' | 'error' | 'command'; unsteered?: boolean }> = [];
+  waitingSubmissionId = 0;
+  timelineSequence = 0;
+  readonly waitingSubmissionWrites = new Set<Promise<void>>();
+  suspended = false;
+  readonly reducedMotion = reducedMotion();
+  activityAnchor = 0;
   /** Rows retired since the last frame reached the terminal, and the live
    * region that frame will draw below them. */
-  private pendingFinished: string[] = [];
-  private pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean };
+  pendingFinished: string[] = [];
+  pendingLive?: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean };
   /** The last row retired, so a blank separator is never doubled across the
    * boundary between one frame and the next. */
-  private lastFinishedRow?: string;
+  lastFinishedRow?: string;
   /** The row before it, so the guard that separates messages can tell one
    * empty row from two across a frame boundary. */
-  private secondLastFinishedRow?: string;
-  private readonly turnTranscript = new TurnTranscript();
+  secondLastFinishedRow?: string;
+  readonly turnTranscript = new TurnTranscript();
   /** What is already in the transcript. See emitted-transcript.ts: a retired
    *  row is never rewritten in place, so the rules live in one place. */
-  private readonly emitted = new EmittedTranscript();
+  readonly emitted = new EmittedTranscript();
   /** The width the transcript's rows were wrapped at. A resize to another
    * width wraps the whole conversation again (see rewrapTranscript). */
-  private transcriptColumns = output.columns || 0;
-  private usageLabel?: string;
-  private usageResetLabel?: string;
-  private selecting = false;
+  transcriptColumns = output.columns || 0;
+  usageLabel?: string;
+  usageResetLabel?: string;
+  selecting = false;
   /** True while the slash palette (inside question()) has its own fixed-capacity
    * footer band open. usage()/activity() are called from fire-and-forget async
    * work (a background usage refresh, a turn's tool-call log) that has no idea
@@ -272,77 +186,77 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * doesn't match the palette's own fixed capacity — the two disagree on where
    * the footer starts, and the status line gets drawn at both rows. Guarded the
    * same way `selecting` already guards this for select() pickers. */
-  private paletteActive = false;
+  paletteActive = false;
   /** A mouse selection in progress, in conversation lines, not screen rows
    * (see lineAtRow): a drag that scrolls the view keeps what it selected, and
    * one longer than the screen copies whole. */
-  private selection?: Selection;
+  selection?: Selection;
   /** While a drag rests on the top or bottom edge, the view keeps scrolling
    * that way, a line at a time, extending the selection -- the way every
    * terminal's own selection does. */
-  private selectionScroll?: { timer: NodeJS.Timeout; direction: 1 | -1; col: number };
+  selectionScroll?: { timer: NodeJS.Timeout; direction: 1 | -1; col: number };
   /** Rows dropped from the front of alternateTranscript, so a line's number
    * stays the same when older rows are trimmed. */
-  private alternateTrimmed = 0;
+  alternateTrimmed = 0;
   /** Each message's first line in the transcript, numbered as
    * alternateTrimmed + index, so it holds while rows are trimmed. */
-  private readonly messageLines = new Map<number, number>();
+  readonly messageLines = new Map<number, number>();
   /** /search: the mention being looked at in the conversation shown, its
    * words highlighted; `jumped` once the view has been moved to it. */
-  private mentionFocus?: MentionFocus & { sessionId: string; jumped: boolean };
+  mentionFocus?: MentionFocus & { sessionId: string; jumped: boolean };
   /** The live rows below the transcript in the last frame: the text a
    * selection copies from them. */
-  private frameLayout = { live: [] as string[] };
+  frameLayout = { live: [] as string[] };
   /** What the composer's slash palette offers, remembered from the last
    * question() so a turn in flight can offer the same commands. A turn does
    * not change which commands exist; each is re-checked when it runs. */
-  private paletteCommands: readonly PaletteEntry[] = [];
+  paletteCommands: readonly PaletteEntry[] = [];
   /** The prompt this client submitted, held from Enter until the turn ends.
    * See render/pending-prompt.ts: the snapshot alone cannot draw it for the
    * whole turn, so the client keeps its own copy of what it sent. */
-  private submittedPrompt?: string;
-  private pendingApproval?: ApprovalRequest & { shownAt: number; needsFocus: boolean; focused: boolean };
-  private approvalGuardTimer?: NodeJS.Timeout;
+  submittedPrompt?: string;
+  pendingApproval?: ApprovalRequest & { shownAt: number; needsFocus: boolean; focused: boolean };
+  approvalGuardTimer?: NodeJS.Timeout;
   /** A short-lived hint (the Ctrl+C exit warning) that takes the notice row. */
-  private transientNotice?: string;
-  private transientNoticeTimer?: NodeJS.Timeout;
-  private thought?: Thought;
+  transientNotice?: string;
+  transientNoticeTimer?: NodeJS.Timeout;
+  thought?: Thought;
   /** When the thought on screen began, and how much of the answer had
    * streamed: it settles there as "Thought for 3s" (settleThought). */
-  private thoughtStart?: { at: number; offset: number; markId?: string };
+  thoughtStart?: { at: number; offset: number; markId?: string };
   /** `<anchor>:<mark id>` of every worker mark already on screen (markDrawn). */
-  private readonly drawnMarks = new Set<string>();
-  private panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
-  private planEntries: readonly PlanEntry[] = [];
+  readonly drawnMarks = new Set<string>();
+  panelState?: { title: string; lines: string[]; offset: number; page: number; total: number };
+  planEntries: readonly PlanEntry[] = [];
   /** The length of the answer when this turn's plan first appeared (settlePlan). */
-  private planStart: number | undefined;
-  private streamingBlocks = createStreamingBlockParser();
+  planStart: number | undefined;
+  streamingBlocks = createStreamingBlockParser();
   /** Re-installs the key listener and raw mode after Ctrl+Z / `fg`. */
-  private resumeInput?: () => void;
+  resumeInput?: () => void;
   /** Providers fan out parallel tool calls, so a second request can arrive
    * while the first is still on screen. Queueing asks them one at a time;
    * resolving the extras false meant silently denying a tool the user was
    * never shown. */
-  private approvalQueue: ApprovalRequest[] = [];
+  approvalQueue: ApprovalRequest[] = [];
   /** Approvals answered since the last time none was waiting: this one is
    * number answered + 1 of answered + 1 + queued. */
-  private approvalsAnswered = 0;
+  approvalsAnswered = 0;
   /** Whether the terminal says it is being looked at (terminal-signals.ts). */
-  private focus: FocusState = { since: 0 };
-  private stopFocusReports?: () => void;
+  focus: FocusState = { since: 0 };
+  stopFocusReports?: () => void;
   /** The window title last written, so an unchanged one is not written. */
-  private terminalTitle?: string;
+  terminalTitle?: string;
   /** Long pastes held as placeholders so far, for the next one's number. */
-  private pasteCount = 0;
+  pasteCount = 0;
   /** "Tell it instead" is being typed; the draft the composer held before. */
-  private tellingInstead?: { draft: string; cursor: number };
-  private approvalRestoreLabel?: string;
+  tellingInstead?: { draft: string; cursor: number };
+  approvalRestoreLabel?: string;
   /** The last label a phase report set ("switching to …", "retrying"): what
    * the turn was doing before the vendor answered. The vendor's first output
    * after it ends it; labels this window sets itself (stopping, waiting for
    * approval) are not phases and stay. */
-  private reportedPhase?: string;
-  private readonly onWaitingKey = (key: string): void => {
+  reportedPhase?: string;
+  readonly onWaitingKey = (key: string): void => {
     const turn = this.turn;
     if (!turn) return;
     // The terminal can lose cells during a mobile resize or a remote redraw.
@@ -508,7 +422,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   };
 
   /** A key typed into the waiting composer. */
-  private editTurnDraft(turn: WaitingTurn, key: string): void {
+  editTurnDraft(turn: WaitingTurn, key: string): void {
     const edited = editWaitingComposer(turn.draft, turn.cursor, key);
     if (!edited.changed) return;
     turn.draft = edited.value;
@@ -519,7 +433,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** User messages still waiting, oldest first. A command and a background
    *  notice stay in the queue: Esc does not edit them, and Enter again does
    *  not send them. One still being submitted (`sending`) is not waiting. */
-  private waitingUserMessages(): Array<{ id: string; text: string } & WaitingMessage> {
+  waitingUserMessages(): Array<{ id: string; text: string } & WaitingMessage> {
     const stored = (this.currentSession?.queuedTurns ?? []).filter((item) => item.kind !== 'command' && item.kind !== 'notification');
     const startedAt = this.currentSession?.pendingTurn?.startedAt;
     const unsteered = (id: string): WaitingMessage => (this.waitingSubmissions.some((item) => item.id === id && item.unsteered) ? { unsteered: true } : {});
@@ -534,12 +448,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * and Enter on nothing would put it into the chat (enterAgainSends). One
    * still being submitted has not been answered yet: a quick double Enter
    * must not send it twice. */
-  private enterAgainReady(): boolean {
+  enterAgainReady(): boolean {
     return enterAgainSends(this.waitingUserMessages());
   }
 
   /** The turn has an answer: text, or a tool. A thought is not one. */
-  private turnHasAnswer(): boolean {
+  turnHasAnswer(): boolean {
     if (this.liveResponse.trim()) return true;
     if (this.activeTools.size > 0) return true;
     return this.activityEntries.some((entry) => entry.event && entry.event.kind !== 'thinking');
@@ -550,7 +464,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * typed, and is gone from the queue. Nothing running is touched. One
    * already on its way into the turn stays where it is. True when there was
    * a message to take, so Esc does not also stop the turn. */
-  private takeBackWaiting(): boolean {
+  takeBackWaiting(): boolean {
     const turn = this.turn;
     if (!turn?.takeBack) return false;
     const last = this.waitingUserMessages().at(-1);
@@ -571,7 +485,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** A message typed during the turn, sent: steered into it or queued
    * behind it (the harness decides; its row says which), or a slash line,
    * which is ClikCode's own command. */
-  private submitWaiting(text: string, allowCommand = true): void {
+  submitWaiting(text: string, allowCommand = true): void {
     const turn = this.turn;
     if (!turn?.submit) {
       this.queuedDraft = this.queuedDraft ? `${this.queuedDraft}\n${text}` : text;
@@ -633,7 +547,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** An approval answered: the next one waiting comes up, or the band goes
    * back to what the turn was doing. */
-  private answerApproval(
+  answerApproval(
     pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, answer: boolean | 'always', settled?: Parameters<typeof decisionRow>[0],
   ): void {
     lifecycle('window.approval.answer', { answer: answer === 'always' ? 'always' : answer ? 'allow' : 'deny' });
@@ -658,7 +572,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * approval is said on the call that runs): one event, one row. Else at the
    * answer's current place like any note, and never merged with an identical
    * earlier one: two denials of the same command are two decisions. */
-  private settleDecision(decision: Parameters<typeof decisionRow>[0], callId?: string): void {
+  settleDecision(decision: Parameters<typeof decisionRow>[0], callId?: string): void {
     if (!this.turn) return;
     this.activityEntries = settleDecisionEntry(this.activityEntries, {
       anchor: this.activityAnchor, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence,
@@ -667,7 +581,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** The draft set aside for "tell it instead", back in the composer. */
-  private restoreTellingDraft(): void {
+  restoreTellingDraft(): void {
     const telling = this.tellingInstead;
     if (!telling) return;
     this.tellingInstead = undefined;
@@ -676,7 +590,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       this.turn.cursor = telling.cursor;
     }
   }
-  private readonly onResize = (): void => {
+  readonly onResize = (): void => {
     if (!this.closed) {
       // The settled repaint redraws everything at the new size, and a change
       // of width wraps the transcript again from its source first.
@@ -712,7 +626,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * what parks the cursor on the status line and strands rows below it. The
    * announced size is the ceiling -- a terminal that answers with more rows
    * than it announced is not offering rows we may use. */
-  private viewportRows(): number {
+  viewportRows(): number {
     return Math.max(5, output.rows || 30);
   }
 
@@ -735,11 +649,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * So the burst is coalesced into the one repaint it always meant, drawn once
    * the size has stopped changing. Short enough not to be seen, long enough to
    * land after the client has finished. */
-  private resizePaintTimer?: NodeJS.Timeout;
+  resizePaintTimer?: NodeJS.Timeout;
   /** The frame being drawn is a resize's immediate one: it leaves the
    * pending resize preamble to the settled frame. */
-  private provisionalFrame = false;
-  private repaintAfterResize(): void {
+  provisionalFrame = false;
+  repaintAfterResize(): void {
     if (this.resizePaintTimer) clearTimeout(this.resizePaintTimer);
     this.resizePaintTimer = setTimeout(() => {
       this.resizePaintTimer = undefined;
@@ -759,7 +673,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * every row below it lands one out. So the transcript is not re-clipped
    * row by row but written again from its source -- the session's messages
    * and this turn's state -- exactly as opening the conversation writes it. */
-  private rewrapIfWidthChanged(): void {
+  rewrapIfWidthChanged(): void {
     const columns = output.columns || 0;
     if (columns === this.transcriptColumns) return;
     this.transcriptColumns = columns;
@@ -770,7 +684,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * above the live region is only ever the conversation being shown: another
    * one, or this one at an old width, is dropped -- not pushed up behind a
    * screenful of blank rows, where scrolling up found it. */
-  private clearTranscript(): void {
+  clearTranscript(): void {
     // Line numbers stay unique across the rewrite, so nothing that holds one
     // can land on a row it did not mean.
     this.alternateTrimmed += this.alternateTranscript.length;
@@ -786,22 +700,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Rows retired out of the viewport, kept so the conversation above the
    * live region is still there to scroll back to on the alternate screen. */
-  private readonly alternateTranscript: string[] = [];
+  readonly alternateTranscript: string[] = [];
   /** Exactly the rows the last alternate-screen frame left on screen, so the
    * next one writes only what differs. */
-  private alternatePrevious: string[] = [];
+  alternatePrevious: string[] = [];
   /** How many rows above the live region the viewport is held back by. Zero
    * follows the conversation, which is what a transcript does until someone
    * asks to look at what went past. Drawing on the alternate screen took the
    * terminal's own scrollback away; this is what replaces it. */
-  private alternateScrollback = 0;
+  alternateScrollback = 0;
   /** Rows the last frame gave the transcript above the live region. The
    * scroll offset is bounded by it, and it changes with the screen. */
-  private alternateAbove = 0;
+  alternateAbove = 0;
   /** Whether the last frame left the cursor shown (undefined: not known), and
    * where it parked it, so a frame that changes neither writes nothing. */
-  private cursorShown: boolean | undefined;
-  private lastPark = '';
+  cursorShown: boolean | undefined;
+  lastPark = '';
 
   /** The alternate screen is not optional: construction is gated on
    * terminalUiSupported(), which requires a TTY, and a non-TTY caller fails
@@ -898,14 +812,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * answer was never written at all. Decided here, for every paint, from what
    * the render said: unsaid means it may be running, so no caller that does
    * not know can fold it. */
-  private transcriptMessages(session: HarnessSession): NonNullable<HarnessSession['messages']> {
+  transcriptMessages(session: HarnessSession): NonNullable<HarnessSession['messages']> {
     return this.journal.running ? settledTranscriptMessages(session, this.journal.prompt) : sessionTranscriptMessages(session);
   }
 
   /** Where activity outside a turn goes: after the conversation as drawn --
    * a prompt held for a turn not started yet (a sign-in before it) included,
    * or its outcome line lands at a place already written and is never drawn. */
-  private restingAnchor(): number {
+  restingAnchor(): number {
     const session = this.currentSession;
     if (!session) return 0;
     const stable = session.messages ?? [];
@@ -1027,7 +941,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The plan at the end of the turn, kept as a row where it first appeared (standard section 7):
    * the band says what is left, and goes with the turn; the row says what was planned and how far it
    * got -- the same rows a reopened chat draws from the saved plan mark (turn-mark-rows.ts). */
-  private settlePlan(): void {
+  settlePlan(): void {
     const entries = this.planEntries;
     const start = this.planStart;
     this.planStart = undefined;
@@ -1113,7 +1027,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * took over, or the turn ended. It stays in the transcript where it was
    * had, as "Thought for 3s" (Claude Code's words, and VS Code's): taking
    * the row away broke the rule that nothing shown ever disappears. */
-  private settleThought(): void {
+  settleThought(): void {
     const thought = this.thought;
     const start = this.thoughtStart;
     this.thought = undefined;
@@ -1187,7 +1101,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** True when the key was a panel command. Only consulted on an empty draft,
    * so none of these keys is ever taken away from text being typed. */
-  private panelKey(key: string): boolean {
+  panelKey(key: string): boolean {
     const panel = this.panelState;
     if (!panel) return false;
     const last = Math.max(0, panel.total - panel.page);
@@ -1462,22 +1376,22 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** What the status line says about the newest open call, if any is open. */
-  private toolStatus(): { phase: string; category?: ToolCategory } | undefined {
+  toolStatus(): { phase: string; category?: ToolCategory } | undefined {
     return this.activeTools.size ? openToolsStatus(this.activeTools) : undefined;
   }
 
   /** What the turn waits on besides the model, for the clock's decisions. */
-  private turnWaits(): TurnWaits {
+  turnWaits(): TurnWaits {
     return { toolsRunning: this.activeTools.size > 0, approval: this.waitingOnUser() };
   }
 
   /** The wait is on the user -- an approval or a sign-in -- not the agent:
    * the band holds still (a ● and no clock) until they act. */
-  private waitingOnUser(): boolean {
+  waitingOnUser(): boolean {
     return Boolean(this.pendingApproval) || this.signingIn;
   }
 
-  private scheduleWaitingTick(): void {
+  scheduleWaitingTick(): void {
     const turn = this.turn;
     if (!turn) return;
     if (turn.timer) clearTimeout(turn.timer);
@@ -1503,7 +1417,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The status line's token count takes a step toward what the turn has
    * produced (see smoothTokens). Stepped on the tick, not on paint, so the
    * speed does not depend on how many frames were drawn. */
-  private stepTokens(turn: WaitingTurn): void {
+  stepTokens(turn: WaitingTurn): void {
     // Reasoning is tokens too: the thought being had and the ones settled
     // this turn (a settled mark copy carries its id as its label, not text).
     const thoughtChars = (this.thought?.text.length ?? 0) + this.activityEntries.reduce((sum, entry) => (
@@ -1532,7 +1446,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** The turn waits on the user (an approval, a sign-in): its clock stops,
    * and the time is not the turn going quiet. */
-  private pauseClock(): void {
+  pauseClock(): void {
     const turn = this.turn;
     if (!turn) return;
     turn.clock = pauseTurnClock(turn.clock, Date.now());
@@ -1543,7 +1457,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Whatever the turn waited on the user for has been answered (or the
    * turn ended under it). Another wait on the user still up keeps it held. */
-  private resumeClock(): void {
+  resumeClock(): void {
     const turn = this.turn;
     if (turn?.clock.pausedAt === undefined || this.waitingOnUser()) return;
     turn.clock = resumeTurnClock(turn.clock, Date.now());
@@ -1632,7 +1546,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** The screen back from whoever had it (the shell after Ctrl+Z, a vendor
    * login): the alternate screen, the transcript rewrapped if they resized
    * it -- a phone's keyboard does -- and the next frame drawn whole. */
-  private retakeScreen(): void {
+  retakeScreen(): void {
     this.suspended = false;
     if (!terminalModes.alternateScreen) {
       output.write(ENTER_ALTERNATE_SCREEN);
@@ -1647,7 +1561,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * Ctrl+Z): every session mode on again, the title taken, and the next
    * frame drawn as after a resize -- the screen may well have changed size,
    * and was certainly drawn on by something else. */
-  private retakeTerminalSignals(): void {
+  retakeTerminalSignals(): void {
     if (!output.isTTY) return;
     output.write(sessionModesOn());
     this.takeTerminalTitle();
@@ -1655,12 +1569,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** A resize outranks a repair: it does all a repair does, and more. */
-  private requestRedraw(redraw: Redraw): void {
+  requestRedraw(redraw: Redraw): void {
     if (this.pendingRedraw !== 'resize') this.pendingRedraw = redraw;
   }
 
   /** Save the shell's title, once per taking of the terminal. */
-  private takeTerminalTitle(): void {
+  takeTerminalTitle(): void {
     if (!output.isTTY || terminalModes.titlePushed) return;
     output.write(PUSH_TITLE);
     terminalModes.titlePushed = true;
@@ -1673,7 +1587,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * (pendingSignals), and never off a TTY. The title holds still while a turn
    * runs -- the progress indicator is what moves -- so a spinner tick writes
    * nothing here. */
-  private terminalSignals(): string {
+  terminalSignals(): string {
     if (!output.isTTY || this.suspended || this.closed || !terminalModes.titlePushed) return '';
     const running = Boolean(this.turn);
     const title = windowTitle({
@@ -1687,25 +1601,25 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
   /** Title and progress sequences owed to the terminal, written inside the
    * next synchronized frame rather than on their own beside it. */
-  private pendingSignals = '';
+  pendingSignals = '';
 
   /** Something needs the user -- a turn ended, an approval waits -- and the
    * terminal said it lost focus long enough ago: tell them (OSC 9 and a
    * bell). A terminal that never reports focus is never notified. */
-  private notifyIfAway(message: string): void {
+  notifyIfAway(message: string): void {
     if (!output.isTTY || this.suspended || this.closed || !shouldNotify(this.focus, Date.now())) return;
     output.write(notifySequence(message));
   }
 
   /** This turn's own calls: the anchor is reused when a turn left no
    * message, so the sequence decides. */
-  private ofThisTurn(entry: ActivityEntry): boolean {
+  ofThisTurn(entry: ActivityEntry): boolean {
     return entry.anchor >= this.activityAnchor && (entry.sequence ?? 0) > this.emitted.turnSequenceFloor;
   }
 
   /** The saved turn is the durable copy: a call it records as stopped is
    * stopped here too, whichever window stopped the turn. */
-  private settleSavedStops(session: HarnessSession): void {
+  settleSavedStops(session: HarnessSession): void {
     const stopped = (session.messages ?? []).slice(this.activityAnchor).flatMap((message) => (message.role === 'assistant'
       ? readTurnActivities(message.activities, message.content.length).flatMap((activity) => (activity.event.stopped && !activity.event.parentId ? [activity.event] : []))
       : []));
@@ -1714,7 +1628,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** The vendor is producing output: a phase reported before it is over. */
-  private vendorAnswered(): void {
+  vendorAnswered(): void {
     if (this.reportedPhase === undefined) return;
     if (this.turn?.label === this.reportedPhase) this.turn.label = 'thinking';
     this.reportedPhase = undefined;
@@ -1749,7 +1663,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Closes a prompt nobody answered: on screen it is answered `no` (which
    * brings up the next); queued it is simply dropped. */
-  private withdrawApproval(request: ApprovalRequest): void {
+  withdrawApproval(request: ApprovalRequest): void {
     if (this.pendingApproval === request) { this.answerApproval(this.pendingApproval, false, { kind: 'declined', label: request.title }); return; }
     const at = this.approvalQueue.indexOf(request);
     if (at < 0) return;
@@ -1814,7 +1728,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** The question on screen takes a key. */
-  private questionKey(turn: WaitingTurn, pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, key: string): void {
+  questionKey(turn: WaitingTurn, pending: NonNullable<TerminalHarnessPrompter['pendingApproval']>, key: string): void {
     const state = pending.question!.state;
     const action = questionKeyAction(key, state, Date.now() - pending.shownAt, pending.needsFocus, pending.focused);
     const rows = questionRows(state.question);
@@ -1876,7 +1790,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Returns false when nothing was waiting, so the caller knows to restore
    * the turn's own label instead of leaving a stale prompt on screen. */
-  private presentNextApproval(): boolean {
+  presentNextApproval(): boolean {
     this.restoreTellingDraft();
     const next = this.approvalQueue.shift();
     if (!next) { this.approvalsAnswered = 0; return false; }
@@ -1909,7 +1823,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** A turn can end while an approval is on screen. Denying outstanding asks
    * is what releases the provider's own awaiting handler; dropping them left
    * it waiting on a promise that could never settle. */
-  private settleApprovals(): void {
+  settleApprovals(): void {
     const outstanding = [this.pendingApproval, ...this.approvalQueue];
     if (this.approvalGuardTimer) clearTimeout(this.approvalGuardTimer);
     this.approvalGuardTimer = undefined;
@@ -1935,7 +1849,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** The line under the composer, fitted to `width`: a narrow screen
    * shortens the directory from the left (`…/clikcode`) before anything. */
-  private statusText(width: number): string {
+  statusText(width: number): string {
     const session = this.currentSession;
     if (!session) return '';
     const path = compactPath(session.workspace ?? process.cwd());
@@ -1975,7 +1889,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * stops the turn (Claude Code's and Codex's "esc to interrupt"). Enter
    * again's is on the waiting message's own row, and Esc's there too while
    * a message waits -- Esc takes that back rather than stopping anything. */
-  private waitingLine(turn: WaitingTurn, width: number): string {
+  waitingLine(turn: WaitingTurn, width: number): string {
     const now = Date.now();
     const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
     // What it says and how it looks, by the shared rules (turn-flow.ts):
@@ -2016,13 +1930,13 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Esc would stop the running turn (see onWaitingKey): a conversation's
    * turn, not already stopping, with no approval or sign-in up, nothing
    * waiting for Esc to take back, and the view at the live edge. */
-  private escStops(): boolean {
+  escStops(): boolean {
     const turn = this.turn;
     return Boolean(turn && (turn.submit || turn.early) && !turn.cancelled && !this.pendingApproval && !this.signingIn
       && !this.scrolledBack && !(turn.takeBack && this.waitingUserMessages().length));
   }
 
-  private updateWaiting(): void {
+  updateWaiting(): void {
     if (!this.turn || this.closed || this.selecting || this.paletteActive) return;
     this.schedulePaint();
   }
@@ -2031,7 +1945,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * all arrive in the same few milliseconds. One shared scheduler collapses
    * those signals into a single atomic frame instead of queueing competing
    * terminal writes that briefly expose half-updated cursor/footer state. */
-  private schedulePaint(delay = PAINT_COALESCE_MS): void {
+  schedulePaint(delay = PAINT_COALESCE_MS): void {
     if (this.responsePaintTimer || this.closed || this.suspended || this.selecting || this.paletteActive) return;
     this.responsePaintTimer = setTimeout(() => {
       this.responsePaintTimer = undefined;
@@ -2050,7 +1964,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * there), so there is no selection to move and Enter runs what was typed.
    * Without this a command was invisible AND unavailable while an answer
    * streamed; `/model` went to the model as the word "/model". */
-  private paintWaiting(turn: WaitingTurn): void {
+  paintWaiting(turn: WaitingTurn): void {
     const asking = this.pendingApproval?.question?.state;
     if (asking?.typing && asking.question.secret) {
       this.paint('•'.repeat(turn.draft.length), [], 0, '› ', turn.cursor);
@@ -2088,12 +2002,12 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    *    and resume() after a vendor has had the TTY -- the composer it repaints
    *    is a new one. In all three the palette belongs to a command that has
    *    already run. */
-  private repaint(options: { keepPalette: boolean } = { keepPalette: true }): void {
+  repaint(options: { keepPalette: boolean } = { keepPalette: true }): void {
     const { text, options: listed, selected, prompt, cursor, palette } = this.composer;
     this.paint(text, listed, selected, prompt, cursor, options.keepPalette ? palette : undefined);
   }
 
-  private paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: PaletteLayout): void {
+  paint(composer: string, options: readonly PickerOption<string>[], selected: number, prompt: string, cursor: number, palette?: PaletteLayout): void {
     const session = this.currentSession;
     if (!session || this.suspended) return;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
@@ -2770,11 +2684,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** The last frame's live rows made safe, by the row as built and the width. */
-  private safeLiveRows = { limit: 0, rows: new Map<string, string>() };
+  safeLiveRows = { limit: 0, rows: new Map<string, string>() };
 
   /** One frame: `finished` rows are retired into the transcript, and the live
    * region below them is replaced. */
-  private renderFrame(
+  renderFrame(
     finished: readonly string[], live: readonly string[], cursorRow: number, cursorColumn: number, hideCursor: boolean,
   ): void {
     // Last line of defence: whatever produced a row, the only escape sequences
@@ -2806,7 +2720,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     if (!this.frameInFlight) this.flushFrame();
   }
 
-  private flushFrame(): void {
+  flushFrame(): void {
     if (this.closed || this.suspended) return;
     // A streaming answer may request a frame while the phone is still
     // changing size. Keep its durable rows, but wait for the final geometry
@@ -2830,7 +2744,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * scrollback, the viewport shows its tail above the live region, and the
    * cursor is parked with an absolute jump. Nothing here counts rows the
    * terminal might count differently, so nothing here can drift. */
-  private flushAlternateFrame(
+  flushAlternateFrame(
     finished: readonly string[],
     pending: { live: string[]; cursorRow: number; cursorColumn: number; hideCursor: boolean },
   ): void {
@@ -3021,7 +2935,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Puts the mention a few rows below the top of the view, once, on the
    * first frame whose transcript holds it. */
-  private jumpToMention(above: number): void {
+  jumpToMention(above: number): void {
     const focus = this.mentionFocus;
     if (!focus || focus.jumped || this.currentSession?.id !== focus.sessionId) return;
     const start = this.messageLines.get(focus.messageIndex);
@@ -3041,7 +2955,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * conversation is followed again at zero, which every new frame returns to
    * by itself once the reader lets go. Returns whether anything moved, so a
    * key that cannot scroll any further still means something to the caller. */
-  private scrollTranscript(rows: number): boolean {
+  scrollTranscript(rows: number): boolean {
     // Bounded by what the CURRENT screen can show -- see flushAlternateFrame.
     // Bounding it by the transcript's length instead let the offset run past
     // the end of what any frame would draw, and the rows a reader then had to
@@ -3075,11 +2989,11 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * three rows and lands whole and at once; a flick of three hundred notches
    * becomes a handful of bounded frames instead of three hundred full
    * repaints, which is what made the client stop forwarding the gesture. */
-  private pendingScroll = 0;
+  pendingScroll = 0;
   /** True while the frame being drawn is the result of a scroll. */
-  private paintingScroll = false;
-  private scrollDrainTimer?: NodeJS.Timeout;
-  private drainScroll(): void {
+  paintingScroll = false;
+  scrollDrainTimer?: NodeJS.Timeout;
+  drainScroll(): void {
     if (this.closed || this.suspended || !this.pendingScroll) return;
     const magnitude = Math.abs(this.pendingScroll);
     const step = Math.min(Math.max(1, this.viewportRows() - 1), Math.max(SCROLL_DRAIN_MIN, (magnitude * 3) >> 2));
@@ -3097,14 +3011,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** Wheel notches go here, not straight to the viewport. */
-  private queueScroll(rows: number): void {
+  queueScroll(rows: number): void {
     this.pendingScroll += rows;
     if (inKeyBatch()) this.drainAtBatchEnd();
     else this.drainScroll();
   }
 
-  private stopDrainBatch?: () => void;
-  private drainAtBatchEnd(): void {
+  stopDrainBatch?: () => void;
+  drainAtBatchEnd(): void {
     this.stopDrainBatch ??= onKeyBatchEnd(() => this.drainScroll());
   }
 
@@ -3125,9 +3039,9 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    *
    * The offset is still updated per notch, so nothing is lost and the view
    * lands exactly where the finger left it; only the drawing is coalesced. */
-  private scrollPaintQueued = false;
-  private stopScrollBatch?: () => void;
-  private scheduleScrollPaint(): void {
+  scrollPaintQueued = false;
+  stopScrollBatch?: () => void;
+  scheduleScrollPaint(): void {
     const draw = (): void => {
       this.scrollPaintQueued = false;
       if (this.closed || this.suspended) return;
@@ -3141,14 +3055,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   /** True while the reader is looking at something other than the live end. */
-  private get scrolledBack(): boolean { return this.alternateScrollback > 0; }
+  get scrolledBack(): boolean { return this.alternateScrollback > 0; }
 
   /** Keys that move the transcript rather than the draft, in the one place
    * both the prompt and the waiting band read them from. Reading back is
    * wanted most while a turn runs -- which is the half that had no scrolling
    * at all, so a page key or a wheel notch reached the draft editor instead.
    * Returns whether the key was spent here. */
-  private handleScrollKey(key: string): boolean {
+  handleScrollKey(key: string): boolean {
     if (isMouseEvent(key)) {
       // A left press, drag or release is a selection ClikCode makes itself:
       // with mouse reporting on, the terminal's own selection never sees it.
@@ -3177,7 +3091,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * that never moved selects nothing and copies nothing. No confirmation is
    * shown: the highlight is what was selected, and it clears when the text is
    * on the clipboard. Only a failure to copy says anything. */
-  private handleSelection(action: MouseAction): void {
+  handleSelection(action: MouseAction): void {
     // Scrolled back, the rows below the conversation are the composer and the
     // status line: a drag reaching them is reaching for the conversation's
     // next line, which the edge scroll brings up, not for the chrome.
@@ -3216,7 +3130,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * repaint lands a moment after the scroll, and a release in between was
    * placed by the old layout -- the selection snapped back to where the drag
    * reached the edge. */
-  private lineAtScreenRow(row: number): number {
+  lineAtScreenRow(row: number): number {
     return lineAtRow({
       length: this.alternateTranscript.length, trimmed: this.alternateTrimmed,
       above: this.alternateAbove, scrollback: this.alternateScrollback,
@@ -3225,7 +3139,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** What a selection copies, read from the conversation itself -- all of it,
    * including the lines scrolled out of view while it was being made. */
-  private selectionText(selection: Selection): string {
+  selectionText(selection: Selection): string {
     const range = orderedRange(selection);
     const rows: string[] = [];
     for (let line = range.start.row; line <= range.end.row; line += 1) {
@@ -3239,7 +3153,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * the conversation while it is scrolled back scrolls forward. Anywhere else
    * stops. The terminal sends a drag report only when the pointer moves, so
    * a timer carries the scroll while it is held still at the edge. */
-  private followSelectionEdge(row: number, col: number): void {
+  followSelectionEdge(row: number, col: number): void {
     const bottom = Math.max(0, this.alternateAbove - 1);
     const direction: 1 | -1 | 0 = row <= 0 ? 1 : row >= bottom && this.alternateScrollback > 0 ? -1 : 0;
     if (!direction) { this.stopSelectionScroll(); return; }
@@ -3251,7 +3165,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.stepSelectionScroll();
   }
 
-  private stepSelectionScroll(): void {
+  stepSelectionScroll(): void {
     const scroll = this.selectionScroll;
     const selection = this.selection;
     if (!scroll || !selection || this.closed || this.suspended) { this.stopSelectionScroll(); return; }
@@ -3262,14 +3176,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     selection.head = { row: selection.head.row - moved, col: scroll.direction < 0 ? Number.MAX_SAFE_INTEGER : scroll.col };
   }
 
-  private stopSelectionScroll(): void {
+  stopSelectionScroll(): void {
     if (!this.selectionScroll) return;
     clearInterval(this.selectionScroll.timer);
     this.selectionScroll = undefined;
   }
 
   /** The current frame again, so the highlight follows the pointer. */
-  private redrawSelection(): void {
+  redrawSelection(): void {
     if (this.closed || this.suspended || this.selecting) return;
     if (this.turn) this.paintWaiting(this.turn);
     else this.repaint();
@@ -3284,7 +3198,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * is worse, because then nothing settles at the live end: every press
    * bounces back into the history. So it stays a no-op, and it tells the
    * reader which way to go. */
-  private noteReadingDirection(): boolean {
+  noteReadingDirection(): boolean {
     if (this.scrolledBack || this.alternateTranscript.length === 0) return false;
     this.showTransientNotice(
       '↑ or Ctrl+B to read earlier messages',
@@ -3297,7 +3211,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
 
   /** Forget where on screen the live block sits: whoever writes next (the
    * shell, a vendor CLI, a resize) decides that now. */
-  private forgetScreenPosition(): void {
+  forgetScreenPosition(): void {
     this.alternatePrevious = [];
     this.cursorShown = undefined;
   }
@@ -3307,7 +3221,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.repaint();
   }
 
-  private showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
+  showTransientNotice(text: string, durationMs: number, redraw: () => void): void {
     this.clearTransientNotice();
     this.transientNotice = text;
     this.transientNoticeTimer = setTimeout(() => {
@@ -3318,7 +3232,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.transientNoticeTimer.unref();
   }
 
-  private clearTransientNotice(): void {
+  clearTransientNotice(): void {
     if (this.transientNoticeTimer) clearTimeout(this.transientNoticeTimer);
     this.transientNoticeTimer = undefined;
     this.transientNotice = undefined;
@@ -3328,7 +3242,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * would have done: give the terminal back exactly as close() would, stop
    * this process, and rebuild the live region below whatever the shell printed
    * once `fg` continues it. */
-  private suspendToShell(): void {
+  suspendToShell(): void {
     if (this.suspended || this.closed) return;
     this.suspended = true;
     if (this.responsePaintTimer) clearTimeout(this.responsePaintTimer);
@@ -3343,7 +3257,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     process.kill(process.pid, 'SIGTSTP');
   }
 
-  private readonly onContinue = (): void => {
+  readonly onContinue = (): void => {
     if (this.closed) return;
     this.retakeScreen();
     this.resumeInput?.();
@@ -3354,7 +3268,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   /** Remove a completed palette/picker as one frame. Painting an empty
    * composer here left its borders/status rows alive while the selected slash
    * command ran, which looked like a composer floating above blank space. */
-  private clearInteractiveFrame(): void {
+  clearInteractiveFrame(): void {
     this.renderFrame([], [], 0, 1, true);
   }
 
@@ -3696,7 +3610,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return runConversationBoard(this.pickerHost(), settings).finally(() => lifecycle('window.board.close'));
   }
 
-  private pickerHost(): OptionPickerHost {
+  pickerHost(): OptionPickerHost {
     return {
       paint: (composer, pickerOptions, selected, prompt, cursor, palette) =>
         this.paint(composer, pickerOptions, selected, prompt, cursor, palette),
