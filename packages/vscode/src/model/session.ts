@@ -9,7 +9,8 @@ export function emptyModel(): ChatModel {
   return { connection: 'starting', messages: [], notes: [], queued: [], running: false, plan: [], approvals: [], submissions: [], traces: [] };
 }
 
-/** What `choose provider` calls the provider a session runs on. */
+/** What `choose provider` calls the provider a session runs on, for a bridge
+ * that does not say (the `session` event's `providerId` does). */
 export function providerIdOf(session: HarnessSession): string | undefined {
   if (session.route === 'gateway') return 'gateway';
   if (session.route === 'clikcode-local') return 'clikcode-local';
@@ -23,11 +24,15 @@ export function freshFor(model: ChatModel): ChatModel {
   };
 }
 
-export function applySession(model: ChatModel, session: HarnessSession, account?: string, label?: IdeModelLabel): ChatModel {
+/** The provider the bridge named with the session (its `session` event). */
+export interface SessionProvider { id?: string; name?: string }
+
+export function applySession(model: ChatModel, session: HarnessSession, account?: string, label?: IdeModelLabel, provider?: SessionProvider): ChatModel {
+  const providerId = provider?.id ?? providerIdOf(session);
   if (model.sessionId && model.sessionId !== session.id) model = freshFor(model);
   // An empty chat that moves to another provider starts clean: what was said about the last one (a
   // cancelled sign-in) is not about this one, and would otherwise keep the welcome off the page.
-  else if (model.sessionId === session.id && model.providerId !== undefined && model.providerId !== providerIdOf(session)
+  else if (model.sessionId === session.id && model.providerId !== undefined && model.providerId !== providerId
     && !model.messages.length && !model.running && !model.pendingPrompt && model.notes.length) model = { ...model, notes: [] };
   const pending = session.pendingTurn;
   return {
@@ -36,7 +41,9 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     sessionId: session.id,
     title: session.name,
     harness: session.route === 'gateway' ? 'ClikDeploy Gateway' : session.route === 'clikcode-local' ? 'ClikCode Local' : session.nativeHarness,
-    providerId: providerIdOf(session),
+    providerId,
+    // A snapshot from the worker names no provider: the name stands while it is the same one.
+    ...(provider ? (provider.name ? { providerName: provider.name } : { providerName: undefined }) : model.providerId === providerId && model.providerName ? { providerName: model.providerName } : { providerName: undefined }),
     // Automatic reads as the Gateway's own `auto`, never as a model it routed to.
     model: session.route === 'gateway' && !session.model && !session.gatewayAgentId ? 'auto' : session.reported?.model ?? session.model ?? undefined,
     account,

@@ -194,6 +194,8 @@ export interface ChatModel {
   /** The provider id `choose provider` takes: a harness command, `gateway`,
    * or `clikcode-local`. */
   providerId?: string;
+  /** The provider's name as the bridge says it (absent from an older bridge). */
+  providerName?: string;
   /** The model id, as the session has it (sent back unchanged). */
   model?: string;
   /** The bridge's label for a model, from the last `session` event. */

@@ -69,14 +69,120 @@ const CONFIRMATION_PANELS: ReadonlySet<string> = new Set([
   'settings-updated', 'conversation-reset', 'account-removed', 'add-dir', 'copied',
 ]);
 
+/** A panel's text as the terminal draws it (colours included), or undefined
+ * for a payload with nothing in it for a person to read. */
+export function renderPanelText(payload: Record<string, unknown>): string | undefined {
+  if (payload.status === 'ready') {
+    const session = payload.session as HarnessSession;
+    const account = typeof payload.account === 'string' ? payload.account : undefined;
+    return (`\n${renderSessionCard(session, account)}\n\n${chalk.dim('Type your request, /provider to choose a provider, or /help for commands.')}\n\n`);
+  }
+  if (payload.panel === 'provider-selected' && typeof payload.harness === 'string') {
+    const account = typeof payload.account === 'string' ? ` · ${payload.account}` : '';
+    return (`\n${chalk.green('✓')} ${chalk.bold(payload.harness)} selected${chalk.dim(account)}\n\n`);
+  }
+  if (payload.panel === 'error' && typeof payload.message === 'string') {
+    // Running out of every account is an outcome, not a fault.
+    if (/^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/.test(payload.message.trim())) {
+      return `\n${payload.message}\n\n`;
+    }
+    return (`\n${chalk.red('Error:')} ${payload.message}\n\n`);
+  }
+  // Something worth knowing that did not stop anything.
+  if (payload.panel === 'notice' && typeof payload.message === 'string') {
+    return (`\n${chalk.yellow('Note:')} ${payload.message}\n\n`);
+  }
+  if (payload.panel === 'help' && typeof payload.helpText === 'string') {
+    return (`\n${chalk.bold('Commands')}\n\n${payload.helpText}\n\n`);
+  }
+  // /status asks for the setup, so it is drawn -- in the TUI too, where a
+  // `settings` panel (a setting just changed) is the status line's to show.
+  if ((payload.panel === 'settings' || payload.panel === 'status') && payload.session) {
+    const session = payload.session as HarnessSession;
+    const account = typeof payload.account === 'string' ? payload.account : undefined;
+    return (`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort or /provider.')}\n\n`);
+  }
+  if (payload.panel === 'accounts' && Array.isArray(payload.accounts)) {
+    const accounts = payload.accounts as Array<Record<string, unknown>>;
+    return (`\n${chalk.bold('Accounts')}\n` + (accounts.length ? accounts.map((account) => {
+      const selected = (payload.session as HarnessSession | undefined)?.accountId === account.id;
+      return `  ${selected ? chalk.green('●') : chalk.dim('○')} ${account.label} ${chalk.dim(`(${account.provider} · ${account.status})`)}`;
+    }).join('\n') : `  ${chalk.dim('No accounts yet.')}`) + `\n\n${chalk.dim('Use /account to choose, or /accounts login <provider> <label>.')}\n\n`);
+  }
+  if (payload.panel === 'accounts' && payload.selected && typeof payload.selected === 'object') {
+    const selected = payload.selected as Record<string, unknown>;
+    return (`\n${chalk.green('✓')} Account selected: ${chalk.bold(String(selected.label))} ${chalk.dim(`(${selected.provider})`)}\n\n`);
+  }
+  if (payload.panel === 'models' && Array.isArray(payload.models)) {
+    const models = payload.models as Array<Record<string, unknown>>;
+    return (`\n${chalk.bold('Models')}\n` + (models.length ? models.map((model) => {
+      // A Gateway model shows its price; a local account's model, where it comes from.
+      const note = 'price' in model ? (model.price ? `· ${model.price}` : '') : `(${model.provider ?? model.account})`;
+      // Named as its row's provider shows it: `big-pickle`, not `opencode/big-pickle`.
+      const shown = typeof model.label === 'string' && !('fits' in model) ? model.label : modelLabel(String(model.model), typeof model.provider === 'string' ? model.provider : undefined);
+      return `  ${shown}${note ? ` ${chalk.dim(String(note))}` : ''}`;
+    }).join('\n') : `  ${chalk.dim('Using the provider default. Set one with /model <name>.')}`) + '\n\n');
+  }
+  if (payload.panel === 'sessions' && Array.isArray(payload.sessions)) {
+    const sessions = payload.sessions as Array<Record<string, unknown>>;
+    return (`\n${chalk.bold('Sessions')}\n` + (sessions.length ? sessions.map((item) => `  ${String(item.id).slice(0, 8)}  ${item.harness ?? item.provider ?? 'unselected'}  ${chalk.dim(String(item.status))}`).join('\n') : `  ${chalk.dim('No saved sessions.')}`) + '\n\n');
+  }
+  if (payload.panel === 'conversation-reset') {
+    return (`\n${chalk.green('✓')} New conversation started\n\n`);
+  }
+  if (payload.panel === 'history' && Array.isArray(payload.messages)) {
+    const messages = payload.messages as Array<{ role: string; content: string }>;
+    // The summary the next provider is given for the opening turns.
+    const summary = payload.summary as { through: number; text: string } | undefined;
+    const opening = summary ? `${chalk.dim(`${summaryHeadline(summary).replace(/^f/, 'F')} -- what the next provider is given for them:`)}\n${summary.text.trim()}\n\n` : '';
+    return (`\n${chalk.bold('Conversation')}\n\n${opening}` + (messages.length
+      ? messages.map((message) => `${message.role === 'assistant' ? chalk.cyan('assistant') : chalk.green('you')}\n${message.content}`).join('\n\n')
+      : chalk.dim('No messages yet.')) + '\n\n');
+  }
+  if (payload.panel === 'diff' && typeof payload.diff === 'string') {
+    return (`\n${chalk.bold('Project changes')}\n\n${payload.diff || chalk.dim('Working tree is clean.')}\n\n`);
+  }
+  if (payload.panel === 'attachments' && Array.isArray(payload.attachments)) {
+    const attachments = payload.attachments as string[];
+    return (`\n${chalk.bold('Next-request attachments')}\n` + (attachments.length
+      ? attachments.map((path) => `  ${chalk.cyan('•')} ${compactPath(path)}`).join('\n')
+      : `  ${chalk.dim('None queued.')}`) + '\n\n');
+  }
+  if (payload.panel === 'usage' && typeof payload.text === 'string') {
+    return (`\n${payload.text}\n\n`);
+  }
+  if (payload.panel === 'usage' && payload.totals && typeof payload.totals === 'object') {
+    const totals = payload.totals as Record<string, unknown>;
+    return (`\n${chalk.bold('Usage')}\n${line('calls', totals.calls)}\n${line('input', `${totals.inputTokens ?? 0} tokens`)}\n${line('output', `${totals.outputTokens ?? 0} tokens`)}\n\n`);
+  }
+  if (payload.panel === 'session-closed') {
+    return (`\n${chalk.dim('Session saved. See you next time.')}\n\n`);
+  }
+  if (typeof payload.text === 'string') {
+    return (`\n${payload.text}\n\n`);
+  }
+  if (typeof payload.panel === 'string') {
+    const controls = Array.isArray(payload.controls) ? payload.controls.join(' · ') : '';
+    const title = payload.panel.replace(/-/g, ' ').replace(/^./, (value) => value.toUpperCase());
+    return (`\n${chalk.bold(title)}${controls ? `\n  ${chalk.dim(controls)}` : ''}\n\n`);
+  }
+  return undefined;
+}
+
+/** A rendered panel as a title and a body: the first line, and the rest. */
+export function panelParts(text: string): { title: string; body: string } {
+  const [title = '', ...rest] = text.replace(/^\n+|\n+$/g, '').split('\n');
+  return { title: title.replace(/\u001b\[[0-9;]*m/g, '').trim(), body: rest.join('\n').replace(/^\n+/, '') };
+}
+
 export function emitHarnessOutput(payload: Record<string, unknown>): void {
   if (isJsonDefaultMode()) return emitResult(payload);
   // In the TUI nothing may be written at the composer cursor: every human
   // rendering below goes through the prompter's panel instead of raw stdout.
   const write = (text: string): void => {
     if (!TERMINAL.active) { output.write(text); return; }
-    const [title = '', ...rest] = text.replace(/^\n+|\n+$/g, '').split('\n');
-    TERMINAL.active.panel(title.replace(/\u001b\[[0-9;]*m/g, '').trim(), rest.join('\n').replace(/^\n+/, ''));
+    const { title, body } = panelParts(text);
+    TERMINAL.active.panel(title, body);
   };
   if (TERMINAL.active) {
     // State-changing commands are reflected by the persistent status line. Raw
@@ -97,120 +203,8 @@ export function emitHarnessOutput(payload: Record<string, unknown>): void {
     // them; a headless caller still gets the payload, which is its answer.
     if (typeof payload.panel === 'string' && (CONFIRMATION_PANELS.has(payload.panel) || payload.changed === true)) return;
   }
-  if (payload.status === 'ready') {
-    const session = payload.session as HarnessSession;
-    const account = typeof payload.account === 'string' ? payload.account : undefined;
-    write(`\n${renderSessionCard(session, account)}\n\n${chalk.dim('Type your request, /provider to choose a provider, or /help for commands.')}\n\n`);
-    return;
-  }
-  if (payload.panel === 'provider-selected' && typeof payload.harness === 'string') {
-    const account = typeof payload.account === 'string' ? ` · ${payload.account}` : '';
-    write(`\n${chalk.green('✓')} ${chalk.bold(payload.harness)} selected${chalk.dim(account)}\n\n`);
-    return;
-  }
-  if (payload.panel === 'error' && typeof payload.message === 'string') {
-    // Running out of every account is an outcome, not a fault.
-    if (/^(?:All accounts exhausted|Usage Exhausted|Credits Exhausted)\b/.test(payload.message.trim())) {
-      write(`\n${payload.message}\n\n`);
-      return;
-    }
-    write(`\n${chalk.red('Error:')} ${payload.message}\n\n`);
-    return;
-  }
-  // Something worth knowing that did not stop anything.
-  if (payload.panel === 'notice' && typeof payload.message === 'string') {
-    write(`\n${chalk.yellow('Note:')} ${payload.message}\n\n`);
-    return;
-  }
-  if (payload.panel === 'help' && typeof payload.helpText === 'string') {
-    write(`\n${chalk.bold('Commands')}\n\n${payload.helpText}\n\n`);
-    return;
-  }
-  // /status asks for the setup, so it is drawn -- in the TUI too, where a
-  // `settings` panel (a setting just changed) is the status line's to show.
-  if ((payload.panel === 'settings' || payload.panel === 'status') && payload.session) {
-    const session = payload.session as HarnessSession;
-    const account = typeof payload.account === 'string' ? payload.account : undefined;
-    write(`\n${chalk.bold('Current setup')}\n${renderSessionCard(session, account)}\n\n${chalk.dim('Change with /model, /effort or /provider.')}\n\n`);
-    return;
-  }
-  if (payload.panel === 'accounts' && Array.isArray(payload.accounts)) {
-    const accounts = payload.accounts as Array<Record<string, unknown>>;
-    write(`\n${chalk.bold('Accounts')}\n` + (accounts.length ? accounts.map((account) => {
-      const selected = (payload.session as HarnessSession | undefined)?.accountId === account.id;
-      return `  ${selected ? chalk.green('●') : chalk.dim('○')} ${account.label} ${chalk.dim(`(${account.provider} · ${account.status})`)}`;
-    }).join('\n') : `  ${chalk.dim('No accounts yet.')}`) + `\n\n${chalk.dim('Use /account to choose, or /accounts login <provider> <label>.')}\n\n`);
-    return;
-  }
-  if (payload.panel === 'accounts' && payload.selected && typeof payload.selected === 'object') {
-    const selected = payload.selected as Record<string, unknown>;
-    write(`\n${chalk.green('✓')} Account selected: ${chalk.bold(String(selected.label))} ${chalk.dim(`(${selected.provider})`)}\n\n`);
-    return;
-  }
-  if (payload.panel === 'models' && Array.isArray(payload.models)) {
-    const models = payload.models as Array<Record<string, unknown>>;
-    write(`\n${chalk.bold('Models')}\n` + (models.length ? models.map((model) => {
-      // A Gateway model shows its price; a local account's model, where it comes from.
-      const note = 'price' in model ? (model.price ? `· ${model.price}` : '') : `(${model.provider ?? model.account})`;
-      // Named as its row's provider shows it: `big-pickle`, not `opencode/big-pickle`.
-      const shown = typeof model.label === 'string' && !('fits' in model) ? model.label : modelLabel(String(model.model), typeof model.provider === 'string' ? model.provider : undefined);
-      return `  ${shown}${note ? ` ${chalk.dim(String(note))}` : ''}`;
-    }).join('\n') : `  ${chalk.dim('Using the provider default. Set one with /model <name>.')}`) + '\n\n');
-    return;
-  }
-  if (payload.panel === 'sessions' && Array.isArray(payload.sessions)) {
-    const sessions = payload.sessions as Array<Record<string, unknown>>;
-    write(`\n${chalk.bold('Sessions')}\n` + (sessions.length ? sessions.map((item) => `  ${String(item.id).slice(0, 8)}  ${item.harness ?? item.provider ?? 'unselected'}  ${chalk.dim(String(item.status))}`).join('\n') : `  ${chalk.dim('No saved sessions.')}`) + '\n\n');
-    return;
-  }
-  if (payload.panel === 'conversation-reset') {
-    write(`\n${chalk.green('✓')} New conversation started\n\n`);
-    return;
-  }
-  if (payload.panel === 'history' && Array.isArray(payload.messages)) {
-    const messages = payload.messages as Array<{ role: string; content: string }>;
-    // The summary the next provider is given for the opening turns.
-    const summary = payload.summary as { through: number; text: string } | undefined;
-    const opening = summary ? `${chalk.dim(`${summaryHeadline(summary).replace(/^f/, 'F')} -- what the next provider is given for them:`)}\n${summary.text.trim()}\n\n` : '';
-    write(`\n${chalk.bold('Conversation')}\n\n${opening}` + (messages.length
-      ? messages.map((message) => `${message.role === 'assistant' ? chalk.cyan('assistant') : chalk.green('you')}\n${message.content}`).join('\n\n')
-      : chalk.dim('No messages yet.')) + '\n\n');
-    return;
-  }
-  if (payload.panel === 'diff' && typeof payload.diff === 'string') {
-    write(`\n${chalk.bold('Project changes')}\n\n${payload.diff || chalk.dim('Working tree is clean.')}\n\n`);
-    return;
-  }
-  if (payload.panel === 'attachments' && Array.isArray(payload.attachments)) {
-    const attachments = payload.attachments as string[];
-    write(`\n${chalk.bold('Next-request attachments')}\n` + (attachments.length
-      ? attachments.map((path) => `  ${chalk.cyan('•')} ${compactPath(path)}`).join('\n')
-      : `  ${chalk.dim('None queued.')}`) + '\n\n');
-    return;
-  }
-  if (payload.panel === 'usage' && typeof payload.text === 'string') {
-    write(`\n${payload.text}\n\n`);
-    return;
-  }
-  if (payload.panel === 'usage' && payload.totals && typeof payload.totals === 'object') {
-    const totals = payload.totals as Record<string, unknown>;
-    write(`\n${chalk.bold('Usage')}\n${line('calls', totals.calls)}\n${line('input', `${totals.inputTokens ?? 0} tokens`)}\n${line('output', `${totals.outputTokens ?? 0} tokens`)}\n\n`);
-    return;
-  }
-  if (payload.panel === 'session-closed') {
-    write(`\n${chalk.dim('Session saved. See you next time.')}\n\n`);
-    return;
-  }
-  if (typeof payload.text === 'string') {
-    write(`\n${payload.text}\n\n`);
-    return;
-  }
-  if (typeof payload.panel === 'string') {
-    const controls = Array.isArray(payload.controls) ? payload.controls.join(' · ') : '';
-    const title = payload.panel.replace(/-/g, ' ').replace(/^./, (value) => value.toUpperCase());
-    write(`\n${chalk.bold(title)}${controls ? `\n  ${chalk.dim(controls)}` : ''}\n\n`);
-    return;
-  }
+  const text = renderPanelText(payload);
+  if (text !== undefined) { write(text); return; }
   // No panel and no text: nothing in it is for a person to read.
   if (TERMINAL.active) return;
   emitResult(payload);

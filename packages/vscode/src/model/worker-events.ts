@@ -14,7 +14,7 @@ import { endTurn } from './traces';
 import type { ChatModel } from './types';
 
 
-export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent): ChatModel {
+export function applyWorkerEvent(model: ChatModel, sessionId: string, event: WorkerEvent, level?: 'info' | 'warning' | 'error'): ChatModel {
   if (model.sessionId && sessionId !== model.sessionId) return model;
   switch (event.type) {
 
@@ -109,7 +109,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // The terminal colours its notes: yellow for an account switch or a
       // limit, red for a failure. The colour is the level.
       return withNote(model, {
-        kind: 'notice', level: noticeLevel(event.message), text: stripAnsi(event.message),
+        kind: 'notice', level: (event.type === 'note' ? level : undefined) ?? noticeLevel(event.message), text: stripAnsi(event.message),
         ...(event.type === 'note' && event.seq !== undefined ? { seq: event.seq } : {}),
         ...(event.type === 'note' && event.responseOffset !== undefined ? { offset: event.responseOffset } : {}),
       });
