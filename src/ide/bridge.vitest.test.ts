@@ -250,3 +250,41 @@ describe('the editor bridge polling usage', () => {
     }
   });
 });
+
+describe('the editor bridge and Stop', () => {
+  const stopSetup = () => {
+    const sent: Array<{ type: string; restoreDraft?: boolean }> = [];
+    const bridge = new IdeBridge({} as Conf, { send: () => undefined });
+    const inner = bridge as unknown as Internals & { worker?: { sessionId: string; client: { send(command: { type: string; restoreDraft?: boolean }): void } } };
+    inner.sessionId = 's1';
+    inner.worker = { sessionId: 's1', client: { send: (command) => { sent.push(command); } } };
+    return { bridge, inner, sent };
+  };
+
+  it('asks again while the turn is still running, without taking back the first Stop\'s draft', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, inner, sent } = stopSetup();
+      inner.workerTurnRunning = true;
+      bridge.handle({ type: 'cancel', restoreDraft: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toEqual([{ type: 'cancel', restoreDraft: true }]);
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(sent.at(-1)).toEqual({ type: 'cancel', restoreDraft: false });
+      inner.onWorkerEvent('s1', {}, { type: 'waiting-stop' } as WorkerEvent);
+      const count = sent.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(sent.length, 'it stops asking once the turn ended').toBe(count);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('brings the editor up to date when the Stop found no turn, instead of leaving it stopping', async () => {
+    vi.useFakeTimers();
+    try {
+      const { bridge, sent } = stopSetup();
+      bridge.handle({ type: 'cancel', restoreDraft: false });
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(sent.map((command) => command.type)).toEqual(['cancel', 'refresh']);
+    } finally { vi.useRealTimers(); }
+  });
+});

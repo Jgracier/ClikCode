@@ -391,3 +391,16 @@ describe('interactive login hangs fail fast as a sign-in', () => {
     expect(interactiveLoginPrompt('Waiting for the build to finish')).toBeUndefined();
   });
 });
+
+describe('a spent plan filed under a rate-limit kind', () => {
+  const session = "Internal error: You've hit your session limit · resets 12:50pm (America/Denver)";
+  it('is out of usage, so the turn moves to the next account instead of waiting on a throttle', () => {
+    // Claude Code's ACP reports this with a rate-limit error kind (real turn, 2026-10-12).
+    expect(classifyAccountFailure(new Error(session), { errorKind: 'rate_limit' })).toBe('quota-exhausted');
+    expect(classifyAccountFailure(new Error('5-hour limit reached ∙ resets 3pm'))).toBe('quota-exhausted');
+  });
+  it('still reads a plain rate limit as a throttle', () => {
+    expect(classifyAccountFailure(new Error('Rate limit exceeded, retry shortly'), { errorKind: 'rate_limit' })).toBe('temporarily-throttled');
+    expect(classifyAccountFailure(new Error('429 too many requests'), { statusCode: 429 })).toBe('temporarily-throttled');
+  });
+});
