@@ -221,7 +221,7 @@ export async function runAgentTurn(input: {
     // back when the stream ends; it is owed to the screen.
     releaseHeld();
     const usage = { ...agentTurnUsage(harnessTurn.usage), ...turnUsage };
-    // The loop's own reason wins where it ended the turn early (max-steps).
+    // The loop's own reason wins where it ended the turn early (no progress, a model error).
     const loopStop = turnStopReason(harnessTurn.stopReason);
     if (loopStop && loopStop !== 'completed') usage.stopReason = loopStop;
     usageRecorded = true;

@@ -71,6 +71,8 @@ export interface OpenAIModelClientOptions {
 export interface RequestLimits {
   /** Chat messages, the system prompt included. */
   messages?: number;
+  /** Conversation items: a server that counts what a message carries (a call, a result, a text) counts more than messages. */
+  items?: number;
   tools?: number;
   /** One tool's `parameters`, serialized. */
   schemaBytes?: number;
@@ -94,21 +96,29 @@ function withoutDescriptions(value: unknown): unknown {
  * here: the loop compacts it (CONTEXT_TOO_LARGE). */
 export function fitToLimits(system: string, tools: readonly ToolSpec[], limits: RequestLimits): { system: string; tools: ToolSpec[] } {
   const fitted: ToolSpec[] = [];
+  const dropped: string[] = [];
   for (const tool of tools) {
-    if (limits.tools !== undefined && fitted.length >= limits.tools) break;
+    if (limits.tools !== undefined && fitted.length >= limits.tools) { dropped.push(tool.name); continue; }
     if (limits.schemaBytes === undefined || bytes(JSON.stringify(tool.parameters)) <= limits.schemaBytes) { fitted.push(tool); continue; }
     const parameters = withoutDescriptions(tool.parameters) as Record<string, unknown>;
     if (bytes(JSON.stringify(parameters)) <= limits.schemaBytes) fitted.push({ ...tool, parameters });
+    else dropped.push(tool.name);
   }
+  // A tool the server will not take is not offered -- and the model is told so, rather than left to
+  // wonder why a tool it was promised is not there.
+  const toolNote = dropped.length
+    ? `\n\n[${dropped.length} tool${dropped.length === 1 ? ' was' : 's were'} not offered because the server's limits would refuse the request: ${dropped.slice(0, 8).join(', ')}${dropped.length > 8 ? ', …' : ''}.]`
+    : '';
+  const budget = limits.systemBytes === undefined ? undefined : limits.systemBytes - bytes(toolNote);
   let fittedSystem = system;
-  if (limits.systemBytes !== undefined && bytes(system) > limits.systemBytes) {
+  if (budget !== undefined && bytes(system) > budget) {
     const note = '\n\n[The rest of the system prompt was cut to fit the server\'s limit.]';
-    let keep = Buffer.from(system, 'utf8').subarray(0, Math.max(0, limits.systemBytes - bytes(note))).toString('utf8');
+    let keep = Buffer.from(system, 'utf8').subarray(0, Math.max(0, budget - bytes(note))).toString('utf8');
     // A character cut in half decodes to U+FFFD; drop it.
     keep = keep.replace(/\uFFFD$/, '');
     fittedSystem = `${keep}${note}`;
   }
-  return { system: fittedSystem, tools: fitted };
+  return { system: `${fittedSystem}${toolNote}`, tools: fitted };
 }
 
 const FIRST_CHUNK_TIMEOUT_MS = 30 * 60_000;
@@ -312,6 +322,9 @@ export class OpenAIModelClient implements ModelClient {
     const doFetch = options.fetchImpl ?? fetch;
     const fitted = options.limits ? fitToLimits(request.system, request.tools, options.limits) : { system: request.system, tools: request.tools };
     const messages = toChatMessages(fitted.system, request.items, this.acceptsImages, options.model);
+    if (options.limits?.items !== undefined && request.items.length > options.limits.items) {
+      throw new ModelClientError(`${this.label}: the conversation has ${request.items.length} items, more than the ${options.limits.items} one request may carry`, { kind: 'other', code: 'CONTEXT_TOO_LARGE' });
+    }
     if (options.limits?.messages !== undefined && messages.length > options.limits.messages) {
       throw new ModelClientError(`${this.label}: the conversation has ${messages.length} messages, more than the ${options.limits.messages} one request may carry`, { kind: 'other', code: 'CONTEXT_TOO_LARGE' });
     }

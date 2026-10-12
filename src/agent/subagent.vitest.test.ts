@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { FileCheckpointStore } from './file-checkpoints.js';
 import { runGatewayHarnessTurn } from './run-turn.js';
-import { SUBAGENT_MAX_STEPS } from './subagent.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
 import type { GatewayHarnessTurnInput, ModelClient, ModelStepRequest, ModelStepResult } from './model-client.js';
 
@@ -299,18 +298,18 @@ describe('task sub-agents', () => {
     expect(reports[1].contextTokens).toBe(reports[0].contextTokens);
   });
 
-  it('stops at its step cap and says the answer is partial', async () => {
+  it('is not cut off at a step count: a long investigation finishes and answers', async () => {
+    const steps = 45;
     const client = new RoutedModelClient({
-      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'task', args: { prompt: 'endless' } }] }, { text: 'done' }] },
-      endless: { script: [{ text: 'Found part of it.', toolCalls: [{ name: 'list_dir', args: {} }] }], fallback: { toolCalls: [{ name: 'list_dir', args: {} }] } },
+      [PARENT_PROMPT]: { script: [{ toolCalls: [{ name: 'task', args: { prompt: 'long' } }] }, { text: 'done' }] },
+      long: { script: [], fallback: (_request: unknown, index: number) => (index < steps - 1 ? { toolCalls: [{ name: 'list_dir', args: { path: '.' }, id: `l${index}` }] } : { text: 'Found it after a long search.' }) },
     });
     const result = await runGatewayHarnessTurn(turn(client).input);
     expect(result.stopReason).toBe('completed');
-    expect(client.requests('endless')).toHaveLength(SUBAGENT_MAX_STEPS);
+    expect(client.requests('long')).toHaveLength(steps);
     const [output] = toolResults(client.requests(PARENT_PROMPT)[1]);
-    expect(output).toMatch(/^Found part of it\./);
-    expect(output).toMatch(new RegExp(`${SUBAGENT_MAX_STEPS}-step limit`));
-    expect(output).not.toMatch(/Send another message/);
+    expect(output).toMatch(/^Found it after a long search\./);
+    expect(output).not.toMatch(/step limit|partial/);
   });
 
   it("puts a sub-agent's approvals through the parent's approver", async () => {

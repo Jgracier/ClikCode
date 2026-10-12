@@ -3,7 +3,7 @@
 import os from 'node:os';
 import path from 'node:path';
 import { ConversationStore } from './conversation.js';
-import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
+import { buildSystemPrompt, compactConversation, environmentNote, needsEnvironmentNote, DEFAULT_CONTEXT_WINDOW, estimateContextTokens, MAX_REQUEST_ITEMS, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, toolOutputCap } from './context.js';
 import { FileCheckpointStore, newTurnId } from './file-checkpoints.js';
 import { claudeToolName } from './hooks.js';
 import { addPermissionAllowRule, buildApprovalPrompt, decidePermission, loadPermissionRules, parsePermissionRules, suggestPermissionRule, visibleTools } from './permissions.js';
@@ -27,14 +27,18 @@ import { createSubagentRunner } from './subagent.js';
 import { BackgroundAgents, formatAgentNotifications } from './background-agents.js';
 import { completedArguments } from './models/openai-client.js';
 import { TASK_TOOL_NAME } from './tools/task.js';
+import { StallGuard, STALL_LIMIT } from './stall.js';
 import { categoryOf, GATEWAY_HARNESS_COMMAND } from '../harness/protocol/tools.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
-const DEFAULT_MAX_STEPS = 60;
-/** Retries of one model step that failed before saying anything. */
-const MAX_STEP_RETRIES = 2;
+/** A model step that failed before saying anything is retried for as long as this much waiting in
+ * total, then the failure is the answer. Time, not a count: a short blip costs one quick retry, a
+ * longer one gets the patience it needs, and an outage ends in minutes with the real error. */
+const STEP_RETRY_BUDGET_SECONDS = 300;
+/** The longest single wait of the backoff (1, 2, 4, 8, 16, 30, 30 ...). */
 const STEP_RETRY_CAP_SECONDS = 30;
-const NO_PROGRESS_LIMIT = 3;
+/** The longest a server's own Retry-After is honoured for one wait. */
+const RETRY_AFTER_CAP_SECONDS = 120;
 const STREAM_EVENT_INTERVAL_MS = 150;
 /** Times one turn goes on with an answer the output limit cut off, as a
  * vendor CLI does, before it stops and says the answer was cut. */
@@ -85,14 +89,27 @@ const MAX_STOP_HOOK_CONTINUES = 3;
  * a retryable code, a 5xx, or no response at all. Everything else -- credit,
  * sign-in, a rejected request, no model, the kill switch -- is the answer. */
 export function stepRecovery(error: unknown): 'compact' | 'retry' | undefined {
-  const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown };
+  const record = (error ?? {}) as { code?: unknown; statusCode?: unknown; kind?: unknown; message?: unknown };
   const code = typeof record.code === 'string' ? record.code : undefined;
   if (code === 'CONTEXT_TOO_LARGE') return 'compact';
+  // The Gateway bounds a request's item count and answers a plain 400 (not CONTEXT_TOO_LARGE): the
+  // conversation is too long in entries, which only summarizing shortens.
+  if (record.statusCode === 400 && typeof record.message === 'string' && /items exceeds \d+ entries/i.test(record.message)) return 'compact';
   if (code && RETRYABLE_STEP_CODES.has(code)) return 'retry';
   if (code) return undefined;
   const status = typeof record.statusCode === 'number' ? record.statusCode : undefined;
   if (status === undefined) return record.kind === 'other' ? 'retry' : undefined;
   return status >= 500 && status !== 501 ? 'retry' : undefined;
+}
+
+/** How long to wait before retry number `attempt` (1-based) of a failed step: an exponential backoff
+ * with jitter, so a fleet of clients does not come back in the same instant -- never shorter than
+ * the server's own Retry-After when it gave one (a `Retry-After: 0` from a server that keeps
+ * failing must not become a hot loop). */
+export function retryDelaySeconds(attempt: number, retryAfter?: number, random: () => number = Math.random): number {
+  const backoff = Math.min(STEP_RETRY_CAP_SECONDS, 2 ** Math.max(0, attempt - 1)) * (0.8 + 0.4 * random());
+  const hinted = retryAfter !== undefined && Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(RETRY_AFTER_CAP_SECONDS, retryAfter) : 0;
+  return Math.max(backoff, hinted);
 }
 
 /** Waits, unless the turn is cancelled first. */
@@ -168,7 +185,6 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   const tools = input.swarmDelegate
     ? exposure.all.map((tool) => tool.name === TASK_TOOL_NAME ? { ...tool, description: `${tool.description}${swarmTaskNote}` } : tool)
     : exposure.all;
-  const maxSteps = Math.max(1, Math.floor(input.maxSteps ?? DEFAULT_MAX_STEPS));
 
   const [loaded, savedRules, baseSystem, notebooksOnDisk] = await abortable(Promise.all([
     store.load(),
@@ -255,9 +271,10 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
   let needsSeparator = false;
   let steps = 0;
   let approvalChain: Promise<unknown> = Promise.resolve();
-  const failures = new Map<string, number>();
+  const stall = new StallGuard();
   let stalledCall: ModelToolCall | undefined;
   let stepRetries = 0;
+  let retryWaitedSeconds = 0;
   let compactedForSize = false;
   let lengthContinues = 0;
   /** The calls of the current step shown while they were written, by id,
@@ -469,7 +486,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
     const compact = async (system: string, targetTokens?: number): Promise<boolean> => {
       input.onPhase?.('compacting context');
       if (!input.subagent && input.hooks?.preCompact) await abortable(input.hooks.preCompact({ ...turnHookInfo, trigger: 'auto' }), signal);
-      const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, ...(targetTokens !== undefined ? { targetTokens } : {}) }), signal);
+      const compacted = await abortable(compactConversation({ items, modelClient: input.modelClient, signal, system, maxItems: MAX_REQUEST_ITEMS, ...(targetTokens !== undefined ? { targetTokens } : {}) }), signal);
       if (compacted.stage === 'none') return false;
       items = compacted.items;
       lastStepUsage = undefined;
@@ -496,7 +513,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
 
       const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
       const system = session.plan.active ? `${baseSystem}\n\n${PLAN_MODE_INSTRUCTIONS}` : baseSystem;
-      if (shouldCompact(estimateContextTokens(system, items, lastStepUsage, items.slice(itemsAtLastUsage)), window)) {
+      if (items.length > MAX_REQUEST_ITEMS || shouldCompact(estimateContextTokens(system, items, lastStepUsage, items.slice(itemsAtLastUsage)), window)) {
         await compact(system, compactionThreshold(window) * 0.75);
       }
 
@@ -590,13 +607,16 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
           // does not fit, which outranks this side's estimate of whether it does.
           if (await compact(system)) continue;
         }
-        if (recovery === 'retry' && stepRetries < MAX_STEP_RETRIES) {
-          stepRetries++;
+        if (recovery === 'retry') {
           const after = (error as { retryAfter?: unknown }).retryAfter;
-          const wait = Math.min(STEP_RETRY_CAP_SECONDS, typeof after === 'number' && after >= 0 ? after : 2 ** stepRetries);
-          input.onPhase?.(`retrying in ${Math.ceil(wait)}s`);
-          await pause(wait, signal);
-          continue;
+          const wait = retryDelaySeconds(stepRetries + 1, typeof after === 'number' ? after : undefined);
+          if (retryWaitedSeconds + wait <= STEP_RETRY_BUDGET_SECONDS) {
+            stepRetries++;
+            retryWaitedSeconds += wait;
+            input.onPhase?.(`retrying in ${Math.ceil(wait)}s`);
+            await pause(wait, signal);
+            continue;
+          }
         }
         const classified = classifyModelError(error);
         const message = error instanceof Error ? error.message : String(error);
@@ -609,6 +629,7 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       }
       steps++;
       stepRetries = 0;
+      retryWaitedSeconds = 0;
       compactedForSize = false;
 
       // A client without a delta channel still has to reach the UI.
@@ -732,23 +753,16 @@ export async function runGatewayHarnessTurn(input: GatewayHarnessTurnInput): Pro
       }
 
       for (const { call, result: outcome } of outcomes) {
-        const key = `${call.name}\0${stableStringify(call.args)}`;
-        if (!outcome.isError) { failures.delete(key); continue; }
-        const count = (failures.get(key) ?? 0) + 1;
-        failures.set(key, count);
-        if (count >= NO_PROGRESS_LIMIT) stalledCall ??= call;
+        const toolClass = tools.find((candidate) => candidate.name === call.name)?.class;
+        const stalled = stall.record(`${call.name}\0${stableStringify(call.args)}`, {
+          failed: Boolean(outcome.isError),
+          mayChangeState: toolClass === 'write' || toolClass === 'exec',
+        });
+        if (stalled) stalledCall ??= call;
       }
       if (stalledCall) {
-        await append({ type: 'text', role: 'user', text: `[harness] The call ${stalledCall.name}(${JSON.stringify(stalledCall.args).slice(0, 400)}) has now failed ${NO_PROGRESS_LIMIT} times with identical arguments. Repeating it will not work. Tools are disabled for this reply: explain to the user what you were trying to do, what is failing, and what you need from them.` });
+        await append({ type: 'text', role: 'user', text: `[harness] The call ${stalledCall.name}(${JSON.stringify(stalledCall.args).slice(0, 400)}) has now failed ${STALL_LIMIT} times in a row with identical arguments and nothing changed in between. Repeating it will not work. Tools are disabled for this reply: explain to the user what you were trying to do, what is failing, and what you need from them.` });
         continue;
-      }
-
-      if (steps >= maxSteps) {
-        const note = `[Stopped after ${maxSteps} steps without finishing. Send another message to continue.]`;
-        input.onResponseDelta?.(`${needsSeparator ? '\n\n' : ''}${note}`, 'append');
-        segments.push(note);
-        await append({ type: 'text', role: 'assistant', text: note });
-        return result({ stopReason: 'max-steps' });
       }
     }
   } finally {
