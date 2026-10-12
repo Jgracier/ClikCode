@@ -164,7 +164,7 @@ export function copilotThreadFiles(record: CanonicalRecord, options: CopilotThre
  *  notes.txt, src/app.ts." The CLI's `--session-id <id>` sent the same
  *  history to the model (checked against a local BYOK endpoint), so the
  *  thread is not pinned to either transport. */
-export const copilotThreadWriter: NativeThreadWriter = {
+const copilotThreadWriter: NativeThreadWriter = {
   testedVersions: ['1.0.91'],
   versionOk: testedVersion(['1.0.91']),
   async write(record, context) {

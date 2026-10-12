@@ -40,7 +40,7 @@ export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: stri
 /** The Gateway's own error codes (its OpenAI-compatible API) as the codes
  * the agent loop acts on (run-turn.ts stepRecovery) or the gateway route
  * checks (gateway/harness.ts). */
-export const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
+const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
   rate_limit_exceeded: 'MODEL_RATE_LIMITED',
   upstream_error: 'MODEL_ERROR',
   internal_error: 'INTERNAL_ERROR',
@@ -53,7 +53,7 @@ export const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
 
 /** What the Gateway refuses with a 400 (`invalid_request`): a request is
  * fitted to these, or compacted, before it is sent. */
-export const GATEWAY_REQUEST_LIMITS = { messages: 2_000, items: 2_000, tools: 128, schemaBytes: 16 * 1024, systemBytes: 64 * 1024 } as const;
+const GATEWAY_REQUEST_LIMITS = { messages: 2_000, items: 2_000, tools: 128, schemaBytes: 16 * 1024, systemBytes: 64 * 1024 } as const;
 
 /** A Gateway refusal with what to do about it added: the Gateway's own
  * message names the model or the limit, and the hint says where to go next. */

@@ -9,7 +9,7 @@ import { HYPERLINK_CLOSE } from './hyperlinks.js';
  * them up there made the two modules import each other. They are pure
  * data with no dependencies, so the lower module is their right home. */
 export const OSC8_SEQUENCE = /^\u001b\]8;[^\u0007\u001b\n]*\u001b\\$/;
-export const ZERO_WIDTH_SEQUENCES = /\u001b\[[0-9;]*m|\u001b\]8;[^\u0007\u001b\n]*\u001b\\/g;
+const ZERO_WIDTH_SEQUENCES = /\u001b\[[0-9;]*m|\u001b\]8;[^\u0007\u001b\n]*\u001b\\/g;
 export const TAB_WIDTH = 4;
 
 export function visibleSlice(value: string, width: number): string {

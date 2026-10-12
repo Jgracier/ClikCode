@@ -20,11 +20,11 @@ import { clikcodeLauncher } from '../search/mcp-entry.js';
 import { writePiSwarmExtension } from './pi-extension.js';
 
 export const SWARM_MCP_NAME = 'clikcode-swarm';
-export const SWARM_MCP_COMMAND = 'swarm-mcp';
+const SWARM_MCP_COMMAND = 'swarm-mcp';
 /** Set on a clerk's process: a clerk never gets the swarm tool. */
 export const SWARM_CLERK_ENV = 'CLIKCODE_SWARM_CLERK';
 
-export interface SwarmServer { command: string; args: string[]; env: Record<string, string> }
+interface SwarmServer { command: string; args: string[]; env: Record<string, string> }
 
 function launch(): { command: string; args: string[] } | undefined {
   const launcher = clikcodeLauncher();

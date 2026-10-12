@@ -70,7 +70,7 @@ const PHASE_TOLERANCE_MS = 15 * MINUTE;
  * round, and a turn's start is not quite when the vendor counted it. */
 const RESET_SLACK_MS = 2 * MINUTE;
 
-export interface QuotaRefusal {
+interface QuotaRefusal {
   at: string;
   /** Spent in each candidate window just before the refused turn. Recomputed
    * from the ledger while it still covers the moment; this is what is left

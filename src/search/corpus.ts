@@ -39,7 +39,7 @@ export interface SessionDoc {
 
 /** One tool call as a line of text: its label, failed or not, and the
  * output it kept. */
-export function activityText(event: { kind: string; label: string; output?: readonly string[] }, outputLines = Number.POSITIVE_INFINITY): string {
+function activityText(event: { kind: string; label: string; output?: readonly string[] }, outputLines = Number.POSITIVE_INFINITY): string {
   const status = event.kind === 'tool-error' ? ' (failed)' : event.kind === 'tool-start' ? ' (not finished)' : '';
   const output = (event.output ?? []).slice(0, outputLines).map((line) => `    ${line}`);
   return [`  ⏺ ${event.label}${status}`, ...output].join('\n');
@@ -55,7 +55,7 @@ function fingerprintOf(role: string, text: string): string {
   return `${role}:${text.length}:${(hash >>> 0).toString(36)}`;
 }
 
-export function messageDoc(message: TranscriptMessage): MessageDoc {
+function messageDoc(message: TranscriptMessage): MessageDoc {
   const content = message.content ?? '';
   const calls = message.role === 'assistant' ? readTurnActivities(message.activities, content.length) : [];
   const text = calls.length ? `${content}\n${calls.map((activity) => activityText(activity.event)).join('\n')}` : content;
@@ -123,7 +123,7 @@ export async function sessionDoc(id: string): Promise<SessionDoc | undefined> {
 
 /** One message of a conversation as the user numbers it: which chat it is
  * stored in, and where. */
-export interface ViewEntry {
+interface ViewEntry {
   sessionId: string;
   /** Its index in that chat's transcript. */
   index: number;
@@ -162,7 +162,7 @@ function sharedPrefix(left: readonly MessageDoc[], right: readonly MessageDoc[])
   return index;
 }
 
-export function buildView(branches: ReadonlyArray<{ id: string; doc: SessionDoc | undefined }>): ConversationView {
+function buildView(branches: ReadonlyArray<{ id: string; doc: SessionDoc | undefined }>): ConversationView {
   const entries: ViewEntry[] = [];
   const positions = new Map<string, number[]>();
   const placed: Array<{ messages: readonly MessageDoc[]; at: number[] }> = [];

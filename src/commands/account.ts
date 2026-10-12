@@ -43,7 +43,7 @@ let emitHarnessOutput: EmitHarnessOutput = () => {};
 export function setEmitHarnessOutput(fn: EmitHarnessOutput): void { emitHarnessOutput = fn; }
 
 /** What happens at an account's limit, said once with the list. */
-export const ACCOUNT_LIMIT_NOTE = 'At an account\'s usage limit, ClikCode moves the chat to another account of the same provider that has usage left (`fallbacks`), and the turn carries on. With none left, it offers another provider.';
+const ACCOUNT_LIMIT_NOTE = 'At an account\'s usage limit, ClikCode moves the chat to another account of the same provider that has usage left (`fallbacks`), and the turn carries on. With none left, it offers another provider.';
 
 /** How long the list waits for the probes it starts before it shows what it has. */
 const ACCOUNT_LIST_PROBE_WAIT_MS = 1_500;

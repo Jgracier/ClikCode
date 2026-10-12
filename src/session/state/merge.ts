@@ -98,7 +98,7 @@ function mergeSessionMeta(baseline: SessionMeta | undefined, working: SessionMet
   return merged;
 }
 
-export function splitSession(session: HarnessSession): { meta: SessionMeta; transcript: SessionTranscript; claim: HarnessSession['claim'] } {
+function splitSession(session: HarnessSession): { meta: SessionMeta; transcript: SessionTranscript; claim: HarnessSession['claim'] } {
   const { messages: _messages, pendingTurn: _pendingTurn, claim, ...meta } = session;
   return { meta, transcript: transcriptOf(session), claim };
 }

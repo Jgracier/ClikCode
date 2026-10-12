@@ -155,7 +155,7 @@ export function stepThought(
 }
 
 /** `mark` as it is kept: every text bounded. */
-export function boundMark(mark: TurnMark): TurnMark {
+function boundMark(mark: TurnMark): TurnMark {
   switch (mark.kind) {
     case 'thought':
       return { ...mark, ...(mark.heading ? { heading: clip(mark.heading, HEADING_CHARS) } : {}), ...(mark.text ? { text: clip(mark.text, THOUGHT_MARK_CHARS) } : {}) };

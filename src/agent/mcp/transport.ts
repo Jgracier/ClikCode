@@ -37,7 +37,7 @@ export interface McpTransport {
   killNow(): void;
 }
 
-export class McpRequestError extends Error {
+class McpRequestError extends Error {
   constructor(message: string, readonly code?: number) { super(message); this.name = 'McpRequestError'; }
 }
 
@@ -79,7 +79,7 @@ function answerServerRequest(method: string): Promise<unknown> | undefined {
 
 // ── stdio ────────────────────────────────────────────────────────────────────
 
-export function stdioTransport(
+function stdioTransport(
   spec: Extract<McpServerSpec, { transport: 'stdio' }>, handlers: McpTransportHandlers,
 ): McpTransport {
   // Detached on POSIX so a Ctrl-C at the terminal reaches ClikCode, which
@@ -127,7 +127,7 @@ interface SseEvent { event: string; data: string }
 
 /** Server-sent events from a fetch body. Blank-line framed; multi-line data
  * joined with newlines; comments and ids ignored, as nothing here resumes. */
-export async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
+async function* readSseEvents(body: ReadableStream<Uint8Array>): AsyncGenerator<SseEvent> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
@@ -166,7 +166,7 @@ interface HttpPending { method: string; resolve(value: Message): void; reject(er
 
 type Fetch = typeof fetch;
 
-export class HttpTransport implements McpTransport {
+class HttpTransport implements McpTransport {
   private readonly pending = new Map<number, HttpPending>();
   /** Aborted on shutdown, so no request or open stream outlives the transport. */
   private readonly lifetime = new AbortController();

@@ -14,11 +14,11 @@ import type { CatalogFile } from './catalog.js';
 import { checkDiskSpace, downloadVerified, formatBytes, isDownloaded, sha256File } from './download.js';
 import { modelsDir } from './paths.js';
 
-export function modelFilePath(file: CatalogFile): string {
+function modelFilePath(file: CatalogFile): string {
   return join(modelsDir(), file.repo.replace('/', '--'), file.revision.slice(0, 12), file.file);
 }
 
-export function huggingFaceUrl(file: CatalogFile): string {
+function huggingFaceUrl(file: CatalogFile): string {
   return `https://huggingface.co/${file.repo}/resolve/${file.revision}/${encodeURIComponent(file.file)}`;
 }
 

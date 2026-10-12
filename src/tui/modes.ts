@@ -11,7 +11,7 @@ import { logCursorEvent } from './cursor-log.js';
  * keystrokes, so every newline inside a paste reads as Enter -- which submitted
  * or queued each pasted line as its own separate message. With it the terminal
  * fences the payload and the whole thing arrives as one key. */
-export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
+const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
 
 /** Mouse tracking: normal (1000), button-event (1002), any-event (1003), SGR
  * encoding (1006). All four, and a swipe does not scroll without all four.
@@ -29,7 +29,7 @@ export const ENABLE_BRACKETED_PASTE = '\u001b[?2004h';
  * own selection gesture, hence the usual "hold Shift while selecting" advice.
  *
  * `?1006h` is the SGR encoding; the wheel arrives as button 64 and 65. */
-export const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
+const ENABLE_MOUSE_TRACKING = '\u001b[?1000h\u001b[?1002h\u001b[?1003h\u001b[?1006h';
 
 /** The opening form, used once when the program takes the screen. The `?1006l`
  * before `?1006h` is deliberate and comes from the bare script that receives

@@ -216,7 +216,7 @@ async function registerSession(
 
 /** Verified against mcode 0.5.10 (2026-10-04, vendor-sandbox): see the
  *  module comment; live proof in the commit that added this. */
-export const mcodeThreadWriter: NativeThreadWriter = {
+const mcodeThreadWriter: NativeThreadWriter = {
   testedVersions: ['0.5.10'],
   versionOk: testedVersion(['0.5.10']),
   async write(record, context) {
@@ -277,7 +277,7 @@ function historyDirectory(db: CarryDb, schema: CarrySchema, sessionId: string): 
  *  carried back, and A's resume sent all four user turns: "HERONF8 200".
  *  Not yet seen on a MiniMax model: mcode 0.5.10 reports "Sign in to MiniMax
  *  to use Agent features" once its token expires (it did not refresh one). */
-export const mcodeCarry: SqliteCarrySpec = {
+const mcodeCarry: SqliteCarrySpec = {
   database: (environment) => join(mcodeDataDir(environment), 'v2', 'sqlite', 'runtime-state.sqlite'),
   session: { table: 'local_runtime_sessions', key: 'session_id', identity: ['created_at_ms'], omit: ['project_id'], parent: 'parent_session_id' },
   rows: [{ table: 'local_runtime_pi_history_file_migrations', key: 'session_id' }],

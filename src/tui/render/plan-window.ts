@@ -6,7 +6,7 @@ import type { HarnessPlanEntry } from '../../harness/events/turn-observer.js';
 
 export const PLAN_MAX_ROWS = 6;
 
-export function planStepSettled(entry: Pick<HarnessPlanEntry, 'status'>): boolean {
+function planStepSettled(entry: Pick<HarnessPlanEntry, 'status'>): boolean {
   return entry.status === 'completed' || entry.status === 'cancelled';
 }
 

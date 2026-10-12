@@ -312,7 +312,7 @@ export function acpApprovalDetail(toolCall: Json | undefined): string | undefine
 const CURSOR_QUESTION_SKIP_ID = '__ask_question_skip__';
 
 /** A permission request that is really a question to the user. */
-export function acpQuestionPermission(params: Json): { skipOptionId: string; prompt: string; answers: string[]; choices: { optionId: string; name: string }[] } | undefined {
+function acpQuestionPermission(params: Json): { skipOptionId: string; prompt: string; answers: string[]; choices: { optionId: string; name: string }[] } | undefined {
   const options: Json[] = Array.isArray(params.options) ? params.options : [];
   const skip = options.find((option) => option?.optionId === CURSOR_QUESTION_SKIP_ID);
   if (!skip) return undefined;
@@ -332,7 +332,7 @@ export function acpQuestionPermission(params: Json): { skipOptionId: string; pro
  * manually approve edits", "No, keep planning". Picking one is the user's
  * decision about the plan, not consent to a tool, so no permission mode may
  * choose it. */
-export function acpPlanChoices(params: Json): { plan?: string; choices: { optionId: string; name: string }[] } | undefined {
+function acpPlanChoices(params: Json): { plan?: string; choices: { optionId: string; name: string }[] } | undefined {
   const options: Json[] = Array.isArray(params.options) ? params.options : [];
   const choices = options.filter((option) => typeof option?.name === 'string' && option.optionId !== undefined)
     .map((option) => ({ optionId: String(option.optionId), name: String(option.name) }));
@@ -468,12 +468,12 @@ async function acpImageBlock(path: string): Promise<Json> {
 
 
 /** The config option an agent uses for its modes when it has no `modes` object. */
-export function acpModeConfigOption(options: readonly Json[] | undefined): Json | undefined {
+function acpModeConfigOption(options: readonly Json[] | undefined): Json | undefined {
   return options?.find((option) => option?.category === 'mode') ?? options?.find((option) => (option?.id ?? option?.configId) === 'mode');
 }
 
 /** Every value a select option offers, grouped or flat. */
-export function acpConfigValues(option: Json): string[] {
+function acpConfigValues(option: Json): string[] {
   const entries: Json[] = Array.isArray(option?.options) ? option.options : [];
   return entries.flatMap((entry) => Array.isArray(entry?.options) ? entry.options : [entry])
     .map((entry) => entry?.value).filter((value): value is string => typeof value === 'string');

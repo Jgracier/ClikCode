@@ -156,7 +156,7 @@ async function searchDuckDuckGo(call: BackendCall): Promise<SearchResult[]> {
   return results;
 }
 
-export function formatResults(query: string, backend: BackendName, results: readonly SearchResult[], notes: readonly string[]): string {
+function formatResults(query: string, backend: BackendName, results: readonly SearchResult[], notes: readonly string[]): string {
   const lines = [`Search results for "${query}" via ${backend}:`];
   for (const note of notes) lines.push(`(note: ${note})`);
   if (!results.length) lines.push('No results.');

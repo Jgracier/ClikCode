@@ -104,7 +104,7 @@ async function codexUsageReading(environment: Readonly<Record<string, string>>):
 
 /** The ChatGPT plan Codex signed in with ("free", "plus", "pro"): a claim
  * in the id token Codex itself keeps in auth.json. Read, never refreshed. */
-export async function codexPlan(environment: Readonly<Record<string, string>>): Promise<string | undefined> {
+async function codexPlan(environment: Readonly<Record<string, string>>): Promise<string | undefined> {
   try {
     const home = environment.CODEX_HOME ?? join(environment.HOME ?? homedir(), '.codex');
     const auth = JSON.parse(await readFile(join(home, 'auth.json'), 'utf8')) as { tokens?: { id_token?: unknown } };

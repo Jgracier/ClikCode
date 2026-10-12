@@ -13,7 +13,7 @@ export function shortId(id: string): string {
 
 /** `<conversation>:<message number>`, the number in the conversation's
  * merged numbering: what read_conversation's `at` takes. */
-export function anchorOf(conversationId: string, position: number): string {
+function anchorOf(conversationId: string, position: number): string {
   return `${shortId(conversationId)}:${position}`;
 }
 

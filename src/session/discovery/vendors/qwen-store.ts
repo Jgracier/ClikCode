@@ -155,7 +155,7 @@ export function qwenThreadLines(record: CanonicalRecord, options: QwenThreadOpti
  *  and I read notes.txt and modified src/app.ts." The CLI's `--resume <id>`
  *  sent the same history to the model (checked against a local endpoint),
  *  so the thread is not pinned to either transport. */
-export const qwenThreadWriter: NativeThreadWriter = {
+const qwenThreadWriter: NativeThreadWriter = {
   testedVersions: ['0.24.3'],
   versionOk: testedVersion(['0.24.3']),
   async write(record, context) {

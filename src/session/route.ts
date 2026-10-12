@@ -43,7 +43,7 @@ export function clikCodeAgentLabel(session: Routed): string {
  * compacts its own context as it nears the window. */
 export const AGENT_COMPACTS_ITSELF = "ClikCode's own agent compacts its context automatically; /compact applies only to vendor harnesses.";
 
-export const AI_HARNESS_ROUTES: readonly AiHarnessRoute[] = ['local', 'gateway', 'clikcode-local'];
+const AI_HARNESS_ROUTES: readonly AiHarnessRoute[] = ['local', 'gateway', 'clikcode-local'];
 
 export function isAiHarnessRoute(value: unknown): value is AiHarnessRoute {
   return typeof value === 'string' && (AI_HARNESS_ROUTES as readonly string[]).includes(value);

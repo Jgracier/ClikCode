@@ -12,7 +12,7 @@
  * `cancelled`, and the transport tells the vendor the question went unanswered.
  */
 
-export interface HarnessQuestionOption {
+interface HarnessQuestionOption {
   label: string;
   /** Secondary text under the label. */
   description?: string;

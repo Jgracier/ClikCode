@@ -29,7 +29,7 @@ import { turnCancelledError } from '../../../agent/cancellation.js';
 type Json = Record<string, unknown>;
 
 /** Wall-clock ceiling on a held process: after this its stdin closes. */
-export const HELD_VENDOR_CEILING_MS = 60 * 60 * 1000;
+const HELD_VENDOR_CEILING_MS = 60 * 60 * 1000;
 /** How long a new turn waits for a held process to exit before stopping it. */
 const RELEASE_WAIT_MS = 5 * 60 * 1000;
 /** How long a process the user stopped gets to exit on its own. */

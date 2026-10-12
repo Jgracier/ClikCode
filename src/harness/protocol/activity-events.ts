@@ -15,7 +15,7 @@ import { COMMAND_HEAD_LINES } from './activity-view.js';
  * renderer can choose what to show (first lines, or a command's last), and
  * as many as a turn keeps of a call (turn/turn-activities.ts MAX_OUTPUT_LINES,
  * where the number is justified). */
-export const EVENT_OUTPUT_LINES = 60;
+const EVENT_OUTPUT_LINES = 60;
 
 /** What a harness appends to a command's output that the command never
  * printed: Claude Code's `Shell cwd was reset to <dir>` when the command
@@ -193,7 +193,7 @@ export function toolFacts(name: string, input: JsonRecord | undefined, command: 
 const CALL_VALUE_CHARS = 2_000;
 /** Serialized size of a call's arguments as kept. A Write's whole file, a
  * long patch: the diff already carries the change, bounded on its own. */
-export const CALL_INPUT_MAX_CHARS = 4_096;
+const CALL_INPUT_MAX_CHARS = 4_096;
 
 function clipValue(value: unknown, limit: number, depth = 0): unknown {
   if (typeof value === 'string') return value.length > limit ? `${value.slice(0, limit - 1)}…` : value;
@@ -205,7 +205,7 @@ function clipValue(value: unknown, limit: number, depth = 0): unknown {
 
 /** A call's arguments within CALL_INPUT_MAX_CHARS: every string clipped,
  * then clipped harder, and past that only the argument names survive. */
-export function boundCallInput(input: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+function boundCallInput(input: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
   for (const limit of [CALL_VALUE_CHARS, 400, 80]) {
     const clipped = clipValue(input, limit) as Record<string, unknown>;

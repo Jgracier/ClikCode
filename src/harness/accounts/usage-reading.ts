@@ -187,7 +187,7 @@ export function windowKey(window: Pick<UsageWindow, 'name' | 'resetsAt'>): strin
  * own "resets in" hint, else QUOTA_MARK_DEFAULT_MS after the refusal. A mark
  * with no date (older builds) is not upheld: nothing says how long it holds,
  * and a turn that is refused again marks it again. */
-export function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefined {
+function quotaMarkExpiresAt(account: AiHarnessAccount): number | undefined {
   if (account.quotaState !== 'exhausted') return undefined;
   const retry = Date.parse(account.quotaRetryAt ?? '');
   if (Number.isFinite(retry)) return retry;

@@ -7,7 +7,7 @@ import type { ContextHints } from '../context-profile.js';
 import { ModelClientError, parseRetryAfter, readWithin, SseParser, STREAM_IDLE_TIMEOUT_MS, type SseEvent } from './gateway-client.js';
 
 /** llama-server's per-request timings, passed through for callers that show speed. */
-export interface LlamaTimings {
+interface LlamaTimings {
   prompt_n?: number;
   prompt_ms?: number;
   prompt_per_second?: number;
@@ -122,7 +122,7 @@ type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_u
 interface WireToolCall { id: string; type: 'function'; function: { name: string; arguments: string } }
 
 /** OpenRouter's `reasoning_details` entry: how the Gateway sends a block's signature out and takes it back. */
-export type ReasoningDetail = { type: 'reasoning.text'; text: string; signature: string } | { type: 'reasoning.encrypted'; data: string };
+type ReasoningDetail = { type: 'reasoning.text'; text: string; signature: string } | { type: 'reasoning.encrypted'; data: string };
 
 export type ChatMessage =
   | { role: 'system'; content: string }

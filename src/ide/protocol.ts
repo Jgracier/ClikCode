@@ -152,7 +152,7 @@ export interface IdeModel {
 }
 
 /** A Gateway agent private to the connected account (`GET /v1/agents`). */
-export interface IdeAgent {
+interface IdeAgent {
   id: string;
   name: string;
   detail?: string;

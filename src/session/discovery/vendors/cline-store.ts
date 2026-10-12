@@ -177,7 +177,7 @@ export function clineThreadFiles(record: CanonicalRecord, options: ClineThreadOp
  *  notes.txt said "launch window: Thursday". The change made in src/app.ts
  *  was fixing a typo, changing "cosnt" to "const"." (the Codex shell call as
  *  run_commands; the Claude Edit, which has no Cline equivalent, as text). */
-export const clineThreadWriter: NativeThreadWriter = {
+const clineThreadWriter: NativeThreadWriter = {
   testedVersions: ['3.0.68'],
   versionOk: testedVersion(['3.0.68']),
   async write(record, context) {

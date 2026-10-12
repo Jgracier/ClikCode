@@ -77,9 +77,9 @@ export interface ThreadStartInput {
  * for the vendor's system prompt, tools and the work. A whole conversation
  * written regardless overflowed the model (365K tokens into a 262K one) or a
  * free plan's whole day (Grok: 603K of 500K tokens) before the turn began. */
-export const NATIVE_WINDOW_SHARE = 0.5;
+const NATIVE_WINDOW_SHARE = 0.5;
 /** The budget when nothing has reported the model's window. */
-export const NATIVE_DEFAULT_BYTES = 400 * 1024;
+const NATIVE_DEFAULT_BYTES = 400 * 1024;
 
 export function nativeThreadBudget(contextWindow?: number): number {
   return contextWindow && contextWindow > 0 ? Math.floor(contextWindow * NATIVE_WINDOW_SHARE * BYTES_PER_TOKEN) : NATIVE_DEFAULT_BYTES;

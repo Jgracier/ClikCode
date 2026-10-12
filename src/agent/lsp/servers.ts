@@ -26,7 +26,7 @@ export interface LanguageSpec {
 
 const C_HEADERS = new Set(['.c', '.h']);
 
-export const LANGUAGES: readonly LanguageSpec[] = [
+const LANGUAGES: readonly LanguageSpec[] = [
   {
     id: 'typescript', label: 'TypeScript/JavaScript',
     extensions: ['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs'],
@@ -71,7 +71,7 @@ export function languageFor(file: string): LanguageSpec | undefined {
 /** The nearest ancestor of `file` with one of the language's markers, else
  * the nearest with `.git`, else `fallback` when the file is inside it, else
  * the file's own directory. */
-export async function workspaceRoot(file: string, language: LanguageSpec, fallback: string): Promise<string> {
+async function workspaceRoot(file: string, language: LanguageSpec, fallback: string): Promise<string> {
   const exists = (candidate: string): Promise<boolean> => fs.access(candidate).then(() => true, () => false);
   let gitRoot: string | undefined;
   for (let dir = path.dirname(file); ; dir = path.dirname(dir)) {
@@ -96,7 +96,7 @@ async function findServer(language: LanguageSpec): Promise<ServerCandidate & { b
   throw new ServerMissingError(`No ${language.label} language server on PATH: ${language.install}.`);
 }
 
-export interface Position { line: number; character: number }
+interface Position { line: number; character: number }
 export interface Range { start: Position; end: Position }
 export interface Diagnostic { range: Range; severity?: number; message: string; source?: string; code?: string | number }
 

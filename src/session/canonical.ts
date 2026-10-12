@@ -29,9 +29,9 @@ import { readTurnActivities } from '../turn/turn-activities.js';
 import { providerBoundaryNote } from '../turn/failover-prompt.js';
 import { conversationIdFor } from './conversation-rows.js';
 
-export const CANONICAL_RECORD_VERSION = 1;
+const CANONICAL_RECORD_VERSION = 1;
 
-export type CanonicalToolStatus = 'done' | 'failed' | 'unfinished';
+type CanonicalToolStatus = 'done' | 'failed' | 'unfinished';
 
 /** One tool call, as recorded. */
 export interface CanonicalToolCall {
@@ -256,7 +256,7 @@ export function canonicalRecord(session: HarnessSession): CanonicalRecord {
 
 /** Who produced a turn, as a note names it: `Kilo Code CLI
  * (kilo/cohere/north-mini-code:free)`. */
-export function originLabel(origin: CanonicalOrigin, displayName?: (harness: string) => string | undefined): string {
+function originLabel(origin: CanonicalOrigin, displayName?: (harness: string) => string | undefined): string {
   const name = origin.harness ? displayName?.(origin.harness) ?? origin.harness : origin.route ?? origin.provider ?? 'ClikCode';
   return `${name}${origin.model ? ` (${origin.model})` : ''}`;
 }

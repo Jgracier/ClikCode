@@ -40,7 +40,7 @@ export function formatBytes(bytes: number): string {
 /** Free bytes on the disk that holds `directory` (or its nearest existing
  * parent). Undefined where statfs is unsupported; the check is then skipped
  * rather than blocking the download. */
-export async function freeDiskBytes(directory: string): Promise<number | undefined> {
+async function freeDiskBytes(directory: string): Promise<number | undefined> {
   let target = directory;
   while (!existsSync(target) && dirname(target) !== target) target = dirname(target);
   const disk = await statfs(target).catch(() => undefined);

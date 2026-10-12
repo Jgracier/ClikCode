@@ -21,7 +21,7 @@ import type { BroadcastObserver } from './broadcast-observer.js';
 import { TurnRecorder } from '../session/turn-changes.js';
 import { stateDirectory } from '../session/store/paths.js';
 
-export const BACKGROUND_TURN_LABEL = 'background work';
+const BACKGROUND_TURN_LABEL = 'background work';
 
 interface RunnerDependencies {
   sessionId: string;
@@ -58,7 +58,7 @@ export function backgroundTurnRecord(outcome: BackgroundTurnOutcome, finished: r
   return `Background work finished: ${unique.slice(0, 8).join('; ')}${unique.length > 8 ? `; and ${unique.length - 8} more` : ''}.`;
 }
 
-export function appendBackgroundRecord(session: HarnessSession, record: string, now: string): void {
+function appendBackgroundRecord(session: HarnessSession, record: string, now: string): void {
   session.messages = [...(session.messages ?? []), { role: 'assistant', content: record }];
   session.updatedAt = now;
 }

@@ -31,7 +31,7 @@ export const TRANSFER_MIN_BYTES = 48 * 1024;
 export const TRANSFER_MAX_BYTES = 200 * 1024;
 /** Share of the receiving model's context window the transfer may take,
  * leaving the rest for the vendor's own system prompt, tools and the work. */
-export const TRANSFER_WINDOW_SHARE = 0.2;
+const TRANSFER_WINDOW_SHARE = 0.2;
 /** UTF-8 bytes per token, for English prose and code alike (a conservative
  * average: tokenizers run 3.5-4.5). */
 export const BYTES_PER_TOKEN = 4;

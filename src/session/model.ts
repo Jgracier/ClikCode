@@ -85,7 +85,7 @@ export type TranscriptMessage = {
 };
 
 /** A turn moved to another account of the same provider (turn/account-routing.ts). */
-export type AccountSwitch = { from: string; to: string; reason: string };
+type AccountSwitch = { from: string; to: string; reason: string };
 
 /** The harness (or, for ClikCode's own agent, the route) and model that
  * produced a message. */

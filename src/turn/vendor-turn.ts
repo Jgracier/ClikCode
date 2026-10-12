@@ -93,7 +93,7 @@ const RETRY_EDITS = { clear: ['', 'replace'], 'new-paragraph': ['\n\n', 'append'
  * standby for the account a failover would move to (worth a second vendor
  * child only when a refusal is likely). */
 const STANDBY_AT_USED_PCT = 80;
-export function nearUsageLimit(account: AiHarnessAccount): boolean {
+function nearUsageLimit(account: AiHarnessAccount): boolean {
   return vendorWindows(account).some((window) => !window.advisory && window.usedPct >= STANDBY_AT_USED_PCT);
 }
 

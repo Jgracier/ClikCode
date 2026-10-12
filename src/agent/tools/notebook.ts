@@ -44,7 +44,7 @@ function sourceLines(text: string): string[] {
 }
 
 /** The id a cell is addressed by: its own `id`, else its position. */
-export function cellKey(cell: NotebookCell, index: number): string {
+function cellKey(cell: NotebookCell, index: number): string {
   return typeof cell.id === 'string' && cell.id ? cell.id : `cell-${index}`;
 }
 

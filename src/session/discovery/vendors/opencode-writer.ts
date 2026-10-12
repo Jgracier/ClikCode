@@ -388,8 +388,8 @@ export function openCodeFamilyThreadWriter(testedVersions: readonly string[]): N
 }
 
 /** Builds whose import and resume were checked live (`--version`). */
-export const OPENCODE_WRITER_TESTED_VERSIONS = ['1.18.32'] as const;
-export const KILO_WRITER_TESTED_VERSIONS = ['7.7.6'] as const;
+const OPENCODE_WRITER_TESTED_VERSIONS = ['1.18.32'] as const;
+const KILO_WRITER_TESTED_VERSIONS = ['7.7.6'] as const;
 
 export const openCodeThreadWriter = openCodeFamilyThreadWriter(OPENCODE_WRITER_TESTED_VERSIONS);
 export const kiloThreadWriter = openCodeFamilyThreadWriter(KILO_WRITER_TESTED_VERSIONS);

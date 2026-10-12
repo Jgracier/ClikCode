@@ -252,7 +252,7 @@ export function kiroThreadFiles(record: CanonicalRecord, options: KiroThreadOpti
  *  shell, read, write, grep and write, all completed, and the model answered
  *  "Codeword: PELICAN-73; notes.txt: launch window Thursday; config.ini:
  *  port 8417; src/app.ts: fixed `cosnt` -> `const`; created: TODO.md." */
-export const kiroThreadWriter: NativeThreadWriter = {
+const kiroThreadWriter: NativeThreadWriter = {
   testedVersions: ['2.23.1'],
   versionOk: testedVersion(['2.23.1']),
   async write(record, context) {

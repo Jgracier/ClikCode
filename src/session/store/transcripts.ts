@@ -139,7 +139,7 @@ const storedFrom = new WeakMap<SessionFile, SessionTranscript>();
  * - Both rewrote: the writer's, the newer write, wins.
  *
  * The pending turn is the writer's if it changed it, otherwise disk's. */
-export function mergeTranscripts(base: SessionTranscript, next: SessionTranscript, disk: SessionTranscript): SessionTranscript {
+function mergeTranscripts(base: SessionTranscript, next: SessionTranscript, disk: SessionTranscript): SessionTranscript {
   const before = base.messages ?? [];
   const mine = next.messages ?? [];
   const theirs = disk.messages ?? [];

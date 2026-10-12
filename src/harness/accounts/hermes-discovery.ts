@@ -54,7 +54,7 @@ const installs = new Map<string, Promise<string | undefined>>();
 
 /** Where Hermes is installed, and the Python of its own environment. A
  * failed ask is not kept: the next one asks again. */
-export async function hermesInstall(
+async function hermesInstall(
   harness: AiLocalHarnessDefinition, environment: Readonly<Record<string, string>>,
 ): Promise<{ install: string; python: string } | undefined> {
   const key = await harnessBinaryIdentity(harness.binary) ?? harness.binary;
@@ -120,7 +120,7 @@ print("\\x00HERMES_INVENTORY" + json.dumps({"providers": rows, "model": p.get("m
  * `hermes model`, the full picker. Mirrors hermes_cli/auth_commands.py. */
 const HERMES_OAUTH_PROVIDERS = new Set(['anthropic', 'nous', 'openai-codex', 'xai-oauth', 'qwen-oauth', 'minimax-oauth']);
 
-export interface HermesConnect { id: string; label: string; detail: string; argv: string[] }
+interface HermesConnect { id: string; label: string; detail: string; argv: string[] }
 export interface HermesInventory {
   models: string[];
   configured?: string;

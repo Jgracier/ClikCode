@@ -46,7 +46,7 @@ type QueueHandler = (submission: LiveTurnSubmission, options?: { held?: boolean 
  * dropped: the message has gone back to the composer). The handler's own
  * promise then resolves if the message was steered in after all -- the
  * queued copy is dropped -- or rejects, leaving the queued copy to run. */
-export type SteerHold = (withdraw: () => boolean) => Promise<void>;
+type SteerHold = (withdraw: () => boolean) => Promise<void>;
 type SteerHandler = (text: string, submission: LiveTurnSubmission, hold: SteerHold) => Promise<void>;
 type LateSteerHandler = (submission: LiveTurnSubmission) => void;
 

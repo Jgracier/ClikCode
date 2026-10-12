@@ -17,8 +17,8 @@ const GIB = 1024 ** 3;
  * thousands of tokens; at 50 a second that is a few minutes, once, since
  * llama.cpp reuses the cached prefix after. 8 tokens a second writes a
  * paragraph in a few seconds. */
-export const MIN_PROMPT_PER_SECOND = 50;
-export const MIN_GENERATE_PER_SECOND = 8;
+const MIN_PROMPT_PER_SECOND = 50;
+const MIN_GENERATE_PER_SECOND = 8;
 
 // ---- memory ----------------------------------------------------------------
 
@@ -53,7 +53,7 @@ export function kvCacheBytes(kv: KvGeometry, context: number, cacheType: CacheTy
 /** llama.cpp's working buffers beyond weights and cache: the compute graph
  * (dominated by the logits of a ~250K-token vocabulary over a 512-token
  * batch, about 0.5 GB) and the server's own state. */
-export function runtimeOverheadBytes(weightBytes: number): number {
+function runtimeOverheadBytes(weightBytes: number): number {
   return 0.75 * GIB + weightBytes * 0.02;
 }
 
@@ -262,7 +262,7 @@ const CPU_PROMPT_RATE: readonly [RegExp, number][] = [
  * speed times bytes read per token, about 40 GB/s (a STREAM test shows
  * 46-55; the rest is overhead). Dual-channel DDR5 is the common desktop
  * and laptop case; it is only a starting point until measured. */
-export const CPU_WEIGHT_BANDWIDTH = 40e9;
+const CPU_WEIGHT_BANDWIDTH = 40e9;
 
 /** Apple Silicon memory bandwidth by tier (base / Pro / Max / Ultra), at
  * the ~75% llama.cpp achieves on it. */
@@ -273,7 +273,7 @@ function appleBandwidth(cpuModel: string): number {
 
 export interface SpeedEstimate { promptPerSecond: number; generatePerSecond: number }
 
-export function cpuPromptRate(quantization: string): number {
+function cpuPromptRate(quantization: string): number {
   return CPU_PROMPT_RATE.find(([pattern]) => pattern.test(quantization))?.[1] ?? 150;
 }
 
@@ -318,7 +318,7 @@ export function speedAtContext(
   };
 }
 
-export function estimatedTurnSeconds(speed: SpeedEstimate): number {
+function estimatedTurnSeconds(speed: SpeedEstimate): number {
   return 2_000 / speed.promptPerSecond + 300 / speed.generatePerSecond;
 }
 

@@ -116,7 +116,7 @@ const INELIGIBLE_TEXT = /(?:not eligible|ineligible|eligibility check failed|ver
 const REQUEST_INVALID_TEXT = /(?:invalid model selection|conflicts with --|is not supported for model|unknown (?:flag|option|argument)|unrecogni[sz]ed (?:flag|option|argument)|invalid (?:flag|option|argument) value)/i;
 
 /** JSON-RPC code ACP agents answer with when the user must sign in. */
-export const ACP_AUTH_REQUIRED_CODE = -32000;
+const ACP_AUTH_REQUIRED_CODE = -32000;
 
 function kindFromErrorKind(errorKind: string): AccountFailureKind | undefined {
   if (errorKind === 'model_not_on_plan') return 'account-ineligible';

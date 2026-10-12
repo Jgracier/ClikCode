@@ -52,12 +52,12 @@ export async function mcpAdd(name: string, target: string, args: readonly string
     : `\n${chalk.green('✓')} ${chalk.bold(name)} recorded. A harness gets it the first time you choose that provider, if it is not already there.\n\n`);
 }
 
-export type McpServerSignIn = 'signed-in' | 'needs-sign-in' | 'open' | 'unknown';
+type McpServerSignIn = 'signed-in' | 'needs-sign-in' | 'open' | 'unknown';
 
 /** Whether each remote server is signed in, needs a sign-in, or asks none:
  * ClikCode's own record first, else the server's answer to an
  * unauthenticated request (cached a day, harness/mcp-sign-in.ts). */
-export async function mcpSignInStates(stateDir: string, specs: readonly McpServerSpec[]): Promise<Map<string, McpServerSignIn>> {
+async function mcpSignInStates(stateDir: string, specs: readonly McpServerSpec[]): Promise<Map<string, McpServerSignIn>> {
   return new Map(await Promise.all(specs.flatMap((spec) => (spec.transport === 'stdio' ? [] : [(async () => {
     const own = await mcpOAuthState(stateDir, spec);
     if (own !== 'none') return [spec.name, own] as const;

@@ -37,7 +37,7 @@ export interface ConversationStateFacts {
   resumeAt?: string;
 }
 
-export type ConversationStateKind = 'working' | 'stalled' | 'needs-you' | 'back' | 'idle';
+type ConversationStateKind = 'working' | 'stalled' | 'needs-you' | 'back' | 'idle';
 
 export interface ConversationState {
   kind: ConversationStateKind;

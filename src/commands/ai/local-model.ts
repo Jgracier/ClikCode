@@ -47,7 +47,7 @@ export type ProgressSink = (label: string) => void;
  * A band already up -- the turn's own, drawn as its message was sent --
  * only has its label moved, and gets it back after: stopping and starting a
  * wait there dropped the band for a frame and set its clock back to 0. */
-export function waitingLineProgress(sink?: ProgressSink): { show: (text: string, shape: string) => void; done: () => void } {
+function waitingLineProgress(sink?: ProgressSink): { show: (text: string, shape: string) => void; done: () => void } {
   // A surface of its own (the editor's busy line): every update goes there.
   if (sink) return { show: (text) => sink(text), done: () => undefined };
   const terminal = TERMINAL.active;
@@ -78,7 +78,7 @@ export function waitingLineProgress(sink?: ProgressSink): { show: (text: string,
 
 /** ClikCode Local's progress: one stderr line per stage and per tenth of a
  * download. */
-export function localModelProgress(sink?: ProgressSink): { progress: (update: LocalModelProgress) => void; done: () => void } {
+function localModelProgress(sink?: ProgressSink): { progress: (update: LocalModelProgress) => void; done: () => void } {
   const shown = waitingLineProgress(sink);
   return {
     progress: (update) => {

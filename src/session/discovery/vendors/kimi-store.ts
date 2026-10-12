@@ -169,7 +169,7 @@ export function kimiThreadFiles(record: CanonicalRecord, options: KimiThreadOpti
  *  `session/prompt` -- answered "Codeword: IBIS-64 / notes.txt: launch
  *  window: Thursday / src/app.ts: Changed `cosnt x = 1;` to
  *  `const x = 1;`" (the Codex shell call as Bash, the Claude Edit as Edit). */
-export const kimiThreadWriter: NativeThreadWriter = {
+const kimiThreadWriter: NativeThreadWriter = {
   testedVersions: ['2.0.2'],
   versionOk: testedVersion(['2.0.2']),
   async write(record, context) {

@@ -76,7 +76,7 @@ export interface ModelStepRequest {
   onServedModel?(model: string, contextWindow?: number): void;
 }
 
-export interface StreamingToolCall {
+interface StreamingToolCall {
   id: string;
   name: string;
   /** The JSON arguments received so far, possibly cut mid-value. */

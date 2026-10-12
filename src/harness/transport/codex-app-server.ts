@@ -173,7 +173,7 @@ export function codexActivityForItem(item: JsonObject, completed: boolean): Harn
  * turn's first reading less that reading's own call. That also holds when a
  * reading is sent twice, as Codex does alongside rate-limit updates. `start`
  * is the baseline the first reading set, handed back for the next one. */
-export function codexTurnUsage(reading: JsonObject, start?: TurnUsage): { usage: TurnUsage; start: TurnUsage } | undefined {
+function codexTurnUsage(reading: JsonObject, start?: TurnUsage): { usage: TurnUsage; start: TurnUsage } | undefined {
   const total = asRecord(reading.total) ?? asRecord(reading.total_token_usage);
   if (!total) return undefined;
   const last = asRecord(reading.last) ?? asRecord(reading.last_token_usage);
@@ -220,7 +220,7 @@ export function codexErrorKind(error: unknown): { errorKind: CodexErrorKind; sta
 /** The structured fields of a Codex failure, for the failover classifier:
  * the turn error's `codexErrorInfo` (kept as the vendor sent it) and the
  * JSON-RPC code the app-server answered a request with. */
-export function codexStructuredFields(turnError: JsonObject | undefined, error: unknown): { codexErrorInfo?: unknown; rpcCode?: number } {
+function codexStructuredFields(turnError: JsonObject | undefined, error: unknown): { codexErrorInfo?: unknown; rpcCode?: number } {
   const thrown = asRecord(error);
   const data = asRecord(thrown?.data);
   const info = turnError?.codexErrorInfo ?? turnError?.codex_error_info ?? data?.codexErrorInfo ?? thrown?.codexErrorInfo;

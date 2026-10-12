@@ -18,7 +18,7 @@ import { gatewayConnection } from '../agent/models/for-session.js';
 import { isGatewayService } from '../session/route.js';
 import type { HarnessSession } from '../session/model.js';
 
-export const CLIKDEPLOY_MCP_SERVER = 'clikdeploy';
+const CLIKDEPLOY_MCP_SERVER = 'clikdeploy';
 
 /** What an agent reaches for without searching: who am I, my apps, their
  * logs and deployments, deploy and restart -- and the search and dispatcher

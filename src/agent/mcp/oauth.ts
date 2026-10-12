@@ -38,7 +38,7 @@ import { mcpChallenge } from '../../harness/mcp-sign-in.js';
 type Fetch = typeof fetch;
 type HttpSpec = Extract<McpServerSpec, { transport: 'http' | 'sse' }>;
 
-export const MCP_SIGN_IN_REQUIRED = 'MCP_SIGN_IN_REQUIRED';
+const MCP_SIGN_IN_REQUIRED = 'MCP_SIGN_IN_REQUIRED';
 
 /** A server that will not answer without a sign-in this process may not start. */
 export class McpSignInRequired extends Error {
@@ -236,7 +236,7 @@ function base64url(buffer: Buffer): string {
   return buffer.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-export function pkcePair(): { verifier: string; challenge: string } {
+function pkcePair(): { verifier: string; challenge: string } {
   const verifier = base64url(randomBytes(32));
   return { verifier, challenge: base64url(createHash('sha256').update(verifier).digest()) };
 }

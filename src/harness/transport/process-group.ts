@@ -59,7 +59,7 @@ export async function processGroupMembers(pgid: number, platform: NodeJS.Platfor
 const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ash', 'ksh', 'mksh', 'fish', 'tcsh', 'csh', 'pwsh']);
 /** Whether `name` (a process's command name) is a shell; a login shell's
  * leading `-` is ignored. */
-export function isShellName(name: string): boolean {
+function isShellName(name: string): boolean {
   return SHELLS.has(name.replace(/^-/, ''));
 }
 

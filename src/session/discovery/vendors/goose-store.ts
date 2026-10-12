@@ -45,7 +45,7 @@ function gooseRoot(environment: NativeSessionEnvironment): string {
  *  both databases untouched -- the failover then re-seeds. (Goose's codex
  *  provider also fails every turn under GOOSE_MODE=approve, ClikCode's `ask`:
  *  "Codex command failed with exit code: Some(1)"; the run used bypass.) */
-export const gooseCarry: SqliteCarrySpec = {
+const gooseCarry: SqliteCarrySpec = {
   database: (environment) => join(gooseRoot(environment), 'sessions.db'),
   session: { table: 'sessions', key: 'id', identity: ['created_at'], parent: 'parent_session_id' },
   rows: [

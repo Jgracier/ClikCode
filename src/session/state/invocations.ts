@@ -21,7 +21,7 @@ import { stateDirectory } from '../store/paths.js';
 
 const DAY_MS = 24 * 60 * 60_000;
 /** Individual records are kept this long. */
-export const RAW_RETENTION_DAYS = 30;
+const RAW_RETENTION_DAYS = 30;
 /** Folding waits until the oldest record is this much past retention, so the
  * log is rewritten every couple of days rather than on every turn. */
 const FOLD_SLACK_DAYS = 2;
@@ -78,7 +78,7 @@ export function capInvocations(index: StateIndex, now: number = Date.now()): voi
 // The log file
 // ---------------------------------------------------------------------------
 
-export function invocationLogPath(): string {
+function invocationLogPath(): string {
   return join(stateDirectory(), 'invocations.jsonl');
 }
 

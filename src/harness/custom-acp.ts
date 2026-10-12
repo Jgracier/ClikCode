@@ -65,7 +65,7 @@ function storedShape(records: readonly AiCustomAcpHarnessInput[]): string {
 }
 
 /** Refuse a name or provider the built-in catalog already owns. */
-export function assertCustomAcpAvailable(definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition {
+function assertCustomAcpAvailable(definition: AiCustomAcpHarnessInput): AiLocalHarnessDefinition {
   const catalog = catalogBundle();
   const built = catalog.customAcpHarness(definition) as AiLocalHarnessDefinition;
   const taken = catalog.AI_LOCAL_HARNESSES.some((item) => item.command === built.command || item.provider === built.provider);

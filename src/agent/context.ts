@@ -19,7 +19,7 @@ import { OUTPUT_CAPS, readDenyReason, resolvePath } from './security.js';
 import { CONVERSATION_TOOLS_NOTE } from '../search/tools.js';
 
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
-export const COMPACTION_THRESHOLD = 0.8;
+const COMPACTION_THRESHOLD = 0.8;
 const MEMORY_CAP_BYTES = 32 * 1024;
 const KEEP_RECENT_ITEMS = 6;
 /** Most conversation items sent in one request. The Gateway refuses more than 2000 with a plain 400,

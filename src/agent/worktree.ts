@@ -98,7 +98,7 @@ export async function finishAgentWorktree(worktree: AgentWorktree, message: stri
   }
 }
 
-export async function removeAgentWorktree(worktree: AgentWorktree, deleteBranch: boolean): Promise<void> {
+async function removeAgentWorktree(worktree: AgentWorktree, deleteBranch: boolean): Promise<void> {
   await git(['worktree', 'remove', '--force', worktree.root], worktree.repo);
   await fs.rm(path.dirname(worktree.root), { recursive: true, force: true });
   if (deleteBranch) await git(['branch', '-D', worktree.branch], worktree.repo);

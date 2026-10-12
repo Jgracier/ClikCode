@@ -22,7 +22,7 @@ import { hasLocalDisplay, openLoginUrl } from '../../gateway/login/url.js';
 import { verificationNotice } from '../../turn/failover.js';
 import { chooseOption } from './choose.js';
 
-export type ProviderAccountChoice =
+type ProviderAccountChoice =
   | { kind: 'account'; harness: string; accountId: string }
   | { kind: 'add-account'; harness: string };
 
@@ -33,7 +33,7 @@ const ACCOUNT_PROBLEM_WORDS = { verify: 'verify', 'sign-in': 'not signed in', re
  * them, then "+ Add account…" where one can be added. Usage is loaded only
  * after its provider is opened, avoiding a wall of rows and quota probes for
  * providers the user never views. */
-export function accountPickerOptions(
+function accountPickerOptions(
   accounts: ReadonlyArray<{ account: AiHarnessAccount; usage?: string; usagePending?: boolean }>,
   session: HarnessSession,
   harness: AiLocalHarnessDefinition,

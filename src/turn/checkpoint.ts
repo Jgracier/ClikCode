@@ -371,7 +371,7 @@ export function consumeSessionTurn(session: HarnessSession, id: string): boolean
  * a saved answer that differs from the one on screen is exactly the flash.
  * Compared with whitespace collapsed, since streams and reports rarely agree
  * on where the blank lines go. */
-export function durableAnswer(streamed: string, reported: string): string {
+function durableAnswer(streamed: string, reported: string): string {
   const stream = streamed.trim();
   const report = reported.trim();
   if (!stream) return report;

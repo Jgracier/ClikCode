@@ -11,8 +11,8 @@ import type { ImageInput } from '../model-client.js';
 import { defineTool, type ToolDefinition } from '../tool-contract.js';
 import type { McpResourceContents, McpResourceInfo } from './client.js';
 
-export const LIST_MCP_RESOURCES = 'list_mcp_resources';
-export const READ_MCP_RESOURCE = 'read_mcp_resource';
+const LIST_MCP_RESOURCES = 'list_mcp_resources';
+const READ_MCP_RESOURCE = 'read_mcp_resource';
 
 /** One connected server that has resources. */
 export interface McpResourceSource {

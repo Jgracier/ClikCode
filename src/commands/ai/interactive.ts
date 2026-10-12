@@ -117,7 +117,7 @@ export async function aiSessionResume(config: Conf, ref: string): Promise<void> 
   await aiSessionInteractive(config, await openConversation(process.cwd(), 'resume', ref));
 }
 
-export async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
+async function aiSessionInteractive(config: Conf, id: string): Promise<void> {
   // Fetched while the app starts, so Copilot's model list is there the first
   // time the picker opens rather than racing the picker's short wait.
   void import('../../harness/accounts/goose-discovery.js').then(({ modelsDevCache }) => modelsDevCache()).catch(() => undefined);

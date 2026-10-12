@@ -90,7 +90,7 @@ export function nextUsableFailoverAccount(
  * vendor's answer decides; a refusal re-stamps the account, so repeated
  * sends try it at most once per interval. Signed out or held for
  * verification is not a usage question and is not tried. */
-export function staleHeldFailoverAccount(
+function staleHeldFailoverAccount(
   state: HarnessState,
   current: AiHarnessAccount,
   matchesTransport: (candidate: AiHarnessAccount) => boolean,

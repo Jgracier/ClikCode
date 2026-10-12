@@ -108,7 +108,7 @@ function startOrder(tools: readonly SettlingTool[]): SettlingTool[] {
 /** Rows of output an open sub-agent may hold behind it before it is released
  * to scrollback as a running line. The prompter passes a share of what the
  * live region can show; this is only the default. */
-export const DEFAULT_AGENT_HOLD_ROWS = 12;
+const DEFAULT_AGENT_HOLD_ROWS = 12;
 
 type BlockRenderer = (blocks: readonly MessageBlock[], firstOfMessage: boolean) => string[];
 

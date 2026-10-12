@@ -65,7 +65,7 @@ export function showStopReason(prompter: TurnObserver | undefined, reason: TurnS
 }
 
 /** An activity row: on the prompter, or as a line on stdout headless. */
-export function showActivity(prompter: TurnObserver | undefined, event: HarnessActivityEvent): void {
+function showActivity(prompter: TurnObserver | undefined, event: HarnessActivityEvent): void {
   if (prompter) prompter.activityEvent(event);
   else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
 }

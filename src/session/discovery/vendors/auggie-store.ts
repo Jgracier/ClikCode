@@ -125,7 +125,7 @@ export function auggieSession(record: CanonicalRecord, options: AuggieThreadOpti
   }, null, 2)}\n`;
 }
 
-export const auggieThreadWriter: NativeThreadWriter = {
+const auggieThreadWriter: NativeThreadWriter = {
   testedVersions: ['0.36.0'],
   versionOk: testedVersion(['0.36.0']),
   async write(record, context) {

@@ -211,7 +211,7 @@ export function isIntegratedAmd(cpuModel: string, vramBytes: number): boolean {
 /** Apple Silicon: one GPU that shares all of RAM. Metal may wire at most
  * about three quarters of it by default (recommendedMaxWorkingSetSize),
  * which is what the budget uses. */
-export function appleSiliconGpu(cpuModel: string, totalRamBytes: number): GpuInfo {
+function appleSiliconGpu(cpuModel: string, totalRamBytes: number): GpuInfo {
   return { name: cpuModel || 'Apple Silicon', vendor: 'apple', backend: 'metal', vramBytes: totalRamBytes, unified: true, integrated: true };
 }
 
@@ -316,7 +316,7 @@ async function probeMac(): Promise<Partial<HardwareProfile>> {
 
 /** One PowerShell call for everything Windows reports; ConvertTo-Json so
  * the parse does not depend on the display language. */
-export const WINDOWS_PROBE_SCRIPT = [
+const WINDOWS_PROBE_SCRIPT = [
   '$os = Get-CimInstance Win32_OperatingSystem | Select-Object TotalVisibleMemorySize,FreePhysicalMemory;',
   '$cpu = Get-CimInstance Win32_Processor | Select-Object Name,NumberOfCores,NumberOfLogicalProcessors;',
   '$gpu = Get-CimInstance Win32_VideoController | Select-Object Name,AdapterRAM;',

@@ -25,7 +25,7 @@ export const LOAD_MCP_TOOLS = 'load_mcp_tools';
  * The default (lean) budget; the full context profile raises it, because
  * where tokens are cheap the loader round trip costs more than the schemas
  * (context-profile.ts). */
-export const DEFER_MCP_SCHEMA_TOKENS = 1_500;
+const DEFER_MCP_SCHEMA_TOKENS = 1_500;
 
 /** Tool names listed per server in the loader's description; more are counted. */
 const LISTED_NAMES_PER_SERVER = 80;
