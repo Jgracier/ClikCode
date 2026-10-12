@@ -218,3 +218,28 @@ describe('every declared capability is usable', () => {
     }
   });
 });
+
+describe('vendor knowledge lives in the catalog, not in branches', () => {
+  it('writes the provider menu labels the key-route menus agree on once', () => {
+    const labels = (command: string, provider: string) => harnesses.find((h) => h.command === command)?.loginKeyRoutes
+      ?.find((route) => 'provider' in route && route.provider === provider)?.choose.at(-1);
+    for (const provider of ['anthropic', 'openrouter', 'groq', 'cerebras', 'huggingface', 'mistral', 'deepseek', 'zai']) {
+      const shared = labels('cline', provider);
+      expect(shared, provider).toBeTruthy();
+      expect(labels('opencode', provider), `opencode:${provider}`).toBe(shared);
+      expect(labels('kilo', provider), `kilo:${provider}`).toBe(shared);
+      expect(labels('pi', provider), `pi:${provider}`).toBe(shared);
+    }
+  });
+
+  it('declares where each vendor model catalog is read from', () => {
+    const byCommand = new Map(harnesses.map((h) => [h.command, h]));
+    for (const command of ['codex', 'claude', 'hermes', 'openclaw', 'vibe']) {
+      expect(byCommand.get(command)?.nativeStateDir, command).toMatch(/^\./);
+      expect(byCommand.get(command)?.modelCatalogFiles?.length, command).toBeGreaterThan(0);
+    }
+    expect(byCommand.get('copilot')?.modelsDevCatalog).toBe(true);
+    expect(byCommand.get('goose')?.modelsDevCatalog).toBe(true);
+    expect(byCommand.get('hermes')?.effortHelpArgv).toEqual(['chat', '--help']);
+  });
+});

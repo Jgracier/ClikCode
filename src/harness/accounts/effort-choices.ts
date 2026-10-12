@@ -149,7 +149,7 @@ async function helpChoices(harness: AiLocalHarnessDefinition): Promise<string[] 
   if (remembered?.identity === identity) return remembered.values.length ? remembered.values : undefined;
   let values: string[] = [];
   try {
-    const helpArgv = harness.command === 'hermes' ? ['chat', '--help'] : ['--help'];
+    const helpArgv = harness.effortHelpArgv ?? ['--help'];
     values = parseHelpEffortChoices(await captureNativeHarnessOutput(harness, helpArgv, {}), flag);
   } catch {
     // A failed ask is not an answer: nothing is remembered, the next call asks again.
@@ -180,8 +180,8 @@ export async function effortChoicesFor(
   account?: AiHarnessAccount,
   model?: string | null,
 ): Promise<EffortChoices> {
-  if (harness.command === 'codex') {
-    const root = account?.nativeProfile?.path ?? process.env.CODEX_HOME?.trim() ?? join(homedir(), '.codex');
+  if (harness.modelCatalogFiles?.includes('models_cache.json') && harness.nativeStateDir) {
+    const root = account?.nativeProfile?.path ?? (harness.profileEnv ? process.env[harness.profileEnv]?.trim() : undefined) ?? join(homedir(), harness.nativeStateDir);
     const path = join(root, 'models_cache.json');
     const key = `codex:${path}:${model ?? ''}`;
     const identity = await fileIdentity(path);

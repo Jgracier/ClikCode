@@ -79,7 +79,7 @@ describe('Claude\'s models', () => {
     const profile = await mkdtemp(join(tmpdir(), 'clikcode-claude-profile-'));
     // A harness named `claude` whose binary is this fake: the catalog reads
     // its alias table out of whatever file `claude` resolves to on PATH.
-    const harness = { command: 'claude', binary: 'claude', displayName: 'Claude Code' } as AiLocalHarnessDefinition;
+    const harness = { command: 'claude', binary: 'claude', displayName: 'Claude Code', modelCatalogFiles: ['settings.json'] } as AiLocalHarnessDefinition;
     const account = { id: 'a', provider: 'anthropic', label: 'work', models: [], status: 'ready', nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path: profile } } as unknown as AiHarnessAccount;
     try {
       await install('claude', '2.1.279', table('claude-opus-5', 'Opus 5'));
@@ -107,7 +107,7 @@ describe('model catalog persistence and stale-while-revalidate', () => {
     const stateHome = await mkdtemp(join(tmpdir(), 'clikcode-test-state-'));
     process.env.CLIKCODE_HOME = stateHome;
     const profile = await mkdtemp(join(tmpdir(), 'clikcode-test-profile-'));
-    const harness = { command: 'claude', binary: 'claude', displayName: 'Claude Code' } as AiLocalHarnessDefinition;
+    const harness = { command: 'claude', binary: 'claude', displayName: 'Claude Code', modelCatalogFiles: ['settings.json'] } as AiLocalHarnessDefinition;
     const account = { id: 'test-account', provider: 'anthropic', label: 'test', models: [], status: 'ready', nativeProfile: { env: 'CLAUDE_CONFIG_DIR', path: profile } } as unknown as AiHarnessAccount;
 
     try {
