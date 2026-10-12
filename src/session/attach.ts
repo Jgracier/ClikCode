@@ -21,8 +21,6 @@ import type { HarnessSession, HarnessState } from './model.js';
 import { launchSession } from '../commands/ai/sessions.js';
 import { sessionOrProviderHarness } from '../tui/slash/context.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
-import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
-import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { ensureLocalModelForTurn } from '../commands/ai/local-model.js';
 import { releaseQueuedTurn } from '../commands/ai/conversations.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
@@ -134,7 +132,7 @@ export async function leaveConversation(id: string): Promise<void> {
 
 /** What a turn needs before the worker is handed it, done by the client:
  * the chat is on disk (a draft lives only in this process, and the worker is
- * another one that must read it), and a TurboFit or ClikCode Local model is up
+ * another one that must read it), and a ClikCode Local model is up
  * -- held by this client, which outlives nothing it shows, not by the worker.
  * `busy` labels the wait, where the client has a line for it. */
 export async function prepareTurn(
@@ -143,13 +141,6 @@ export async function prepareTurn(
   await ensureSessionOnDisk(targetId);
   const state = await readState({ transcripts: [targetId] });
   const active = state.sessions.find((item) => item.id === targetId);
-  const harness = active?.nativeHarness ? localHarnessForCommand(active.nativeHarness) : undefined;
-  if (active && harness) {
-    busy?.('preparing…');
-    try {
-      await ensureTurboFitForTurn(harness, state.accounts.find((item) => item.id === active.accountId), targetId, active.model, busy);
-    } finally { busy?.(); }
-  }
   if (active?.route === 'clikcode-local') {
     busy?.('loading the local model…');
     // Its download's percentage on the same line, where the caller shows

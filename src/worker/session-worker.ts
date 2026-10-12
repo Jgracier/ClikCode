@@ -440,7 +440,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
 
   /** Runs the queue's head when it is a notification. A message the user
    * queued is still sent by their window, which prepares what that turn
-   * needs locally (a TurboFit or ClikCode Local model) before sending it; a
+   * needs locally (a ClikCode Local model) before sending it; a
    * slash command only ever runs there. Anything else at the head is left,
    * and the windows are told the queue changed. */
   const reportDrainFailure = (error: unknown): void => {

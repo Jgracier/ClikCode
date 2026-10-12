@@ -513,10 +513,6 @@ export interface AiLocalHarnessDefinition {
    * settings file (`~/`-relative), merged into whatever is there: Antigravity
    * ignores GEMINI_API_KEY unless `modelProvider` is `gemini`. */
   apiKeySettings?: { path: string; set: Readonly<Record<string, string>> };
-  /** Serves TurboFit local models through its own provider plugin
-   * (src/harness/accounts/hermes-discovery.ts): the model picker offers them,
-   * and a turn on one starts its runtime first. */
-  turboFit?: boolean;
   statusArgv?: readonly string[];
   logoutArgv?: readonly string[];
   /** Which of the harness's own options is its read-only planning mode, and
@@ -1097,7 +1093,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // (it prints a notice and exits 0), so signing in is `hermes model`, and a
   // single provider is `hermes auth add <provider>`, which picks OAuth or an
   // API key for that provider itself.
-  { command: 'hermes', capabilities: { childActivity: false, thinking: false, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { suffix: ':free' }, loginAccountChoose: ['Nous Portal'], provider: 'nous', displayName: 'Hermes', turboFit: true, tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], inheritCliOptions: false, permissionArgv: { bypass: ['--yolo'] }, listsModels: false, usageTotals: 'session' }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', installer: HARNESS_INSTALLERS.hermes, loginArgv: ['model'], loginKeyRoutes: providerKeyRoutes([], {
+  { command: 'hermes', capabilities: { childActivity: false, thinking: false, plan: false, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { suffix: ':free' }, loginAccountChoose: ['Nous Portal'], provider: 'nous', displayName: 'Hermes', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], inheritCliOptions: false, permissionArgv: { bypass: ['--yolo'] }, listsModels: false, usageTotals: 'session' }, effortValues: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'], normalizedPermissionOptionIds: ['yolo'], localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'hermes', installer: HARNESS_INSTALLERS.hermes, loginArgv: ['model'], loginKeyRoutes: providerKeyRoutes([], {
     anthropic: ['Anthropic', 'Anthropic API key'], openrouter: 'OpenRouter', openai: ['OpenAI', 'OpenAI API'], google: 'Google AI Studio', xai: ['xAI Grok', 'xAI'],
     huggingface: 'Hugging Face Inference Providers', fireworks: 'Fireworks AI', deepseek: 'DeepSeek', moonshot: ['Kimi / Moonshot', 'Kimi / Kimi Coding Plan'],
     'moonshot-cn': ['Kimi / Moonshot', 'Kimi / Moonshot (China)'], zai: ['Z.AI / GLM', 'Global (https://api.z.ai/api/paas/v4)'], minimax: ['MiniMax', 'MiniMax'],

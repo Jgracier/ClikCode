@@ -32,7 +32,6 @@ import { withWorkspacePaths } from '../harness/protocol/activity-view.js';
 import { harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import { writeState } from '../session/state/write.js';
 import { syncAccountIdentityAfterLogin, withSignIn } from '../commands/account.js';
-import { ensureTurboFitForTurn } from '../commands/ai/turbofit.js';
 import { closePersistentTransport, closeStandby, persistentWorkRunning, standbyFor, waitForPersistentWork, rememberFallbackTurn, usesFallbackTurn, nativeAvailableCommands } from './vendor-process.js';
 import { hasHeldVendorProcess, releaseHeldVendorProcess, waitForHeldVendorSubagents } from '../harness/transport/native/held-vendor.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
@@ -155,10 +154,6 @@ export async function sendVendorTurn(input: {
     model = await resolveNativeModel(harness, account) ?? null;
     if (model) session.model = model;
   }
-  // A TurboFit local model is running before its turn (a headless send, a
-  // worker picking up a session whose terminal took the lease).
-  model = await ensureTurboFitForTurn(harness, account, session.id, model);
-  if (model) session.model = model;
   // An unnamed chat gets a title from the harness that writes one. Where the
   // harness does not, one turn asks, once the user has said enough to name
   // the chat. The request rides on that turn's text only -- never on what is

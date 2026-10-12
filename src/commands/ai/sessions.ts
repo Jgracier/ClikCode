@@ -1,7 +1,6 @@
 /** `clikcode session`: creating, listing, showing, closing and leaving a
  * session, and the policy each kind of session starts with. */
 
-import { turboFitSessionClosed } from './turbofit.js';
 import { releaseHeldLocalModel } from './local-model.js';
 import { catalogModel, resolveLocalModelId } from '../../local-models/catalog.js';
 import { isBlankConversation } from '../../session/options.js';
@@ -363,10 +362,8 @@ async function endSession(id: string, intent: 'close' | 'leave'): Promise<void> 
   const announce = (): void => {
     if (intent === 'close') emitHarnessOutput({ panel: 'session-closed', sessionId: session.id, closed: true });
   };
-  // A closed session no longer holds a TurboFit local model running.
   if (intent === 'close') {
-    await turboFitSessionClosed(state.accounts.find((item) => item.id === session.accountId), session.id).catch(() => undefined);
-    // Nor a ClikCode Local one, if this process held it.
+    // A closed session no longer holds a ClikCode Local model, if this process held it.
     await releaseHeldLocalModel(session.id);
   }
   // Never started: not kept, by the same rule /resume hides it by.

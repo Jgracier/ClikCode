@@ -12,8 +12,7 @@ export async function runIdeTerminal(encoded: string): Promise<void> {
   const spec = decodeTerminalSpec(encoded);
   const harness = localHarnessForCommand(spec.command);
   if (!harness) throw new Error(`unknown harness ${spec.command}`);
-  // The environment the bridge asked for (a vendor profile, a TurboFit
-  // endpoint) is this terminal's own, so nothing is layered on top here.
+  // The environment the bridge asked for (a vendor profile) is this terminal's own, so nothing is layered on top here.
   await ensureNativeHarness(harness);
   await runNativeHarnessCommand(harness, spec.argv, {});
 }

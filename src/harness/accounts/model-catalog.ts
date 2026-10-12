@@ -2,7 +2,6 @@
  * itself -- its CLI, its config, or its own bundled table -- and cached only
  * for as long as what it was derived from stays the same. */
 
-import { turboFitCpuLaneRows } from './turbofit-local.js';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { readFile, stat } from 'node:fs/promises';
@@ -11,7 +10,7 @@ import { nativeAccountEnvironment, nativeProfileEnvironment } from '../transport
 import { resolveBinaryPath } from '../transport/native/binary.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition, ModelCatalogConnect, ModelCatalogResult } from '../definition.js';
 import { claudeModelAliases, claudeModelLabel, claudeModelTable } from './claude-models.js';
-import { discoverHermesModels, hermesCachedModels, hermesTurboFitCatalogFiles } from './hermes-discovery.js';
+import { discoverHermesModels, hermesCachedModels } from './hermes-discovery.js';
 import { discoverOpenClawModels } from './openclaw-discovery.js';
 import { discoverOpencodeConnect, opencodeVerboseModels } from './opencode-discovery.js';
 import { freePlanModels, planIsFree, preferredFreeModel } from './free-plan.js';
@@ -196,7 +195,6 @@ async function catalogFingerprint(harness: AiLocalHarnessDefinition, account?: A
     ...(harness.command === 'codex' && root ? [join(root, 'config.toml'), join(root, 'models_cache.json')] : []),
     ...(harness.command === 'claude' && root ? [join(root, 'settings.json')] : []),
     ...(harness.command === 'hermes' && root ? [join(root, 'config.yaml'), join(root, 'provider_models_cache.json'), join(root, 'auth.json'), join(root, '.env')] : []),
-    ...(harness.command === 'hermes' ? await hermesTurboFitCatalogFiles(nativeProfileEnvironment(account?.nativeProfile)) : []),
     // OpenClaw's sign-ins live in the agent's SQLite auth store.
     ...(harness.command === 'openclaw' && root ? [join(root, 'openclaw.json'), join(root, 'agents', 'main', 'agent', 'openclaw-agent.sqlite')] : []),
     ...(harness.command === 'vibe' && root ? [join(root, 'config.toml')] : []),
@@ -505,7 +503,6 @@ async function nativeModelCatalogUncached(
   let labels: Record<string, string> | undefined;
   let configured: string | undefined;
   let connect: ModelCatalogConnect[] | undefined;
-  let localRecommendations: ModelCatalogResult['localRecommendations'];
   let free: string[] | undefined;
   let effortValues: string[] | undefined;
   // Hermes' and OpenClaw's inventories are the whole truth: ids remembered on
@@ -572,10 +569,6 @@ async function nativeModelCatalogUncached(
     const inventory = await discoverHermesModels(harness, account).catch(() => undefined);
     if (inventory) {
       adoptInventory(inventory);
-      // On a machine TurboFit sees no GPU in, its recommendations are GPU
-      // measurements; the CPU lanes, measured or estimated here, replace them.
-      const cpuLanes = await turboFitCpuLaneRows(harness, account).catch(() => []);
-      localRecommendations = cpuLanes.length ? cpuLanes : inventory.localRecommendations;
     } else if (profileRoot) {
       try {
         for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) models.add(model);
@@ -696,7 +689,6 @@ async function nativeModelCatalogUncached(
     ...(labels ? { labels } : {}),
     ...(free?.length ? { free } : {}),
     ...(connect?.length ? { connect } : {}),
-    ...(localRecommendations?.length ? { localRecommendations } : {}),
     ...(effortValues?.length ? { effortValues } : {}),
   };
 }
