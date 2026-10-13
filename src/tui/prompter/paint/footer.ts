@@ -73,7 +73,8 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // rule rather than needing a line of its own. Provider/model/directory
   // (meta) stay on their own separate line below, never sharing space with
   // the title the way they used to.
-  const titleRule = paintTitleRule(rowWidth, session.name || undefined);
+  // A name cut from the chat's first message is already on screen as that message: the rule says a name only when it adds something.
+  const titleRule = paintTitleRule(rowWidth, session.nameSource === 'message' ? undefined : session.name || undefined);
   footer.push(titleRule);
   // Provider, model, effort and directory are one statement -- what this
   // conversation is running as -- so they read as one line in one colour
