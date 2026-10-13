@@ -1,15 +1,26 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, beforeAll } from 'vitest';
 import { describe, expect, it } from 'vitest';
 import { holdResourceNote, stripResourceNotes, withResourceNotes, wrapResourceNote } from './resource-notes.js';
 import { normalizeImportedTranscript } from './failover-prompt.js';
 import { LiveTurnInputBroker } from './live-input.js';
 
+const savedHome = process.env.CLIKCODE_HOME;
+let testHome: string;
+beforeAll(() => { testHome = mkdtempSync(join(tmpdir(), 'clikcode-resource-notes-')); process.env.CLIKCODE_HOME = testHome; });
+afterAll(() => { if (savedHome === undefined) delete process.env.CLIKCODE_HOME; else process.env.CLIKCODE_HOME = savedHome; rmSync(testHome, { recursive: true, force: true }); });
+
 describe('resource notes', () => {
   it('ride on the next turn once, ahead of its text', () => {
     holdResourceNote('s1', 'memory is tight');
     holdResourceNote('s1', 'a command was stopped');
+    expect(existsSync(join(testHome, 'resource-notes', 's1.json'))).toBe(true);
     const sent = withResourceNotes('s1', 'fix the bug');
     expect(sent).toBe(`${wrapResourceNote('memory is tight')}\n${wrapResourceNote('a command was stopped')}\n\nfix the bug`);
     expect(withResourceNotes('s1', 'next')).toBe('next');
+    expect(existsSync(join(testHome, 'resource-notes', 's1.json'))).toBe(false);
     expect(withResourceNotes('other', 'untouched')).toBe('untouched');
   });
 

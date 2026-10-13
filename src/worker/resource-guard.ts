@@ -1,289 +1,119 @@
-/** Keeps agents' commands from taking the memory the desktop and editor need,
- * by reacting, not predicting: commands grow, so nothing is capped up front.
- *
- * Every conversation's worker watches the agent slice (own-scope.ts) against
- * what the machine can give it -- free memory less a reserve for the desktop,
- * and never past the slice's own hard ceiling. Near that line the agent whose
- * command is largest is told memory is getting tight (a nudge). Past it, that
- * command -- the largest one any agent is running -- is stopped, and its agent
- * is told what was stopped and why, so it can run something lighter. The
- * notes go to the model only (turn/resource-notes.ts).
- *
- * A "command" is what an agent ran: the first process below a shell, with
- * everything it started. The worker, the vendor's own process and MCP servers
- * are never one. Each worker acts only on its own conversation's processes;
- * every worker reads the same numbers, so exactly the owner acts.
- *
- * MEASURED 2026-10-10/12: agents' test runs exhausted RAM and swap and the
- * kernel's own pick took VS Code's GPU process (the editor quit); a soft
- * per-chat ceiling instead throttled whole conversations silently. Linux
- * only: it needs the worker in its own scope under the agent slice. */
-import { readFileSync, readdirSync, readlinkSync } from 'node:fs';
+/** React to measured memory pressure. A probe owns the platform-specific
+ * accounting and stop operation; this controller only chooses and informs. */
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
+import { stateDirectory } from '../session/store/paths.js';
+import { cgroupProbe, processProbe, type Inventory, type MemorySample, type Probe, type Unit } from './resource-probes.js';
 
 const GIB = 2 ** 30;
 const TICK_MS = 2_000;
-/** Told memory is getting tight from here (of the limit)... */
 export const NUDGE_AT = 0.85;
-/** ...and again only once usage has fallen back below this. */
 export const NUDGE_REARM_BELOW = 0.75;
-/** A stopped command's memory takes a moment to come back. */
-const KILL_SETTLE_MS = 5_000;
-/** The slice's own ceiling -- MemoryHigh throttles every agent, MemoryMax
- * kills by the kernel's choice -- is reached a little later than this. */
+export const SETTLE_MS = 15_000;
+const STOP_INTERVAL_MS = 20_000;
+const EFFECTIVE_SHARE = 0.25;
 const SLICE_CEILING_SHARE = 0.97;
-/** Every agent in the slice stalled on memory this much of the last 10 s
- * (memory.pressure "full"): over the limit, whatever the numbers say. */
-export const STALL_STOP_PERCENT = 10;
-
-export interface MemorySample {
-  /** MemTotal and MemAvailable (/proc/meminfo), bytes. */
-  total: number;
-  available: number;
-  /** What the agent slice holds that cannot simply be dropped: anon + shmem + kernel. */
-  agentUsed: number;
-  /** The lower of the slice's memory.high and memory.max, if it has either:
-   * past MemoryHigh the kernel throttles every agent, so that is the ceiling.
-   * MEASURED 2026-10-13: with only memory.max (38G) counted, agents sat
-   * throttled at 34-37G for a morning -- stalled up to 78% of the time, 23
-   * nudges, nothing stopped -- until the user killed commands by hand. */
-  agentCeiling?: number;
-  /** Percent of the last 10 s every agent in the slice was stalled on memory. */
-  agentStalled?: number;
-}
 
 export interface AgentBudget { used: number; limit: number; ratio: number }
-
-/** Room left for the desktop and editor beyond what they use now. */
-export function desktopReserve(total: number): number {
-  return Math.max(4 * GIB, total * 0.08);
-}
-
-/** What agents may hold right now: theirs plus what is free, less the
- * desktop's reserve, and never past the slice's own ceiling. Agents already
- * choking on memory are past it, however the numbers come out. */
+export function desktopReserve(total: number): number { return Math.max(4 * GIB, total * 0.08); }
 export function agentBudget(sample: MemorySample): AgentBudget {
-  const byMachine = sample.agentUsed + sample.available - desktopReserve(sample.total);
-  const bySlice = sample.agentCeiling ? sample.agentCeiling * SLICE_CEILING_SHARE : Infinity;
+  const byMachine = sample.used + sample.available - desktopReserve(sample.total);
+  const bySlice = sample.ceiling ? sample.ceiling * SLICE_CEILING_SHARE : Infinity;
   const limit = Math.max(0, Math.min(byMachine, bySlice));
-  const ratio = limit > 0 ? sample.agentUsed / limit : Infinity;
-  return { used: sample.agentUsed, limit, ratio: (sample.agentStalled ?? 0) >= STALL_STOP_PERCENT ? Math.max(ratio, 1) : ratio };
+  const ratio = limit > 0 ? sample.used / limit : Infinity;
+  return { used: sample.used, limit, ratio: sample.critical ? Math.max(ratio, 1) : ratio };
 }
 
-export interface ProcessEntry {
-  pid: number;
-  ppid: number;
-  /** Resident plus swapped, bytes. */
-  bytes: number;
-  /** Basename of the executable: tells a shell running a script from what it runs. */
-  exe: string;
-  command: string;
+export function worthStopping(unit: Unit, budget: AgentBudget): boolean {
+  return unit.freeable >= Math.max(GIB, budget.limit * 0.03);
 }
-
-const SHELLS = new Set(['bash', 'sh', 'dash', 'zsh', 'fish', 'ksh', 'mksh', 'busybox']);
-const MCP = /(?:^|[\s/@_-])mcp(?:$|[\s/._-])|-mcp\b|\bmcp-/i;
-const WORKER = /\ssession-worker\s/;
-
-export interface CommandTree {
-  /** The worker whose conversation ran it. */
-  worker: number;
-  root: ProcessEntry;
-  pids: number[];
-  bytes: number;
-}
-
-export interface ProcessView {
-  /** Every command an agent is running, largest first. */
-  commands: CommandTree[];
-  /** Each worker's whole tree, bytes. */
-  byWorker: Map<number, number>;
-}
-
-/** Commands and their owners, from the processes in the agent slice. */
-export function viewProcesses(entries: readonly ProcessEntry[]): ProcessView {
-  const byPid = new Map(entries.map((entry) => [entry.pid, entry]));
-  const children = new Map<number, ProcessEntry[]>();
-  for (const entry of entries) {
-    const list = children.get(entry.ppid) ?? [];
-    list.push(entry);
-    children.set(entry.ppid, list);
+export type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; unit?: Unit } | { kind: 'stop'; worker: number; unit: Unit };
+/** Only a measured unit large enough to relieve pressure is stopped. */
+export function decideAction(budget: AgentBudget, inventory: Inventory): GuardAction {
+  if (budget.ratio < NUDGE_AT || !inventory.workers.length) return { kind: 'none' };
+  const bySize = [...inventory.units].sort((a, b) => b.freeable - a.freeable);
+  const commands = bySize.filter((unit) => unit.kind === 'command' && unit.owner !== undefined);
+  if (budget.ratio >= 1) {
+    const command = commands.find((unit) => worthStopping(unit, budget));
+    if (command) return { kind: 'stop', worker: command.owner!, unit: command };
   }
-  const workers = entries.filter((entry) => WORKER.test(` ${entry.command} `));
-  const byWorker = new Map<number, number>();
-  const commands: CommandTree[] = [];
-  const subtree = (root: ProcessEntry): ProcessEntry[] => {
-    const out: ProcessEntry[] = [];
-    const stack = [root];
-    while (stack.length) {
-      const next = stack.pop()!;
-      out.push(next);
-      stack.push(...(children.get(next.pid) ?? []));
-    }
-    return out;
-  };
-  for (const worker of workers) {
-    byWorker.set(worker.pid, subtree(worker).reduce((sum, entry) => sum + entry.bytes, 0));
-    // Down from the worker: a process with a shell above it (below the
-    // worker) and none of its own ancestors already a command is a command.
-    const walk = (entry: ProcessEntry, belowShell: boolean): void => {
-      for (const child of children.get(entry.pid) ?? []) {
-        const shell = SHELLS.has(child.exe);
-        if (!shell && belowShell && !MCP.test(child.command)) {
-          const tree = subtree(child);
-          commands.push({ worker: worker.pid, root: child, pids: tree.map((item) => item.pid), bytes: tree.reduce((sum, item) => sum + item.bytes, 0) });
-          continue;
-        }
-        walk(child, belowShell || shell);
-      }
-    };
-    if (byPid.has(worker.pid)) walk(worker, false);
-  }
-  commands.sort((a, b) => b.bytes - a.bytes);
-  return { commands, byWorker };
+  const largest = commands[0];
+  return largest
+    ? { kind: 'nudge', worker: largest.owner!, unit: largest }
+    : { kind: 'nudge', worker: Math.min(...inventory.workers) };
 }
-
-export type GuardAction =
-  | { kind: 'none' }
-  | { kind: 'nudge'; worker: number; command?: CommandTree }
-  | { kind: 'stop'; command: CommandTree };
-
-/** What to do at this ratio: stop the largest command past the limit; near
- * it, nudge whoever runs the largest (or, with no command running, holds the
- * most). Who acts is the owner (`worker`), and only they. */
-/** Smallest command worth stopping: one below this frees nothing that
- * matters. MEASURED 2026-10-13: with agents choking on memory held outside any
- * command (their own processes, orphans, /tmp), the largest command was an
- * agent's `sleep` -- 70 of 102 stops in half an hour were 8 MB sleeps, which
- * freed nothing and broke the agents' wait loops. */
-export function worthStopping(command: CommandTree, budget: AgentBudget): boolean {
-  return command.bytes >= Math.max(GIB, budget.limit * 0.03);
-}
-
-export function decideAction(budget: AgentBudget, view: ProcessView): GuardAction {
-  if (budget.ratio < NUDGE_AT) return { kind: 'none' };
-  const largest = view.commands[0];
-  if (budget.ratio >= 1 && largest && worthStopping(largest, budget)) return { kind: 'stop', command: largest };
-  if (largest) return { kind: 'nudge', worker: largest.worker, command: largest };
-  const heaviest = [...view.byWorker].sort((a, b) => b[1] - a[1])[0];
-  return heaviest ? { kind: 'nudge', worker: heaviest[0] } : { kind: 'none' };
-}
-
 const gb = (bytes: number): string => `${(bytes / GIB).toFixed(1)} GB`;
-const shown = (command: string): string => (command.length > 160 ? `${command.slice(0, 157)}...` : command);
-
-export function nudgeNote(budget: AgentBudget, conversations: number, command?: CommandTree): string {
+export function nudgeNote(budget: AgentBudget, conversations: number, unit?: Unit): string {
   return [
-    `Memory on this machine is getting tight: agents are using ${gb(budget.used)} of the ${gb(budget.limit)} they can have`
-      + ` (${conversations} conversation${conversations === 1 ? '' : 's'} share it).`,
-    command ? `Your \`${shown(command.root.command)}\` is the largest command running, at ${gb(command.bytes)}.` : '',
-    'Prefer lighter work for now: run only the tests for what you changed, use fewer parallel workers, and avoid starting another heavy build or suite.'
-      + ' If memory runs out, ClikCode stops the largest command and tells you.',
+    `Memory is getting tight: agents are using ${gb(budget.used)} of ${gb(budget.limit)} available to them across ${conversations} conversation${conversations === 1 ? '' : 's'}.`,
+    unit ? `Your \`${unit.label}\` holds about ${gb(unit.freeable)}.` : '',
+    'Prefer targeted tests and fewer parallel workers before starting more heavy work.',
   ].filter(Boolean).join(' ');
 }
-
-export function stopNote(budget: AgentBudget, conversations: number, command: CommandTree): string {
-  const others = command.pids.length - 1;
-  return [
-    `ClikCode stopped \`${shown(command.root.command)}\`${others ? ` (and ${others} process${others === 1 ? '' : 'es'} it started)` : ''}`
-      + ` at ${gb(command.bytes)}: agents had used all the memory this machine can give them (${gb(budget.used)} of ${gb(budget.limit)},`
-      + ` shared by ${conversations} conversation${conversations === 1 ? '' : 's'}), and it was the largest command running.`,
-    'It did not fail on its own; it was killed (exit 137 / SIGKILL). Run something lighter instead: only the tests or files you changed,'
-      + ' fewer parallel workers (e.g. --maxWorkers=2, -j2), or split it into smaller runs. Do not rerun it unchanged.',
-  ].join(' ');
+export function stopNote(budget: AgentBudget, conversations: number, unit: Unit, platform: NodeJS.Platform = process.platform): string {
+  const how = platform === 'win32' ? 'terminated by ClikCode (taskkill)' : 'killed by ClikCode (SIGKILL)';
+  return `ClikCode stopped \`${unit.label}\` and its child processes because it held about ${gb(unit.freeable)} while agents used ${gb(budget.used)} of ${gb(budget.limit)} across ${conversations} conversations. It was ${how} for resource pressure, not a test failure. Use targeted tests, fewer workers, or smaller runs; do not rerun the same command unchanged.`;
 }
-
-// --- Reading the machine -----------------------------------------------------
-
-function readNumber(path: string): number | undefined {
-  try {
-    const text = readFileSync(path, 'utf8').trim();
-    return text === 'max' ? undefined : Number(text);
-  } catch { return undefined; }
-}
-
-export function sampleMemory(sliceDir: string): MemorySample | undefined {
-  try {
-    const meminfo = readFileSync('/proc/meminfo', 'utf8');
-    const field = (name: string): number => Number(new RegExp(`^${name}:\\s+(\\d+)`, 'm').exec(meminfo)?.[1] ?? 0) * 1024;
-    const stat = readFileSync(join(sliceDir, 'memory.stat'), 'utf8');
-    const statField = (name: string): number => Number(new RegExp(`^${name} (\\d+)`, 'm').exec(stat)?.[1] ?? 0);
-    const ceilings = [readNumber(join(sliceDir, 'memory.high')), readNumber(join(sliceDir, 'memory.max'))].filter((value): value is number => !!value);
-    let agentStalled: number | undefined;
-    try { agentStalled = Number(/^full avg10=([\d.]+)/m.exec(readFileSync(join(sliceDir, 'memory.pressure'), 'utf8'))?.[1]); } catch { /* fail-open-ok: no pressure file, judged by the numbers alone */ }
-    return {
-      total: field('MemTotal'), available: field('MemAvailable'),
-      agentUsed: statField('anon') + statField('shmem') + statField('kernel'),
-      ...(ceilings.length ? { agentCeiling: Math.min(...ceilings) } : {}),
-      ...(agentStalled !== undefined && Number.isFinite(agentStalled) ? { agentStalled } : {}),
-    };
-  } catch { return undefined; }
-}
-
-function slicePids(dir: string): number[] {
-  const pids: number[] = [];
-  const visit = (path: string): void => {
-    try {
-      for (const line of readFileSync(join(path, 'cgroup.procs'), 'utf8').split('\n')) if (line) pids.push(Number(line));
-      for (const entry of readdirSync(path, { withFileTypes: true })) if (entry.isDirectory()) visit(join(path, entry.name));
-    } catch { /* fail-open-ok: a scope that ended mid-read has no processes left to count */ }
-  };
-  visit(dir);
-  return pids;
-}
-
-export function readProcesses(sliceDir: string): ProcessEntry[] {
-  const entries: ProcessEntry[] = [];
-  for (const pid of slicePids(sliceDir)) {
-    try {
-      const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-      const ppid = Number(stat.slice(stat.lastIndexOf(')') + 2).split(' ')[1]);
-      const status = readFileSync(`/proc/${pid}/status`, 'utf8');
-      const kib = (name: string): number => Number(new RegExp(`^${name}:\\s+(\\d+)`, 'm').exec(status)?.[1] ?? 0);
-      let exe = '';
-      try { exe = readlinkSync(`/proc/${pid}/exe`).split('/').pop()!.replace(/ \(deleted\)$/, ''); } catch { /* fail-open-ok: a zombie has no exe; it is no shell */ }
-      const command = readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').filter(Boolean).join(' ');
-      entries.push({ pid, ppid, bytes: (kib('VmRSS') + kib('VmSwap')) * 1024, exe, command });
-    } catch { /* fail-open-ok: the process exited between listing and reading */ }
-  }
-  return entries;
-}
-
-// --- Acting --------------------------------------------------------------------
-
+function marker(): string { return join(stateDirectory(), 'resource-guard.last-stop'); }
+function ineffectiveMarker(): string { return join(stateDirectory(), 'resource-guard.ineffective'); }
+function lastStopAt(): number { try { return Number(readFileSync(marker(), 'utf8')) || 0; } catch { return 0; } }
+function ineffective(): boolean { try { return readFileSync(ineffectiveMarker(), 'utf8').length > 0; } catch { return false; } }
 export interface ResourceGuardOptions {
   sessionId: string;
-  sliceDir: string;
-  /** Hand a note to this conversation's model (turn/resource-notes.ts). */
+  sliceDir?: string;
   deliver: (note: string) => void;
+  probe?: Probe;
 }
-
+/** When a Linux scope isn't delegated, or on macOS/Windows, use the process
+ * probe. It is approximate and has no orphan cleanup; its stop implementation
+ * revalidates the root before signalling. */
 export function startResourceGuard(options: ResourceGuardOptions): () => void {
-  const { sessionId, sliceDir, deliver } = options;
+  const { sessionId, deliver } = options;
+  const probe = options.probe ?? (options.sliceDir ? cgroupProbe(options.sliceDir) : processProbe());
   let nudged = false;
-  let settleUntil = 0;
-  const tick = (): void => {
-    const sample = sampleMemory(sliceDir);
+  let pending: { unit: Unit; before: number; at: number } | undefined;
+  const tick = async (): Promise<void> => {
+    const sample = await probe.sample();
     if (!sample) return;
     const budget = agentBudget(sample);
-    if (budget.ratio < NUDGE_REARM_BELOW) nudged = false;
-    if (budget.ratio < NUDGE_AT || Date.now() < settleUntil) return;
-    const view = viewProcesses(readProcesses(sliceDir));
-    const action = decideAction(budget, view);
-    const conversations = view.byWorker.size;
-    if (action.kind === 'stop' && action.command.worker === process.pid) {
-      for (const pid of action.command.pids) { try { process.kill(pid, 'SIGKILL'); } catch { /* fail-open-ok: it already exited, which is what was wanted */ } }
-      settleUntil = Date.now() + KILL_SETTLE_MS;
-      lifecycle('resource.stop', { session: sessionId, command: shown(action.command.root.command), bytes: action.command.bytes, processes: action.command.pids.length, used: budget.used, limit: budget.limit });
-      deliver(stopNote(budget, conversations, action.command));
-    } else if (action.kind === 'nudge' && action.worker === process.pid && !nudged) {
+    if (pending && Date.now() - pending.at >= SETTLE_MS) {
+      const freed = pending.before - budget.used;
+      const effective = freed >= pending.unit.freeable * EFFECTIVE_SHARE;
+      lifecycle('resource.effect', { session: sessionId, label: pending.unit.label, held: pending.unit.freeable, freed, effective });
+      // If stopping something did not help, the cause is outside measured
+      // commands (e.g. /tmp, an orphan, agent machinery). No more kills this
+      // pressure episode; resume only after memory has recovered.
+      if (!effective) writeFileSync(ineffectiveMarker(), String(Date.now()));
+      pending = undefined;
+    }
+    if (budget.ratio < NUDGE_REARM_BELOW) {
+      nudged = false;
+      try { rmSync(ineffectiveMarker(), { force: true }); } catch { /* fail-open-ok */ }
+    }
+    if (budget.ratio < NUDGE_AT || Date.now() - lastStopAt() < STOP_INTERVAL_MS || pending) return;
+    const inventory = await probe.inventory();
+    const action = decideAction(budget, inventory);
+    if (action.kind === 'none' || action.worker !== process.pid) return;
+    const conversations = inventory.workers.length;
+    if (action.kind === 'stop' && !ineffective()) {
+      if (!await probe.stop(action.unit.target)) return;
+      try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(marker(), String(Date.now())); } catch { /* fail-open-ok */ }
+      pending = { unit: action.unit, before: budget.used, at: Date.now() };
+      lifecycle('resource.stop', { session: sessionId, kind: action.unit.kind, label: action.unit.label, held: action.unit.freeable, used: budget.used, limit: budget.limit });
+      if (action.unit.kind === 'command') deliver(stopNote(budget, conversations, action.unit));
+    } else if (!nudged) {
       nudged = true;
-      lifecycle('resource.nudge', { session: sessionId, ...(action.command ? { command: shown(action.command.root.command), bytes: action.command.bytes } : {}), used: budget.used, limit: budget.limit });
-      deliver(nudgeNote(budget, conversations, action.command));
+      lifecycle('resource.nudge', { session: sessionId, ...(action.unit ? { label: action.unit.label, held: action.unit.freeable } : {}), used: budget.used, limit: budget.limit });
+      deliver(nudgeNote(budget, conversations, action.unit));
     }
   };
+  let running = false;
   const timer = setInterval(() => {
-    try { tick(); } catch (error) { lifecycle('resource.error', { session: sessionId, message: error instanceof Error ? error.message : String(error) }); }
+    if (running) return;
+    running = true;
+    void tick().catch((error) => lifecycle('resource.error', { session: sessionId, message: error instanceof Error ? error.message : String(error) }))
+      .finally(() => { running = false; });
   }, TICK_MS);
   timer.unref();
   return () => clearInterval(timer);
