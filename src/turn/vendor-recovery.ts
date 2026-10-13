@@ -3,7 +3,8 @@
  * one ('pass'); when none applies the turn moves to another account. */
 import { forgetNativeThread } from '../session/native-thread.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { closePersistentTransport, closeStandby, rememberFallbackTurn, standbyFor, usesFallbackTurn } from './vendor-process.js';
+import chalk from 'chalk';
+import { closePersistentTransport, closeStandby, standbyFor } from './vendor-process.js';
 import { moveThreadToAccount } from '../session/carry.js';
 import { switchAccountAfterFailure } from './account-switch.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
@@ -26,22 +27,17 @@ export function echoesRefusal(text: string, failure: unknown): boolean {
   return said.length > 0 && refused.length > 0 && (refused.includes(said) || said.includes(refused));
 }
 
-export type Recovery = 'fallback-turn' | 'sign-in' | 'native-thread';
+export type Recovery = 'sign-in' | 'native-thread';
 
 /** The recoveries a failure could take, in the order they are tried. Pure: a
  * recovery may still decline (a sign-in that fails, a compatibility turn
  * already in use) and the next is tried. */
 export function recoveryCandidates(facts: {
   failureKind: AccountFailureKind;
-  cliOutputStarted: boolean;
-  cliTransport: boolean;
-  hasFallbackTurn: boolean;
   attempt: Pick<AttemptState, 'authRetried' | 'nativeThreadRetried'>;
 }): Recovery[] {
-  const { failureKind, cliOutputStarted, attempt } = facts;
+  const { failureKind, attempt } = facts;
   const order: Recovery[] = [];
-  // A turn contract an older vendor build rejects outright.
-  if (failureKind === 'other' && !cliOutputStarted && facts.hasFallbackTurn && facts.cliTransport) order.push('fallback-turn');
   if (failureKind === 'authentication-required' && !attempt.authRetried) order.push('sign-in');
   if (failureKind === 'native-thread-invalid' && !attempt.nativeThreadRetried) order.push('native-thread');
   return order;
@@ -49,14 +45,6 @@ export function recoveryCandidates(facts: {
 
 type Decision = 'retry' | 'pass';
 type Failed = AttemptRecord & { failure: Error; failureKind: AccountFailureKind };
-
-/** Retry once on the harness's declared fallback contract, and remember it for that build. */
-async function retryOnFallbackTurn(ctx: VendorTurnContext, _failed: Failed): Promise<Decision> {
-  if (await usesFallbackTurn(ctx.harness)) return 'pass';
-  await rememberFallbackTurn(ctx.harness);
-  ctx.prompter?.phase('using compatibility turn');
-  return 'retry';
-}
 
 /** Reactive counterpart to aiHarnessSelect's proactive login check: a
  * harness with no statusArgv gets no pre-turn "are you logged in?" probe at
@@ -78,6 +66,8 @@ async function retryAfterSignIn(ctx: VendorTurnContext, failed: Failed): Promise
  * truth, and nativeSessionId is a disposable optimization. */
 async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promise<Decision> {
   ctx.attempt.nativeThreadRetried = true;
+  // The one notice of this recovery; the flag above makes it once per attempt.
+  ctx.prompter?.activity(chalk.yellow(`${ctx.harness.displayName} could not resume its thread; continuing on a new one with the conversation carried over`));
   await closePersistentTransport(ctx.session.id);
   forgetNativeThread(ctx.session);
   ctx.turnText = await retell(ctx, ctx.askedText, 'clear', Boolean(ctx.session.pendingTurn?.outputStarted || failed.cliOutputStarted));
@@ -85,7 +75,6 @@ async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promi
 }
 
 const RECOVERIES: Record<Recovery, (ctx: VendorTurnContext, failed: Failed) => Promise<Decision>> = {
-  'fallback-turn': retryOnFallbackTurn,
   'sign-in': retryAfterSignIn,
   'native-thread': retryOnFreshThread,
 };
@@ -172,11 +161,7 @@ export async function recoverFromFailure(ctx: VendorTurnContext, observer: Vendo
     message: (failure instanceof Error ? failure.message : String(failure)).slice(0, 8000),
   });
   const failed: Failed = { ...record, failure, failureKind };
-  const candidates = recoveryCandidates({
-    failureKind, cliOutputStarted: record.cliOutputStarted,
-    cliTransport: transport === 'structured-cli' || transport === 'text-cli',
-    hasFallbackTurn: Boolean(harness.fallbackTurn), attempt: ctx.attempt,
-  });
+  const candidates = recoveryCandidates({ failureKind, attempt: ctx.attempt });
   for (const recovery of candidates) {
     if (await RECOVERIES[recovery](ctx, failed) === 'retry') return;
   }

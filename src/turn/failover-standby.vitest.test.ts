@@ -1,6 +1,6 @@
 /** An account near its limit gets a standby for the account a failover would move to, opened
  * while its own attempt runs. When it refuses before writing anything, the turn moves to the
- * standby without a cold start, asks it the request itself, and keeps none of the refusal's text.
+ * standby without a cold start, asks it the request itself; the refusal's text stays on the turn as the vendor said it.
  * The vendor attempt and the standby's preparation are stubbed; the turn driver, the accounts, the
  * standby registry and the state store are real. */
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -179,6 +179,31 @@ describe('a failover standby', () => {
     expect(asked).toEqual(['Reply SWITCHED', 'Reply SWITCHED']);
     const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
     expect(saved.messages?.at(-1)?.content).toBe('Half of the answer\n\nthe rest');
+  });
+
+  it('starts a new thread once, with one visible notice, when the vendor says the thread to resume is gone', async () => {
+    attempt.transport.kind = 'structured-cli';
+    let calls = 0;
+    attempt.run.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 2) throw Object.assign(new Error('thread not found'), { nativeThreadInvalid: true });
+      return { isError: false, text: 'ok' };
+    });
+    const state = await readState({ transcripts: ['s1'] });
+    const session = state.sessions.find((item) => item.id === 's1')!;
+    session.nativeSessionId = 'gone';
+    session.nativeThreadAccountId = 'acct-a';
+    session.messages = [{ role: 'user', content: 'earlier' }, { role: 'assistant', content: 'reply' }];
+    const notices: string[] = [];
+    const prompter = { activity: (message: string) => notices.push(message), phase: () => undefined };
+    const outcome = await sendVendorTurn({
+      state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'go',
+      prepared: { images: [], textContext: '' } as never, turnText: 'go', startedAt: Date.now(), run: { prompter: prompter as never },
+    }).catch((error: Error) => error);
+    // The second refusal of the new thread does not start a third attempt on the same account's thread.
+    expect(notices.filter((line) => /could not resume its thread/.test(line))).toHaveLength(1);
+    expect(calls).toBeLessThanOrEqual(3);
+    expect(outcome).toBeDefined();
   });
 
   it('is not opened for an account with room to spare', async () => {

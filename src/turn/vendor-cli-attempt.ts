@@ -23,7 +23,7 @@ import { holdVendorProcess, type HeldVendor } from '../harness/transport/native/
 import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
-import { usesFallbackTurn, vendorBackgroundTurnHandlerFor } from './vendor-process.js';
+import { vendorBackgroundTurnHandlerFor } from './vendor-process.js';
 import { turnCancelledError } from '../agent/cancellation.js';
 
 function insideGitRepository(folder: string): boolean {
@@ -55,11 +55,9 @@ export async function runVendorCliAttempt(input: {
   // Agent calls and follow-up finish before closing stdin; Claude kills
   // running Agent calls when that input closes.
   await settleHeldVendor(session.id, prompter, signal);
-  const cliHarness: AiLocalHarnessDefinition = harness.fallbackTurn && await usesFallbackTurn(harness)
-    ? { ...harness, turn: harness.fallbackTurn } : harness;
-  const turn = cliHarness.turn;
+  const turn = harness.turn;
   if (!turn) throw new Error(`${harness.displayName} cannot execute centralized non-interactive turns`);
-  if (promptExceedsArgvLimit(cliHarness, turnText)) {
+  if (promptExceedsArgvLimit(harness, turnText)) {
     throw Object.assign(new Error(
       `${harness.displayName} takes its prompt as a command-line argument, and this request is ${Math.ceil(Buffer.byteLength(turnText, 'utf8') / 1024)} KB (limit ${Math.floor(maxPromptArgvBytes() / 1024)} KB). Shorten it, or save the long content to a file in the workspace and ask the agent to read it.`,
     ), { code: 'ERR_PROMPT_TOO_LARGE' });
@@ -69,21 +67,21 @@ export async function runVendorCliAttempt(input: {
   // a first attempt that dies early must re-create, never `--resume` an
   // id that was never created.
   let createdHere = Boolean(session.nativeSessionId && session.nativeSessionPreallocated);
-  if (!session.nativeSessionId && cliHarness.session?.idKind === 'uuid' && turn.createIdPrefix) {
+  if (!session.nativeSessionId && harness.session?.idKind === 'uuid' && turn.createIdPrefix) {
     session.nativeSessionId = randomUUID();
     session.nativeSessionPreallocated = true;
     createdHere = true;
-  } else if (!session.nativeSessionId && cliHarness.session?.idKind === 'history-file' && turn.createIdPrefix) {
-    const nativeDirectory = join(stateDirectory(), 'native', cliHarness.command);
+  } else if (!session.nativeSessionId && harness.session?.idKind === 'history-file' && turn.createIdPrefix) {
+    const nativeDirectory = join(stateDirectory(), 'native', harness.command);
     await mkdir(nativeDirectory, { recursive: true, mode: 0o700 });
     session.nativeSessionId = join(nativeDirectory, `${session.id}.history.md`);
     session.nativeSessionPreallocated = true;
     createdHere = true;
-  } else if (!session.nativeSessionId && cliHarness.session?.createSessionArgv) {
-    session.nativeSessionId = await captureNativeHarness(cliHarness, cliHarness.session.createSessionArgv, environment);
+  } else if (!session.nativeSessionId && harness.session?.createSessionArgv) {
+    session.nativeSessionId = await captureNativeHarness(harness, harness.session.createSessionArgv, environment);
     createdHere = true;
   }
-  const argv = nativeHarnessTurnArgv(cliHarness, {
+  const argv = nativeHarnessTurnArgv(harness, {
     prompt: turnText, nativeSessionId: session.nativeSessionId, createdHere,
     model, workspace: session.workspace, effort,
     permissionMode: session.permissionMode ?? 'ask', images, options: session.harnessOptions,
@@ -144,7 +142,7 @@ export async function runVendorCliAttempt(input: {
     });
   }
   try {
-    turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
+    turnOutput = await captureNativeHarnessTurn(harness, argv, environment, {
     cwd: session.workspace,
     signal,
     stdinText: turn.promptInput === 'stdin' ? (heldInput ? streamJsonUserMessage(turnText) : turnText) : undefined,
@@ -164,7 +162,7 @@ export async function runVendorCliAttempt(input: {
       // should be doing: confirming an optimistically minted session id,
       // the quota probe, and persisting what the harness says about
       // itself.
-      const outcome = reportStructuredLine(cliHarness, lineText, {
+      const outcome = reportStructuredLine(harness, lineText, {
         ...sharedObserver,
         onResponseDelta: (text, mode) => {
           onOutputStart();
@@ -189,7 +187,7 @@ export async function runVendorCliAttempt(input: {
           report: (text, observer, parsed) => {
             let position = heldStreams.get(observer);
             if (!position) heldStreams.set(observer, position = createStreamState());
-            reportStructuredLine(cliHarness, text, observer, position, parsed);
+            reportStructuredLine(harness, text, observer, position, parsed);
           },
         });
       }
@@ -219,19 +217,19 @@ export async function runVendorCliAttempt(input: {
     }
   }
   if (turnOutput.interrupted) throw turnCancelledError();
-  let cliResult = nativeTurnResult(cliHarness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });
+  let cliResult = nativeTurnResult(harness, turnOutput.stdout, { exitCode: turnOutput.exitCode, stderr: turnOutput.stderr });
   // Aider's stdout is its banner, the answer and a cost footer; its own
   // chat history file holds the answer alone (see events/aider.ts).
   // When that file exists it alone decides: a turn with no reply in it
   // failed, and the notice Aider quoted there says why. Stdout is only
   // read when there is no file, since there the error sits where an
   // answer would.
-  if (cliHarness.parser === 'aider') {
+  if (harness.parser === 'aider') {
     const history = session.nativeSessionId ? await readFile(session.nativeSessionId, 'utf8').catch(() => '') : '';
     const reply = history ? aiderHistoryReply(history) : aiderStdoutReply(turnOutput.stdout);
     if (!reply) {
       const notice = history ? aiderHistoryNotice(history) : undefined;
-      throw Object.assign(new Error(`${cliHarness.displayName}: ${notice ?? 'returned no reply'}`), {
+      throw Object.assign(new Error(`${harness.displayName}: ${notice ?? 'returned no reply'}`), {
         stderrTail: [notice, turnOutput.stderr.trim()].filter(Boolean).join('\n').slice(-4000),
         stdoutTail: turnOutput.stdout.trim().slice(-4000),
       });

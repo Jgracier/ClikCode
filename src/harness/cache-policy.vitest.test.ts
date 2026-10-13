@@ -9,7 +9,6 @@ import { chmod, mkdtemp, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { inspectNativeHarness, inspectNativeHarnessForPicker } from './transport/native/inspect.js';
-import { rememberFallbackTurn, usesFallbackTurn } from '../turn/vendor-process.js';
 import { nativeModelCatalog, nativeModelLabel, nativeModelCatalogForPicker, resetModelCatalogMemo } from './accounts/model-catalog.js';
 import { clearLoginStatusCache, harnessNeedsLogin } from '../commands/account.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
@@ -54,20 +53,6 @@ describe('install and version', () => {
     expect((await inspectNativeHarnessForPicker(later)).installed).toBe(false);
     await install('latecli', '1.0.0');
     expect((await inspectNativeHarnessForPicker(later)).installed).toBe(true);
-  });
-});
-
-describe('the compatibility turn', () => {
-  const harness = { command: 'compatcli', binary: 'compatcli' } as AiLocalHarnessDefinition;
-
-  it('is used for the build that rejected the experimental one, and only that build', async () => {
-    await install('compatcli', '1.0.0');
-    expect(await usesFallbackTurn(harness)).toBe(false);
-    await rememberFallbackTurn(harness);
-    expect(await usesFallbackTurn(harness)).toBe(true);
-    // A newer build may accept the experimental contract. It gets asked.
-    await install('compatcli', '2.0.0');
-    expect(await usesFallbackTurn(harness)).toBe(false);
   });
 });
 

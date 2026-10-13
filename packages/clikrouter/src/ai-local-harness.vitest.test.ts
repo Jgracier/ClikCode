@@ -504,7 +504,6 @@ describe('local harness catalog', () => {
     expect(amp).toMatchObject({ transport: 'structured-cli', integration: 'structured', experimental: true });
     expect(nativeHarnessTurnArgv(amp, { prompt: 'hi' })).toEqual(['--stream-json', '-x', 'hi']);
     expect(nativeHarnessTurnArgv(amp, { prompt: 'hi', nativeSessionId: 'T-1' })).toEqual(['threads', 'continue', 'T-1', '--stream-json', '-x', 'hi']);
-    expect(nativeHarnessTurnArgv({ ...amp, turn: amp.fallbackTurn }, { prompt: 'hi', nativeSessionId: 'T-1' })).toEqual(['threads', 'continue', 'T-1', '-x', 'hi']);
   });
 
   it('pipes the prompt where the vendor reads stdin and never leaves it in argv', () => {
