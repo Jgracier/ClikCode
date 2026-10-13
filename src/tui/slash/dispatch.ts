@@ -389,12 +389,12 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       const path = args || (await host.ask('File to attach'))?.trim();
       return path ? viaHeadless(`/mention ${path}`) : {};
     },
-    review: async () => ({ prompt: reviewPrompt(args), echo: false }),
-    init: async () => ({ prompt: initPrompt(session), echo: false }),
+    review: async () => ({ prompt: isClikCodeAgent(session) ? reviewPrompt(args) : `/review${args ? ` ${args}` : ''}`, echo: false }),
+    init: async () => ({ prompt: isClikCodeAgent(session) ? initPrompt(session) : '/init', echo: false }),
     compact: async () => {
       // No confirmation line: the compacted conversation on screen is that.
-      const compacted = await compactConversation(id, session, args, (targetId, promptText) => host.runTurn(targetId, promptText));
-      return typeof compacted === 'string' ? { id: compacted } : {};
+      await compactConversation(id, session, args, (targetId, promptText) => host.runTurn(targetId, promptText));
+      return {};
     },
     export: async () => {
       // Esc on the overwrite question cancels the export, quietly.

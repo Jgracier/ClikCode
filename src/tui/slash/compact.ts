@@ -1,32 +1,20 @@
-/** `/compact`: replacing a long conversation with a summary of itself. */
+/** `/compact`: the vendor's own compaction, relayed. */
 
 import type { HarnessSession } from '../../session/model.js';
-import { readState } from '../../session/state/read.js';
-import { writeState } from '../../session/state/write.js';
-import { closePersistentTransport, persistentTransports } from '../../turn/vendor-process.js';
 import { hasConversationContent } from '../../session/options.js';
-import { conversationIdFor } from '../../session/conversation-rows.js';
-import { sessionTranscriptMessages } from '../../turn/checkpoint.js';
-import { textTranscript } from '../../turn/turn-activities.js';
-import { newConversationSession } from '../../commands/ai/conversations.js';
+import { persistentTransports } from '../../turn/vendor-process.js';
 import { sessionHarness } from './context.js';
 import { AGENT_COMPACTS_ITSELF, isClikCodeAgent } from '../../session/route.js';
 
-/** The first message of a chat /compact made. */
-const COMPACTED_OPENING = 'Summary of the conversation so far (compacted by ClikCode):';
-
-const COMPACT_PROMPT = 'Summarize this conversation so far for a fresh session that will continue the work. Include: the goal, decisions made and why, files created or changed (with paths), commands that matter, the current state, and the concrete next steps. Be complete but concise. Output only the summary.';
-
-/** `/compact`. A harness that runs slash commands itself compacts natively.
- * Otherwise ClikCode does it: one turn produces the summary, then a fresh
- * branch of the same conversation is seeded with only that summary -- with no
- * native session id, so its first turn replays the summary into a brand-new
- * vendor session. The full transcript stays on the original, resumable. */
+/** `/compact`. Only a harness that compacts itself does: one that runs slash
+ * commands gets `/compact`, and a server with a compact operation (Codex
+ * `thread/compact/start`, on the transport's live child) is asked to. Where a
+ * vendor has neither, there is no compaction to relay and nothing is sent.
+ * ClikCode's own agent (Gateway or ClikCode Local) compacts its context
+ * locally as it nears the window. */
 export async function compactConversation(
   id: string, session: HarnessSession, focus: string, send: (id: string, prompt: string) => Promise<void>,
-): Promise<string | void> {
-  // ClikCode's own agent (Gateway or ClikCode Local) compacts its context
-  // locally as it nears the window; this command is the vendor-harness path.
+): Promise<void> {
   if (isClikCodeAgent(session)) throw new Error(AGENT_COMPACTS_ITSELF);
   if (!hasConversationContent(session)) throw new Error('There is nothing to compact yet.');
   const harness = sessionHarness(session);
@@ -34,36 +22,10 @@ export async function compactConversation(
     await send(id, `/compact${focus ? ` ${focus}` : ''}`);
     return;
   }
-  // A server that compacts its own thread (catalog `nativeOperations: compact`, Codex
-  // `thread/compact/start`) keeps the conversation in one session. The transport's live child
-  // does it (`compactThread`, see harness/transport/codex-native-methods.ts); with no live child
-  // or a transport without the method, the summary path below is the fallback.
   if (harness?.nativeOperations?.includes('compact') && session.nativeSessionId) {
     const live = persistentTransports.get(id);
     const compactor = live?.transport === 'codex-app-server' ? (live.session as unknown as { compactThread?: (threadId: string) => Promise<boolean> }) : undefined;
-    if (compactor?.compactThread) {
-      // False: no live server holds the thread, so the summary path below does it.
-      if (await compactor.compactThread(session.nativeSessionId)) return;
-    }
+    if (compactor?.compactThread && await compactor.compactThread(session.nativeSessionId)) return;
   }
-  await send(id, `${COMPACT_PROMPT}${focus ? `\nPay particular attention to: ${focus}` : ''}`);
-  const state = await readState({ transcripts: [id] });
-  const source = state.sessions.find((item) => item.id === id);
-  if (!source) throw new Error(`AI session "${id}" was not found`);
-  const summary = [...textTranscript(sessionTranscriptMessages(source))].reverse().find((message) => message.role === 'assistant')?.content.trim();
-  if (!summary) throw new Error('The provider returned no summary; the conversation was left as it was.');
-  const compacted: HarnessSession = {
-    ...newConversationSession(state, source),
-    conversationId: conversationIdFor(source), parentSessionId: source.id, fork: true,
-    ...(source.name ? { name: source.name } : {}),
-    ...(source.harnessOptions ? { harnessOptions: { ...source.harnessOptions } } : {}),
-    messages: [
-      { role: 'user', content: COMPACTED_OPENING },
-      { role: 'assistant', content: summary },
-    ],
-  };
-  state.sessions.push(compacted);
-  await writeState(state);
-  await closePersistentTransport(id);
-  return compacted.id;
+  throw new Error(`/compact is not available for ${harness?.displayName ?? 'this provider'}.`);
 }

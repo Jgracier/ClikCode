@@ -121,7 +121,10 @@ export const conversationHandlers = {
   },
   review: async ({ id, session, head, words }) => {
     // Gateway refusal lives in the registry's availability(), shared by both dispatchers.
-    return sendSessionTurn(id, head === 'review' ? reviewPrompt(words.join(' ').trim()) : initPrompt(session));
+    const focus = words.join(' ').trim();
+    // A vendor runs its own command; only ClikCode's own agent is given ClikCode's prompt.
+    if (!isClikCodeAgent(session)) return sendSessionTurn(id, `/${head}${head === 'review' && focus ? ` ${focus}` : ''}`);
+    return sendSessionTurn(id, head === 'review' ? reviewPrompt(focus) : initPrompt(session));
   },
   rename: async ({ state, session, words }) => {
     const name = words.join(' ').trim();

@@ -90,10 +90,23 @@ const localOnly = (session: HarnessSession | undefined): SlashAvailability => {
   return { available: false, reason: isGatewayService(session) ? GATEWAY_MANAGED : CLIKCODE_LOCAL_AGENT };
 };
 /** ClikCode's own agent compacts its context by itself; /compact is the
- * vendor-harness summary-and-branch path. */
-const vendorCompaction = (session: HarnessSession | undefined): SlashAvailability => (isClikCodeAgent(session)
-  ? { available: false, reason: AGENT_COMPACTS_ITSELF }
-  : { available: true });
+ * vendor's own compaction, where it has one. */
+/** Whether a vendor harness compacts its own conversation: it runs the slash
+ * command itself, or its server has a compact operation. */
+const vendorCompacts = (harness: Pick<AiLocalHarnessDefinition, 'nativeSlashPassthrough' | 'nativeOperations'>): boolean =>
+  Boolean(harness.nativeSlashPassthrough || harness.nativeOperations?.includes('compact'));
+const vendorCompaction = (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
+  if (isClikCodeAgent(session)) return { available: false, reason: AGENT_COMPACTS_ITSELF };
+  if (!harness) return { available: false, reason: 'Choose a provider before compacting.', needs: 'provider' };
+  return vendorCompacts(harness) ? { available: true } : { available: false, reason: `/compact is not available for ${harness.displayName}.` };
+};
+/** A command ClikCode's own agent implements and a vendor runs itself: relayed
+ * to a vendor that takes slash commands, not available for one that does not. */
+const ownOrNative = (name: string) => (session: HarnessSession | undefined, harness: AiLocalHarnessDefinition | undefined): SlashAvailability => {
+  if (isClikCodeAgent(session)) return { available: true };
+  if (!harness) return { available: false, reason: `Choose a provider before /${name}.`, needs: 'provider' };
+  return harness.nativeSlashPassthrough ? { available: true } : { available: false, reason: `/${name} is not available for ${harness.displayName}.` };
+};
 /** ClikCode's own agent's settings: a vendor harness runs its own commands. */
 const agentOnly = (session: HarnessSession | undefined): SlashAvailability => (isClikCodeAgent(session)
   ? { available: true }
@@ -153,7 +166,7 @@ export const TERMINAL_ONLY_COMMANDS: ReadonlySet<string> = new Set(['select', 'r
 
 export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('new', 'Conversation', 'start a fresh conversation (the current one stays resumable)', { aliases: ['clear', 'reset'], argHint: '[first message]' }),
-  entry('compact', 'Conversation', 'summarize the conversation and continue in a fresh native session', { argHint: '[focus]', availability: vendorCompaction }),
+  entry('compact', 'Conversation', "the provider's own compaction of this conversation", { argHint: '[focus]', availability: vendorCompaction }),
   entry('history', 'Conversation', 'show this conversation'),
   entry('copy', 'Conversation', 'copy the last answer'),
   entry('export', 'Conversation', 'write the transcript as markdown', { argHint: '[path]' }),
@@ -162,8 +175,8 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
   entry('redraw', 'Conversation', 'repaint the screen'),
   entry('exit', 'Conversation', 'save and leave', { aliases: ['quit'] }),
 
-  entry('review', 'Workspace', 'ask the provider to review uncommitted changes', { argHint: '[focus]' }),
-  entry('init', 'Workspace', "create or improve the harness's agent instructions file"),
+  entry('review', 'Workspace', 'review uncommitted changes (the provider\'s own /review where it has one)', { argHint: '[focus]', availability: ownOrNative('review') }),
+  entry('init', 'Workspace', "create or improve the agent instructions file (the provider's own /init where it has one)", { availability: ownOrNative('init') }),
   entry('memory', 'Workspace', "show the harness's memory file; `edit` opens $EDITOR", { argHint: '[edit]' }),
   entry('diff', 'Workspace', 'changes against HEAD, staged included, plus untracked files'),
   entry('cwd', 'Workspace', 'show or change the working directory', { argHint: '[dir]' }),
