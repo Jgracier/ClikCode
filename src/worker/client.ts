@@ -6,6 +6,8 @@
  */
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { spawn } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { userManagerLaunch } from './own-scope.js';
 import { EventEmitter } from 'node:events';
 import { connect, type Socket } from 'node:net';
 import { conversationHolder, currentWorkerBuild, listWorkerRecords, readWorkerRecord, workerIsReachable, type WorkerRuntimeRecord } from './registry.js';
@@ -39,18 +41,44 @@ function workerSpawnArgv(sessionId: string): string[] {
   return [entry, 'session-worker', sessionId];
 }
 
+/** Starts the worker process, detached. From outside the user's systemd
+ * manager (an SSH session) the user manager starts it, so it lands in the
+ * agent slice like every other worker (own-scope.ts userManagerLaunch); if
+ * that cannot be done, it is started directly, as everywhere else. */
+function launchWorker(sessionId: string): void {
+  const argv = workerSpawnArgv(sessionId);
+  let started = false;
+  const direct = (): void => {
+    if (started) return;
+    started = true;
+    const child = spawn(process.execPath, argv, {
+      // windowsHide: a detached child on Windows otherwise opens a console
+      // window of its own for as long as the worker lives.
+      stdio: 'ignore', detached: true, windowsHide: true,
+    });
+    child.on('error', () => {});
+    child.unref();
+  };
+  const viaManager = process.platform === 'linux' ? userManagerLaunch(argv, {
+    cgroup: (() => { try { return readFileSync('/proc/self/cgroup', 'utf8'); } catch { return ''; } })(),
+    uid: process.getuid?.() ?? 0, env: process.env, cwd: process.cwd(), execPath: process.execPath,
+    unit: `clikcode-start-${sessionId.replace(/[^A-Za-z0-9_.-]/g, '_')}-${process.pid}-${Date.now()}.service`,
+    busExists: existsSync,
+  }) : undefined;
+  if (!viaManager) { direct(); return; }
+  lifecycle('client.worker.spawn-via-user-manager', { worker: sessionId });
+  const launcher = spawn(viaManager.command, viaManager.args, { env: viaManager.env, stdio: 'ignore', detached: true });
+  launcher.on('error', direct);
+  launcher.on('exit', (code) => { if (code !== 0) direct(); });
+  launcher.unref();
+}
+
 /** Starts a fresh worker for a session and waits until its socket actually
  * accepts a connection -- not until the child process merely exists, which
  * would race the worker's own listen() call. */
 async function spawnSessionWorker(sessionId: string): Promise<WorkerRuntimeRecord> {
   lifecycle('client.worker.spawn', { worker: sessionId });
-  const child = spawn(process.execPath, workerSpawnArgv(sessionId), {
-    // windowsHide: a detached child on Windows otherwise opens a console
-    // window of its own for as long as the worker lives.
-    stdio: 'ignore', detached: true, windowsHide: true,
-  });
-  child.on('error', () => {});
-  child.unref();
+  launchWorker(sessionId);
   const deadline = Date.now() + SPAWN_TIMEOUT_MS;
   for (;;) {
     const record = await readWorkerRecord(sessionId);
