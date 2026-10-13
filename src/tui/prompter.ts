@@ -36,7 +36,7 @@ import { showTransientNotice, clearTransientNotice, panel, panelKey } from './pr
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
 import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, markVendorWork, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
-import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, paintWaiting, repaint } from './prompter/waiting-band.js';
+import { statusText, footerUsage, waitingLine, escStops, updateWaiting, schedulePaint, paintWaiting, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clearTranscript } from './prompter/viewport.js';
 import { signInScreen } from './prompter/sign-in.js';
@@ -599,6 +599,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   }
 
   statusText(...args: Parameters<typeof statusText>): ReturnType<typeof statusText> { return statusText.apply(this, args); }
+  footerUsage(): ReturnType<typeof footerUsage> { return footerUsage.call(this); }
 
   waitingLine(...args: Parameters<typeof waitingLine>): ReturnType<typeof waitingLine> { return waitingLine.apply(this, args); }
 

@@ -206,24 +206,12 @@ export function redrawSelection(this: TerminalHarnessPrompter): void {
   else this.repaint();
 }
 
-/** Down at the live end moves nothing, and says so.
- *
- * There is nothing newer than the newest, so the key is a correct no-op --
- * and an invisible one, which is worse than useless when the only way to
- * read back on a client is its arrow keys: the request looks like a broken
- * feature rather than a wrong direction. Inverting it instead was tried and
- * is worse, because then nothing settles at the live end: every press
- * bounces back into the history. So it stays a no-op, and it tells the
- * reader which way to go. */
+/** Down at the live end moves nothing: there is nothing newer than the
+ * newest. The key is still taken (inverting it was tried and nothing then
+ * settled at the live end), and it no longer prints a hint: how to read back
+ * -- Up or Ctrl+B -- is in /help. */
 export function noteReadingDirection(this: TerminalHarnessPrompter): boolean {
-  if (this.scrolledBack || this.alternateTranscript.length === 0) return false;
-  this.showTransientNotice(
-    '↑ or Ctrl+B to read earlier messages',
-    2000,
-    () => this.repaint(),
-  );
-  this.repaint();
-  return true;
+  return !this.scrolledBack && this.alternateTranscript.length > 0;
 }
 
 /** Forget where on screen the live block sits: whoever writes next (the

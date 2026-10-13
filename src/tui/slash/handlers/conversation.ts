@@ -18,7 +18,7 @@ import { SELECTION_MODE, setSelectionMode } from '../../modes.js';
 import { TERMINAL } from '../../active-terminal.js';
 import { copyToClipboard, decodeAttachmentPath, expandHomePath, queueAttachment } from '../../../session/attachments.js';
 import { conversationIdFor } from '../../../session/conversation-rows.js';
-import { slashControls, slashHelpText, type SlashHandlerKey } from '../registry.js';
+import { slashControls, slashHelpText, terminalKeysHelp, type SlashHandlerKey } from '../registry.js';
 import { sessionTranscriptMessages } from '../../../turn/checkpoint.js';
 import { textTranscript } from '../../../turn/turn-activities.js';
 import { newConversationSession } from '../../../commands/ai/conversations.js';
@@ -48,7 +48,7 @@ export const conversationHandlers = {
   help: async ({ session }) => {
     const harness = sessionHarness(session);
     const extras = slashExtrasFor(session, harness);
-    return emitHarnessOutput({ panel: 'help', helpText: slashHelpText(session, harness, extras), controls: slashControls() });
+    return emitHarnessOutput({ panel: 'help', helpText: `${slashHelpText(session, harness, extras)}\n\n${terminalKeysHelp()}`, controls: slashControls() });
   },
   status: async ({ state, session }) => {
     const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId)?.label : undefined;

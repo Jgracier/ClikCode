@@ -145,7 +145,7 @@ describe('running steps stay above the status line', () => {
   });
 });
 
-describe('the token meter of a running turn', () => {
+describe('the running turn carries no token meter', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
   afterEach(() => {
     vi.useRealTimers();
@@ -155,7 +155,7 @@ describe('the token meter of a running turn', () => {
 
   // MEASURED 2026-10-11: a window that joined a turn showed a number that did not move however much
   // was written, because a vendor's early, small reading outranked the written length.
-  it('is not held on a vendor reading taken once, early, nor by reasoning it cannot see', () => {
+  it('says no token count however much is written (tokens stay in /usage)', () => {
     const written: string[] = [];
     Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 30 });
     process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
@@ -171,9 +171,7 @@ describe('the token meter of a running turn', () => {
       rl.response('word '.repeat(2000));
       vi.advanceTimersByTime(3000);
       const text = strip(written.join(''));
-      const counts = [...text.matchAll(/↓ ([0-9.]+)k? tokens/g)].map((match) => match[0]);
-      // 10000 chars is 2500 tokens: shown as 2.5k, not 8.
-      expect(counts.at(-1)).toBe('↓ 2.5k tokens');
+      expect(text).not.toMatch(/↓ [0-9.]+k? tokens/);
     } finally { rl.close(); }
   });
 });

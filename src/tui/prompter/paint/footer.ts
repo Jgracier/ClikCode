@@ -6,7 +6,7 @@ import type { PickerOption } from '../../../harness/prompter.js';
 import { fitFooterForApproval } from '../../render/frame-budget.js';
 import { paletteRows as paletteBandRows } from '../../render/footer-rows.js';
 import type { PaletteLayout } from '../../option-picker.js';
-import { composerUsageLabel, paintTitleRule, paintUsageRule } from '../../render/waiting.js';
+import { paintTitleRule, paintUsageRule } from '../../render/waiting.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import type { HarnessSession } from '../../../session/model.js';
 import { frameBands } from './bands.js';
@@ -25,7 +25,8 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
     noticeShown, noticeRows, waitingRows, paletteRows: paletteCapacity, indicatorRows, indicatorText, approvalRows,
     thoughtRows, signInRows, planRows, panelRows, composerRows,
   } = bands;
-  const meta = this.statusText(inner);
+  const usage = this.footerUsage();
+  const meta = this.statusText(Math.max(8, inner - (usage ? terminalCellWidth(usage.label) + 5 : 0)));
   const footer: string[] = [];
   // The resting composer starts with a clear row, or its rule sits directly
   // on the last line of the answer. While a turn runs the generating band
@@ -53,10 +54,9 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   const indicatorRow = indicatorRows && indicatorText !== undefined
     ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : undefined;
   if (indicatorRow !== undefined) footer.push(indicatorRow);
-  // Usage lives on the upper composer border, mirroring the title on the
-  // lower border. A spent window replaces the percentage with the reset
-  // itself (`Resets 5:34PM`); a spent balance says `Out Of Credits`.
-  const usageRule = paintUsageRule(rowWidth, composerUsageLabel(this.usageLabel, this.usageResetLabel));
+  // The upper composer border is plain: usage joins the footer line below,
+  // and only when it is low or spent.
+  const usageRule = paintUsageRule(rowWidth);
   footer.push(usageRule);
   let composerStart = footer.length;
   const composerFooter: string[] = [];
@@ -80,7 +80,7 @@ export function buildFooter(this: TerminalHarnessPrompter, input: FooterInput): 
   // conversation is running as -- so they read as one line in one colour
   // rather than a bright word followed by a dimmer tail. Cyan is ClikCode's
   // own chrome, the same family as the caret above it.
-  const metaRow = `  ${chalk.cyan(meta)}`;
+  const metaRow = `  ${[meta ? chalk.cyan(meta) : '', usage ? (usage.spent ? chalk.red(usage.label) : chalk.cyan(usage.label)) : ''].filter(Boolean).join(chalk.cyan('  •  '))}`;
   footer.push(metaRow);
   // A short terminal with an approval up: the rows that are not the prompt
   // go first, so it is never the prompt that is cut off the top.

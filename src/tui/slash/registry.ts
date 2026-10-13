@@ -369,6 +369,19 @@ export function slashHelpText(
   }).join('\n\n');
 }
 
+/** The terminal's keys, listed once in /help instead of as hints on every row. */
+export function terminalKeysHelp(): string {
+  const rows: Array<[string, string]> = [
+    ['esc', 'stop the running turn; or take back a waiting message, or cancel a sign-in'],
+    ['enter', 'send; while a turn runs the message waits for the next turn'],
+    ['enter again', 'with nothing typed, send the waiting message into the running turn'],
+    ['ctrl+c twice', 'exit'],
+    ['up / ctrl+b', 'read earlier messages; down / ctrl+f read later ones'],
+    ['tab', 'complete a command'],
+  ];
+  return `Keys\n${rows.map(([key, what]) => `  ${key.padEnd(14)}${what}`).join('\n')}`;
+}
+
 /** Machine-readable command list for `--json` consumers. */
 export function slashControls(): Array<{ command: string; aliases: string[]; argHint?: string; description: string; group: SlashGroup }> {
   return [
