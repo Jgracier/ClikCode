@@ -12,7 +12,7 @@ export async function settleStep(
 ): Promise<'continue' | GatewayHarnessTurnResult | undefined> {
   const { input, session, signal, backgroundAgents } = rt;
   const { calls, cutOff, stepText } = step;
-  if (step.finalOnly) return rt.result({ stopReason: 'no-progress', isError: true, errorKind: 'other' });
+  if (step.finalOnly) return rt.result({ stopReason: 'completed', stalled: true });
   // An answer cut off at the output limit is carried on, not taken as
   // the answer: the next step picks up mid-sentence.
   if (!calls.length && cutOff && rt.lengthContinues < MAX_LENGTH_CONTINUES) {

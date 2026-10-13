@@ -228,7 +228,11 @@ export interface GatewayHarnessTurnResult {
   usage: TokenUsage;
   steps: number;
   /** Why the loop ended. */
-  stopReason: 'completed' | 'no-progress' | 'model-error' | 'account-switch';
+  stopReason: 'completed' | 'model-error' | 'account-switch';
+  /** The model kept repeating a failing call, so its last reply was asked for
+   * with tools off (stall.ts). The turn still completed: that reply is the
+   * answer, and the caller says so beside it. */
+  stalled?: boolean;
   /** The context profile the turn ran under, so usage can be attributed to it. */
   contextProfile?: ContextProfileName;
 }
