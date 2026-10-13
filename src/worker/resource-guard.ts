@@ -30,8 +30,12 @@ export const NUDGE_AT = 0.85;
 export const NUDGE_REARM_BELOW = 0.75;
 /** A stopped command's memory takes a moment to come back. */
 const KILL_SETTLE_MS = 5_000;
-/** The slice's own MemoryMax kills by the kernel's choice; this acts first. */
-const SLICE_MAX_SHARE = 0.97;
+/** The slice's own ceiling -- MemoryHigh throttles every agent, MemoryMax
+ * kills by the kernel's choice -- is reached a little later than this. */
+const SLICE_CEILING_SHARE = 0.97;
+/** Every agent in the slice stalled on memory this much of the last 10 s
+ * (memory.pressure "full"): over the limit, whatever the numbers say. */
+export const STALL_STOP_PERCENT = 10;
 
 export interface MemorySample {
   /** MemTotal and MemAvailable (/proc/meminfo), bytes. */
@@ -39,8 +43,14 @@ export interface MemorySample {
   available: number;
   /** What the agent slice holds that cannot simply be dropped: anon + shmem + kernel. */
   agentUsed: number;
-  /** The slice's memory.max, if it has one. */
-  agentMax?: number;
+  /** The lower of the slice's memory.high and memory.max, if it has either:
+   * past MemoryHigh the kernel throttles every agent, so that is the ceiling.
+   * MEASURED 2026-10-13: with only memory.max (38G) counted, agents sat
+   * throttled at 34-37G for a morning -- stalled up to 78% of the time, 23
+   * nudges, nothing stopped -- until the user killed commands by hand. */
+  agentCeiling?: number;
+  /** Percent of the last 10 s every agent in the slice was stalled on memory. */
+  agentStalled?: number;
 }
 
 export interface AgentBudget { used: number; limit: number; ratio: number }
@@ -51,12 +61,14 @@ export function desktopReserve(total: number): number {
 }
 
 /** What agents may hold right now: theirs plus what is free, less the
- * desktop's reserve, and never past the slice's own ceiling. */
+ * desktop's reserve, and never past the slice's own ceiling. Agents already
+ * choking on memory are past it, however the numbers come out. */
 export function agentBudget(sample: MemorySample): AgentBudget {
   const byMachine = sample.agentUsed + sample.available - desktopReserve(sample.total);
-  const bySlice = sample.agentMax ? sample.agentMax * SLICE_MAX_SHARE : Infinity;
+  const bySlice = sample.agentCeiling ? sample.agentCeiling * SLICE_CEILING_SHARE : Infinity;
   const limit = Math.max(0, Math.min(byMachine, bySlice));
-  return { used: sample.agentUsed, limit, ratio: limit > 0 ? sample.agentUsed / limit : Infinity };
+  const ratio = limit > 0 ? sample.agentUsed / limit : Infinity;
+  return { used: sample.agentUsed, limit, ratio: (sample.agentStalled ?? 0) >= STALL_STOP_PERCENT ? Math.max(ratio, 1) : ratio };
 }
 
 export interface ProcessEntry {
@@ -187,11 +199,14 @@ export function sampleMemory(sliceDir: string): MemorySample | undefined {
     const field = (name: string): number => Number(new RegExp(`^${name}:\\s+(\\d+)`, 'm').exec(meminfo)?.[1] ?? 0) * 1024;
     const stat = readFileSync(join(sliceDir, 'memory.stat'), 'utf8');
     const statField = (name: string): number => Number(new RegExp(`^${name} (\\d+)`, 'm').exec(stat)?.[1] ?? 0);
-    const agentMax = readNumber(join(sliceDir, 'memory.max'));
+    const ceilings = [readNumber(join(sliceDir, 'memory.high')), readNumber(join(sliceDir, 'memory.max'))].filter((value): value is number => !!value);
+    let agentStalled: number | undefined;
+    try { agentStalled = Number(/^full avg10=([\d.]+)/m.exec(readFileSync(join(sliceDir, 'memory.pressure'), 'utf8'))?.[1]); } catch { /* fail-open-ok: no pressure file, judged by the numbers alone */ }
     return {
       total: field('MemTotal'), available: field('MemAvailable'),
       agentUsed: statField('anon') + statField('shmem') + statField('kernel'),
-      ...(agentMax ? { agentMax } : {}),
+      ...(ceilings.length ? { agentCeiling: Math.min(...ceilings) } : {}),
+      ...(agentStalled !== undefined && Number.isFinite(agentStalled) ? { agentStalled } : {}),
     };
   } catch { return undefined; }
 }
