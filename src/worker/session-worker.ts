@@ -27,6 +27,7 @@ import { createVendorBackgroundRunner } from './vendor-background.js';
 import { createResumeWaiter } from './resume-wait.js';
 import { separateFromForeground } from './own-scope.js';
 import { startResourceGuard } from './resource-guard.js';
+import { startStuckWatchdog } from './stuck-watchdog.js';
 import { holdResourceNote, wrapResourceNote } from '../turn/resource-notes.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -124,6 +125,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   ctx.agentSession.onNotification = () => { void ctx.queue.deliverNotifications(); };
   ctx.server = createWorkerServer(ctx, createCommandHandler(ctx));
   ctx.shutdown = createShutdown(ctx);
+  // A loop of its own that never yields would keep this worker -- and what it
+  // holds -- forever: a thread ends it (worker/stuck-watchdog.ts).
+  startStuckWatchdog(sessionId);
   // Memory: a nudge near the machine's limit, the largest command stopped
   // past it, and this conversation's agent told either way -- into the turn
   // running now, or with the next one (worker/resource-guard.ts).
