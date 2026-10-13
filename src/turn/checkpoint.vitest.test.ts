@@ -91,26 +91,52 @@ describe('durable turn checkpoints', () => {
     beginPendingTurn(empty, 'Try again', stamp(2));
     expect(empty.pendingTurn?.failedAt).toBeUndefined();
   });
-  it('persists the title and cleaned answer with the completed turn', async () => {
+  it('names the chat from the first message and stores the answer as the vendor wrote it', async () => {
     const home = await mkdtemp(join(tmpdir(), 'clikcode-complete-'));
     const previous = process.env.CLIKCODE_HOME;
     process.env.CLIKCODE_HOME = home;
     try {
       const { completeTurnCheckpoint, startTurnCheckpoint } = await import('./turn-journal.js');
-      const target = { ...session(), id: randomUUID(), attachments: ['/tmp/example.png'], shellNotes: [] };
+      const target = { ...session(), id: randomUUID(), name: undefined, messages: [], attachments: ['/tmp/example.png'], shellNotes: [] };
       const state = { v: 1, sessions: [target], accounts: [] } as never;
       const checkpoint = await startTurnCheckpoint(state, target, 'Fix the parser', {});
       const answer = await completeTurnCheckpoint(
-        target, checkpoint, '<clikcode-title>Parser Repair</clikcode-title>\nFixed it.',
-        { asked: true },
+        target, checkpoint, 'Fixed it.',
       );
       expect(answer).toBe('Fixed it.');
       const { readState } = await import('../session/state/read.js');
       const saved = (await readState()).sessions.find((item) => item.id === target.id);
-      expect(saved?.name).toBe('Parser Repair');
+      expect(saved?.name).toBe('Fix the parser');
+      expect(saved?.nameSource).toBe('message');
       expect(saved?.messages?.at(-1)).toEqual({ role: 'assistant', content: 'Fixed it.', ...by, turnEnd: { ms: expect.any(Number) } });
       expect(saved?.attachments).toEqual([]);
       expect(saved?.pendingTurn).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_HOME;
+      else process.env.CLIKCODE_HOME = previous;
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it('takes the vendor title over a name made from the first message, and never over the user\'s', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'clikcode-complete-'));
+    const previous = process.env.CLIKCODE_HOME;
+    process.env.CLIKCODE_HOME = home;
+    try {
+      const { completeTurnCheckpoint, startTurnCheckpoint } = await import('./turn-journal.js');
+      const target = { ...session(), id: randomUUID(), name: undefined, messages: [], attachments: [], shellNotes: [] };
+      const state = { v: 1, sessions: [target], accounts: [] } as never;
+      const first = await startTurnCheckpoint(state, target, 'Fix the parser', {});
+      await completeTurnCheckpoint(target, first, 'Ok.', { vendor: async () => undefined });
+      expect(target.name).toBe('Fix the parser');
+      const second = await startTurnCheckpoint(state, target, 'and then?', {});
+      await completeTurnCheckpoint(target, second, 'Ok.', { vendor: async () => 'Parser repair' });
+      expect(target.name).toBe('Parser repair');
+      expect(target.nameSource).toBe('provider');
+      target.nameSource = 'user';
+      const third = await startTurnCheckpoint(state, target, 'again', {});
+      await completeTurnCheckpoint(target, third, 'Ok.', { vendor: async () => 'Something else' });
+      expect(target.name).toBe('Parser repair');
     } finally {
       if (previous === undefined) delete process.env.CLIKCODE_HOME;
       else process.env.CLIKCODE_HOME = previous;

@@ -37,9 +37,6 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   session: HarnessSession;
   prompt: string;
   prompter?: TurnObserver;
-  /** Applied to each streamed delta before anyone sees it (drive passes the
-   * title filter); undefined or '' holds it back. */
-  responseFilter?: (text: string, mode: 'append' | 'replace') => string | undefined;
   /** Servers the route brings beside the user's own (the Gateway's ClikDeploy server). */
   mcpServers?: readonly McpServerSpec[];
   /** The Gateway agent's instructions, when the conversation runs as one. */
@@ -133,13 +130,9 @@ export async function runGatewayHarnessSessionTurn(
     ...(input.signal ? { signal: input.signal } : {}),
     ...(input.images?.length ? { images: input.images } : {}),
     onResponseDelta: (text, mode) => {
-      // The same title filter the vendor path streams through: the tag a
-      // first turn asks the model to open with never reaches the screen, and
-      // so never outranks the stripped answer when the turn is saved.
-      const visible = input.responseFilter ? input.responseFilter(text, mode ?? 'append') : text;
-      if (!visible) return;
-      input.onResponseDelta?.(visible, mode);
-      prompter?.response(visible, mode);
+      if (!text) return;
+      input.onResponseDelta?.(text, mode);
+      prompter?.response(text, mode);
     },
     onActivity: publishActivity,
     ...(swarmIsOn(session) ? { swarmModelNote: await swarmModelList(session, await readState({ transcripts: [] })).catch(() => undefined) } : {}),
@@ -152,11 +145,7 @@ export async function runGatewayHarnessSessionTurn(
       if (!swarmIsOn(host)) return null;
       return runSwarmDelegation({ host, state, request, onActivity: publishActivity });
     },
-    onPhase: (phase) => {
-      // The loop announces every model step as 'thinking' before calling it.
-      if (phase === 'thinking') input.onStepStart?.();
-      prompter?.phase(phase);
-    },
+    onPhase: (phase) => prompter?.phase(phase),
     onPlan: (entries) => prompter?.setPlan(entries),
     // Per model step, as it happens: the loop's running total and where the
     // context stands, in the shape every harness reports.

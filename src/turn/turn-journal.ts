@@ -1,6 +1,6 @@
 /** Durable turn state, completion, and interrupted-turn recovery. */
 import { cloneData } from '../session/store/data.js';
-import { normalizeSessionTitle, replyWithoutTitle } from '../session/title.js';
+import { normalizeSessionTitle, titleFromFirstMessage } from '../session/title.js';
 import type { HarnessSession, HarnessState, OpenThought, TurnMark } from '../session/model.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { LiveTurnSubmission } from './live-input.js';
@@ -12,22 +12,28 @@ import { beginPendingTurn, consumeSessionTurn, discardPendingTurn, enqueueSessio
 import { MarkSequencer, readTurnMarks } from './turn-marks.js';
 import { readTurnActivities } from './turn-activities.js';
 
-/** Name a chat, once, from a title the model produced.
- *
- * Never from the first message: that is the start of a sentence, not a name.
- * A /rename is the user's and is left alone; everything else is provisional
- * until a real title arrives, and a turn that produces none simply leaves the
- * chat unnamed without requesting another title. */
+/** Name a chat: the vendor's own title when it reports one, else the user's
+ * first message. A /rename is the user's and is left alone; a name taken from
+ * the first message gives way to the vendor's title once the vendor has one. */
 async function nameSession(
   session: HarnessSession,
-  sources: { title?: string; vendor?: () => Promise<string | undefined> },
+  sources: { vendor?: () => Promise<string | undefined> },
 ): Promise<void> {
-  if (session.nameSource === 'user' || session.name) return;
-  const raw = sources.title ?? await sources.vendor?.().catch(() => undefined);
-  const title = raw ? normalizeSessionTitle(raw) : undefined;
+  if (session.nameSource === 'user') return;
+  if (session.nameSource !== 'message' && session.name) return;
+  const vendorRaw = await sources.vendor?.().catch(() => undefined);
+  const vendorTitle = vendorRaw ? normalizeSessionTitle(vendorRaw) : undefined;
+  if (vendorTitle) {
+    session.name = vendorTitle;
+    session.nameSource = 'provider';
+    return;
+  }
+  if (session.name) return;
+  const first = session.messages?.find((message) => message.role === 'user')?.content ?? session.pendingTurn?.prompt;
+  const title = first ? titleFromFirstMessage(first) : undefined;
   if (!title) return;
   session.name = title;
-  session.nameSource = 'provider';
+  session.nameSource = 'message';
 }
 
 function interruptedTurnMessages(
@@ -334,18 +340,11 @@ export async function startTurnCheckpoint(
 /** Apply the successful turn's common state changes before the durable write. */
 export async function completeTurnCheckpoint(
   session: HarnessSession, checkpoint: DurableTurnCheckpoint, response: string,
-  sources: {
-    title?: string;
-    vendor?: () => Promise<string | undefined>;
-    /** This turn asked for a name. Only then is the title marker taken off
-     * the reply. Every other reply is stored as the model wrote it. */
-    asked?: boolean;
-  } = {},
+  sources: { vendor?: () => Promise<string | undefined> } = {},
 ): Promise<string> {
-  const answer = replyWithoutTitle(response, Boolean(sources.asked));
   session.attachments = [];
   session.shellNotes = [];
-  await nameSession(session, { ...sources, title: sources.title ?? answer.title });
-  await checkpoint.complete(answer.text);
-  return answer.text;
+  await nameSession(session, sources);
+  await checkpoint.complete(response);
+  return response;
 }

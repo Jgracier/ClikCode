@@ -47,18 +47,9 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     return { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage };
   });
   const pendingWork = createPendingWorkTracker(harness.command);
-  /** The response-delta rule, in one place. Every transport owes the same
-   * three steps -- through the title filter, then to the checkpoint and to
-   * the screen -- and they differed only in which default mode they passed.
-   * This was three copies, and drift between them was not hypothetical: the
-   * structured-CLI copy once skipped the title filter entirely, which made
-   * what was displayed differ from what was persisted, and the transcript
-   * then read the saved answer as new content and drew the whole reply a
-   * second time. That was the duplicated response. One function cannot
-   * drift from itself. */
-  const sink = turnSink(checkpoint, prompter, {
-    title: () => ctx.titleStream,
-  });
+  /** The response-delta rule, in one place: to the checkpoint and to the
+   * screen alike, so what is shown and what is saved cannot differ. */
+  const sink = turnSink(checkpoint, prompter);
   const onActivity = (event: HarnessActivityEvent): void => {
     // The clerk's frames are the row. The host's own swarm tool is the same
     // call: count that tool so a backgrounded command still pairs, and do

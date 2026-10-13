@@ -9,7 +9,6 @@ import { readState } from '../session/state/read.js';
 import { discardInterruptedTurn } from './turn-journal.js';
 import { agentTurnUsage, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
-import { prepareSessionTitle, replyWithoutTitle } from '../session/title.js';
 import { localModelTurnHooks } from '../commands/ai/local-model.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
 import type { TurnRunOptions } from './session-turn.js';
@@ -85,13 +84,8 @@ export async function runAgentTurn(input: {
   const prepared = await prepareAttachments(session.attachments ?? []);
   // Images are not refused: the agent loop runs on this machine and reads the
   // attached files with its own tools (run-turn.ts names them).
-  // One turn asks for a title, once the user has said enough to name the
-  // chat. The agent writes no title of its own anywhere ClikCode can read.
-  // Every other turn sends the prompt unchanged and does not filter the reply.
-  const agentTitle = prepareSessionTitle(session, `${text}${prepared.textContext}`);
-  const titleStream = agentTitle.stream;
   // Resource notes ClikCode held for this conversation ride the same way (turn/resource-notes.ts).
-  const turnText = withResourceNotes(session.id, agentTitle.prompt);
+  const turnText = withResourceNotes(session.id, `${text}${prepared.textContext}`);
   // Before the checkpoint, so a route that cannot serve a turn (the Gateway
   // not signed in, ClikCode Local's engine absent) fails without recording
   // a turn that never ran.
@@ -114,14 +108,6 @@ export async function runAgentTurn(input: {
   const agentServer = agent ? agentMcpServer(config, agent) : undefined;
   const startedAt = Date.now();
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
-  /** Text the title filter held back and now owes: to the saved turn and to
-   * the screen alike, like every streamed delta. */
-  const releaseHeld = (): void => {
-    const held = titleStream?.flush();
-    if (!held) return;
-    checkpoint.response(held, 'append');
-    prompter?.response(held, 'append');
-  };
   let turnUsage: TurnUsage | undefined;
   /** The turn's usage went into the invocation log: once, however it ended. */
   let usageRecorded = false;
@@ -167,16 +153,6 @@ export async function runAgentTurn(input: {
         mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],
         ...(agent?.system ? { agentInstructions: agent.system } : {}),
         ...(prompter ? { prompter } : {}),
-        ...(titleStream ? { responseFilter: (delta: string, mode: 'append' | 'replace') => titleStream.push(delta, mode) } : {}),
-        // Each model step may open with the title again (the request rides in
-        // the conversation every step re-sends): the filter watches every step's
-        // start, and hands on whatever the previous step still held.
-        ...(titleStream ? {
-          onStepStart: () => {
-            releaseHeld();
-            titleStream.nextStep();
-          },
-        } : {}),
         ...(signal ? { signal } : {}),
         ...(prepared.images.length ? { images: prepared.images } : {}),
         // What streams is saved as it streams, as on every other route: a
@@ -219,14 +195,12 @@ export async function runAgentTurn(input: {
     }
     if (harnessTurn.stopReason === 'account-switch') {
       recordUnfinished('stopped');
-      releaseHeld();
       const progressed = Boolean(harnessTurn.text.trim() || harnessTurn.steps > 0);
       if (!progressed) {
         await discardInterruptedTurn(session.id, text);
         return 'resend';
       }
-      const extracted = replyWithoutTitle(harnessTurn.text, titleStream !== undefined, true);
-      await completeTurnCheckpoint(session, checkpoint, extracted.text, { title: titleStream?.title ?? extracted.title, asked: false });
+      await completeTurnCheckpoint(session, checkpoint, harnessTurn.text);
       return 'continue';
     }
     if (harnessTurn.isError) {
@@ -240,9 +214,6 @@ export async function runAgentTurn(input: {
       }
       throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
     }
-    // A reply shorter than the title filter's decision window is still held
-    // back when the stream ends; it is owed to the screen.
-    releaseHeld();
     const usage = { ...agentTurnUsage(harnessTurn.usage), ...turnUsage };
     // The loop's own reason wins where it ended the turn early (no progress, a model error).
     const loopStop = turnStopReason(harnessTurn.stopReason);
@@ -256,11 +227,7 @@ export async function runAgentTurn(input: {
       // attribute time and quality to it (agent/context-profile.ts).
       contextProfile: harnessTurn.contextProfile,
     });
-    // The marker is taken off only the turn that asked for it. A repeated
-    // marker inside that same multi-step reply is the same request, not a
-    // second naming.
-    const extracted = replyWithoutTitle(harnessTurn.text, titleStream !== undefined, true);
-    const completedText = await completeTurnCheckpoint(session, checkpoint, extracted.text, { title: titleStream?.title ?? extracted.title, asked: false });
+    const completedText = await completeTurnCheckpoint(session, checkpoint, harnessTurn.text);
     showStopReason(prompter, usage.stopReason);
     if (!prompter) {
       emitHarnessOutput({

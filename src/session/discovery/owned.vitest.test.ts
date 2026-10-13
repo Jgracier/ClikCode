@@ -11,7 +11,6 @@ import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import { FAILOVER_PREAMBLE, providerBoundaryNote } from '../../turn/failover-prompt.js';
 import type { HarnessSession } from '../model.js';
 import { forgetNativeThread } from '../native-thread.js';
-import { withTitleRequest } from '../title.js';
 import { resetNativeSessionDiscoveryCache } from './cache.js';
 import { adoptableNativeSessions, type FoundNativeSession } from './owned.js';
 import { discoverClaudeFsSessions } from './vendors/claude.js';
@@ -79,7 +78,7 @@ describe('ClikCode-owned vendor threads', () => {
       await writeFile(join(project, `${id}.jsonl`), `${lines.map((line) => JSON.stringify(line)).join('\n')}\n`);
     };
     await write('c-transfer', transfer);
-    await write('c-titled', withTitleRequest('test'));
+    await write('c-titled', 'test\n\n<clikcode-title>Start this reply only with a title</clikcode-title>');
     await write('c-own', 'what does this repo do?');
     const sessions = await discoverClaudeFsSessions('', { CLAUDE_CONFIG_DIR: join(root, 'claude') });
     const listed = await adoptableNativeSessions({ sessions: [] }, sessions.map((item) => ({ harness: harness('claude'), item })));

@@ -12,7 +12,6 @@
 import { describe, expect, it } from 'vitest';
 import { allLocalHarnesses } from '@clikcode/router/ai-local-harness';
 import { createStreamState, parseHarnessLine } from './adapters';
-import { StreamingTitle } from '../../session/title';
 
 /** The live assistant text one line carries. */
 const responseOf = (...line: Parameters<typeof parseHarnessLine>) => parseHarnessLine(...line).response;
@@ -85,29 +84,20 @@ describe('every harness that speaks claude-stream-json', () => {
     expect(out).toContain('Found it.');
   });
 
-  it('leaves no paragraph jammed against the next, and no title tag on screen', () => {
-    // The three symptoms of the one bug, from two real screenshots:
-    //   1. every block printed twice
-    //   2. blocks jammed together -- "…workspace first.The final commit…"
-    //   3. the raw <clikcode-title> tag visible in the reply
-    // The third is the subtlest: the DELTAS settle the title and strip it,
-    // then the completed message re-sends the whole block including the tag,
-    // and StreamingTitle -- already settled, mode 'append' -- hands it back
-    // verbatim. Fixing the parser fixes all three, because there is only one
-    // bug: the same block arriving twice.
+  it('leaves no paragraph jammed against the next', () => {
+    // Every block printed twice, and blocks jammed together -- "…workspace first.The final
+    // commit…" -- are one bug: the same block arriving twice.
     const harness = harnessFor('grok');
-    const title = new StreamingTitle();
     const session = 'three-symptoms';
     const turn = createStreamState();
     let shown = '';
     const feed = (record: unknown) => {
       const update = responseOf(harness, JSON.stringify(record), turn);
       if (!update?.text) return;
-      const visible = title.push(update.text, update.mode);
-      if (visible !== undefined) shown += visible;
+      shown += update.text;
     };
     const blocks = [
-      "<clikcode-title>Prod Disk Cleanup</clikcode-title> I'm checking the workspace first.",
+      "I'm checking the workspace first.",
       'The final commit is live and all core containers are healthy.',
     ];
     feed({ type: 'system', subtype: 'init', session_id: session });
@@ -118,11 +108,7 @@ describe('every harness that speaks claude-stream-json', () => {
       }
       feed({ type: 'assistant', session_id: session, message: { role: 'assistant', content: [{ type: 'text', text: block }] } });
     }
-    const tail = title.flush();
-    if (tail) shown += tail;
 
-    expect(title.title).toBe('Prod Disk Cleanup');
-    expect(shown, 'the title tag must never reach the screen').not.toContain('<clikcode-title>');
     expect(shown.match(/checking the workspace/g), 'each block once').toHaveLength(1);
     expect(shown, 'a change of block is a paragraph, not a run-on').not.toContain('first.The final');
   });
