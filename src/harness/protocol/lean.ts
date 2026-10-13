@@ -36,19 +36,14 @@ export function costShownInline(costUsd: number | undefined): boolean {
   return costUsd !== undefined && Number.isFinite(costUsd) && costUsd >= COST_INLINE_MIN_USD;
 }
 
-/** The `(exit N · duration)` a call row carries, or nothing: an exit code
- * only when it is not 0, a duration only from 5 s. */
-export function callOutcome(exitCode: number | undefined, ms: number | undefined): string | undefined {
-  const parts = [
-    ...(exitCode !== undefined && exitCode !== 0 ? [`exit ${exitCode}`] : []),
-    ...(ms !== undefined && ms >= CALL_DURATION_MIN_MS ? [durationWords(ms)] : []),
-  ];
-  return parts.length ? `(${parts.join(' · ')})` : undefined;
-}
-
-function durationWords(ms: number): string {
-  const seconds = Math.round(ms / 1000);
-  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+/** The `exit N` and duration parts of a call's `(exit N · duration)`: shown
+ * only when the exit is not 0 or the call took 5 s or more; then the duration
+ * only from a second. A quick, successful call says neither. */
+export function callOutcomeParts(exitCode: number | undefined, ms: number | undefined, words: (ms: number) => string): string[] {
+  const failed = exitCode !== undefined && exitCode !== 0;
+  const slow = ms !== undefined && ms >= CALL_DURATION_MIN_MS;
+  if (!failed && !slow) return [];
+  return [...(failed ? [`exit ${exitCode}`] : []), ...(ms !== undefined && ms >= 1000 ? [words(ms)] : [])];
 }
 
 /** Whether the usage figure belongs in the footer: only when it is low or spent. */

@@ -16,20 +16,13 @@ describe('incremental native tool activity', () => {
     }));
     // The whole output is carried (it is short); the row decides what shows.
     expect(event).toEqual({ kind: 'tool-done', label: '$ git status', category: 'run', id: 'call-1', output: ['one', 'two', 'three', 'four'] });
-    // Kept whole, short output shows whole; a long one shows its first lines
-    // and its last -- what it set out to do and how it ended -- the middle
-    // counted between them (Grok, Cursor).
+    // A successful call is one row; its output is in the saved turn, not under the call.
     const plain = (rows: string[]): string[] => rows.map((row) => row.replace(/\u001b\[[0-9;]*m/g, '').trim());
-    expect(plain(renderActivityLine(event!)).slice(1)).toEqual(['one', 'two', 'three', 'four']);
-    const long = { ...event!, output: Array.from({ length: 9 }, (_, index) => `line ${index + 1}`) };
-    expect(plain(renderActivityLine(long)).slice(1)).toEqual(['line 1', 'line 2', '… 4 lines hidden', 'line 7', 'line 8', 'line 9']);
-    // Cut to its tail by the producer, its first kept line is mid-stream: the
-    // end is shown, the earlier lines counted above it.
-    expect(plain(renderActivityLine({ ...long, outputOmitted: 20, outputTail: true })).slice(1)).toEqual(['… 26 earlier lines', 'line 7', 'line 8', 'line 9']);
-    // Unless the producer kept its head as well, as activityOutput does.
-    const cut = { ...event!, ...activityOutput(Array.from({ length: 90 }, (_, index) => `step ${index + 1}`).join('\n'), { tail: true }) };
-    expect(cut.outputHead).toEqual(['step 1', 'step 2']);
-    expect(plain(renderActivityLine(cut)).slice(1)).toEqual(['step 1', 'step 2', '… 85 lines hidden', 'step 88', 'step 89', 'step 90']);
+    expect(plain(renderActivityLine(event!)).slice(1)).toEqual([]);
+    // A failed one shows the last lines of its output: that is the error.
+    const failed = { ...event!, kind: 'tool-error' as const, exitCode: 1, output: Array.from({ length: 9 }, (_, index) => `line ${index + 1}`) };
+    expect(plain(renderActivityLine(failed)).slice(1).at(-1)).toBe('line 9');
+    expect(plain(renderActivityLine(failed)).slice(1).length).toBeLessThan(9);
   });
 
   it('renders failed command completions as failures rather than green done events', () => {
