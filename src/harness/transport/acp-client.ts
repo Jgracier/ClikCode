@@ -78,7 +78,7 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   effort?: string | null;
   /** The harness's catalog ACP entry: how model, effort and permission mode
    * are selected over the protocol, and what its usage readings mean. */
-  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks'>;
+  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks' | 'steering'>;
   /** The chat's Plan mode is on: the session runs in `acp.planModeId`; the
    * agent leaving it is onPlanModeExit. */
   planMode?: boolean;
@@ -766,7 +766,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
       }, setup));
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
-      live.steering = initialized._meta?.steering?.supported === true;
+      live.steering = initialized._meta?.steering?.supported === true && input.acp?.steering !== false;
       stillRunning();
     }
     // A vendor that says it is signed out is not signed in over ACP
