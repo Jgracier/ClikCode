@@ -117,7 +117,16 @@ describe('captureStdout', () => {
     captureStdout({ send: (event) => events.push(event) }, stream, (line) => logged.push(line));
     stream.write('{"panel":"settings","ok":true}\nnot json\n{"pa');
     stream.write('nel":"help"}\n');
-    expect(events).toEqual([{ type: 'output', payload: { panel: 'settings', ok: true } }, { type: 'output', payload: { panel: 'help' } }]);
+    // Each carries what the terminal would show for it, so the editor need not re-render the payload.
+    expect(events).toEqual([
+      { type: 'output', payload: { panel: 'settings', ok: true }, formatted: { title: 'Settings', body: '' } },
+      { type: 'output', payload: { panel: 'help' }, formatted: { title: 'Help', body: '' } },
+    ]);
+    stream.write('{"panel":"help","helpText":"/model  choose"}\n{"nothing":"to read"}\n');
+    expect(events.slice(2)).toEqual([
+      { type: 'output', payload: { panel: 'help', helpText: '/model  choose' }, formatted: { title: 'Commands', body: '/model  choose' } },
+      { type: 'output', payload: { nothing: 'to read' } },
+    ]);
     expect(logged).toEqual(['not json']);
   });
 });

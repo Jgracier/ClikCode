@@ -278,8 +278,10 @@ export type IdeEvent =
   | { type: 'ready'; version: string; protocol?: number; revision?: number; build?: string; pid: number }
   /** The conversation shown, from the state file: on open, on a switch, and
    * after anything that changed it outside a turn. */
-  | { type: 'session'; session: HarnessSession; account?: string; modelLabel?: IdeModelLabel }
-  | { type: 'worker'; sessionId: string; event: WorkerEvent }
+  | { type: 'session'; session: HarnessSession; account?: string; modelLabel?: IdeModelLabel; providerId?: string; providerName?: string }
+  /** `level`: how a `note` event reads (red, yellow or plain in the terminal),
+   * so the editor need not parse the colour back out of its text. */
+  | { type: 'worker'; sessionId: string; event: WorkerEvent; level?: 'info' | 'warning' | 'error' }
   /** This client submitted a turn; `prompt` is what to show as the user's
    * message until the worker's snapshot carries it (absent for synthetic
    * prompts such as /review). */
@@ -289,8 +291,10 @@ export type IdeEvent =
   | { type: 'busy'; label?: string }
   | { type: 'notice'; message: string; level: 'info' | 'warning' | 'error' }
   | { type: 'panel'; title: string; body: string }
-  /** A command's structured result, as `--json` would print it. */
-  | { type: 'output'; payload: Record<string, unknown> }
+  /** A command's structured result, as `--json` would print it. `formatted`
+   * is what the terminal would show for it (plain text, titled), absent for a
+   * payload with nothing for a person to read and from an older bridge. */
+  | { type: 'output'; payload: Record<string, unknown>; formatted?: { title: string; body: string } }
   | { type: 'restore-draft'; text: string }
   | { type: 'ui-request'; id: string; request: IdeUiRequest }
   | { type: 'ui-update'; id: string; items: readonly IdePickItem[] }

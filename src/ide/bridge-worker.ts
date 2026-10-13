@@ -1,5 +1,6 @@
 /** The bridge's attachment to the conversation's worker: attach, follow its
  * events, and stop a turn and see that it lands. */
+import { noticeLevel } from './notice-level.js';
 import { withSignIn } from '../commands/account.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
@@ -82,7 +83,7 @@ export class WorkerLink {
   }
 
   onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {
-    this.host.channel.send({ type: 'worker', sessionId, event });
+    this.host.channel.send({ type: 'worker', sessionId, event, ...(event.type === 'note' || event.type === 'notice' ? { level: noticeLevel(event.message) } : {}) });
     switch (event.type) {
       case 'waiting-start':
         this.workerTurnRunning = true;

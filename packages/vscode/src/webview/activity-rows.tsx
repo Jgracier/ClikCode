@@ -1,0 +1,305 @@
+/** A turn's tool calls, thoughts and decisions as rows. */
+import type { JSX } from 'preact';
+import { useContext, useState } from 'preact/hooks';
+import { activityOutcome, commandOutputPreview, diffPreview, diffTotals, DIFF_PREVIEW_LINES, LIVE_OUTPUT_LINES, liveWaitKind, outputPreview, previewLinesFor, toolUses } from '../../../../src/harness/protocol/activity-view';
+import { activityResult, decisionRow, exploreRuns, exploreSummary, reasoningBody, reasoningHeading, tensedLabel, thoughtRow } from '../../../../src/harness/protocol/turn-flow';
+import { TOOL_CATEGORY } from '../../../../src/harness/protocol/tool-category';
+import { useNow } from './clock';
+import { formatElapsed } from '../../../../src/harness/protocol/format';
+import type { ToolCategory } from '../../../../src/harness/prompter';
+import { liveChildren, type Activity, type DecisionEntry, type LiveChild, type ThoughtEntry } from '../model';
+import type { FileDiff } from '../protocol';
+import { post } from './bus';
+import { pathIn, relative } from './format';
+import { Animating, Icon, Spinner } from './ui';
+import { decisionBadge, foldedSummary, runGroupView, shimmerStyle } from './flow';
+
+export const CATEGORY_ICON: Record<ToolCategory, string> = { read: 'file', edit: 'edit', run: 'terminal', search: 'search', fetch: 'globe' };
+
+/** A call's icon and colour come from what it is (its category, or being a
+ * sub-agent), the same facts the terminal's glyph and colour come from. */
+export function activityIcon(activity: Activity): string {
+  if (activity.agent || liveWaitKind({ ...activity, kind: 'tool-start' }) === 'agent') return 'hubot';
+  return activity.category ? CATEGORY_ICON[activity.category] : 'tools';
+}
+
+export function toneOf(activity: Activity): string {
+  if (activity.agent) return 'tone-cyan';
+  return activity.category ? `tone-${TOOL_CATEGORY[activity.category].colour}` : '';
+}
+
+
+/** A tool label with the path in it made a link to the file. */
+export function ActivityLabel({ label, workspace, shimmer }: { label: string; workspace?: string; shimmer?: boolean }): JSX.Element {
+  const className = shimmer ? 'activity-text live-name' : 'activity-text';
+  const style = shimmer ? shimmerStyle(label) : undefined;
+  const found = pathIn(label);
+  if (!found) return <span class={className} style={style} title={label}>{relative(label, workspace)}</span>;
+  const before = relative(label.slice(0, found.index), workspace);
+  const written = found.path + (found.line ? `:${found.line}` : '');
+  const after = relative(label.slice(found.index + written.length), workspace);
+  // Shown relative to the workspace, opened by the path the tool used.
+  const shown = relative(found.path, workspace) + (found.line ? `:${found.line}` : '');
+  return (
+    <span class={className} style={style} title={label}>
+      {before}
+      <a href="#" class="file-link" data-file={found.path} data-line={found.line} title={`Open ${found.path}`}>{shown}</a>
+      {after}
+    </span>
+  );
+}
+
+/** An edit as the terminal shows it: per file (named when there are
+ * several), hunks with line numbers where they are real, removed and added
+ * on tinted rows, context dim, ⋮ between hunks. `budget` lines across at
+ * most four files, the rest counted (activity-view.ts); none: all of it. */
+export function DiffView({ files, budget }: { files: readonly FileDiff[]; budget?: number }): JSX.Element {
+  const preview = diffPreview(files, budget ?? Number.MAX_SAFE_INTEGER);
+  const shown = budget === undefined ? files.map((file) => ({ file, lines: file.lines })) : preview.files;
+  const width = preview.gutter;
+  const notes = budget === undefined ? [] : [
+    ...(preview.hiddenLines > 0 ? [`${preview.hiddenLines} more line${preview.hiddenLines === 1 ? '' : 's'}`] : []),
+    ...(preview.moreFiles > 0 ? [`${preview.moreFiles} more file${preview.moreFiles === 1 ? '' : 's'}`] : []),
+  ];
+  return (
+    <div class="activity-output diff" role="group" aria-label="Change">
+      {shown.map(({ file, lines }, fileIndex) => (
+        <div key={`f${fileIndex}`}>
+          {files.length > 1 ? (
+            <div class="file">{file.path ?? 'file'}{file.change === 'add' ? ' (new)' : file.change === 'delete' ? ' (deleted)' : ''} <Counts additions={file.additions} removals={file.removals} /></div>
+          ) : null}
+          {lines.map((line, index) => {
+            const number = width ? String(line.line ?? '').padStart(width) : '';
+            if (line.kind === 'gap') return <div key={index} class="gap"><span class="num">{''.padStart(width)}</span>⋮</div>;
+            const mark = line.kind === 'removed' ? '-' : line.kind === 'added' ? '+' : ' ';
+            return <div key={index} class={line.kind === 'removed' ? 'del' : line.kind === 'added' ? 'add' : 'same'}><span class="num">{number}</span><span class="mark">{mark}</span>{line.text}</div>;
+          })}
+          {budget === undefined && file.omitted ? <div class="gap">… {file.omitted} more line{file.omitted === 1 ? '' : 's'}</div> : null}
+        </div>
+      ))}
+      {notes.length ? <div class="gap">… {notes.join(', ')}</div> : null}
+    </div>
+  );
+}
+
+export function Counts({ additions, removals }: { additions: number; removals: number }): JSX.Element {
+  return <>{additions ? <span class="add">+{additions}</span> : null}{additions && removals ? ' ' : ''}{removals ? <span class="del">-{removals}</span> : null}</>;
+}
+
+/** A tool's output as the terminal budgets it: a command's last lines, the
+ * earlier ones counted above; anything else its first, the rest below. */
+export function OutputView({ activity, budget }: { activity: Activity; budget: number }): JSX.Element | null {
+  const { lines, hidden, fromEnd } = outputPreview(activity, budget);
+  if (!lines.length) return null;
+  const note = hidden > 0 ? <div class="gap">… {hidden} {fromEnd ? 'earlier' : 'more'} line{hidden === 1 ? '' : 's'}</div> : null;
+  return <pre class="activity-output">{fromEnd ? note : null}{lines.join('\n')}{fromEnd ? null : note}</pre>;
+}
+
+/** A finished command's output: its first lines and its last, the middle
+ * counted (commandOutputPreview, the terminal's rule). */
+export function CommandOutput({ ends }: { ends: NonNullable<ReturnType<typeof commandOutputPreview>> }): JSX.Element {
+  return (
+    <pre class="activity-output">
+      {ends.head.join('\n')}
+      {ends.hidden ? <div class="gap">… {ends.hidden} line{ends.hidden === 1 ? '' : 's'} hidden</div> : null}
+      {ends.tail.join('\n')}
+    </pre>
+  );
+}
+
+/** Which rows are open, kept across the live turn becoming its trace and
+ * across a redraw: a row is its call (key) at the moment it was first seen. */
+export const openRows = new Set<string>();
+export const rowId = (activity: Activity): string => `${activity.key}@${activity.startedAt ?? ''}`;
+
+/** The seconds a running call has taken, ticking on its own so the rest of
+ * the turn is not redrawn every second. */
+export function Clock({ since }: { since: number }): JSX.Element | null {
+  const now = useNow();
+  return now - since >= 1000 ? <span class="activity-outcome">{formatElapsed(now - since)}</span> : null;
+}
+
+/** One running child of a sub-agent, on its own line with its own spinner;
+ * the newest carries the parent's count (as the terminal's row does). */
+export function ChildLine({ live }: { live: LiveChild }): JSX.Element {
+  const uses = live.newest ? live.parent.childTools : undefined;
+  return (
+    <div class="activity-child" title={live.child.label}>
+      <Spinner tone="tone-cyan" /><span>{tensedLabel(live.child.label, true)}</span>{uses ? <span class="muted">{toolUses(uses)}</span> : null}
+    </div>
+  );
+}
+
+export function ActivityRow({ activity, workspace, userIndex }: { activity: Activity; workspace?: string; userIndex?: number }): JSX.Element {
+  const id = rowId(activity);
+  const [open, setOpenState] = useState(openRows.has(id));
+  const setOpen = (value: boolean): void => { if (value) openRows.add(id); else openRows.delete(id); setOpenState(value); };
+  const status = activity.kind === 'tool-start' ? 'running' : activity.stopped ? 'stopped' : activity.kind === 'tool-error' ? 'error' : 'done';
+  // What the terminal shows under a settled call: an edit's change, a
+  // command's or search's last lines, a fetch's first -- a read's row says
+  // all of it. The rest is one click away.
+  // A command's whole output: its first lines and its last (Codex).
+  const budget = previewLinesFor(activity.category);
+  const ends = activity.category === 'run' && status !== 'running' ? commandOutputPreview(activity) : undefined;
+  const preview = !ends && activity.output?.length && budget > 0 ? outputPreview(activity, budget) : undefined;
+  const hasMore = Boolean((activity.output?.length && (ends ? ends.hidden > 0 : !preview || preview.hidden > 0))
+    || (activity.diff && diffPreview(activity.diff, DIFF_PREVIEW_LINES).hiddenLines) || activity.children?.length);
+  // Its own live children directly under it (those that began after more
+  // text was written are drawn lower, by the turn: turnMarks).
+  const beside = status === 'running' ? liveChildren(activity).filter((entry) => entry.beside) : [];
+  // What it found ("42 lines"), then the exceptions (a failure, a long run).
+  const result = activityResult(activity);
+  const outcome = activityOutcome(activity);
+  const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
+  const agentRunning = status === 'running' && (Boolean(activity.swarm) || Boolean(activity.agent)
+    || liveWaitKind({ kind: 'tool-start', label: activity.label, agent: activity.agent, category: activity.category }) === 'agent');
+  const animating = useContext(Animating);
+  const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
+    event.stopPropagation();
+    post({ type: 'change', action, key: activity.key, ...(userIndex === undefined ? {} : { userIndex }) });
+  };
+  return (
+    <div class={`activity ${status}`}>
+      <div class="activity-line">
+        {/* Every running row spins for itself, in its category's colour, on
+            the page's one clock (the working line spins for the turn). */}
+        <span class={`activity-status ${activity.swarm ? 'tone-cyan' : toneOf(activity)}`} aria-label={status}>
+          {status === 'error' ? <Icon name="error" /> : status === 'stopped' ? <Icon name="debug-stop" />
+            : status === 'running' ? <Spinner tone={agentRunning ? 'tone-cyan' : toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}
+        </span>
+        <ActivityLabel label={status === 'stopped' ? activity.label : tensedLabel(activity.label, status === 'running')} workspace={workspace} shimmer={agentRunning && animating} />
+        {status === 'stopped' ? <span class="activity-outcome stopped">stopped</span> : null}
+        {activity.decision ? <span class={`activity-outcome activity-decision ${decisionBadge(activity.decision).tone}`}>{decisionBadge(activity.decision).text}</span> : null}
+        {totals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
+        {status === 'running' && activity.startedAt ? <Clock since={activity.startedAt} /> : null}
+        {result ? <span class="activity-outcome activity-result">{result}</span> : null}
+        {outcome ? <span class={`activity-outcome${outcome.failed ? ' failed' : ''}`}>{activity.children?.length || activity.childTools ? `(${outcome.parts.join(' · ')})` : outcome.parts.join(' · ')}</span> : null}
+        {activity.diff?.length && status !== 'running' ? (
+          <span class="activity-actions">
+            <button type="button" class="icon-button tiny" title="Open in the diff editor" aria-label="Open in the diff editor" onClick={change('view')}><Icon name="diff" /></button>
+            {status === 'done' ? <button type="button" class="icon-button tiny" title="Undo this change" aria-label="Undo this change" onClick={change('revert')}><Icon name="discard" /></button> : null}
+          </span>
+        ) : null}
+        {hasMore ? (
+          <button type="button" class="icon-button tiny" aria-expanded={open} aria-label={open ? 'Hide details' : 'Show details'} onClick={() => setOpen(!open)}>
+            <Icon name={open ? 'chevron-up' : 'chevron-down'} />
+          </button>
+        ) : null}
+      </div>
+      {beside.map((entry) => <ChildLine key={entry.child.key} live={entry} />)}
+      {/* A harness that sent no child calls, only what it is doing now. */}
+      {status === 'running' && activity.child && !activity.children?.length ? <div class="activity-child" title={activity.child}><Spinner tone="tone-cyan" /><span>{activity.child}</span>{activity.childTools ? <span class="muted">{toolUses(activity.childTools)}</span> : null}</div> : null}
+      {/* The children stay available once it settles, one click away. */}
+      {open && activity.children?.length ? (
+        <div class="activities nested">{activity.children.map((child) => <ActivityRow key={child.key} activity={child} workspace={workspace} userIndex={userIndex} />)}</div>
+      ) : null}
+      {/* A running call shows what it has printed so far, newest last -- a
+          long build is visibly working instead of a bare timer. */}
+      {status === 'running' && !open && activity.output?.length ? <OutputView activity={{ ...activity, outputTail: true }} budget={LIVE_OUTPUT_LINES} /> : null}
+      {activity.diff?.length ? <DiffView files={activity.diff} budget={open ? undefined : status === 'running' ? 0 : DIFF_PREVIEW_LINES} /> : null}
+      {!open && ends ? <CommandOutput ends={ends} /> : null}
+      {status !== 'running' && !open && preview ? <OutputView activity={activity} budget={budget} /> : null}
+      {open && activity.output?.length ? <OutputView activity={activity} budget={Number.MAX_SAFE_INTEGER} /> : null}
+    </div>
+  );
+}
+
+/** A run of calls a finished turn made between two paragraphs, folded to
+ * one line in its place -- "Read 3 files, searched 1 pattern · ran 2
+ * commands" -- as Codex folds its work; open, the rows themselves. */
+export function FoldedRun({ activities, workspace, userIndex }: { activities: Activity[]; workspace?: string; userIndex?: number }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const failed = activities.filter((activity) => activity.kind === 'tool-error' && !activity.stopped).length;
+  const stopped = activities.filter((activity) => activity.stopped).length;
+  const totals = diffTotals(activities.flatMap((activity) => activity.diff ?? []));
+  return (
+    <div class="trace">
+      <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} />
+        <span>{foldedSummary(activities)}</span>
+        {failed ? <span class="muted"> · {failed} failed</span> : null}
+        {stopped ? <span class="muted"> · {stopped} stopped</span> : null}
+        {totals.additions || totals.removals ? <span class="activity-counts"><Counts additions={totals.additions} removals={totals.removals} /></span> : null}
+      </button>
+      {open ? <div class="activities"><RunGroups groups={exploreRuns(activities)} workspace={workspace} userIndex={userIndex} /></div> : null}
+    </div>
+  );
+}
+
+/** Rows of one run, each run of looking-around calls merged into one
+ * "Explored" row (exploreRuns), the rest a row each. */
+export function RunGroups({ groups, workspace, userIndex }: { groups: ReadonlyArray<{ rows: Activity[]; explore: boolean }>; workspace?: string; userIndex?: number }): JSX.Element {
+  return (
+    <>
+      {runGroupView(groups).map((group) => (group.kind === 'explored'
+        ? <ExploredRow key={group.key} activities={group.rows} workspace={workspace} userIndex={userIndex} />
+        : <ActivityRow key={group.key} activity={group.rows[0]!} workspace={workspace} userIndex={userIndex} />))}
+    </>
+  );
+}
+
+/** Calls shown, dimmed, under a closed "Explored" row: the newest. */
+export const EXPLORED_RECENT = 3;
+
+/** A run of reads and searches as one row, as Codex's "Explored" and
+ * Cursor's merged reads: what it amounts to ("Read 3 files, searched 1
+ * pattern"), its newest calls dimmed beneath; open, every call's own row. */
+export function ExploredRow({ activities, workspace, userIndex }: { activities: Activity[]; workspace?: string; userIndex?: number }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const running = activities.some((activity) => activity.kind === 'tool-start');
+  return (
+    <div class={`explored${running ? ' running' : ''}`}>
+      <button type="button" class="trace-toggle explored-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <Icon name={open ? 'chevron-down' : 'chevron-right'} />
+        {running ? <Spinner tone="tone-blue" /> : null}
+        <span class="explored-title">{running ? 'Exploring' : 'Explored'}</span>
+        <span class="muted explored-summary">{exploreSummary(activities)}</span>
+      </button>
+      {open ? <div class="activities">{activities.map((activity) => <ActivityRow key={activity.key} activity={activity} workspace={workspace} userIndex={userIndex} />)}</div> : (
+        <div class="explored-recent">
+          {activities.slice(-EXPLORED_RECENT).map((activity) => {
+            const result = activityResult(activity);
+            return (
+              <div key={activity.key} class="explored-call">
+                <span class={`activity-status ${toneOf(activity)}`}>{activity.kind === 'tool-start' ? <Spinner tone={toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}</span>
+                <ActivityLabel label={activity.stopped ? activity.label : tensedLabel(activity.label, activity.kind === 'tool-start')} workspace={workspace} />
+                {activity.stopped ? <span class="activity-outcome stopped">stopped</span> : null}
+                {result ? <span class="activity-outcome activity-result">{result}</span> : null}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A thought, where it happened: "Thought for 4s · heading", open to read it
+ * when its words were kept (the worker caps them; the heading and the
+ * duration are always there). The same words as the terminal's row. */
+export function ThoughtRow({ thought }: { thought: ThoughtEntry }): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const row = thoughtRow({ durationMs: thought.ms, heading: thought.heading ?? reasoningHeading(thought.text) });
+  const body = thought.text ? reasoningBody(thought.text) || thought.text : '';
+  return (
+    <div class="trace thought-row">
+      {body ? (
+        <button type="button" class="trace-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+          <Icon name={open ? 'chevron-down' : 'chevron-right'} /><span>{row}</span>
+        </button>
+      ) : <div class="trace-toggle static"><Icon name="lightbulb" /><span>{row}</span></div>}
+      {open && body ? <Reasoning text={body} /> : null}
+    </div>
+  );
+}
+
+/** What the user decided at an approval or question, where it was asked:
+ * `✓ approved make clean`, `✗ denied …`, `↳ told: …` (standard 8). */
+export function DecisionRow({ entry }: { entry: Pick<DecisionEntry, 'decision'> }): JSX.Element {
+  const { text, tone } = decisionRow(entry.decision);
+  return <div class={`decision-row decision-${tone}`} role="note"><span class="muted">{text}</span></div>;
+}
+
+export function Reasoning({ text }: { text: string }): JSX.Element {
+  return <div class="reasoning" aria-label="Reasoning"><p>{text}</p></div>;
+}

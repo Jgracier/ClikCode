@@ -27,3 +27,10 @@ export { modelLabel } from '../../../../src/harness/model-label.js';
 /** A finished turn's tokens, cache hits, context and cost, bundled from
  * ClikCode's source for the same reason. */
 export { formatTurnUsage } from '../../../../src/tui/render/usage-line.js';
+
+/** Paths inside the workspace, shown relative to it. */
+export function relative(text: string, workspace: string | undefined): string {
+  if (!workspace) return text;
+  const root = workspace.replace(/[\\/]+$/, '');
+  return text.split(`${root}/`).join('').split(`${root}\\`).join('');
+}
