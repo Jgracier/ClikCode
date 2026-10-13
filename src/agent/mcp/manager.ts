@@ -22,6 +22,7 @@ import { McpClient, type McpCallResult, type McpToolInfo } from './client.js';
 import { loadMcpServers, type McpServerSpec } from './config.js';
 import { carriesCredentials } from '../../harness/mcp-sign-in.js';
 import { importNotice, importVendorMcpServers } from './import.js';
+import { diagnostic } from '../../runtime/lifecycle-log.js';
 import { enabledPluginMcpServers } from '../plugins.js';
 import { isMcpSignInRequired, mcpOAuthProvider, mcpSignInNote, type McpAuth } from './oauth.js';
 import { mcpResourceTools, type McpResourceSource } from './resources.js';
@@ -39,8 +40,6 @@ const DEFAULT_TIMEOUTS: McpTimeouts = { connectMs: 30_000, callMs: 300_000, retr
 
 export interface McpToolset {
   tools: ToolDefinition[];
-  /** One line per server that is configured but offers nothing this turn. */
-  notes: string[];
 }
 
 interface ServerState {
@@ -52,7 +51,7 @@ interface ServerState {
   /** Set by `notifications/tools/list_changed`; the next turn re-lists. */
   stale?: boolean;
   failure?: {
-    message: string; at: number; reported?: boolean;
+    message: string; at: number;
     /** Needs a sign-in only the user can start: retried only once the stored
      * credential changes (`clikcode mcp login`), never on the clock. */
     signIn?: { stamp: string };
@@ -108,7 +107,9 @@ export class McpManager {
    * parallel, so the slowest one bounds the wait, not the sum of them. */
   async toolset(): Promise<McpToolset> {
     const { servers, problem } = await this.loadServers();
-    const notes: string[] = problem ? [problem] : [];
+    // Nothing here is said to the user: a server that offers nothing is simply
+    // not offered, and the log keeps why (`/mcp` lists what needs a sign-in).
+    if (problem) diagnostic('mcp.config', problem);
     await this.reconcile(servers);
     await Promise.all([...this.servers.values()].map((state) => withinWait(this.ensureReady(state), state.spec.turnWaitMs)));
     const tools: ToolDefinition[] = [];
@@ -120,15 +121,6 @@ export class McpManager {
     const ordered = [...this.servers.values()].sort((a, b) => (a.spec.name < b.spec.name ? -1 : a.spec.name > b.spec.name ? 1 : 0));
     for (const state of ordered) {
       if (!state.client || !state.tools) {
-        // Said once per failure, not on every turn: a server that stays down
-        // (one needing a login the agent cannot do) would otherwise add the
-        // same line to every conversation. A different reason is said again.
-        if (state.failure && !state.failure.reported) {
-          notes.push(state.failure.signIn
-            ? `MCP server ${state.failure.message}; its tools are not offered until then`
-            : `MCP server "${state.spec.name}" is unavailable, so its tools are not offered: ${state.failure.message}`);
-          state.failure.reported = true;
-        }
         continue;
       }
       for (const info of state.tools) {
@@ -145,7 +137,7 @@ export class McpManager {
         });
       }
     }
-    return { tools: [...tools, ...mcpResourceTools(resources)], notes };
+    return { tools: [...tools, ...mcpResourceTools(resources)] };
   }
 
   /** Stops every server. Safe to call more than once. */
@@ -242,8 +234,10 @@ export class McpManager {
   private async fail(state: ServerState, error: unknown): Promise<void> {
     const signIn = isMcpSignInRequired(error);
     const message = signIn ? mcpSignInNote(state.spec.name) : firstLine(error);
+    // Logged once per distinct reason, not on every retry.
+    if (state.failure?.message !== message) diagnostic('mcp.server-unavailable', `${state.spec.name}: ${message}`);
     state.failure = {
-      message, at: this.now(), reported: state.failure?.message === message && state.failure.reported,
+      message, at: this.now(),
       ...(signIn ? { signIn: { stamp: await this.auth(state)?.stamp() ?? '' } } : {}),
     };
     await this.stop(state);
@@ -321,13 +315,13 @@ async function loadAllServers(stateDir: string): Promise<{ servers: McpServerSpe
  * Under vitest with no CLIKCODE_HOME the answer is always empty, so a test
  * of the turn wiring never starts the developer's real servers. */
 export async function mcpToolsForTurn(stateDir: string, signal?: AbortSignal, builtins: readonly McpServerSpec[] = []): Promise<McpToolset> {
-  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return { tools: [], notes: [] };
+  if (process.env.VITEST && !process.env.CLIKCODE_HOME?.trim()) return { tools: [] };
   builtinServers = builtins;
   if (!signal) return sharedToolset(stateDir);
   // A cancel while a slow server is still starting ends the wait at once;
   // the start carries on in the background and serves the next turn.
   return new Promise((resolve) => {
-    const onAbort = (): void => resolve({ tools: [], notes: [] });
+    const onAbort = (): void => resolve({ tools: [] });
     if (signal.aborted) return onAbort();
     signal.addEventListener('abort', onAbort, { once: true });
     void sharedToolset(stateDir).then(resolve).finally(() => signal.removeEventListener('abort', onAbort));
@@ -351,15 +345,16 @@ async function sharedToolset(stateDir: string): Promise<McpToolset> {
   // the user gave their vendor harnesses before mcp.json existed. Once it has
   // run anywhere, its marker file makes this a single read.
   imports ??= importVendorMcpServers(stateDir).then(importNotice, (error: unknown) => `MCP import from harness configs failed: ${firstLine(error)}`);
-  const notice = await imports;
-  imports = Promise.resolve(undefined); // the notice is shown once, not every turn
+  const imported = await imports;
+  imports = Promise.resolve(undefined); // logged once, not every turn
+  if (imported) diagnostic('mcp.import', imported);
   try {
-    const toolset = await shared.manager.toolset();
-    return notice ? { ...toolset, notes: [notice, ...toolset.notes] } : toolset;
+    return await shared.manager.toolset();
   } catch (error) {
     // Belt and braces: the manager catches per server, but MCP must never be
     // the reason a turn did not run.
-    return { tools: [], notes: [`MCP tools are unavailable this turn: ${firstLine(error)}`] };
+    diagnostic('mcp.toolset', firstLine(error));
+    return { tools: [] };
   }
 }
 

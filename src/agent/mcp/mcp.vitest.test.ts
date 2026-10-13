@@ -8,7 +8,8 @@ import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { diagnostic } from '../../runtime/lifecycle-log.js';
 import { runAgentLoop } from '../run-turn.js';
 import { disposeSessionState } from '../session-state.js';
 import { ScriptedModelClient } from '../testing.js';
@@ -18,13 +19,17 @@ import { McpManager } from './manager.js';
 import { formatMcpResult, mcpToolName, mcpToolParameters } from './tools.js';
 import { writeMcpConfigEntry } from '../../harness/mcp-registry.js';
 
+// What a user is never told goes to the lifecycle log: these tests read it from here.
+vi.mock('../../runtime/lifecycle-log.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../runtime/lifecycle-log.js')>()), diagnostic: vi.fn() }));
+const logged = (): string[] => vi.mocked(diagnostic).mock.calls.filter(([kind]) => kind === 'mcp.server-unavailable').map(([, message]) => message);
+
 const FIXTURE = fileURLToPath(new URL('./fixtures/fake-mcp-server.mjs', import.meta.url));
 
 let dir: string;
 const managers: McpManager[] = [];
 const servers: Server[] = [];
 
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'clikcode-mcp-agent-')); });
+beforeEach(async () => { vi.mocked(diagnostic).mockClear(); dir = await mkdtemp(join(tmpdir(), 'clikcode-mcp-agent-')); });
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((manager) => manager.shutdown()));
   await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); })));
@@ -139,22 +144,21 @@ describe('a server with a turn wait', () => {
     expect(Date.now() - begun).toBeLessThan(5_000);
     expect(first.tools.some((tool) => tool.name === 'mcp__quick__echo')).toBe(true);
     expect(first.tools.some((tool) => tool.name.startsWith('mcp__slow__'))).toBe(false);
-    // Still starting is not a failure: nothing to tell the user.
-    expect(first.notes).toEqual([]);
+    // Still starting is not a failure: nothing even for the log.
+    expect(logged()).toEqual([]);
     await writeFile(ready, '');
     // The start already under way finishes once the server answers, and a
     // later turn offers its tools -- without starting it again.
     let later = await subject.toolset();
     for (let tries = 0; tries < 20 && !later.tools.some((tool) => tool.name === 'mcp__slow__echo'); tries += 1) later = await subject.toolset();
     expect(later.tools.some((tool) => tool.name === 'mcp__slow__echo')).toBe(true);
-    expect(later.notes).toEqual([]);
+    expect(logged()).toEqual([]);
   });
 });
 
 describe('a stdio server', () => {
   it('lists every tool across pages, with read only where the server says so', async () => {
-    const { tools, notes } = await manager([fake('fake')]).toolset();
-    expect(notes).toEqual([]);
+    const { tools } = await manager([fake('fake')]).toolset();
     expect(tools.map((tool) => tool.name)).toEqual([
       'mcp__fake__echo', 'mcp__fake__fail', 'mcp__fake__explode', 'mcp__fake__crash',
       'mcp__fake__slow', 'mcp__fake__picture', 'mcp__fake__structured', 'mcp__fake__grow', expect.stringMatching(/^mcp__fake__weird_name_with_spaces_[0-9a-f]{8}$/),
@@ -204,7 +208,6 @@ describe('a stdio server', () => {
     await expect(find(tools, 'mcp__fake__crash').run({}, ctx())).rejects.toThrow(/segfault in module frobnicate/);
     await until(() => !alive(first));
     const again = await mcp.toolset();
-    expect(again.notes).toEqual([]);
     expect(Number(await readFile(pidFile, 'utf8'))).not.toBe(first);
     expect((await find(again.tools, 'mcp__fake__echo').run({ text: 'back' }, ctx())).output).toMatch(/^echo: back/);
   });
@@ -234,28 +237,27 @@ describe('a stdio server', () => {
   it('a server that will not start costs only its own tools, with its reason', async () => {
     let clock = 0;
     const mcp = manager([fake('broken', { FAKE_MCP_FAIL_START: '1' }), fake('good')], { now: () => clock });
-    const { tools, notes } = await mcp.toolset();
+    const { tools } = await mcp.toolset();
     expect(tools.every((tool) => tool.name.startsWith('mcp__good__'))).toBe(true);
     expect(tools.length).toBeGreaterThan(0);
-    expect(notes).toHaveLength(1);
-    expect(notes[0]).toMatch(/"broken" is unavailable/);
-    expect(notes[0]).toMatch(/could not open the database/);
-    // Not retried on every turn, and said once: a server that stays down
-    // does not add the same line to every turn.
+    // Only the log hears of it, once: a server that stays down does not
+    // add the same line on every turn.
+    expect(logged()).toHaveLength(1);
+    expect(logged()[0]).toMatch(/broken: .*could not open the database/);
     const started = Date.now();
-    expect((await mcp.toolset()).notes).toEqual([]);
+    await mcp.toolset();
     expect(Date.now() - started).toBeLessThan(500);
     // Retried after the backoff; failing again for the same reason is not news.
     clock += 61_000;
     const retried = await mcp.toolset();
-    expect(retried.notes).toEqual([]);
+    expect(logged()).toHaveLength(1);
     expect(retried.tools.every((tool) => tool.name.startsWith('mcp__good__'))).toBe(true);
   });
 
-  it('a command that does not exist is a note, not a failed turn', async () => {
-    const { tools, notes } = await manager([{ name: 'nope', transport: 'stdio', command: join(dir, 'no-such-binary'), args: [], env: {} }]).toolset();
+  it('a command that does not exist is logged, not a failed turn', async () => {
+    const { tools } = await manager([{ name: 'nope', transport: 'stdio', command: join(dir, 'no-such-binary'), args: [], env: {} }]).toolset();
     expect(tools).toEqual([]);
-    expect(notes[0]).toMatch(/"nope" is unavailable/);
+    expect(logged()[0]).toMatch(/^nope: /);
   });
 
   it('shuts its servers down, and restarts one whose config changed', async () => {
@@ -315,8 +317,7 @@ describe('an HTTP server', () => {
       }
       response.writeHead(200, { 'content-type': 'application/json', 'mcp-session-id': 'sess-1' }).end(reply);
     });
-    const { tools, notes } = await manager([{ name: 'web', transport: 'http', url, headers: { authorization: 'Bearer t' } }]).toolset();
-    expect(notes).toEqual([]);
+    const { tools } = await manager([{ name: 'web', transport: 'http', url, headers: { authorization: 'Bearer t' } }]).toolset();
     expect(tools.map((tool) => [tool.name, tool.class])).toEqual([['mcp__web__lookup', 'read']]);
     expect((await tools[0].run({ q: 'cats' }, ctx())).output).toBe('found cats');
     expect(seen[0]).toEqual({ method: 'initialize', session: undefined, version: undefined });
@@ -337,15 +338,14 @@ describe('an HTTP server', () => {
       response.writeHead(202).end();
       if (message.id !== undefined) stream!.write(`event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: message.id, result: answer(message) })}\n\n`);
     });
-    const { tools, notes } = await manager([{ name: 'old', transport: 'http', url, headers: {} }]).toolset();
-    expect(notes).toEqual([]);
+    const { tools } = await manager([{ name: 'old', transport: 'http', url, headers: {} }]).toolset();
     expect((await find(tools, 'mcp__old__lookup').run({ q: 'dogs' }, ctx())).output).toBe('found dogs');
   });
 
-  it('an unreachable URL is a note', async () => {
-    const { tools, notes } = await manager([{ name: 'gone', transport: 'http', url: 'http://127.0.0.1:9/mcp', headers: {} }]).toolset();
+  it('an unreachable URL is logged', async () => {
+    const { tools } = await manager([{ name: 'gone', transport: 'http', url: 'http://127.0.0.1:9/mcp', headers: {} }]).toolset();
     expect(tools).toEqual([]);
-    expect(notes[0]).toMatch(/"gone" is unavailable/);
+    expect(logged()[0]).toMatch(/^gone: /);
   });
 });
 

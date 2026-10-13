@@ -9,13 +9,18 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { McpServerSpec } from './config.js';
 import { McpManager } from './manager.js';
 import {
   discoverMcpOAuth, forgetMcpOAuth, mcpOAuthFile, mcpOAuthProvider, mcpOAuthState, parsePastedRedirect,
   parseWwwAuthenticate, readMcpOAuth, signInMcpServer, type McpSignInUi,
 } from './oauth.js';
+import { diagnostic } from '../../runtime/lifecycle-log.js';
+
+// What a user is never told goes to the lifecycle log: these tests read it from here.
+vi.mock('../../runtime/lifecycle-log.js', async (importOriginal) => ({ ...(await importOriginal<typeof import('../../runtime/lifecycle-log.js')>()), diagnostic: vi.fn() }));
+const logged = (): string[] => vi.mocked(diagnostic).mock.calls.filter(([kind]) => kind === 'mcp.server-unavailable').map(([, message]) => message);
 import type { ToolContext } from '../tool-contract.js';
 
 type HttpSpec = Extract<McpServerSpec, { transport: 'http' | 'sse' }>;
@@ -332,7 +337,7 @@ describe('a connection with a stored sign-in', () => {
     expect(fake.log.filter((line) => line === 'POST /as/token')).toHaveLength(2);
   });
 
-  it('marks the server as needing sign-in when the refresh is refused, and says so in the turn', async () => {
+  it('marks the server as needing sign-in when the refresh is refused, and the model is told in the turn, not the user', async () => {
     const fake = await fakeOAuthMcp({ refreshFails: true });
     await signInMcpServer({ stateDir: dir, spec: fake.spec, ui: browserUi() });
     const subject = manager(fake.spec);
@@ -343,7 +348,7 @@ describe('a connection with a stored sign-in', () => {
     expect(JSON.stringify(result)).toMatch(/needs sign-in/);
     const next = await subject.toolset();
     expect(next.tools.map((tool) => tool.name)).not.toContain('mcp__fake__whoami');
-    expect(next.notes.join('\n')).toContain('fake needs sign-in: run clikcode mcp login fake');
+    expect(logged().join('\n')).toContain('fake needs sign-in: run clikcode mcp login fake');
     expect(await mcpOAuthState(dir, fake.spec)).toBe('needs-sign-in');
     const record = JSON.parse(await readFile(mcpOAuthFile(dir, 'fake'), 'utf8'));
     expect(record.tokens).toBeUndefined();
@@ -356,11 +361,12 @@ describe('never a sign-in in the background', () => {
     const subject = manager(fake.spec);
     const first = await subject.toolset();
     expect(first.tools).toEqual([]);
-    expect(first.notes).toEqual(['MCP server fake needs sign-in: run clikcode mcp login fake; its tools are not offered until then']);
+    // Said to nobody: the log has it, and `clikcode mcp list` shows `needs sign-in`.
+    expect(logged()).toEqual(['fake: fake needs sign-in: run clikcode mcp login fake']);
     expect(fake.log.some((line) => /\/as\/|well-known/.test(line))).toBe(false);
-    // Said once, and not retried on the clock while nothing changed.
-    const second = await subject.toolset();
-    expect(second.notes).toEqual([]);
+    // Not retried on the clock while nothing changed.
+    await subject.toolset();
+    expect(logged()).toHaveLength(1);
     expect(fake.log.filter((line) => line === 'POST /mcp')).toHaveLength(1);
     expect(await mcpOAuthState(dir, fake.spec)).toBe('needs-sign-in');
   });
@@ -379,7 +385,7 @@ describe('never a sign-in in the background', () => {
       authFor: () => undefined,
     });
     managers.push(subject);
-    const { notes } = await subject.toolset();
-    expect(notes.join('\n')).toMatch(/unavailable.*401/);
+    await subject.toolset();
+    expect(logged().join('\n')).toMatch(/401/);
   });
 });

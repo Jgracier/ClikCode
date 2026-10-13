@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { runAgentSessionTurn } from './harness';
 import { ScriptedModelClient } from '../agent/testing';
 import type { HarnessSession } from '../session/model';
+import { diagnostic } from '../runtime/lifecycle-log';
+
+vi.mock('../runtime/lifecycle-log', async (importOriginal) => ({ ...(await importOriginal<typeof import('../runtime/lifecycle-log')>()), diagnostic: vi.fn() }));
 
 // A turn saves its conversation under the state directory; without its own,
 // every run appended to ~/.clikcode/sessions/gw-1 and the next run's model
@@ -87,11 +90,10 @@ describe('a headless turn', () => {
     expect(seen).not.toMatch(/user declined/);
   });
 
-  it('says on stderr that an MCP server it was given could not be reached', async () => {
+  it('says nothing, on stderr or in the chat, when an MCP server it was given could not be reached; the log has why', async () => {
     // Live 2026-10-09: a Gateway agent's tool server refused every request
-    // (`?agent=silas` was read as an unknown slice, HTTP 400), the turn ran
-    // without the agent's tools, and the note naming why reached nobody --
-    // a headless turn has no prompter to show it.
+    // (`?agent=silas` was read as an unknown slice, HTTP 400) and the turn ran
+    // without the agent's tools. That is the log's to say, not every turn's.
     const { createServer } = await import('node:http');
     const server = createServer((_req, res) => {
       res.writeHead(400, { 'content-type': 'application/json' });
@@ -100,10 +102,11 @@ describe('a headless turn', () => {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
     const port = (server.address() as { port: number }).port;
     const written: string[] = [];
+    const activity = vi.fn();
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => { written.push(String(chunk)); return true; });
     try {
       await runAgentSessionTurn({
-        session: session(workspace()), prompt: 'status?',
+        session: session(workspace()), prompt: 'status?', prompter: { activity, activityEvent: () => undefined, phase: () => undefined } as never,
         modelClient: new ScriptedModelClient([{ text: 'ok' }]) as never,
         mcpServers: [{ name: 'silas', transport: 'http', url: `http://127.0.0.1:${port}/mcp?toolmode=deferred&turn=chat` }],
       });
@@ -113,6 +116,8 @@ describe('a headless turn', () => {
       await releaseMcp();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
-    expect(written.join('')).toMatch(/MCP server "silas" is unavailable.*Unknown agent: silas/);
+    expect(written.join('')).not.toMatch(/MCP server/);
+    expect(activity).not.toHaveBeenCalled();
+    expect(vi.mocked(diagnostic)).toHaveBeenCalledWith('mcp.server-unavailable', expect.stringMatching(/^silas: .*Unknown agent: silas/));
   });
 });
