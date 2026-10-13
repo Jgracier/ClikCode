@@ -160,7 +160,7 @@ describe('local harness catalog', () => {
   it('drives one Plan mode through each harness’s own planning flag', () => {
     const expected: Record<string, string[]> = {
       copilot: ['--plan'], cline: ['--plan'], command: ['--plan'], droid: ['--use-spec'], auggie: ['--ask'],
-      cursor: ['--mode', 'plan'], antigravity: ['--mode', 'plan'],
+      cursor: ['--mode', 'plan'], antigravity: ['--mode', 'plan'], kimi: ['--plan'], cn: ['--readonly'],
     };
     const planned = AI_LOCAL_HARNESSES.filter((harness) => harness.planMode);
     expect(planned.map((harness) => harness.command).sort()).toEqual(Object.keys(expected).sort());
@@ -487,8 +487,8 @@ describe('local harness catalog', () => {
   });
 
   it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
-    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, permissionEnv: _pe, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, ...opencode } = localHarnessForCommand('opencode')!;
-    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, permissionEnv: _kpe, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, ...kilo } = localHarnessForCommand('kilo')!;
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, quotaProbe: _q, permissionModes: _pm, permissionArgv: _pa, permissionEnv: _pe, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, quotaProbe: _kq, permissionModes: _kpm, permissionArgv: _kpa, permissionEnv: _kpe, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
     // Only OpenCode's free models were proven to answer signed out.
