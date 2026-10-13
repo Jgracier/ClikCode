@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import permissionLaunchBefore from './permission-launch.before.json';
 import { modelDisplayId, modelIdFromDisplay, AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsModelSelection, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessTurnArgv } from './ai-local-harness';
 
 
@@ -746,5 +747,37 @@ describe('vendor quirks are declared by field', () => {
     expect(having('keyIdentityArgv')).toEqual(['amp']);
     expect(having('eventDialect')).toEqual(['command']);
     expect(localHarnessForCommand('amp')!.authEnv?.[0]).toBe('AMP_API_KEY');
+  });
+});
+
+describe('one permission declaration per harness', () => {
+  it('still produces, for all harnesses, the turn argv, ACP launch and ACP mode ids it did before the merge', () => {
+    const sort = (value: unknown): unknown => Array.isArray(value) ? value.map(sort)
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, sort(v)])) : value;
+    const now: Record<string, unknown> = {};
+    for (const harness of AI_LOCAL_HARNESSES) {
+      now[harness.command] = {};
+      for (const mode of ['ask', 'bypass', 'auto'] as const) {
+        const turn = harness.turn || harness.transport === 'text-cli' ? (() => { try { return nativeHarnessTurnArgv(harness, { prompt: 'hi', permissionMode: mode }); } catch (error) { return (error as Error).message; } })() : null;
+        const acp = harness.acp ? (() => { try { return harnessAcpLaunch(harness, { model: null, effort: null, permissionMode: mode }); } catch (error) { return (error as Error).message; } })() : null;
+        (now[harness.command] as Record<string, unknown>)[mode] = { turn, acp, ...(harness.acp?.permissionModeIds?.[mode] ? { ids: harness.acp.permissionModeIds[mode] } : {}) };
+      }
+    }
+    expect(Object.keys(now)).toHaveLength(29);
+    expect(sort(JSON.parse(JSON.stringify(now)))).toEqual(permissionLaunchBefore);
+  });
+
+  it('derives both launch paths from `permissions` and keeps the Hermes exception explicit', () => {
+    for (const command of ['claude', 'droid', 'qwen', 'cline', 'command', 'kimi']) {
+      const harness = localHarnessForCommand(command)!;
+      expect(harness.permissions, command).toBeTruthy();
+      for (const [mode, declared] of Object.entries(harness.permissions!)) {
+        expect(harness.permissionArgv?.[mode as 'ask']?.argv, `${command} ${mode}`).toEqual(declared.argv);
+        expect(harness.acp?.permissionModeIds?.[mode as 'ask'], `${command} ${mode}`).toBe(declared.acpModeId);
+      }
+    }
+    const hermes = localHarnessForCommand('hermes')!;
+    expect(hermes.permissions).toBeUndefined();
+    expect(hermes.acp?.permissionArgv).toEqual({ bypass: ['--yolo'] });
   });
 });
