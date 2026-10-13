@@ -78,6 +78,8 @@ export interface TurnRuntime {
   stepRetries: number;
   retryWaitedSeconds: number;
   compactedForSize: boolean;
+  /** The estimated context size right after the last compaction; the next one waits for real growth past it (run-turn.ts). */
+  tokensAfterCompaction: number | undefined;
   lengthContinues: number;
   /** Stop hooks may keep the agent working; bounded so two hooks cannot loop it forever. */
   stopContinues: number;
@@ -188,7 +190,7 @@ export async function openTurn(input: GatewayHarnessTurnInput): Promise<{ rt: Tu
     steerQueue: [], steerOpen: true, items, ledger, lastStepUsage: undefined, itemsAtLastUsage: items.length,
     contextWindow: input.contextWindow ?? input.modelClient.contextHints?.contextWindow,
     servedModel: undefined, segments, needsSeparator: false, steps: 0, stall: new StallGuard(), stalledCall: undefined,
-    stepRetries: 0, retryWaitedSeconds: 0, compactedForSize: false, lengthContinues: 0, stopContinues: 0,
+    stepRetries: 0, retryWaitedSeconds: 0, compactedForSize: false, tokensAfterCompaction: undefined, lengthContinues: 0, stopContinues: 0,
     shownCalls: new Map(), continuesCutAnswer: false, lastContext: { contextProfile: profile.name },
     stepAcceptsImages: input.modelClient.acceptsImages === true,
   };

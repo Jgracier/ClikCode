@@ -132,11 +132,31 @@ export function spawnBackgroundShell(args: BashArgs, ctx: ToolContext, onStdout?
   // A write after the process exits is EPIPE; bash_input reports the exit instead.
   child.stdin?.on('error', () => undefined);
   const id = `bash_${ctx.session.nextShellNumber++}`;
-  const shell: BackgroundShell = { id, command: args.command, child, detached, unread: '', droppedBytes: 0, status: 'running', startedAt: Date.now() };
+  // The unread output is a list of chunks, bounded by dropping from the
+  // front: a chunk is appended without copying what is already held, and the
+  // text is joined only when something reads it.
+  let chunks: string[] = [];
+  let held = 0;
+  const shell: BackgroundShell = {
+    id, command: args.command, child, detached, droppedBytes: 0, status: 'running', startedAt: Date.now(),
+    get unread(): string {
+      if (chunks.length > 1) chunks = [chunks.join('')];
+      return chunks[0] ?? '';
+    },
+    set unread(text: string) { chunks = text ? [text] : []; held = text.length; },
+  };
   const onData = (chunk: string): void => {
-    const combined = shell.unread + chunk;
-    if (combined.length > BACKGROUND_BUFFER_CHARS) shell.droppedBytes += combined.length - BACKGROUND_BUFFER_CHARS;
-    shell.unread = combined.slice(-BACKGROUND_BUFFER_CHARS);
+    chunks.push(chunk);
+    held += chunk.length;
+    while (held > BACKGROUND_BUFFER_CHARS) {
+      const excess = held - BACKGROUND_BUFFER_CHARS;
+      const first = chunks[0]!;
+      if (first.length <= excess) chunks.shift();
+      else chunks[0] = first.slice(excess);
+      const dropped = Math.min(first.length, excess);
+      held -= dropped;
+      shell.droppedBytes += dropped;
+    }
   };
   // A monitor takes stdout itself (its lines are the events); stderr still
   // collects for the exit notice and bash_output.

@@ -37,6 +37,16 @@ describe.skipIf(process.platform === 'win32')('typing into a background shell', 
     expect(second.output).toMatch(new RegExp(`^\\[${id}: exited \\(exit code 0\\)\\]`));
   });
 
+  it('keeps only the last megabyte of a flood of unread output, and says how much it dropped', async () => {
+    const id = await background(`node -e "for (let i = 0; i < 3000; i++) process.stdout.write('a'.repeat(999) + '\\n'); process.stdout.write('END\\n')"`);
+    await waitTool.run({ ids: [id], timeout_ms: 20_000 } as never, ctx).catch(() => undefined);
+    const shell = ctx.session.shells.get(id)!;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(shell.unread.length).toBe(1024 * 1024);
+    expect(shell.unread.endsWith('END\n')).toBe(true);
+    expect(shell.droppedBytes).toBe(3000 * 1000 + 4 - 1024 * 1024);
+  });
+
   it('drives a REPL across several inputs', async () => {
     const id = await background('while read -r line; do echo "got:$line"; done');
     expect((await bashInputTool.run({ id, text: 'a' }, ctx)).output).toContain('got:a');

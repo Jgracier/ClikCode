@@ -154,7 +154,7 @@ export async function recordStep(
   produced.push(...calls.map((call): ConversationItem => ({ type: 'tool_call', id: call.id, name: call.name, args: call.args })));
   if (produced.length) await rt.append(...produced);
 
-  rt.ledger = recordUsage(rt.ledger, { step: rt.steps, usage: step.usage, ...(step.servedModel ? { servedModel: step.servedModel } : {}) });
+  rt.ledger = recordUsage(rt.ledger, step.usage);
   rt.lastStepUsage = step.usage;
   rt.itemsAtLastUsage = rt.items.length;
   rt.contextWindow = step.contextWindow ?? rt.contextWindow;

@@ -753,6 +753,40 @@ describe('runAgentLoop', () => {
     expect(history.every((item) => item.type !== 'tool_result' || !/elided/.test(item.output))).toBe(true);
   });
 
+  it('compacts once, not before every step, when what is kept is itself over the line', async () => {
+    const phases: string[] = [];
+    const call = (id: string) => ({ toolCalls: [{ id, name: 'list_dir', args: { path: '.' } }], usage: { input: 8_000, output: 10 }, contextWindow: 10_000 });
+    let steps = 0;
+    const h = harness([], { onPhase: (phase) => phases.push(phase) },
+      (request) => (request.tools.length === 0 ? { text: 'SUMMARY of the history' } : (steps += 1) <= 4 ? call(`l${steps}`) : { text: 'finished', usage: { input: 8_000, output: 10 } }));
+    Object.assign(h.client, { contextHints: { contextWindow: 10_000 } });
+    const store = path.join(stateDir, 'sessions', h.input.sessionId);
+    await fs.mkdir(store, { recursive: true });
+    const lines: string[] = [];
+    for (let i = 0; i < 6; i += 1) {
+      lines.push(JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'tool_call', id: `h${i}`, name: 'read_file', args: { path: `f${i}` } } }));
+      lines.push(JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'tool_result', id: `h${i}`, name: 'read_file', output: 'x'.repeat(60_000) } }));
+    }
+    await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
+    const result = await runAgentLoop(h.input);
+    expect(result.stopReason).toBe('completed');
+    expect(phases.filter((phase) => phase === 'compacting context')).toHaveLength(1);
+    // The recent huge results were shrunk, not carried whole.
+    const after = h.client.requests.find((request) => request.tools.length > 0 && request.items.some((item) => item.type === 'summary'))!;
+    expect(after.items.every((item) => item.type !== 'tool_result' || item.output.length < 10_000)).toBe(true);
+  });
+
+  it('counts the usage of a summarising call that came back empty', async () => {
+    const h = harness([], {}, (request) => (request.tools.length === 0 ? { text: '', usage: { input: 5_000, output: 1 } } : { text: 'answered', usage: { input: 10, output: 1 } }));
+    Object.assign(h.client, { contextHints: { contextWindow: 1_000_000 } });
+    const store = path.join(stateDir, 'sessions', h.input.sessionId);
+    await fs.mkdir(store, { recursive: true });
+    const lines = Array.from({ length: MAX_REQUEST_ITEMS + 100 }, (_, i) => JSON.stringify({ kind: 'item', at: '2026-10-10T00:00:00.000Z', item: { type: 'text', role: i % 2 ? 'assistant' : 'user', text: `m${i}` } }));
+    await fs.writeFile(path.join(store, 'harness.jsonl'), `${lines.join('\n')}\n`);
+    const result = await runAgentLoop(h.input);
+    expect(result.usage.input).toBeGreaterThanOrEqual(5_010);
+  });
+
   it('continues the turn when the compaction summary call fails', async () => {
     const phases: string[] = [];
     const h = harness([], { onPhase: (phase) => phases.push(phase) }, (request) => (request.tools.length === 0 ? { error: Object.assign(new Error('503 upstream'), { code: 'UPSTREAM', kind: 'other' }) } : { text: 'answered' }));

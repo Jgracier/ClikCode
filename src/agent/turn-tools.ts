@@ -49,7 +49,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: GatewayHarnes
     // A sub-agent's spend is this turn's spend: it lands in the same ledger
     // and is reported as it happens, not when the task returns.
     onUsage: (delta) => {
-      rt.ledger = recordUsage(rt.ledger, { step: rt.steps, usage: delta });
+      rt.ledger = recordUsage(rt.ledger, delta);
       input.onUsage?.({ ...rt.ledger.total, ...rt.lastContext });
     },
   });
