@@ -22,10 +22,14 @@ describe('file locks before a re-exec', () => {
     const lock = join(dir, 'state.lock');
     try {
       let release!: () => void;
-      const held = withFileLock(lock, () => new Promise<void>((resolve) => { release = resolve; }));
+      let acquired!: () => void;
+      const holding = new Promise<void>((resolve) => { acquired = resolve; });
+      const held = withFileLock(lock, () => new Promise<void>((resolve) => { release = resolve; acquired(); }));
       const queued = withFileLock(lock, async () => undefined);
       let idle = false;
       const waiting = fileLocksIdle().then(() => { idle = true; });
+      // Acquiring the lock is file I/O: on a loaded host it takes longer than any fixed pause.
+      await holding;
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(idle).toBe(false);
       release();
