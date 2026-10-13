@@ -5,12 +5,8 @@ import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import { join } from 'node:path';
 import { safeRecordFileName, stateDirectory } from '../session/store/paths.js';
 
-const OPEN = '<clikcode_resource_note>';
-const CLOSE = '</clikcode_resource_note>';
-const LEADING_NOTES = /^(?:\s*<clikcode_resource_note>[\s\S]*?<\/clikcode_resource_note>)+\s*/;
-
-export function wrapResourceNote(text: string): string { return `${OPEN}\n${text.trim()}\n${CLOSE}`; }
-export function stripResourceNotes(content: string): string { return content.replace(LEADING_NOTES, ''); }
+import { wrapResourceNote } from './resource-note-text.js';
+export { stripResourceNotes, wrapResourceNote } from './resource-note-text.js';
 
 function pathFor(sessionId: string): string { return join(stateDirectory(), 'resource-notes', `${safeRecordFileName(sessionId)}.json`); }
 function readNotes(sessionId: string): string[] {
