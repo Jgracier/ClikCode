@@ -155,6 +155,9 @@ export async function runAgentTurn(input: {
         ...(agent?.system ? { agentInstructions: agent.system } : {}),
         ...(prompter ? { prompter } : {}),
         ...(signal ? { signal } : {}),
+        // The request is in the agent's memory from here: counted at once and saved, not in the `finally` a
+        // killed worker never reaches -- or the next worker writes this turn into memory a second time.
+        onRemembered: async () => { session.agentThreadTurns = held.total + 1; checkpoint.touch(); await checkpoint.flush(); },
         ...(prepared.images.length ? { images: prepared.images } : {}),
         // What streams is saved as it streams, as on every other route: a
         // worker that dies mid-turn leaves the answer so far, not nothing.

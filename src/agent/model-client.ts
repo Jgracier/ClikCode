@@ -190,6 +190,8 @@ export interface AgentTurnInput {
    *  stays valid, so an approver that cannot remember anything is unchanged. */
   onApproval?: (title: string, detail?: string, rule?: string, preview?: import('../tui/render/approval-block.js').ApprovalPreview) => Promise<boolean | 'always'>;
   onSteerReady?: (handler?: (text: string) => Promise<void>) => void;
+  /** The turn's request is in the agent's memory (awaited): the caller records that, durably, before the turn goes on. */
+  onRemembered?: () => Promise<void>;
   onUsage?: (usage: UsageReport) => void;
   onPlan?: (entries: PlanEntry[]) => void;
   /** Fired when the user approves a plan and plan mode switches off mid-turn,
