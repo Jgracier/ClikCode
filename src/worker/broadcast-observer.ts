@@ -62,6 +62,8 @@ export class BroadcastObserver implements TurnObserver {
   private outputStarted = false;
   /** What the running turn was started with (see WorkerEvent's waiting-start). */
   private livePrompt: string | undefined;
+  /** The running turn is the vendor's own background work (waiting-start `vendorWork`). */
+  private liveVendorWork = false;
   /** The running turn's tool rows and plan, so a window joining it mid-way
    * draws those too, not only its text. */
   private liveActivities: LiveActivity[] = [];
@@ -140,6 +142,7 @@ export class BroadcastObserver implements TurnObserver {
     if (!this.waitingLabel) return undefined;
     return {
       text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}),
+      ...(this.liveVendorWork ? { vendorWork: true as const } : {}),
       activities: [...this.liveActivities], plan: [...this.livePlan],
       ...(this.livePlan.length ? this.planOffset() : {}),
       ...(this.liveMarks.length ? { marks: [...this.liveMarks] } : {}),
@@ -415,8 +418,9 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   /** startWaiting, naming the prompt the turn runs, for clients following it. */
-  startTurn(message: string, prompt?: string): void {
+  startTurn(message: string, prompt?: string, vendorWork = false): void {
     this.generation++;
+    this.liveVendorWork = vendorWork;
     this.seenActivity.clear();
     this.liveText = '';
     this.waitingLabel = message;
@@ -425,7 +429,7 @@ export class BroadcastObserver implements TurnObserver {
     this.livePlan = [];
     this.resetLiveMarks();
     this.outputStarted = false;
-    this.broadcast({ type: 'waiting-start', message, ...(prompt !== undefined ? { prompt } : {}) });
+    this.broadcast({ type: 'waiting-start', message, ...(prompt !== undefined ? { prompt } : {}), ...(vendorWork ? { vendorWork: true as const } : {}) });
   }
 
   stopWaiting(): void {
@@ -449,6 +453,7 @@ export class BroadcastObserver implements TurnObserver {
   private endWaiting(stopped: boolean): void {
     this.waitingLabel = '';
     this.livePrompt = undefined;
+    this.liveVendorWork = false;
     this.liveActivities = [];
     this.livePlan = [];
     this.resetLiveMarks();

@@ -169,6 +169,12 @@ export function joinedWaiting(this: TerminalHarnessPrompter, startedAt?: number,
   this.updateWaiting();
 }
 
+/** The wait on show is the vendor's own background work, not a turn ClikCode started: Esc leaves it and the
+ * work goes on (Ctrl+C is the explicit Stop). Said after startWaiting so that call is the same for every wait. */
+export function markVendorWork(this: TerminalHarnessPrompter): void {
+  if (this.turn) this.turn.vendorWork = true;
+}
+
 export function startWaiting(
   this: TerminalHarnessPrompter,
   message: string,

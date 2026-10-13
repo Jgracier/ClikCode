@@ -440,3 +440,27 @@ describe('worker-assigned order and a window joining mid-turn (standards 1, 4, 7
     expect(thoughts).toMatchObject([{ id: 'r', text: 'hmm' }, undefined]);
   });
 });
+
+describe("a turn that is the vendor's own background work", () => {
+  it('says so to every window, and to one that joins mid-way, until the turn ends', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('background work', undefined, true);
+    expect(client.frames.find((f) => f.type === 'waiting-start')).toMatchObject({ message: 'background work', vendorWork: true });
+    expect(observer.liveSnapshot()).toMatchObject({ vendorWork: true });
+    observer.stopWaiting();
+    expect(observer.liveSnapshot()).toBeUndefined();
+  });
+
+  it('is absent on a turn ClikCode started, even right after one', () => {
+    const observer = new BroadcastObserver();
+    const client = fakeClient();
+    observer.attach(client.socket);
+    observer.startTurn('background work', undefined, true);
+    observer.startTurn('thinking', 'fix the build');
+    const starts = client.frames.filter((f) => f.type === 'waiting-start');
+    expect(starts[1]).not.toHaveProperty('vendorWork');
+    expect(observer.liveSnapshot()).not.toHaveProperty('vendorWork');
+  });
+});

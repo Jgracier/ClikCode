@@ -35,7 +35,7 @@ import { showMention, mentionKey, endMention, jumpToMention } from './prompter/m
 import { notice, showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
-import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
+import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, markVendorWork, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, paintWaiting, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clearTranscript } from './prompter/viewport.js';
@@ -510,6 +510,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   updateWaitingLabel(...args: Parameters<typeof updateWaitingLabel>): ReturnType<typeof updateWaitingLabel> { return updateWaitingLabel.apply(this, args); }
 
   joinedWaiting(...args: Parameters<typeof joinedWaiting>): ReturnType<typeof joinedWaiting> { return joinedWaiting.apply(this, args); }
+  markVendorWork(...args: Parameters<typeof markVendorWork>): ReturnType<typeof markVendorWork> { return markVendorWork.apply(this, args); }
 
   signInScreen(...args: Parameters<typeof signInScreen>): ReturnType<typeof signInScreen> { return signInScreen.apply(this, args); }
 

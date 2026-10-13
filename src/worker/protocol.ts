@@ -84,6 +84,8 @@ export function isTranscriptActivity(event: HarnessActivityEvent): boolean {
  * `plan` are additive: a worker older than them sends text only. */
 export type LiveTurn = {
   text: string; waitingLabel: string; prompt?: string;
+  /** The live turn is the vendor's own background work (see waiting-start). */
+  vendorWork?: true;
   activities?: LiveActivity[]; plan?: PlanEntry[];
   /** The rest of what an attached window has drawn (additive): the thought
    * being had, the turn's settled thoughts / plan / notices / approval
@@ -149,7 +151,10 @@ export type WorkerEvent =
    * not send it -- another window's turn, or one the worker started itself
    * for a finished background shell -- follows it from here to waiting-stop
    * and shows the prompt as the pending message. */
-  | { type: 'waiting-start'; message: string; prompt?: string }
+  | { type: 'waiting-start'; message: string; prompt?: string;
+      /** The turn is the VENDOR's own background work, not one ClikCode started. A window leaves it on
+       * Esc (the work is the vendor's and goes on); Ctrl+C is the explicit Stop. */
+      vendorWork?: true }
   /** The turn is over. `stopped`: it was stopped (Esc or Ctrl+C in any
    * window), so every window ends it as stopped, not finished. */
   | { type: 'waiting-stop'; stopped?: true }
