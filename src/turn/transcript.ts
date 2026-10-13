@@ -88,6 +88,10 @@ export type SettlingTool = {
   nested?: boolean;
   /** The agent row a nested row belongs to. */
   parent?: string;
+  /** Still running, and drawn in the pinned band above the status line
+   * instead of in the scrolling answer. A background agent used to hold its
+   * steps in that scroll, so they left the screen while the spinner stayed. */
+  pin?: boolean;
   /** A message the user steered into the turn: not a call the model made.
    * It never proves the prose before it is final (the model has not stopped
    * writing; it was interrupted), and it waits for the block its offset falls
@@ -202,7 +206,7 @@ export class TurnTranscript {
      * after it began, and the rows of calls after it) before it is retired as
      * a running line and what it held follows, in order. */
     agentHoldRows?: number;
-  }): { finished: string[]; live: string[] } {
+  }): { finished: string[]; live: string[]; pinned: string[] } {
     // A last line of only dashes or equals signs is either a list item or
     // the underline that turns the line above into a heading, and the next
     // character decides which. Lexed now it made a heading of a list item's
@@ -212,11 +216,21 @@ export class TurnTranscript {
       const content = input.content.slice(0, undecided.index + (undecided[0].startsWith('\n') ? 1 : 0));
       return this.advance({ ...input, content, blocks: splitIntoBlocks(content) });
     }
+    // Running rows asked to stay by the status line. They are not part of
+    // the answer's scroll, and they do not hold later prose behind them.
+    const pinned: string[] = [];
+    const tools = input.tools.filter((tool) => {
+      if (tool.pin && !tool.done && !input.turnEnded) {
+        pinned.push(...tool.lines);
+        return false;
+      }
+      return true;
+    });
     // A tool that began at or after the end of the prose proves the prose is
     // final: the model stopped writing to call it. A call that is still
     // running closes that prose too, so its row can sit directly under it
     // instead of under whatever sentence arrives next.
-    const closedByTool = input.tools.some((tool) => !tool.steer && tool.responseOffset !== undefined
+    const closedByTool = tools.some((tool) => !tool.steer && tool.responseOffset !== undefined
       && tool.responseOffset >= input.content.length && input.content.length > 0);
     // Same rule as settledToolRows, kept grouped so a tool's rows can be
     // placed at the offset it started at rather than after all of the prose.
@@ -225,7 +239,7 @@ export class TurnTranscript {
     const exempt = (tool: SettlingTool): boolean => Boolean(tool.steer || tool.nested);
     // A released agent that still runs was drawn already: nothing owed until
     // it settles, and then only its completion row.
-    let owing = startOrder(input.tools.filter((tool) => !this.emittedTools.has(tool.id)
+    let owing = startOrder(tools.filter((tool) => !this.emittedTools.has(tool.id)
       && !(this.released.has(tool.id) && !isSettled(tool))))
       .map((tool) => (this.released.has(tool.id) && tool.completed ? { ...tool, lines: tool.completed } : tool));
     // Position is start order, never completion order. A call that finished
@@ -346,7 +360,7 @@ export class TurnTranscript {
     const headed = new Set<string>();
     liveTools = liveTools.flatMap((tool) => {
       const parent = tool.nested && tool.parent !== undefined && this.released.has(tool.parent) && !headed.has(tool.parent)
-        ? input.tools.find((candidate) => candidate.id === tool.parent) : undefined;
+        ? tools.find((candidate) => candidate.id === tool.parent) : undefined;
       if (!parent?.childHeader) return [tool];
       headed.add(parent.id);
       return [{ id: `${parent.id}#children`, done: false, nested: true, parent: parent.id,
@@ -432,7 +446,7 @@ export class TurnTranscript {
     }
     for (const tool of ahead) after.push(...tool.lines);
     live = [...before, ...live, ...after];
-    return { finished, live };
+    return { finished, live, pinned };
   }
 
   reset(): void {

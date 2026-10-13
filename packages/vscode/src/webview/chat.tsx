@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
 import { reconnecting, turnNoticeNotes, type ChatModel, type Note, type TurnTrace } from '../model';
 import { Animating, Icon } from './ui';
 import { userMessageIndexes } from '../../../../src/tui/slash/fork-at';
+import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
 import { AssistantMessage, UserMessage } from './messages';
 import { FinishedTurn, LiveTurnView, NoteView, waitingOnUser } from './turn';
 
@@ -80,7 +81,8 @@ function FinalAnswer({ running, messages }: Pick<ChatModel, 'running' | 'message
     const last = messages[messages.length - 1];
     if (owed.current && last?.role === 'assistant') {
       owed.current = false;
-      setSaid(last.content.length > 1000 ? `${last.content.slice(0, 1000)}…` : last.content);
+      const answer = withoutOtherOrgThinkingNotice(last.content);
+      setSaid(answer.length > 1000 ? `${answer.slice(0, 1000)}…` : answer);
     }
   }, [running, messages]);
   return <div class="visually-hidden" role="status" aria-live="polite">{said}</div>;

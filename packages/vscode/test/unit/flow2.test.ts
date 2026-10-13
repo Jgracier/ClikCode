@@ -554,9 +554,9 @@ describe('background work by kind: workflows on the end line, terminals on the w
 
   it('a window joining mid-turn takes every kind from the snapshot, and the later event replaces it', () => {
     const joined = applyEvent(begin(), worker({ type: 'snapshot', session: session(), live: { text: 'abc', waitingLabel: 'thinking', pendingBackground: 1, background: { agents: 1, terminals: 2 } } }));
-    expect(workingIndicator(joined.live)).toBe('2 background terminals running');
+    expect(workingIndicator(joined.live)).toBe('Waiting for 1 background agent · 2 background terminals running');
     const after = applyEvent(joined, worker({ type: 'background', pending: 1, work: { agents: 1 } }));
-    expect(workingIndicator(after.live)).toBeUndefined();
+    expect(workingIndicator(after.live)).toBe('Waiting for 1 background agent');
     expect(after.live!.pendingBackground).toBe(1);
   });
 

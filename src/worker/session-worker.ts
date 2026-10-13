@@ -27,6 +27,8 @@ import { createVendorBackgroundRunner } from './vendor-background.js';
 import { createResumeWaiter } from './resume-wait.js';
 import { separateFromForeground } from './own-scope.js';
 import { startResourceGuard } from './resource-guard.js';
+import { createCommandSweep } from './command-groups.js';
+import { useConversationTmp } from './conversation-tmp.js';
 import { startStuckWatchdog } from './stuck-watchdog.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
@@ -46,6 +48,9 @@ import { createResourceNoteDelivery } from './resource-note-delivery.js';
 /** This conversation for this worker, or undefined when another worker has
  * it. A scripted turn running in-process (worker/scripted-send.ts) is waited
  * out: its conversation comes to a worker the moment it ends. */
+/** A command is in a group of its own within this long of starting. */
+const COMMAND_SWEEP_MS = 1_000;
+
 async function ownConversation(sessionId: string): Promise<ConversationHold | undefined> {
   for (;;) {
     const taken = await takeConversation(sessionId, 'worker');
@@ -69,7 +74,9 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   if (!hold) return;
   // Before any vendor process exists, so all of the agent's work is born
   // outside the window that spawned this worker (own-scope.ts).
-  const agentSlice = await separateFromForeground(sessionId);
+  const placement = await separateFromForeground(sessionId);
+  // Temp files on disk, not in RAM-backed /tmp, for everything the agent runs.
+  useConversationTmp(sessionId);
   const socketPath = socketPathFor(sessionId);
   // A worker from a build before the hold existed takes none, and still
   // answers: it keeps the conversation. Anything else at the path is left
@@ -140,9 +147,15 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // Memory: a nudge near the machine's limit, the largest command stopped
   // past it, and this conversation's agent told either way -- into the turn
   // running now, or with the next one (worker/resource-guard.ts).
-  if (agentSlice) {
+  {
+    // One cgroup per command the agent runs, so the guard reads and stops
+    // exactly a command (worker/command-groups.ts).
+    if (placement?.divided) {
+      const commands = createCommandSweep(placement.scopeDir);
+      setInterval(() => { try { commands.sweep(); } catch { /* fail-open-ok: next sweep */ } }, COMMAND_SWEEP_MS).unref();
+    }
     startResourceGuard({
-      sessionId, sliceDir: agentSlice,
+      sessionId, ...(placement?.divided ? { sliceDir: placement.sliceDir } : {}),
       deliver: createResourceNoteDelivery(ctx),
     });
   }

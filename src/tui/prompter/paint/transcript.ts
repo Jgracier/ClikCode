@@ -12,6 +12,7 @@ import { reseedStartIndex } from '../../render/reseed-window.js';
 import { liveTurnSpan } from '../../render/steer-rows.js';
 import { pendingPromptText } from '../../render/pending-prompt.js';
 import { renderMessageBlocks } from '../../render/message-blocks.js';
+import { withoutOtherOrgThinkingNotice } from '../../../harness/protocol/claude-thinking-notice.js';
 import type { TerminalHarnessPrompter } from '../../prompter.js';
 import { ALTERNATE_TRANSCRIPT_ROWS } from '../state.js';
 import type { HarnessSession } from '../../../session/model.js';
@@ -167,7 +168,7 @@ function writeMessages(
       // A title tag never renders, however it got into the saved reply: a
       // vendor that repeated its first reply's tag, or an older transcript.
       emit(message.role === 'assistant'
-        ? messageRows(stripRepeatedTitles(message.content), '·')
+        ? messageRows(withoutOtherOrgThinkingNotice(stripRepeatedTitles(message.content)), '·')
         : userRows(message.content));
     }
     if (index === liveAssistant) {
@@ -226,7 +227,11 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
   const seam: TurnSeam = { materializedPendingTurn: false };
   const { savedTools, turnTools } = createTurnTools(p, builders, createToolRows(p, builders), pending, seam);
   const renderBlocks = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
-    renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage);
+    renderMessageBlocks(blocks.flatMap((block): MessageBlock[] => {
+      if (block.kind !== 'paragraph' && block.kind !== 'heading' && block.kind !== 'list-item') return [block];
+      const text = withoutOtherOrgThinkingNotice(block.text);
+      return text.trim() ? [{ ...block, text }] : [];
+    }), '·', conversationInner, firstOfMessage);
   const renderLive = (blocks: readonly MessageBlock[], firstOfMessage: boolean): string[] =>
     renderMessageBlocks(blocks, '·', conversationInner, firstOfMessage, true);
   const settled = settleSeam(p, finished, session, persistedMessages, conversationInner);
@@ -256,4 +261,3 @@ export function writeTranscript(p: TerminalHarnessPrompter, input: TranscriptInp
   }
   return { finished, liveConversation, userRows };
 }
-

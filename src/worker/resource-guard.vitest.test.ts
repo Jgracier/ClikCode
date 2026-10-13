@@ -1,84 +1,90 @@
 import { describe, expect, it } from 'vitest';
-import { agentBudget, decideAction, desktopReserve, NUDGE_AT, STALL_STOP_PERCENT, nudgeNote, stopNote, viewProcesses, type ProcessEntry } from './resource-guard.js';
+import { agentBudget, decideAction, desktopReserve, nudgeNote, stopNote } from './resource-guard.js';
+import { parsePs, parseVmStat, parseWindowsProcesses, processProbe, tableInventory, type TableEntry, type Unit } from './resource-probes.js';
 
 const GIB = 2 ** 30;
-const proc = (pid: number, ppid: number, gib: number, exe: string, command: string): ProcessEntry => ({ pid, ppid, bytes: gib * GIB, exe, command });
-
-/** Two conversations, as the slice holds them on this machine. */
-const table: ProcessEntry[] = [
-  // Conversation A: Claude through ACP, a test suite, an MCP server, a script that runs two things.
-  proc(100, 1, 0.3, 'node', 'node /x/dist/index.js session-worker aaaa'),
-  proc(101, 100, 0.1, 'node', 'node /usr/bin/claude-agent-acp'),
-  proc(102, 101, 0.4, 'claude', '/opt/claude --output-format stream-json'),
-  proc(103, 102, 0.01, 'bash', '/bin/bash -c npx vitest run'),
-  proc(104, 103, 2.5, 'node', 'node /repo/node_modules/.bin/vitest run'),
-  proc(105, 104, 0.6, 'node', 'node vitest fork'),
-  proc(106, 104, 0.6, 'node', 'node vitest fork'),
-  proc(107, 102, 0.01, 'sh', 'sh -c npx @upstash/context7-mcp'),
-  proc(108, 107, 0.9, 'node', 'node /npx/context7-mcp/dist/index.js'),
-  proc(109, 102, 0.01, 'bash', '/bin/bash -c ./pm.sh'),
-  proc(110, 109, 0.01, 'bash', 'bash ./pm.sh full'),
-  proc(111, 110, 1.1, 'node', 'node resident.mjs'),
-  // Conversation B: Codex, one typecheck.
-  proc(200, 1, 0.2, 'node', 'node /x/dist/index.js session-worker bbbb'),
-  proc(201, 200, 0.3, 'codex', 'codex app-server'),
-  proc(202, 201, 0.01, 'bash', 'bash -lc tsc --noEmit'),
-  proc(203, 202, 3.0, 'node', 'node /repo/node_modules/.bin/tsc --noEmit'),
+const entry = (pid: number, ppid: number, size: number, exe: string, command: string): TableEntry => ({ pid, ppid, bytes: size * GIB, exe, command });
+const processes = [
+  entry(100, 1, 0.2, 'node', 'node /x/dist/index.js session-worker aaaa'),
+  entry(101, 100, 0.3, 'claude', '/opt/claude'),
+  entry(102, 101, 0.01, 'bash', '/bin/bash -c vitest'),
+  entry(103, 102, 2.4, 'node', 'node vitest'),
+  entry(104, 103, 0.6, 'node', 'node vitest fork'),
+  entry(105, 101, 0.01, 'sh', 'sh -c npx @upstash/context7-mcp'),
+  entry(106, 105, 0.8, 'node', 'node context7-mcp'),
+  entry(107, 106, 0.01, 'bash', 'bash -c internal-mcp-work'),
+  entry(200, 1, 0.2, 'node', 'node /x/dist/index.js session-worker bbbb'),
+  entry(201, 200, 0.3, 'codex', 'codex app-server'),
+  entry(202, 201, 0.01, 'bash', 'bash -lc sleep 10'),
+  entry(203, 202, 0.008, 'sleep', 'sleep 10'),
 ];
 
 describe('resource guard', () => {
-  it('gives agents what is free less the desktop reserve, never past the slice ceiling', () => {
+  it('reserves desktop memory, honoring the kernel ceiling and pressure', () => {
     expect(desktopReserve(57 * GIB)).toBeCloseTo(57 * GIB * 0.08);
     expect(desktopReserve(16 * GIB)).toBe(4 * GIB);
-    const roomy = agentBudget({ total: 57 * GIB, available: 30 * GIB, agentUsed: 10 * GIB });
-    expect(roomy.limit / GIB).toBeCloseTo(10 + 30 - 57 * 0.08);
-    const capped = agentBudget({ total: 57 * GIB, available: 30 * GIB, agentUsed: 10 * GIB, agentCeiling: 20 * GIB });
-    expect(capped.limit / GIB).toBeCloseTo(20 * 0.97);
-    expect(agentBudget({ total: 16 * GIB, available: 1 * GIB, agentUsed: 2 * GIB }).ratio).toBe(Infinity);
+    expect(agentBudget({ total: 57 * GIB, available: 30 * GIB, used: 10 * GIB, ceiling: 20 * GIB, critical: false }).limit / GIB).toBeCloseTo(19.4);
+    expect(agentBudget({ total: 57 * GIB, available: 30 * GIB, used: 10 * GIB, critical: true }).ratio).toBe(1);
   });
 
-  it('is over the limit when agents are choking on memory, whatever the numbers say', () => {
-    // 2026-10-13: 34G of a 38G hard ceiling looked like room; MemoryHigh 34G was throttling every agent.
-    const sample = { total: 57 * GIB, available: 10 * GIB, agentUsed: 34 * GIB, agentCeiling: 34 * GIB };
-    expect(agentBudget(sample).ratio).toBeGreaterThan(1);
-    const roomy = { total: 57 * GIB, available: 30 * GIB, agentUsed: 10 * GIB, agentCeiling: 38 * GIB };
-    expect(agentBudget({ ...roomy, agentStalled: 2 }).ratio).toBeLessThan(NUDGE_AT);
-    expect(agentBudget({ ...roomy, agentStalled: STALL_STOP_PERCENT }).ratio).toBe(1);
+  it('stops an owned command that can free memory, never MCP machinery or a sleep', () => {
+    const inventory = tableInventory(processes);
+    expect(inventory.units.map((unit) => unit.label)).toEqual(['vitest', 'bash -lc sleep 10']);
+    const over = { used: 36 * GIB, limit: 34 * GIB, ratio: 36 / 34 };
+    const action = decideAction(over, inventory);
+    expect(action.kind).toBe('stop');
+    if (action.kind === 'stop') {
+      expect(action.worker).toBe(100);
+      expect(action.unit.freeable / GIB).toBeCloseTo(3.01);
+      expect(action.unit.target).toMatchObject({ root: 102, pids: [102, 103, 104] });
+      expect(stopNote(over, 2, action.unit)).toContain('do not rerun');
+    }
+    const sleepOnly = tableInventory(processes.filter((item) => ![102, 103, 104].includes(item.pid)));
+    expect(decideAction(over, sleepOnly)).toMatchObject({ kind: 'nudge', worker: 200 });
+    expect(nudgeNote(over, 2, sleepOnly.units[0])).toContain('Prefer targeted tests');
+    const agentOnly = tableInventory(processes.filter((item) => [100, 101, 200, 201].includes(item.pid)));
+    expect(decideAction(over, agentOnly)).toEqual({ kind: 'nudge', worker: 100 });
   });
 
-  it('finds what agents ran: below a shell, with what it started; never the worker, the vendor or an MCP server', () => {
-    const view = viewProcesses(table);
-    expect(view.commands.map((command) => [command.root.pid, command.worker, +(command.bytes / GIB).toFixed(1)])).toEqual([
-      [104, 100, 3.7], // vitest and its forks, one command
-      [203, 200, 3.0],
-      [111, 100, 1.1], // a script's own child, not the script
-    ]);
-    expect(view.byWorker.get(100)! / GIB).toBeCloseTo(6.54);
-    expect(view.byWorker.get(200)! / GIB).toBeCloseTo(3.51);
+  it('parses macOS and Windows process lists and only stops a freshly revalidated tree', async () => {
+    const mac = parsePs(' 100 1 300000 node node /x/dist/index.js session-worker aaaa\n 101 100 200000 claude claude\n 102 101 20000 bash bash -c vitest\n 103 102 2000000 node node vitest');
+    expect(tableInventory(mac).units[0]?.target).toMatchObject({ root: 102, pids: [102, 103] });
+    const win = parseWindowsProcesses(JSON.stringify([
+      { ProcessId: 100, ParentProcessId: 1, WorkingSetSize: 300000000, Name: 'node.exe', CommandLine: 'node C:\\x\\dist\\index.js session-worker aaaa', CreationDate: '2026-10-13T14:00:00' },
+      { ProcessId: 101, ParentProcessId: 100, WorkingSetSize: 200000000, Name: 'claude.exe', CommandLine: 'claude', CreationDate: '2026-10-13T14:00:01' },
+      { ProcessId: 102, ParentProcessId: 101, WorkingSetSize: 20000000, Name: 'cmd.exe', CommandLine: 'cmd /c vitest', CreationDate: '2026-10-13T14:00:02' },
+      { ProcessId: 103, ParentProcessId: 102, WorkingSetSize: 2000000000, Name: 'node.exe', CommandLine: 'node vitest', CreationDate: '2026-10-13T14:00:03' },
+    ]));
+    expect(win[2]?.startedAt).toBe('2026-10-13T14:00:02');
+    expect(win[2]?.command).toBe('cmd /c vitest');
+    expect(parseWindowsProcesses('{bad')).toEqual([]);
+    expect(parseWindowsProcesses(JSON.stringify({ ProcessId: 9, ParentProcessId: 1, WorkingSetSize: 1, Name: 'cmd.exe', CommandLine: 'cmd', CreationDate: '/Date(1760000000000)/' }))[0]?.startedAt).toBe('2025-10-09T08:53:20.000Z');
+    expect(tableInventory(win).units[0]?.target).toMatchObject({ root: 102, pids: [102, 103] });
+    const staleParent = win.map((item) => item.pid === 101 ? { ...item, startedAt: '2026-10-13T14:10:00' } : item);
+    expect(tableInventory(staleParent).units).toEqual([]);
+    let stopped = 0;
+    let current = win;
+    const probe = processProbe('win32', { readTable: () => current, stopTree: () => { stopped++; return true; } });
+    const target = (await probe.inventory()).units[0]!.target;
+    expect(await probe.stop(target)).toBe(true);
+    current = current.map((item) => item.pid === 102 ? { ...item, startedAt: '2026-10-13T14:05:02' } : item);
+    expect(await probe.stop(target)).toBe(false);
+    expect(stopped).toBe(1);
+    const macProbe = processProbe('darwin', {
+      readTable: () => mac,
+      readMemory: () => ({ total: 16 * GIB, available: 2 * GIB, used: 14 * GIB, critical: false }),
+      stopTree: () => { stopped++; return true; },
+    });
+    const macBudget = agentBudget((await macProbe.sample())!);
+    expect(macBudget.ratio).toBeGreaterThan(1);
+    const macInventory = await macProbe.inventory();
+    const macUnit = macInventory.units[0]!;
+    expect(decideAction(macBudget, macInventory)).toMatchObject({ kind: 'stop', worker: 100 });
+    expect(await macProbe.stop(macUnit.target)).toBe(true);
+    expect(stopped).toBe(2);
   });
 
-  it('nudges near the limit and stops the largest command past it, each acted on by its owner', () => {
-    const view = viewProcesses(table);
-    expect(decideAction({ used: 1, limit: 10, ratio: 0.5 }, view)).toEqual({ kind: 'none' });
-    const near = decideAction({ used: 9, limit: 10, ratio: NUDGE_AT + 0.01 }, view);
-    expect(near.kind === 'nudge' && [near.worker, near.command?.root.pid]).toEqual([100, 104]);
-    const past = decideAction({ used: 11, limit: 10, ratio: 1.1 }, view);
-    expect(past.kind === 'stop' && [past.command.worker, past.command.pids.sort()]).toEqual([100, [104, 105, 106]]);
-    // Nothing an agent ran: the conversation holding the most is told, nothing is stopped.
-    const idle = viewProcesses(table.filter((entry) => [100, 101, 102, 200, 201].includes(entry.pid)));
-    expect(decideAction({ used: 11, limit: 10, ratio: 1.1 }, idle)).toEqual({ kind: 'nudge', worker: 100 });
-  });
-
-  it('tells the agent what happened and what to do instead', () => {
-    const view = viewProcesses(table);
-    const budget = { used: 30 * GIB, limit: 29 * GIB, ratio: 30 / 29 };
-    const stop = stopNote(budget, 2, view.commands[0]!);
-    expect(stop).toContain('ClikCode stopped `node /repo/node_modules/.bin/vitest run` (and 2 processes it started) at 3.7 GB');
-    expect(stop).toContain('30.0 GB of 29.0 GB, shared by 2 conversations');
-    expect(stop).toContain('killed (exit 137 / SIGKILL)');
-    expect(stop).toContain('Do not rerun it unchanged');
-    const nudge = nudgeNote({ used: 26 * GIB, limit: 29 * GIB, ratio: 26 / 29 }, 2, view.commands[0]);
-    expect(nudge).toContain('agents are using 26.0 GB of the 29.0 GB they can have (2 conversations share it)');
-    expect(nudge).toContain('is the largest command running, at 3.7 GB');
+  it('counts reclaimable macOS pages as available', () => {
+    expect(parseVmStat('Mach Virtual Memory Statistics: (page size of 16384 bytes)\nPages free: 100.\nPages inactive: 200.\nPages speculative: 50.\nPages purgeable: 25.')).toBe(375 * 16384);
   });
 });
