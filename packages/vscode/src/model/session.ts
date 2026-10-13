@@ -17,6 +17,13 @@ export function providerIdOf(session: HarnessSession): string | undefined {
   return session.nativeHarness ?? undefined;
 }
 
+/** What a turn's end, a worker's shutdown and a lost connection all drop: the
+ * locally echoed prompt, open requests, unanswered submissions and a Stop
+ * waiting for its turn. The one place these are cleared. */
+export const NO_TRANSIENT: Pick<ChatModel, 'pendingPrompt' | 'approvals' | 'submissions' | 'stopPending'> = {
+  pendingPrompt: undefined, approvals: [], submissions: [], stopPending: undefined,
+};
+
 export function freshFor(model: ChatModel): ChatModel {
   return {
     ...emptyModel(), connection: model.connection,

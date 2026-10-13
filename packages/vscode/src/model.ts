@@ -18,7 +18,7 @@ import { modelLabel } from './webview/format';
 import { stripAnsi } from './text';
 import { resumed } from './model/clock';
 import { withNote } from './model/notes';
-import { applySession, freshFor } from './model/session';
+import { applySession, freshFor, NO_TRANSIENT } from './model/session';
 import { applyWorkerEvent } from './model/worker-events';
 import type { ChatModel } from './model/types';
 
@@ -30,7 +30,7 @@ export { liveChildren } from './model/activity';
 export { liveElapsedMs } from './model/clock';
 export { answeredApproval } from './model/approvals';
 export { turnMarks, turnNoticeNotes } from './model/marks';
-export { applySession, emptyModel } from './model/session';
+export { applySession, emptyModel, NO_TRANSIENT } from './model/session';
 export { withNote } from './model/notes';
 
 export function conversationAttention(id: string, open: ReadonlyArray<{ sessionId?: string; approvals: number; unread: boolean }>): 'waiting' | 'unread' | undefined {
@@ -72,10 +72,9 @@ export function chatModelLabel(model: ChatModel, providerName?: string): string 
  * of it). */
 export function connectionLost(model: ChatModel, patch: Partial<ChatModel> = {}): ChatModel {
   return {
-    ...model, ...patch, running: false, live: undefined, approvals: [], ownTurn: undefined, pendingPrompt: undefined, turnUserIndex: undefined,
-    // Only a live bridge ends these: a 'signing in…' or busy label, the queue
-    // it was holding and the submissions it had yet to answer.
-    busy: undefined, signIn: undefined, queued: [], submissions: [], stopPending: undefined,
+    ...model, ...patch, ...NO_TRANSIENT, running: false, live: undefined, ownTurn: undefined, turnUserIndex: undefined,
+    // Only a live bridge ends these: a 'signing in…' or busy label and the queue it was holding.
+    busy: undefined, signIn: undefined, queued: [],
   };
 }
 

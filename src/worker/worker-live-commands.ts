@@ -122,24 +122,19 @@ export function createLiveCommands(ctx: WorkerContext) {
     if (hasHeldVendorProcess(sessionId)) {
       lifecycle('worker.cancel', { stopped: 'held vendor' });
       announceStopping(undefined);
-      await stopHeldVendorProcess(sessionId);
-      ctx.stopAnnounced = false;
-      observer.broadcast({ type: 'stop-done' });
+      try { await stopHeldVendorProcess(sessionId); } finally { ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
       return;
     }
     if (ctx.vendorBackground.busy || await persistentWorkRunning(sessionId)) {
       lifecycle('worker.cancel', { stopped: 'vendor background work' });
       announceStopping(undefined);
-      await closePersistentTransport(sessionId);
-      ctx.stopAnnounced = false;
-      observer.broadcast({ type: 'stop-done' });
+      try { await closePersistentTransport(sessionId); } finally { ctx.stopAnnounced = false; observer.broadcast({ type: 'stop-done' }); }
       return;
     }
     // Else a turn parked for the reset, if there is one. Said out loud
     // either way: the window that asked is waiting to hear that it is over.
     lifecycle('worker.cancel', { stopped: ctx.resumeWaiter.pending ? 'reset wait' : 'nothing' });
-    await ctx.resumeWaiter.cancel('Stopped waiting for the reset');
-    sendEvent(socket, { type: 'stop-done', nothing: true });
+    try { await ctx.resumeWaiter.cancel('Stopped waiting for the reset'); } finally { sendEvent(socket, { type: 'stop-done', nothing: true }); }
     return;
   };
 
