@@ -21,7 +21,7 @@ import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.j
 import type { HarnessActivityEvent as AgentActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
 import type { HarnessSession } from '../session/model.js';
@@ -78,24 +78,18 @@ export async function runAgentSessionTurn(
   const permissionMode: AiHarnessPermissionMode = session.permissionMode ?? 'ask';
   const stateDir = stateDirectory();
   // The user's MCP servers, the same ones `clikcode mcp add` gave every
-  // harness. One that is down is named here rather than silently missing.
+  // harness. One that is down or needs a sign-in is simply not offered: the
+  // manager logs why, and `/mcp` lists what needs a sign-in.
   const mcp = await mcpToolsForTurn(stateDir, input.signal, input.mcpServers ?? []);
-  // Shown on every surface: headless (`send`, a script) has no prompter, and a
-  // note that reached nobody hid a Gateway agent's whole tool server failing.
-  for (const note of mcp.notes) {
-    lifecycle('mcp.note', { session: session.id, note: note.slice(0, 300) });
-    if (prompter) prompter.activity(note);
-    else process.stderr.write(`${note}\n`);
-  }
   // The user's Claude Code tool hooks, so they run whichever lane serves the
   // turn; a workspace's own only once the user trusts it.
   const workspace = session.workspace ?? process.cwd();
   const hookConfig = await hooksForWorkspace({
     cwd: workspace, stateDir,
     ...(prompter ? { ask: (title: string, detail: string) => prompter.approval(title, detail) } : {}),
-    notice: (message) => { if (prompter) prompter.activity(message); else process.stderr.write(`${message}\n`); },
+    notice: (message) => diagnostic('hooks.untrusted', message),
   });
-  const hooks = toolHooksFrom(hookConfig, (message) => prompter?.activity(message));
+  const hooks = toolHooksFrom(hookConfig, (message) => diagnostic('hooks.note', message));
   let servedModel: string | undefined;
   const publishActivity = (event: AgentActivityEvent): void => {
     const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);

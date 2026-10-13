@@ -241,15 +241,13 @@ describe('where it runs', () => {
     }
   });
 
-  it('imports before the agent\'s first turn loads its servers, and says so once', async () => {
+  it('imports before the agent\'s first turn loads its servers, silently', async () => {
     process.env.HOME = home;
     process.env.CLIKCODE_HOME = state;
     await put(join(home, '.claude.json'), { mcpServers: { fake: { command: process.execPath, args: [FIXTURE] } } });
     const first = await mcpToolsForTurn(state);
-    expect(first.notes).toEqual(['Imported 1 MCP server from your harness configs into mcp.json: fake (Claude Code)']);
     expect(first.tools.length).toBeGreaterThan(0);
     const second = await mcpToolsForTurn(state);
-    expect(second.notes).toEqual([]);
     expect(second.tools.length).toBe(first.tools.length);
   });
 });
