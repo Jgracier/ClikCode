@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentBudget, decideAction, desktopReserve, NUDGE_AT, nudgeNote, stopNote, viewProcesses, type ProcessEntry } from './resource-guard.js';
+import { agentBudget, decideAction, desktopReserve, NUDGE_AT, STALL_STOP_PERCENT, nudgeNote, stopNote, viewProcesses, type ProcessEntry } from './resource-guard.js';
 
 const GIB = 2 ** 30;
 const proc = (pid: number, ppid: number, gib: number, exe: string, command: string): ProcessEntry => ({ pid, ppid, bytes: gib * GIB, exe, command });
@@ -32,9 +32,18 @@ describe('resource guard', () => {
     expect(desktopReserve(16 * GIB)).toBe(4 * GIB);
     const roomy = agentBudget({ total: 57 * GIB, available: 30 * GIB, agentUsed: 10 * GIB });
     expect(roomy.limit / GIB).toBeCloseTo(10 + 30 - 57 * 0.08);
-    const capped = agentBudget({ total: 57 * GIB, available: 30 * GIB, agentUsed: 10 * GIB, agentMax: 20 * GIB });
+    const capped = agentBudget({ total: 57 * GIB, available: 30 * GIB, agentUsed: 10 * GIB, agentCeiling: 20 * GIB });
     expect(capped.limit / GIB).toBeCloseTo(20 * 0.97);
     expect(agentBudget({ total: 16 * GIB, available: 1 * GIB, agentUsed: 2 * GIB }).ratio).toBe(Infinity);
+  });
+
+  it('is over the limit when agents are choking on memory, whatever the numbers say', () => {
+    // 2026-10-13: 34G of a 38G hard ceiling looked like room; MemoryHigh 34G was throttling every agent.
+    const sample = { total: 57 * GIB, available: 10 * GIB, agentUsed: 34 * GIB, agentCeiling: 34 * GIB };
+    expect(agentBudget(sample).ratio).toBeGreaterThan(1);
+    const roomy = { total: 57 * GIB, available: 30 * GIB, agentUsed: 10 * GIB, agentCeiling: 38 * GIB };
+    expect(agentBudget({ ...roomy, agentStalled: 2 }).ratio).toBeLessThan(NUDGE_AT);
+    expect(agentBudget({ ...roomy, agentStalled: STALL_STOP_PERCENT }).ratio).toBe(1);
   });
 
   it('finds what agents ran: below a shell, with what it started; never the worker, the vendor or an MCP server', () => {
