@@ -196,6 +196,7 @@ export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime
   };
   if (!promptBlocked) {
     await rt.append({ type: 'text', role: 'user', text: `${environment}${hookNote}${input.prompt}${imageNote}`, ...(images.length ? { images } : {}) });
+    await input.onRemembered?.();
   }
   input.onSteerReady?.(async (text: string) => {
     if (!rt.steerOpen) throw new Error('The turn has already finished');

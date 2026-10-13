@@ -25,7 +25,7 @@ import { setOutOfTurnHandler, setVendorBackgroundTurnHandler } from '../turn/ven
 import { BroadcastObserver } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
 import { createResumeWaiter } from './resume-wait.js';
-import { separateFromForeground } from './own-scope.js';
+import { installSystemdRunShim, separateFromForeground } from './own-scope.js';
 import { startResourceGuard } from './resource-guard.js';
 import { createCommandSweep } from './command-groups.js';
 import { useConversationTmp } from './conversation-tmp.js';
@@ -75,6 +75,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   // Before any vendor process exists, so all of the agent's work is born
   // outside the window that spawned this worker (own-scope.ts).
   const placement = await separateFromForeground(sessionId);
+  if (process.platform === 'linux' && process.env.CLIKCODE_OWN_SCOPE !== '0') installSystemdRunShim();
   // Temp files on disk, not in RAM-backed /tmp, for everything the agent runs.
   useConversationTmp(sessionId);
   const socketPath = socketPathFor(sessionId);
@@ -150,12 +151,11 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   {
     // One cgroup per command the agent runs, so the guard reads and stops
     // exactly a command (worker/command-groups.ts).
-    if (placement?.divided) {
-      const commands = createCommandSweep(placement.scopeDir);
-      setInterval(() => { try { commands.sweep(); } catch { /* fail-open-ok: next sweep */ } }, COMMAND_SWEEP_MS).unref();
-    }
+    const commands = placement?.divided ? createCommandSweep(placement.scopeDir) : undefined;
+    if (commands) setInterval(() => { try { commands.sweep(); } catch { /* fail-open-ok: next sweep */ } }, COMMAND_SWEEP_MS).unref();
     startResourceGuard({
-      sessionId, ...(placement?.divided ? { sliceDir: placement.sliceDir } : {}),
+      sessionId,
+      ...(placement?.divided ? { sliceDir: placement.sliceDir, remembered: { scopeDir: placement.scopeDir, labels: commands!.labels } } : {}),
       deliver: createResourceNoteDelivery(ctx),
     });
   }

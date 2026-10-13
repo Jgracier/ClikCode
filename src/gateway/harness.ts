@@ -38,6 +38,8 @@ interface AgentSessionTurnInput extends HarnessTurnObserver {
   agentInstructions?: string;
   signal?: AbortSignal;
   images?: readonly string[];
+  /** The turn's request is in the agent's memory (AgentTurnInput.onRemembered). */
+  onRemembered?: () => Promise<void>;
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
    * modelClientForSession (agent/models/for-session.ts) chose for the route. */
   modelClient: ModelClient;
@@ -142,5 +144,6 @@ export async function runAgentSessionTurn(
     // remembered here: the third answer is passed straight through.
     ...(prompter ? { onApproval: async (title: string, detail?: string, rule?: string, preview?: ApprovalPreview) => (await prompter.approval(title, detail, preview, rule)) ?? false } : {}),
     ...(input.onSteerReady ? { onSteerReady: input.onSteerReady } : {}),
+    ...(input.onRemembered ? { onRemembered: input.onRemembered } : {}),
   });
 }

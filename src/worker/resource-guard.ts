@@ -1,6 +1,6 @@
 /** React to measured memory pressure. A probe owns the platform-specific
  * accounting and stop operation; this controller only chooses and informs. */
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statfsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -33,15 +33,19 @@ export type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; un
 export function decideAction(budget: AgentBudget, inventory: Inventory): GuardAction {
   if (budget.ratio < NUDGE_AT || !inventory.workers.length) return { kind: 'none' };
   const bySize = [...inventory.units].sort((a, b) => b.freeable - a.freeable);
-  const commands = bySize.filter((unit) => unit.kind === 'command' && unit.owner !== undefined);
+  const commands = bySize.filter((unit) => unit.kind === 'command');
+  const owned = commands.filter((unit) => unit.owner !== undefined);
   if (budget.ratio >= 1) {
     const command = commands.find((unit) => worthStopping(unit, budget));
-    if (command) return { kind: 'stop', worker: command.owner!, unit: command };
+    if (command) return { kind: 'stop', worker: command.owner ?? Math.min(...inventory.workers), unit: command };
   }
-  const largest = commands[0];
-  return largest
+  const largest = owned[0];
+  if (!largest) return { kind: 'nudge', worker: Math.min(...inventory.workers) };
+  // A command too small to stop is not named. Naming an 8 MB sleep sent the
+  // agent after the wrong thing (2026-10-13).
+  return worthStopping(largest, budget)
     ? { kind: 'nudge', worker: largest.owner!, unit: largest }
-    : { kind: 'nudge', worker: Math.min(...inventory.workers) };
+    : { kind: 'nudge', worker: largest.owner! };
 }
 const gb = (bytes: number): string => `${(bytes / GIB).toFixed(1)} GB`;
 export function nudgeNote(budget: AgentBudget, conversations: number, unit?: Unit): string {
@@ -59,9 +63,22 @@ function marker(): string { return join(stateDirectory(), 'resource-guard.last-s
 function ineffectiveMarker(): string { return join(stateDirectory(), 'resource-guard.ineffective'); }
 function lastStopAt(): number { try { return Number(readFileSync(marker(), 'utf8')) || 0; } catch { return 0; } }
 function ineffective(): boolean { try { return readFileSync(ineffectiveMarker(), 'utf8').length > 0; } catch { return false; } }
+/** Set when /tmp is a RAM disk holding enough to matter. Stopping a command does not free it. */
+export function ramTmpNote(): string {
+  try {
+    if (!/^tmpfs \/tmp /m.test(readFileSync('/proc/mounts', 'utf8'))) return '';
+    const stat = statfsSync('/tmp');
+    const used = Number(stat.bsize) * (Number(stat.blocks) - Number(stat.bavail));
+    if (!(used >= 4 * GIB)) return '';
+    return ` /tmp is RAM here and holds about ${gb(used)}; deleting those files frees memory, stopping a command does not.`;
+  } catch { return ''; }
+}
+
 export interface ResourceGuardOptions {
   sessionId: string;
   sliceDir?: string;
+  /** This worker's command names, kept after the shell process exits. */
+  remembered?: { scopeDir: string; labels: ReadonlyMap<string, string> };
   deliver: (note: string) => void;
   probe?: Probe;
 }
@@ -70,7 +87,7 @@ export interface ResourceGuardOptions {
  * revalidates the root before signalling. */
 export function startResourceGuard(options: ResourceGuardOptions): () => void {
   const { sessionId, deliver } = options;
-  const probe = options.probe ?? (options.sliceDir ? cgroupProbe(options.sliceDir) : processProbe());
+  const probe = options.probe ?? (options.sliceDir ? cgroupProbe(options.sliceDir, options.remembered) : processProbe());
   let nudged = false;
   let pending: { unit: Unit; before: number; at: number } | undefined;
   const tick = async (): Promise<void> => {
@@ -101,11 +118,11 @@ export function startResourceGuard(options: ResourceGuardOptions): () => void {
       try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(marker(), String(Date.now())); } catch { /* fail-open-ok */ }
       pending = { unit: action.unit, before: budget.used, at: Date.now() };
       lifecycle('resource.stop', { session: sessionId, kind: action.unit.kind, label: action.unit.label, held: action.unit.freeable, used: budget.used, limit: budget.limit });
-      if (action.unit.kind === 'command') deliver(stopNote(budget, conversations, action.unit));
+      if (action.unit.owner === process.pid) deliver(stopNote(budget, conversations, action.unit) + ramTmpNote());
     } else if (!nudged) {
       nudged = true;
       lifecycle('resource.nudge', { session: sessionId, ...(action.unit ? { label: action.unit.label, held: action.unit.freeable } : {}), used: budget.used, limit: budget.limit });
-      deliver(nudgeNote(budget, conversations, action.unit));
+      deliver(nudgeNote(budget, conversations, action.unit) + ramTmpNote());
     }
   };
   let running = false;

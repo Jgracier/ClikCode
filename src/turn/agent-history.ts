@@ -58,11 +58,29 @@ export function agentItemsFromTurn(turn: CanonicalTurn): ConversationItem[] {
     }
   }
   flush();
-  if (turn.interrupted) lines.push('[This turn was interrupted before it finished.]');
+  if (turn.interrupted) lines.push(INTERRUPTED_NOTE);
   return [
     { type: 'text', role: 'user', text: request || '(no request)' },
     { type: 'text', role: 'assistant', text: lines.join('\n\n') || '(no reply)' },
   ];
+}
+
+const INTERRUPTED_NOTE = '[This turn was interrupted before it finished.]';
+
+/** A turn the agent's memory already holds -- its request, and the steps that finished -- that was cut off
+ * (the worker was stopped, the machine went down). What streamed since the last step reached the transcript
+ * but never the memory; the model is told what was said and that the turn did not finish, once. */
+async function noteInterruptedTail(store: ConversationStore, last: CanonicalTurn | undefined): Promise<void> {
+  if (!last) return;
+  const tail = (await store.load()).at(-1);
+  // A turn that finished ends on the model's answer; anything else is a turn cut off.
+  if (!tail || tail.type === 'summary' || (tail.type === 'text' && tail.role === 'assistant')) return;
+  // Memory ends on the request: nothing of the answer is in it. Otherwise the steps are, and only the cut-off is news.
+  if (tail.type === 'text' && tail.role === 'user') {
+    const said = agentItemsFromTurn(last)[1]!;
+    await store.append(said.type === 'text' && !said.text.includes(INTERRUPTED_NOTE) ? { ...said, text: `${said.text}\n\n${INTERRUPTED_NOTE}` } : said);
+  }
+  else await store.append({ type: 'text', role: 'assistant', text: INTERRUPTED_NOTE });
 }
 
 /** Writes the turns the agent's memory lacks into it, and says how many of
@@ -85,7 +103,10 @@ export async function seedAgentConversation(input: {
   if ((await store.size()) === 0) through = 0;
   else through ??= total;
   through = Math.min(through, total);
-  if (through >= total) return { total, seeded: 0 };
+  if (through >= total) {
+    await noteInterruptedTail(store, record.turns.at(-1));
+    return { total, seeded: 0 };
+  }
   const receiving = `${session.route}:${session.provider ?? ''}`;
   // A summary another harness (or this agent, earlier) made of turns this
   // memory does not hold goes in as the agent's own compaction: what the
