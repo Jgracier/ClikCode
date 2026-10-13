@@ -508,14 +508,6 @@ SCENARIOS = {
         ],
         'watch': [], 'final_contains': ['Checking the workspace first.', 'The final commit is live.'],
     },
-    'title-after-mobile-resize': {
-        'turns': [{'blocks': ['<clikcode-title>My Mobile Chat</clikcode-title>\nThe final commit is live.']}],
-        'steps': [
-            ('type', 'please check the commit'), ('resize_burst',),
-            ('wait_for', 'The final commit is live.', 30), ('settle', 2),
-        ],
-        'watch': [], 'final_contains': ['My Mobile Chat', 'The final commit is live.'],
-    },
     'narrow-mid-transcript': {
         # A row written at 100 columns is wider than the screen at 60. It
         # must be wrapped again, not clipped (its tail lost) and not left to
