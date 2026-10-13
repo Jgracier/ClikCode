@@ -39,6 +39,6 @@ export function leaveProvider(session: HarnessSession): void {
     };
   }
   forgetNativeThread(session);
-  for (const key of ['reported', 'effortRefused', 'lastUsage', 'resumeAt', 'harnessOptions', 'gatewayConfirmed'] as const) delete session[key];
+  for (const key of ['reported', 'lastUsage', 'resumeAt', 'harnessOptions', 'gatewayConfirmed'] as const) delete session[key];
   session.updatedAt = new Date().toISOString();
 }

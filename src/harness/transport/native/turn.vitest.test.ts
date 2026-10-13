@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { captureNativeHarnessTurn, createTurnIdleController } from './turn.js';
+import { captureNativeHarnessTurn } from './turn.js';
 
 const node = { command: 'node-fixture', binary: process.execPath, displayName: 'Fixture' };
 
@@ -8,33 +8,16 @@ function lingering(lines: readonly string[]): string[] {
   return ['-e', `${lines.map((line) => `console.log(${JSON.stringify(line)});`).join('')}setInterval(() => {}, 1000);`];
 }
 
-describe('captureNativeHarnessTurn idle budget', () => {
-  it('finishes normally when the vendor goes silent after a successful result', async () => {
-    const idle = createTurnIdleController();
-    const output = await captureNativeHarnessTurn(node, lingering([
-      '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}',
-      '{"type":"result","subtype":"success","is_error":false,"result":"hi"}',
-    ]), {}, {
-      idleTimeoutMs: 300,
-      idleController: idle,
-      onStdoutLine: (line) => { if (line.includes('"type":"result"')) idle.noteResult('success'); },
-    });
-    expect(output.exitCode).toBe(0);
-    expect(output.stdout).toContain('"result":"hi"');
-  });
-
-  it('still reports a hang when no result arrived', async () => {
-    const idle = createTurnIdleController();
-    await expect(captureNativeHarnessTurn(node, lingering(['{"type":"assistant"}']), {}, {
-      idleTimeoutMs: 300, idleController: idle, onStdoutLine: () => undefined,
-    })).rejects.toMatchObject({ reason: 'idle-timeout' });
-  });
-
-  it('still reports a hang when the result was a failure', async () => {
-    const idle = createTurnIdleController();
-    await expect(captureNativeHarnessTurn(node, lingering(['{"type":"result","is_error":true}']), {}, {
-      idleTimeoutMs: 300, idleController: idle, onStdoutLine: () => idle.noteResult('error'),
-    })).rejects.toMatchObject({ reason: 'idle-timeout' });
+describe('captureNativeHarnessTurn without a silence ceiling', () => {
+  it('waits for a quiet vendor, and ends when the user stops it', async () => {
+    const controller = new AbortController();
+    const turn = captureNativeHarnessTurn(node, lingering(['{"type":"assistant"}']), {}, { signal: controller.signal, onStdoutLine: () => undefined });
+    let settled = false;
+    void turn.then(() => { settled = true; }, () => { settled = true; });
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(settled, 'no clock of ClikCode\'s own ends it').toBe(false);
+    controller.abort();
+    expect((await turn).interrupted).toBe(true);
   });
 });
 
@@ -44,7 +27,7 @@ describe('captureNativeHarnessTurn interactive sign-in', () => {
     await expect(captureNativeHarnessTurn(node, lingering([
       'No API key found. Starting login flow...',
       'Waiting for confirmation in the browser...',
-    ]), {}, { idleTimeoutMs: 60_000, onStdoutLine: () => undefined }))
+    ]), {}, { onStdoutLine: () => undefined }))
       .rejects.toMatchObject({ reason: 'login-prompt', message: expect.stringContaining('sign in') });
     expect(Date.now() - started).toBeLessThan(10_000);
   });

@@ -9,8 +9,7 @@ import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { isTurnCancelled, turnCancelledError } from '../../agent/cancellation.js';
 import { spawnPortable } from './spawn.js';
 import { JsonRpcPeer, type JsonRpcPeerOptions } from './jsonrpc-peer.js';
-import type { BackgroundTurnChannel, BackgroundTurnEnd, VendorBackgroundTurnHandler } from './background-turn.js';
-import { createTurnWatchdog, type TurnWatchdog } from './turn-watchdog.js';
+import type { BackgroundTurnChannel, BackgroundTurnEnd, OutOfTurnRelay, VendorBackgroundTurnHandler } from './background-turn.js';
 import { processGroup, processGroupMembers, toolCallWork } from './process-group.js';
 
 /** How long a cancelled turn gets to unwind before its child is killed. */
@@ -22,16 +21,14 @@ export interface PersistentSessionOptions {
   spawn?: PersistentSpawn;
   /** Receives work the vendor does between ClikCode turns. */
   backgroundTurns?: VendorBackgroundTurnHandler;
-  /** Watchdog budgets (see turn-watchdog.ts); tests shorten them. */
-  idleMs?: number;
-  toolIdleMs?: number;
-  /** How long a background turn may go quiet, with nothing running, before it counts as over. */
-  backgroundQuietMs?: number;
+  /** Receives what the vendor says with no prompt open and no tool running: it
+   * goes into the conversation, and nothing is shown as working for it. */
+  outOfTurn?: OutOfTurnRelay;
 }
 
 interface PersistentLive { peer: JsonRpcPeer; key: string; pid?: number }
-interface PersistentTurn { done: boolean; fail: (error: Error) => void; watchdog?: TurnWatchdog }
-interface PersistentBackground { channel: BackgroundTurnChannel; watchdog?: TurnWatchdog }
+interface PersistentTurn { done: boolean; fail: (error: Error) => void }
+interface PersistentBackground { channel: BackgroundTurnChannel }
 
 /** A promise that rejects when `fail` is called: what a turn's flow races. */
 export function turnFailure(): { failure: Promise<never>; fail: (error: Error) => void } {
@@ -59,11 +56,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected isClosed = false;
   private readonly spawn: PersistentSpawn;
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
-  protected readonly backgroundQuietMs: number;
-  /** Ends a background turn the vendor never announces the end of (see AcpSessionImpl.quietEndOfBackground). */
-  protected backgroundQuiet?: NodeJS.Timeout;
-  private readonly idleMs?: number;
-  private readonly toolIdleMs?: number;
+  protected readonly relay?: OutOfTurnRelay;
   /** The child's process group when the current turn's prompt went out
    * (promptSent): what was already running -- the vendor, its MCP servers. */
   private atPrompt?: Promise<Set<number>>;
@@ -76,9 +69,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   constructor(options: PersistentSessionOptions, private readonly label: string) {
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
     this.onBackgroundTurn = options.backgroundTurns;
-    this.idleMs = options.idleMs;
-    this.backgroundQuietMs = options.backgroundQuietMs ?? 30_000;
-    this.toolIdleMs = options.toolIdleMs;
+    this.relay = options.outOfTurn;
   }
 
   /** Forget the vendor work being tracked as still running. */
@@ -192,7 +183,6 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     } finally {
       turn.done = true;
       this.closePrompts();
-      turn.watchdog?.stop();
       signal?.removeEventListener('abort', onAbort);
       if (this.turn === turn) this.turn = undefined;
       hooks.ended(succeeded);
@@ -281,18 +271,10 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     return live;
   }
 
-  protected watchdog(onIdle: (afterMs: number) => void): TurnWatchdog {
-    return createTurnWatchdog({
-      ...(this.idleMs !== undefined ? { idleMs: this.idleMs } : {}),
-      ...(this.toolIdleMs !== undefined ? { toolIdleMs: this.toolIdleMs } : {}),
-      onIdle,
-    });
-  }
-
   /** Open a background turn (`create`) and hand it to the owner, or return
    * the one already open. Without an owner the vendor's out-of-turn work is
-   * not surfaced. `prime` readies its watchdog before the owner sees it. */
-  protected openBackgroundRun(create: () => B, prime?: (watchdog: TurnWatchdog) => void): B | undefined {
+   * not surfaced. */
+  protected openBackgroundRun(create: () => B): B | undefined {
     if (!this.onBackgroundTurn || this.isClosed) return undefined;
     // A stopped turn still unwinding: what the vendor says now is that turn's
     // tail (a chunk already on its way when the stop landed), not new work.
@@ -301,19 +283,6 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     if (this.settling) return undefined;
     if (this.background && !this.background.channel.done) return this.background;
     const run = create();
-    const watchdog = this.watchdog(() => {
-      if (this.background !== run) return;
-      // A silent Agent call is still work owned by this process. The user
-      // can stop it explicitly; a clock must not force an account handoff
-      // that kills it.
-      if (this.hasActiveSubagents()) return;
-      // The ceiling ends the background turn, not the child: whatever is
-      // still running can report into the next turn.
-      this.clearPending();
-      this.finishBackground('idle-timeout');
-    });
-    run.watchdog = watchdog;
-    prime?.(watchdog);
     this.background = run;
     try { this.onBackgroundTurn(run.channel); } catch { /* fail-open-ok: the owner's bookkeeping */ }
     return run;
@@ -323,8 +292,6 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const run = this.background;
     if (!run) return;
     this.background = undefined;
-    clearTimeout(this.backgroundQuiet);
-    run.watchdog?.stop();
     run.channel.finish(ended);
   }
 }

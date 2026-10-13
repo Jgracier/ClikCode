@@ -36,7 +36,7 @@ function fakeServer(turns: Step[][]): string {
   `;
 }
 
-function session(turns: Step[][], options: { idleMs?: number; toolIdleMs?: number; backgroundTurns?: (turn: VendorBackgroundTurn) => void } = {}) {
+function session(turns: Step[][], options: { backgroundTurns?: (turn: VendorBackgroundTurn) => void } = {}) {
   return createCodexSession({
     spawn: (_binary, _argv, spawnOptions) => spawn(process.execPath, ['-e', fakeServer(turns)], spawnOptions),
     ...options,
@@ -139,45 +139,17 @@ describe('a Codex sub-agent thread\'s own tool calls', () => {
   });
 });
 
-describe('the idle watchdog on a Codex turn', () => {
-  it('fails a silent turn as an idle timeout', async () => {
-    const codex = session([[]], { idleMs: 200 });
-    try {
-      const failure = await codex.runTurn(input()).catch((error: Error & { reason?: string }) => error);
-      expect((failure as Error & { reason?: string }).reason).toBe('idle-timeout');
-      expect((failure as Error).message).toMatch(/Codex produced no output for 0s/);
-    } finally { await codex.close(); }
-  });
-
-  // The budgets here leave the fake server room to be scheduled late on a
-  // loaded machine: each gap the turn must survive is well inside its budget,
-  // and the one it must outlast (a silent tool) well past the idle one.
-  it('gives a running tool the longer budget, and any notification restarts it', async () => {
-    const codex = session([[
-      { send: command('build', false) },
-      { after: 900, send: command('build', true) },
-      { after: 200, send: { method: 'item/agentMessage/delta', params: { threadId: 'T', turnId: '{{turn}}', itemId: 'm', delta: 'ok' } } },
-      { after: 200, send: turnCompleted('T', '{{turn}}') },
-    ]], { idleMs: 600, toolIdleMs: 5000 });
-    try {
-      expect((await codex.runTurn(input())).text).toBe('ok');
-    } finally { await codex.close(); }
-  });
-
-  it('does not count time the user spends deciding an approval', async () => {
+describe('a Codex turn has no silence ceiling', () => {
+  it('waits through a silent tool and a user deciding an approval', async () => {
     const codex = session([[
       { send: command('build', false) },
       { approve: 'build' },
-    ], []], { idleMs: 600, toolIdleMs: 600 });
-    let answered = false;
+      { after: 900, send: command('build', true) },
+      { after: 100, send: { method: 'item/agentMessage/delta', params: { threadId: 'T', turnId: '{{turn}}', itemId: 'm', delta: 'ok' } } },
+      { after: 100, send: turnCompleted('T', '{{turn}}') },
+    ]]);
     try {
-      const running = codex.runTurn(input([], {
-        onApproval: () => new Promise<boolean>((resolve) => setTimeout(() => { answered = true; resolve(true); }, 1500)),
-      }));
-      const failure = await running.catch((error: Error & { reason?: string }) => error);
-      // The watchdog only fires once the approval has been answered.
-      expect(answered).toBe(true);
-      expect((failure as Error & { reason?: string }).reason).toBe('idle-timeout');
+      expect((await codex.runTurn(input([], { onApproval: async () => true }))).text).toBe('ok');
     } finally { await codex.close(); }
   });
 });
@@ -189,7 +161,7 @@ describe('work a Codex turn leaves running', () => {
       { send: { method: 'item/started', params: { threadId: 'T', turnId: '{{turn}}', item: { type: 'subAgentActivity', id: 'call-1', kind: 'started', agentThreadId: 'C', agentPath: '/root/check' } } } },
       { send: turnCompleted('T', '{{turn}}', 'failed') },
       { after: 600, send: turnCompleted('C', 'CU1') },
-    ]], { idleMs: 200, toolIdleMs: 200, backgroundTurns: (turn) => turns.push(turn) });
+    ]], { backgroundTurns: (turn) => turns.push(turn) });
     try {
       await expect(codex.runTurn(input())).rejects.toThrow();
       expect(turns).toHaveLength(1);

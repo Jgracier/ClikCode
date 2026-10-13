@@ -1,5 +1,5 @@
 /** What the editor and terminal animate while an ACP agent runs: a "connecting to …" label that ends
- * with the connection, and work the agent does between prompts that ends when it goes quiet. Driven
+ * with the connection, and work the agent does between prompts, which shows as working only while a tool it reports runs. Driven
  * by a real child speaking ACP. */
 import { describe, expect, it } from 'vitest';
 import { createAcpSession } from './acp-client.js';
@@ -29,7 +29,7 @@ const input = (script: string, extra: Record<string, unknown> = {}) => ({
 describe('the "connecting to" label', () => {
   it('is replaced once the agent is connected, instead of standing for the whole turn', async () => {
     const phases: string[] = [];
-    const session = createAcpSession({ idleMs: 0 });
+    const session = createAcpSession();
     try {
       await session.runTurn(input(agent(1300, []), { onPhase: (phase: string) => phases.push(phase) }));
     } finally { await session.close(); }
@@ -38,7 +38,7 @@ describe('the "connecting to" label', () => {
 
   it('is never shown for an agent that answers at once', async () => {
     const phases: string[] = [];
-    const session = createAcpSession({ idleMs: 0 });
+    const session = createAcpSession();
     try {
       await session.runTurn(input(agent(0, []), { onPhase: (phase: string) => phases.push(phase) }));
     } finally { await session.close(); }
@@ -48,25 +48,48 @@ describe('the "connecting to" label', () => {
 
 describe('work an agent does between prompts', () => {
   const chunk = { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'late news' } };
+  const thought = { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'pondering' } };
+  const running = { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run build', kind: 'execute', status: 'in_progress' };
+  const settled = { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: 'completed' };
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  it('ends when it goes quiet, instead of animating until the user types', async () => {
+  it('relays a trailing message or thought into the conversation and opens no working turn', async () => {
     const turns: VendorBackgroundTurn[] = [];
-    const session = createAcpSession({ idleMs: 0, backgroundQuietMs: 300, backgroundTurns: (turn) => turns.push(turn) });
+    const said: Array<{ kind: string; text: string; mode: string }> = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), outOfTurn: (what) => said.push(what) });
     try {
-      await session.runTurn(input(agent(0, [{ delay: 100, update: chunk }])));
-      await new Promise((resolve) => setTimeout(resolve, 200));
-      expect(turns).toHaveLength(1);
-      expect(await Promise.race([turns[0]!.finished, new Promise((resolve) => setTimeout(() => resolve('still running'), 3000))])).toEqual({ text: expect.any(String), ended: 'completed' });
+      await session.runTurn(input(agent(0, [{ delay: 50, update: chunk }, { delay: 20, update: thought }])));
+      await wait(400);
+      expect(turns).toHaveLength(0);
+      expect(said).toEqual([
+        { kind: 'message', text: 'late news', mode: 'append' },
+        { kind: 'thought', text: 'pondering', mode: 'append' },
+      ]);
     } finally { await session.close(); }
   });
 
-  it('keeps running while a tool it started has not settled', async () => {
+  it('keeps working while a tool it reports in progress has not settled, however long that takes', async () => {
     const turns: VendorBackgroundTurn[] = [];
-    const session = createAcpSession({ idleMs: 0, backgroundQuietMs: 200, backgroundTurns: (turn) => turns.push(turn) });
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
     try {
-      await session.runTurn(input(agent(0, [{ delay: 100, update: { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run build', kind: 'execute', status: 'in_progress' } }])));
-      await new Promise((resolve) => setTimeout(resolve, 900));
-      expect(await Promise.race([turns[0]!.finished, new Promise((resolve) => setTimeout(() => resolve('still running'), 50))])).toBe('still running');
+      await session.runTurn(input(agent(0, [{ delay: 50, update: running }])));
+      await wait(1200);
+      expect(turns).toHaveLength(1);
+      expect(await Promise.race([turns[0]!.finished, wait(50).then(() => 'still running')])).toBe('still running');
+    } finally { await session.close(); }
+  });
+
+  it('ends when the vendor reports the tool settled, and what it says after that is relayed again', async () => {
+    const turns: VendorBackgroundTurn[] = [];
+    const said: string[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), outOfTurn: (what) => said.push(what.text) });
+    try {
+      await session.runTurn(input(agent(0, [{ delay: 50, update: running }, { delay: 50, update: chunk }, { delay: 50, update: settled }, { delay: 50, update: { ...chunk, content: { type: 'text', text: 'after' } } }])));
+      await wait(100);
+      expect(await Promise.race([turns[0]!.finished, wait(3000).then(() => 'still running')])).toEqual({ text: 'late news', ended: 'completed' });
+      await wait(300);
+      expect(turns).toHaveLength(1);
+      expect(said).toEqual(['after']);
     } finally { await session.close(); }
   });
 });

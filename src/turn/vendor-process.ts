@@ -9,6 +9,7 @@ import type { CodexSession } from '../harness/transport/codex-app-server.js';
 import type { AcpSession } from '../harness/transport/acp-client.js';
 import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harness/transport/background-turn.js';
 import { turnCancelledError } from '../agent/cancellation.js';
+import { outOfTurnRecorder } from './out-of-turn-record.js';
 
 /** Harnesses whose `turn` contract was rejected, by the build that rejected
  * it; later turns on that build go straight to the catalog's declared
@@ -79,7 +80,7 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
     persistentTransports.set(sessionId, standby.transport);
     return standby.transport;
   }
-  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn) };
+  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnRecorder(sessionId) };
   const created: PersistentTransport = {
     key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
   };
@@ -137,7 +138,7 @@ export function standbyFor(sessionId: string, accountId: string): StandbyTranspo
 export function openStandby(sessionId: string, accountId: string, transport: HarnessTurnTransport, key: string,
   prepare: (session: CodexSession | AcpSession) => Promise<void>): StandbyTransport {
   void closeStandby(sessionId);
-  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn) };
+  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnRecorder(sessionId) };
   const created: PersistentTransport = {
     key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
   };

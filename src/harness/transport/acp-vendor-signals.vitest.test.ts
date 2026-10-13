@@ -38,7 +38,7 @@ function agent(opts: { steps?: Step[]; initResult?: Record<string, unknown>; ses
 
 interface Seen { init: any; requests: Array<{ method: string; params: any }>; replies: Record<string, any> }
 
-async function run(opts: Parameters<typeof agent>[0], extra: Record<string, unknown> = {}, sessionOptions: { idleMs?: number } = {}) {
+async function run(opts: Parameters<typeof agent>[0], extra: Record<string, unknown> = {}, sessionOptions: Record<string, never> = {}) {
   const session = createAcpSession(sessionOptions);
   const notices: string[] = [];
   const phases: string[] = [];

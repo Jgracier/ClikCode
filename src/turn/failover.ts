@@ -260,22 +260,6 @@ function clockTimeHint(text: string, now: number): string | undefined {
   return at.getTime() > now ? at.toISOString() : undefined;
 }
 
-/** A start that failed for a moment and says so: the vendor's binary was
- * being rewritten by its own updater as ClikCode launched it, or Claude Code
- * found another of its processes refreshing the shared sign-in ("usually
- * transient; retry in a minute"). Nothing was sent, so one retry in place is
- * the request, not a guess; another account would meet the same binary. */
-const TRANSIENT_START_TEXT = /\bspawn (?:ETXTBSY|EAGAIN|EBUSY)\b|another [\w ]{0,40}process is refreshing/i;
-export function isTransientStartFailure(error: unknown): boolean {
-  const carried = (error ?? {}) as { stderrTail?: unknown; code?: unknown };
-  if (carried.code === 'ETXTBSY' || carried.code === 'EAGAIN' || carried.code === 'EBUSY') return true;
-  const text = [error instanceof Error ? error.message : String(error ?? ''), typeof carried.stderrTail === 'string' ? carried.stderrTail : ''].join('\n');
-  return TRANSIENT_START_TEXT.test(text);
-}
-
-/** How long a transient start is given before the one retry. */
-export const TRANSIENT_START_RETRY_MS = 2_000;
-
 export function verificationNotice(verification: { url?: string }): string {
   if (!verification.url) return 'Account needs verification with its provider';
   return /^https:\/\/accounts\.google\.com\//.test(verification.url)
