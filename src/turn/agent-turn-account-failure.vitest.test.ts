@@ -32,6 +32,7 @@ vi.mock('../commands/gateway.js', () => ({
 }));
 
 const { runSessionTurn } = await import('./session-turn.js');
+const { LiveSettings } = await import('./live-settings.js');
 const { readState } = await import('../session/state/read.js');
 const { writeState } = await import('../session/state/write.js');
 const { ConversationStore } = await import('../agent/conversation.js');
@@ -126,8 +127,8 @@ describe('settings changed while a Gateway turn runs', () => {
   it('the next model call uses the new effort and speed, not the turn\'s first', async () => {
     const home = mkdtempSync(join(tmpdir(), 'cc-agent-live-'));
     process.env.CLIKCODE_HOME = home;
-    const seen: string[] = [];
     let calls = 0;
+    const liveSettings = new LiveSettings({ route: 'gateway', model: null, effort: 'low', speed: undefined, permissionMode: 'bypass' });
     const server = createServer((req, res) => {
       req.resume();
       req.on('end', async () => {
@@ -135,10 +136,8 @@ describe('settings changed while a Gateway turn runs', () => {
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         if (calls === 1) {
           // The user changes effort and speed while this first model call is being answered.
-          const state = await readState();
-          const live = state.sessions.find((item) => item.id === 's1')!;
-          live.effort = 'high'; live.speed = 'fast';
-          await writeState(state);
+          // Pushed to the worker's live settings; the state file is not touched.
+          liveSettings.apply({ effort: 'high', speed: 'fast' });
           res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'c1', type: 'function', function: { name: 'list_dir', arguments: JSON.stringify({ path: home }) } }] } }] })}\n\n`);
           res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\n`);
         } else {
@@ -159,7 +158,7 @@ describe('settings changed while a Gateway turn runs', () => {
         status: 'active', workspace: home, title: 'named', name: 'named', nameSource: 'user',
       } as HarnessSession);
       await writeState(state);
-      await runSessionTurn(config, 's1', 'go', undefined, {});
+      await runSessionTurn(config, 's1', 'go', undefined, { liveSettings });
       expect(modelClients).toEqual(['low/default', 'high/fast']);
     } finally {
       server.closeAllConnections();

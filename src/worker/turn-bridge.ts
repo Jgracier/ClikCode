@@ -33,6 +33,7 @@ import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
 import { readState } from '../session/state/read.js';
+import { liveSettingsOf } from '../turn/live-settings.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 
 export interface WorkerTurnRequest {
@@ -217,6 +218,13 @@ export async function prepareSessionWorker(sessionId: string, options: { spawn: 
  * it to every window attached. Only to a worker already attached. */
 export function refreshSessionWorker(sessionId: string): void {
   clients.get(sessionId)?.send({ type: 'refresh' });
+}
+
+/** This terminal changed model, effort, speed, permission mode or route (already
+ * persisted): the worker holds them for the turn it may be running. Only to a
+ * worker already attached. */
+export function pushSessionSettings(session: HarnessSession): void {
+  clients.get(session.id)?.send({ type: 'settings-changed', settings: liveSettingsOf(session) });
 }
 
 /** This terminal has left a conversation: its worker stops what it started
@@ -601,7 +609,15 @@ async function driveWorkerTurn(
         },
         // A slash line is never the worker's business: it is ClikCode's own
         // command, and it runs here when the turn ends.
-        (text) => commandDuringTurn(sessionId, text),
+        async (text) => {
+          const result = await commandDuringTurn(sessionId, text);
+          // /model, /effort, /permissions applied now: the turn learns of it from the worker.
+          if (result.commandOutcome === 'applied') {
+            const changed = (await readState({ transcripts: [] })).sessions.find((item) => item.id === sessionId);
+            if (changed) client.send({ type: 'settings-changed', settings: liveSettingsOf(changed) });
+          }
+          return result;
+        },
         // Stepping away ends this window's following, not the turn: the
         // worker runs it to the end either way, and the connection stays
         // open, so coming back (or another window) picks it up mid-stream.

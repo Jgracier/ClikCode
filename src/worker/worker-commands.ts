@@ -107,6 +107,7 @@ export function createCommandHandler(ctx: WorkerContext) {
       observer.render(current, account);
       return;
     }
+    if (command.type === 'settings-changed') { ctx.liveSettings.apply(command.settings); return; }
     if (command.type === 'prepare') { await prepareForRoute(); return; }
     // Another window's turn may be using them: a turn keeps what it started,
     // and the turn's own end releases them if nobody is left.

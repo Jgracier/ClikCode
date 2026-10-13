@@ -5,7 +5,7 @@ import type Conf from 'conf';
 import { routeMcpServers } from '../gateway/mcp.js';
 import { modelClientForSession } from '../agent/models/for-session.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
-import { readState } from '../session/state/read.js';
+import { LiveSettings } from './live-settings.js';
 import { discardInterruptedTurn } from './turn-journal.js';
 import { agentTurnUsage, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
@@ -34,22 +34,23 @@ import { withResourceNotes } from './resource-notes.js';
  * ending it. A client that cannot be rebuilt keeps the previous one: a bad
  * setting reaches the user as a notice, not as a thrown turn. */
 export function stepClientRefresher(input: {
-  session: HarnessSession; config: Conf; agentModel: string | undefined;
+  session: HarnessSession; config: Conf; agentModel: string | undefined; live: LiveSettings;
   current: () => Awaited<ReturnType<typeof modelClientForSession>>;
   adopt: (client: Awaited<ReturnType<typeof modelClientForSession>>) => void;
   notice: (message: string) => void;
 }) {
-  const { session, config } = input;
+  const { session, config, live } = input;
   return async () => {
-    const stored = (await readState({ transcripts: [] })).sessions.find((item) => item.id === session.id);
-    if (stored && !isClikCodeAgent(stored)) return 'switch' as const;
-    // Model, effort and speed are read back before every model step: a change made while the turn
-    // runs applies to the next call, not to the next turn.
-    if (!stored || (stored.model === session.model && stored.effort === session.effort && stored.speed === session.speed)) return undefined;
+    if (!isClikCodeAgent({ route: live.route })) return 'switch' as const;
+    // Model, effort and speed are the worker's live settings, read before every model step: a change
+    // made while the turn runs applies to the next call, not to the next turn.
+    const model = live.model ?? null;
+    const effort = live.effort ?? session.effort;
+    if (model === session.model && effort === session.effort && live.speed === session.speed) return undefined;
     const before = { model: session.model, effort: session.effort, speed: session.speed };
-    session.model = stored.model;
-    session.effort = stored.effort;
-    session.speed = stored.speed;
+    session.model = model;
+    session.effort = effort;
+    session.speed = live.speed;
     try {
       // The same effective session the turn started with: the agent's own
       // model, unless the conversation chose one.
@@ -75,6 +76,7 @@ export async function runAgentTurn(input: {
   const agentId = session.route === 'gateway' ? session.gatewayAgentId : undefined;
   const agent: GatewayAgentSession | undefined = agentId ? await gatewayAgentSession(config, { ...session, gatewayAgentId: agentId }, signal) : undefined;
   const prompter = run.prompter;
+  const liveSettings = run.liveSettings ?? new LiveSettings(session);
   const gatewayService = isGatewayService(session);
   // Attribution for the invocation log and the output payload: the route's
   // own name, so ClikCode Local turns are never counted as Gateway usage.
@@ -102,7 +104,7 @@ export async function runAgentTurn(input: {
    * step. Leaving this agent route hands the conversation to that account
    * without ending it. */
   const modelClientForStep = stepClientRefresher({
-    session, config, agentModel: agent?.model ?? undefined,
+    session, config, agentModel: agent?.model ?? undefined, live: liveSettings,
     current: () => modelClient, adopt: (next) => { modelClient = next; }, notice: (message) => prompter?.activity(chalk.yellow(message)),
   });
   const agentServer = agent ? agentMcpServer(config, agent) : undefined;
@@ -148,7 +150,7 @@ export async function runAgentTurn(input: {
     let harnessTurn: Awaited<ReturnType<typeof runGatewayHarnessSessionTurn>>;
     for (;;) {
       harnessTurn = await runGatewayHarnessSessionTurn({
-        session, prompt: turnText, modelClient, modelClientForStep,
+        session, prompt: turnText, modelClient, modelClientForStep, currentPermissionMode: async () => liveSettings.permissionMode,
         // ClikDeploy's own account tools come with the Gateway.
         mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],
         ...(agent?.system ? { agentInstructions: agent.system } : {}),

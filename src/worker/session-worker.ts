@@ -29,6 +29,7 @@ import { separateFromForeground } from './own-scope.js';
 import { startResourceGuard } from './resource-guard.js';
 import { startStuckWatchdog } from './stuck-watchdog.js';
 import { holdResourceNote, wrapResourceNote } from '../turn/resource-notes.js';
+import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold } from './registry.js';
@@ -89,6 +90,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   const ctx = {
     sessionId, config, observer, token, hold, socketPath,
     agentSession: sessionState(stateDirectory(), sessionId),
+    liveSettings: new LiveSettings(session),
     connections: new Map<ConnectionState['socket'], ConnectionState>(),
     homeGone: () => homeIdentity() !== startedHome,
     spawnedBuild: currentWorkerBuild(),

@@ -34,6 +34,7 @@ import { conversationCost } from '../tui/slash/usage-report.js';
 import { autoSelectSessionHarness } from '../tui/pickers/engine.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
 import { shownSettingsKey } from '../worker/protocol.js';
+import { liveSettingsOf } from '../turn/live-settings.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
 import { watchConversationList, type ListWatch } from '../session/list-watch.js';
 import { encodeTerminalSpec, type IdeEvent, type IdeFeature, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
@@ -54,6 +55,7 @@ const USAGE_REFRESH_MS = 15_000;
 export class IdeBridge {
   readonly prompter: IdePrompter;
   private sessionId: string | undefined;
+  private shownLiveSettings: string | undefined;
   /** shownSettingsKey of the chat as last sent to the editor. */
   private shownSettings: string | undefined;
   private preparedRoute: string | undefined;
@@ -282,6 +284,12 @@ export class IdeBridge {
     const key = shownSettingsKey(session);
     if (this.shownSettings?.startsWith(`${session.id}|`) && this.shownSettings !== key && this.link.worker?.sessionId === session.id) this.link.worker.client.send({ type: 'refresh' });
     this.shownSettings = key;
+    // What a running turn reads (permission mode, speed too): the worker holds it for the turn.
+    const liveKey = `${session.id}|${JSON.stringify(liveSettingsOf(session))}`;
+    if (this.shownLiveSettings?.startsWith(`${session.id}|`) && this.shownLiveSettings !== liveKey && this.link.worker?.sessionId === session.id) {
+      this.link.worker.client.send({ type: 'settings-changed', settings: liveSettingsOf(session) });
+    }
+    this.shownLiveSettings = liveKey;
   }
 
   // ---- conversations -------------------------------------------------------

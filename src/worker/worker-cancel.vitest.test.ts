@@ -166,3 +166,13 @@ describe('every accepted submit ends in one waiting-stop', () => {
     expect(ctx.turnRunning).toBe(false);
   });
 });
+
+describe('settings-changed', () => {
+  it('is held by the worker for the running turn', async () => {
+    const { ctx, send } = build();
+    (ctx as { liveSettings: unknown }).liveSettings = new (await import('../turn/live-settings.js')).LiveSettings({ route: 'gateway', model: null, effort: 'low', speed: undefined, permissionMode: 'ask' });
+    await send({ type: 'settings-changed', settings: { effort: 'high', permissionMode: 'bypass' } });
+    expect(ctx.liveSettings.effort).toBe('high');
+    expect(ctx.liveSettings.permissionMode).toBe('bypass');
+  });
+});
