@@ -26,6 +26,8 @@ import { BroadcastObserver } from './broadcast-observer.js';
 import { createVendorBackgroundRunner } from './vendor-background.js';
 import { createResumeWaiter } from './resume-wait.js';
 import { separateFromForeground } from './own-scope.js';
+import { startResourceGuard } from './resource-guard.js';
+import { holdResourceNote, wrapResourceNote } from '../turn/resource-notes.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { generateWorkerToken, socketPathFor, takeConversation, workerIsReachable, writeWorkerRecord, currentWorkerBuild, type ConversationHold } from './registry.js';
@@ -64,7 +66,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   if (!hold) return;
   // Before any vendor process exists, so all of the agent's work is born
   // outside the window that spawned this worker (own-scope.ts).
-  await separateFromForeground(sessionId);
+  const agentSlice = await separateFromForeground(sessionId);
   const socketPath = socketPathFor(sessionId);
   // A worker from a build before the hold existed takes none, and still
   // answers: it keeps the conversation. Anything else at the path is left
@@ -122,6 +124,19 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   ctx.agentSession.onNotification = () => { void ctx.queue.deliverNotifications(); };
   ctx.server = createWorkerServer(ctx, createCommandHandler(ctx));
   ctx.shutdown = createShutdown(ctx);
+  // Memory: a nudge near the machine's limit, the largest command stopped
+  // past it, and this conversation's agent told either way -- into the turn
+  // running now, or with the next one (worker/resource-guard.ts).
+  if (agentSlice) {
+    startResourceGuard({
+      sessionId, sliceDir: agentSlice,
+      deliver: (note) => {
+        const live = ctx.activeLiveInput;
+        if (!live) { holdResourceNote(sessionId, note); return; }
+        void live.steerNote(wrapResourceNote(note)).then((steered) => { if (!steered) holdResourceNote(sessionId, note); });
+      },
+    });
+  }
 
   try {
     await new Promise<void>((resolveListening, rejectListening) => {
