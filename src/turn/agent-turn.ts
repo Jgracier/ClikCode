@@ -7,7 +7,7 @@ import { modelClientForSession } from '../agent/models/for-session.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
 import { LiveSettings } from './live-settings.js';
 import { discardInterruptedTurn } from './turn-journal.js';
-import { agentTurnUsage, runGatewayHarnessSessionTurn } from '../gateway/harness.js';
+import { agentTurnUsage, runAgentSessionTurn } from '../gateway/harness.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import { localModelTurnHooks } from '../commands/ai/local-model.js';
 import { completeTurnCheckpoint, startTurnCheckpoint } from './turn-journal.js';
@@ -147,9 +147,9 @@ export async function runAgentTurn(input: {
     // The Gateway refused this machine's sign-in before anything ran: sign in
     // (sign-in-for-turn.ts) and ask again, once, as a vendor turn does.
     let signInTried = false;
-    let harnessTurn: Awaited<ReturnType<typeof runGatewayHarnessSessionTurn>>;
+    let harnessTurn: Awaited<ReturnType<typeof runAgentSessionTurn>>;
     for (;;) {
-      harnessTurn = await runGatewayHarnessSessionTurn({
+      harnessTurn = await runAgentSessionTurn({
         session, prompt: turnText, modelClient, modelClientForStep, currentPermissionMode: async () => liveSettings.permissionMode,
         // ClikDeploy's own account tools come with the Gateway.
         mcpServers: [...routeMcpServers(session, config), ...(agentServer ? [agentServer] : [])],

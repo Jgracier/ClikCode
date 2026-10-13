@@ -8,7 +8,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { FileCheckpointStore } from './file-checkpoints.js';
 import { runAgentLoop } from './run-turn.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
-import type { GatewayHarnessTurnInput, ModelClient, ModelStepRequest, ModelStepResult } from './model-client.js';
+import type { AgentTurnInput, ModelClient, ModelStepRequest, ModelStepResult } from './model-client.js';
 
 let root: string;
 let cwd: string;
@@ -53,7 +53,7 @@ class RoutedModelClient implements ModelClient {
   }
 }
 
-function turn(client: ModelClient, overrides: Partial<GatewayHarnessTurnInput> = {}): { input: GatewayHarnessTurnInput; events: HarnessActivityEvent[] } {
+function turn(client: ModelClient, overrides: Partial<AgentTurnInput> = {}): { input: AgentTurnInput; events: HarnessActivityEvent[] } {
   const events: HarnessActivityEvent[] = [];
   return {
     events,

@@ -7,7 +7,7 @@ import { validateAgainstSchema } from './schema-validate.js';
 import { capHeadTail, eventOutputPreview } from './security.js';
 import { sessionState } from './session-state.js';
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
-import type { ConversationItem, GatewayHarnessTurnInput, GatewayHarnessTurnResult, ModelToolCall } from './model-client.js';
+import type { ConversationItem, AgentTurnInput, AgentTurnResult, ModelToolCall } from './model-client.js';
 import type { SubagentCall, ToolContext, ToolDefinition, ToolRunResult } from './tool-contract.js';
 import { recordUsage } from './usage.js';
 import { createSubagentRunner } from './subagent.js';
@@ -20,7 +20,7 @@ import type { TurnRuntime } from './turn-runtime.js';
 const STREAM_EVENT_INTERVAL_MS = 150;
 
 /** Builds what a turn's tool calls run with: its sub-agent runner and approval queue. */
-export function createToolRunner(rt: TurnRuntime, runTurn: (input: GatewayHarnessTurnInput) => Promise<GatewayHarnessTurnResult>) {
+export function createToolRunner(rt: TurnRuntime, runTurn: (input: AgentTurnInput) => Promise<AgentTurnResult>) {
   const { input, signal, cwd, addDirs, tools, session, scope, turnRules } = rt;
   let approvalChain: Promise<unknown> = Promise.resolve();
   // One prompt at a time: parallel reads, and parallel sub-agents, must not stack dialogs.
@@ -210,7 +210,7 @@ export type ToolRunner = ReturnType<typeof createToolRunner>;
 
 /** Runs a step's calls and records their results. A result ends the turn
  * (ask_user put a question to the user); undefined goes on to the next step. */
-export async function runToolCalls(rt: TurnRuntime, runner: ToolRunner, calls: readonly ModelToolCall[]): Promise<GatewayHarnessTurnResult | undefined> {
+export async function runToolCalls(rt: TurnRuntime, runner: ToolRunner, calls: readonly ModelToolCall[]): Promise<AgentTurnResult | undefined> {
   const { input, session, tools } = rt;
   const outcomes: CallOutcome[] = [];
   try {

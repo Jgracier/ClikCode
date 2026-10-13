@@ -1,7 +1,7 @@
 /** One model step of the agent loop: the call, what streams out of it, and the
  * recovery from a step that failed before saying anything. */
 import { isTurnCancelled, turnCancelledError } from './cancellation.js';
-import type { ConversationItem, GatewayHarnessTurnResult, ModelClient, ModelStepResult, ModelToolCall } from './model-client.js';
+import type { ConversationItem, AgentTurnResult, ModelClient, ModelStepResult, ModelToolCall } from './model-client.js';
 import { toolSpecs } from './tools/registry.js';
 import { visibleTools } from './permissions.js';
 import { completedArguments } from './models/openai-client.js';
@@ -17,7 +17,7 @@ import type { TurnRuntime } from './turn-runtime.js';
 export type ModelStepOutcome =
   | { kind: 'step'; step: ModelStepResult; streamedThisStep: string }
   | { kind: 'continue' }
-  | { kind: 'done'; result: GatewayHarnessTurnResult };
+  | { kind: 'done'; result: AgentTurnResult };
 
 /** Calls shown while they were being written, by id, with the label
  * last shown: one that never runs is settled, not left spinning. */

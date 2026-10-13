@@ -146,7 +146,7 @@ interface HarnessHooks {
   notification?(info: HookInfo & { message: string; notificationType: 'permission_prompt' | 'idle_prompt' }): Promise<void>;
 }
 
-export interface GatewayHarnessTurnInput {
+export interface AgentTurnInput {
   sessionId: string;
   cwd: string;
   /** The Gateway agent's instructions (context.ts agentInstructions), when the conversation runs as one. */
@@ -216,7 +216,7 @@ export interface GatewayHarnessTurnInput {
   subagent?: { system: string; transcriptFile: string; checkpoint?: { sessionId: string; turnId: string }; parentSessionId?: string; kind?: 'research' | 'work'; agentType?: string };
 }
 
-export interface GatewayHarnessTurnResult {
+export interface AgentTurnResult {
   text: string;
   nativeSessionId: string;
   isError?: boolean;
