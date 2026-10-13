@@ -86,3 +86,13 @@ describe('a dead child\'s failure text', () => {
     expect(acpFailureMessage('[acp] starting ACP mode over stdio…\n')).toBe('');
   });
 });
+
+describe('a prompt the agent cancels by itself', () => {
+  it('fails with a reason instead of ending as a quiet cancel', async () => {
+    const session = createAcpSession();
+    try {
+      const failure = await session.runTurn(input(`send({ id, result: { stopReason: 'cancelled' } });`)).catch((e: Error) => e);
+      expect((failure as Error).message).toMatch(/ended the turn as cancelled before saying anything/);
+    } finally { await session.close(); }
+  });
+});
