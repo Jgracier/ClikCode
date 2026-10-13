@@ -33,12 +33,13 @@ export type GuardAction = { kind: 'none' } | { kind: 'nudge'; worker: number; un
 export function decideAction(budget: AgentBudget, inventory: Inventory): GuardAction {
   if (budget.ratio < NUDGE_AT || !inventory.workers.length) return { kind: 'none' };
   const bySize = [...inventory.units].sort((a, b) => b.freeable - a.freeable);
-  const commands = bySize.filter((unit) => unit.kind === 'command' && unit.owner !== undefined);
+  const commands = bySize.filter((unit) => unit.kind === 'command');
+  const owned = commands.filter((unit) => unit.owner !== undefined);
   if (budget.ratio >= 1) {
     const command = commands.find((unit) => worthStopping(unit, budget));
-    if (command) return { kind: 'stop', worker: command.owner!, unit: command };
+    if (command) return { kind: 'stop', worker: command.owner ?? Math.min(...inventory.workers), unit: command };
   }
-  const largest = commands[0];
+  const largest = owned[0];
   if (!largest) return { kind: 'nudge', worker: Math.min(...inventory.workers) };
   // A command too small to stop is not named. Naming an 8 MB sleep sent the
   // agent after the wrong thing (2026-10-13).
@@ -117,7 +118,7 @@ export function startResourceGuard(options: ResourceGuardOptions): () => void {
       try { mkdirSync(stateDirectory(), { recursive: true }); writeFileSync(marker(), String(Date.now())); } catch { /* fail-open-ok */ }
       pending = { unit: action.unit, before: budget.used, at: Date.now() };
       lifecycle('resource.stop', { session: sessionId, kind: action.unit.kind, label: action.unit.label, held: action.unit.freeable, used: budget.used, limit: budget.limit });
-      if (action.unit.kind === 'command') deliver(stopNote(budget, conversations, action.unit) + ramTmpNote());
+      if (action.unit.owner === process.pid) deliver(stopNote(budget, conversations, action.unit) + ramTmpNote());
     } else if (!nudged) {
       nudged = true;
       lifecycle('resource.nudge', { session: sessionId, ...(action.unit ? { label: action.unit.label, held: action.unit.freeable } : {}), used: budget.used, limit: budget.limit });

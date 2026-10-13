@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bestLabel } from './command-groups.js';
 import { agentBudget, decideAction, desktopReserve, nudgeNote, stopNote } from './resource-guard.js';
-import { parsePs, parseVmStat, parseWindowsProcesses, processProbe, tableInventory, type TableEntry, type Unit } from './resource-probes.js';
+import { parsePs, parseVmStat, parseWindowsProcesses, processProbe, tableInventory, workerPidFromEnv, type TableEntry, type Unit } from './resource-probes.js';
 
 const GIB = 2 ** 30;
 const entry = (pid: number, ppid: number, size: number, exe: string, command: string): TableEntry => ({ pid, ppid, bytes: size * GIB, exe, command });
@@ -84,6 +84,14 @@ describe('resource guard', () => {
     expect(decideAction(macBudget, macInventory)).toMatchObject({ kind: 'stop', worker: 100 });
     expect(await macProbe.stop(macUnit.target)).toBe(true);
     expect(stopped).toBe(2);
+  });
+
+  it('stops a tagged scope the guard can see, and reads only the shim tag', () => {
+    expect(workerPidFromEnv('HOME=/\0CLIKCODE_WORKER_PID=42\0PATH=/bin')).toBe(42);
+    expect(workerPidFromEnv('CLIKCODE_WORKER_PID=nope')).toBeUndefined();
+    const scope: Unit = { kind: 'command', target: { cgroup: '/run' }, label: 'vitest run', freeable: 8 * GIB };
+    const over = { used: 40 * GIB, limit: 30 * GIB, ratio: 40 / 30 };
+    expect(decideAction(over, { units: [scope], workers: [100, 200] })).toMatchObject({ kind: 'stop', worker: 100, unit: scope });
   });
 
   it('names the program the agent started, including after its shell wrapper is gone', () => {

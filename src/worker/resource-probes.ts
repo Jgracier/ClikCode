@@ -16,6 +16,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { freemem, totalmem } from 'node:os';
 import { join } from 'node:path';
 import { AGENT_GROUP, bestLabel, COMMAND_GROUP, commandLabel, findCommands, groupPids, readProc, type ProcInfo, type ProcReader } from './command-groups.js';
+import { WORKER_PID_ENV } from './own-scope.js';
 
 /** How a unit is stopped: its cgroup, or its process tree. */
 export type StopTarget = { cgroup: string } | { pids: number[]; root: number; command: string; startedAt?: string };
@@ -114,10 +115,16 @@ export function sampleSlice(sliceDir: string): MemorySample | undefined {
   } catch { return undefined; }
 }
 
-/** Everything precisely owned by a worker. Other systemd scopes may contain
- * intentionally detached work and cannot safely be assigned to a chat from
- * their current parent PID, so they are never stop candidates. */
-export function sliceInventory(sliceDir: string, read: ProcReader = readProc, remembered?: { scopeDir: string; labels: ReadonlyMap<string, string> }): Inventory {
+/** The worker pid our systemd-run shim stamped on a scope, if it did. */
+export function workerPidFromEnv(envText: string): number | undefined {
+  const value = envText.split('\0').find((entry) => entry.startsWith(`${WORKER_PID_ENV}=`))?.slice(WORKER_PID_ENV.length + 1);
+  return value && /^\d+$/.test(value) ? Number(value) : undefined;
+}
+
+/** Everything precisely owned by a worker. A systemd scope is included only
+ * when this process's own shim tagged it with a worker pid. Anything else
+ * in the slice is left alone. */
+export function sliceInventory(sliceDir: string, read: ProcReader = readProc, remembered?: { scopeDir: string; labels: ReadonlyMap<string, string> }, readEnv: (pid: number) => string | undefined = readProcessEnv): Inventory {
   let names: string[] = [];
   try { names = readdirSync(sliceDir, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch { return { units: [], workers: [] }; }
   const units: Unit[] = [];
@@ -140,7 +147,23 @@ export function sliceInventory(sliceDir: string, read: ProcReader = readProc, re
       units.push({ kind: 'command', target: { cgroup: groupDir }, owner: worker, label: bestLabel(root, infos.filter((entry) => entry.pid !== rootPid), saved) || group, freeable: cgroupFreeable(groupDir) });
     }
   }
+  for (const name of names) {
+    if (!/^run-.*\.(scope|service)$/.test(name)) continue;
+    const dir = join(sliceDir, name);
+    const pids = groupPids(dir);
+    const tagged = pids.map(readEnv).map((text) => text ? workerPidFromEnv(text) : undefined).find((pid): pid is number => pid !== undefined);
+    if (tagged === undefined) continue;
+    const infos = pids.map(read).filter((entry): entry is ProcInfo => !!entry);
+    units.push({
+      kind: 'command', target: { cgroup: dir }, ...(workers.includes(tagged) ? { owner: tagged } : {}),
+      label: bestLabel(undefined, infos) || name, freeable: cgroupFreeable(dir),
+    });
+  }
   return { units, workers };
+}
+
+function readProcessEnv(pid: number): string | undefined {
+  try { return readFileSync(join('/proc', String(pid), 'environ'), 'utf8'); } catch { return undefined; }
 }
 
 export function cgroupProbe(sliceDir: string, remembered?: { scopeDir: string; labels: ReadonlyMap<string, string> }): Probe {
