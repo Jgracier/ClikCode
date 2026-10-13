@@ -31,14 +31,14 @@ describe('own scope', () => {
     expect(userManagerOwns('')).toBe(false);
   });
 
-  it('creates the agent slice with soft, hard and swap limits in whole bytes', () => {
+  it('creates the agent slice with a hard cap and a swap cap, and no soft throttle', () => {
     const args = sliceArgs(1000);
     const prop = (name: string) => args.slice(args.indexOf(name), args.indexOf(name) + 3);
     expect(args[args.indexOf('StartTransientUnit') + 2]).toBe(AGENT_SLICE);
-    expect(prop('MemoryHigh')).toEqual(['MemoryHigh', 't', '700']);
+    expect(args).not.toContain('MemoryHigh');
     expect(prop('MemoryMax')).toEqual(['MemoryMax', 't', '800']);
     expect(prop('MemorySwapMax')).toEqual(['MemorySwapMax', 't', '100']);
-    expect(args[args.indexOf(AGENT_SLICE) + 2]).toBe('4');
+    expect(args[args.indexOf(AGENT_SLICE) + 2]).toBe('3');
   });
 
   it('keeps the worker when one process in its scope is killed at the ceiling', () => {

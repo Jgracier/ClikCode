@@ -150,12 +150,11 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   {
     // One cgroup per command the agent runs, so the guard reads and stops
     // exactly a command (worker/command-groups.ts).
-    if (placement?.divided) {
-      const commands = createCommandSweep(placement.scopeDir);
-      setInterval(() => { try { commands.sweep(); } catch { /* fail-open-ok: next sweep */ } }, COMMAND_SWEEP_MS).unref();
-    }
+    const commands = placement?.divided ? createCommandSweep(placement.scopeDir) : undefined;
+    if (commands) setInterval(() => { try { commands.sweep(); } catch { /* fail-open-ok: next sweep */ } }, COMMAND_SWEEP_MS).unref();
     startResourceGuard({
-      sessionId, ...(placement?.divided ? { sliceDir: placement.sliceDir } : {}),
+      sessionId,
+      ...(placement?.divided ? { sliceDir: placement.sliceDir, remembered: { scopeDir: placement.scopeDir, labels: commands!.labels } } : {}),
       deliver: createResourceNoteDelivery(ctx),
     });
   }

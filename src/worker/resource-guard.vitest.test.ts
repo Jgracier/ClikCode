@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { bestLabel } from './command-groups.js';
 import { agentBudget, decideAction, desktopReserve, nudgeNote, stopNote } from './resource-guard.js';
 import { parsePs, parseVmStat, parseWindowsProcesses, processProbe, tableInventory, type TableEntry, type Unit } from './resource-probes.js';
 
@@ -40,7 +41,8 @@ describe('resource guard', () => {
       expect(stopNote(over, 2, action.unit)).toContain('do not rerun');
     }
     const sleepOnly = tableInventory(processes.filter((item) => ![102, 103, 104].includes(item.pid)));
-    expect(decideAction(over, sleepOnly)).toMatchObject({ kind: 'nudge', worker: 200 });
+    expect(decideAction(over, sleepOnly)).toEqual({ kind: 'nudge', worker: 200 });
+    expect(nudgeNote(over, 2)).not.toContain('sleep');
     expect(nudgeNote(over, 2, sleepOnly.units[0])).toContain('Prefer targeted tests');
     const agentOnly = tableInventory(processes.filter((item) => [100, 101, 200, 201].includes(item.pid)));
     expect(decideAction(over, agentOnly)).toEqual({ kind: 'nudge', worker: 100 });
@@ -82,6 +84,14 @@ describe('resource guard', () => {
     expect(decideAction(macBudget, macInventory)).toMatchObject({ kind: 'stop', worker: 100 });
     expect(await macProbe.stop(macUnit.target)).toBe(true);
     expect(stopped).toBe(2);
+  });
+
+  it('names the program the agent started, including after its shell wrapper is gone', () => {
+    const shell = { pid: 1, ppid: 0, exe: 'bash', command: "/bin/bash -O extglob -c IFS= builtin read -r -d '' __grok_user_cmd" };
+    const child = { pid: 2, ppid: 1, exe: 'node', command: 'node vitest run src/a.ts' };
+    expect(bestLabel(shell, [child])).toBe('node vitest run src/a.ts');
+    expect(bestLabel(undefined, [], 'bash /tmp/seqpush.sh')).toBe('bash /tmp/seqpush.sh');
+    expect(bestLabel(undefined, [], "/bin/bash -c IFS= builtin read __grok_user_cmd")).toBe('');
   });
 
   it('counts reclaimable macOS pages as available', () => {
