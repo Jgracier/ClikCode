@@ -137,7 +137,7 @@ describe('a reading the vendor proved wrong', () => {
     const served = account({ usage: reading(minutes(-1), [weekly]) });
     const state = { accounts: [served], sessions: [], invocations: [] } as unknown as HarnessState;
     expect(accountQuotaSpent(served, now)).toBe(true);
-    recordSuccessfulAccountTurn(state, served, { id: 'i', accountId: 'a', provider: 'anthropic', at: new Date(now).toISOString(), latencyMs: 1_000 } as never);
+    recordSuccessfulAccountTurn(served);
     expect(accountQuotaSpent(served, now)).toBe(false);
     // The next reading says the same thing; it is still not believed.
     served.usage = reading(new Date(now + 60_000).toISOString(), [weekly]);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readState } from './read.js';
@@ -44,14 +44,14 @@ describe('harness state normalization', () => {
     }
   });
 
-  it('drops an older build\'s high-water limit, and keeps the vendor\'s own reading', async () => {
+  it('ignores the estimate an older build kept on an account, and keeps the vendor\'s own reading', async () => {
     const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
     process.env.CLIKCODE_HOME = root;
     const now = new Date().toISOString();
     const base = { provider: 'openai', authKind: 'vendor-cli', models: [], status: 'ready' };
     await storedIndex(root, {
       accounts: [
-        { ...base, id: 'estimated', label: 'estimated', credentialRef: 'native:e', usageLearning: { highWater: { weekly: 1 }, hits: [] } },
+        { ...base, id: 'estimated', label: 'estimated', credentialRef: 'native:e', usageLearning: { turns: [[Date.now() - 60_000, 100]], hits: [{ at: now, costs: { '5h': 100 } }] } },
         { ...base, id: 'vendor', label: 'vendor', credentialRef: 'native:v',
           usage: { at: now, label: '5h 99% left', windows: [{ name: '5h', usedPct: 1 }] } },
       ],
@@ -59,34 +59,13 @@ describe('harness state normalization', () => {
     try {
       const state = await readState();
       const estimated = state.accounts.find((account) => account.id === 'estimated') as Record<string, unknown> | undefined;
-      // Its refusals stay; the faulty high-water "limit" does not.
-      expect(estimated?.usageLearning).toEqual({ turns: [], hits: [] });
+      expect(estimated).toBeDefined();
+      expect(estimated).not.toHaveProperty('usageLearning');
       expect(state.accounts.find((account) => account.id === 'vendor')?.usage?.label).toBe('5h 99% left');
-    } finally {
-      await rm(root, { recursive: true, force: true });
-    }
-  });
-
-  it('keeps learning two processes recorded on one account, whichever writes last', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'clikcode-state-'));
-    process.env.CLIKCODE_HOME = root;
-    const now = Date.now();
-    await storedIndex(root, {
-      accounts: [{ id: 'a', provider: 'antigravity', label: 'a', authKind: 'vendor-cli', models: [], status: 'ready', credentialRef: 'native:a',
-        usageLearning: { turns: [[now - 60_000, 100]], hits: [] } }],
-    });
-    try {
-      // Two windows read the same account, each records something, each saves.
-      const first = await readState();
-      const second = await readState();
-      const at = new Date(now).toISOString();
-      first.accounts[0]!.usageLearning = { ...first.accounts[0]!.usageLearning!, hits: [{ at, costs: { '5h': 100 } }] };
-      second.accounts[0]!.usageLearning = { ...second.accounts[0]!.usageLearning!, turns: [...second.accounts[0]!.usageLearning!.turns, [now - 30_000, 100]] };
-      await writeState(first);
-      await writeState(second);
-      const learning = (await readState()).accounts[0]!.usageLearning!;
-      expect(learning.hits.map((hit) => hit.at)).toEqual([at]);
-      expect(learning.turns).toHaveLength(2);
+      // And it does not come back on the next write.
+      state.accounts.find((account) => account.id === 'vendor')!.label = 'renamed';
+      await writeState(state);
+      expect(await readFile(join(root, 'index.json'), 'utf8')).not.toContain('usageLearning');
     } finally {
       await rm(root, { recursive: true, force: true });
     }

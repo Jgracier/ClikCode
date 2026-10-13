@@ -212,9 +212,7 @@ export interface IdeAccount {
   /** With 'out-of-usage': when it is back, where something says (accountBackAt). */
   backAt?: string;
   current: boolean;
-  /** `learned`: estimated from the account's own refusals, for a harness
-   *  that reports no usage. */
-  usage?: { label?: string; windows: IdeUsageWindow[]; learned?: boolean };
+  usage?: { label?: string; windows: IdeUsageWindow[] };
   actions: Array<'reauthenticate' | 'disconnect' | 'remove' | 'verified'>;
 }
 

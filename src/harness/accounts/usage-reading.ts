@@ -82,10 +82,9 @@ function usageReadingLabel(windows: readonly UsageWindow[]): string | undefined 
 
 /** An account's usage in one line, wherever it is shown (/usage, the
  * editor's account menu): its windows' figures, else the label of a reading
- * with none (a balance); a learned estimate says it is one. */
-export function accountUsageText(usage: { label?: string; windows: readonly UsageWindow[]; learned?: boolean }): string | undefined {
-  const text = usage.learned ? usage.label ?? usageReadingLabel(usage.windows) : usageReadingLabel(usage.windows) ?? usage.label;
-  return text && usage.learned ? `${text} · estimated` : text;
+ * with none (a balance). */
+export function accountUsageText(usage: { label?: string; windows: readonly UsageWindow[] }): string | undefined {
+  return usageReadingLabel(usage.windows) ?? usage.label;
 }
 
 /** "resets at 8:00PM", derived from the same vendor-reported `resetsAt` the
@@ -130,7 +129,7 @@ export function usageWindowsDetail(windows: readonly UsageWindow[] | undefined, 
 
 /** When an account out of usage can take a turn again: the latest reset of
  * the windows it has spent (5h and weekly both spent is back at the weekly
- * one), or the reset a refusal named -- the vendor's, or learned -- never the
+ * one), or the reset a refusal named by the vendor, never the
  * default hold ClikCode guessed. Undefined when nothing says. */
 export function accountBackAt(account: AiHarnessAccount, now: number = Date.now()): string | undefined {
   const resets = vendorWindows(account)

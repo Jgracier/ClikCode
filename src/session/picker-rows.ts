@@ -14,7 +14,6 @@ import { inspectNativeHarnessForPicker } from '../harness/transport/native/inspe
 import { harnessInstallRoute } from '../harness/transport/native/install-route.js';
 import { authEvidencePresent, hasAuthEvidence, harnessCanLogout } from '../harness/accounts/auth-files.js';
 import { effortChoicesFor } from '../harness/accounts/effort-choices.js';
-import { learnedReading } from '../harness/accounts/learned-usage.js';
 import { accountBackAt, accountQuotaSpent, usageReadingIsCurrent, vendorWindows, type UsageWindow } from '../harness/accounts/usage-reading.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import {
@@ -110,15 +109,12 @@ export const usageWindows = (windows: readonly UsageWindow[]): UsageWindow[] =>
   windows.map((window) => ({ name: window.name, usedPct: window.usedPct, ...(window.resetsAt ? { resetsAt: window.resetsAt } : {}) }));
 
 /** What an account's usage reads without asking the vendor: the windows it
- * last reported while they still hold, else what its refusals have taught
- * (`learned`), else a balance it reported (a label with no window). */
+ * last reported while they still hold, else a balance it reported (a label with no window). */
 export function accountUsage(account: AiHarnessAccount, state: HarnessState, now = Date.now()): IdeAccount['usage'] {
   const windows = vendorWindows(account);
   if (windows.length && usageReadingIsCurrent({ windows }, now)) {
     return { ...(account.usage?.label ? { label: account.usage.label } : {}), windows: usageWindows(windows) };
   }
-  const learned = learnedReading(state, account, now);
-  if (learned) return { ...(learned.label ? { label: learned.label } : {}), windows: usageWindows(learned.windows), learned: true };
   const stored = account.usage;
   if (stored?.label && !stored.failed && !windows.length) return { label: stored.label, windows: [] };
   return undefined;

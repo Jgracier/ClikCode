@@ -17,7 +17,6 @@ import type { HarnessSession, HarnessState } from '../../session/model.js';
 import { NATIVE_USAGE_PROBES } from './usage-probes.js';
 import { AccountUsageReading, USAGE_RECHECK_MS, UsageCacheEntry, UsageReading, nativeUsageCache, settleQuotaMark, usageAskedAt, usageCacheKey, usageReadingIsCurrent, vendorWindows, windowSpent } from './usage-reading.js';
 import { NATIVE_STREAM_USAGE_READINGS, accountUsageFrom } from './stream-usage.js';
-import { learnedReading, learnsUsage, preferLearnedReading } from './learned-usage.js';
 
 /** Probes in flight, by usage cache key. Opening a conversation asks for its
  * usage from more than one place at once (the status line and the account
@@ -54,11 +53,8 @@ export async function nativeUsageReading(
   // probe also made every reading that harness had already given unreadable.
   const reportsOnStream = session.nativeHarness ? NATIVE_STREAM_USAGE_READINGS[session.nativeHarness] !== undefined : false;
   const account = session.accountId ? state.accounts.find((item) => item.id === session.accountId) : undefined;
-  // Nothing to ask and nothing on the stream: what its refusals have taught,
-  // if anything yet.
-  if (!probe && !reportsOnStream) return account ? learnedReading(state, account) : undefined;
-  const shownReading = (reading: UsageReading | undefined): UsageReading | undefined =>
-    account ? preferLearnedReading(state, account, reading) : reading;
+  // Nothing to ask and nothing on the stream: the vendor reports no usage.
+  if (!probe && !reportsOnStream) return undefined;
   const cacheKey = usageCacheKey(session.nativeHarness, account?.id, session.nativeSessionId);
   const cached = nativeUsageCache.get(cacheKey);
   // The account's own record is the shared reading: every terminal sees it, so
@@ -95,17 +91,17 @@ export async function nativeUsageReading(
   // account, and nothing is launched -- a list that must not wait on a vendor.
   if (options.cachedOnly) {
     const known = entry && entry.label !== undefined && (!entry.windows?.length || usageReadingIsCurrent(entry)) ? entry : undefined;
-    return shownReading(known?.label === undefined ? undefined : { windows: known.windows ?? [], label: known.label });
+    return known?.label === undefined ? undefined : { windows: known.windows ?? [], label: known.label };
   }
   if (reusable && !options.network) {
     nativeUsageCache.set(cacheKey, reusable);
-    return shownReading(reusable.label === undefined ? undefined : { windows: reusable.windows ?? [], label: reusable.label });
+    return reusable.label === undefined ? undefined : { windows: reusable.windows ?? [], label: reusable.label };
   }
   // A probe spawns the vendor CLI, and a CLI run while signed out can start a
   // login or onboarding (Kiro's session list did). Only an account that is
   // signed in is asked; anything else keeps what it last had.
   if (!account || account.status !== 'ready') {
-    return shownReading(entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
+    return entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   }
   account.usageCheckedAt = new Date().toISOString();
   // Written before the vendor is asked, not after it answers: a probe that
@@ -147,11 +143,11 @@ export async function nativeUsageReading(
     // anything another terminal changed meanwhile.
     await writeState(state).catch(() => undefined);
     const shown = !reading?.label && carried?.windows?.length ? carried : next;
-    return shownReading({
+    return {
       windows: shown.windows ?? [],
       ...(shown.label === undefined ? {} : { label: shown.label }),
       ...(reading?.plan ? { plan: reading.plan } : {}),
-    });
+    };
   };
   const asking = probe ? probeOnce(cacheKey, () => probe(environment)) : Promise.resolve(undefined);
   const settled = asking.then(settle);
@@ -163,7 +159,7 @@ export async function nativeUsageReading(
   // the last known figure (nothing, if there is none yet). This wait only
   // decides what to paint now: it never cancels the probe.
   settled.catch(() => undefined);
-  const stale = shownReading(entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label });
+  const stale = entry?.label === undefined ? undefined : { windows: entry.windows ?? [], label: entry.label };
   return Promise.race([settled, new Promise<UsageReading | undefined>((resolve) => { setTimeout(() => resolve(stale), USAGE_PAINT_WAIT_MS).unref(); })]);
 }
 
@@ -201,7 +197,6 @@ export async function accountUsageReading(
  * other ClikCode processes. Windows expire at their reset; a balance names
  * no reset, so it stands only as long as any reading does (USAGE_RECHECK_MS). */
 export function cachedAccountUsageLabel(account: AiHarnessAccount, state: HarnessState): string | undefined {
-  if (learnsUsage(account)) return learnedReading(state, account)?.label;
   if (account.authKind !== 'vendor-cli') return undefined;
   const harness = localHarnessForProvider(account.provider);
   if (!harness) return undefined;

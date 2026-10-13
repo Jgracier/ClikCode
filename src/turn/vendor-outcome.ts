@@ -84,7 +84,7 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
   }
   const usage = observer.usage() as TurnUsage | undefined;
   const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage });
-  recordSuccessfulAccountTurn(state, ctx.account, invocation);
+  recordSuccessfulAccountTurn(ctx.account);
   showStopReason(prompter, usage?.stopReason);
   const completedText = await completeTurnCheckpoint(session, ctx.checkpoint, result.text, {
     ...(harness.titleSource === 'vendor'

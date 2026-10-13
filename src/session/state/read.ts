@@ -2,7 +2,6 @@
  * per-session transcripts. */
 
 import { randomUUID } from 'node:crypto';
-import { normalizeLearning } from '../../harness/accounts/usage-learning.js';
 import type { HarnessSession, HarnessState } from '../model.js';
 import { ephemeralSessions } from '../ephemeral.js';
 import { markFromIndex, markTranscriptLoaded, sessionFromIndex, transcriptWasLoaded } from '../list-facts.js';
@@ -71,10 +70,10 @@ function normalizedState(raw: HarnessState): HarnessState {
   // vendor's "resets in" hint, else a default window -- see
   // quotaMarkExpiresAt). The 60-second value older builds wrote is long past,
   // which only means that account is tried again and re-marked if it refuses.
-  // Learning is brought to the current shape.
+  // An estimate older ClikCode kept on the account (`usageLearning`) is dropped.
   const accounts = (Array.isArray(raw.accounts) ? raw.accounts : []).map((account) => {
-    const usageLearning = normalizeLearning(account.usageLearning);
-    return { ...account, ...(usageLearning ? { usageLearning } : {}) };
+    const { usageLearning: _estimate, ...kept } = account as typeof account & { usageLearning?: unknown };
+    return kept;
   });
   const normalized = {
     ...raw, accounts, sessions, invocations: Array.isArray(raw.invocations) ? raw.invocations : [],

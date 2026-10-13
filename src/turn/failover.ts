@@ -216,8 +216,7 @@ export function quotaRetryHint(error: unknown, now: number = Date.now()): string
   if (zonedAt && Date.parse(zonedAt) > now) return zonedAt;
   // "Usage resets over a rolling 24-hour window" (Grok Free) names the
   // window's length, not the instant the oldest spend ages out. Holding the
-  // account for the whole window is the fallback for when nothing recorded
-  // can say sooner. The learned reset replaces it once it can.
+  // account for the whole window is the fallback when nothing else says.
   const rolling = quotaRollingWindowMs(error);
   if (rolling) return new Date(now + rolling).toISOString();
   return clockTimeHint(text, now);
@@ -225,8 +224,7 @@ export function quotaRetryHint(error: unknown, now: number = Date.now()): string
 
 /** A refusal that names a rolling window's length ("rolling 24-hour
  * window"), in milliseconds. That is not a reset instant — see
- * quotaRetryHint, which parks the account for the whole window only until a
- * learned reset exists. */
+ * quotaRetryHint, which parks the account for the whole window as a last resort. */
 export function quotaRollingWindowMs(error: unknown): number | undefined {
   const carried = (error ?? {}) as { stderrTail?: unknown; message?: unknown };
   const text = [carried.stderrTail, carried.message].filter((part): part is string => typeof part === 'string').join('\n');
