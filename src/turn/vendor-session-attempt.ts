@@ -1,7 +1,8 @@
 /** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import chalk from 'chalk';
-import type { AiHarnessAccount, AiHarnessPermissionMode, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
+import type { LiveSettings } from './live-settings.js';
 import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import { cliThreadTransport, type HarnessTurnTransport } from '../harness/transport/select.js';
@@ -19,17 +20,11 @@ import { turnShareOf } from '../harness/protocol/turn-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
 import { closePersistentTransport, openStandby, persistentTransportFor, vendorChildKey } from './vendor-process.js';
-import { loadIndex } from '../session/state/index-file.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import { recordLiveModelCatalog } from '../harness/accounts/model-catalog.js';
 
 /** Per chat, the unapplied options last said (see the app-server branch). */
 const ignoredOptionsSaid = new Map<string, string>();
-
-/** The conversation's permission mode as the user has it now (/permissions writes the index while a turn runs). */
-async function storedPermissionMode(sessionId: string): Promise<AiHarnessPermissionMode | undefined> {
-  return (await loadIndex())?.sessions.find((item) => item.id === sessionId)?.permissionMode;
-}
 
 export async function runVendorSessionAttempt(input: {
   harness: AiLocalHarnessDefinition;
@@ -74,7 +69,7 @@ export async function runVendorSessionAttempt(input: {
     : undefined;
   try {
     if (transport === 'codex-app-server') {
-      const launch = codexLaunchInput({ harness, session, model, effort, environment });
+      const launch = codexLaunchInput({ harness, session, model, effort, environment, live: run.liveSettings });
       // The user's own option going unapplied is theirs to know -- once per
       // chat and set of options, not as a note on every turn.
       const ignored = launch.unmapped.join(', ');
@@ -90,7 +85,7 @@ export async function runVendorSessionAttempt(input: {
       result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
     } else {
       const acpInput: AcpTurnInput = {
-        ...acpLaunchInput({ harness, account, session, model, effort, environment, checkpoint, prompter }),
+        ...acpLaunchInput({ harness, account, session, model, effort, environment, checkpoint, prompter, live: run.liveSettings }),
         prompt: turnText, signal, images, onSessionId,
         ...sharedObserver,
         onSteerReady,
@@ -162,9 +157,9 @@ export async function runVendorSessionAttempt(input: {
 function acpLaunchInput(input: {
   harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string;
   environment: Record<string, string>;
-  checkpoint?: DurableTurnCheckpoint; prompter?: TurnRunOptions['prompter'];
+  checkpoint?: DurableTurnCheckpoint; prompter?: TurnRunOptions['prompter']; live?: LiveSettings;
 }): Omit<AcpTurnInput, 'prompt'> {
-  const { harness, account, session, model, effort, environment, checkpoint, prompter } = input;
+  const { harness, account, session, model, effort, environment, checkpoint, prompter, live } = input;
   const declaredOptions = localHarnessCapabilityManifest(harness).options;
   const launch = harnessAcpLaunch(harness, { model, effort, permissionMode: session.permissionMode ?? 'ask' });
   if (!launch) throw new Error(`${harness.displayName} does not declare an ACP launch`);
@@ -197,7 +192,7 @@ function acpLaunchInput(input: {
     extraArgv: [...launch.optionArgv, ...optionArgv],
     ...(session.nativeSessionId ? { nativeSessionId: session.nativeSessionId } : {}),
     cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask',
-    currentPermissionMode: () => storedPermissionMode(session.id),
+    ...(live ? { currentPermissionMode: async () => live.permissionMode } : {}),
     ...(additionalDirectories.length ? { additionalDirectories } : {}),
     acp: harness.acp,
     // Plan mode as an ACP session mode (catalog acp.planModeId); the
@@ -243,9 +238,9 @@ export function prepareAcpStandby(input: {
  * for a failover's standby alike (see acpLaunchInput). `unmapped`: the
  * chat's own options the app-server has no place for. */
 function codexLaunchInput(input: {
-  harness: AiLocalHarnessDefinition; session: HarnessSession; model: string | null; effort?: string; environment: Record<string, string>;
+  harness: AiLocalHarnessDefinition; session: HarnessSession; model: string | null; effort?: string; environment: Record<string, string>; live?: LiveSettings;
 }): { input: Omit<CodexAppServerTurnInput, 'prompt'>; unmapped: readonly string[] } {
-  const { harness, session, model, effort, environment } = input;
+  const { harness, session, model, effort, environment, live } = input;
   const overrides = appServerThreadOverrides(localHarnessCapabilityManifest(harness).options, session.harnessOptions);
   const configOverrides = { ...(overrides.configOverrides ? overrides.configOverrides : {}) };
   return {
@@ -253,7 +248,7 @@ function codexLaunchInput(input: {
     input: {
       binary: harness.binary, nativeSessionId: session.nativeSessionId,
       cwd: session.workspace!, model, effort, permissionMode: session.permissionMode ?? 'ask', environment,
-      currentPermissionMode: () => storedPermissionMode(session.id),
+      ...(live ? { currentPermissionMode: async () => live.permissionMode } : {}),
       ...(Object.keys(configOverrides).length ? { configOverrides } : {}),
       ...(overrides.extraThreadParams ? { extraThreadParams: overrides.extraThreadParams } : {}),
       // Codex reports its own quota on this connection during the turn,

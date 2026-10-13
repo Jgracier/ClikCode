@@ -155,6 +155,7 @@ export function createTurnRunner(ctx: WorkerContext) {
         persistentTransports: true,
         prompter: observer,
         liveInput,
+        liveSettings: ctx.liveSettings,
         ...(command.queuedTurnId ? { queuedTurnId: command.queuedTurnId } : {}),
       });
     } catch (error) {

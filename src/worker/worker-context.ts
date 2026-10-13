@@ -3,6 +3,7 @@
 import type { Server, Socket } from 'node:net';
 import type Conf from 'conf';
 import type { LiveTurnInputBroker } from '../turn/live-input.js';
+import type { LiveSettings } from '../turn/live-settings.js';
 import type { sessionState } from '../agent/session-state.js';
 import type { BroadcastObserver } from './broadcast-observer.js';
 import type { FrameDecoder } from './protocol.js';
@@ -58,6 +59,8 @@ export interface WorkerContext {
    * turn ends. A `cancel` with nothing running is simply a no-op. */
   activeController: AbortController | undefined;
   activeLiveInput: LiveTurnInputBroker | undefined;
+  /** The settings the running turn reads; `settings-changed` writes them. */
+  readonly liveSettings: LiveSettings;
   /** Messages typed during the running turn that the worker is still placing
    * (steered, or queued durably) and answering. The turn is not over for the
    * windows until each has been. */

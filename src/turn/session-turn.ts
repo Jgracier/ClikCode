@@ -11,6 +11,7 @@ import { prepareAttachments } from '../session/attachments.js';
 import { shellContextBlock } from '../commands/ai/shell-run.js';
 import { releaseHeldLocalModel } from '../commands/ai/local-model.js';
 import type { LiveTurnInputBroker } from './live-input.js';
+import { LiveSettings } from './live-settings.js';
 import type { TurnObserver } from './observer.js';
 import { turnBackendForAccount } from './account-routing.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
@@ -27,6 +28,8 @@ import { randomUUID } from 'node:crypto';
 /** Options supplied by any caller of a turn. */
 export interface TurnRunOptions {
   liveInput?: LiveTurnInputBroker;
+  /** What the user changes mid-turn, held by the worker (turn/live-settings.ts). Seeded here. */
+  liveSettings?: LiveSettings;
   queuedTurnId?: string;
   /** A worker keeps ONE app-server / ACP child per open session and closes
    * it itself; a turn run anywhere else stays one-shot. */
@@ -63,7 +66,10 @@ export async function runSessionTurn(
   // route that turn ran on (session/turn-changes.ts).
   const agent = isClikCodeAgent(session);
   const recorder = new TurnRecorder(prompt.trim(), agent ? 'agent' : 'reported');
-  const recorded = { ...run, recorder };
+  // Seeded from the conversation as it is stored now; from here the turn reads this, never the state file.
+  const liveSettings = run.liveSettings ?? new LiveSettings(session);
+  liveSettings.seed(session);
+  const recorded = { ...run, recorder, liveSettings };
   try {
     if (agent) {
       const handed = await runAgentTurn({ config, state, session, prompt, signal, run: recorded });

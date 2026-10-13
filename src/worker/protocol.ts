@@ -15,6 +15,7 @@ import type { HarnessSession, TurnActivity, TurnMark } from '../session/model.js
 import type { PlanEntry } from '../tui/render/plan-block.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
+import type { LiveSettingsFields } from '../turn/live-settings.js';
 
 /** What a client may ask the worker to do. `submit`/`steer`/`cancel` mirror
  * the same three actions a terminal already offers a running turn; `attach`
@@ -51,6 +52,11 @@ export type ClientCommand =
    * worker re-reads state and sends every window a snapshot, so the others
    * stop showing the old one. Sent when `shownSettingsKey` changes. */
   | { type: 'refresh' }
+  /** The user changed model, effort, speed, permission mode or route while a
+   * turn may be running. The window has already persisted them; the worker
+   * holds them for the running turn, which reads them there and not from the
+   * state file. */
+  | { type: 'settings-changed'; settings: LiveSettingsFields }
   /** Get ready for the conversation's route: on an agent route (the Gateway,
    * ClikCode Local) start its MCP servers and, for the Gateway, open the
    * connection and fetch its model list; on any other route stop them. */

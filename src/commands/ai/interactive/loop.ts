@@ -16,8 +16,9 @@ import { claimConversation, leaveConversation } from '../../../session/attach.js
 import { newConversation } from '../conversations.js';
 import { dispatchLine } from '../../../tui/slash/dispatch.js';
 import { stopWaitingForReset, type ExhaustionRetryGuard } from '../../../tui/pickers/resume-in.js';
-import { followWorkerTurn, prepareSessionWorker, questionOrWorker, refreshSessionWorker, releaseSessionWorker, workerQueueMark, workerTurn } from '../../../worker/turn-bridge.js';
+import { followWorkerTurn, prepareSessionWorker, pushSessionSettings, questionOrWorker, refreshSessionWorker, releaseSessionWorker, workerQueueMark, workerTurn } from '../../../worker/turn-bridge.js';
 import { shownSettingsKey } from '../../../worker/protocol.js';
+import { liveSettingsOf } from '../../../turn/live-settings.js';
 import { BOARD_LINE, DELETED_ELSEWHERE, joinedTurn } from './board.js';
 import { turnFailureEffect } from './turn-failure.js';
 import { runTimedTurn } from './run-turn.js';
@@ -50,6 +51,7 @@ export class ChatLoop {
    * between two reads (a /account, /model, sign-in) is sent to the worker so
    * every other window attached to it re-renders. */
   private shownSettings: string | undefined;
+  private shownLiveSettings: string | undefined;
   /** A notice for the next frame, from whatever the last pass did. */
   private notice: string | undefined;
   /** What this pass's turn actually sent, when a slash command expanded
@@ -179,6 +181,10 @@ export class ChatLoop {
     const settingsKey = shownSettingsKey(latest);
     if (this.shownSettings?.startsWith(`${latest.id}|`) && this.shownSettings !== settingsKey) refreshSessionWorker(latest.id);
     this.shownSettings = settingsKey;
+    // What a running turn reads (permission mode, speed too): pushed to its worker when it changed.
+    const liveKey = `${latest.id}|${JSON.stringify(liveSettingsOf(latest))}`;
+    if (this.shownLiveSettings?.startsWith(`${latest.id}|`) && this.shownLiveSettings !== liveKey) pushSessionSettings(latest);
+    this.shownLiveSettings = liveKey;
     const account = latest.accountId ? latestState.accounts.find((item) => item.id === latest.accountId)?.label : undefined;
     this.w.ref.paletteState = latestState;
     // A turn parked for the quota reset: Esc on an empty composer stops it.

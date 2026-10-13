@@ -22,7 +22,6 @@ import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/pr
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { loadIndex } from '../session/state/index-file.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
 import type { HarnessSession } from '../session/model.js';
@@ -42,6 +41,8 @@ interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
   /** Whatever supplies the model step: the Gateway or ClikCode Local, as
    * modelClientForSession (agent/models/for-session.ts) chose for the route. */
   modelClient: ModelClient;
+  /** The mode as the user has it now: the worker's live settings. */
+  currentPermissionMode?: () => Promise<AiHarnessPermissionMode | undefined>;
   modelClientForStep?: () => Promise<ModelClient | 'switch' | undefined>;
 }
 
@@ -113,10 +114,9 @@ export async function runGatewayHarnessSessionTurn(
     planMode: session.planMode === true,
     ...(input.onPlanModeExit ? { onPlanModeExit: input.onPlanModeExit } : {}),
     ...(input.onPlanModeEnter ? { onPlanModeEnter: input.onPlanModeEnter } : {}),
-    // /permissions writes the index from the user's terminal while this turn
-    // runs in the worker: read the mode back before each tool call so a switch
-    // (ask -> bypass) applies to the rest of this turn.
-    currentPermissionMode: async () => (await loadIndex())?.sessions.find((item) => item.id === session.id)?.permissionMode,
+    // A switch (ask -> bypass) while the turn runs applies to its next tool call: the
+    // caller's live settings, pushed by the worker (turn/live-settings.ts).
+    ...(input.currentPermissionMode ? { currentPermissionMode: input.currentPermissionMode } : {}),
     ...(sessionSandboxMode(session.sandbox) === 'workspace' ? { sandbox: 'workspace' as const } : {}),
     modelClient,
     ...(input.modelClientForStep ? { modelClientForStep: input.modelClientForStep } : {}),
