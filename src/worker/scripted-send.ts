@@ -16,9 +16,8 @@ import { WorkerClient } from './client.js';
 import { takeConversation } from './registry.js';
 import type { WorkerEvent } from './protocol.js';
 import { runSessionTurn } from '../turn/session-turn.js';
-import { consumeSessionTurn, enqueueSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
-import { randomUUID } from 'node:crypto';
-import { disposeSessionState, formatShellNotifications } from '../agent/session-state.js';
+import { consumeSessionTurn, sessionTranscriptMessages } from '../turn/checkpoint.js';
+import { disposeSessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { textTranscript } from '../turn/turn-activities.js';
 import { readState } from '../session/state/read.js';
@@ -50,9 +49,8 @@ export async function sendScriptedTurn(config: Conf, sessionId: string, prompt: 
       try {
         return await runSessionTurn(config, sessionId, text, signal);
       } finally {
-        // No worker will own what the turn left running: stop it, and queue
-        // what the model is owed for whoever opens the conversation next.
-        await settleInProcessWork(sessionId).catch(() => undefined);
+        // No worker will own what the turn left running: stop it.
+        settleInProcessWork(sessionId);
         await taken.hold.release();
       }
     }
@@ -131,12 +129,6 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
         case 'activity':
           if (ours && !isJsonDefaultMode()) for (const line of renderActivityLine(event.event)) output.write(`${line}\n`);
           return;
-        case 'note':
-          // A note says something is missing from the turn (an MCP server that
-          // would not start): JSON output keeps stdout to the result, so it
-          // goes to stderr rather than nowhere.
-          if (ours) (isJsonDefaultMode() ? process.stderr : output).write(`${event.message}\n`);
-          return;
         case 'turn-error':
           if (ours) failure = new Error(event.message);
           return;
@@ -194,15 +186,7 @@ function turnThroughWorker(client: WorkerClient, sessionId: string, text: string
 
 /** After a turn run here (no worker could start): background shells it
  * started are stopped -- they are detached, and would otherwise outlive this
- * process with nobody to report them -- and each, with any notification not
- * yet delivered, is queued as a turn for the next worker. */
-async function settleInProcessWork(sessionId: string): Promise<void> {
-  const undelivered = disposeSessionState(stateDirectory(), sessionId, 'the command that started it ended and no ClikCode worker could keep it');
-  if (!undelivered.length) return;
-  const state = await readState({ transcripts: [sessionId] });
-  const found = state.sessions.find((item) => item.id === sessionId);
-  if (!found) return;
-  const submittedAt = new Date().toISOString();
-  enqueueSessionTurn(found, { id: randomUUID(), text: formatShellNotifications(undelivered), submittedAt, kind: 'notification' }, submittedAt);
-  await writeState(state);
+ * process with nobody to report them. Nothing is queued about it. */
+function settleInProcessWork(sessionId: string): void {
+  disposeSessionState(stateDirectory(), sessionId, 'the command that started it ended and no ClikCode worker could keep it');
 }

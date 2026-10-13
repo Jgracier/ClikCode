@@ -351,7 +351,7 @@ describe('a session worker waits for what it should', () => {
     await processExit(pid, 10_000);
   }, 30_000);
 
-  it('records a shell it stops on shutdown as a queued notification for the next worker', async () => {
+  it('stops a shell on shutdown and leaves no queued turn behind: killing ClikCode says nothing to the model', async () => {
     const session = await gatewaySession();
     const client = await attach(session.id);
     const pid = workerPids[0]!;
@@ -362,8 +362,27 @@ describe('a session worker waits for what it should', () => {
     await firstTurn;
     process.kill(pid, 'SIGTERM');
     await processExit(pid);
-    const queued = (await storedSession(session.id)).queuedTurns ?? [];
-    expect(queued).toEqual([expect.objectContaining({ kind: 'notification', text: expect.stringMatching(/^\[background shell bash_1 was stopped: ClikCode's worker for this conversation stopped \(SIGTERM\)\] sleep 300/) })]);
+    expect((await storedSession(session.id)).queuedTurns ?? []).toEqual([]);
+  }, 60_000);
+
+  it('drops a notification an older worker queued, without running a turn or drawing anything', async () => {
+    const session = await gatewaySession();
+    const state = await readState();
+    state.sessions.find((item) => item.id === session.id)!.queuedTurns = [{
+      id: randomUUID(), kind: 'notification', submittedAt: '2020-01-01T00:00:00.000Z',
+      text: '[background shell bash_9 was stopped: ClikCode\'s worker for this conversation stopped (SIGTERM)] sleep 300\n(no unread output)',
+    }];
+    await writeState(state);
+    const client = await attach(session.id);
+    const seen: string[] = [];
+    client.on('event', (event: { type: string }) => seen.push(event.type));
+    const deadline = Date.now() + 10_000;
+    while ((await storedSession(session.id)).queuedTurns?.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await storedSession(session.id)).queuedTurns ?? []).toEqual([]);
+    // No turn started for it, and no note or error was said.
+    expect(seen).not.toContain('waiting-start');
+    expect(seen).not.toContain('note');
+    expect(seen).not.toContain('turn-error');
   }, 60_000);
 
   it('queues a submit that arrives while a turn runs instead of starting a second turn', async () => {
@@ -604,7 +623,7 @@ describe('a message sent while another window\'s turn runs', () => {
     expect(queueChanges).toBe(1);
     expect(await workerTurn(session.id)).toEqual({ prompt: 'the other window asks' });
     held.respond(text('the other answer'));
-    expect(await sent).toEqual({ notice: 'Queued behind the turn already running' });
+    expect(await sent).toEqual({});
     expect(rl.calls).toContain('submitted("the other window asks")');
     expect(rl.calls.filter((entry) => entry.startsWith('response(')).join('')).toContain('the other answer');
     expect(await workerTurn(session.id)).toBeUndefined();
