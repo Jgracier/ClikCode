@@ -30,13 +30,13 @@ export function queuedMessagesOf(p: TerminalHarnessPrompter, session: HarnessSes
   const unsteeredIds = new Set(p.waitingSubmissions.flatMap((item) => (item.unsteered && item.id ? [item.id] : [])));
   const queuedMessages: Array<{ role: 'user'; content: string; queueState: string; unsteered?: boolean; user: boolean }> = [
     // A queued COMMAND is not a message and gets no row: it runs when the
-    // turn ends and shows whatever it shows then. A notice does get a row,
-    // and it is not the user's: Enter and Esc leave it.
-    ...storedQueued.filter((item) => item.kind !== 'command')
+    // turn ends and shows whatever it shows then. Nor does a notice
+    // ClikCode owes the model: it is not the user's to see.
+    ...storedQueued.filter((item) => item.kind !== 'command' && item.kind !== 'notification')
       // Held by the running turn to steer in once no tool call is open
       // (acp-client.ts): it is on its way into this turn, not the next.
       .map((item) => ({
-        role: 'user' as const, content: item.text, user: item.kind !== 'notification', ...(unsteeredIds.has(item.id) ? { unsteered: true } : {}),
+        role: 'user' as const, content: item.text, user: true, ...(unsteeredIds.has(item.id) ? { unsteered: true } : {}),
         queueState: p.turn && item.heldForTurn && item.heldForTurn === pending?.startedAt ? 'pause' as const : 'queued' as const,
       })),
     ...p.waitingSubmissions.filter((item) => item.state !== 'steered' && !storedCopy(item)

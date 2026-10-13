@@ -178,7 +178,7 @@ export function takenBackText(takingBack: Map<string, string>, event: Extract<Wo
  * could not take one, nor once Stop was asked for. */
 export function enterAgainReady(model: Pick<ChatModel, 'queued' | 'running' | 'submissions' | 'live'>): boolean {
   if (!model.running || model.live?.stopping) return false;
-  return enterAgainSends(model.queued.filter((item) => !item.notification && !item.command).map((item) => ({
+  return enterAgainSends(model.queued.filter((item) => !item.command).map((item) => ({
     ...(item.held ? { held: true } : {}),
     ...(model.submissions.some((entry) => entry.id === item.id && entry.unsteered) ? { unsteered: true } : {}),
   })));

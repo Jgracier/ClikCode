@@ -230,19 +230,18 @@ describe('esc / edit: taking a waiting message back', () => {
 
 describe('enter again: send into the chat', () => {
   const message = { id: 'a', text: 'first', command: false };
-  const notice = { id: 'n', text: 'done', command: false, notification: true };
   const command = { id: 'c', text: '/model opus', command: true };
   const ready = (queued: ChatModel['queued'], patch: Partial<Pick<ChatModel, 'running' | 'submissions' | 'live'>> = {}): boolean =>
     enterAgainReady({ queued, running: true, submissions: [], ...patch });
 
   it('is ready when a message of the user\'s is waiting', () => {
-    expect(ready([notice, message])).toBe(true);
+    expect(ready([message])).toBe(true);
   });
 
-  it('never with nothing running, nothing waiting, or only a notice or a command waiting', () => {
+  it('never with nothing running, nothing waiting, or only a command waiting', () => {
     expect(ready([message], { running: false })).toBe(false);
     expect(ready([])).toBe(false);
-    expect(ready([notice, command])).toBe(false);
+    expect(ready([command])).toBe(false);
   });
 
   // The terminal's rule (enterAgainSends): no hint and no button for what

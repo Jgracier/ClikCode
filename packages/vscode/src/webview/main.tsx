@@ -239,7 +239,7 @@ function App(): JSX.Element {
   approvalRef.current = model?.approvals[0]?.id;
   /** The newest message of the user's still waiting -- what Esc takes back. */
   const waitingRef = useRef<{ id: string }>();
-  waitingRef.current = model?.queued.filter((item) => !item.notification && !item.command).at(-1);
+  waitingRef.current = model?.queued.filter((item) => !item.command).at(-1);
   /** Text or a tool row. A thought is not an answer, so Esc brings the prompt back. */
   const answeredRef = useRef(false);
   answeredRef.current = Boolean(model && turnHasAnswer(model));

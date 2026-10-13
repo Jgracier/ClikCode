@@ -12,8 +12,7 @@ import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from '../../render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../../../harness/protocol/tool-category-style.js';
 import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
-import { messageRows as cachedMessageRows, noticeRows as clikCodeNoticeRows } from '../../render/message-blocks.js';
-import { isClikCodeNotice } from '../../../session/clikcode-notice.js';
+import { messageRows as cachedMessageRows } from '../../render/message-blocks.js';
 import { callRow, underCallRow } from '../../render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from '../../render/turn-mark-rows.js';
 import { runningChatLine } from '../../render/waiting.js';
@@ -42,10 +41,8 @@ export function createRowBuilders(p: TerminalHarnessPrompter, conversationInner:
       : callRow(line, conversationInner, category ? TOOL_CATEGORY_STYLE[category].paint : undefined)))]
     : []);
   const messageRows = (content: string, marker: string): readonly string[] => cachedMessageRows(content, marker, conversationInner);
-  /** A user-side message: what the user wrote, or a notice ClikCode sent
-   * the model in their place (session/clikcode-notice.ts). */
-  const userRows = (content: string): readonly string[] => (isClikCodeNotice(content)
-    ? clikCodeNoticeRows(content, conversationInner) : messageRows(content, userMarker));
+  /** A user-side message: what the user wrote. */
+  const userRows = (content: string): readonly string[] => messageRows(content, userMarker);
   /** Activity that belongs between two messages rather than inside a turn.
    * Retired once, by identity rather than by text -- two rows that say the
    * same thing are still two rows -- and an entry that arrives after its

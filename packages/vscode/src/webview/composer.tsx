@@ -285,7 +285,7 @@ export function Composer(props: {
   // Enter on an empty box puts the oldest waiting message into the chat.
   // The hint goes on that message, and only while Enter would do it.
   const enterAgain = enterAgainReady(model) && !text.trim() && !attachments.length;
-  const firstWaiting = model.queued.findIndex((item) => !item.notification && !item.command);
+  const firstWaiting = model.queued.findIndex((item) => !item.command);
   const placeholder = !connected ? 'ClikCode is not connected'
     : model.running ? (model.chatSettings?.send === 'queue' ? 'Queue a message for after this turn…' : 'Steer the running turn…')
       : `Ask ${providerDisplayName(model, knownProviders()) ?? 'ClikCode'} anything`;

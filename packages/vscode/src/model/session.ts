@@ -63,8 +63,9 @@ export function applySession(model: ChatModel, session: HarnessSession, account?
     workspace: session.workspace,
     messages: sameMessages(model.messages, session.messages ?? []) ? model.messages : (session.messages ?? []).map(({ role, content }) => ({ role, content })),
     traces: withSavedTraces(model.traces, session.messages ?? []),
-    queued: (session.queuedTurns ?? []).map((item) => ({
-      id: item.id, text: item.text, command: item.kind === 'command', ...(item.kind === 'notification' ? { notification: true } : {}),
+    // What ClikCode owes the model (a finished background shell) is not the user's to see.
+    queued: (session.queuedTurns ?? []).filter((item) => item.kind !== 'notification').map((item) => ({
+      id: item.id, text: item.text, command: item.kind === 'command',
       // The running turn is holding it to send in once no tool call is open
       // (acp-client.ts); queued only in case that moment never comes.
       ...(item.heldForTurn && item.heldForTurn === pending?.startedAt ? { held: true } : {}),
