@@ -951,7 +951,15 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (live.steering) input.onSteerReady?.(undefined);
     this.releaseSteers(turn);
     await turn.flushing;
-    if (completed.stopReason === 'cancelled') throw turnCancelledError();
+    if (completed.stopReason === 'cancelled') {
+      // Nothing here asked for it and nothing was said or done first: the agent
+      // gave up the prompt by itself (Junie does, signed out and in a sandbox
+      // that cannot read its keyring), which must not read as a quiet stop.
+      if (!live.cancelled && !turn.sawActivity && !turn.text.trim()) {
+        throw new Error(`${input.command} ended the turn as cancelled before saying anything, which it does when its sign-in is not usable; check \`clikcode accounts status\``);
+      }
+      throw turnCancelledError();
+    }
     // `end_turn`, or the reason the agent stopped short (max_tokens,
     // max_turn_requests, refusal), beside whatever usage it counted.
     // Gemini's ACP answers with `_meta.quota.token_count` {input_tokens,
