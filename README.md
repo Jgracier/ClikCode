@@ -467,7 +467,7 @@ streams at full speed.
 | Variable | Effect |
 | --- | --- |
 | `CLIKCODE_HOME` | State directory instead of `~/.clikcode` |
-| `CLIKCODE_TURN_IDLE_TIMEOUT_MS` | How long a vendor CLI may stay completely silent before the turn is treated as wedged and stopped. Default `600000` (10 minutes). It is an idle timeout, not a cap on turn length |
+| `CLIKCODE_TURN_IDLE_TIMEOUT_MS` | Off when unset. A positive number is how long a vendor may stay completely silent before the turn is stopped. Zero leaves it off. It is an idle timeout, not a cap on turn length |
 | `CLIKCODE_REDUCED_MOTION` | Any value other than empty, `0` or `false` holds the spinner on one frame and slows repainting. The turn still streams |
 | `NO_MOTION` | Same as `CLIKCODE_REDUCED_MOTION`, used when that is unset |
 | `CLIKCODE_SCREEN_READER` | Any value other than empty, `0` or `false` switches to the append-only, line-oriented renderer so output is announced once, in order |

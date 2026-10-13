@@ -1,9 +1,8 @@
 /** Defects from live conformance: a vendor's "queued" notice is never stored
- * as the answer, a repeated retry category ends the turn classified, a dead
- * child's startup banner is not its failure, and a wait for the user shows. */
+ * as the answer, a repeated retry stays the harness's own, a dead child's
+ * startup banner is not its failure, and a wait for the user shows. */
 import { describe, expect, it } from 'vitest';
 import { acpFailureMessage, createAcpSession, vendorBusyNotice } from './acp-client.js';
-import { classifyAccountFailure } from '../../turn/failover.js';
 
 function agent(body: string): string {
   return `
@@ -41,17 +40,16 @@ describe('vendor busy notices', () => {
 });
 
 describe('a retry category repeated with no progress', () => {
-  it('ends the turn as rate limited after five in a row, with the phase shown each time', async () => {
+  it('keeps waiting through repeated retries and lets the agent finish', async () => {
     const phases: string[] = [];
     const session = createAcpSession({ idleMs: 5000 });
     try {
       const retry = `send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: 'HTTP 429' } });`;
-      const failure = await session.runTurn(input(retry.repeat(6), { onPhase: (p: string) => phases.push(p) })).catch((e: Error) => e) as Error & { errorKind?: string; statusCode?: number };
-      expect(phases.filter((p) => /attempt/.test(p))).toHaveLength(5);
+      const result = await session.runTurn(input(`${retry.repeat(6)} note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } }); send({ id, result: { stopReason: 'end_turn' } });`, { onPhase: (p: string) => phases.push(p) }));
+      expect(phases.filter((p) => /attempt/.test(p))).toHaveLength(6);
       expect(phases[0]).toMatch(/rate limited: HTTP 429\), attempt 1/);
-      expect(failure.errorKind).toBe('rate_limited');
-      expect(failure.statusCode).toBe(429);
-      expect(classifyAccountFailure(failure)).toBe('temporarily-throttled');
+      expect(phases[5]).toMatch(/attempt 6/);
+      expect(result.text).toBe('done');
     } finally { await session.close(); }
   });
 

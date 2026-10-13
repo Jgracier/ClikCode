@@ -2,12 +2,10 @@
  * for every vendor that reports it.
  *
  * A backgrounded command's tool call COMPLETES at once -- the tool only
- * launched it -- so the idle watchdog sees no running tool and gives the
- * process the ordinary silence budget while the vendor sits waiting for the
- * work. Verified live: cursor-agent 2026.09 holds `-p` open until its own
- * background shell ends, then emits `task_notification` and a follow-up in
- * the same `result`; twenty seconds of silence in between. A build that ran
- * longer than the ordinary budget was stopped as a hang.
+ * launched it. The vendor then sits quiet until that work ends. Verified
+ * live: cursor-agent 2026.09 holds `-p` open until its own background shell
+ * ends, then emits `task_notification` and a follow-up in the same `result`.
+ * ClikCode does not stop it for that silence.
  *
  * Shapes (captured, see fixtures/):
  *  - Claude Code: `{type:"system", subtype:"task_started", task_id,

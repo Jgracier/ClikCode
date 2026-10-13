@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
-import { createTurnWatchdog } from './turn-watchdog.js';
+import { configuredIdleMs, createTurnWatchdog } from './turn-watchdog.js';
 
 describe('the turn watchdog', () => {
   it('does not fail a turn whose vendor spoke while this process was not running', async () => {
@@ -21,6 +21,24 @@ describe('the turn watchdog', () => {
       watchdog.stop();
     } finally {
       echo.kill();
+    }
+  });
+
+  it('stays off unless a silence budget is configured', async () => {
+    expect(configuredIdleMs({})).toBe(0);
+    expect(configuredIdleMs({ CLIKCODE_TURN_IDLE_TIMEOUT_MS: '' })).toBe(0);
+    expect(configuredIdleMs({ CLIKCODE_TURN_IDLE_TIMEOUT_MS: '600000' })).toBe(600_000);
+    const previous = process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS;
+    delete process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS;
+    try {
+      let fired = 0;
+      const watchdog = createTurnWatchdog({ onIdle: () => { fired += 1; } });
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(fired).toBe(0);
+      watchdog.stop();
+    } finally {
+      if (previous === undefined) delete process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS;
+      else process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS = previous;
     }
   });
 
