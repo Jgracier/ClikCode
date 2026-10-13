@@ -157,7 +157,7 @@ describe('a stdio server', () => {
     expect(notes).toEqual([]);
     expect(tools.map((tool) => tool.name)).toEqual([
       'mcp__fake__echo', 'mcp__fake__fail', 'mcp__fake__explode', 'mcp__fake__crash',
-      'mcp__fake__slow', 'mcp__fake__picture', 'mcp__fake__structured', expect.stringMatching(/^mcp__fake__weird_name_with_spaces_[0-9a-f]{8}$/),
+      'mcp__fake__slow', 'mcp__fake__picture', 'mcp__fake__structured', 'mcp__fake__grow', expect.stringMatching(/^mcp__fake__weird_name_with_spaces_[0-9a-f]{8}$/),
     ]);
     expect(find(tools, 'mcp__fake__echo').class).toBe('read');
     expect(find(tools, 'mcp__fake__picture').class).toBe('exec');
@@ -207,6 +207,18 @@ describe('a stdio server', () => {
     expect(again.notes).toEqual([]);
     expect(Number(await readFile(pidFile, 'utf8'))).not.toBe(first);
     expect((await find(again.tools, 'mcp__fake__echo').run({ text: 'back' }, ctx())).output).toMatch(/^echo: back/);
+  });
+
+  it('offers a tool the server added and announced with tools/list_changed on the next turn, without restarting it', async () => {
+    const pidFile = join(dir, 'pid');
+    const mcp = manager([fake('fake', { FAKE_MCP_PID_FILE: pidFile })]);
+    const { tools } = await mcp.toolset();
+    const pid = Number(await readFile(pidFile, 'utf8'));
+    expect(tools.some((tool) => tool.name === 'mcp__fake__extra')).toBe(false);
+    await find(tools, 'mcp__fake__grow').run({}, ctx());
+    const again = await mcp.toolset();
+    expect(again.tools.some((tool) => tool.name === 'mcp__fake__extra')).toBe(true);
+    expect(Number(await readFile(pidFile, 'utf8'))).toBe(pid);
   });
 
   it('reconnects on a call when the server died after its tools were listed', async () => {
