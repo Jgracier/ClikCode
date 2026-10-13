@@ -388,7 +388,7 @@ async function driveWorkerTurn(
       let settled = false;
       // A caught turn failure is not, on its own, the end of the sequence:
       // the worker still sends a final render() and then waiting-stop after
-      // it (see session-worker.ts's runTurn `finally`), and tearing this
+      // it (see worker-turn.ts's runTurn `finally`), and tearing this
       // listener down the instant turn-error arrived meant that render
       // never reached here -- confirmed by a real test that failed on
       // exactly this ordering the first time this shipped, the same class

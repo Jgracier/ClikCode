@@ -26,7 +26,7 @@ import { describe, expect, it } from 'vitest';
  */
 describe('streamed answers go through the title filter', () => {
   const turnSources = async (): Promise<string> => (await Promise.all(
-    ['turn-output.ts', 'vendor-turn.ts', 'vendor-cli-attempt.ts', 'vendor-session-attempt.ts', 'direct-turn.ts', 'agent-turn.ts']
+    ['turn-output.ts', 'vendor-turn.ts', 'vendor-observer.ts', 'vendor-thread-takeup.ts', 'vendor-recovery.ts', 'vendor-outcome.ts', 'vendor-cli-attempt.ts', 'vendor-session-attempt.ts', 'direct-turn.ts', 'agent-turn.ts']
       .map((file) => readFile(new URL(file, import.meta.url), 'utf8')),
   )).join('\n');
 

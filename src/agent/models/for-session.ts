@@ -38,7 +38,7 @@ export function gatewayConnection(config: Conf): { baseUrl: string; apiKey: stri
 }
 
 /** The Gateway's own error codes (its OpenAI-compatible API) as the codes
- * the agent loop acts on (run-turn.ts stepRecovery) or the gateway route
+ * the agent loop acts on (turn-recovery.ts stepRecovery) or the gateway route
  * checks (gateway/harness.ts). */
 const GATEWAY_ERROR_CODES: Readonly<Record<string, string>> = {
   rate_limit_exceeded: 'MODEL_RATE_LIMITED',

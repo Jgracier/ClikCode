@@ -13,7 +13,7 @@
  */
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { McpServerSpec } from '../agent/mcp/config.js';
-import { runGatewayHarnessTurn } from '../agent/run-turn.js';
+import { runAgentLoop } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
 import { hooksForWorkspace, toolHooksFrom } from '../agent/hooks.js';
 import type { GatewayHarnessTurnResult, ModelClient, TokenUsage, UsageReport } from '../agent/model-client.js';
@@ -110,7 +110,7 @@ export async function runGatewayHarnessSessionTurn(
     input.onActivity?.(classified as never);
     prompter?.activityEvent(classified as never);
   };
-  return runGatewayHarnessTurn({
+  return runAgentLoop({
     sessionId: session.id,
     cwd: workspace,
     ...(input.agentInstructions ? { agentInstructions: input.agentInstructions } : {}),

@@ -45,7 +45,7 @@ export interface OpenAIModelClientOptions {
   /** A hosted service rather than a server on this machine (context-profile.ts). */
   hosted?: boolean;
   /** The server's own error codes, as the codes the agent loop acts on
-   * (run-turn.ts stepRecovery), e.g. `{ rate_limit_exceeded: 'MODEL_RATE_LIMITED' }`.
+   * (turn-recovery.ts stepRecovery), e.g. `{ rate_limit_exceeded: 'MODEL_RATE_LIMITED' }`.
    * An unmapped code is kept in the message only. */
   errorCodes?: Readonly<Record<string, string>>;
   /** Added to an out-of-credit refusal (HTTP 402): how to add credit. */
@@ -508,7 +508,7 @@ export class OpenAIModelClient implements ModelClient {
     }
     const kind = status === 401 || status === 403 ? 'auth' : status === 402 || status === 429 ? 'quota' : 'other';
     // Only a code the loop acts on is passed through: any other code would
-    // stop it retrying a 5xx (stepRecovery treats an unknown code as final).
+    // stop it retrying a 5xx (stepRecovery (turn-recovery.ts) treats an unknown code as final).
     // The server's own code is still in the message.
     if (code && !message.includes(code)) message = `${message} (${code})`;
     if (status === 402 && this.options.creditHint) message = `${message} ${this.options.creditHint}`;

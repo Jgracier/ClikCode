@@ -7,7 +7,7 @@ import { ConversationStore } from './conversation.js';
 import { sniffImage } from './images.js';
 import { gatewayModelClient } from './models/for-session.js';
 import type { ConversationItem, ModelClient, ModelStepRequest } from './model-client.js';
-import { runGatewayHarnessTurn } from './run-turn.js';
+import { runAgentLoop } from './run-turn.js';
 import { ScriptedModelClient } from './testing.js';
 
 let root: string;
@@ -32,7 +32,7 @@ function client(acceptsImages: boolean): ScriptedModelClient & ModelClient {
 }
 
 async function turn(modelClient: ModelClient, sessionId = `s${++counter}`): Promise<string> {
-  await runGatewayHarnessTurn({
+  await runAgentLoop({
     sessionId, cwd, stateDir, homeDir: root, userConfigDir: path.join(root, 'config'), prompt: 'look',
     images: [path.join(cwd, 'shot.png'), path.join(cwd, 'missing.png')], permissionMode: 'bypass', modelClient,
   });
@@ -101,7 +101,7 @@ describe('image input', () => {
         return { ...result, toolCalls: result.toolCalls.map((call) => ({ ...call, argumentsError: 'Unexpected end of JSON input' })) };
       },
     };
-    await runGatewayHarnessTurn({
+    await runAgentLoop({
       sessionId: `s${++counter}`, cwd, stateDir, homeDir: root, userConfigDir: path.join(root, 'config'), prompt: 'go', permissionMode: 'bypass', modelClient: wrapped,
     });
     const result = model.requests[1].items.find((item) => item.type === 'tool_result');
@@ -117,7 +117,7 @@ describe('read_file shows images', () => {
   async function readPixel(acceptsImages: boolean, file = 'pixel.png'): Promise<{ model: ScriptedModelClient; sessionId: string }> {
     const model = Object.assign(new ScriptedModelClient([{ toolCalls: [{ id: 'r1', name: 'read_file', args: { path: file } }] }, { text: 'a dot' }]), { acceptsImages });
     const sessionId = `s${++counter}`;
-    await runGatewayHarnessTurn({
+    await runAgentLoop({
       sessionId, cwd, stateDir, homeDir: root, userConfigDir: path.join(root, 'config'), prompt: 'what is in it?', permissionMode: 'bypass', modelClient: model,
     });
     return { model, sessionId };
