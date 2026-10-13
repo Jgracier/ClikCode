@@ -37,7 +37,10 @@ function list(rows: unknown[], row: (item: Record<string, unknown>) => string): 
   return rows.length ? rows.map((item) => row(item as Record<string, unknown>)).join('\n') : '(none)';
 }
 
-export function formatOutput(payload: Record<string, unknown>): Shown {
+/** `formatted` is what the bridge says the terminal shows for the payload
+ * (its title and body), so a panel reads as it does there; the rendering below
+ * is for a bridge that does not send it. */
+export function formatOutput(payload: Record<string, unknown>, formatted?: { title: string; body: string }): Shown {
   const panel = typeof payload.panel === 'string' ? payload.panel : undefined;
   const text = typeof payload.text === 'string' ? stripAnsi(payload.text) : undefined;
   if (payload.status === 'ready') return { kind: 'none' };
@@ -52,6 +55,7 @@ export function formatOutput(payload: Record<string, unknown>): Shown {
   if (panel === 'settings' || panel === 'provider-selected' || panel === 'history' || panel === 'redraw') return { kind: 'none' };
   if (panel === 'accounts' && payload.selected) return { kind: 'none' };
   if (panel && CONFIRMATIONS.has(panel)) return text ? { kind: 'notice', text, level: 'info' } : { kind: 'none' };
+  if (formatted) return { kind: 'panel', title: stripAnsi(formatted.title), body: stripAnsi(formatted.body) };
   if (panel === 'help' && typeof payload.helpText === 'string') return { kind: 'panel', title: 'Commands', body: stripAnsi(payload.helpText) };
   if (panel === 'models' && Array.isArray(payload.models)) {
     const selected = payload.selected;

@@ -11,6 +11,8 @@
  * One conversation at a time, like a terminal: `open` switches, and a slash
  * command that moves the conversation (/new, /fork, /resume) switches too.
  */
+import { stripVTControlCharacters } from 'node:util';
+import { panelParts, renderPanelText } from '../harness/output.js';
 import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import type Conf from 'conf';
@@ -418,7 +420,11 @@ export function captureStdout(channel: IdeChannel, stream: NodeJS.WriteStream = 
       buffer = buffer.slice(newline + 1);
       let payload: unknown;
       try { payload = JSON.parse(line); } catch { payload = undefined; }
-      if (payload && typeof payload === 'object' && !Array.isArray(payload)) channel.send({ type: 'output', payload: payload as Record<string, unknown> });
+      if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+        const record = payload as Record<string, unknown>;
+        const text = renderPanelText(record);
+        channel.send({ type: 'output', payload: record, ...(text === undefined ? {} : { formatted: panelParts(stripVTControlCharacters(text)) }) });
+      }
       else if (line.trim()) log(line);
     }
     const done = typeof encoding === 'function' ? encoding : callback;

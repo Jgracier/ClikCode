@@ -1,26 +1,22 @@
 /** The message box: text with / commands and @ files, attached selections
  * and images, and the footer that chooses provider·model, effort and
  * permissions for this chat. */
-import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
-import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { usageLabelIsSpent } from '../../../../src/tui/render/usage-words';
 import type { JSX } from 'preact';
 import { useEffect, useMemo, useRef, useState } from 'preact/hooks';
-import { chatModelLabel, currentProvider, enterAgainReady, preparing, providerDisplayName, queuedRowLabel, type ChatModel } from '../model';
-import type { IdeSlashCommand } from '../protocol';
-import { commandPaletteMatches, type PaletteEntry } from '../../../../src/tui/command-palette';
+import { chatModelLabel, enterAgainReady, preparing, providerDisplayName, type ChatModel } from '../model';
 import { pastePlaceholder } from '../../../../src/harness/protocol/turn-flow';
-import { compactCount, formatElapsed } from '../../../../src/harness/protocol/format';
 import { buttonTitle } from '../../../../src/harness/protocol/wording';
 import type { Mention } from '../webview-protocol';
-import { problemsBlock, selectionBlock, splitEditorContext } from '../editor-context';
 import { post, request, save, saved, uid } from './bus';
 import { formatTurnUsage, titleCase } from './format';
-import { AccountMenu, agentName, choose, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, permissionLabel, providerChoosesModel, ProviderModelPicker } from './picker';
-import { focusHere, Icon, KeyList, Spinner, useSlowWait, type ListRow } from './ui';
-import { useNow } from './clock';
+import { AccountMenu, agentName, EffortMenu, effortLabel, knownProviders, ModeMenu, modelWithEffort, providerChoosesModel, ProviderModelPicker } from './picker';
+import { focusHere, Icon, KeyList, type ListRow } from './ui';
+import { composeMessage, promptHistory, sameRange, tokenAtCaret, type Attachment } from './composer-text';
+import { commandRows, fileRows } from './composer-suggestions';
+import { AttachmentChips, BusyLine, ContextMeter, QueueRows, SignInCard, StatusButtons, type Menu } from './composer-parts';
 
-type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefined;
+export { composeMessage, paletteEntry, promptHistory, tokenAtCaret } from './composer-text';
 
 export interface ComposerHandle {
   focus(): void;
@@ -32,75 +28,6 @@ export interface ComposerHandle {
   accounts(): void;
 }
 
-/** A chip above the message box: lines referenced, an image, or a long
- * paste held as `[Pasted text #1 +40 lines]` (its `text` goes with the
- * message). */
-interface Attachment { key: string; kind: 'selection' | 'image' | 'pasted'; label: string; mention?: Mention; path?: string; preview?: string; text?: string }
-
-const sameRange = (left: Mention | undefined, right: Mention): boolean =>
-  left?.path === right.path && left.startLine === right.startLine && left.endLine === right.endLine;
-
-
-/** The command list, for the conversation on the provider and model it had
- * when read: another provider has other commands (its own skills, its own
- * built-ins). */
-let slashCache: { key: string; at: number; commands: readonly PaletteEntry[] } | undefined;
-/** The vendor lists behind the values (models, efforts) load in the
- * background; a list read this long ago is read again for what arrived. */
-const SLASH_FRESH_MS = 20_000;
-
-/** A bridge command row as the terminal palette's entry, so the same matcher
- * (command-palette.ts) ranks and completes it. */
-export function paletteEntry(item: IdeSlashCommand): PaletteEntry {
-  return {
-    label: item.command, value: item.command, detail: item.description,
-    ...(item.argHint ? { argHint: item.argHint } : {}), ...(item.group ? { group: item.group } : {}),
-    ...(item.aliases?.length ? { aliases: item.aliases } : {}),
-    ...(item.argValues?.length ? { argValues: () => item.argValues! } : {}),
-  };
-}
-
-/** The prompts ↑ and ↓ step through: this conversation's own, oldest first,
- * repeats in a row once -- as the terminal recalls what was typed, though
- * read from the transcript so every tab and window on it has them. */
-export function promptHistory(messages: ReadonlyArray<{ role: string; content: string }>): string[] {
-  const prompts: string[] = [];
-  for (const message of messages) {
-    // A notice ClikCode sent in the user's place is not something they typed.
-    const typed = message.role === 'user' && !isClikCodeNotice(message.content) ? splitEditorContext(message.content).text : '';
-    if (!typed.trim()) continue;
-    if (prompts[prompts.length - 1] !== typed) prompts.push(typed);
-  }
-  return prompts.slice(-200);
-}
-
-/** The @ or / token the caret is in, if any. A / command is the whole first
- * line up to the caret, its argument included, so `/model op` lists models. */
-export function tokenAtCaret(text: string, caret: number): { kind: '@' | '/'; query: string; start: number } | undefined {
-  const before = text.slice(0, caret);
-  const slash = /^\/([\w:-]*(?: [^\n]*)?)$/.exec(before);
-  if (slash) return { kind: '/', query: slash[1]!, start: 0 };
-  const at = /(?:^|\s)@([^\s@]*)$/.exec(before);
-  if (at) return { kind: '@', query: at[1]!, start: caret - at[1]!.length - 1 };
-  return undefined;
-}
-
-/** What is sent: the typed text, then each attachment in order -- a long
- * paste's own text, a referenced range of lines as a fenced block (with the
- * problems VS Code reports in it), an image's path (ClikCode attaches image
- * paths it finds in a message). */
-export function composeMessage(text: string, attachments: ReadonlyArray<{ kind: 'selection' | 'image' | 'pasted'; mention?: Mention; path?: string; text?: string }>): string {
-  const blocks = attachments.flatMap((attachment) => {
-    if (attachment.kind === 'pasted') return attachment.text?.trim() ? [attachment.text.replace(/\r\n/g, '\n').replace(/\n+$/, '')] : [];
-    if (attachment.kind === 'image' && attachment.path) return [attachment.path];
-    const mention = attachment.mention;
-    if (!mention) return [];
-    const problems = mention.problems?.length ? [problemsBlock(mention.label, mention.problems)] : [];
-    if (!mention.text) return [`@${mention.label}`];
-    return [selectionBlock({ path: mention.label, languageId: mention.languageId ?? '', startLine: mention.startLine ?? 1, endLine: mention.endLine ?? 1, text: mention.text }), ...problems];
-  });
-  return [text.trim(), ...blocks].filter(Boolean).join('\n\n');
-}
 
 export function Composer(props: {
   model: ChatModel;
@@ -173,69 +100,14 @@ export function Composer(props: {
       const next = `${text.slice(0, token.start)}${value}${text.slice(caret)}`;
       update(next, token.start + value.length);
     };
+    const run = (command: string): void => { setText(''); save({ draft: '' }); setSuggestions([]); post({ type: 'send', text: command, id: uid() }); };
+    const shown = (rows: ListRow[]): void => { if (live) setSuggestions(rows); };
     if (token.kind === '/') {
-      const cacheKey = `${model.sessionId}|${model.providerId}|${model.model}`;
-      const cached = slashCache;
-      const load = cached?.key === cacheKey && Date.now() - cached.at < SLASH_FRESH_MS ? Promise.resolve(cached.commands)
-        : request<IdeSlashCommand[]>({ method: 'query', query: 'slash-commands' }).then((commands) => {
-          const entries = commands.map(paletteEntry);
-          slashCache = { key: cacheKey, at: Date.now(), commands: entries };
-          return entries;
-        });
-      load.then((commands) => {
-        if (!live) return;
-        const line = `/${token.query}`;
-        const rows: ListRow[] = [];
-        let group: string | undefined;
-        for (const item of commandPaletteMatches(line, commands).slice(0, 80)) {
-          if (!item.completes && item.group && item.group !== group) { group = item.group; const heading = group; rows.push({ key: `h:${heading}`, heading: true, render: () => <>{heading}</> }); }
-          // A value row runs its whole command line; a command that takes
-          // values or a required argument is filled in so they can be chosen.
-          const run = (command: string): void => { setText(''); save({ draft: '' }); setSuggestions([]); post({ type: 'send', text: command, id: uid() }); };
-          const fill = Boolean(!item.completes && ((item.argHint && !/^\[/.test(item.argHint)) || item.argValues));
-          rows.push({
-            key: item.value,
-            onSelect: () => {
-              if (item.completes) run(item.value);
-              // The command's own free-text argument, as typed.
-              else if (line.includes(' ')) run(line.trim());
-              else if (fill) replace(`${item.value} `);
-              else run(item.value);
-            },
-            render: () => (
-              <div class="row">
-                <span class="row-main">
-                  <span class={`row-label${item.completes ? '' : ' mono'}`}>{item.completes ? item.label : item.value}{!item.completes && item.argHint ? <span class="muted"> {item.argHint}</span> : null}</span>
-                  {item.detail ? <span class="row-detail">{item.detail}</span> : null}
-                </span>
-              </div>
-            ),
-          });
-        }
-        setSuggestions(rows);
-      }, () => setSuggestions([]));
-    } else {
-      const timer = setTimeout(() => {
-        request<Mention[]>({ method: 'files', text: token.query }).then((files) => {
-          if (!live) return;
-          setSuggestions(files.map((file) => ({
-            key: file.path,
-            onSelect: () => replace(`@${file.label} `),
-            render: () => {
-              const slash = file.label.lastIndexOf('/');
-              return (
-                <div class="row">
-                  <span class="row-check"><Icon name="file" /></span>
-                  <span class="row-main"><span class="row-label">{file.label.slice(slash + 1)}</span><span class="row-detail">{slash > 0 ? file.label.slice(0, slash) : ''}</span></span>
-                </div>
-              );
-            },
-          })));
-        }, () => setSuggestions([]));
-      }, 80);
-      return () => { live = false; clearTimeout(timer); };
+      commandRows(token.query, `${model.sessionId}|${model.providerId}|${model.model}`, { replace, run }).then(shown, () => setSuggestions([]));
+      return () => { live = false; };
     }
-    return () => { live = false; };
+    const timer = setTimeout(() => { fileRows(token.query, { replace }).then(shown, () => setSuggestions([])); }, 80);
+    return () => { live = false; clearTimeout(timer); };
   }, [tokenKey, token?.query, model.sessionId, model.providerId, model.model]);
 
   const send = (): void => {
@@ -402,7 +274,6 @@ export function Composer(props: {
   const modelName = chatModelLabel(model, providerName);
   const effort = model.chatSettings?.effort;
   const showSuggestions = suggestions.length > 0 && !menu;
-  const account = model.currentAccount;
   const busy = model.busy;
   const installing = busy && /^(installing|waiting for another ClikCode to finish installing)/i.test(busy);
   // The last turn's tokens, once it has ended: a running turn shows what it
@@ -448,24 +319,7 @@ export function Composer(props: {
           <div class="progress indeterminate"><div /></div>
         </div>
       ) : null}
-      {model.queued.length ? (
-        <div class="queued" aria-label="Queued messages">
-          {model.queued.map((item, index) => item.notification ? (
-            // A notice ClikCode owes the agent (a background task's result,
-            // work that was stopped): not the user's to edit.
-            <div key={item.id} class="queued-item clikcode-notice"><Icon name="bell" /><span class="queued-text" title={clikCodeNoticeBody(item.text)}>ClikCode notice</span><span class="muted">next turn</span></div>
-          ) : (
-            <div key={item.id} class="queued-item">
-              <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
-              <span class="muted">{queuedRowLabel(model, item, index === firstWaiting && enterAgain)}</span>
-              <button type="button" class="icon-button tiny" title="Edit: take it back into the message box" aria-label="Edit queued message"
-                onClick={() => post({ type: 'unqueue', id: item.id, edit: true })}><Icon name="edit" /></button>
-              <button type="button" class="icon-button tiny" title="Remove from the queue" aria-label="Remove queued message"
-                onClick={() => post({ type: 'unqueue', id: item.id })}><Icon name="close" /></button>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      {model.queued.length ? <QueueRows model={model} enterAgain={enterAgain} firstWaiting={firstWaiting} /> : null}
       <div class={`composer-box${dropping ? ' dropping' : ''}`} data-running={model.running ? 'true' : undefined}
         onDragOver={(event) => { event.preventDefault(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'; if (!dropping) setDropping(true); }}
         onDragLeave={(event) => { if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) setDropping(false); }}
@@ -480,17 +334,7 @@ export function Composer(props: {
           </div>
         ) : null}
         {attachments.length ? (
-          <div class="attachments">
-            {attachments.map((attachment) => (
-              <span key={attachment.key} class={`attachment${attachment.preview ? ' with-thumb' : ''}${attachment.kind === 'pasted' ? ' pasted' : ''}`} title={attachment.mention?.label ?? attachment.path}>
-                {attachment.preview ? <img class="attachment-thumb" src={attachment.preview} alt="" /> : <Icon name={attachment.kind === 'image' ? 'file-media' : attachment.kind === 'pasted' ? 'clippy' : 'code'} />}
-                {attachment.kind === 'pasted' ? (
-                  <button type="button" class="attachment-expand" title="Put the pasted text back in the message box, to edit" onClick={() => expandPaste(attachment)}>{attachment.label}</button>
-                ) : <span>{attachment.label}</span>}
-                <button type="button" class="icon-button tiny" aria-label={`Remove ${attachment.label}`} onClick={() => setAttachments((items) => items.filter((item) => item !== attachment))}><Icon name="close" /></button>
-              </span>
-            ))}
-          </div>
+          <AttachmentChips attachments={attachments} onExpand={expandPaste} onRemove={(attachment) => setAttachments((items) => items.filter((item) => item !== attachment))} />
         ) : null}
         <textarea id="composer-input" ref={textarea} rows={1} value={text} placeholder={placeholder} aria-label="Message ClikCode"
           aria-autocomplete="list" aria-controls={showSuggestions ? 'suggestions' : undefined}
@@ -526,21 +370,7 @@ export function Composer(props: {
       <div class="composer-status">
         {menu === 'account' ? <AccountMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
         {menu === 'mode' ? <ModeMenu model={model} onClose={() => setMenu(undefined)} onError={props.onError} /> : null}
-        {/* The Gateway has no account of its own: its button is for its credit. */}
-        {account || model.providerId === 'gateway' ? (
-          <button type="button" id="account-button" class={`status-account${menu === 'account' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'account'}
-            title={account ? `${account.label}: this provider's accounts` : 'Gateway credit'} disabled={!connected} onClick={() => setMenu(menu === 'account' ? undefined : 'account')}>
-            <Icon name={account?.problem ? 'warning' : account ? 'account' : 'credit-card'} /><span class="status-label">{account?.label ?? 'Credit'}</span><Icon name="chevron-down" />
-          </button>
-        ) : null}
-        {/* Permissions belong to how this chat runs, beside whose account it runs on. */}
-        {model.chatSettings?.permissions ? (
-          <button type="button" id="mode-button" class={`status-account${menu === 'mode' ? ' open' : ''}`} data-popover-anchor aria-haspopup="dialog" aria-expanded={menu === 'mode'}
-            title={`Permissions: ${model.chatSettings.plan ? 'Plan mode' : permissionLabel(model.permissions)}`} disabled={!connected} onClick={() => setMenu(menu === 'mode' ? undefined : 'mode')}>
-            <Icon name={model.chatSettings.plan ? 'list-tree' : model.permissions === 'bypass' ? 'unlock' : 'shield'} />
-            <span class="status-label">{model.chatSettings.plan ? 'Plan' : permissionLabel(model.permissions)}</span><Icon name="chevron-down" />
-          </button>
-        ) : null}
+        <StatusButtons model={model} menu={menu} setMenu={setMenu} connected={connected} />
         <span class="spacer" />
         <BusyLine label={busy && !installing && !model.signIn ? busy : undefined} />
         {model.chatCost ? <span class="muted status-cost" title="What this chat has cost so far">{model.chatCost}</span> : null}
@@ -552,73 +382,3 @@ export function Composer(props: {
   );
 }
 
-/** What ClikCode is doing between turns ("preparing…", a local model's
- * download at 42%), as the terminal's band shows it: the page's spinner
- * and clock, and only once it is slow (useSlowWait) -- "preparing…" came
- * and went before every turn. */
-function BusyLine({ label }: { label: string | undefined }): JSX.Element | null {
-  const shown = useSlowWait(label !== undefined);
-  const last = useRef<{ label: string; since: number }>();
-  if (label !== undefined && !last.current) last.current = { label, since: Date.now() };
-  if (label !== undefined && last.current) last.current.label = label;
-  if (label === undefined && !shown) last.current = undefined;
-  const now = useNow(shown);
-  if (!shown || !last.current) return null;
-  const elapsed = now - last.current.since;
-  return <span class="muted busy" role="status"><Spinner />{last.current.label}{elapsed >= 1000 ? ` · ${formatElapsed(elapsed)}` : ''}</span>;
-}
-
-/** How full the conversation's context window is, as a ring that fills; the
- * figures on hover, the breakdown (/context) on click. */
-function ContextMeter({ context, tokens }: { context: NonNullable<ChatModel['context']>; tokens?: string }): JSX.Element {
-  const radius = 6;
-  const circumference = 2 * Math.PI * radius;
-  const percent = context.percent;
-  const figures = context.used ? `${compactCount(context.used)}${context.window ? ` of ${compactCount(context.window)}` : ''} tokens` : '';
-  const label = `Context ${percent < 10 ? percent.toFixed(1) : Math.round(percent)}% used${figures ? ` (${figures})` : ''}`;
-  return (
-    <button type="button" class={`context-meter${percent >= 90 ? ' high' : percent >= 70 ? ' warn' : ''}`} title={`${label}${tokens ? `\nLast turn: ${tokens}` : ''}\nClick for the breakdown.`} aria-label={label}
-      onClick={() => post({ type: 'send', text: '/context', id: uid() })}>
-      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-        <circle cx="8" cy="8" r={radius} class="context-track" />
-        <circle cx="8" cy="8" r={radius} class="context-fill" stroke-dasharray={`${(percent / 100) * circumference} ${circumference}`} transform="rotate(-90 8 8)" />
-      </svg>
-      <span>{percent > 0 && percent < 1 ? '<1' : Math.round(percent)}%</span>
-    </button>
-  );
-}
-
-/** A sign-in in progress: its link opened in the browser and its code to
- * confirm there, once the vendor gives one; a key it takes instead as a row
- * under them (the terminal's hint line under the link); questions it asks
- * come up as sheets over it. Cancel ends it. Nothing is typed into a terminal. */
-function SignInCard({ signIn }: { signIn: NonNullable<ChatModel['signIn']> }): JSX.Element {
-  const [copied, setCopied] = useState(false);
-  const [key, setKey] = useState('');
-  return (
-    <div class="install-card signin-link" role="status" id="sign-in-link">
-      <div class="install-text"><Icon name="key" /> {signIn.url ? `Sign in to ${signIn.name} in your browser` : `Signing in to ${signIn.name}…`}</div>
-      {signIn.code ? (
-        <div class="signin-code">
-          <span class="muted">Confirm this code there</span>
-          <code data-code>{signIn.code}</code>
-          <button type="button" class="icon-button tiny" title={copied ? 'Copied' : 'Copy code'} aria-label={copied ? 'Copied' : 'Copy code'}
-            onClick={() => { void navigator.clipboard?.writeText(signIn.code ?? '').then(() => { setCopied(true); setTimeout(() => setCopied(false), COPIED_MS); }); }}>
-            <Icon name={copied ? 'check' : 'copy'} />
-          </button>
-        </div>
-      ) : null}
-      {signIn.ask ? (
-        <form class="signin-key" onSubmit={(event) => { event.preventDefault(); if (!key.trim()) return; post({ type: 'signInAnswer', id: signIn.id, text: key.trim() }); setKey(''); }}>
-          <input id="sign-in-key" type={signIn.ask.secret ? 'password' : 'text'} value={key} placeholder={signIn.ask.prompt} aria-label={signIn.ask.prompt}
-            autocomplete="off" spellcheck={false} onInput={(event) => setKey((event.target as HTMLInputElement).value)} />
-          <button type="submit" class="secondary" disabled={!key.trim()}>Use key</button>
-        </form>
-      ) : null}
-      <div class="banner-actions">
-        {signIn.url ? <button type="button" class="secondary" data-open onClick={() => post({ type: 'signInOpen', url: signIn.url! })}>Open the page again</button> : null}
-        <button type="button" class="secondary" data-cancel onClick={() => post({ type: 'signInCancel', id: signIn.id })}>Cancel</button>
-      </div>
-    </div>
-  );
-}
