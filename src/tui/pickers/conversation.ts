@@ -46,7 +46,7 @@ async function moveToAgentRoute(
   await refuseWhileTurnRuns(id);
   await synchronizeNativeTranscript(state, current);
   leaveProvider(current);
-  applyClikCodeAgentSessionPolicy(current, route);
+  applyClikCodeAgentSessionPolicy(current, route, state);
   await writeState(state);
   return id;
 }

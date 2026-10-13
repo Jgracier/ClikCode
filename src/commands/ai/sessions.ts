@@ -13,6 +13,7 @@ import { randomUUID } from 'node:crypto';
 import { emitResult } from '../../cli/structured-output.js';
 import type { AiHarnessAccount, AiHarnessPermissionMode, AiHarnessRoute, AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
+import { recallRouteModel, rememberRouteModel } from '../../session/route-models.js';
 import { modelIdFromLabel, nativeModelCatalog } from '../../harness/accounts/model-catalog.js';
 import { harnessSupportsEffort, harnessSupportsModelSelection, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
 import { liveWorkers, sessionIsLive } from '../../session/liveness.js';
@@ -106,14 +107,16 @@ async function gatewayAgentChoice(value: string): Promise<string | undefined> {
  * centralized prevents route switches, slash settings, and headless setters
  * from leaving stale local harness/account controls attached to a remote
  * platform-managed session. */
-export function applyGatewaySessionPolicy(session: HarnessSession): void {
+export function applyGatewaySessionPolicy(session: HarnessSession, state?: HarnessState): void {
   // A model chosen from the Gateway's own list stays; one carried over from
   // another route names a model the Gateway was never asked about.
   const keepModel = session.route === 'gateway';
+  if (!keepModel) rememberRouteModel(session);
   session.route = 'gateway';
   session.accountId = null;
   session.provider = 'gateway';
-  if (!keepModel) session.model = null;
+  // Back on the Gateway: the model last used there (null = Automatic), not a default.
+  if (!keepModel) session.model = recallRouteModel(session, 'gateway', state) ?? null;
   if (!keepModel) delete session.gatewayAgentId;
   if (!keepModel) delete session.gatewayAgentThreadId;
   if (!keepModel) delete session.gatewayAgentName;
@@ -144,11 +147,13 @@ function shedVendorHarness(session: HarnessSession): void {
  * vendor's model id never survives the move. Effort is `auto` until the
  * engine publishes a control for it. The first turn uses an already
  * downloaded model; a new weight file is fetched only after /model consent. */
-export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
+export function applyClikCodeLocalSessionPolicy(session: HarnessSession, state?: HarnessState): void {
+  if (session.route !== 'clikcode-local') rememberRouteModel(session);
+  const recalled = session.route === 'clikcode-local' ? undefined : recallRouteModel(session, 'clikcode-local', state);
   session.route = 'clikcode-local';
   session.accountId = null;
   session.provider = 'clikcode-local';
-  session.model = session.model && catalogModel(session.model) ? session.model : null;
+  session.model = recalled && catalogModel(recalled) ? recalled : session.model && catalogModel(session.model) ? session.model : null;
   session.effort = 'auto';
   // gatewayConfirmed marks an explicit Gateway choice; this is not one.
   delete session.gatewayConfirmed;
@@ -160,9 +165,9 @@ export function applyClikCodeLocalSessionPolicy(session: HarnessSession): void {
 
 /** The policy for whichever agent route `route` names, so a route switch in
  * any caller cannot apply one route's defaults to the other. */
-export function applyClikCodeAgentSessionPolicy(session: HarnessSession, route: 'gateway' | 'clikcode-local'): void {
-  if (route === 'gateway') applyGatewaySessionPolicy(session);
-  else applyClikCodeLocalSessionPolicy(session);
+export function applyClikCodeAgentSessionPolicy(session: HarnessSession, route: 'gateway' | 'clikcode-local', state?: HarnessState): void {
+  if (route === 'gateway') applyGatewaySessionPolicy(session, state);
+  else applyClikCodeLocalSessionPolicy(session, state);
 }
 
 export function applyFreshLocalSessionPolicy(state: HarnessState, session: HarnessSession): void {
@@ -263,7 +268,7 @@ export async function aiSessionCreate(options: { route: AiHarnessRoute; account?
     createdAt: now, updatedAt: now, status: 'active',
   };
   if (options.route === 'clikcode-local') {
-    applyClikCodeLocalSessionPolicy(session);
+    applyClikCodeLocalSessionPolicy(session, state);
     if (localModel) session.model = localModel;
   }
   state.sessions.push(session);
@@ -486,7 +491,7 @@ export async function aiSessionSet(id: string, options: { route?: AiHarnessRoute
     if (gatewayAgentId) next.gatewayAgentId = gatewayAgentId;
     else delete next.gatewayAgentId;
   }
-  if (effectiveRoute === 'gateway' || effectiveRoute === 'clikcode-local') applyClikCodeAgentSessionPolicy(next, effectiveRoute);
+  if (effectiveRoute === 'gateway' || effectiveRoute === 'clikcode-local') applyClikCodeAgentSessionPolicy(next, effectiveRoute, state);
   else if (account) {
     if (turnBackendForAccount(account) === 'vendor' && selectedHarness && harnessCanRunTurns(selectedHarness)) {
       // Another account of the same harness keeps the thread: it moves to

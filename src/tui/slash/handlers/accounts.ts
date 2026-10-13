@@ -126,7 +126,7 @@ export const accountsHandlers = {
     if (sessionTranscriptMessages(session).length || session.nativeSessionId) {
       throw new Error('Use the interactive /provider menu to hand off an existing conversation to ClikDeploy Gateway.');
     }
-    applyGatewaySessionPolicy(session);
+    applyGatewaySessionPolicy(session, state);
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     return emitHarnessOutput({ panel: 'provider-selected', harness: 'gateway', displayName: 'ClikDeploy Gateway', provider: 'gateway', account: null, model: 'platform', centralized: true });

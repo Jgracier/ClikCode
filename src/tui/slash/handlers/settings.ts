@@ -86,7 +86,7 @@ export const settingsHandlers = {
       // Leaving ClikCode Local lets go of its model at once, not at the
       // interactive loop's next pass.
       if (session.route === 'clikcode-local' && value !== 'clikcode-local') await releaseHeldLocalModel(session.id);
-      if (value === 'gateway' || value === 'clikcode-local') applyClikCodeAgentSessionPolicy(session, value);
+      if (value === 'gateway' || value === 'clikcode-local') applyClikCodeAgentSessionPolicy(session, value, state);
       else if (isClikCodeAgent(session)) applyFreshLocalSessionPolicy(state, session);
       else session.route = 'local';
     } else if (setting === 'account' || setting === 'model' || setting === 'effort' || setting === 'permissions' || setting === 'permission') {
