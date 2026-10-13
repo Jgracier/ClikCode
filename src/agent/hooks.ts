@@ -60,7 +60,7 @@ export type HookConfig = Partial<Record<HookEvent, HookGroup[]>>;
 /** ClikCode's tool names as Claude Code names them. MCP tools share Claude's `mcp__server__tool` form. */
 const CLAUDE_TOOL_NAMES: Record<string, string> = {
   bash: 'Bash', bash_output: 'BashOutput', kill_bash: 'KillShell',
-  read_file: 'Read', write_file: 'Write', edit_file: 'Edit', multi_edit: 'MultiEdit',
+  read_file: 'Read', write_file: 'Write', edit_file: 'Edit', multi_edit: 'MultiEdit', apply_patch: 'ApplyPatch',
   list_dir: 'LS', glob: 'Glob', grep: 'Grep', lsp: 'LSP',
   web_fetch: 'WebFetch', web_search: 'WebSearch',
   todo_write: 'TodoWrite', task: 'Task', skill: 'Skill', exit_plan_mode: 'ExitPlanMode', enter_plan_mode: 'EnterPlanMode',

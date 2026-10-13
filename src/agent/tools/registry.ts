@@ -1,5 +1,6 @@
 import type { ToolSpec } from '../model-client.js';
 import type { ToolDefinition } from '../tool-contract.js';
+import { applyPatchTool } from './apply-patch.js';
 import { askUserTool } from './ask-user.js';
 import { agentTool } from './agent.js';
 import { agentSendTool, agentWaitTool } from './agent-messaging.js';
@@ -29,7 +30,7 @@ import { writeFileTool } from './write-file.js';
 export function defaultTools(): ToolDefinition[] {
   return [
     readFileTool, listDirTool, globTool, grepTool, lspTool,
-    writeFileTool, editFileTool, multiEditTool, notebookEditTool,
+    writeFileTool, editFileTool, multiEditTool, applyPatchTool, notebookEditTool,
     bashTool, bashOutputTool, bashInputTool, killBashTool, waitTool, monitorTool, scheduleWakeupTool,
     webFetchTool, webSearchTool, todoWriteTool, enterPlanModeTool, exitPlanModeTool, skillTool,
     taskTool, agentTool, agentSendTool, agentWaitTool, listAgentsTool, askUserTool, ...conversationTools,
