@@ -49,14 +49,25 @@ describe('resource guard', () => {
   it('parses macOS and Windows process lists and only stops a freshly revalidated tree', async () => {
     const mac = parsePs(' 100 1 300000 node node /x/dist/index.js session-worker aaaa\n 101 100 200000 claude claude\n 102 101 20000 bash bash -c vitest\n 103 102 2000000 node node vitest');
     expect(tableInventory(mac).units[0]?.target).toMatchObject({ root: 102, pids: [102, 103] });
-    const win = parseWindowsProcesses('100\t1\t300000000\tnode.exe\tnode C:\\x\\dist\\index.js session-worker aaaa\r\n101\t100\t200000000\tclaude.exe\tclaude\r\n102\t101\t20000000\tcmd.exe\tcmd /c vitest\r\n103\t102\t2000000000\tnode.exe\tnode vitest');
+    const win = parseWindowsProcesses(JSON.stringify([
+      { ProcessId: 100, ParentProcessId: 1, WorkingSetSize: 300000000, Name: 'node.exe', CommandLine: 'node C:\\x\\dist\\index.js session-worker aaaa', CreationDate: '2026-10-13T14:00:00' },
+      { ProcessId: 101, ParentProcessId: 100, WorkingSetSize: 200000000, Name: 'claude.exe', CommandLine: 'claude', CreationDate: '2026-10-13T14:00:01' },
+      { ProcessId: 102, ParentProcessId: 101, WorkingSetSize: 20000000, Name: 'cmd.exe', CommandLine: 'cmd /c vitest', CreationDate: '2026-10-13T14:00:02' },
+      { ProcessId: 103, ParentProcessId: 102, WorkingSetSize: 2000000000, Name: 'node.exe', CommandLine: 'node vitest', CreationDate: '2026-10-13T14:00:03' },
+    ]));
+    expect(win[2]?.startedAt).toBe('2026-10-13T14:00:02');
+    expect(win[2]?.command).toBe('cmd /c vitest');
+    expect(parseWindowsProcesses('{bad')).toEqual([]);
+    expect(parseWindowsProcesses(JSON.stringify({ ProcessId: 9, ParentProcessId: 1, WorkingSetSize: 1, Name: 'cmd.exe', CommandLine: 'cmd', CreationDate: '/Date(1760000000000)/' }))[0]?.startedAt).toBe('2025-10-09T08:53:20.000Z');
     expect(tableInventory(win).units[0]?.target).toMatchObject({ root: 102, pids: [102, 103] });
+    const staleParent = win.map((item) => item.pid === 101 ? { ...item, startedAt: '2026-10-13T14:10:00' } : item);
+    expect(tableInventory(staleParent).units).toEqual([]);
     let stopped = 0;
     let current = win;
     const probe = processProbe('win32', { readTable: () => current, stopTree: () => { stopped++; return true; } });
     const target = (await probe.inventory()).units[0]!.target;
     expect(await probe.stop(target)).toBe(true);
-    current = current.map((item) => item.pid === 102 ? { ...item, command: 'cmd /c unrelated' } : item);
+    current = current.map((item) => item.pid === 102 ? { ...item, startedAt: '2026-10-13T14:05:02' } : item);
     expect(await probe.stop(target)).toBe(false);
     expect(stopped).toBe(1);
     const macProbe = processProbe('darwin', {
