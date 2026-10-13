@@ -18,6 +18,13 @@ export type AiHarnessIntegrationLevel = 'native' | 'structured' | 'compatibility
 export type AiHarnessTransport = 'codex-app-server' | 'acp' | 'structured-cli' | 'text-cli';
 /** Picker placement. `primary` is shown first, `more` sits behind "More
  * providers", `experimental` is reserved for adapters nobody has run live. */
+export interface AiHarnessLiveCheck {
+  /** ISO date of the check. */
+  at: string;
+  verified: boolean;
+  method: string;
+  note?: string;
+}
 export type AiHarnessTier = 'primary' | 'more' | 'experimental';
 /** Stream-adapter FAMILY, not a vendor name: two vendors that emit the same
  * envelope (Qwen/Amp -> Claude stream-json, Kilo -> OpenCode) declare the same
@@ -416,6 +423,10 @@ export interface AiLocalHarnessDefinition {
   /** The one-shot `turn` contract below comes from vendor documentation and has
    * not been run live by ClikCode. Details are in the comment above the entry. */
   experimental?: boolean;
+  /** The last live check of this entry: when, how, and whether a turn ran end
+   * to end. `verified: false` carries the reason in `note`, and the tier stays
+   * what it was. Declared in LIVE_CHECKS, not inline. */
+  liveCheck?: AiHarnessLiveCheck;
   /** Protocol operations the vendor's own server offers that ClikCode should use instead of
    * working around them, each named for what it replaces:
    *   `compact`     the vendor compacts a thread in place (Codex `thread/compact/start`), so `/compact`
@@ -1250,7 +1261,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // devin 3000.11.3 session/new: starts in `accept-edits` (workspace edits auto-approved) and offers
   // modes accept-edits|smart|ask|plan|bypass (configOptions id `mode`, category `mode`). `ask` is its
   // read-only Q&A mode, the strict end of ClikCode's ask.
-  { command: 'devin', quotaProbe: true, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { listed: true }, loginAccountChoose: ['Log in with browser'], provider: 'devin', displayName: 'Devin CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'], optionPlacement: 'after', permissionModeIds: { ask: 'ask', auto: 'smart', bypass: 'bypass' }, planModeId: 'plan' }, permissionModes: ['ask', 'auto', 'bypass'], localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'devin', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/devin/credentials.toml', contains: 'api_key' }], installer: HARNESS_INSTALLERS.devin, loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], authEnv: ['WINDSURF_API_KEY'], modelArgvPrefix: ['--model'] },
+  { command: 'devin', quotaProbe: true, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, freePlan: { listed: true }, loginAccountChoose: ['Log in with browser'], provider: 'devin', displayName: 'Devin CLI', tier: 'more', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, acp: { argv: ['acp'], optionPlacement: 'after', permissionModeIds: { ask: 'ask', auto: 'smart', bypass: 'bypass' }, planModeId: 'plan' }, permissionModes: ['ask', 'auto', 'bypass'], localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'devin', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/devin/credentials.toml', contains: 'api_key' }], installer: HARNESS_INSTALLERS.devin, loginArgv: ['auth', 'login'], statusArgv: ['auth', 'status'], logoutArgv: ['auth', 'logout'], authEnv: ['WINDSURF_API_KEY'], modelArgvPrefix: ['--model'] },
   // junie 26.9.22 initialize (vendor-sandbox, 2026-10-11): `_meta.steering.supported: true`, which the ACP client reads on any agent, so Junie is
   // steered like Claude. Not run: whether it answers `_session/steering` as claude-agent-acp does. session/new (signed in): modes default|plan, config
   // options mode, model, effort (low|medium|high), brave_mode (brave-auto|on|off) -- brave_mode is a config option, not a mode id, so no permission mapping.
@@ -1261,10 +1272,32 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   { command: 'mcode', quotaProbe: { none: '`mcode --help` could not be run under the sandbox (it writes ~/.minimax-code); no usage command known' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'minimax-code', displayName: 'MiniMax Code', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['acp'] }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'mcode', installer: HARNESS_INSTALLERS.mcode, loginArgv: ['login', '--region', 'global'], logoutArgv: ['logout'], authFiles: [{ path: '~/.minimax/auth/prod/*/*/auth.json', contains: '"accessToken"' }], authEnv: ['MCODE_PROVIDER_API_KEY'] },
 ];
 
+
+const SANDBOX_TURN = '`clikcode send --harness <h> "Reply with the single word PONG"` under scripts/vendor-sandbox.mjs --auth <h>';
+/** What running each thin entry for real showed (2026-10-12). A tier is only
+ * promoted past `experimental` with `verified: true`; the rest keep theirs and
+ * say what blocked the check. */
+const LIVE_CHECKS: Readonly<Record<string, AiHarnessLiveCheck>> = {
+  devin: { at: '2026-10-12', verified: true, method: `${SANDBOX_TURN}: model swe-1-6-slow discovered over ACP, native session id captured, reply and token usage (input, output, cache) reported` },
+  junie: { at: '2026-10-12', verified: false, method: 'raw ACP session under the sandbox, and one `clikcode send` turn', note: 'the sandbox cannot read the sign-in (prompt answers "Authentication is required" or stopReason cancelled); initialize, session/new with model, effort and mode options, and `_session/steering` were read live' },
+  amp: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN}, and \`amp usage\``, note: 'the account session has expired ("Session expired and could not be refreshed"); signing in again is an account change' },
+  aider: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN} with a free OpenRouter model`, note: 'the turn ran and its error was reported cleanly (OpenRouter 404: the cached free model is gone); no PONG reached because a second turn was not allowed' },
+  cn: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN}`, note: 'the account has no model or key in ~/.continue/config.yaml (models: []), so ClikCode refuses the turn as not signed in' },
+  dcode: { at: '2026-10-12', verified: false, method: `${SANDBOX_TURN}`, note: 'no provider key stored (~/.deepagents/.state/auth.json absent), so ClikCode refuses the turn as not signed in' },
+  openclaw: { at: '2026-10-12', verified: false, method: 'not run', note: 'declares no sign-in file to link, and its configured models route through the claude-cli runtime, i.e. another harness account' },
+  mcode: { at: '2026-10-12', verified: false, method: 'not run', note: 'account is exhausted' },
+  kimi: { at: '2026-10-12', verified: false, method: 'not run', note: 'account needs login' },
+  openhands: { at: '2026-10-12', verified: false, method: 'not run', note: 'account needs login' },
+  auggie: { at: '2026-10-12', verified: false, method: 'not run', note: 'account is out of credits' },
+  vibe: { at: '2026-10-12', verified: false, method: 'not run', note: 'the plan allows no requests' },
+};
+
 /** Every native-login account gets its own vendor configuration root by
  * default. Harnesses with a documented root declare it; the remaining CLIs
  * use an isolated HOME. */
-export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = CATALOG_HARNESSES.map((harness) => {
+export const AI_LOCAL_HARNESSES: readonly AiLocalHarnessDefinition[] = CATALOG_HARNESSES.map((entry) => {
+  const liveCheck = LIVE_CHECKS[entry.command];
+  const harness = liveCheck ? { ...entry, liveCheck } : entry;
   if (harness.profileEnv) return harness;
   return { ...harness, profileEnv: 'HOME', profileEnvPassthrough: HOME_REDIRECT_ENV_PASSTHROUGH };
 });
