@@ -1,4 +1,6 @@
+import { createReadStream } from 'node:fs';
 import fs from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { OUTPUT_CAPS } from '../security.js';
 import { defineTool } from '../tool-contract.js';
@@ -6,7 +8,7 @@ import { displayPath, IMAGE_EXTENSIONS, looksBinary, resolveForRead } from './fs
 import { isNotebookPath, parseNotebook, renderNotebook } from './notebook.js';
 import { formatToolRow } from '../../harness/protocol/tools.js';
 import { IMAGE_MIME, MAX_IMAGE_SIDE, MAX_TOOL_IMAGE_BYTES, sniffImage } from '../images.js';
-import type { ToolRunResult } from '../tool-contract.js';
+import type { ToolContext, ToolRunResult } from '../tool-contract.js';
 
 interface ReadFileArgs { path: string; offset?: number; limit?: number }
 
@@ -39,7 +41,7 @@ export const readFileTool = defineTool<ReadFileArgs>({
     if (IMAGE_EXTENSIONS.has(extension)) {
       return { output: `${shown} is an image (${stat.size} bytes) in a format this tool cannot show; only PNG, JPEG, GIF and WebP are shown.` };
     }
-    if (stat.size > MAX_READ_BYTES) return { output: `${shown} is ${stat.size} bytes, which is too large to read. Use grep to find the relevant part.`, isError: true };
+    if (stat.size > MAX_READ_BYTES) return readLargeFile(resolved.real, shown, stat, args, ctx);
     const buffer = await fs.readFile(resolved.real);
     if (looksBinary(buffer)) return { output: `${shown} is a binary file (${stat.size} bytes); not shown.` };
     ctx.session.readFiles.set(resolved.real, { mtimeMs: stat.mtimeMs, size: stat.size });
@@ -78,6 +80,46 @@ export const readFileTool = defineTool<ReadFileArgs>({
     return { output: `${body.join('\n')}${notes}` };
   },
 });
+
+/** A file too large to hold: read as a stream, from `offset`, for as many
+ * lines as fit one result, and the way to continue. The number of lines in the
+ * whole file is not known without reading all of it, so it is not said. */
+async function readLargeFile(
+  file: string, shown: string, stat: { mtimeMs: number; size: number }, args: ReadFileArgs, ctx: ToolContext,
+): Promise<ToolRunResult> {
+  const handle = await fs.open(file, 'r');
+  try {
+    const head = Buffer.alloc(8192);
+    const { bytesRead } = await handle.read(head, 0, head.length, 0);
+    if (looksBinary(head.subarray(0, bytesRead))) return { output: `${shown} is a binary file (${stat.size} bytes); not shown.` };
+  } finally { await handle.close(); }
+  ctx.session.readFiles.set(file, { mtimeMs: stat.mtimeMs, size: stat.size });
+  const start = Math.max(1, args.offset ?? 1);
+  const limit = Math.min(args.limit ?? OUTPUT_CAPS.readFileLines, OUTPUT_CAPS.readFileLines);
+  const budget = (ctx.outputCap ?? OUTPUT_CAPS.toolOutputBytes) - 300;
+  const body: string[] = [];
+  let bytes = 0;
+  let lineNumber = 0;
+  let more = false;
+  const lines = createInterface({ input: createReadStream(file, { encoding: 'utf8' }), crlfDelay: Infinity });
+  try {
+    for await (const line of lines) {
+      lineNumber += 1;
+      if (lineNumber < start) continue;
+      const clipped = line.length > OUTPUT_CAPS.readFileLineChars ? `${line.slice(0, OUTPUT_CAPS.readFileLineChars)}… [line truncated]` : line;
+      bytes += Buffer.byteLength(clipped) + 8;
+      if (body.length >= limit || (bytes > budget && body.length)) { more = true; break; }
+      body.push(`${lineNumber}\t${clipped}`);
+    }
+  } finally { lines.close(); }
+  if (!body.length) return { output: `${shown} has only ${lineNumber} lines; offset ${start} is past the end.`, isError: true };
+  const end = start + body.length - 1;
+  const size = `${Math.round(stat.size / (1024 * 1024))} MB`;
+  const note = more
+    ? `\n\n[${shown} is ${size}, read in pages. Showing lines ${start}-${end}. Continue with offset=${end + 1}.]`
+    : `\n\n[${shown} is ${size}. Showing lines ${start}-${end}, the end of the file.]`;
+  return { output: `${body.join('\n')}${note}` };
+}
 
 /** The picture itself, for a model that can see it: the loop sends it with
  * the result (models/openai-client.ts toChatMessages), and the text says
