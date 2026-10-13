@@ -2,7 +2,7 @@
 import type { JSX } from 'preact';
 import { memo } from 'preact/compat';
 import { useRef, useState } from 'preact/hooks';
-import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
+import { isClikCodeNotice } from '../../../../src/session/clikcode-notice';
 import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { post, uid } from './bus';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
@@ -59,20 +59,12 @@ export function LiveMarkdown({ text }: { text: string }): JSX.Element {
   );
 }
 
-/** A notice ClikCode sent the model in the user's place (a background
- * shell's exit, vendor work a stopped worker ended): muted and labelled as
- * ClikCode's, not a bubble the user wrote (session/clikcode-notice.ts). */
-export const ClikCodeNotice = ({ text }: { text: string }): JSX.Element => (
-  <div class="notice clikcode-notice" role="note" aria-label="ClikCode notice">
-    <Icon name="info" /><span><span class="notice-label">ClikCode notice</span>{'\n'}{clikCodeNoticeBody(text)}</span>
-  </div>
-);
-
 /** A sent prompt. Settled ones (`prompt`: its number, as /redo counts them)
  * show two actions on hover: copy it, or redo from it -- the conversation
  * goes back to before it and it returns to the message box (/redo). */
 export const UserMessage = memo(({ text: content, prompt }: { text: string; prompt?: number }): JSX.Element => {
-  if (isClikCodeNotice(content)) return <ClikCodeNotice text={content} />;
+  // Something ClikCode told the model, not a message of the user's: never drawn.
+  if (isClikCodeNotice(content)) return <></>;
   const { text, file, problems, selections } = splitEditorContext(content);
   return (
     <div class="message user" role="article" aria-label="You">

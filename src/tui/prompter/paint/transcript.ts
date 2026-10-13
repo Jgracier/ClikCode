@@ -1,6 +1,7 @@
 /** The append-only transcript of a frame: what is retired into scrollback this frame, and the live answer under it. */
 import chalk from 'chalk';
 import { sanitizeTerminalText } from '../../render/text.js';
+import { isClikCodeNotice } from '../../../session/clikcode-notice.js';
 import { stripRepeatedTitles } from '../../../session/title.js';
 import { TurnTranscript } from '../../../turn/transcript.js';
 import type { MessageBlock } from '../../../harness/prompter.js';
@@ -126,6 +127,12 @@ function writeMessages(
   for (let index = firstUnwritten; index < persistedMessages.length; index += 1) {
     let message = persistedMessages[index]!;
     p.messageLines.set(index, p.alternateTrimmed + p.alternateTranscript.length + p.pendingFinished.length + finished.length);
+    // Something ClikCode told the model (a background shell's exit) is not part of the conversation the user reads.
+    if (message.role === 'user' && isClikCodeNotice(message.content)) {
+      p.emitted.wrote(message);
+      emit(standaloneActivity(index + 1));
+      continue;
+    }
     const pastTools = message.role === 'assistant' && index !== liveAssistant && !drewLiveTurn ? savedTools(message, index) : [];
     // A steered turn is saved as several messages and was drawn live as
     // one answer: the span of them is that answer, written once.

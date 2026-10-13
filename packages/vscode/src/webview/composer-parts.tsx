@@ -1,7 +1,6 @@
 /** Pieces of the composer: what it shows above and below the message box. */
 import type { JSX } from 'preact';
 import { useRef, useState } from 'preact/hooks';
-import { clikCodeNoticeBody } from '../../../../src/session/clikcode-notice';
 import { COPIED_MS } from '../../../../src/harness/protocol/timings';
 import { compactCount, formatElapsed } from '../../../../src/harness/protocol/format';
 import { queuedRowLabel, type ChatModel } from '../model';
@@ -17,11 +16,7 @@ export type Menu = 'provider' | 'model' | 'effort' | 'mode' | 'account' | undefi
 export function QueueRows({ model, enterAgain, firstWaiting }: { model: ChatModel; enterAgain: boolean; firstWaiting: number }): JSX.Element {
   return (
     <div class="queued" aria-label="Queued messages">
-      {model.queued.map((item, index) => item.notification ? (
-        // A notice ClikCode owes the agent (a background task's result,
-        // work that was stopped): not the user's to edit.
-        <div key={item.id} class="queued-item clikcode-notice"><Icon name="bell" /><span class="queued-text" title={clikCodeNoticeBody(item.text)}>ClikCode notice</span><span class="muted">next turn</span></div>
-      ) : (
+      {model.queued.map((item, index) => (
         <div key={item.id} class="queued-item">
           <Icon name={item.command ? 'terminal-cmd' : 'clock'} /><span class="queued-text" title={item.text}>{item.text}</span>
           <span class="muted">{queuedRowLabel(model, item, index === firstWaiting && enterAgain)}</span>

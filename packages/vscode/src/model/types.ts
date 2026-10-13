@@ -221,9 +221,7 @@ export interface ChatModel {
   chatCost?: string;
   messages: Array<{ role: 'user' | 'assistant'; content: string }>;
   notes: Note[];
-  /** `notification`: a finished background task the agent is owed, not
-   * something the user typed. */
-  queued: Array<{ id: string; text: string; command: boolean; notification?: boolean; held?: boolean }>;
+  queued: Array<{ id: string; text: string; command: boolean; held?: boolean }>;
   running: boolean;
   /** This client's submitted prompt, until a snapshot carries it. */
   pendingPrompt?: string;
