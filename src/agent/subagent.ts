@@ -91,7 +91,7 @@ function answerFrom(result: GatewayHarnessTurnResult, transcript: readonly Conve
   let lastResult = -1;
   transcript.forEach((item, index) => { if (item.type === 'tool_result') lastResult = index; });
   const final = assistantTexts(transcript.slice(lastResult + 1)).join('\n\n');
-  if (result.stopReason === 'no-progress') return { output: final || 'The sub-agent could not make progress.', isError: true };
+  if (result.stalled) return { output: final || 'The sub-agent could not make progress.', isError: !final };
   return { output: final || assistantTexts(transcript).join('\n\n') || '(The sub-agent finished without writing an answer.)' };
 }
 

@@ -221,11 +221,12 @@ describe('runAgentLoop', () => {
     expect(result).toMatchObject({ steps: 90, stopReason: 'completed', text: 'All ninety steps done.' });
   });
 
-  it('detects no progress: tells the model after 3 identical failures with nothing changed, then stops', async () => {
+  it('detects no progress: tells the model after 3 identical failures with nothing changed, then takes its explanation as the answer of a completed turn', async () => {
     const failing = { name: 'read_file', args: { path: 'missing.txt' } };
     const h = harness([{ toolCalls: [failing] }, { toolCalls: [failing] }, { toolCalls: [failing] }, { text: 'I cannot find missing.txt.', toolCalls: [failing] }]);
     const result = await runAgentLoop(h.input);
-    expect(result).toMatchObject({ steps: 4, stopReason: 'no-progress', isError: true, text: 'I cannot find missing.txt.' });
+    expect(result).toMatchObject({ steps: 4, stopReason: 'completed', stalled: true, text: 'I cannot find missing.txt.' });
+    expect(result.isError).toBeUndefined();
     const last = h.client.requests[3];
     // The tools stay declared -- the history holds tool calls, which Anthropic
     // refuses without them -- and the model is told not to call one.
@@ -260,7 +261,7 @@ describe('runAgentLoop', () => {
       { text: 'Still failing.', toolCalls: [missing] },
     ]);
     const result = await runAgentLoop(h.input);
-    expect(result).toMatchObject({ stopReason: 'no-progress' });
+    expect(result).toMatchObject({ stopReason: 'completed', stalled: true });
   });
 
   it('abort mid-tool kills the whole process group and throws ERR_TURN_CANCELLED', async () => {

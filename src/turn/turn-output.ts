@@ -63,6 +63,12 @@ export function showStopReason(prompter: TurnObserver | undefined, reason: TurnS
   else if (stopped && !isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(stopped)}\n`);
 }
 
+/** A line about a turn that completed but not as asked, beside its answer. */
+export function showTurnNote(prompter: TurnObserver | undefined, note: string): void {
+  if (prompter) prompter.activity(chalk.yellow(note));
+  else if (!isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(note)}\n`);
+}
+
 /** An activity row: on the prompter, or as a line on stdout headless. */
 function showActivity(prompter: TurnObserver | undefined, event: HarnessActivityEvent): void {
   if (prompter) prompter.activityEvent(event);

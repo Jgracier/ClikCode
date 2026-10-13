@@ -16,7 +16,7 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { setPlanMode, unfinishedUsageRecorder } from './turn-steps.js';
-import { recordInvocation, showStopReason } from './turn-output.js';
+import { recordInvocation, showStopReason, showTurnNote } from './turn-output.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
 import chalk from 'chalk';
 import { agentTurnFailureKind } from './failover.js';
@@ -231,6 +231,7 @@ export async function runAgentTurn(input: {
     });
     const completedText = await completeTurnCheckpoint(session, checkpoint, harnessTurn.text);
     showStopReason(prompter, usage.stopReason);
+    if (harnessTurn.stalled) showTurnNote(prompter, 'The agent stopped repeating a call that kept failing and explained instead; the reply above is its explanation.');
     if (!prompter) {
       emitHarnessOutput({
         session, text: completedText, invocation: harnessInvocation,
