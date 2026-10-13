@@ -87,11 +87,16 @@ export function foldedSummary(activities: readonly Activity[]): string {
   return titleCase(text);
 }
 
-/** The working line's background-terminals indicator (`2 background
- * terminals running`) while any run, else nothing. It is not part of the
- * turn's closing line. */
+/** The live background work beside the status, in the same words as the CLI's
+ * pinned band. The closing line still owns the turn's final counts. */
 export function workingIndicator(live: Pick<LiveTurn, 'background'> | undefined): string | undefined {
-  return backgroundTerminalsLabel(live?.background?.terminals);
+  const work = live?.background;
+  const agents = work?.agents ?? 0;
+  const workflows = work?.workflows ?? 0;
+  const waiting = agents || workflows
+    ? turnSummary({ ms: 0, ...(agents ? { pendingBackground: agents } : {}), ...(workflows ? { pendingWorkflows: workflows } : {}) })
+    : undefined;
+  return [waiting, backgroundTerminalsLabel(work?.terminals)].filter(Boolean).join(' · ') || undefined;
 }
 
 /** The line a finished turn ends on, the same live and on reopen, or nothing.

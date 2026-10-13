@@ -78,6 +78,17 @@ describe('ACP status updates and extension notifications', () => {
     expect(phases).toEqual(['compacting the conversation', 'compacting the conversation', 'background task: dev server', 'sub-agent: reviewer']);
   });
 
+  it('hides only Claude cross-organization thinking notices in both adapter formats', async () => {
+    const streamed: string[] = [];
+    const { notices, seen } = await run({ steps: [
+      update({ sessionUpdate: 'notice', severity: 'warning', title: "Claude can't use thinking from another organization", description: 'Preserved thinking is account-bound' }),
+      update({ sessionUpdate: 'notice', severity: 'warning', title: 'Rate limit near', description: '80% of the window' }),
+      update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: "**Warning:** Claude can't use thinking from another organization\nAn old warning" }, _meta: { claudeCode: { kind: 'informational', level: 'warning' } } }),
+    ] }, { onResponseDelta: (delta: string) => streamed.push(delta) });
+    expect(notices).toEqual(['Rate limit near: 80% of the window']);
+    expect(streamed.join('')).toBe(JSON.stringify(seen));
+  });
+
   it('counts extension notifications as proof of life for the idle watchdog', async () => {
     const quiet = (method: string) => ({ after: 150, send: { method, params: { sessionId: 's1' } } });
     // 4 x 150ms of nothing but extension traffic against a 400ms budget.

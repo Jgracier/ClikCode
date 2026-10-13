@@ -99,6 +99,52 @@ describe('the background terminals indicator (standard section 10)', () => {
   });
 });
 
+describe('running steps stay above the status line', () => {
+  beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
+  afterEach(() => {
+    vi.useRealTimers();
+    Object.assign(process.stdout, { isTTY: realTty });
+    process.stdout.write = realWrite;
+  });
+
+  it('shows the latest step until a click, then the live rows, then hides them', () => {
+    const written: string[] = [];
+    Object.assign(process.stdout, { isTTY: true, columns: 100, rows: 30 });
+    process.stdout.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      for (const arg of rest) if (typeof arg === 'function') (arg as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+    const rl = new TerminalHarnessPrompter();
+    const keys = rl as unknown as { handleScrollKey(key: string): boolean };
+    const click = (): void => {
+      keys.handleScrollKey('\u001b[<0;4;2M');
+      keys.handleScrollKey('\u001b[<0;4;2m');
+      vi.advanceTimersByTime(50);
+    };
+    try {
+      rl.render({ id: 's', route: 'local', accountId: null, provider: null, model: null, createdAt: '', updatedAt: '', status: 'active', messages: [] } as never);
+      rl.startWaiting('thinking', () => undefined, async () => ({ kind: 'sent' }) as never);
+      rl.response(`${'The answer keeps going. '.repeat(40)}\n\n`);
+      rl.activityEvent({ kind: 'tool-start', id: 'a', label: 'Task(explore)', agent: true });
+      rl.activityEvent({ kind: 'tool-start', id: 'c', parentId: 'a', label: 'Grep(charge)' });
+      vi.advanceTimersByTime(300);
+      const closed = strip(written.slice(-3).join(''));
+      expect(closed).toContain('Grep(charge)');
+      expect(closed).toContain('click');
+      expect(closed).not.toContain('Task(explore)');
+      click();
+      const open = strip(written.slice(-4).join(''));
+      expect(open.lastIndexOf('Task(explore)')).toBeGreaterThan(open.lastIndexOf('· click'));
+      expect(open).toContain('Grep(charge)');
+      click();
+      const shut = strip(written.slice(-4).join(''));
+      expect(shut.lastIndexOf('· click')).toBeGreaterThan(shut.lastIndexOf('Task(explore)'));
+      expect(shut).toContain('Grep(charge)');
+    } finally { rl.close(); }
+  });
+});
+
 describe('the token meter of a running turn', () => {
   beforeEach(() => { vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] }); });
   afterEach(() => {
