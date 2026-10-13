@@ -80,8 +80,8 @@ const READERS = {
   kimi: bearer('https://api.kimi.com/coding/v1/me', parseKimiUserInfo),
   // Amp publishes no key endpoint; its own `amp usage` reads AMP_API_KEY
   // before its stored login and opens with "Signed in as <email>".
-  amp: async (key, harness) => harness?.command === 'amp'
-    ? parseAmpUsage(await captureNativeHarnessOutput(harness, ['usage'], { AMP_API_KEY: key }))
+  amp: async (key, harness) => harness?.keyIdentityArgv && harness.authEnv?.[0]
+    ? parseAmpUsage(await captureNativeHarnessOutput(harness, harness.keyIdentityArgv, { [harness.authEnv[0]]: key }))
     : undefined,
 } satisfies Record<string, KeyReader>;
 
