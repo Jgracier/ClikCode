@@ -6,6 +6,7 @@
  * engine (src/local-models) plugs in here and nowhere else. */
 
 import type Conf from 'conf';
+import { diagnostic } from '../../runtime/lifecycle-log.js';
 import type { ModelClient } from '../model-client.js';
 import { OpenAIModelClient } from './openai-client.js';
 import { gatewaySubscriptionsOn, subscriptionsHeader } from '../../gateway/subscriptions.js';
@@ -22,9 +23,6 @@ import type { HarnessSession } from '../../session/model.js';
  * waiting line (or stderr headless); nothing is shown when omitted. */
 export interface LocalModelHooks {
   progress?: (update: LocalModelProgress) => void;
-  /** The engine's one-off remark about the model (slow here, no tool
-   * calls, a fallback pick). */
-  notice?: (text: string) => void;
 }
 
 /** The Gateway's base URL and the credential for it, or the error that says
@@ -175,7 +173,7 @@ export async function modelClientForSession(session: HarnessSession, config: Con
       ...(session.model ? { modelId: session.model } : {}), sessionId: session.id,
       ...(local.progress ? { progress: local.progress } : {}),
     });
-    if (endpoint.notice) local.notice?.(endpoint.notice);
+    if (endpoint.notice) diagnostic('local-model.notice', endpoint.notice);
     // A session with no pick runs what the engine chose; recording it keeps
     // later turns on the same model (another session's pick changes the
     // engine's default) and lets the status line name it. Persisted with

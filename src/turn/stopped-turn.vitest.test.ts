@@ -57,8 +57,8 @@ describe('a turn stopped with calls still open', () => {
     expect(stopEntries(entries, () => false)).toBe(entries);
   });
 
-  it('ends on "Stopped after", where a finished turn says "Worked for"', () => {
-    expect(turnSummary({ ms: 4200, stopped: true })).toBe('Stopped after 4s');
+  it('ends on "Stopped", where a finished turn says "Worked for"', () => {
+    expect(turnSummary({ ms: 4200, stopped: true })).toBe('Stopped');
     expect(turnSummary({ ms: 4200 })).toBe('Worked for 4s');
   });
 });

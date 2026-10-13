@@ -9,6 +9,7 @@ import type { HarnessActivityEvent } from '../prompter.js';
 import { compactCount, formatElapsed } from './format.js';
 import type { TurnUsage } from './turn-usage.js';
 import { SHIMMER_WIDTH } from './timings.js';
+import { STOPPED } from './wording.js';
 
 /** Each row's first word, running and done ("Reading" / "Read"), as all four
  * write it. A command keeps its `$`; an unknown tool keeps its own name. */
@@ -284,9 +285,10 @@ export function turnSummary(state: {
     const waiting = [...(agents ? [plural(agents, 'background agent')] : []), ...(workflows ? [plural(workflows, 'dynamic workflow')] : [])].join(' and ');
     return `Waiting for ${waiting}${changed}${spent}`;
   }
-  // A stopped turn says so where it ends: "Stopped" is otherwise only a
-  // passing notice, and "Worked for" read as a turn that finished.
-  return `${state.stopped ? 'Stopped after' : 'Worked for'} ${formatElapsed(Math.max(1000, state.ms))}${changed}${spent}`;
+  // A stopped turn says so where it ends, and only that: "Worked for" read
+  // as a turn that finished.
+  if (state.stopped) return STOPPED;
+  return `Worked for ${formatElapsed(Math.max(1000, state.ms))}${changed}${spent}`;
 }
 
 /** The footer indicator for background terminals (standard section 10), as

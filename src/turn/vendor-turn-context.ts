@@ -1,5 +1,5 @@
 /** The state one vendor turn's attempts share, held in one object. */
-import chalk from 'chalk';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
@@ -86,7 +86,7 @@ export async function createVendorTurnContext(input: {
   await ensureNativeHarness(harness, prompter ? {
     reporter: {
       start: (label) => prompter.phase(label),
-      done: (message) => prompter.activity(chalk.dim(message)),
+      done: (message) => diagnostic('vendor.installed', message),
       failed: () => undefined,
     },
   } : {});

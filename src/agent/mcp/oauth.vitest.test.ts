@@ -29,7 +29,7 @@ let dir: string;
 const servers: Server[] = [];
 const managers: McpManager[] = [];
 
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'clikcode-mcp-oauth-')); });
+beforeEach(async () => { vi.mocked(diagnostic).mockClear(); dir = await mkdtemp(join(tmpdir(), 'clikcode-mcp-oauth-')); });
 afterEach(async () => {
   await Promise.all(managers.splice(0).map((manager) => manager.shutdown()));
   await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); })));

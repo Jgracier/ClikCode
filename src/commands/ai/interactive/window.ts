@@ -128,7 +128,7 @@ export async function openWindow(config: Conf, startId: string): Promise<ChatWin
   const initialAccount = session.accountId ? state.accounts.find((account) => account.id === session.accountId)?.label : undefined;
   const warmCatalogFor = createCatalogWarmer();
   warmCatalogFor(session, state);
-  if (terminal) terminal.render(session, initialAccount, selectionNotice);
+  if (terminal) { terminal.render(session, initialAccount); if (selectionNotice) terminal.activity(selectionNotice); }
   else emitHarnessOutput({ status: 'ready', session, account: initialAccount });
   const refreshUsage = createUsageRefresher(config, terminal);
   refreshUsage(session, state);

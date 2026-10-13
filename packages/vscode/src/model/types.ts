@@ -102,7 +102,7 @@ export interface TurnTrace {
   pendingWorkflows?: number;
   /** The calls and text are the saved turn's, not this window's. */
   saved?: boolean;
-  /** The turn was stopped: it ends on "Stopped after", not "Worked for". */
+  /** The turn was stopped: it ends on "Stopped", not "Worked for". */
   stopped?: boolean;
 }
 

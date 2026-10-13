@@ -215,18 +215,17 @@ describe('an install on the terminal\'s band', () => {
         startWaiting: (text: string) => { calls.push(`start ${text}`); current = text; },
         stopWaiting: () => { calls.push('stop'); current = undefined; },
         updateWaitingLabel: (text: string) => { calls.push(`label ${text}`); current = text; },
-        notice: (text: string) => { calls.push(`notice ${text}`); },
       },
     };
   }
 
-  it('starts its wait once: a second start only moves the label, and the outcome is a notice', () => {
+  it('starts its wait once: a second start only moves the label, and a finished install says nothing', () => {
     const { calls, terminal } = fakeTerminal();
     const reporter = terminalInstallReporter(terminal);
     reporter.start('waiting for another ClikCode to finish installing Grok…');
     reporter.start('installing Grok…');
     reporter.done('Installed Grok.');
-    expect(calls).toEqual(['start waiting for another ClikCode to finish installing Grok…', 'label installing Grok…', 'stop', 'notice Installed Grok.']);
+    expect(calls).toEqual(['start waiting for another ClikCode to finish installing Grok…', 'label installing Grok…', 'stop']);
   });
 
   it('borrows a band already up and gives its label back', () => {

@@ -346,7 +346,7 @@ export class ClikCodeController implements vscode.Disposable {
         this.onBridgeEvent(event);
         if (event.type === 'ready') {
           const skew = versionSkew(event);
-          if (skew && !this.model.notes.some((note) => note.text === skew)) { log.appendLine(`[${this.label}] ${skew}`); this.note(skew, 'warning'); }
+          if (skew) log.appendLine(`[${this.label}] ${skew}`);
         }
       });
       bridge.once('exit', ({ code }) => {

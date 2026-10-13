@@ -88,10 +88,6 @@ export function renderPanelText(payload: Record<string, unknown>): string | unde
     }
     return (`\n${chalk.red('Error:')} ${payload.message}\n\n`);
   }
-  // Something worth knowing that did not stop anything.
-  if (payload.panel === 'notice' && typeof payload.message === 'string') {
-    return (`\n${chalk.yellow('Note:')} ${payload.message}\n\n`);
-  }
   if (payload.panel === 'help' && typeof payload.helpText === 'string') {
     return (`\n${chalk.bold('Commands')}\n\n${payload.helpText}\n\n`);
   }

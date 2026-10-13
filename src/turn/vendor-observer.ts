@@ -1,6 +1,6 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
  * screen: the shared observer, usage and pending work. */
-import chalk from 'chalk';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import type { HarnessAvailableCommand, HarnessPlanEntry, HarnessTurnObserver } from '../harness/events/turn-observer.js';
@@ -91,7 +91,7 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     },
     onResponseDelta: sink.response,
     onPhase: (phase: string) => prompter?.phase(phase),
-    onNotice: (message: string) => prompter?.activity(chalk.yellow(message)),
+    onNotice: (message: string) => diagnostic('vendor.notice', message),
     onPlan: (entries: readonly HarnessPlanEntry[]) => {
       // Kept on the session too: a provider taking the conversation over is
       // told the todos still open (session/canonical.ts).

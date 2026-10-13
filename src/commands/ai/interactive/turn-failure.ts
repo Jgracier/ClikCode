@@ -1,7 +1,7 @@
 /** Deciding what a failed turn changes about the loop. */
 import { lifecycle } from '../../../runtime/lifecycle-log.js';
-import { STOPPED } from '../../../harness/protocol/wording.js';
-import { isUsageExhaustedMessage, nextQuotaReset, resumeWaitLabel } from '../../../turn/usage-exhausted.js';
+import chalk from 'chalk';
+import { isUsageExhaustedMessage, nextQuotaReset } from '../../../turn/usage-exhausted.js';
 import { quotaResetPhrase } from '../../../harness/protocol/format.js';
 import { failureLine } from '../../../harness/protocol/stderr-line.js';
 import type { HarnessSession, HarnessState } from '../../../session/model.js';
@@ -39,23 +39,27 @@ export async function turnFailureEffect(
   // (don't clear it like we would for a turn that never started properly)
   // A sign-in that did not sign in has said so in its own line.
   if (signInOutcomeSaid(error)) return {};
+  // The worker put its line in the turn already.
+  const said = Boolean((error as { said?: boolean } | undefined)?.said);
   const next = await afterTurnFailure(terminal, id, error, { ...failed, guard });
-  if (next.cancelled && terminal) return { notice: STOPPED };
+  // A stopped turn ends on its own "Stopped" row; nothing more is said.
+  if (next.cancelled && terminal) return {};
   if (!terminal) { emitHarnessOutput({ panel: 'error', message: failureLine(message) }); return {}; }
   if ('retry' in next) return { resend: next.retry };
   if ('moved' in next) return { id: next.moved.id, resend: next.moved.prompt };
   if (next.waiting) {
     // The worker sends it at the reset; it hears of the parked turn now.
-    const notice = `${resumeWaitLabel(next.waiting)} · Esc or a new message cancels`;
+    // The status line says it is waiting: nothing more is drawn.
     refreshSessionWorker(id);
     const parkedState = await readState({ transcripts: [] });
     const parked = parkedState.sessions.find((item) => item.id === id);
     if (parked) refreshUsage(parked, parkedState);
-    return { notice };
+    return {};
   }
   // Running out says when usage is back, as the Resume-in list did.
-  const notice = isUsageExhaustedMessage(message) ? `${message}${await usageBackPhrase(id)}` : `Error: ${failureLine(message)}`;
   if (next.back.length) terminal?.restoreDraft(next.back.join('\n\n'));
+  if (said) return {};
+  const notice = isUsageExhaustedMessage(message) ? `${message}${await usageBackPhrase(id)}` : chalk.red(`Error: ${failureLine(message)}`);
   return { notice };
 }
 

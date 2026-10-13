@@ -140,7 +140,6 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       actedOn = row;
       if (action === 'clear-provider' && harness) {
         await aiSettingsClearProvider(harness.command, false);
-        rl.activity?.(`${harness.displayName} now uses every-harness defaults`);
         return;
       }
       const [scope, key] = action.split(':') as ['provider' | 'global', DefaultKey];
@@ -151,9 +150,6 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
       if (!value) return;
       if (scope === 'global') await aiSettingsSetGlobal(key, value, false);
       else if (harness) await aiSettingsSetProvider(harness.command, key, value, false);
-      // A line in the conversation: Settings stays open over it, and a
-      // panel drawn under the list was gone with the next paint.
-      rl.activity?.(`Default saved · ${settingLabel(key)} ${scope === 'global' ? 'for every harness' : `for ${harness?.displayName}`}: ${value}`);
     }, returnTo === undefined ? undefined : { startAt: returnTo });
     if (selected === undefined && actedOn !== undefined && lastPickerExit === 'choose') { returnTo = actedOn; continue; }
     if (selected === undefined) return id;

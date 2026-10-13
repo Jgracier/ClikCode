@@ -2,8 +2,7 @@
  * says whether the turn runs again ('retry') or leaves the choice to the next
  * one ('pass'); when none applies the turn moves to another account. */
 import { forgetNativeThread } from '../session/native-thread.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
-import chalk from 'chalk';
+import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { closePersistentTransport, closeStandby, standbyFor } from './vendor-process.js';
 import { moveThreadToAccount } from '../session/carry.js';
 import { switchAccountAfterFailure } from './account-switch.js';
@@ -67,7 +66,7 @@ async function retryAfterSignIn(ctx: VendorTurnContext, failed: Failed): Promise
 async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promise<Decision> {
   ctx.attempt.nativeThreadRetried = true;
   // The one notice of this recovery; the flag above makes it once per attempt.
-  ctx.prompter?.activity(chalk.yellow(`${ctx.harness.displayName} could not resume its thread; continuing on a new one with the conversation carried over`));
+  diagnostic('vendor.thread-not-resumed', `${ctx.harness.displayName} could not resume its thread; continuing on a new one with the conversation carried over`);
   await closePersistentTransport(ctx.session.id);
   forgetNativeThread(ctx.session);
   ctx.turnText = await retell(ctx, ctx.askedText, 'clear', Boolean(ctx.session.pendingTurn?.outputStarted || failed.cliOutputStarted));

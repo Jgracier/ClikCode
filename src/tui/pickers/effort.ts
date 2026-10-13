@@ -25,5 +25,5 @@ export async function interactiveEffortPicker(rl: HarnessPrompter, id: string): 
       value,
     })),
   ]);
-  if (selected) { await applyToChat(id, 'effort', selected); rl.notice?.(`Effort set to ${settingLabel(selected === 'default' ? '' : selected)}`); }
+  if (selected) await applyToChat(id, 'effort', selected);
 }

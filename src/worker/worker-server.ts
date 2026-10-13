@@ -18,7 +18,7 @@ export function createWorkerServer(ctx: WorkerContext, handleCommand: (socket: C
         void handleCommand(socket, message as ClientCommand, connection).catch((error: unknown) => {
           const reason = error instanceof Error ? error.message : String(error);
           lifecycle('worker.command.failed', { type: (message as { type?: unknown }).type, message: reason });
-          sendEvent(socket, { type: 'notice', message: `The conversation's worker could not do that: ${reason}` });
+          sendEvent(socket, { type: 'note', message: `The conversation's worker could not do that: ${reason}` });
         });
       }
     });

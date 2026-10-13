@@ -66,8 +66,8 @@ export type TranscriptMessage = {
    * is that harness's. */
   origin?: MessageOrigin;
   /** On the answer a turn ended on: how long the turn took, and whether it
-   * was stopped. The turn's closing line ("Worked for 12s", "Stopped after
-   * 3s") is drawn from this, so it is there however the conversation is
+   * was stopped. The turn's closing line ("Worked for 12s", "Stopped")
+   * is drawn from this, so it is there however the conversation is
    * opened again -- not only in the window that watched the turn end.
    * `usage` is what the turn reported it spent, when it reported any: the
    * closing line adds tokens and cost from it. */
@@ -79,9 +79,6 @@ export type TranscriptMessage = {
   /** On the answer a turn ended on: the account it moved to on the way,
    * from which, and why ("Switched to work: personal is out of usage"). */
   accountSwitch?: AccountSwitch;
-  /** On the answer a turn ended on: the sign-in it needed on the way (a
-   * vendor that refused it as signed out), by the name it signed in to. */
-  signedInTo?: string;
 };
 
 /** A turn moved to another account of the same provider (turn/account-routing.ts). */
@@ -233,8 +230,6 @@ export interface HarnessSession {
     subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string }>;
     /** The account this turn moved to, carried onto its answer at the end. */
     accountSwitch?: AccountSwitch;
-    /** A sign-in this turn needed and got, carried onto its answer too. */
-    signedInTo?: string;
     /** Background agents the vendor says are still running: carried onto
      * the answer's `turnEnd` when the turn ends (`background`: the same,
      * with workflows). */

@@ -1,3 +1,4 @@
+import { diagnostic } from '../../runtime/lifecycle-log.js';
 import Conf from 'conf';
 /** Choosing a model from the active harness's catalog. */
 
@@ -164,7 +165,6 @@ export async function interactiveModelPicker(rl: HarnessPrompter, id: string): P
   // genuinely benefit from a scope choice.
   if (value) {
     await aiSessionCommand(id, typed !== undefined ? `/model --any ${value}` : `/model ${value}`);
-    rl.notice?.(`Model set to ${harness ? harnessModelLabel(harness, value) : value}`);
   }
 }
 
@@ -223,7 +223,7 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
   // Account-private roster: always ask with the current key; never display
   // another account's cached agents. A missing roster does not block models.
   const agents = await gatewayAgents().catch((error: unknown) => {
-    rl.notice?.(`Could not load Gateway agents: ${error instanceof Error ? error.message : String(error)}`);
+    diagnostic('gateway.agents-unavailable', error instanceof Error ? error.message : String(error));
     return [];
   });
   if (!list) {
@@ -243,15 +243,13 @@ async function gatewayModelPicker(rl: HarnessPrompter, id: string, current: stri
       try {
         list = await withSlowWait(waiting, 'finding ClikDeploy Gateway models…', () => gatewayModels({ fresh: true, config }));
       } catch (error) {
-        rl.notice?.(`Could not refresh the Gateway models: ${error instanceof Error ? error.message : String(error)}`);
+        diagnostic('gateway.models-unavailable', error instanceof Error ? error.message : String(error));
       }
-      rl.notice?.(on ? 'Subscriptions on: your ClikCode turns may use the platform\'s subscriptions.' : 'Subscriptions off: your ClikCode turns use customer accounts only.');
       continue;
     }
     if (selected.kind === 'agent') {
       currentAgent = selected.id === currentAgent ? undefined : selected.id;
       await selectGatewayAgent(id, currentAgent, agents.find((agent) => agent.id === currentAgent)?.name);
-      if (currentAgent) rl.notice?.('Agent selected for this session. Choose a model, or Automatic, to finish.');
       continue;
     }
     await aiSessionCommand(id, `/model ${selected.id}`);

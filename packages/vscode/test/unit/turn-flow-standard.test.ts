@@ -91,10 +91,10 @@ describe('a reopened turn says what the live one said (V3)', () => {
     expect(traceSummaryLine(trace, [])).toBe('Worked for 1m 2s');
   });
 
-  it('says Stopped after for a stopped one', () => {
+  it('says Stopped for a stopped one', () => {
     const trace = applyEvent(emptyModel(), { type: 'session', session: saved({ ms: 3_000, stopped: true }) }).traces[0]!;
     expect(trace.stopped).toBe(true);
-    expect(traceSummaryLine(trace, [])).toBe('Stopped after 3s');
+    expect(traceSummaryLine(trace, [])).toBe('Stopped');
   });
 
   it('invents no duration when none was saved', () => {
@@ -189,7 +189,7 @@ describe('a notice stays where it arrived (V9)', () => {
   it('is anchored to the response offset of the running turn and keeps its turn at the end', () => {
     const model = run([
       worker({ type: 'delta', text: 'abc', mode: 'append' }),
-      worker({ type: 'notice', message: 'Switched to work' }),
+      worker({ type: 'note', message: 'Switched to work' }),
       worker({ type: 'delta', text: 'def', mode: 'append' }),
     ], begin());
     expect(model.notes[0]).toMatchObject({ turn: 0, offset: 3, text: 'Switched to work' });
@@ -205,14 +205,14 @@ describe('a notice stays where it arrived (V9)', () => {
   });
 
   it('a note outside a turn is not tied to one', () => {
-    const model = applyEvent(run([{ type: 'session', session: session() }]), worker({ type: 'notice', message: 'hello' }));
+    const model = applyEvent(run([{ type: 'session', session: session() }]), worker({ type: 'note', message: 'hello' }));
     expect(model.notes[0]!.turn).toBeUndefined();
   });
 
   it('is rebased with the rows when the answer text is replaced', () => {
     const model = run([
       worker({ type: 'delta', text: 'abcdef', mode: 'append' }),
-      worker({ type: 'notice', message: 'n' }),
+      worker({ type: 'note', message: 'n' }),
       worker({ type: 'delta', text: 'abXY', mode: 'replace' }),
     ], begin());
     expect(model.notes[0]!.offset).toBe(2);

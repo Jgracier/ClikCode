@@ -1,6 +1,5 @@
 /** One ACP or app-server attempt, with a CLI fallback where the vendor permits it. */
-import { lifecycle } from '../runtime/lifecycle-log.js';
-import chalk from 'chalk';
+import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import type { LiveSettings } from './live-settings.js';
 import type { HarnessSession } from '../session/model.js';
@@ -75,7 +74,7 @@ export async function runVendorSessionAttempt(input: {
       const ignored = launch.unmapped.join(', ');
       if (ignored && ignoredOptionsSaid.get(session.id) !== ignored) {
         ignoredOptionsSaid.set(session.id, ignored);
-        prompter?.activity(chalk.dim(`${harness.displayName} app-server ignores: ${ignored}`));
+        diagnostic('vendor.app-server-ignores', `${harness.displayName}: ${ignored}`);
       }
       const codexInput: CodexAppServerTurnInput = {
         ...launch.input, prompt: turnText, images, signal, onSessionId,

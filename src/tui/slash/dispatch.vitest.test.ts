@@ -54,11 +54,11 @@ describe('one dispatch for every client', () => {
     expect(await dispatchLine(recordingHost(), 's1', 'explain this')).toEqual({ prompt: 'explain this', echo: true });
   });
 
-  it('attaches a file named on its own, and tells the host', async () => {
+  it('attaches a file named on its own, and tells the host, with no line of its own', async () => {
     writeFileSync(join(workspace, 'shot.png'), 'png');
     const attached = vi.fn();
     const outcome = await dispatchLine(recordingHost({ attached }), 's1', join(workspace, 'shot.png'));
-    expect(outcome.notice).toMatch(/^Attached .*shot\.png for the next request$/);
+    expect(outcome).toEqual({});
     expect(attached).toHaveBeenCalledWith([join(workspace, 'shot.png')]);
     expect((await readState()).sessions[0]?.attachments).toEqual([join(workspace, 'shot.png')]);
   });
@@ -117,7 +117,7 @@ describe('one dispatch for every client', () => {
     expect(bodies[0]).toContain('/mcp login <name>');
     // A sign-in only where a screen can show it; a logout forgets the record.
     await expect(dispatchLine(recordingHost(), 's1', '/mcp login remote')).rejects.toThrow(/clikcode mcp login remote/);
-    expect(await dispatchLine(recordingHost(), 's1', '/mcp logout remote')).toEqual({ notice: 'Signed out of remote' });
+    expect(await dispatchLine(recordingHost(), 's1', '/mcp logout remote')).toEqual({});
     expect(existsSync(join(home, 'mcp-oauth', 'remote.json'))).toBe(false);
   });
 });

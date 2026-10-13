@@ -14,7 +14,7 @@ import {
   ensureLocalModel, releaseLocalModel, releaseLocalModelsOnExit, type LocalModelEndpoint, type LocalModelProgress,
 } from '../../local-models/index.js';
 import type { LocalModelHooks } from '../../agent/models/for-session.js';
-import { emitHarnessOutput } from '../../harness/output.js';
+import { diagnostic } from '../../runtime/lifecycle-log.js';
 import type { HarnessSession } from '../../session/model.js';
 import { TERMINAL } from '../../tui/active-terminal.js';
 
@@ -23,7 +23,6 @@ import { TERMINAL } from '../../tui/active-terminal.js';
 const held = new Set<string>();
 /** Notices already shown, per session: the engine repeats its remark on
  * every cold start, and once is enough to know a model is slow here. */
-const noticed = new Set<string>();
 
 /** One progress update as a line: a download or runtime fetch with its
  * percentage, everything else as the engine words it. */
@@ -89,29 +88,23 @@ function localModelProgress(sink?: ProgressSink): { progress: (update: LocalMode
   };
 }
 
-function reportNotice(sessionId: string, notice: string | undefined): void {
-  if (!notice || noticed.has(`${sessionId}\n${notice}`)) return;
-  noticed.add(`${sessionId}\n${notice}`);
-  emitHarnessOutput({ panel: 'notice', message: `ClikCode Local: ${notice}` });
-}
-
 async function ensureWithProgress(sessionId: string, modelId: string | undefined, allowDownload = false, sink?: ProgressSink): Promise<LocalModelEndpoint> {
   releaseLocalModelsOnExit();
   const shown = localModelProgress(sink);
   try {
     const endpoint = await ensureLocalModel({ ...(modelId ? { modelId } : {}), sessionId, progress: shown.progress, allowDownload });
     held.add(sessionId);
-    reportNotice(sessionId, endpoint.notice);
+    if (endpoint.notice) diagnostic('local-model.notice', endpoint.notice);
     return endpoint;
   } finally { shown.done(); }
 }
 
 /** The turn path's hooks into the seam (agent/models/for-session.ts):
- * progress where this process shows it, and each notice once. */
+ * progress where this process shows it. */
 export function localModelTurnHooks(sessionId: string): LocalModelHooks & { done: () => void } {
   const shown = localModelProgress();
   held.add(sessionId);
-  return { progress: shown.progress, notice: (text) => reportNotice(sessionId, text), done: shown.done };
+  return { progress: shown.progress, done: shown.done };
 }
 
 /** Before a turn is handed to the worker: a ClikCode Local session's model
@@ -151,5 +144,4 @@ export async function reconcileLocalModelLeases(showing: HarnessSession | undefi
 /** For tests: forget what this process holds without touching the engine. */
 export function resetLocalModelHeldForTests(): void {
   held.clear();
-  noticed.clear();
 }

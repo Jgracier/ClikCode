@@ -1,8 +1,7 @@
 /** A ClikCode slash command typed while a turn is still streaming.
  *
- * It applies at the earliest moment it can. The composer acknowledges it
- * with one transient line saying which (`/model sonnet · applied`, `/stats ·
- * runs when this turn ends`; `commandOutcome` below), never a queued row:
+ * It applies at the earliest moment it can. It says nothing of which
+ * (`commandOutcome` below), and is never a queued row:
  *
  *  - **now**, if its argument form is a pure state write -- `/model sonnet`,
  *    `/effort high`, `/permissions plan`, `/account work`. These need no

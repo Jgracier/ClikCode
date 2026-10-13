@@ -255,7 +255,7 @@ SCENARIOS = {
     },
     # Another window deletes the chat this one has open. The next message
     # here is not lost and does not end ClikCode ("AI session ... was not
-    # found"): a fresh chat opens, says why, and the message waits in its
+    # found"): a fresh chat opens, silently, and the message waits in its
     # composer.
     'chat-deleted-in-other-window': {
         'turns': [{'blocks': ['DOOMED answer lives here.']}, {'blocks': ['Fresh chat answered.']}],
@@ -264,12 +264,12 @@ SCENARIOS = {
             ('open2', 6, ['--continue']), ('wait_for2', 'DOOMED answer lives here.', 10),
             ('keys2', '\x1b[D'), ('settle', 2), ('keys2', '\x1b[3~'), ('wait_for2', 'Cancel', 10),
             ('keys2', '\x1b[B'), ('keys2', '\r'), ('settle', 3),
-            ('mark',), ('type', 'are you there'), ('wait_for', 'was deleted', 15), ('settle', 2), ('snap', 'kept'),
+            ('mark',), ('type', 'are you there'), ('settle', 4), ('snap', 'kept'),
             ('keys', '\r'), ('wait_for', 'Fresh chat answered.', 30), ('settle', 2),
         ],
         'watch': [], 'final_contains': ['are you there', 'Fresh chat answered.'],
         'snap_contains': {'kept': ['› are you there']},
-        'never_after_mark': ['not found'],
+        'never_after_mark': ['not found', 'was deleted'],
     },
     # A window with no worker attached -- its worker stopped (a rebuild
     # retires them), or none ever ran -- sees the turn another window starts.
@@ -295,16 +295,16 @@ SCENARIOS = {
                   {'blocks': ['Second answer arrives here.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30), ('settle', 2),
-            ('kill_workers', 'KILL'), ('wait_for', 'send again to continue', 10), ('settle', 2), ('snap', 'stopped'),
+            ('kill_workers', 'KILL'), ('wait_for', 'sleep 30 stopped', 10), ('settle', 2), ('snap', 'stopped'),
             ('type', 'carry on'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 2),
         ],
         'watch': [],
         # Its call settled as stopped. No closing line: the worker that would
         # have saved the turn's end is gone, and that line is the saved one.
-        'snap_contains': {'stopped': ["The conversation's worker stopped; send again to continue.", 'sleep 30 stopped']},
+        'snap_contains': {'stopped': ['sleep 30 stopped']},
         'snap_once': {'stopped': ['start the build', 'Starting the long build.']},
         'snap_lacks': {'stopped': ['▸', 'Worked for']},
-        'final_once': ['Second answer arrives here.'], 'never': ['closed unexpectedly'],
+        'final_once': ['Second answer arrives here.'], 'never': ['closed unexpectedly', 'send again to continue', "worker stopped"],
     },
     # Esc on a turn that has not answered yet takes the message back -- into
     # the composer of the window that pressed it, and no other. A second
@@ -318,8 +318,8 @@ SCENARIOS = {
             ('type', 'take this back'), ('wait_for', 'Pondering', 20), ('wait_for2', 'Pondering', 20), ('settle', 1),
             ('keys', '\x1b'), ('settle', 4), ('snap', 'one'), ('snap2', 'two'),
         ],
-        'watch': [], 'snap_contains': {'one': ['› take this back', 'draft restored'], 'two': ['Stopped']},
-        'snap_lacks': {'two': ['› take this back', 'draft restored']},
+        'watch': [], 'snap_contains': {'one': ['› take this back']},
+        'snap_lacks': {'one': ['draft restored'], 'two': ['› take this back', 'draft restored']},
     },
     # A turn one window started is stopped from another (Esc there stops the
     # shared turn). Both end it as stopped -- the window that started it used
@@ -332,9 +332,9 @@ SCENARIOS = {
             ('type', 'hello'), ('wait_for', 'First chat answered.', 30), ('settle', 2),
             ('open2', 6, ['--continue']), ('wait_for2', 'First chat answered.', 10), ('settle', 1),
             ('type', 'check the commit'), ('wait_for', 'The final', 30), ('wait_for2', 'The final', 20), ('settle', 1),
-            ('keys2', '\x1b'), ('wait_for2', 'Stopped after', 10), ('settle', 3),
+            ('keys2', '\x1b'), ('wait_for2', 'Stopped', 10), ('settle', 3),
         ],
-        'watch': [], 'final_once': ['Stopped after'], 'final2_once': ['Stopped after'],
+        'watch': [], 'final_once': ['Stopped'], 'final2_once': ['Stopped'],
         'never': ['Worked for'], 'never2': ['Worked for'],
     },
     # "Worked for" is the saved turn's, not only the window's that watched it
@@ -449,8 +449,8 @@ SCENARIOS = {
         ],
         'watch': ['please check the commit', 'Checking the workspace first.', 'The final commit is live.'],
         'final_contains': ['grok-4-fast'],
-        # The typed command is acknowledged, not silently swallowed.
-        'ever': ['/model grok-4-fast · applied'],
+        # The typed command is applied (the footer says so), and nothing more is said.
+        'never': ['/model grok-4-fast · applied'],
     },
     'redraw-idle': {
         'turns': [{'blocks': ['The final commit is live.']}],
@@ -620,12 +620,12 @@ SCENARIOS = {
     },
     # The slash menu, a step at a time. Choosing a command that takes a value
     # opens its own titled picker -- the typed command gone, never left under
-    # it -- starting on the current value, and the change is confirmed.
+    # it -- starting on the current value; the change is not announced.
     'slash-command-opens-picker': {
         'turns': [TWO_BLOCKS],
         'steps': [('keys', '/effort'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Reasoning effort', 10), ('settle', 0.5),
-                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'Effort set to High', 10)],
-        'watch': [], 'ever': ['❯ Medium  · current', 'Effort set to High'],
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 2)],
+        'watch': [], 'ever': ['❯ Medium  · current'], 'never': ['Effort set to High'],
         'never_together': [('› /effort', 'Reasoning effort'), ('tab complete · enter run', 'Reasoning effort')],
     },
     # What runs is what is highlighted: a typed command starts highlighted,
@@ -674,8 +674,8 @@ SCENARIOS = {
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[3~'), ('wait_for', 'reauth', 15), ('settle', 1)],
-        'watch': [], 'ever': ['del disconnect', 'Signed out of Grok Build · /login signs back in'], 'final_contains': ['reauth'],
-        'never': ['Cancel'],
+        'watch': [], 'ever': ['del disconnect'], 'final_contains': ['reauth'],
+        'never': ['Cancel', 'Signed out of Grok Build'],
     },
     # The same from a Mac or iPhone, whose "delete" key sends Backspace.
     'account-backspace-disconnects': {
@@ -684,8 +684,8 @@ SCENARIOS = {
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x7f'), ('wait_for', 'reauth', 15), ('settle', 1)],
-        'watch': [], 'ever': ['del disconnect', 'Signed out of Grok Build · /login signs back in'], 'final_contains': ['reauth'],
-        'never': ['Cancel'],
+        'watch': [], 'ever': ['del disconnect'], 'final_contains': ['reauth'],
+        'never': ['Cancel', 'Signed out of Grok Build'],
     },
     # Adding a Grok account: its sign-in is a link and a code, shown on
     # ClikCode's own screen -- the vendor's own text never takes it over.
@@ -693,9 +693,9 @@ SCENARIOS = {
         'turns': [TWO_BLOCKS],
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15),
-                  ('wait_for', 'signed in to', 15), ('settle', 1)],
+                  ('settle', 5)],
         'watch': [], 'ever': ['Sign in to Grok Build · confirm the code AB12-CD34', 'https://accounts.x.ai/oauth2/device?user_code=AB12-CD34', 'waiting for you to sign in'],
-        'final_contains': ['signed in to'], 'never': ['Confirm this code in your browser', 'Waiting for authorization', 'not a tty'],
+        'never': ['signed in to', 'Confirm this code in your browser', 'Waiting for authorization', 'not a tty'],
     },
     # A sign-in that asks for a key: asked under ClikCode's band, typed
     # there as dots, never the vendor's own prompt on screen.
@@ -704,10 +704,10 @@ SCENARIOS = {
         'env': {'FAKE_LOGIN_KEY': 'sk-test-42'},
         # Signed out: the first message signs in, then is answered.
         'steps': [('type', 'please check the commit'), ('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
-                  ('keys', 'sk-test-42'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 15),
+                  ('keys', 'sk-test-42'), ('settle', 0.5), ('keys', '\r'),
                   ('wait_for', 'The final commit is live.', 40), ('settle', 1)],
         'watch': [], 'ever': ['Paste your API key · type it and press Enter', '••••••••••'],
-        'final_contains': ['signed in to', 'The final commit is live.'], 'never': ['sk-test-42', 'Paste your API key: ', 'did not finish'],
+        'final_contains': ['The final commit is live.'], 'never': ['signed in to', 'sk-test-42', 'Paste your API key: ', 'did not finish'],
     },
     # A question with a shown default after the key (Hermes's `Base URL
     # [...]:`): Enter alone answers it -- a stray Enter on the key does not.
@@ -716,10 +716,10 @@ SCENARIOS = {
         'env': {'FAKE_LOGIN_KEY': 'sk-test-42', 'FAKE_LOGIN_DEFAULT': '1'},
         'steps': [('type', 'please check the commit'), ('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
                   ('keys', '\r'), ('settle', 0.5), ('keys', 'sk-test-42'), ('settle', 0.5), ('keys', '\r'),
-                  ('wait_for', 'Base URL', 15), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 15),
+                  ('wait_for', 'Base URL', 15), ('settle', 0.5), ('keys', '\r'),
                   ('wait_for', 'The final commit is live.', 40), ('settle', 1)],
         'watch': [], 'ever': ['Paste your API key · type it and press Enter', 'Base URL [https://api.example.test/v1] · type it and press Enter'],
-        'final_contains': ['signed in to', 'The final commit is live.'], 'never': ['sk-test-42', 'did not finish'],
+        'final_contains': ['The final commit is live.'], 'never': ['signed in to', 'sk-test-42', 'did not finish'],
     },
     # A rejected key is never shown back: the failure is one line, and the
     # vendor's last line -- its prompt with the typed key on it -- is not it.
@@ -731,16 +731,16 @@ SCENARIOS = {
         'watch': [], 'never': ['sk-wrong', 'Error:'], 'final_once': ['did not finish'],
     },
     # Esc cancels a sign-in the first message opened, and the band says it
-    # does: one plain line says it was cancelled, and the message goes back
+    # does: nothing is said of it, and the message goes back
     # to the composer to send again.
     'esc-cancels-sign-in': {
         'cols': 70,
         'turns': [TWO_BLOCKS],
         'hold_sign_in': True,
         'steps': [('type', 'start the work'), ('wait_for', 'waiting for you to sign in', 30), ('settle', 0.5), ('snap', 'band'),
-                  ('keys', '\x1b'), ('wait_for', 'cancelled', 10), ('settle', 2), ('snap', 'after')],
+                  ('keys', '\x1b'), ('settle', 3), ('snap', 'after')],
         'watch': [], 'snap_contains': {'band': ['esc cancel'], 'after': ['› start the work']},
-        'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish', 'Stopped'],
+        'never': ['Sign-in to Grok Build cancelled', 'Error:', 'did not finish', 'Stopped'],
     },
     # A sign-in waits on the user, as an approval does: the band holds still
     # -- a ●, never a spinner frozen mid-step -- and its clock is stopped.
@@ -767,9 +767,9 @@ SCENARIOS = {
         'turns': [TWO_BLOCKS],
         'env': {'FAKE_LOGIN_KEY': 'sk-test-42'},
         'steps': [('type', 'start the work'), ('wait_for', 'type it and press Enter', 15), ('settle', 0.5),
-                  ('keys', '\x03'), ('wait_for', 'cancelled', 10), ('settle', 2), ('snap', 'after')],
+                  ('keys', '\x03'), ('settle', 3), ('snap', 'after')],
         'watch': [], 'snap_contains': {'after': ['› start the work']},
-        'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish'],
+        'never': ['Sign-in to Grok Build cancelled', 'Error:', 'did not finish'],
     },
     # Adding an account from /account: Esc cancels its sign-in too.
     'esc-cancels-account-sign-in': {
@@ -777,8 +777,8 @@ SCENARIOS = {
         'hold_sign_in': True,
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'the code AB12-CD34', 15), ('settle', 0.5),
-                  ('keys', '\x1b'), ('wait_for', 'cancelled', 10), ('settle', 2), ('snap', 'after')],
-        'watch': [], 'final_once': ['Sign-in to Grok Build cancelled'], 'never': ['Error:', 'did not finish'],
+                  ('keys', '\x1b'), ('settle', 3), ('snap', 'after')],
+        'watch': [], 'never': ['Sign-in to Grok Build cancelled', 'Error:', 'did not finish'],
         'snap_lacks': {'after': ['› /account']},
     },
     # Nothing signs in at launch: a signed-out provider waits for its first
@@ -797,7 +797,7 @@ SCENARIOS = {
                   ('type_slow', 'please check the commit', 0.2),
                   ('wait_for', 'The second one is answered.', 60), ('settle', 2)],
         'watch': ['please check the commit', 'The second one is answered.'],
-        'ever': ['signed in to'],
+        'never': ['signed in to'],
     },
     # The same message sent (Enter) while the sign-in is still waiting on the
     # browser: it is sent once the sign-in has finished, not dropped.
@@ -809,7 +809,7 @@ SCENARIOS = {
                   ('release_sign_in',),
                   ('wait_for', 'The second one is answered.', 60), ('settle', 2)],
         'watch': ['please check the commit', 'The second one is answered.'],
-        'ever': ['signed in to'],
+        'never': ['signed in to'],
     },
     # Back from a sub-menu lands on the row it was opened from, with no
     # spinner or empty composer flashed on the way into the list.
@@ -820,12 +820,12 @@ SCENARIOS = {
                   ('wait_for', 'Choose a model', 10), ('settle', 0.5), ('keys', '\x1b[D'), ('settle', 1.5)],
         'watch': [], 'final_contains': ['❯ Model'], 'never': ['finding Grok Build models'],
     },
-    # A sign-in leaves one line saying how it went, never a "signing in"
-    # line that stays.
+    # A sign-in that worked leaves no line, and never a "signing in" line
+    # that stays.
     'sign-in-outcome': {
         'turns': [TWO_BLOCKS],
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1)],
-        'watch': [], 'final_contains': ['signed in to Grok Build'], 'never': ['signing in to Grok Build'],
+        'watch': [], 'never': ['signed in to Grok Build', 'signing in to Grok Build'],
     },
     # A command that prints while it runs: its newest lines show under the
     # spinner, and stay -- its first and last, the middle counted -- once a
@@ -923,7 +923,7 @@ SCENARIOS = {
         'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']},
                   {'blocks': ['The queued one answered now.']}],
         'steps': [
-            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
+            ('type', '/send queue'), ('settle', 2),
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
             ('type', 'then do this'), ('wait_for', 'enter again send into the chat', 10), ('keys', '\r'),
             ('wait_for', 'Steered in: then do this.', 40), ('settle', 3),
@@ -997,7 +997,7 @@ SCENARIOS = {
         'turns': [{'intro': 'Starting the long build.', 'hold_ms': 5000, 'blocks': ['The build passed.']},
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
-            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
+            ('type', '/send queue'), ('settle', 2),
             ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
             ('type', 'also run the linter'), ('wait_for', 'queued for next turn', 10), ('settle', 0.5),
             ('keys', '\x1b'), ('wait_for', '› also run the linter', 10), ('settle', 0.5),
@@ -1032,7 +1032,7 @@ SCENARIOS = {
         'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']},
                   {'blocks': ['The queued one answered now.']}],
         'steps': [
-            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
+            ('type', '/send queue'), ('settle', 2),
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
             ('type', 'then do this'), ('wait_for', 'enter again send into the chat', 10),
             ('keys', '\r'), ('wait_for', 'Steered in: then do this.', 20), ('settle', 3),
@@ -1111,7 +1111,7 @@ SCENARIOS = {
         'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30),
-            ('keys', '\x03'), ('wait_for', 'Stopped after', 15), ('settle', 2),
+            ('keys', '\x03'), ('wait_for', 'Stopped', 15), ('settle', 2),
         ],
         'watch': ['start the long job', 'Step one of'],
         'never': ['The long job is finished.', 'Worked for'],
@@ -1124,26 +1124,26 @@ SCENARIOS = {
         'turns': [{'blocks': ['Step one of the long job.', 'Step two of the long job.', 'The long job is finished.']}],
         'steps': [
             ('type', 'start the long job'), ('wait_for', 'Step one of', 30), ('settle', 0.5), ('snap', 'running'),
-            ('keys', '\x1b'), ('wait_for', 'Stopped after', 15), ('settle', 2),
+            ('keys', '\x1b'), ('wait_for', 'Stopped', 15), ('settle', 2),
         ],
         'snap_contains': {'running': ['writing · ', ' · esc stop']},
         'watch': ['start the long job', 'Step one of'],
         'never': ['The long job is finished.', 'Worked for'],
-        'final_contains': ['Stopped after'],
+        'final_contains': ['Stopped'],
     },
     # A turn stopped under a running call reads as stopped, not finished:
-    # the call's row says stopped, the turn ends on "Stopped after", and the
+    # the call's row says stopped, the turn ends on "Stopped", and the
     # saved turn -- reopened by a fresh process -- says the same.
     'stopped-turn-reads-stopped': {
         'cols': 70, 'env': {'FAKE_DELAY_MS': '60'},
         'turns': [{'intro': 'Starting the long build.', 'hold_ms': 20000, 'blocks': ['The build passed.']}],
         'steps': [
             ('type', 'start the build'), ('wait_for', 'sleep 30', 30), ('settle', 1),
-            ('keys', '\x03'), ('wait_for', 'Stopped after', 15), ('settle', 2), ('snap', 'stopped'),
+            ('keys', '\x03'), ('wait_for', 'Stopped', 15), ('settle', 2), ('snap', 'stopped'),
             ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\r'), ('settle', 2.5),
         ],
         'watch': [],
-        'snap_contains': {'stopped': ['■ $ sleep 30 stopped', 'Stopped after']},
+        'snap_contains': {'stopped': ['■ $ sleep 30 stopped', 'Stopped']},
         'final_contains': ['Starting the long build.', '■ $ sleep 30 stopped'],
         'final_once': ['$ sleep 30'],
         'never': ['Worked for', 'The build passed.'],
@@ -1155,7 +1155,7 @@ SCENARIOS = {
         'turns': [{'intro': 'Starting the long build.', 'hold_ms': 4000, 'blocks': ['The build passed.']},
                   {'blocks': ['Queued turn answered.']}],
         'steps': [
-            ('type', '/send queue'), ('wait_for', 'Messages typed mid-turn: queue', 15),
+            ('type', '/send queue'), ('settle', 2),
             ('type', 'start the build'), ('wait_for', 'Starting the long build.', 30),
             ('type', 'also run the linter'), ('wait_for', 'queued for next turn', 10),
             ('wait_for', 'The build passed.', 40), ('wait_for', 'Queued turn answered.', 40), ('settle', 3),
@@ -1307,14 +1307,14 @@ SCENARIOS = {
         'steps': [
             ('type', 'please check the commit'), ('wait_for', 'Wait for reset (', 30), ('settle', 1),
             ('keys', '\r'), ('wait_for', 'waiting for reset ·', 15), ('settle', 1), ('snap', 'waiting'),
-            ('keys', '\x1b'), ('wait_for', 'Stopped waiting for the reset', 10), ('settle', 3), ('mark',), ('settle', 16),
+            ('keys', '\x1b'), ('settle', 4), ('mark',), ('settle', 16),
         ],
         # Stopped: neither the status line nor a redraw brings it back.
         'never_after_mark': ['waiting for reset ·'],
         'watch': [],
-        'ever': ['All accounts exhausted · back', 'Esc or a new message cancels'],
+        'ever': ['All accounts exhausted · back'],
         'snap_contains': {'waiting': ['waiting for reset ·']},
-        'final_contains': ['Stopped waiting for the reset'],
+        'never': ['Stopped waiting for the reset'],
     },
     # Typing in the palette highlights the best match: `/c` and `/co` used
     # to highlight /account (its group came first) over /compact and /copy.
@@ -1335,10 +1335,10 @@ SCENARIOS = {
                   ('keys', '\r'), ('wait_for', 'Reasoning effort', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('settle', 1),
                   ('keys', '\t'), ('wait_for', 'Make default for every harness', 10), ('settle', 0.5),
-                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('wait_for', 'Default saved', 10), ('settle', 1.5), ('snap', 'after'),
+                  ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('settle', 2.5), ('snap', 'after'),
                   ('keys', '\x1b'), ('settle', 1)],
-        'watch': [], 'final_contains': ['Default saved · Effort for every harness: high'],
-        'snap_contains': {'after': ['❯ Effort  High']}, 'never': ['for every harness: medium'],
+        'watch': [], 'never': ['Default saved', 'for every harness: medium'],
+        'snap_contains': {'after': ['❯ Effort  High']},
     },
     # Esc on a one-line question ("Conversation name ›", "File to attach ›")
     # cancels it: the next thing typed is a message again, not its answer.
@@ -1349,16 +1349,15 @@ SCENARIOS = {
                   ('type', 'hello again'), ('wait_for', 'Answered after the questions were cancelled.', 30), ('settle', 2)],
         'watch': [], 'final_contains': ['› hello again'], 'never': ['ENOENT', 'Error:'],
     },
-    # A notice wraps (up to three rows) rather than being cut to one: at 70
-    # columns /export's notice kept its file name only in the middle of a
-    # long path, and /model's error lost the list of valid models.
+    # What a command answers is one line, cut to the width, at 70 columns
+    # too: /export's result and /model's error.
     'notices-wrap-at-70-cols': {
         'cols': 70,
         'turns': [{'blocks': ['Hello there, all good.']}],
         'steps': [('type', 'hi'), ('wait_for', 'Hello there, all good.', 30), ('settle', 2),
                   ('type', '/export'), ('wait_for', 'Transcript written', 10), ('settle', 1), ('snap', 'export'),
                   ('type', '/model nosuch-model'), ('settle', 3), ('snap', 'model')],
-        'watch': [], 'snap_contains': {'export': ['.md'], 'model': ['grok-4-fast']},
+        'watch': [], 'snap_contains': {'export': ['Transcript written'], 'model': ['is not a model Grok Build publishes']},
     },
     # ← in /account is back, as in every other list: to the Settings row it
     # was opened from, or closed. It reopened the palette with "/", and Esc
@@ -1403,14 +1402,14 @@ SCENARIOS = {
                   ('type', '!true'), ('settle', 2)],
         'watch': [], 'never': ['checking harnesses', '! true ·'], 'final_contains': ['!true', 'exit 0'],
     },
-    # Commands that did something say so: /logout (it said nothing)
-    # and /copy over SSH (OSC 52), which showed nothing at all.
+    # Commands that did something say nothing of it: /copy puts the answer on
+    # the clipboard (OSC 52 over SSH) and /logout signs out.
     'commands-say-what-they-did': {
         'turns': [TWO_BLOCKS],
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
-                  ('type', '/copy'), ('wait_for', 'Copied', 10), ('settle', 0.5),
-                  ('type', '/logout'), ('wait_for', 'Signed out of', 10), ('settle', 1)],
-        'watch': [], 'final_contains': ['Signed out of Grok Build · /login signs back in'], 'clipboard': 'Checking the workspace first.\n\nThe final commit is live.',
+                  ('type', '/copy'), ('settle', 2),
+                  ('type', '/logout'), ('settle', 3)],
+        'watch': [], 'never': ['Copied', 'Signed out of'], 'clipboard': 'Checking the workspace first.\n\nThe final commit is live.',
     },
     # Out of usage on one of two accounts: the turn switches to the other on
     # its own, a line in the conversation says so and stays (it was on screen
@@ -1421,7 +1420,7 @@ SCENARIOS = {
                   {'blocks': ['Answered on the other account.']}],
         'steps': [('type', 'hello'), ('wait_for', 'First answer on the first account.', 40), ('settle', 1),
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
-                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 20), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 6),
                   ('type', 'carry on'), ('wait_for', 'Answered on the other account.', 40), ('settle', 2), ('snap', 'after'),
                   ('restart',), ('keys', '\x1b[D'), ('settle', 2), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
                   ('wait_for', 'Answered on the other account.', 10), ('settle', 2)],
@@ -1429,7 +1428,7 @@ SCENARIOS = {
         'final_contains': ['Switched to ', 'is out of usage'], 'never': ['usage exhausted', 'All accounts exhausted'],
     },
     # A turn the vendor refuses as signed out signs in mid-turn and is
-    # answered: a line says it signed in, and stays (there was none).
+    # answered, and says nothing of the sign-in.
     'mid-turn-sign-in-is-said': {
         'turns': [{'blocks': ['First answer.']},
                   {'refuse': 'Authentication required: not logged in. Run grok login. (401 Unauthorized)', 'blocks': ['unused']},
@@ -1438,15 +1437,14 @@ SCENARIOS = {
                   ('type', 'carry on'), ('wait_for', 'Answered after signing in again.', 40), ('settle', 3)],
         'watch': [], 'ever_after_mark': ['waiting for you to sign in'], 'final_once': ['› carry on'],
         'final_contains': ['Answered after signing in again.'],
-        # Twice: the first message's sign-in, and this one's.
-        'final_count': {'signed in to Grok Build': 2},
+        'never': ['signed in to Grok Build'],
     },
     # A provider never signed in is "not signed in" in /account, with signing
     # in as what Enter does -- not "reauth" with "del remove" from launch.
     'never-signed-in-account-row': {
         'turns': [TWO_BLOCKS],
         'steps': [('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2), ('snap', 'list'),
-                  ('keys', '\r'), ('wait_for', 'signed in to', 20), ('settle', 1)],
+                  ('keys', '\r'), ('settle', 6)],
         'watch': [], 'snap_contains': {'list': ['not signed in']}, 'snap_lacks': {'list': ['reauth', 'del remove']},
         'never': ['reauth'],
     },
@@ -1456,7 +1454,7 @@ SCENARIOS = {
         'turns': [TWO_BLOCKS],
         'steps': [('type', 'hello'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2),
-                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'signed in to', 20), ('settle', 2),
+                  ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 6),
                   ('keys', '/account'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 2), ('snap', 'list')],
         'watch': [], 'snap_contains': {'list': ['Grok Build 2']}, 'never': ['Grok Build 1'],
     },
@@ -1544,16 +1542,15 @@ SCENARIOS = {
                   ('keys', '\x1b'), ('settle', 2), ('snap', 'after')],
         'watch': [], 'snap_contains': {'after': ['\n  › please check the commit', 'All accounts exhausted · back ']},
     },
-    # A new message sent while a turn waits for the reset: the line saying
-    # the wait stopped comes before that message and its answer (it was
-    # drawn under the answer).
+    # A new message sent while a turn waits for the reset replaces the wait,
+    # and nothing is said of it.
     'new-message-stops-reset-wait-line-first': {
         'turns': [{'refuse': 'The monthly usage limit has been reached. Try again in 2 hours.', 'blocks': ['unused']},
                   {'blocks': ['Second answer arrives here.']}],
         'steps': [('type', 'please check the commit'), ('wait_for', 'Wait for reset (', 30), ('settle', 1),
                   ('keys', '\r'), ('wait_for', 'waiting for reset ·', 15), ('settle', 1),
                   ('type', 'something else'), ('wait_for', 'Second answer arrives here.', 30), ('settle', 3)],
-        'watch': [], 'final_in_order': ['please check the commit', 'Stopped waiting for the reset', 'something else', 'Second answer arrives here.'],
+        'watch': [], 'final_in_order': ['please check the commit', 'something else', 'Second answer arrives here.'], 'never': ['Stopped waiting for the reset'],
     },
     # /status draws the current setup: it used to draw nothing at all.
     'status-shows-setup': {
@@ -1571,17 +1568,17 @@ SCENARIOS = {
         'watch': [], 'final_contains': ['Grok Build', 'Last 7 days', '1 turn'], 'never': ['$0.00', 'unknown'],
     },
     # /fork with no N: a picker of the user's messages, newest first; the fork
-    # after message 1 holds only that exchange, and says files are not rewound.
+    # after message 1 holds only that exchange.
     'fork-at-message': {
         'turns': [{'blocks': ['ALPHA answer lives here.']}, {'blocks': ['BETA answer lives here.']}],
         'steps': [
             ('type', 'first question'), ('wait_for', 'ALPHA answer lives here.', 30), ('settle', 2),
             ('type', 'second question'), ('wait_for', 'BETA answer lives here.', 30), ('settle', 2),
             ('type', '/fork'), ('wait_for', 'Fork after which message?', 10), ('settle', 0.5),
-            ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('wait_for', 'Forked after message 1', 10), ('mark',), ('settle', 2),
+            ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'), ('settle', 3), ('mark',), ('settle', 2),
         ],
         'watch': [], 'ever': ['2  second question', '1  first question'],
-        'final_contains': ['first question', 'ALPHA answer lives here.', 'files on disk are not rewound'],
+        'final_contains': ['first question', 'ALPHA answer lives here.'], 'never': ['files on disk are not rewound'],
         'never_after_mark': ['BETA answer lives here.'],
     },
     # /changes lists the turn's edit, /changes 1 shows its diff, /redo @1 with

@@ -1,6 +1,6 @@
 /** What a vendor attempt's result means: the reply notice a harness reports as an
  * error, the thread bookkeeping after it, and the turn's completion. */
-import chalk from 'chalk';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import { harnessReplyError } from '../runtime/lazy-bridge.js';
 import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
 import { keepsNoHistory } from './thread-start.js';
@@ -78,9 +78,7 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
   // cannot collect output from a process that has already gone.
   if (observer.pendingWork.outstanding > 0) {
     const count = observer.pendingWork.outstanding;
-    prompter?.activity(chalk.yellow(count === 1
-      ? 'The harness exited while a tool was still running.'
-      : `The harness exited while ${count} tools were still running.`));
+    diagnostic('vendor.exited-with-tools-running', `${count} tool${count === 1 ? '' : 's'}`);
   }
   const usage = observer.usage() as TurnUsage | undefined;
   const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage });

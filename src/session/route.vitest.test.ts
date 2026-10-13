@@ -157,14 +157,12 @@ describe('the model-client seam', () => {
     expect(client.contextHints).toEqual({ contextWindow: 65536, promptPerSecond: 1200 });
   });
 
-  it('asks the engine for the session\'s own model, passes progress through, and reports its notice', async () => {
+  it('asks the engine for the session\'s own model, passes progress through, and keeps its notice to the log', async () => {
     engine.ensureLocalModel.mockResolvedValue({ baseUrl: 'http://127.0.0.1:1/v1', model: 'gpt-oss-20b', contextWindow: 8192, notice: 'slow here' });
     const progress = vi.fn();
-    const notice = vi.fn();
     const routed = { ...local(), model: 'gpt-oss-20b' };
-    await modelClientForSession(routed, config, { progress, notice });
+    await modelClientForSession(routed, config, { progress });
     expect(engine.ensureLocalModel).toHaveBeenCalledWith({ modelId: 'gpt-oss-20b', sessionId: 's1', progress });
-    expect(notice).toHaveBeenCalledWith('slow here');
   });
 
   it('fails as the engine fails, before any client exists', async () => {

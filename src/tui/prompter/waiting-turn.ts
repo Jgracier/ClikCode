@@ -9,14 +9,12 @@ import type { ToolCategory } from '../../harness/prompter.js';
 import { stopEntries } from '../render/activity-log.js';
 import { openToolsStatus, joinTurnClock, nextTurnTickMs, pauseTurnClock, resumeTurnClock, startTurnClock, turnAnimating, type TurnWaits } from '../../harness/protocol/activity-view.js';
 import { isApprovalWaitPhase, liveTokenTarget, smoothTokens } from '../../harness/protocol/turn-flow.js';
-import { NOTICE_MS } from '../../harness/protocol/timings.js';
 import type { BackgroundWork } from '../../harness/protocol/background-agents.js';
 import { enterAgainSends, type WaitingMessage } from '../render/steer-rows.js';
 import { commandLineTypedDuringTurn } from '../waiting-slash.js';
 import type { TurnUsage } from '../../harness/protocol/turn-usage.js';
 import { takeTerminalKeys } from '../input-decoder.js';
 import { enterInputModes } from '../modes.js';
-import { commandAck } from '../../harness/protocol/wording.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
 
@@ -100,9 +98,8 @@ export function submitWaiting(this: TerminalHarnessPrompter, text: string, allow
   const line = asCommand ? completedCommandLine(text, this.paletteCommands) : text;
   const localId = ++this.waitingSubmissionId;
   // A message gets a row, because the user needs to know where their words
-  // went. A command is acknowledged too -- `/model sonnet · applied`, or
-  // when it runs -- as a transient line once it has been taken: typed words
-  // that simply vanish read as ignored (Claude Code acknowledges them).
+  // went. A command does not: it applies (the footer shows the model) or runs
+  // when the turn ends, and says nothing of either.
   if (!asCommand) {
     this.waitingSubmissions.push({
       localId, text, responseOffset: this.liveResponse.length, sequence: ++this.timelineSequence, state: 'sending',
@@ -120,7 +117,7 @@ export function submitWaiting(this: TerminalHarnessPrompter, text: string, allow
       if (result.disposition === 'steered') item.ack = { sequence: ++this.timelineSequence, responseOffset: this.liveResponse.length };
       if (result.unsteered) item.unsteered = true;
     } else if (asCommand && result.disposition === 'command') {
-      this.showTransientNotice(commandAck(line, result.commandOutcome), NOTICE_MS, () => this.updateWaiting());
+      this.updateWaiting();
     } else if (asCommand) {
       // The router decided the line was conversation after all: it is a
       // message, with its row, as if it had never looked like a command.
@@ -394,7 +391,7 @@ export function leaveTurn(this: TerminalHarnessPrompter): void {
 
 /** The turn showing was stopped elsewhere -- from another window, or its
  * worker is gone -- and ends as one stopped here does: what was still
- * running did not finish, its line says "Stopped after", and it is not
+ * running did not finish, its line says "Stopped", and it is not
  * announced as finished. */
 export function turnStopped(this: TerminalHarnessPrompter): void {
   if (this.turn) this.turn.cancelled = true;

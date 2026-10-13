@@ -17,7 +17,7 @@ export function signInNotPossibleHere(error: unknown): boolean {
 /** Sign in to the account this turn runs on, once per turn: true when it
  * worked and the account is ready. */
 export async function signInForTurn(ctx: VendorTurnContext, environment: Readonly<Record<string, string>>): Promise<boolean> {
-  const { harness, session, prompter, state, checkpoint, model } = ctx;
+  const { harness, session, prompter, state, model } = ctx;
   // A multi-provider harness signs in to the provider the model runs on
   // (`hermes auth add opencode-free`), not the whole harness.
   const signInArgv = harnessLoginArgvForModel(harness, model);
@@ -45,13 +45,6 @@ export async function signInForTurn(ctx: VendorTurnContext, environment: Readonl
       return false;
     });
   if (!signedIn) return false;
-  // Kept with the turn's answer (TranscriptMessage.signedInTo): a line
-  // drawn under a turn that owns the screen was lost, the window's and a
-  // note from here alike. (Signed in here, withSignIn said it.)
-  if (prompter?.signIn && session.pendingTurn) {
-    session.pendingTurn.signedInTo = signInName;
-    await checkpoint.persistNow();
-  }
   ctx.account = await syncAccountIdentityAfterLogin(harness, ctx.account, state);
   await ctx.accounts.recordAccount(ctx.account);
   return true;

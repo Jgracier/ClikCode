@@ -17,7 +17,8 @@ export function createWorkerIo(ctx: WorkerContext) {
     return { session: found, account };
   };
 
-  const broadcastNotice = (message: string): void => observer.broadcast({ type: 'notice', message });
+  /** One muted line in the chat, from the turn if one runs (saved with it). */
+  const note = (message: string): void => observer.activity(message);
 
   const broadcastQueueChanged = (): void => {
     observer.broadcast({ type: 'queue-changed' });
@@ -33,9 +34,9 @@ export function createWorkerIo(ctx: WorkerContext) {
     void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);
   };
 
-  /** Shell notifications become a queued turn: durable in the conversation's
-   * state (a worker that stops before running it leaves it for the next
-   * one), and run through the same queue as a message typed during a turn. */
+  /** Shell notifications become a queued turn the model alone reads: run
+   * through the same queue as a message typed during a turn, and never
+   * drawn. Only the live worker records them; a stopping one does not. */
   const recordNotifications = async (notes: readonly ShellNotification[]): Promise<void> => {
     if (!notes.length) return;
     const latest = await readState({ transcripts: [sessionId] });
@@ -45,7 +46,7 @@ export function createWorkerIo(ctx: WorkerContext) {
     enqueueSessionTurn(found, { id: randomUUID(), text: formatShellNotifications(notes), submittedAt, kind: 'notification' }, submittedAt);
     await writeState(latest);
   };
-  return { currentSessionAndAccount, broadcastNotice, broadcastQueueChanged, showEveryWindow, recordNotifications };
+  return { currentSessionAndAccount, note, broadcastQueueChanged, showEveryWindow, recordNotifications };
 }
 
 export type WorkerIo = ReturnType<typeof createWorkerIo>;

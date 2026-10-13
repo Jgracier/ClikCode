@@ -87,3 +87,19 @@ describe('version skew', () => {
     expect(line).not.toContain('\n');
   });
 });
+
+describe('commands that cannot work are not offered, rather than answered with a toast', () => {
+  const palette = (pkg.contributes.menus.commandPalette as Array<{ command: string; when: string }>);
+  const whenOf = (command: string): string | undefined => palette.find((item) => item.command === command)?.when;
+
+  it('needs a file for adding to the chat, a file on disk for its conversation, and a selection to ask about it', () => {
+    expect(whenOf('clikcode.addToChat')).toMatch(/resourceScheme == file/);
+    expect(whenOf('clikcode.insertAtMention')).toMatch(/resourceScheme == file/);
+    expect(whenOf('clikcode.openConversationThatEdited')).toBe('resourceScheme == file');
+    expect(whenOf('clikcode.askAboutSelection')).toBe('editorHasSelection');
+  });
+
+  it('answers a proposed change only from its own diff', () => {
+    for (const command of ['acceptProposedDiff', 'rejectProposedDiff', 'alwaysAllowProposedDiff']) expect(whenOf(`clikcode.${command}`)).toBe('resourceScheme == clikcode-diff');
+  });
+});

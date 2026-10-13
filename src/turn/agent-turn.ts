@@ -1,4 +1,5 @@
 /** ClikCode's own agent turn, using Gateway or a local model for inference. */
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import { summarySources } from './summary-sources.js';
 import { agentMcpServer, gatewayAgentSession, type GatewayAgentSession } from '../gateway/agent-session.js';
 import type Conf from 'conf';
@@ -16,9 +17,8 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import { emitHarnessOutput } from '../harness/output.js';
 import { prepareAttachments } from '../session/attachments.js';
 import { setPlanMode, unfinishedUsageRecorder } from './turn-steps.js';
-import { recordInvocation, showStopReason, showTurnNote } from './turn-output.js';
+import { recordInvocation, showStopReason } from './turn-output.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
-import chalk from 'chalk';
 import { agentTurnFailureKind } from './failover.js';
 import { usageExhaustedMessage } from './usage-exhausted.js';
 import { signInGatewayForTurn } from '../gateway/sign-in-for-turn.js';
@@ -32,12 +32,11 @@ import { withResourceNotes } from './resource-notes.js';
 /** The account and model as the user has them now, before each model step.
  * Leaving this agent route hands the conversation to that account without
  * ending it. A client that cannot be rebuilt keeps the previous one: a bad
- * setting reaches the user as a notice, not as a thrown turn. */
+ * setting is logged, not thrown as a failed turn. */
 export function stepClientRefresher(input: {
   session: HarnessSession; config: Conf; agentModel: string | undefined; live: LiveSettings;
   current: () => Awaited<ReturnType<typeof modelClientForSession>>;
   adopt: (client: Awaited<ReturnType<typeof modelClientForSession>>) => void;
-  notice: (message: string) => void;
 }) {
   const { session, config, live } = input;
   return async () => {
@@ -59,7 +58,7 @@ export function stepClientRefresher(input: {
       return next;
     } catch (error) {
       Object.assign(session, before);
-      input.notice(`Could not apply the new model settings; this turn continues with the previous ones: ${error instanceof Error ? error.message : String(error)}`);
+      diagnostic('turn.model-settings-unapplied', error instanceof Error ? error.message : String(error));
       return input.current();
     }
   };
@@ -105,7 +104,7 @@ export async function runAgentTurn(input: {
    * without ending it. */
   const modelClientForStep = stepClientRefresher({
     session, config, agentModel: agent?.model ?? undefined, live: liveSettings,
-    current: () => modelClient, adopt: (next) => { modelClient = next; }, notice: (message) => prompter?.activity(chalk.yellow(message)),
+    current: () => modelClient, adopt: (next) => { modelClient = next; },
   });
   const agentServer = agent ? agentMcpServer(config, agent) : undefined;
   const startedAt = Date.now();
@@ -211,7 +210,7 @@ export async function runAgentTurn(input: {
       // which offers Resume in on another provider. The Gateway's own words
       // (what it ran out of, where to add credit) stay on the turn.
       if (gatewayService && agentTurnFailureKind(harnessTurn) === 'quota-exhausted') {
-        prompter?.activity(chalk.yellow(harnessTurn.text));
+        diagnostic('turn.gateway-quota', harnessTurn.text);
         throw new Error(usageExhaustedMessage());
       }
       throw new Error(harnessTurn.text || `${attributedTo} harness turn failed`);
@@ -231,7 +230,7 @@ export async function runAgentTurn(input: {
     });
     const completedText = await completeTurnCheckpoint(session, checkpoint, harnessTurn.text);
     showStopReason(prompter, usage.stopReason);
-    if (harnessTurn.stalled) showTurnNote(prompter, 'The agent stopped repeating a call that kept failing and explained instead; the reply above is its explanation.');
+    if (harnessTurn.stalled) diagnostic('turn.stalled-call', 'The agent stopped repeating a call that kept failing and explained instead.');
     if (!prompter) {
       emitHarnessOutput({
         session, text: completedText, invocation: harnessInvocation,
