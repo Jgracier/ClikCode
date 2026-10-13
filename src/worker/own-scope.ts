@@ -23,7 +23,9 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { constants, setPriority, totalmem } from 'node:os';
+import { join } from 'node:path';
 import { lifecycle } from '../runtime/lifecycle-log.js';
+import { divideScope } from './command-groups.js';
 
 /** Top level, BESIDE app.slice -- not inside it. A slice over its MemoryHigh
  * throttles every allocation of every process under it: MEASURED 2026-10-08,
@@ -48,10 +50,12 @@ export function adoptArgs(unit: string, pid: number): string[] {
   return [
     '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
     'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
-    unit, 'fail', '4',
+    unit, 'fail', '5',
     'PIDs', 'au', '1', String(pid),
     'Slice', 's', AGENT_SLICE,
     'CollectMode', 's', 'inactive-or-failed',
+    // The worker divides its scope itself: one cgroup per command (command-groups.ts).
+    'Delegate', 'b', 'true',
     // The default, `stop`, ends the whole scope -- the worker and its agent --
     // when the kernel kills any one process in it at the slice's ceiling.
     // The test run that hit the ceiling is what should die, alone.
@@ -142,7 +146,7 @@ function busctl(args: string[]): Promise<boolean> {
   });
 }
 
-async function moveToOwnScope(sessionId: string, cgroup: string): Promise<boolean> {
+async function moveToOwnScope(sessionId: string, cgroup: string): Promise<string | undefined> {
   const slice = agentSliceDirectory(cgroup);
   // Only the first worker on a boot finds no slice; every later one skips this call.
   if (slice && !existsSync(slice)) await busctl(sliceArgs(totalmem()));
@@ -155,7 +159,7 @@ async function moveToOwnScope(sessionId: string, cgroup: string): Promise<boolea
     }
   }
   lifecycle('worker.scope', { worker: sessionId, unit, adopted });
-  return adopted;
+  return adopted ? unit : undefined;
 }
 
 /** Without cgroups to separate them (macOS, Windows, Linux without a user
@@ -170,15 +174,26 @@ function lowerOwnPriority(sessionId: string): void {
   lifecycle('worker.priority', { worker: sessionId, lowered });
 }
 
+/** Where a worker ended up: the agent slice, and its own scope there --
+ * divided into an agent group and one group per command when it could be
+ * (command-groups.ts). */
+export interface WorkerPlacement { sliceDir: string; scopeDir: string; divided: boolean }
+
 /** Keeps the agent's work from starving the program the user is looking at.
  * Call before any vendor process starts, so every child is born separated.
- * The agent slice's cgroup directory when the worker is now in its own scope
- * under it -- what worker/resource-guard.ts watches -- else undefined. */
-export async function separateFromForeground(sessionId: string): Promise<string | undefined> {
+ * Undefined where the worker could only lower its priority. */
+export async function separateFromForeground(sessionId: string): Promise<WorkerPlacement | undefined> {
   if (process.env.CLIKCODE_OWN_SCOPE === '0') return undefined;
   if (process.platform === 'linux') {
     const cgroup = await ownCgroup();
-    if (userManagerOwns(cgroup) && await moveToOwnScope(sessionId, cgroup)) return agentSliceDirectory(cgroup);
+    const sliceDir = agentSliceDirectory(cgroup);
+    const unit = userManagerOwns(cgroup) && sliceDir ? await moveToOwnScope(sessionId, cgroup) : undefined;
+    if (unit && sliceDir) {
+      const scopeDir = join(sliceDir, unit);
+      const divided = divideScope(scopeDir);
+      lifecycle('worker.divided', { worker: sessionId, divided });
+      return { sliceDir, scopeDir, divided };
+    }
   }
   lowerOwnPriority(sessionId);
   return undefined;

@@ -44,7 +44,7 @@ describe('own scope', () => {
   it('keeps the worker when one process in its scope is killed at the ceiling', () => {
     const args = adoptArgs('u.scope', 99);
     expect(args.slice(args.indexOf('OOMPolicy'), args.indexOf('OOMPolicy') + 3)).toEqual(['OOMPolicy', 's', 'continue']);
-    expect(args[args.indexOf('u.scope') + 2]).toBe('4');
+    expect(args[args.indexOf('u.scope') + 2]).toBe('5');
   });
 
   it('finds the agent slice under the user manager, beside app.slice', () => {
