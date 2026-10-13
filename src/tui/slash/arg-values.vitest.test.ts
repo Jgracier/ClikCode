@@ -52,18 +52,6 @@ describe('/account palette values', () => {
     expect(entries[0]?.argValues?.()).toEqual([]);
   });
 
-  it('offers the other side of swarm', () => {
-    const off = withArgValues([{ label: '/swarm', value: '/swarm' }], session, harness, { accounts: [], sessions: [] });
-    expect(off[0]?.argValues?.()).toEqual([{ value: 'on', label: 'Turn swarm on' }]);
-    const on = withArgValues(
-      [{ label: '/swarm', value: '/swarm' }],
-      { ...session, swarm: true },
-      harness,
-      { accounts: [], sessions: [] },
-    );
-    expect(on[0]?.argValues?.()).toEqual([{ value: 'off', label: 'Turn swarm off' }]);
-  });
-
   it('offers the other side of the sandbox', () => {
     // Unset is on, the default.
     const on = withArgValues([{ label: '/sandbox', value: '/sandbox' }], session, harness, { accounts: [], sessions: [] });

@@ -18,8 +18,6 @@ import { readAcpUsageFile } from '../harness/transport/acp-usage-file.js';
 import { turnShareOf } from '../harness/protocol/turn-usage.js';
 import { codexRateLimitsReading } from '../harness/accounts/usage-probes.js';
 import { harnessAcpLaunch, localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
-import { swarmIsOn } from '../swarm/policy.js';
-import { swarmAcpMcpServers, swarmCodexConfig } from '../swarm/publish.js';
 import { closePersistentTransport, openStandby, persistentTransportFor, vendorChildKey } from './vendor-process.js';
 import { loadIndex } from '../session/state/index-file.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
@@ -48,7 +46,7 @@ export async function runVendorSessionAttempt(input: {
   sharedObserver: HarnessTurnObserver;
   effort?: string;
   onSessionId: (id: string) => Promise<void>;
-  /** MCP servers to hand an ACP session, beside the swarm's. */
+  /** MCP servers to hand an ACP session. */
   mcpServers?: readonly Record<string, unknown>[];
   runCli: () => Promise<NativeTurnResult>;
 }): Promise<NativeTurnResult> {
@@ -195,7 +193,7 @@ function acpLaunchInput(input: {
   if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
     throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
   }
-  const mcpServers = [...input.mcpServers ?? [], ...(swarmIsOn(session) ? swarmAcpMcpServers(session.id) : [])];
+  const mcpServers = [...input.mcpServers ?? []];
   return {
     binary: launch.binary, command: harness.command,
     argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
@@ -253,10 +251,7 @@ function codexLaunchInput(input: {
 }): { input: Omit<CodexAppServerTurnInput, 'prompt'>; unmapped: readonly string[] } {
   const { harness, session, model, effort, environment } = input;
   const overrides = appServerThreadOverrides(localHarnessCapabilityManifest(harness).options, session.harnessOptions);
-  const configOverrides = {
-    ...(overrides.configOverrides ? overrides.configOverrides : {}),
-    ...(swarmIsOn(session) ? swarmCodexConfig(session.id) : {}),
-  };
+  const configOverrides = { ...(overrides.configOverrides ? overrides.configOverrides : {}) };
   return {
     unmapped: overrides.unmapped,
     input: {

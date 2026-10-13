@@ -591,7 +591,7 @@ body.vscode-high-contrast .keylist-row.active { outline: 1px dashed var(--vscode
   animation: shimmer var(--shimmer-cycle, 2s) steps(var(--shimmer-steps, 16)) infinite;
 }
 @keyframes shimmer { from { background-position: 100% 0; } to { background-position: 0 0; } }
-/* A running sub-agent or swarm agent: its name sweeps like the working line
+/* A running sub-agent: its name sweeps like the working line
    while that row is still running. Still when the user asks for less motion. */
 .activity.running .live-name {
   background: linear-gradient(90deg, currentColor 0%, currentColor 38%, color-mix(in srgb, currentColor 35%, var(--vscode-editor-foreground, #fff)) 50%, currentColor 62%, currentColor 100%);

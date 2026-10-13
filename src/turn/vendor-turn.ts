@@ -8,7 +8,7 @@ import { closePersistentTransport, closeStandby, persistentWorkRunning, waitForP
 import { settleHeldVendor } from './turn-steps.js';
 import type { TurnRunOptions } from './session-turn.js';
 import { runAttempt } from './vendor-attempt.js';
-import { attachSwarm, createVendorObserver } from './vendor-observer.js';
+import { createVendorObserver } from './vendor-observer.js';
 import { completeVendorTurn, settleAttempt } from './vendor-outcome.js';
 import { recoverFromFailure } from './vendor-recovery.js';
 import { takeUp } from './vendor-thread-takeup.js';
@@ -81,11 +81,9 @@ export async function sendVendorTurn(input: {
   run: TurnRunOptions;
 }): Promise<void> {
   const ctx = await createVendorTurnContext(input);
-  let stopSwarmWatch = (): void => undefined;
   try {
     await startVendorTurn(ctx);
     const observer = createVendorObserver(ctx);
-    await attachSwarm(ctx, observer.onActivity, (stop) => { stopSwarmWatch = stop; });
     ctx.askedText = ctx.turnText;
     for (;;) {
       const attempt = await runAttempt(ctx, observer);
@@ -97,7 +95,6 @@ export async function sendVendorTurn(input: {
       return;
     }
   } finally {
-    stopSwarmWatch();
     // A standby the turn did not need (it answered on its own account, or
     // ended otherwise) is a second vendor child: closed with the turn.
     await closeStandby(ctx.session.id);

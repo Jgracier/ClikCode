@@ -20,7 +20,6 @@ import { effortChoices } from '../../session/picker-rows.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
 import { sessionPermissionModes, VALID_PERMISSION_MODES } from '../../session/options.js';
-import { swarmSwitch } from './swarm.js';
 import { readState } from '../../session/state/read.js';
 import { newConversation } from '../../commands/ai/conversations.js';
 import { aiSettingsClearProvider, aiSettingsSetGlobal, aiSettingsSetProvider } from '../../commands/ai/settings.js';
@@ -111,10 +110,6 @@ export async function interactiveSettingsPicker(config: Conf, rl: HarnessPrompte
         label: 'Permissions', detail: settingLabel(session.permissionMode ?? 'ask'), value: 'permissions', actions: defaultActions(harness, 'permissions'),
         ...inline(permissions.map((value) => ({ label: settingLabel(value), value })), session.permissionMode ?? 'ask', (value) => applyToChat(id, 'permissions', value)),
       }] : []),
-      {
-        label: 'Swarm', detail: 'hand work to other accounts when it makes sense', value: 'swarm',
-        inline: swarmSwitch(session, id),
-      },
       // One Plan mode for every harness that has a read-only planning mode,
       // whatever the vendor calls it.
       ...(harness?.planMode ? [{

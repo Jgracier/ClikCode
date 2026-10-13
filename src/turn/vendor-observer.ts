@@ -1,5 +1,5 @@
 /** What one vendor turn's transports report, folded into the checkpoint and the
- * screen: the shared observer, usage, pending work and the swarm feed. */
+ * screen: the shared observer, usage and pending work. */
 import chalk from 'chalk';
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
@@ -9,18 +9,11 @@ import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { thoughtLabel } from '../harness/protocol/activity-events.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import { mergeBackgroundWork, type BackgroundWork, type BackgroundWorkUpdate } from '../harness/protocol/background-agents.js';
-import { emptySwarmFold, foldSwarmActivity, type SwarmFold } from '../swarm/fold.js';
-import { watchSwarmActivity } from '../swarm/spool.js';
-import { swarmIsOn } from '../swarm/policy.js';
-import { openSwarmTurn } from '../swarm/store.js';
 import { createPendingWorkTracker } from './pending-work.js';
 import { unfinishedUsageRecorder } from './turn-steps.js';
 import { turnSink } from './turn-output.js';
-import { closePersistentTransport, nativeAvailableCommands } from './vendor-process.js';
+import { nativeAvailableCommands } from './vendor-process.js';
 import type { VendorTurnContext } from './vendor-turn-context.js';
-
-/** Sessions whose current vendor process was opened with the swarm tool. */
-const swarmAttached = new Set<string>();
 
 export type VendorTransport = ReturnType<typeof sessionTurnTransport>;
 
@@ -29,7 +22,6 @@ export function createVendorObserver(ctx: VendorTurnContext) {
   /** Shared by every transport: usage seen on the wire for this attempt.
    * Each report is the attempt's running total, so its fields replace. */
   let turnUsage: TurnUsage | undefined;
-  let swarmFold: SwarmFold = emptySwarmFold();
   let backgroundNow: BackgroundWork | undefined;
   let activeTransport: VendorTransport | undefined;
   const noteUsage = (usage: TurnUsage): void => {
@@ -51,13 +43,8 @@ export function createVendorObserver(ctx: VendorTurnContext) {
    * screen alike, so what is shown and what is saved cannot differ. */
   const sink = turnSink(checkpoint, prompter);
   const onActivity = (event: HarnessActivityEvent): void => {
-    // The clerk's frames are the row. The host's own swarm tool is the same
-    // call: count that tool so a backgrounded command still pairs, and do
-    // not count the clerk frames as a second piece of unfinished work.
-    const folded = foldSwarmActivity(swarmFold, event);
-    swarmFold = folded.fold;
-    if (!event.swarm) pendingWork.note(event);
-    if (folded.event) sink.activity(withWorkspacePaths(folded.event, session.workspace));
+    pendingWork.note(event);
+    sink.activity(withWorkspacePaths(event, session.workspace));
   };
   /** A transport's thought is the whole of it so far: one row per id,
    *  replaced as it grows (activity-events.ts thoughtLabel). */
@@ -133,28 +120,8 @@ export function createVendorObserver(ctx: VendorTurnContext) {
     resetAttempt(): void {
       turnUsage = undefined;
       pendingWork.reset();
-      swarmFold = emptySwarmFold();
     },
   };
 }
 
 export type VendorObserver = ReturnType<typeof createVendorObserver>;
-
-/** Opens the swarm feed when the swarm is on, handing what stops it to
- * `watching` as soon as it runs. */
-export async function attachSwarm(
-  ctx: VendorTurnContext, onActivity: (event: HarnessActivityEvent) => void, watching: (stop: () => void) => void,
-): Promise<void> {
-  const { session, harness } = ctx;
-  if (swarmIsOn(session)) {
-    await openSwarmTurn(session.id).catch(() => undefined);
-    watching(watchSwarmActivity(session.id, onActivity));
-  }
-  // The tool rides on the ACP session ClikCode opens. A process already up
-  // was opened without it, or still has it after swarm was turned off.
-  if (harness.acp && swarmIsOn(session) !== swarmAttached.has(session.id)) {
-    await closePersistentTransport(session.id);
-    if (swarmIsOn(session)) swarmAttached.add(session.id);
-    else swarmAttached.delete(session.id);
-  }
-}

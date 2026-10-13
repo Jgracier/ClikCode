@@ -2,7 +2,6 @@
 import { harnessCommand } from '../session/state/paths.js';
 import { provisionChosenHarness } from '../harness/provision.js';
 import { builtClikcodeLauncher, conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
-import { swarmProvisionEntry, swarmRidesTurn } from '../swarm/publish.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { adoptListedNativeId } from '../session/discovery/cli-listing.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
@@ -40,16 +39,12 @@ export interface AttemptRecord {
 async function prepareAttempt(ctx: VendorTurnContext) {
   const { harness, session } = ctx;
   const conversations = conversationsMcpEntry();
-  const swarmEntry = swarmProvisionEntry();
   const launcher = builtClikcodeLauncher();
   const provisioningAt = Date.now();
   const provisioned = await provisionChosenHarness({
     ...(launcher ? { launcher } : {}),
     harness, account: ctx.account, workspace: session.workspace, stateDir: stateDirectory(), signIn: ctx.checkMcpSignIn,
-    builtins: [
-      ...(conversations ? [conversations] : []),
-      ...(!swarmRidesTurn(harness) && swarmEntry ? [swarmEntry] : []),
-    ],
+    builtins: conversations ? [conversations] : [],
   });
   lifecycle('turn.provisioned', { harness: harness.command, ms: Date.now() - provisioningAt, account: ctx.account.id.slice(0, 8) });
   // A server taken back out is just as invisible to a running process,
@@ -71,7 +66,7 @@ async function prepareAttempt(ctx: VendorTurnContext) {
   // Goose resumes by its own id what was created under ClikCode's name.
   if (await adoptListedNativeId(harness, session, environment)) await ctx.checkpoint.persistNow();
   const transport = sessionTurnTransport(harness, session);
-  return { environment, sessionMcpServers, transport, provisioning: { launcher, conversations, swarmEntry } };
+  return { environment, sessionMcpServers, transport, provisioning: { launcher, conversations } };
 }
 
 /** Runs one attempt; a stopped or oversized one throws, any other failure is

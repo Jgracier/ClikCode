@@ -40,9 +40,9 @@ describe('shared ACP adapter contract', () => {
     const result = await runAcpTurn({
       binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(),
       prompt: 'check', environment: {}, permissionMode: 'ask',
-      mcpServers: [{ name: 'clikcode-swarm', command: 'node', args: ['swarm-mcp'], env: [] }],
+      mcpServers: [{ name: 'notes', command: 'node', args: ['notes-mcp'], env: [] }],
     });
-    expect(JSON.parse(result.text)).toEqual([{ name: 'clikcode-swarm', command: 'node', args: ['swarm-mcp'], env: [] }]);
+    expect(JSON.parse(result.text)).toEqual([{ name: 'notes', command: 'node', args: ['notes-mcp'], env: [] }]);
   });
 
   it('fails an image turn before the prompt when the agent takes no images, so the CLI can run it', async () => {

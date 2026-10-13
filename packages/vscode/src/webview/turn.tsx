@@ -179,7 +179,7 @@ export const VISIBLE_ACTIVITIES = 6;
 /** The working line: what the turn is doing (turn-flow's rule: waiting on you,
  * the open call's verb, the reasoning's own heading, or how long it has
  * thought), in the colour of that work, a shimmer passing over it (CSS). A
- * running sub-agent or swarm agent keeps its own spinner on its chat row.
+ * running sub-agent keeps its own spinner on its chat row.
  * The thought being had is this line's tooltip, and opens under it. Ticks
  * on its own. */
 /** The working line's clock and token meter. The count steps on the page's

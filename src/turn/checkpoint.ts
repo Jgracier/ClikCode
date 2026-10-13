@@ -260,13 +260,8 @@ function trackSubagent(pending: NonNullable<HarnessSession['pendingTurn']>, even
   const isAgent = event.agent || (event.category !== 'run' && isAgentToolName(event.label));
   if (event.kind === 'tool-start' && isAgent) {
     const existing = running.find((agent) => agent.id === event.id);
-    if (existing) {
-      if (event.swarm) { existing.provider = event.swarm.displayName; existing.label = event.label; existing.stepAt = now; }
-      return;
-    }
-    pending.subagents = [...running, {
-      id: event.id, label: event.label, startedAt: now, ...(event.swarm ? { provider: event.swarm.displayName } : {}),
-    }];
+    if (existing) return;
+    pending.subagents = [...running, { id: event.id, label: event.label, startedAt: now }];
   } else if ((event.kind === 'tool-done' || event.kind === 'tool-error') && running.some((agent) => agent.id === event.id)) {
     const left = running.filter((agent) => agent.id !== event.id);
     if (left.length) pending.subagents = left;

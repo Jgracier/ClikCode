@@ -823,7 +823,7 @@ SCENARIOS = {
     # spinner or empty composer flashed on the way into the list.
     'settings-back-lands-on-row': {
         'turns': [TWO_BLOCKS],
-        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
+        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Account', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\x1b[B'), ('settle', 0.5), ('keys', '\r'),
                   ('wait_for', 'Choose a model', 10), ('settle', 0.5), ('keys', '\x1b[D'), ('settle', 1.5)],
         'watch': [], 'final_contains': ['❯ Model'], 'never': ['finding Grok Build models'],
@@ -1338,7 +1338,7 @@ SCENARIOS = {
         'turns': [TWO_BLOCKS],
         # Effort is the fifth row (Resume is first); Enter opens its picker, and the value shown after
         # choosing High is the value "Make default for every harness" must save.
-        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
+        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Account', 10), ('settle', 0.5),
                   *[step for _ in range(4) for step in (('keys', '\x1b[B'), ('settle', 0.3))],
                   ('keys', '\r'), ('wait_for', 'Reasoning effort', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.3), ('keys', '\r'), ('settle', 1),
@@ -1374,13 +1374,13 @@ SCENARIOS = {
     'account-back-returns-to-settings': {
         'turns': [TWO_BLOCKS],
         'steps': [('type', 'hi'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
-                  ('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
+                  ('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Account', 10), ('settle', 0.5),
                   *[step for _ in range(3) for step in (('keys', '\x1b[B'), ('settle', 0.3))],
                   ('keys', '\r'), ('wait_for', 'Grok Build accounts', 10), ('settle', 1),
                   ('keys', '\x1b[D'), ('settle', 1.5), ('snap', 'settings'), ('keys', '\x1b'), ('settle', 1.5), ('snap', 'closed'),
                   ('type', '/account'), ('wait_for', 'Grok Build accounts', 10), ('settle', 1), ('keys', '\x1b[D'), ('settle', 1.5), ('snap', 'direct')],
-        'watch': [], 'snap_contains': {'settings': ['❯ Account', 'Swarm']},
-        'snap_lacks': {'closed': ['› /', 'Swarm', '/settings'], 'direct': ['› /', 'Grok Build accounts']},
+        'watch': [], 'snap_contains': {'settings': ['❯ Account']},
+        'snap_lacks': {'closed': ['› /', '/settings'], 'direct': ['› /', 'Grok Build accounts']},
     },
     # At 70 columns the row in force still says "current" (a long
     # description used to push it off), and the hint keeps "esc close"
@@ -1411,13 +1411,12 @@ SCENARIOS = {
                   ('type', '!true'), ('settle', 2)],
         'watch': [], 'never': ['checking harnesses', '! true ·'], 'final_contains': ['!true', 'exit 0'],
     },
-    # Commands that did something say so: /logout (it said nothing), /swarm
-    # on, and /copy over SSH (OSC 52), which showed nothing at all.
+    # Commands that did something say so: /logout (it said nothing)
+    # and /copy over SSH (OSC 52), which showed nothing at all.
     'commands-say-what-they-did': {
         'turns': [TWO_BLOCKS],
         'steps': [('type', 'please check the commit'), ('wait_for', 'The final commit is live.', 40), ('settle', 1),
                   ('type', '/copy'), ('wait_for', 'Copied', 10), ('settle', 0.5),
-                  ('type', '/swarm on'), ('wait_for', 'Swarm on', 10), ('settle', 0.5),
                   ('type', '/logout'), ('wait_for', 'Signed out of', 10), ('settle', 1)],
         'watch': [], 'final_contains': ['Signed out of Grok Build · /login signs back in'], 'clipboard': 'Checking the workspace first.\n\nThe final commit is live.',
     },
@@ -1525,7 +1524,7 @@ SCENARIOS = {
     # Tab, which both act there.
     'settings-inline-row-steady': {
         'turns': [TWO_BLOCKS],
-        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Swarm', 10), ('settle', 0.5),
+        'steps': [('keys', '/settings'), ('settle', 1), ('keys', '\r'), ('wait_for', 'Account', 10), ('settle', 0.5),
                   ('keys', '\x1b[B'), ('settle', 0.5), ('snap', 'plain'),
                   *[step for _ in range(4) for step in (('keys', '\x1b[B'), ('settle', 0.3))], ('settle', 0.5), ('snap', 'inline')],
         'watch': [], 'snap_contains': {'plain': ['\n  Model  grok-4'], 'inline': ['\n  Model  grok-4', 'enter next', 'tab options']},

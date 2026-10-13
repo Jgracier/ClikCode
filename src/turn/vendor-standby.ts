@@ -3,7 +3,6 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import { vendorWindows } from '../harness/accounts/usage-reading.js';
 import { provisionChosenHarness } from '../harness/provision.js';
 import { builtClikcodeLauncher, conversationsForAcpSession, conversationsMcpEntry } from '../search/mcp-entry.js';
-import { swarmProvisionEntry, swarmRidesTurn } from '../swarm/publish.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { carryNativeSession } from '../session/carry.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
@@ -25,7 +24,6 @@ function nearUsageLimit(account: AiHarnessAccount): boolean {
 export interface AttemptProvisioning {
   launcher: ReturnType<typeof builtClikcodeLauncher>;
   conversations: ReturnType<typeof conversationsMcpEntry>;
-  swarmEntry: ReturnType<typeof swarmProvisionEntry>;
 }
 
 /** An account close to its limit may refuse this turn. The account a
@@ -40,7 +38,7 @@ export interface AttemptProvisioning {
  * refusal hands over with nothing left but the next process's start. */
 export async function openFailoverStandby(ctx: VendorTurnContext, transport: VendorTransport, provisioning: AttemptProvisioning): Promise<void> {
   const { state, session, harness, account, model, run, attempt } = ctx;
-  const { launcher, conversations, swarmEntry } = provisioning;
+  const { launcher, conversations } = provisioning;
   const persistentStandby = (transport === 'acp' || transport === 'codex-app-server') && Boolean(run.persistentTransports);
   if (!((persistentStandby || transport === 'structured-cli' || transport === 'text-cli') && !attempt.standbyOpened && nearUsageLimit(account))) return;
   attempt.standbyOpened = true;
@@ -58,7 +56,7 @@ export async function openFailoverStandby(ctx: VendorTurnContext, transport: Ven
     const ready = await provisionChosenHarness({
       ...(launcher ? { launcher } : {}),
       harness, account: standbyFor, workspace: session.workspace, stateDir: stateDirectory(), signIn: ctx.checkMcpSignIn,
-      builtins: [...(conversations ? [conversations] : []), ...(!swarmRidesTurn(harness) && swarmEntry ? [swarmEntry] : [])],
+      builtins: conversations ? [conversations] : [],
     });
     lifecycle('worker.standby', { harness: harness.command, account: standbyFor.id.slice(0, 8), process: persistentStandby });
     if (!persistentStandby) return;

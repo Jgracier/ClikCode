@@ -234,7 +234,7 @@ export interface HarnessSession {
     failedAt?: string;
     /** Sub-agents this turn has running, so another terminal's conversation
      * list can show them. Part of the journal, so it ends with the turn. */
-    subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string; provider?: string }>;
+    subagents?: Array<{ id: string; label: string; startedAt: string; step?: string; stepAt?: string }>;
     /** The account this turn moved to, carried onto its answer at the end. */
     accountSwitch?: AccountSwitch;
     /** A sign-in this turn needed and got, carried onto its answer too. */
@@ -267,13 +267,9 @@ export interface HarnessSession {
   shellNotes?: ShellNote[];
   /** Provider-native values validated against the selected harness manifest. */
   harnessOptions?: Record<string, unknown>;
-  /** Swarm is off until this conversation turns it on. */
-  swarm?: boolean;
   /** The plan (todo list) the provider last published, and when. Kept so a
    * provider taking the conversation over learns what was still open. */
   plan?: { entries: Array<{ content: string; status?: string; priority?: string }>; at: string };
-  /** Set on a clerk run that was stored by mistake. Those rows are not chats. */
-  clerkOf?: string;
   /** A branch from before provider switches happened in place, whose whole
    * history the named session carries on (its turns
    * the other lacked were merged into it first). Kept, never listed. */

@@ -42,7 +42,6 @@ export interface ToolContext {
 export interface SubagentCall {
   prompt: string;
   description?: string;
-  model?: string;
   kind?: 'research' | 'work';
   /** A plugin's agent type (`subagent_type`): its prompt joins the
    * sub-agent's, and its tool list narrows the kind's tools. */
@@ -63,11 +62,6 @@ export interface ToolRunResult {
   diff?: import('./line-diff.js').FileDiff[];
   /** A finished command's exit code, shown on its row. */
   exitCode?: number;
-  /** Replaces the tool's own label on the activity row once the call ends.
-   * A swarm clerk uses it so the row keeps the provider it ran on. */
-  activityLabel?: string;
-  /** Set when another provider ran the call. The row animates under that name. */
-  swarm?: import('../harness/prompter.js').HarnessActivityEvent['swarm'];
 }
 
 type ToolClass = 'read' | 'write' | 'exec' | 'network' | 'meta';

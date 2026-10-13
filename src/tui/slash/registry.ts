@@ -41,7 +41,7 @@ export const SLASH_HANDLER_KEYS = [
   'help', 'status', 'new', 'redraw', 'exit', 'compact', 'context', 'export', 'history', 'copy', 'select', 'changes',
   'review', 'init', 'memory', 'diff', 'cwd', 'add-dir', 'mention',
   'provider', 'accounts', 'login', 'logout', 'gateway',
-  'model', 'effort', 'fast', 'swarm', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
+  'model', 'effort', 'fast', 'permissions', 'sandbox', 'send', 'options', 'capabilities', 'settings',
   'sessions', 'resume', 'search', 'rename', 'fork', 'redo', 'archive', 'delete',
   'usage', 'doctor',
 ] as const;
@@ -185,9 +185,6 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       // The Gateway takes a reasoning level with every step.
       : isGatewayService(session) ? { available: true }
         : needsHarness('setting effort')(session, harness)),
-  }),
-  entry('swarm', 'Settings', 'flip swarm on or off for this chat', {
-    argHint: '[on|off]', duringTurn: 'apply', availability: always,
   }),
   entry('fast', 'Settings', 'serve from the fastest provider instead of the cheapest', {
     argHint: '[on|off]', duringTurn: 'apply',
