@@ -15,7 +15,6 @@ import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession } from '../session/model.js';
 import { forceStoreSession, unforceStoreSession } from '../session/ephemeral.js';
 import { leaveProvider } from '../session/native-thread.js';
-import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { runSessionTurn } from './session-turn.js';
 import { resumePromptForPendingTurn } from '../tui/pickers/resume-in.js';
 import { NATIVE_SESSION_STORES } from '../session/discovery/registry.js';
@@ -133,14 +132,16 @@ describe("the first vendor turn after a provider switch", () => {
     }
   }, 30_000);
 
-  it('carries an interrupted request and its partial answer into "Resume in"', async () => {
+  it('sends the user own request with its partial answer carried into "Resume in"', async () => {
     const pending = { prompt: 'finish the edit', response: 'changed a.ts', startedAt: '', updatedAt: '', outputStarted: true };
     const id = await handedOff(pending);
     await runSessionTurn({} as never, id, resumePromptForPendingTurn(pending, 'finish the edit'));
     const [wire] = await sentPrompts();
-    for (const part of ['rename the parser', 'renamed it to Reader', 'finish the edit', 'changed a.ts', INTERRUPTED_TURN_REQUEST]) {
+    for (const part of ['rename the parser', 'renamed it to Reader', 'finish the edit', 'changed a.ts']) {
       expect(wire).toContain(part);
     }
+    // No line of ClikCode's own asks the vendor to continue.
+    expect(wire).not.toContain('Continue the interrupted');
   }, 30_000);
 
   it('carries the files the interrupted request had attached, not only its words', async () => {

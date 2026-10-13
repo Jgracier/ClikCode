@@ -19,7 +19,7 @@ export interface ResumeWaiterHost {
    * when it ends. */
   turnRunning: () => boolean;
   /** Start the parked turn, as the worker starts any turn. */
-  send: (prompt: string) => void;
+  send: (prompt: string) => void | Promise<void>;
   notice: (message: string) => void;
   /** Whether one is parked changed: the idle clock re-decides. */
   changed: () => void;
@@ -83,7 +83,7 @@ export function createResumeWaiter(host: ResumeWaiterHost): ResumeWaiter {
     setPending(false);
     if (!taken) return;
     if (step === 'give-up') { host.notice('Stopped waiting for the reset: no account could take the turn an hour after it'); return; }
-    host.send(taken.prompt);
+    await host.send(taken.prompt);
   };
 
   return {

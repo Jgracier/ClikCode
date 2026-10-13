@@ -3,11 +3,11 @@
  * prompts are not the user's and are not counted. */
 import type { TranscriptMessage } from '../../session/model.js';
 import type { PickerOption } from '../../harness/prompter.js';
-import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
+import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 
 /** Where each user message sits in `messages`, in order. */
 export function userMessageIndexes(messages: readonly TranscriptMessage[]): number[] {
-  return messages.flatMap((message, index) => (message.role === 'user' && message.content !== INTERRUPTED_TURN_REQUEST ? [index] : []));
+  return messages.flatMap((message, index) => (message.role === 'user' && message.content !== LEGACY_INTERRUPTED_TURN_REQUEST ? [index] : []));
 }
 
 /** `@3` -> 3; anything else undefined. */

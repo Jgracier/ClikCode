@@ -16,7 +16,7 @@
  * worker-shutdown.
  */
 import { lifecycle } from '../runtime/lifecycle-log.js';
-import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
+import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { statSync } from 'node:fs';
 import { unlink } from 'node:fs/promises';
 import Conf from 'conf';
@@ -119,9 +119,14 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
    * here once it has, once. `resumingTurn` marks that turn for the turn runner. */
   ctx.resumeWaiter = createResumeWaiter({
     sessionId, turnRunning: () => ctx.turnRunning || ctx.draining, notice: ctx.io.broadcastNotice, changed: () => ctx.idle.scheduleIdleExit(),
-    send: (prompt) => {
+    send: async (prompt) => {
+      // A wait an older build parked holds its continuation line, which is
+      // never sent: the turn's own request is.
+      const text = prompt === LEGACY_INTERRUPTED_TURN_REQUEST
+        ? (await readState({ transcripts: [sessionId] })).sessions.find((item) => item.id === sessionId)?.pendingTurn?.prompt ?? prompt
+        : prompt;
       ctx.resumingTurn = true;
-      if (!ctx.queue.startTurn({ type: 'submit', text: prompt, echo: prompt !== INTERRUPTED_TURN_REQUEST })) ctx.resumingTurn = false;
+      if (!ctx.queue.startTurn({ type: 'submit', text, echo: true })) ctx.resumingTurn = false;
     },
   });
   ctx.queue = createWorkerQueue(ctx);

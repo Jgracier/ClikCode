@@ -7,7 +7,6 @@ import { closePersistentTransport, closeStandby, rememberFallbackTurn, standbyFo
 import { moveThreadToAccount } from '../session/carry.js';
 import { switchAccountAfterFailure } from './account-switch.js';
 import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
-import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { nativeTurnFailure } from '../harness/protocol/turn-result.js';
 import { continueAnswer, editAnswer, retell } from './vendor-thread-takeup.js';
 import { signInForTurn } from './vendor-sign-in.js';
@@ -17,7 +16,9 @@ import type { AttemptState, VendorTurnContext } from './vendor-turn-context.js';
 
 /** Whether an attempt's streamed text is only the account refusal it then
  * failed with ("You've hit your session limit · resets 3:50pm" streamed as
- * a message, then "Internal error: You've hit your session limit …"). */
+ * a message, then "Internal error: You've hit your session limit …"). Read
+ * only to choose how the next account is set up; what the vendor said is
+ * never taken back off the turn. */
 export function echoesRefusal(text: string, failure: unknown): boolean {
   const flat = (value: string): string => value.toLowerCase().replace(/^\s*internal error:\s*/, '').replace(/[^a-z0-9]+/g, ' ').trim();
   const said = flat(text);
@@ -79,7 +80,7 @@ async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promi
   ctx.attempt.nativeThreadRetried = true;
   await closePersistentTransport(ctx.session.id);
   forgetNativeThread(ctx.session);
-  ctx.turnText = await retell(ctx, ctx.session.pendingTurn?.outputStarted || failed.cliOutputStarted ? INTERRUPTED_TURN_REQUEST : ctx.askedText, 'clear');
+  ctx.turnText = await retell(ctx, ctx.askedText, 'clear', Boolean(ctx.session.pendingTurn?.outputStarted || failed.cliOutputStarted));
   return 'retry';
 }
 
@@ -93,30 +94,19 @@ const RECOVERIES: Record<Recovery, (ctx: VendorTurnContext, failed: Failed) => P
  * Where a switch spends its time, one line per switch (account-switch.ts):
  * the choice of account, the old process closing, the thread copy, the record. */
 async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<void> {
-  const { session, harness, checkpoint, prompter, attempt } = ctx;
+  const { session, harness, attempt } = ctx;
   const { failure, failureKind, responseBefore, wroteBefore, cliOutputStarted } = failed;
   const from = ctx.account;
   const { value: moved } = await switchAccountAfterFailure({
     accounts: ctx.accounts, from, failure, kind: failureKind, signal: ctx.signal, harness: harness.command,
     carry: async (fallback, { switchAt, chooseMs }) => {
       // Claude streams "You've hit your session limit · resets …" as message
-      // text, then fails the prompt. That text is the refusal, not an
-      // answer: it is taken back off the turn, and the next account is
-      // asked the request itself rather than to continue it.
+      // text, then fails the prompt. That text stays on the turn, as the
+      // vendor said it; it only means this attempt gave the next account no
+      // answer to carry on from, so the standby copy of the thread (loaded
+      // before this turn) is still the whole conversation.
       const attemptText = (session.pendingTurn?.response ?? '').slice(responseBefore);
       const refusalOnly = attemptText.trim() !== '' && echoesRefusal(attemptText, failure);
-      if (refusalOnly) {
-        const earlier = (session.pendingTurn?.response ?? '').slice(0, responseBefore);
-        checkpoint.response(earlier, 'replace');
-        prompter?.response(earlier, 'replace');
-        if (session.pendingTurn && !wroteBefore) session.pendingTurn.outputStarted = false;
-      }
-      // The answer on screen stays when this attempt already wrote one: the
-      // next account carries on from it, so clearing it made the first half
-      // vanish. An attempt that produced nothing is asked again in the
-      // request's own words. "Continue" there points at the previous
-      // finished turn, and retelling the transcript repeats a conversation
-      // the carried thread already holds.
       const wrote = refusalOnly ? wroteBefore : Boolean(session.pendingTurn?.outputStarted || cliOutputStarted);
       // Closing after the last tool settled lets the vendor flush its own
       // transcript before the receiving account copies it.
@@ -144,17 +134,19 @@ async function switchAccount(ctx: VendorTurnContext, failed: Failed): Promise<vo
   const { wrote, carriedThread } = moved!;
   attempt.nativeThreadRetried = false;
   const edit = session.pendingTurn?.response?.trim() ? 'new-paragraph' : 'clear';
-  const nextRequest = wrote ? INTERRUPTED_TURN_REQUEST : ctx.askedText;
+  // The user's own request goes again; what the attempt wrote is in the
+  // carried conversation.
+  const nextRequest = ctx.askedText;
   if (carriedThread) {
     // ('present' counts as much as 'carried': both accounts run this
     // harness against one vendor home, so the thread never had to move.)
     ctx.turnText = nextRequest;
-    if (wrote) continueAnswer(ctx, edit);
+    if (wrote || session.pendingTurn?.response?.trim()) continueAnswer(ctx, edit);
   } else {
     // Built while the interrupted attempt's touched-file hints are still
     // on the checkpoint. The only path that rewrites the conversation:
     // this vendor's thread cannot be copied across.
-    ctx.turnText = await retell(ctx, nextRequest, edit);
+    ctx.turnText = await retell(ctx, nextRequest, edit, wrote);
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { failoverPromptRequest, INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript, providerBoundaryNote } from './failover-prompt.js';
+import { failoverPromptRequest, LEGACY_INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript, providerBoundaryNote } from './failover-prompt.js';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import { conversationTitle } from '../session/discovery/conversation-title.js';
@@ -16,7 +16,7 @@ const interruptedTurnFailoverPrompt = (session: HarnessSession, options: { reque
   const record = canonicalRecord({ id: 's', ...session });
   const last = record.turns.at(-1)!;
   if (options.requestContext) last.user += options.requestContext;
-  return transferPrompt(record, INTERRUPTED_TURN_REQUEST, { interrupted: true });
+  return transferPrompt(record, LEGACY_INTERRUPTED_TURN_REQUEST, { interrupted: true });
 };
 
 const history = [
@@ -37,7 +37,7 @@ describe('failoverPromptRequest', () => {
     } as unknown as HarnessSession;
     const prompt = interruptedTurnFailoverPrompt(session);
     expect(prompt).toContain('/home/me/a.ts');
-    expect(failoverPromptRequest(prompt)).toBe(INTERRUPTED_TURN_REQUEST);
+    expect(failoverPromptRequest(prompt)).toBe(LEGACY_INTERRUPTED_TURN_REQUEST);
   });
 
   it('restores frame tags the prompt escaped', () => {
@@ -117,7 +117,7 @@ describe('a retry on a fresh thread retells the whole request', () => {
     expect(prompt).toContain('The add function must round.');
     expect(prompt).toContain('On branch main');
     expect(prompt.indexOf('fix the failing test')).toBeLessThan(prompt.indexOf('The add function must round.'));
-    expect(failoverPromptRequest(prompt)).toBe(INTERRUPTED_TURN_REQUEST);
+    expect(failoverPromptRequest(prompt)).toBe(LEGACY_INTERRUPTED_TURN_REQUEST);
   });
 });
 
@@ -125,7 +125,7 @@ describe('a stored or imported continuation request', () => {
   it('is dropped, wherever it was recorded', () => {
     expect(normalizeImportedTranscript([
       { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' },
-      { role: 'user', content: INTERRUPTED_TURN_REQUEST }, { role: 'assistant', content: 'The other half' },
+      { role: 'user', content: LEGACY_INTERRUPTED_TURN_REQUEST }, { role: 'assistant', content: 'The other half' },
     ])).toEqual([
       { role: 'user', content: 'Fix the parser' }, { role: 'assistant', content: 'Half of it' }, { role: 'assistant', content: 'The other half' },
     ]);

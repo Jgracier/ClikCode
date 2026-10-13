@@ -204,7 +204,7 @@ function condensedTurn(turn: CanonicalTurn): string {
 export interface TransferOptions {
   /** Total UTF-8 budget (transferBudget). */
   maxBytes?: number;
-  /** The newest turn's answer was cut off and the request continues it. */
+  /** The newest turn's answer was cut off; the request is that turn's again. */
   interrupted?: boolean;
   /** Harness command -> display name, for the header. */
   displayName?: (harness: string) => string | undefined;

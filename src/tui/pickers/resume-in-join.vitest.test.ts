@@ -11,7 +11,6 @@ import { readState } from '../../session/state/read';
 import { writeState } from '../../session/state/write';
 import { forceStoreSession, unforceStoreSession } from '../../session/ephemeral';
 import { leaveProvider } from '../../session/native-thread';
-import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt';
 
 const moves = vi.hoisted(() => ({ count: 0 }));
 vi.mock('../../commands/ai/conversations', async (original) => ({
@@ -58,7 +57,7 @@ async function interrupted(startedAt: string): Promise<void> {
 }
 
 describe('"Resume in" from two windows at once', () => {
-  it('moves the conversation once: the first window sends the continuation, the second follows without sending', async () => {
+  it('moves the conversation once: the first window sends the request again, the second follows without sending', async () => {
     await interrupted('2026-10-03T10:00:00.000Z');
     const [first, second] = await Promise.all([
       resumeIn('s1', codex, 'acct', null, 'fix the parser', 'fix the parser', 'claude'),
@@ -66,7 +65,7 @@ describe('"Resume in" from two windows at once', () => {
     ]);
     expect(moves.count).toBe(1);
     expect([first.id, second.id]).toEqual(['s1', 's1']);
-    expect([first.prompt, second.prompt].sort()).toEqual([INTERRUPTED_TURN_REQUEST, undefined].sort());
+    expect([first.prompt, second.prompt].sort()).toEqual(['fix the parser', undefined].sort());
     const moved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
     expect(moved.nativeHarness).toBe('codex');
     // The interrupted turn is history now, its answer still Claude's.

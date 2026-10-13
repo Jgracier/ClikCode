@@ -2,7 +2,6 @@
  * makes to the answer written so far. */
 import { conversationSummary } from '../session/conversation-summary.js';
 import { summarySources } from './summary-sources.js';
-import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { startConversationThread } from './thread-start.js';
 import { targetContextWindow } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
@@ -79,13 +78,13 @@ export async function takeUp(
   return start.prompt;
 }
 
-/** A retry on a fresh thread (the old one already forgotten). A turn that
- * already wrote is taken up with the answer so far and the continuation.
- * One that produced nothing is taken up as the request itself. The answer
- * is cleared, or continued in a new paragraph. Returns what to send. */
-export async function retell(ctx: VendorTurnContext, request: string, edit: RetryEdit): Promise<string> {
-  const continuing = request === INTERRUPTED_TURN_REQUEST;
-  const prompt = await takeUp(ctx, request, { interrupted: continuing, withJournal: continuing, requestContext: ctx.requestContext });
+/** A retry on a fresh thread (the old one already forgotten). The request is
+ * always the user's own. A turn that already wrote (`wrote`) is taken up with
+ * the answer so far in the carried conversation, marked cut off; one that
+ * produced nothing is taken up as the request alone. The answer is cleared,
+ * or continued in a new paragraph. Returns what to send. */
+export async function retell(ctx: VendorTurnContext, request: string, edit: RetryEdit, wrote: boolean): Promise<string> {
+  const prompt = await takeUp(ctx, request, { interrupted: wrote, withJournal: wrote, requestContext: ctx.requestContext });
   continueAnswer(ctx, edit);
   return prompt;
 }

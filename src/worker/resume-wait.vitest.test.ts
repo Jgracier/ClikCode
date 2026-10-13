@@ -11,7 +11,6 @@ import type { HarnessSession } from '../session/model';
 import { readState } from '../session/state/read';
 import { writeState } from '../session/state/write';
 import { forceStoreSession, unforceStoreSession } from '../session/ephemeral';
-import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt';
 import { RESUME_GRACE_MS, RESUME_MAX_SLEEP_MS, RESUME_RECHECK_MS, resumeStep, resumeWaitLabel, type ResumeAt } from '../turn/usage-exhausted';
 import { carryOnAfterExhaustion, stopWaitingForReset } from '../tui/pickers/resume-in';
 import { createResumeWaiter } from './resume-wait';
@@ -52,7 +51,7 @@ async function chat(fields: Partial<HarnessSession> = {}, accounts = [spentUntil
   await writeState(state);
 }
 const parked = async (): Promise<ResumeAt | undefined> => (await readState()).sessions.find((item) => item.id === 's1')?.resumeAt;
-const park = (prompt = INTERRUPTED_TURN_REQUEST): ResumeAt => ({ at: new Date(RESET).toISOString(), prompt, setAt: new Date(T0).toISOString() });
+const park = (prompt = 'fix the parser'): ResumeAt => ({ at: new Date(RESET).toISOString(), prompt, setAt: new Date(T0).toISOString() });
 
 describe('resumeStep', () => {
   const resumeAt = park();
@@ -96,7 +95,7 @@ describe('the worker waiting for the reset', () => {
     for (let step = 0; step < 11; step += 1) await vi.advanceTimersByTimeAsync(RESUME_MAX_SLEEP_MS);
     expect(sent).toEqual([]);
     await vi.advanceTimersByTimeAsync(RESET - Date.now());
-    await vi.waitFor(() => expect(sent).toEqual([INTERRUPTED_TURN_REQUEST]));
+    await vi.waitFor(() => expect(sent).toEqual(['fix the parser']));
     expect(await parked()).toBeUndefined();
     expect(waiter.pending).toBe(false);
     // Nothing is parked any more: a later look sends nothing.
@@ -162,8 +161,8 @@ describe('"Wait for reset" in the Resume-in picker', () => {
     } } as unknown as HarnessPrompter;
     const next = await carryOnAfterExhaustion(rl, 's1', 'fix the parser', {});
     expect(offered.at(-1)).toMatch(/^Wait for reset \(\d+:\d\d[AP]M/);
-    expect('waiting' in next && next.waiting.prompt).toBe(INTERRUPTED_TURN_REQUEST);
-    expect((await parked())?.prompt).toBe(INTERRUPTED_TURN_REQUEST);
+    expect('waiting' in next && next.waiting.prompt).toBe('fix the parser');
+    expect((await parked())?.prompt).toBe('fix the parser');
     expect(await stopWaitingForReset('s1')).toBe(true);
     expect(await parked()).toBeUndefined();
   });

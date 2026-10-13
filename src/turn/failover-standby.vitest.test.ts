@@ -118,7 +118,8 @@ describe('a failover standby', () => {
     expect(asked.map((item) => [item.account, item.text])).toEqual([['acct-a', 'Reply SWITCHED'], ['acct-b', 'Reply SWITCHED']]);
     const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
     const answer = saved.messages?.at(-1);
-    expect(answer?.content).toBe('SWITCHED');
+    // What the vendor said stays on the turn, the refusal included.
+    expect(answer?.content).toBe(`${REFUSAL}\n\nSWITCHED`);
     expect(saved.accountId).toBe('acct-b');
     // The second attempt ran on the standby child, not a cold one.
     expect(asked[1]!.child).toBe(standbys[0]);
@@ -151,8 +152,33 @@ describe('a failover standby', () => {
     expect(attempt.prepare).not.toHaveBeenCalled();
     const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
     expect(saved.accountId).toBe('acct-b');
-    expect(saved.nativeThreadAccountId).toBe('acct-b');
-    expect(saved.messages?.at(-1)?.content).toBe('SWITCHED');
+    expect(saved.messages?.at(-1)?.content).toBe(`${REFUSAL}\n\nSWITCHED`);
+  });
+
+  it('asks the next account the user own request again after a partial answer, and keeps the partial answer', async () => {
+    attempt.transport.kind = 'structured-cli';
+    attempt.carry.mockImplementation(async () => 'carried');
+    const asked: string[] = [];
+    attempt.run.mockImplementation(async (input: { turnText: string; checkpoint: { response: (text: string, mode: 'append') => void } }) => {
+      asked.push(input.turnText);
+      if (asked.length === 1) {
+        input.checkpoint.response('Half of the answer', 'append');
+        throw new Error(`Internal error: ${REFUSAL}`);
+      }
+      input.checkpoint.response('the rest', 'append');
+      return { isError: false, text: 'the rest' };
+    });
+    const state = await readState({ transcripts: ['s1'] });
+    const session = state.sessions.find((item) => item.id === 's1')!;
+    session.nativeSessionId = 'thread-1';
+    session.nativeThreadAccountId = 'acct-a';
+    await sendVendorTurn({
+      state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'Reply SWITCHED',
+      prepared: { images: [], textContext: '' } as never, turnText: 'Reply SWITCHED', startedAt: Date.now(), run: {},
+    });
+    expect(asked).toEqual(['Reply SWITCHED', 'Reply SWITCHED']);
+    const saved = (await readState({ transcripts: ['s1'] })).sessions.find((item) => item.id === 's1')!;
+    expect(saved.messages?.at(-1)?.content).toBe('Half of the answer\n\nthe rest');
   });
 
   it('is not opened for an account with room to spare', async () => {

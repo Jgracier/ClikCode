@@ -9,7 +9,7 @@ import {
   updatePendingResponse, type PendingTurnWithHints,
 } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
-import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
+import { LEGACY_INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import type { HarnessSession } from '../session/model.js';
 
 /** Who answers in session(): every committed answer carries it. */
@@ -467,9 +467,9 @@ describe('joining a turn another window is running', () => {
     expect(runningActivityLabel(junk.pendingTurn)).toBeUndefined();
   });
 
-  it('stores a continuation as the rest of the interrupted answer, never as a message the user typed', () => {
+  it('stores a continuation an older build journalled as the rest of the interrupted answer, never as a message the user typed', () => {
     const resumed = { ...session(), messages: [{ role: 'user' as const, content: 'Fix the parser' }, { role: 'assistant' as const, content: 'Half of it' }] };
-    beginPendingTurn(resumed, INTERRUPTED_TURN_REQUEST, '2026-01-01T00:00:01.000Z');
+    beginPendingTurn(resumed, LEGACY_INTERRUPTED_TURN_REQUEST, '2026-01-01T00:00:01.000Z');
     expect(sessionTranscriptMessages(resumed)).toEqual(resumed.messages);
     updatePendingResponse(resumed, 'The other half', 'append', '2026-01-01T00:00:02.000Z');
     finishPendingTurn(resumed, undefined, '2026-01-01T00:00:03.000Z');
