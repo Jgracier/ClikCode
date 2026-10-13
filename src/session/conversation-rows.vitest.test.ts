@@ -59,10 +59,10 @@ describe('conversationRows: the one list both surfaces draw', () => {
     expect(rows[0]?.activity).toBeUndefined();
   });
 
-  it('marks the chat open here idle, leaves clerks out, and ignores a stored listTurn', () => {
+  it('marks the chat open here idle and ignores a stored listTurn', () => {
     const old = chat('old', { updatedAt: ago(48 * HOUR) });
     (old as { listTurn?: unknown }).listTurn = { startedAt: ago(48 * HOUR), prompt: 'go' };
-    const rows = conversationRows([old, chat('clerk', { clerkOf: 'old' })], { workerIsLive: () => true, now: NOW, currentId: 'old' });
+    const rows = conversationRows([old], { workerIsLive: () => true, now: NOW, currentId: 'old' });
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ activity: 'idle', section: 'past', current: true });
   });

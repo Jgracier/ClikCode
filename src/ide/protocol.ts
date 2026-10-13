@@ -234,9 +234,6 @@ export interface IdeChatSettings {
   permissions?: { current: string; choices: string[] };
   plan?: boolean;
   fast?: boolean;
-  /** One switch. Off until this chat turns it on. `current` and `choices`
-   * stay so an editor from before the switch still renders one On row. */
-  swarm?: { enabled: boolean; current?: string[]; choices?: Array<{ id: string; label: string; detail: string }> };
   /** `/send`: what a message typed mid-turn does, in every chat. */
   send?: 'steer' | 'queue';
 }
@@ -260,9 +257,6 @@ export type IdeChoice =
   | { kind: 'plan'; on: boolean }
   /** ClikDeploy Gateway: served by the fastest provider instead of the cheapest. */
   | { kind: 'fast'; on: boolean }
-  /** Turn swarm on or off. `names` is the editor from before the switch:
-   * any name meant on, and an empty list meant off. */
-  | { kind: 'swarm'; enabled?: boolean; names?: string[] }
   | { kind: 'account'; accountId: string }
   | { kind: 'add-account'; provider: string }
   | { kind: 'account-action'; accountId: string; action: 'reauthenticate' | 'disconnect' | 'remove' | 'verified' }

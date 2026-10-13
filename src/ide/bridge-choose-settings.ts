@@ -1,5 +1,5 @@
 /** Choices that set something on the open conversation: model, agent, effort,
- * permissions, account, fast, swarm, plan. */
+ * permissions, account, fast, plan. */
 import { planModeOnChat, setAgentPlanMode } from '../agent/plan-mode-setting.js';
 import { selectGatewayAgent } from '../commands/ai/sessions.js';
 import type { IdeChoice } from './protocol.js';
@@ -29,12 +29,6 @@ export async function chooseSetting(cx: ChooseContext, choice: IdeChoice): Promi
     case 'permissions': await setting(`/permissions ${choice.value}`); done(); return true;
     case 'account': await setting(`/settings account ${choice.accountId}`); done(); return true;
     case 'fast': await setting(`/fast ${choice.on ? 'on' : 'off'}`); done(); return true;
-    case 'swarm': {
-      const on = typeof choice.enabled === 'boolean' ? choice.enabled : (choice.names?.length ?? 0) > 0;
-      await setting(on ? '/swarm on' : '/swarm off');
-      done();
-      return true;
-    }
     case 'plan': {
       const { session } = await host.current();
       const harness = sessionHarnessDefinition(session);

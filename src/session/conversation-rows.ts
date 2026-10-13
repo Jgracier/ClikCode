@@ -76,11 +76,10 @@ const timestamp = (value: string): number => {
   return Number.isNaN(at) ? -Infinity : at;
 };
 
-/** Whether a chat is a conversation of its own. A swarm's helper chat (a
- * clerk) is part of its host's turn; a folded branch's history is all in the
- * branch it was folded into. */
+/** Whether a chat is a conversation of its own. A folded branch's history is
+ * all in the branch it was folded into. */
 export function isConversationChat(session: HarnessSession): boolean {
-  return !session.clerkOf && !session.foldedInto;
+  return !session.foldedInto;
 }
 
 /** The conversation chats, by the conversation each belongs to. */
@@ -97,7 +96,7 @@ export function groupByConversation(sessions: readonly HarnessSession[]): Map<st
 }
 
 /** One row per conversation: Working first, then Recent, then Older; within
- * each, one that needs the user first, then newest first. A clerk (a swarm's helper chat) is never a row. Which
+ * each, one that needs the user first, then newest first. Which
  * chats count as conversations at all (blank ones) is the caller's filter. */
 export function conversationRows(sessions: readonly HarnessSession[], facts: ConversationRowFacts = {}): ConversationRow[] {
   const now = facts.now ?? Date.now();

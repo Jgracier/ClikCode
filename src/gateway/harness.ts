@@ -23,10 +23,6 @@ import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools
 import { stateDirectory } from '../session/store/paths.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { loadIndex } from '../session/state/index-file.js';
-import { readState } from '../session/state/read.js';
-import { swarmIsOn } from '../swarm/policy.js';
-import { runSwarmDelegation, swarmModelList } from '../swarm/run.js';
-import { openSwarmTurn } from '../swarm/store.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 import { sessionSandboxMode } from '../agent/sandbox.js';
 import type { HarnessSession } from '../session/model.js';
@@ -99,7 +95,6 @@ export async function runGatewayHarnessSessionTurn(
     notice: (message) => { if (prompter) prompter.activity(message); else process.stderr.write(`${message}\n`); },
   });
   const hooks = toolHooksFrom(hookConfig, (message) => prompter?.activity(message));
-  if (swarmIsOn(session)) await openSwarmTurn(session.id).catch(() => undefined);
   let servedModel: string | undefined;
   const publishActivity = (event: GatewayActivityEvent): void => {
     const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);
@@ -135,16 +130,6 @@ export async function runGatewayHarnessSessionTurn(
       prompter?.response(text, mode);
     },
     onActivity: publishActivity,
-    ...(swarmIsOn(session) ? { swarmModelNote: await swarmModelList(session, await readState({ transcripts: [] })).catch(() => undefined) } : {}),
-    // Re-read the conversation's swarm on each task, so /swarm during a turn
-    // applies to the next call. Passing model hands that model the task.
-    swarmDelegate: async (request) => {
-      const state = await readState({ transcripts: [] });
-      const live = state.sessions.find((item) => item.id === session.id);
-      const host = live && swarmIsOn(live) ? { ...session, swarm: live.swarm, permissionMode: live.permissionMode ?? session.permissionMode, accountId: live.accountId ?? session.accountId } : session;
-      if (!swarmIsOn(host)) return null;
-      return runSwarmDelegation({ host, state, request, onActivity: publishActivity });
-    },
     onPhase: (phase) => prompter?.phase(phase),
     onPlan: (entries) => prompter?.setPlan(entries),
     // Per model step, as it happens: the loop's running total and where the

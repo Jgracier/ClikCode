@@ -33,7 +33,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   program.command('ide-bridge', { hidden: true }).action(async () => (await import('../ide/bridge.js')).runIdeBridge(config));
   program.command('ide-terminal <spec>', { hidden: true }).action(async (spec: string) => (await import('../ide/terminal.js')).runIdeTerminal(spec));
   program.command('conversations-mcp', { hidden: true }).description('Serves search_conversations, read_conversation, and active_conversations to a vendor agent over stdio MCP').action(async () => (await import('../search/mcp.js')).serveConversationsMcp());
-  program.command('swarm-mcp', { hidden: true }).description('Answers the swarm tool for the conversation that spawned it').action(async () => (await import('../swarm/mcp.js')).serveSwarmMcp());
   // The search /search runs, from a shell: the same engine and ranking.
   program.command('search <words...>').description('Find the conversations that mention something, any provider, most mentions first (--json: each hit and its first mention)')
     .action(async (words: string[]) => {

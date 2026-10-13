@@ -53,16 +53,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: GatewayHarnes
       input.onUsage?.({ ...rt.ledger.total, ...rt.lastContext });
     },
   });
-  // Swarm, when the conversation has one, runs the task on another provider
-  // and returns a card. Null means this host's own sub-agent still does it.
-  const runSubagent = innerSubagent && input.swarmDelegate
-    ? async (request: SubagentCall & { callId: string; signal?: AbortSignal }): Promise<ToolRunResult> => {
-      // A plugin agent's prompt and tools are this host's to apply.
-      const delegated = request.kind === 'work' || request.agentType ? null : await input.swarmDelegate?.(request);
-      if (delegated) return delegated;
-      return innerSubagent(request);
-    }
-    : innerSubagent;
+  const runSubagent = innerSubagent;
   const backgroundSignal = signal ? AbortSignal.any([signal, rt.backgroundStop.signal]) : rt.backgroundStop.signal;
 
   const toolContext = (callId: string, toolName: string, emitOutput: (chunk: string) => void): ToolContext => ({
@@ -151,8 +142,7 @@ export function createToolRunner(rt: TurnRuntime, runTurn: (input: GatewayHarnes
     const finish = (result: ToolRunResult): ToolRunResult => {
       const output = eventOutputPreview(result.output);
       input.onActivity?.({
-        kind: result.isError ? 'tool-error' : 'tool-done', label: result.activityLabel || label, id: call.id, ...category,
-        ...(result.swarm ? { agent: true, swarm: result.swarm } : {}),
+        kind: result.isError ? 'tool-error' : 'tool-done', label, id: call.id, ...category,
         ...output, ...(result.diff ? { diff: result.diff } : {}),
         ...(startedAt !== undefined ? { durationMs: Date.now() - startedAt } : {}),
         ...(result.exitCode !== undefined ? { exitCode: result.exitCode } : {}),

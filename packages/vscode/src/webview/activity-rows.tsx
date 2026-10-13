@@ -151,7 +151,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
   const result = activityResult(activity);
   const outcome = activityOutcome(activity);
   const totals = activity.diff?.length ? diffTotals(activity.diff) : undefined;
-  const agentRunning = status === 'running' && (Boolean(activity.swarm) || Boolean(activity.agent)
+  const agentRunning = status === 'running' && (Boolean(activity.agent)
     || liveWaitKind({ kind: 'tool-start', label: activity.label, agent: activity.agent, category: activity.category }) === 'agent');
   const animating = useContext(Animating);
   const change = (action: 'view' | 'revert') => (event: MouseEvent): void => {
@@ -163,7 +163,7 @@ export function ActivityRow({ activity, workspace, userIndex }: { activity: Acti
       <div class="activity-line">
         {/* Every running row spins for itself, in its category's colour, on
             the page's one clock (the working line spins for the turn). */}
-        <span class={`activity-status ${activity.swarm ? 'tone-cyan' : toneOf(activity)}`} aria-label={status}>
+        <span class={`activity-status ${toneOf(activity)}`} aria-label={status}>
           {status === 'error' ? <Icon name="error" /> : status === 'stopped' ? <Icon name="debug-stop" />
             : status === 'running' ? <Spinner tone={agentRunning ? 'tone-cyan' : toneOf(activity)} /> : <Icon name={activityIcon(activity)} />}
         </span>

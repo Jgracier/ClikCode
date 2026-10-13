@@ -20,7 +20,6 @@ import { harnessModelLabel, modelSettingsDetail, nativeModelCatalog } from '../.
 import { effortChoicesFor } from '../../harness/accounts/effort-choices.js';
 import { harnessSupportsPermissionMode } from '../../runtime/lazy-bridge.js';
 import { isBlankConversation, VALID_PERMISSION_MODES } from '../../session/options.js';
-import { swarmIsOn } from '../../swarm/policy.js';
 import { sessionSandboxMode } from '../../agent/sandbox.js';
 import type { PaletteEntry } from '../command-palette.js';
 
@@ -81,9 +80,6 @@ export function withArgValues(
     .filter((item) => item.id !== session.id && !isBlankConversation(item) && item.name)
     .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
     .map((item) => ({ value: item.name!, detail: new Date(item.updatedAt).toLocaleDateString() }));
-  const swarm: Values = swarmIsOn(session)
-    ? [{ value: 'off', label: 'Turn swarm off' }]
-    : [{ value: 'on', label: 'Turn swarm on' }];
   const sandbox: Values = sessionSandboxMode(session.sandbox) === 'workspace'
     ? [{ value: 'off', label: 'Turn the sandbox off' }]
     : [{ value: 'on', label: 'Turn the sandbox on' }];
@@ -93,7 +89,6 @@ export function withArgValues(
     '/permissions': () => permissions,
     '/account': () => accounts,
     '/resume': () => chats,
-    '/swarm': () => swarm,
     '/sandbox': () => sandbox,
   };
   return entries.map((entry) => (sources[entry.value] ? { ...entry, argValues: sources[entry.value] } : entry));

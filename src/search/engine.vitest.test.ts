@@ -116,10 +116,9 @@ describe('searchConversations', () => {
     expect(hit.mentions.map((mention) => [mention.sessionId, mention.messageIndex])).toEqual([['fork', 0], ['fork', 1], ['fork', 2]]);
   });
 
-  it('leaves out blank chats, clerks and the excluded conversation', async () => {
+  it('leaves out blank chats and the excluded conversation', async () => {
     await store(
       chat('blank', []),
-      chat('clerk', [user('banana split')], { clerkOf: 'host' } as Partial<HarnessSession>),
       chat('mine', [user('banana split')]),
       chat('theirs', [user('banana split')]),
     );
@@ -127,10 +126,9 @@ describe('searchConversations', () => {
     expect(result.hits.map((hit) => hit.conversationId)).toEqual(['theirs']);
   });
 
-  it('groups as readState reads: an old status is active, and clerks and folded branches are no conversation', async () => {
+  it('groups as readState reads: an old status is active, and folded branches are no conversation', async () => {
     await store(
       chat('old', [user('plum')], { status: 'open' } as unknown as Partial<HarnessSession>),
-      chat('clerk', [user('plum')], { clerkOf: 'old' } as Partial<HarnessSession>),
       chat('folded', [user('plum')], { foldedInto: 'old' } as Partial<HarnessSession>),
     );
     const groups = await conversationGroups();

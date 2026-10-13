@@ -24,11 +24,11 @@ export function rightLabeledRule(width: number, label?: string): string {
  * Its colour is the call's category, the same one the status line uses. The
  * turn's clock stays on that line, so this row has none. */
 export function runningChatLine(
-  label: string, frame: number, kind: 'command' | 'agent' | 'tool' | 'swarm', category?: ToolCategory,
+  label: string, frame: number, kind: 'command' | 'agent' | 'tool', category?: ToolCategory,
 ): string {
   const colour = category ? TOOL_CATEGORY[category].colour
     : kind === 'command' ? 'yellow' as const
-      : kind === 'agent' || kind === 'swarm' ? 'cyan' as const
+      : kind === 'agent' ? 'cyan' as const
         : undefined;
   const glyph = waitingSpinnerGlyph(frame);
   const spinner = colour ? chalk[colour](glyph) : chalk.dim(glyph);

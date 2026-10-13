@@ -300,7 +300,7 @@ and `--debug` adds the stack and HTTP detail when something fails.
 Most of the time you will not type any of those. You will be in a session,
 where everything is a slash away.
 
-Pressing `/` opens a searchable list of ClikCode's 44 commands. Ten are pinned
+Pressing `/` opens a searchable list of ClikCode's 43 commands. Ten are pinned
 at the top, in the order people reach for them: resume a conversation, pick a
 tool, an account on it, then its model, start over, change what needs your
 approval, then settings, sessions, status and help. (The terminal leaves
@@ -373,7 +373,6 @@ not reversed.
 | --- | --- |
 | `/model [name]` | choose or set a model |
 | `/effort [level]` | reasoning level |
-| `/swarm [on\|off]` | swarm for this chat: while on, a task is handed to another of your accounts when it can do it for less, and small ones stay here. Off unless turned on |
 | `/fast [on\|off]` | on ClikDeploy Gateway, serve from the fastest provider of the model instead of the cheapest |
 | `/permissions [ask\|bypass\|auto]` | approval behavior |
 | `/sandbox [on\|off]` | ClikCode's own agent: its shell commands write only the workspace, temp and caches (on by default) |

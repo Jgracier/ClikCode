@@ -116,12 +116,7 @@ export async function openTurn(input: GatewayHarnessTurnInput): Promise<{ rt: Tu
     session: input.contextProfile,
   });
   const exposure = exposeTools(mergeTools(input.tools ?? defaultTools(), input.extraTools), profile.mcpEagerSchemaTokens);
-  const swarmTaskNote = input.swarmModelNote
-    ? ` ${input.swarmModelNote}`
-    : ' If this conversation has a swarm on, pass one model id from the swarm list, exactly. Those are the models on accounts that still have usage. Do not invent a model. Match the index to the task and prefer a cheaper model when a lower index is enough. You get one subagent row and a short card, not that model\'s conversation.';
-  const tools = input.swarmDelegate
-    ? exposure.all.map((tool) => tool.name === TASK_TOOL_NAME ? { ...tool, description: `${tool.description}${swarmTaskNote}` } : tool)
-    : exposure.all;
+  const tools = exposure.all;
 
   const [loaded, savedRules, baseSystem, notebooksOnDisk] = await abortable(Promise.all([
     store.load(),

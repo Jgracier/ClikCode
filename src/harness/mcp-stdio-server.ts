@@ -1,5 +1,4 @@
-/** The stdio side of ClikCode's own MCP servers (`conversations-mcp`,
- * `swarm-mcp`): reading requests and writing answers.
+/** The stdio side of ClikCode's own MCP servers (`conversations-mcp`): reading requests and writing answers.
  *
  * The MCP stdio transport is newline-delimited JSON; some clients send
  * Content-Length frames instead. Each message is answered -- and anything

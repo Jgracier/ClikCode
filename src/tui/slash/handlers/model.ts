@@ -1,4 +1,4 @@
-/** /model, /effort, /fast and /swarm: choosing what runs the conversation. */
+/** /model, /effort and /fast: choosing what runs the conversation. */
 import { isGatewayService } from '../../../session/route.js';
 import { localModelChosen } from '../../../commands/ai/local-model.js';
 import { localModelChoices } from '../../../local-models/index.js';
@@ -16,7 +16,6 @@ import { normalizeModelWord, setSessionHarnessOption } from '../../../session/op
 import type { SlashHandlerKey } from '../registry.js';
 import { modelChoicesFor } from '../model-choices.js';
 import { effortChoicesFor } from '../../../harness/accounts/effort-choices.js';
-import { swarmIsOn } from '../../../swarm/policy.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../../harness/definition.js';
 import { assertRealModel, chooseGatewayModel } from '../../../commands/ai/sessions.js';
 import { gatewayModelDetail, gatewayModelLabel, gatewayModels, isAutomaticModelWord } from '../../../gateway/models.js';
@@ -181,13 +180,5 @@ export const modelHandlers = {
     if (on) session.speed = 'fast';
     else delete session.speed;
     return saveSettings(state, session);
-  },
-  swarm: async ({ state, session, words }) => {
-    const asked = words.map((word) => word.toLowerCase()).filter(Boolean);
-    const word = asked.length === 0 ? (swarmIsOn(session) ? 'off' : 'on') : asked.length === 1 ? asked[0] : '';
-    if (word !== 'on' && word !== 'off') throw new Error('usage: /swarm [on|off]');
-    if (word === 'off') delete session.swarm;
-    else session.swarm = true;
-    await saveSettings(state, session);
   },
 } satisfies Partial<Record<SlashHandlerKey, HeadlessSlashHandler>>;

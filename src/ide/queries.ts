@@ -34,7 +34,6 @@ import { conversationRows } from '../session/conversation-rows.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
 import { textTranscript } from '../turn/turn-activities.js';
 import { modelRow } from '../tui/pickers/model.js';
-import { swarmIsOn } from '../swarm/policy.js';
 import { planModeOnChat } from '../agent/plan-mode-setting.js';
 import { CLIKCODE_USER_AGENT } from '../version.js';
 import type {
@@ -128,7 +127,6 @@ export async function modelList(config: Conf, state: HarnessState, session: Harn
  * chat), in the terminal board's sections and order (conversationRows). */
 export async function conversationList(state: HarnessState, currentId: string | undefined): Promise<IdeConversation[]> {
   const sessions = state.sessions
-    .filter((session) => !session.clerkOf)
     .filter((session) => session.status !== 'archived' || session.id === currentId)
     .filter((session) => session.id === currentId || !isBlankConversation(session));
   const workers = await liveWorkers();
@@ -197,16 +195,6 @@ export async function chatSettings(state: HarnessState, session: HarnessSession)
   if (isGatewayService(session)) settings.fast = session.speed === 'fast';
   const permissions = sessionPermissionModes(session, isClikCodeAgent(session) ? undefined : harness);
   if (permissions.length) settings.permissions = { current: session.permissionMode ?? 'ask', choices: [...permissions] };
-  const swarmOn = swarmIsOn(session);
-  settings.swarm = {
-    enabled: swarmOn,
-    current: [],
-    choices: [{
-      id: swarmOn ? 'off' : 'on',
-      label: swarmOn ? 'Turn swarm off' : 'Turn swarm on',
-      detail: swarmOn ? 'This chat does its own work' : 'Hand work to other accounts that have usage left',
-    }],
-  };
   if (planModeOnChat(session, harness)) settings.plan = session.planMode === true;
   else if (harness?.planMode) settings.plan = session.harnessOptions?.[harness.planMode.option] === harness.planMode.value;
   return settings;

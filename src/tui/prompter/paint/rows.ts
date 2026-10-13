@@ -90,7 +90,7 @@ export function createToolRows(p: TerminalHarnessPrompter, builders: RowBuilders
         lines: activityRows(entry.lines, entry.event?.category),
       };
     }
-    const kind = entry.event?.swarm ? 'swarm' as const : (liveWaitKind(entry.event!) ?? 'tool');
+    const kind = liveWaitKind(entry.event!) ?? 'tool';
     const frame = p.reducedMotion ? 0 : p.waitingFrame;
     const row = runningChatLine(
       tensedLabel(entry.event?.label ?? '', true), frame, kind, entry.event?.category,

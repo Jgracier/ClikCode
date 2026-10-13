@@ -214,11 +214,6 @@ export interface GatewayHarnessTurnInput {
    * start sub-agents of its own. `parentSessionId` and `kind` name it to a
    * SubagentStop hook. */
   subagent?: { system: string; transcriptFile: string; checkpoint?: { sessionId: string; turnId: string }; parentSessionId?: string; kind?: 'research' | 'work'; agentType?: string };
-  /** When the conversation has a swarm, a `task` call asks this before the
-   * same-model sub-agent. Null keeps that sub-agent. */
-  swarmDelegate?: (request: { prompt: string; description?: string; callId: string; signal?: AbortSignal; model?: string }) => Promise<ToolRunResult | null>;
-  /** Models with usage left, shown on the task tool while swarm is on. */
-  swarmModelNote?: string;
 }
 
 export interface GatewayHarnessTurnResult {

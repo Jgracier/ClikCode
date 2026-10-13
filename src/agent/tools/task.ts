@@ -28,7 +28,6 @@ export const taskTool = defineTool<TaskArgs>({
       prompt: { type: 'string', description: 'The complete task for the sub-agent.' },
       description: { type: 'string', description: 'A 3-6 word label shown to the user, e.g. "Find the retry logic".' },
       subagent_type: { type: 'string', description: 'An agent type listed under Agent types in the system prompt, when one fits. Omit for the general research sub-agent.' },
-      model: { type: 'string', description: 'One model id from the swarm list, copied exactly, when this conversation has a swarm. Do not invent a model. Match the index to the task and prefer the cheaper price when a lower index is enough.' },
     },
   },
   label: (args) => formatToolRow('task', args.description?.trim() || args.prompt),
@@ -40,7 +39,6 @@ export const taskTool = defineTool<TaskArgs>({
     return ctx.runSubagent({
       prompt: args.prompt, ...type,
       ...(args.description?.trim() ? { description: args.description.trim() } : {}),
-      ...(args.model?.trim() ? { model: args.model.trim() } : {}),
     });
   },
 });

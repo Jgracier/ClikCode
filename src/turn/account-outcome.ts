@@ -1,9 +1,7 @@
 /** What a turn's outcome records on its account. */
 import { clearQuotaMark, markQuotaExhausted, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
 import { noteAllowedTurn, noteRefusal } from '../harness/accounts/learned-usage.js';
-import type { TurnUsage } from '../harness/protocol/turn-usage.js';
 import { quotaRetryHint, quotaRollingWindowMs } from './failover.js';
-import { recordInvocation } from './turn-output.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 
@@ -50,18 +48,4 @@ export function recordQuotaRefusal(state: HarnessState, account: AiHarnessAccoun
     .map((window) => window.resetsAt!).sort().at(-1);
   const learnedReset = noteRefusal(state, account, now, exact, windowMs);
   markQuotaExhausted(account, now, exact ?? spentReset ?? learnedReset ?? named);
-}
-
-/** A clerk turn is a turn: recorded, and its refusal marks the account. */
-export function recordClerkTurn(state: HarnessState, account: AiHarnessAccount, turn: {
-  sessionId: string; provider: string; model?: string | null; startedAt: number; usage?: TurnUsage; quota?: boolean; failure?: unknown;
-}): void {
-  const invocation = turn.usage || !turn.quota
-    ? recordInvocation(state, {
-      sessionId: turn.sessionId, accountId: account.id, provider: turn.provider,
-      ...(turn.model ? { model: turn.model } : {}), startedAt: turn.startedAt, ...(turn.usage ? { usage: turn.usage } : {}),
-    })
-    : undefined;
-  if (turn.quota) recordQuotaRefusal(state, account, turn.failure);
-  else if (invocation) recordSuccessfulAccountTurn(state, account, invocation);
 }
