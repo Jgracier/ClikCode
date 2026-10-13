@@ -21,16 +21,36 @@ const session = (attachments: string[] = []): HarnessSession => ({
 } as HarnessSession);
 
 describe('Gateway turn startup', () => {
-  it('starts without a model-list network request for a text turn', async () => {
-    catalog.saved.mockResolvedValue(undefined);
+  it('starts without a model-list network request when a list is saved', async () => {
+    catalog.saved.mockResolvedValue({ auto: null, models: [{ id: 'vision-model', contextWindow: 50_000 }] });
     catalog.fresh.mockClear();
     const client = await modelClientForSession(session(), { get: () => undefined } as never);
-    expect(client).toBeDefined();
+    expect(client.contextHints?.contextWindow).toBe(50_000);
     expect(catalog.fresh).not.toHaveBeenCalled();
   });
 
-  it('fetches missing vision facts when an image needs them', async () => {
+  it('fetches the list before the first step when none is saved, instead of assuming a window and no vision', async () => {
     catalog.saved.mockResolvedValue(undefined);
+    catalog.fresh.mockReset();
+    catalog.fresh.mockResolvedValue({ auto: null, models: [{ id: 'vision-model', vision: true, contextWindow: 200_000, maxOutput: 16_000 }] });
+    const client = await modelClientForSession(session(), { get: () => undefined } as never);
+    expect(catalog.fresh).toHaveBeenCalledOnce();
+    expect(client.contextHints?.contextWindow).toBe(200_000);
+    expect(client.acceptsImages).toBe(true);
+  });
+
+  it('runs the turn on what it has when that first fetch fails', async () => {
+    catalog.saved.mockResolvedValue(undefined);
+    catalog.fresh.mockReset();
+    catalog.fresh.mockRejectedValue(new Error('timed out'));
+    const client = await modelClientForSession(session(), { get: () => undefined } as never);
+    expect(client).toBeDefined();
+    expect(catalog.fresh).toHaveBeenCalledOnce();
+  });
+
+  it('fetches missing vision facts when an image needs them', async () => {
+    catalog.saved.mockResolvedValue({ auto: null, models: [] });
+    catalog.fresh.mockReset();
     catalog.fresh.mockResolvedValue({ auto: null, models: [{ id: 'vision-model', vision: true, contextWindow: 100_000 }] });
     const client = await modelClientForSession(session(["/tmp/shot.png"]), { get: () => undefined } as never);
     expect(catalog.fresh).toHaveBeenCalledOnce();
