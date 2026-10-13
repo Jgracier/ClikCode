@@ -3,7 +3,7 @@
   "displayName": "ClikCode",
   "description": "Claude Code, Codex, Gemini, Copilot, OpenCode and 20 more coding agents in one chat: pick any provider and model from the composer, resume the same conversations as the terminal, switch accounts automatically when a usage limit hits, and review every change as a diff.",
   "//version": "MAJOR.MINOR only: ClikDeploy computes the patch and stamps the full version into its own build copy before publishing, so the patch digit here is ignored. Bump the minor (or major) here for a new release line; never the patch. Versioned independently of the clikcode npm package.",
-  "version": "0.2.0",
+  "version": "0.2.2",
   "publisher": "clikcode",
   "license": "MIT",
   "pricing": "Free",
