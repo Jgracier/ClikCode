@@ -79,6 +79,7 @@ async function turnWithMessage(mode: string, options: {
   typeAt: (event: HarnessActivityEvent) => boolean;
   approve?: (resolve: (answer: boolean) => void) => void;
   steering?: boolean;
+  catalogSteering?: false;
   typeAtStart?: boolean;
 }) {
   const log = join(dir, 'log');
@@ -97,6 +98,7 @@ async function turnWithMessage(mode: string, options: {
     const result = await session.runTurn({
       binary: process.execPath, command: 'claude', argv: ['-e', agent(log, mode, options.steering)], cwd: process.cwd(), prompt: 'go',
       environment: {}, permissionMode: 'ask',
+      ...(options.catalogSteering === false ? { acp: { steering: false as const } } : {}),
       onSteerReady: (handler) => {
         broker.setSteerHandler(handler ? (text, _submission, hold) => handler(text, hold) : undefined);
         if (handler && options.typeAtStart) type();
@@ -177,6 +179,12 @@ describe('a message typed during an ACP turn that advertises steering', () => {
     const run = await turnWithMessage('idle', { typeAt: (event) => event.kind === 'thinking', steering: false, typeAtStart: false });
     expect(run.log.some((line) => line.startsWith('steer'))).toBe(false);
     expect(run.result?.disposition).toBe('queued');
+    expect(run.queue).toEqual(['m1']);
+  });
+
+  it('is not steered into an agent that advertises it when the catalog records it as unsupported (Junie)', async () => {
+    const run = await turnWithMessage('idle', { typeAt: (event) => event.kind === 'thinking', catalogSteering: false, typeAtStart: false });
+    expect(run.log.some((line) => line.startsWith('steer'))).toBe(false);
     expect(run.queue).toEqual(['m1']);
   });
 });

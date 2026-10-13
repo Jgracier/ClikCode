@@ -61,6 +61,12 @@ export interface AiHarnessAcpDefinition {
   /** False for an agent whose initialize response lacks
    * `promptCapabilities.image` (Grok Build 1.0.50): images never go over ACP. */
   promptImages?: false;
+  /** False for an agent that advertises `_meta.steering.supported` but does
+   * not answer `_session/steering` as claude-agent-acp does. Junie 26.9.22
+   * (checked 2026-10-12, one `_session/steering` with
+   * `idleBehavior: promptRequired` against an idle session, sandboxed)
+   * answers `startedNewTurn`, starting a detached turn ClikCode cannot own. */
+  steering?: false;
   /** ACP config option that selects the reasoning effort. */
   effortConfigId?: string;
   /** ACP config option used by agents that select a model provider first. */
@@ -1248,7 +1254,7 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // junie 26.9.22 initialize (vendor-sandbox, 2026-10-11): `_meta.steering.supported: true`, which the ACP client reads on any agent, so Junie is
   // steered like Claude. Not run: whether it answers `_session/steering` as claude-agent-acp does. session/new (signed in): modes default|plan, config
   // options mode, model, effort (low|medium|high), brave_mode (brave-auto|on|off) -- brave_mode is a config option, not a mode id, so no permission mapping.
-  { command: 'junie', quotaProbe: { none: '`junie --help` has no usage or quota command' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'], effortConfigId: 'effort', planModeId: 'plan' }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', authFiles: [{ path: '~/.junie/secure_credentials.json', contains: 'jb-account-stored' }], installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
+  { command: 'junie', quotaProbe: { none: '`junie --help` has no usage or quota command' }, capabilities: { childActivity: false, thinking: false, plan: false, usage: false, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'junie', displayName: 'Junie CLI', tier: 'experimental', transport: 'acp', integration: 'structured', parser: 'text', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, acp: { argv: ['--acp', 'true'], effortConfigId: 'effort', planModeId: 'plan', steering: false }, localAuth: ['oauth', 'api-key', 'vendor-cli'], binary: 'junie', authFiles: [{ path: '~/.junie/secure_credentials.json', contains: 'jb-account-stored' }], installer: HARNESS_INSTALLERS.junie, loginArgv: [], authEnv: ['JUNIE_API_KEY', 'ANTHROPIC_API_KEY', 'OPENAI_API_KEY'], modelArgvPrefix: ['--model'], effortArgvPrefix: ['--effort'], effortValues: ['low', 'medium', 'high'] },
   // Sign-in evidence: the OAuth record `mcode login` writes under
   // ~/.minimax/auth/prod/<region>/<client>/auth.json (vendor-identity.ts
   // reads the same record for the account's email).
