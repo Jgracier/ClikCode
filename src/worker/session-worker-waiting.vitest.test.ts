@@ -730,3 +730,87 @@ describe('a window joining a running turn', () => {
     expect(joined.filter(({ client }) => client.initialEvent?.type === 'snapshot' && client.initialEvent.live).length).toBeGreaterThan(2);
   }, 60_000);
 });
+
+describe('a worker stopped by SIGTERM in the middle of a turn', () => {
+  it('leaves the conversation whole: earlier turns, the prompt, and what had streamed', async () => {
+    const session = await gatewaySession();
+    const client = await attach(session.id);
+    const first = eventsUntil(client, 'waiting-stop');
+    client.send({ type: 'submit', text: 'first question', echo: true });
+    (await gateway!.next()).respond(words('First answer.'));
+    await first;
+    const events: WorkerEvent[] = [];
+    client.on('event', (event: WorkerEvent) => events.push(event));
+    client.send({ type: 'submit', text: 'second question', echo: true });
+    const answer = Array.from({ length: 400 }, (_, index) => `word${index}`).join(' ');
+    void (await gateway!.next()).respondSlowly(words(answer), 4);
+    // Let a good part of it stream and the journal write at least once.
+    await new Promise((resolve) => setTimeout(resolve, 1200));
+    const record = await readWorkerRecord(session.id);
+    process.kill(record!.pid, 'SIGTERM');
+    await processExit(record!.pid);
+    const { sessionTranscriptMessages } = await import('../turn/checkpoint.js');
+    const stored = await storedSession(session.id);
+    const messages = sessionTranscriptMessages(stored).map((message) => `${message.role}: ${message.content}`);
+    expect(messages[0]).toBe('user: first question');
+    expect(messages[1]).toBe('assistant: First answer.');
+    expect(messages[2]).toBe('user: second question');
+    // What had streamed is kept, not dropped to nothing.
+    expect(messages[3] ?? '').toMatch(/^assistant: word0 word1 word2/);
+    expect(events.some((event) => event.type === 'shutdown')).toBe(true);
+  }, 60_000);
+});
+
+describe('a worker killed hard in the middle of a turn', () => {
+  for (const [name, signal, afterMs] of [['SIGKILL after a good part streamed', 'SIGKILL', 1200], ['SIGKILL almost at once', 'SIGKILL', 120], ['SIGTERM almost at once', 'SIGTERM', 120]] as const) {
+    it(`keeps the prompt of the first message: ${name}`, async () => {
+      const session = await gatewaySession();
+      const client = await attach(session.id);
+      client.send({ type: 'submit', text: 'my very first question', echo: true });
+      const answer = Array.from({ length: 400 }, (_, index) => `word${index}`).join(' ');
+      void (await gateway!.next()).respondSlowly(words(answer), 4);
+      await new Promise((resolve) => setTimeout(resolve, afterMs));
+      const record = await readWorkerRecord(session.id);
+      process.kill(record!.pid, signal);
+      await processExit(record!.pid);
+      const { sessionTranscriptMessages } = await import('../turn/checkpoint.js');
+      const stored = await storedSession(session.id);
+      const messages = sessionTranscriptMessages(stored).map((message) => `${message.role}: ${message.content}`);
+      expect(messages[0]).toBe('user: my very first question');
+    }, 60_000);
+  }
+});
+
+describe('the model after its worker was stopped mid-turn', () => {
+  for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+    it(`still knows what was said before and during the interrupted turn (${signal})`, async () => {
+      const session = await gatewaySession();
+      const client = await attach(session.id);
+      const first = eventsUntil(client, 'waiting-stop');
+      client.send({ type: 'submit', text: 'first question', echo: true });
+      (await gateway!.next()).respond(words('First answer.'));
+      await first;
+      client.send({ type: 'submit', text: 'second question', echo: true });
+      const answer = Array.from({ length: 400 }, (_, index) => `word${index}`).join(' ');
+      void (await gateway!.next()).respondSlowly(words(answer), 4);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      const record = await readWorkerRecord(session.id);
+      process.kill(record!.pid, signal);
+      await processExit(record!.pid);
+      // The user comes back and carries on.
+      const again = await attach(session.id);
+      const third = eventsUntil(again, 'waiting-stop');
+      again.send({ type: 'submit', text: 'carry on', echo: true });
+      const request = await gateway!.next();
+      request.respond(words('Carried on.'));
+      await third;
+      const said = request.items.map((item) => `${item.role}: ${item.text}`);
+      expect(said.join('\n')).toContain('first question');
+      expect(said.join('\n')).toContain('First answer.');
+      expect(said.join('\n')).toContain('second question');
+      expect(said.join('\n')).toContain('carry on');
+      expect(said.join('\n')).toContain('interrupted');
+      expect(said.filter((line) => line.includes('second question'))).toHaveLength(1);
+    }, 60_000);
+  }
+});
