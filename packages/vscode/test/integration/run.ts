@@ -26,6 +26,16 @@ async function main(): Promise<void> {
   const extensionDevelopmentPath = process.env.CLIKCODE_IT_EXTENSION_PATH ?? packageRoot;
   const extensionTestsPath = resolve(__dirname, 'suite/index.js');
   const entry = process.env.CLIKCODE_TEST_ENTRY ?? resolve(packageRoot, '../../dist/index.js');
+  // CLIKCODE_IT_BUNDLED=1 tests the extension on its own, as the Marketplace ships it: no
+  // clikcode.path, and (suite/helpers.ts removes it from the host's PATH) no ClikCode installed, so
+  // it has to start the copy inside the package.
+  // Pair it with CLIKCODE_IT_EXTENSION_PATH (an unpacked .vsix, which has bundled/clikcode).
+  const bundledOnly = process.env.CLIKCODE_IT_BUNDLED === '1';
+  if (bundledOnly) {
+    if (!existsSync(join(extensionDevelopmentPath, 'bundled', 'clikcode', 'dist', 'index.js'))) {
+      throw new Error('CLIKCODE_IT_BUNDLED=1 needs CLIKCODE_IT_EXTENSION_PATH to be an unpacked .vsix that contains bundled/clikcode');
+    }
+  }
   if (!existsSync(entry)) throw new Error(`no ClikCode build at ${entry}: run \`node scripts/build.mjs\` at the repository root first`);
   const root = mkdtempSync(join(tmpdir(), 'clikcode-vscode-it-'));
   const workspace = join(root, 'workspace');
@@ -42,7 +52,7 @@ async function main(): Promise<void> {
   // test would silently run whatever \`clikcode\` is on PATH. User settings it is.
   mkdirSync(join(root, 'user-data', 'User'), { recursive: true });
   writeFileSync(join(root, 'user-data', 'User', 'settings.json'), JSON.stringify({
-    'clikcode.path': entry,
+    ...(bundledOnly ? {} : { 'clikcode.path': entry }),
     'workbench.colorTheme': theme,
     'workbench.startupEditor': 'none',
     'workbench.tips.enabled': false,
@@ -78,7 +88,7 @@ async function main(): Promise<void> {
     ...(existsSync(local) ? { vscodeExecutablePath: local } : {}),
     extensionDevelopmentPath,
     extensionTestsPath,
-    extensionTestsEnv: { CLIKCODE_IT_VENDOR: process.env.CLIKCODE_IT_VENDOR ?? '', CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), XDG_CONFIG_HOME: join(root, 'vendor-config'), XDG_CACHE_HOME: join(root, 'vendor-cache'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_OPENED: join(root, 'opened'), CLIKCODE_IT_HOLD: join(root, 'hold-login'), CLIKCODE_IT_FAKE_BIN: fakeBin, FAKE_LOGIN_HOLD: process.env.FAKE_LOGIN_HOLD ?? '', CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
+    extensionTestsEnv: { CLIKCODE_IT_BUNDLED: process.env.CLIKCODE_IT_BUNDLED ?? '', CLIKCODE_IT_VENDOR: process.env.CLIKCODE_IT_VENDOR ?? '', CLIKCODE_IT_GREP: process.env.CLIKCODE_IT_GREP ?? '', CLIKCODE_IT_LOG: process.env.CLIKCODE_IT_LOG ?? join(root, 'extension.log'), CLIKCODE_IT_SUITE: suite, CLIKCODE_IT_THEME: process.env.CLIKCODE_IT_THEME ?? 'dark', CLIKCODE_HOME: home, XDG_DATA_HOME: join(root, 'vendor-data'), XDG_STATE_HOME: join(root, 'vendor-state'), XDG_CONFIG_HOME: join(root, 'vendor-config'), XDG_CACHE_HOME: join(root, 'vendor-cache'), CLIKCODE_IT_WORKSPACE: workspace, CLIKCODE_IT_OPENED: join(root, 'opened'), CLIKCODE_IT_HOLD: join(root, 'hold-login'), CLIKCODE_IT_FAKE_BIN: fakeBin, FAKE_LOGIN_HOLD: process.env.FAKE_LOGIN_HOLD ?? '', CLIKCODE_IT_SCREENSHOT_DIR: process.env.CLIKCODE_IT_SCREENSHOT_DIR ?? '' },
     launchArgs: [
       workspace,
       '--user-data-dir', join(root, 'user-data'),

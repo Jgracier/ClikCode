@@ -1,11 +1,14 @@
 /** Which ClikCode the extension runs, and with which Node.js.
  *
- * The user's installed ClikCode, never a copy inside the extension. The
- * terminal and the editor then attach to a conversation's worker as the same
- * build: a worker is retired by any client whose build differs (see
- * src/worker/client.ts), so a bundled copy and an installed one would retire
- * each other's workers on every attach. And a state file written by a newer
- * ClikCode is never read by an older one hiding in the extension.
+ * The user's installed ClikCode first, and only when there is none, the copy
+ * that ships inside the extension (bundled/clikcode, see scripts/package.mjs).
+ * The order is the point. A worker is retired by any client whose build
+ * differs (see src/worker/client.ts), so a bundled copy running beside an
+ * installed one would retire each other's workers on every attach, and a
+ * state file written by a newer ClikCode would be read by an older one. With
+ * the installed copy always winning there is only ever one build in play per
+ * machine: the bundled one is what makes the extension work on its own, and
+ * installing ClikCode hands over to it from the next bridge start.
  *
  * ClikCode is a Node.js program (engines >=22.12). It is run as
  * `<node> <entry>` rather than through the `clikcode` shim, so it always has
@@ -30,6 +33,9 @@ export interface Runtime {
   entry: string;
   /** How the Node.js was found, for the log. */
   nodeSource: 'setting' | 'path' | 'vscode';
+  /** Where the entry came from, for the log: the `clikcode.path` setting, a
+   * `clikcode` on PATH, or the copy inside the extension. */
+  entrySource: 'setting' | 'path' | 'bundled';
 }
 
 export class RuntimeError extends Error {
@@ -101,7 +107,21 @@ export function entryFor(candidate: string, host: RuntimeHost): string | undefin
   return undefined;
 }
 
-export function resolveEntry(setting: string | undefined, host: RuntimeHost): string {
+/** The ClikCode that ships inside the extension, when this build has one
+ * (a development checkout does not). */
+export function bundledEntryFor(extensionPath: string, host: Pick<RuntimeHost, 'isFile'> = realHost): string | undefined {
+  const entry = join(extensionPath, 'bundled', 'clikcode', 'dist', 'index.js');
+  return host.isFile(entry) ? entry : undefined;
+}
+
+let bundledEntry: string | undefined;
+
+/** Called once on activation: where the bundled ClikCode is, if there is one. */
+export function useBundledClikcode(extensionPath: string): void {
+  bundledEntry = bundledEntryFor(extensionPath);
+}
+
+export function resolveEntry(setting: string | undefined, host: RuntimeHost, bundled?: string): string {
   const configured = setting?.trim();
   if (configured) {
     const entry = host.exists(configured) ? entryFor(configured, host) : undefined;
@@ -112,6 +132,7 @@ export function resolveEntry(setting: string | undefined, host: RuntimeHost): st
     const entry = entryFor(candidate, host);
     if (entry) return entry;
   }
+  if (bundled) return bundled;
   throw new RuntimeError(`ClikCode is not installed (no \`clikcode\` on PATH). Install it with: ${INSTALL_HELP}`, 'clikcode-missing');
 }
 
@@ -134,9 +155,10 @@ export async function resolveNode(setting: string | undefined, host: RuntimeHost
   throw new RuntimeError(`ClikCode needs Node.js ${MINIMUM_NODE} or newer: install it, or set clikcode.nodePath.`, 'node-missing');
 }
 
-export async function resolveRuntime(settings: { path?: string; nodePath?: string }, host: RuntimeHost = realHost): Promise<Runtime> {
-  const entry = resolveEntry(settings.path, host);
-  return { entry, ...(await resolveNode(settings.nodePath, host)) };
+export async function resolveRuntime(settings: { path?: string; nodePath?: string }, host: RuntimeHost = realHost, bundled: string | undefined = bundledEntry): Promise<Runtime> {
+  const entry = resolveEntry(settings.path, host, bundled);
+  const entrySource = entry === bundled && !settings.path?.trim() ? 'bundled' : settings.path?.trim() ? 'setting' : 'path';
+  return { entry, entrySource, ...(await resolveNode(settings.nodePath, host)) };
 }
 
 /** The build a worker records (src/worker/registry.ts currentWorkerBuild):

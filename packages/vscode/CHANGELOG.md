@@ -5,6 +5,10 @@ section covers a release line.
 
 ## 0.2
 
+- **Works on its own.** The extension ships with a copy of ClikCode and runs it when no `clikcode`
+  is installed, so installing it from the Marketplace is the whole setup. An installed ClikCode
+  still takes precedence, so the editor and the terminal stay on one build.
+
 ClikCode in VS Code, rebuilt as a finished product: everything ClikCode is, in the panel.
 
 - **On the right**, in the secondary side bar, like Claude Code and Codex (an activity bar view on

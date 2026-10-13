@@ -54,7 +54,7 @@ describe('ClikCode compatibility', () => {
     const entry = join(dir, 'index.js');
     // What commander prints for an unknown subcommand.
     writeFileSync(entry, `process.stderr.write("error: unknown command 'ide-bridge'\\n"); process.exit(1);`);
-    const client = BridgeClient.start({ node: process.execPath, env: {}, entry, nodeSource: 'path' }, dir);
+    const client = BridgeClient.start({ node: process.execPath, env: {}, entry, nodeSource: 'path', entrySource: 'path' }, dir);
     const log: string[] = [];
     client.on('log', (line) => log.push(line));
     await new Promise((resolve) => client.once('exit', resolve));

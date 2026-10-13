@@ -1,6 +1,9 @@
 /** Shared by the integration suites: waiting on the chat's state, driving
  * its page, and screenshots. */
 import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { delimiter, join } from 'node:path';
 import * as vscode from 'vscode';
 import type { ClikCodeApi } from '../../../src/extension';
 import type { ChatModel } from '../../../src/model';
@@ -13,6 +16,16 @@ const refusalNotes = (model: ChatModel) => model.notes.filter((note) => note.lev
 
 /** Watches for a refusal that arrives AFTER this call: one a finished earlier turn left in the notes
  * is not this turn's. Take it before the message is sent. */
+/** The ClikCode entry the extension under test runs: the `clikcode.path` setting, or, when it is
+ * unset (CLIKCODE_IT_BUNDLED=1), the copy inside the extension itself. */
+export function clikcodeEntry(): string {
+  const configured = vscode.workspace.getConfiguration('clikcode').get<string>('path')?.trim();
+  if (configured) return configured;
+  const extension = vscode.extensions.getExtension('clikcode.clikcode');
+  if (!extension) throw new Error('the ClikCode extension is not loaded');
+  return join(extension.extensionPath, 'bundled', 'clikcode', 'dist', 'index.js');
+}
+
 export function vendorRefusalSince(model: ChatModel): (model: ChatModel) => string | undefined {
   const before = refusalNotes(model).length;
   return (now) => {
@@ -105,7 +118,27 @@ export async function screenshot(name: string, settle = 1_200): Promise<void> {
   }
 }
 
+/** CLIKCODE_IT_BUNDLED=1: leave no `clikcode` on the extension host's PATH, so the extension has to
+ * start the copy it ships with. Done here, in the host: VS Code resets PATH for it, so the runner
+ * cannot. Only `clikcode` goes -- a directory that holds it is replaced by one linking everything
+ * else it holds, so node and every vendor CLI are still found. */
+function withoutClikcodeOnPath(): void {
+  if (process.env.CLIKCODE_IT_BUNDLED !== '1') return;
+  const scratch = mkdtempSync(join(tmpdir(), 'clikcode-it-path-'));
+  process.env.PATH = (process.env.PATH ?? '').split(delimiter).filter(Boolean).map((dir, index) => {
+    if (!existsSync(join(dir, 'clikcode'))) return dir;
+    const copy = join(scratch, String(index));
+    mkdirSync(copy);
+    for (const name of readdirSync(dir)) {
+      if (name === 'clikcode') continue;
+      try { symlinkSync(join(dir, name), join(copy, name)); } catch { /* a file that vanished is not on PATH */ }
+    }
+    return copy;
+  }).join(delimiter);
+}
+
 export async function activate(): Promise<ClikCodeApi> {
+  withoutClikcodeOnPath();
   const extension = vscode.extensions.all.find((item) => item.packageJSON?.name === 'clikcode');
   if (!extension) throw new Error('the extension is not installed in the test instance');
   return await extension.activate() as ClikCodeApi;
