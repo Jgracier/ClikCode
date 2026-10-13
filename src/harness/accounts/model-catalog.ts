@@ -480,51 +480,62 @@ function discoveredModelsFrom(raw: string): string[] {
   return [...models];
 }
 
-async function nativeModelCatalogUncached(
-  harness: AiLocalHarnessDefinition,
-  account?: AiHarnessAccount,
-  /** What a live session already offered: then no agent is started for it. */
-  liveListed?: { models: string[]; labels: Record<string, string>; current?: string; efforts?: string[] },
-): Promise<ModelCatalogResult> {
-  const models = new Set(account?.models ?? []);
-  const addDiscoveredModels = (raw: string): void => { for (const model of discoveredModelsFrom(raw)) models.add(model); };
-  const profileRoot = catalogProfileRoot(harness, account);
-  let labels: Record<string, string> | undefined;
-  let configured: string | undefined;
-  let connect: ModelCatalogConnect[] | undefined;
-  let free: string[] | undefined;
-  let effortValues: string[] | undefined;
-  // Hermes' and OpenClaw's inventories are the whole truth: ids remembered on
-  // the account from before (bare, or from a provider since signed out)
-  // would run wrong.
-  const adoptInventory = (inventory: { models: readonly string[]; labels: Record<string, string>; configured?: string; connect: ModelCatalogConnect[] }): void => {
-    models.clear();
-    inventory.models.forEach((model) => models.add(model));
-    labels = { ...labels, ...inventory.labels };
-    if (inventory.configured) configured = inventory.configured;
-    connect = inventory.connect;
-  };
-  if (profileRoot && harness.command === 'codex') {
+/** What each vendor-specific discovery reads and writes of the catalog being built. */
+interface DiscoveryState {
+  models: Set<string>;
+  labels?: Record<string, string>;
+  configured?: string;
+  connect?: ModelCatalogConnect[];
+  free?: string[];
+  effortValues?: string[];
+}
+interface DiscoveryContext {
+  harness: AiLocalHarnessDefinition;
+  account: AiHarnessAccount | undefined;
+  profileRoot: string | undefined;
+  liveListed: { models: string[]; labels: Record<string, string>; current?: string; efforts?: string[] } | undefined;
+  state: DiscoveryState;
+}
+
+/** Hermes' and OpenClaw's inventories are the whole truth: ids remembered on
+ * the account from before (bare, or from a provider since signed out) would
+ * run wrong. */
+function adoptInventory(d: DiscoveryState, inventory: { models: readonly string[]; labels: Record<string, string>; configured?: string; connect: ModelCatalogConnect[] }): void {
+  d.models.clear();
+  inventory.models.forEach((model) => d.models.add(model));
+  d.labels = { ...d.labels, ...inventory.labels };
+  if (inventory.configured) d.configured = inventory.configured;
+  d.connect = inventory.connect;
+}
+
+type VendorModelDiscovery = (context: DiscoveryContext) => Promise<void>;
+
+/** The catalog's `modelStrategy`, each strategy's own reading of its vendor's state. */
+const VENDOR_MODEL_DISCOVERY: Readonly<Record<NonNullable<AiLocalHarnessDefinition['modelStrategy']>, VendorModelDiscovery>> = {
+  'codex-cache': async ({ profileRoot, liveListed, state: d }) => {
+    if (!profileRoot) return;
     try {
       const config = await readFile(join(profileRoot, 'config.toml'), 'utf8');
-      configured = /^\s*model\s*=\s*["']([^"']+)["']/m.exec(config)?.[1]?.trim();
+      d.configured = /^\s*model\s*=\s*["']([^"']+)["']/m.exec(config)?.[1]?.trim();
     } catch { /* Codex will choose its own default when no config exists. */ }
     if (liveListed?.models.length) {
       // The running app-server's own `model/list`: the cache file is only the fallback below.
-      liveListed.models.forEach((model) => models.add(model));
-      labels = { ...labels, ...liveListed.labels };
+      liveListed.models.forEach((model) => d.models.add(model));
+      d.labels = { ...d.labels, ...liveListed.labels };
     } else {
       try {
         const cache = JSON.parse(await readFile(join(profileRoot, 'models_cache.json'), 'utf8')) as { models?: Array<{ slug?: unknown; visibility?: unknown }> };
         for (const model of cache.models ?? []) {
-          if (typeof model.slug === 'string' && model.slug.trim() && model.visibility !== 'hide') models.add(model.slug.trim());
+          if (typeof model.slug === 'string' && model.slug.trim() && model.visibility !== 'hide') d.models.add(model.slug.trim());
         }
       } catch { /* The cache is optional and vendor-owned. */ }
     }
-  } else if (profileRoot && harness.command === 'claude') {
+  },
+  'claude-table': async ({ harness, profileRoot, state: d }) => {
+    if (!profileRoot) return;
     try {
       const settings = JSON.parse(await readFile(join(profileRoot, 'settings.json'), 'utf8')) as { model?: unknown };
-      if (typeof settings.model === 'string' && settings.model.trim()) configured = settings.model.trim();
+      if (typeof settings.model === 'string' && settings.model.trim()) d.configured = settings.model.trim();
     } catch { /* Claude will choose its own default when no setting exists. */ }
     // The aliases and their names come from the installed Claude Code's own
     // table. If it cannot be read, the aliases alone are still right --
@@ -532,96 +543,127 @@ async function nativeModelCatalogUncached(
     // are shown bare rather than with a label that may be a release behind.
     const table = await claudeModelTable(harness.binary);
     const aliases = claudeModelAliases(table);
-    (aliases.length ? aliases : CLAUDE_FALLBACK_ALIASES).forEach((model) => models.add(model));
+    (aliases.length ? aliases : CLAUDE_FALLBACK_ALIASES).forEach((model) => d.models.add(model));
     if (table) {
-      labels = {};
+      d.labels = {};
       for (const alias of aliases) {
         const name = table.displayNames[table.aliases[alias]!];
-        if (name) labels[alias] = name;
+        if (name) d.labels[alias] = name;
       }
     }
-  }
-  // Copilot had the same problem, worse: a full hardcoded model list with
-  // no discovery mechanism and no verification against Copilot CLI itself
-  // ever performed -- checked its own GitHub issue tracker directly
-  // (github/copilot-cli#700, #1356, #236), which confirms this is a known,
-  // still-open gap in Copilot CLI itself: there is no `copilot models`
-  // command, only an interactive picker with no scriptable equivalent.
-  // Removed rather than kept as a guess.
+  },
   // Hermes has no `models` command. `hermes model` is an interactive picker;
   // its list (signed-in providers only) is read from the install's inventory,
   // with the provider cache as the fallback. Every id is `provider:model`, so
   // the choice keeps its provider. The configured model is `config get model
   // --json`'s `default` plus `provider` (`{"default":"gpt-6-astra","provider":"openai-codex",...}`).
-  if (harness.command === 'hermes') {
+  'hermes-inventory': async ({ harness, account, profileRoot, state: d }) => {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     const inventory = await discoverHermesModels(harness, account).catch(() => undefined);
     if (inventory) {
-      adoptInventory(inventory);
+      adoptInventory(d, inventory);
     } else if (profileRoot) {
       try {
-        for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) models.add(model);
+        for (const model of hermesCachedModels(await readFile(join(profileRoot, 'provider_models_cache.json'), 'utf8'))) d.models.add(model);
       } catch { /* The cache is optional and only holds providers that have been fetched. */ }
     }
     try {
-      if (!configured) {
+      if (!d.configured) {
         const parsed = JSON.parse(await captureNativeHarnessOutput(harness, ['config', 'get', 'model', '--json'], environment, undefined)) as { default?: unknown; provider?: unknown };
         const model = typeof parsed.default === 'string' ? parsed.default.trim() : '';
         const provider = typeof parsed.provider === 'string' ? parsed.provider.trim() : '';
-        if (model) configured = provider ? `${provider}:${model}` : model;
+        if (model) d.configured = provider ? `${provider}:${model}` : model;
       }
     } catch { /* Keep account models. A missing config is not an empty catalog. */ }
-  }
-  if (harness.command === 'openclaw') {
+  },
+  'openclaw-inventory': async ({ harness, account, state: d }) => {
     const inventory = await discoverOpenClawModels(harness, account).catch(() => undefined);
-    if (inventory) adoptInventory(inventory);
-  }
+    if (inventory) adoptInventory(d, inventory);
+  },
   // Aider: the models of each provider it has a key for (aider-discovery.ts).
-  if (harness.command === 'aider') {
+  'aider-providers': async ({ harness, account, state: d }) => {
     const found = await discoverAiderModels(harness, nativeAccountEnvironment(harness, account)).catch(() => undefined);
-    if (found) {
-      found.models.forEach((model) => models.add(model));
-      labels = { ...labels, ...found.labels };
-      if (found.connect.length) connect = found.connect;
-    }
-  }
+    if (!found) return;
+    found.models.forEach((model) => d.models.add(model));
+    d.labels = { ...d.labels, ...found.labels };
+    if (found.connect.length) d.connect = found.connect;
+  },
   // Copilot: the models its own server offers this account (`models.list`
   // on `copilot --headless`, which only its own sign-in may ask). The public
-  // models.dev catalog, what Copilot offers anyone, only when that fails.
-  if (harness.command === 'copilot') {
+  // models.dev catalog, what Copilot offers anyone, only when that fails. It
+  // has no `copilot models` command (github/copilot-cli#700, #1356, #236), so
+  // no hardcoded list stands in for them.
+  'copilot-server': async ({ account, state: d }) => {
     const own = await copilotAccountModels(nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
     const listed = own ?? modelsDevProvider(await modelsDevCache(), 'github-copilot');
     // The account's own list is the whole truth; ids remembered from the
     // public catalog would offer models this plan refuses.
-    if (own) models.clear();
-    listed.models.forEach((model) => models.add(model));
-    labels = { ...labels, ...listed.labels };
-  }
+    if (own) d.models.clear();
+    listed.models.forEach((model) => d.models.add(model));
+    d.labels = { ...d.labels, ...listed.labels };
+  },
   // Goose: its configured providers' models, and the rest to set up. A
   // provider that is another agent CLI (claude-code) lists that harness's own
   // models, so its sign-in carries over with nothing more to do.
-  if (harness.command === 'goose') {
+  'goose-providers': async ({ harness, account, state: d }) => {
     const providers = await discoverGooseProviders(harness, nativeProfileEnvironment(account?.nativeProfile)).catch(() => undefined);
-    if (providers) {
-      const modelsDev = await modelsDevCache();
-      labels = { ...labels };
-      for (const provider of providers.filter((item) => item.configured)) {
-        const drivenCommand = GOOSE_DRIVEN_HARNESSES[provider.id];
-        const drivenHarness = drivenCommand ? localHarnessForCommand(drivenCommand) : undefined;
-        if (drivenHarness) {
-          const driven = await nativeModelCatalog(drivenHarness).catch(() => undefined);
-          for (const model of driven?.models ?? []) {
-            models.add(`${provider.id}/${model}`);
-            const name = driven?.labels?.[model];
-            if (name) labels[`${provider.id}/${model}`] = name;
-          }
-        } else {
-          gooseModelsDevModels(modelsDev, provider.id).forEach((model) => models.add(model));
+    if (!providers) return;
+    const modelsDev = await modelsDevCache();
+    const labels = { ...d.labels };
+    for (const provider of providers.filter((item) => item.configured)) {
+      const drivenCommand = GOOSE_DRIVEN_HARNESSES[provider.id];
+      const drivenHarness = drivenCommand ? localHarnessForCommand(drivenCommand) : undefined;
+      if (drivenHarness) {
+        const driven = await nativeModelCatalog(drivenHarness).catch(() => undefined);
+        for (const model of driven?.models ?? []) {
+          d.models.add(`${provider.id}/${model}`);
+          const name = driven?.labels?.[model];
+          if (name) labels[`${provider.id}/${model}`] = name;
         }
+      } else {
+        gooseModelsDevModels(modelsDev, provider.id).forEach((model) => d.models.add(model));
       }
-      connect = gooseConnect(providers);
     }
-  }
+    d.labels = labels;
+    d.connect = gooseConnect(providers);
+  },
+};
+
+/** The catalog's `modelListFormat`: how a vendor's printed list is read. */
+const PRINTED_MODEL_LIST: Readonly<Record<NonNullable<AiLocalHarnessDefinition['modelListFormat']>, (context: DiscoveryContext, printed: string) => Promise<void>>> = {
+  // OpenCode and Kilo print only connected providers' models, each with its
+  // price and (Kilo) whether it is free; the rest of what they know is
+  // offered as a sign-in.
+  'opencode-verbose': async ({ harness, state: d }, printed) => {
+    const verbose = opencodeVerboseModels(printed);
+    verbose.models.forEach((model) => d.models.add(model));
+    d.free = verbose.free;
+    d.connect = await discoverOpencodeConnect(harness, verbose.models);
+  },
+  // Pi prints a provider/model table; the generic reader cannot see a model
+  // in it. Its other providers are signed in to inside Pi.
+  'pi-table': async ({ harness, state: d }, printed) => {
+    for (const model of discoveredModelsFrom(printed)) d.models.add(model);
+    const piListed = piModels(printed);
+    for (const model of [...discoveredModelsFrom(printed), ...d.models]) if (model.startsWith('/')) d.models.delete(model);
+    piListed.forEach((model) => d.models.add(model));
+    d.connect = piConnect(await discoverPiProviders(harness), piListed);
+  },
+};
+
+async function nativeModelCatalogUncached(
+  harness: AiLocalHarnessDefinition,
+  account?: AiHarnessAccount,
+  /** What a live session already offered: then no agent is started for it. */
+  liveListed?: { models: string[]; labels: Record<string, string>; current?: string; efforts?: string[] },
+): Promise<ModelCatalogResult> {
+  const d: DiscoveryState = { models: new Set(account?.models ?? []) };
+  const { models } = d;
+  const addDiscoveredModels = (raw: string): void => { for (const model of discoveredModelsFrom(raw)) models.add(model); };
+  const profileRoot = catalogProfileRoot(harness, account);
+  const context: DiscoveryContext = { harness, account, profileRoot, liveListed, state: d };
+  // What the vendor's own state says, by the catalog's declared strategy.
+  if (harness.modelStrategy) await VENDOR_MODEL_DISCOVERY[harness.modelStrategy](context);
   // No list command, but the ACP session says (Cline: 318 models through its
   // own gateway, none of which ClikCode could offer before).
   const liveOnly = Boolean(liveListed && harness.acp?.liveModelList);
@@ -638,47 +680,31 @@ async function nativeModelCatalogUncached(
       // not accept after an upgrade (Cursor's `auto` vs `default[]`).
       if (harness.acp.listsModels === true) models.clear();
       listed.models.forEach((model) => models.add(model));
-      labels = { ...labels, ...listed.labels };
+      d.labels = { ...d.labels, ...listed.labels };
       // Current only if listed: a model ClikCode set on the session is
       // reported back as current even when the plan refuses it (Kiro), and
       // added here it read as one the account's plan offers.
-      if (listed.current && listed.models.includes(listed.current)) configured ??= listed.current;
+      if (listed.current && listed.models.includes(listed.current)) d.configured ??= listed.current;
     }
-    if (listed?.efforts?.length) effortValues = listed.efforts;
+    if (listed?.efforts?.length) d.effortValues = listed.efforts;
   }
   if (harness.modelDiscoveryArgv && !liveOnly) {
     const environment = nativeProfileEnvironment(account?.nativeProfile);
     try {
       const printed = await captureNativeHarnessOutput(harness, harness.modelDiscoveryArgv, environment, undefined);
-      // OpenCode and Kilo print only connected providers' models, each with
-      // its price and (Kilo) whether it is free; the rest of what they know
-      // is offered as a sign-in.
-      if (harness.command === 'opencode' || harness.command === 'kilo') {
-        const verbose = opencodeVerboseModels(printed);
-        verbose.models.forEach((model) => models.add(model));
-        free = verbose.free;
-        connect = await discoverOpencodeConnect(harness, verbose.models);
-      } else {
-        addDiscoveredModels(printed);
-      }
-      // Pi prints a provider/model table; the generic reader cannot see a
-      // model in it. Its other providers are signed in to inside Pi.
-      if (harness.command === 'pi') {
-        const piListed = piModels(printed);
-        for (const model of [...discoveredModelsFrom(printed), ...models]) if (model.startsWith('/')) models.delete(model);
-        piListed.forEach((model) => models.add(model));
-        connect = piConnect(await discoverPiProviders(harness), piListed);
-      }
+      // A vendor whose list is not plain ids declares how to read it.
+      if (harness.modelListFormat) await PRINTED_MODEL_LIST[harness.modelListFormat](context, printed);
+      else addDiscoveredModels(printed);
     } catch { /* Keep configured/account models and the custom-ID option available. */ }
   }
-  if (configured) models.add(configured);
+  if (d.configured) models.add(d.configured);
   return {
-    ...(configured ? { configured } : {}),
+    ...(d.configured ? { configured: d.configured } : {}),
     models: [...models],
-    ...(labels ? { labels } : {}),
-    ...(free?.length ? { free } : {}),
-    ...(connect?.length ? { connect } : {}),
-    ...(effortValues?.length ? { effortValues } : {}),
+    ...(d.labels ? { labels: d.labels } : {}),
+    ...(d.free?.length ? { free: d.free } : {}),
+    ...(d.connect?.length ? { connect: d.connect } : {}),
+    ...(d.effortValues?.length ? { effortValues: d.effortValues } : {}),
   };
 }
 

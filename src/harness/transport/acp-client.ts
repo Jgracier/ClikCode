@@ -78,7 +78,7 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   effort?: string | null;
   /** The harness's catalog ACP entry: how model, effort and permission mode
    * are selected over the protocol, and what its usage readings mean. */
-  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks'>;
+  acp?: Pick<AiHarnessAcpDefinition, 'inheritCliOptions' | 'effortConfigId' | 'providerConfigId' | 'permissionModeIds' | 'planModeId' | 'usageTotals' | 'cumulativeChunks' | 'steering'>;
   /** The chat's Plan mode is on: the session runs in `acp.planModeId`; the
    * agent leaving it is onPlanModeExit. */
   planMode?: boolean;
@@ -766,7 +766,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         clientInfo: { name: 'clikcode', title: 'ClikCode', version: '1' },
       }, setup));
       live.capabilities = (initialized.agentCapabilities as Json | undefined) ?? {};
-      live.steering = initialized._meta?.steering?.supported === true;
+      live.steering = initialized._meta?.steering?.supported === true && input.acp?.steering !== false;
       stillRunning();
     }
     // A vendor that says it is signed out is not signed in over ACP
@@ -951,7 +951,15 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (live.steering) input.onSteerReady?.(undefined);
     this.releaseSteers(turn);
     await turn.flushing;
-    if (completed.stopReason === 'cancelled') throw turnCancelledError();
+    if (completed.stopReason === 'cancelled') {
+      // Nothing here asked for it and nothing was said or done first: the agent
+      // gave up the prompt by itself (Junie does, signed out and in a sandbox
+      // that cannot read its keyring), which must not read as a quiet stop.
+      if (!live.cancelled && !turn.sawActivity && !turn.text.trim()) {
+        throw new Error(`${input.command} ended the turn as cancelled before saying anything, which it does when its sign-in is not usable; check \`clikcode accounts status\``);
+      }
+      throw turnCancelledError();
+    }
     // `end_turn`, or the reason the agent stopped short (max_tokens,
     // max_turn_requests, refusal), beside whatever usage it counted.
     // Gemini's ACP answers with `_meta.quota.token_count` {input_tokens,
