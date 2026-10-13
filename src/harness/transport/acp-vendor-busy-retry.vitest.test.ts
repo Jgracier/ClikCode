@@ -39,26 +39,16 @@ describe('vendor busy notices', () => {
   });
 });
 
-describe('a retry category repeated with no progress', () => {
+describe('a retry the agent repeats', () => {
   it('keeps waiting through repeated retries and lets the agent finish', async () => {
     const phases: string[] = [];
-    const session = createAcpSession({ idleMs: 5000 });
+    const session = createAcpSession();
     try {
       const retry = `send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: 'HTTP 429' } });`;
       const result = await session.runTurn(input(`${retry.repeat(6)} note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } }); send({ id, result: { stopReason: 'end_turn' } });`, { onPhase: (p: string) => phases.push(p) }));
-      expect(phases.filter((p) => /attempt/.test(p))).toHaveLength(6);
-      expect(phases[0]).toMatch(/rate limited: HTTP 429\), attempt 1/);
-      expect(phases[5]).toMatch(/attempt 6/);
+      expect(phases.filter((p) => /is retrying/.test(p))).toHaveLength(6);
+      expect(phases[0]).toBe('fake is retrying (rate limited: HTTP 429)');
       expect(result.text).toBe('done');
-    } finally { await session.close(); }
-  });
-
-  it('starts counting again after content', async () => {
-    const session = createAcpSession({ idleMs: 5000 });
-    try {
-      const retry = `send({ method: '_session/retrying', params: { sessionId: 's1', category: 'rate_limited', detail: 'HTTP 429' } });`;
-      const result = await session.runTurn(input(`${retry.repeat(4)} note({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'fine' } }); ${retry.repeat(4)} send({ id, result: { stopReason: 'end_turn' } });`));
-      expect(result.text).toBe('fine');
     } finally { await session.close(); }
   });
 });

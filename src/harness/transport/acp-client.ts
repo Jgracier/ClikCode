@@ -18,7 +18,6 @@ import { activityOutput, editDiffFromInput, toolCall } from '../protocol/activit
 import { turnCancelledError } from '../../agent/cancellation.js';
 import { type JsonRpcPeer } from './jsonrpc-peer.js';
 import { BackgroundTurnChannel } from './background-turn.js';
-import { configuredIdleMs, turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { backgroundWork, mergeBackgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
@@ -533,7 +532,6 @@ interface Stream {
    * report the session's cost (and some its tokens) so far, and a turn's
    * share is what they grew by. */
   base: TurnUsage;
-  watchdog?: TurnWatchdog;
 }
 
 interface ActiveTurn extends Stream {
@@ -559,15 +557,11 @@ interface BackgroundRun extends Stream {
  * Session bookkeeping (usage, titles, modes, command palettes) never does. */
 /** What a sub-agent's session contributes to the turn it runs under. */
 const CHILD_SESSION_UPDATES: ReadonlySet<string> = new Set(['tool_call', 'tool_call_update', 'agent_message_chunk', 'agent_thought_chunk']);
-const CONTENT_UPDATES: ReadonlySet<string> = new Set(['agent_message_chunk', 'agent_thought_chunk', 'tool_call', 'tool_call_update', 'plan']);
 /** What agents publish as a prompt winds up (cline and hermes send
  * `session_info_update`, kimi and hermes `usage_update`). ACP has no
  * turn-completed notification outside session/prompt, so for a background
  * turn with no tool left running this is the end marker. */
 const TURN_BOOKKEEPING_UPDATES: ReadonlySet<string> = new Set(['usage_update', 'session_info_update']);
-
-/** The watchdog's name for the vendor's background level while it is above zero. */
-const LEVEL_WATCH = 'background-level';
 
 const toolRunning = (update: Json): boolean => update.status === 'pending' || update.status === 'in_progress' || update.status === undefined;
 const toolSettled = (update: Json): boolean => update.status === 'completed' || update.status === 'failed';
@@ -585,8 +579,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   private backgroundLevel?: BackgroundWork;
   private sessionId?: string;
   private lastCumulativeChunks = false;
-  /** The agent's `_session/retrying` category and how many times in a row, with no content between. */
-  private retryStreak?: { category: string; count: number };
+  /** The agent's out-of-turn message so far, for an agent that re-sends it whole. */
+  private relayedMessage = '';
   /** The live session's running totals as the agent last reported them
    * (acpSessionTotals, and a prompt response for an agent declaring
    * `usageTotals: 'session'`). Reset when a session is opened in this
@@ -608,7 +602,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       input, observer: input, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: {}, promptStarted: false, done: false, fail,
       held: [], approvals: 0,
     };
-    this.retryStreak = undefined;
+    this.relayedMessage = '';
     // What already runs (a terminal an earlier turn started) is the new
     // turn's indicator from its first frame.
     if (this.backgroundLevel) input.onBackgroundWork?.(this.fullLevel());
@@ -616,8 +610,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       if (!(error as { acpStaleTurn?: boolean } | null)?.acpStaleTurn || turn.done) throw error;
       // The prompt went to the cancelled turn's process, which is gone now:
       // the same prompt, once, on a fresh process that resumes the session.
-      turn.watchdog?.stop();
-      Object.assign(turn, { text: '', messageText: '', sawActivity: false, thoughts: 0, promptStarted: false, prompt: undefined, thought: undefined, watchdog: undefined, sessionId: undefined });
+      Object.assign(turn, { text: '', messageText: '', sawActivity: false, thoughts: 0, promptStarted: false, prompt: undefined, thought: undefined, sessionId: undefined });
       return this.flow(turn, argv);
     }), {
       failed: (error) => {
@@ -689,11 +682,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     return this.openBackgroundRun(() => {
       const channel = new BackgroundTurnChannel('acp', reason);
       return { channel, observer: channel.observer, cumulativeChunks: this.lastCumulativeChunks, text: '', messageText: '', sawActivity: false, thoughts: 0, base: { ...this.sessionTotals } };
-    }, (watchdog) => {
-      for (const id of this.pendingTools.keys()) watchdog.toolStarted(id);
-      // Work the vendor says runs is silent for as long as it runs: the
-      // running-tool budget, not the ordinary one.
-      if (this.backgroundLevel) watchdog.toolStarted(LEVEL_WATCH);
     });
   }
 
@@ -732,9 +720,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // still starting: Claude Code connects every MCP server before it takes a
     // control request, and its adapter answers set_config_option only once
     // Claude Code has. That can take far longer than a handshake, and is not a
-    // fault. No clock unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set. Esc still
-    // cancels it.
-    const control = { timeoutMs: configuredIdleMs() };
+    // fault. No clock; Esc still cancels it.
+    const control: { timeoutMs?: number } = {};
     // Said once, only for an agent this turn started (one already running
     // answers at once), and only when it is slow to: not a flash every turn.
     let announced = Boolean(live.capabilities);
@@ -933,11 +920,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     turn.promptStarted = true;
     // "connecting to …" was true until here; left up, it read as stuck for as long as the agent thought.
     if (connectingShown) input.onPhase?.('thinking');
-    // The turn ends with the agent's answer to session/prompt. No silence
-    // ceiling unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set: the harness has
-    // its own, and a quiet stretch is often a long command.
-    turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError(input.command, afterMs)));
-    // No wall-clock timeout: a prompt legitimately runs for hours.
+    // The turn ends with the agent's answer to session/prompt, or the user
+    // stopping it: no silence ceiling. No wall-clock timeout: a prompt legitimately runs for hours.
     turn.prompt = call('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
     markTurn('prompt-sent');
     if (live.steering) input.onSteerReady?.((text, hold) => this.steer(turn, text, hold));
@@ -1077,7 +1061,30 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   private targetFor(update: Json): Stream | undefined {
     if (this.turn) return this.turn.done ? undefined : this.turn;
     if (this.background && !this.background.channel.done) return this.background;
-    return CONTENT_UPDATES.has(String(update.sessionUpdate)) ? this.openBackground() : undefined;
+    // Only a tool the vendor reports running opens a "working" background turn.
+    // Prose with no open tool is relayed (relayOutOfTurn), never worked on.
+    const reportsRunning = update.sessionUpdate === 'tool_call' ? toolRunning(update)
+      : update.sessionUpdate === 'tool_call_update' && (update.status === 'in_progress' || update.status === 'pending');
+    return reportsRunning ? this.openBackground() : undefined;
+  }
+
+  /** What the agent says with no prompt open and no tool running: its words
+   * go into the conversation as they arrive. It is not work in progress, so
+   * nothing is shown as working for it. */
+  private relayOutOfTurn(update: Json): void {
+    if (!this.live || this.isClosed || this.settling || !this.relay) return;
+    const name = String(update.sessionUpdate);
+    if (name !== 'agent_message_chunk' && name !== 'agent_thought_chunk') return;
+    const kind = name === 'agent_message_chunk' ? 'message' as const : 'thought' as const;
+    const delta = kind === 'message' ? acpResponseDelta(update) : acpThoughtDelta(update);
+    if (!delta) return;
+    if (kind === 'message' && this.lastCumulativeChunks && typeof update.messageId === 'string') {
+      const change = acpVibeResponseChange(this.relayedMessage, delta);
+      this.relayedMessage = change.current;
+      this.relay({ kind, text: change.text, mode: change.mode });
+      return;
+    }
+    this.relay({ kind, text: delta, mode: 'append' });
   }
 
   /** Sessions an agent runs a sub-agent in (cursor-agent: `subagent_spawned`
@@ -1135,39 +1142,22 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       return;
     }
     const target = this.targetFor(update);
-    target?.watchdog?.activity();
-    if (CONTENT_UPDATES.has(String(update.sessionUpdate))) this.retryStreak = undefined;
+    if (!target && !this.turn) this.relayOutOfTurn(update);
     this.trackTool(target, update);
     if (target) this.deliver(target, update, totals);
     const run = this.background;
     if (run && target === run && this.pendingTools.size === 0) {
-      // Event-driven end of a background turn: the last tool it was waiting
-      // for settled, or (no tool involved) the agent's own end-of-turn
-      // bookkeeping arrived.
+      // The end of a background turn is the vendor's to say: the last tool it
+      // was waiting for settled, or the agent's own end-of-turn bookkeeping
+      // arrived. Nothing else ends it but the process going or the user.
       const settledLastTool = update.sessionUpdate === 'tool_call_update' && toolSettled(update);
       if (settledLastTool || TURN_BOOKKEEPING_UPDATES.has(String(update.sessionUpdate))) this.finishBackground('completed');
-      else this.quietEndOfBackground(run);
     }
-  }
-
-  /** ACP announces no end for work the agent does between prompts: only a settled last tool or
-   * (some agents) a usage update ends a background turn here. An agent that sends neither -- a
-   * trailing message or thought, a tool whose result never came back as an update -- left the chat
-   * "working" for hours, until the user typed. With no tool, agent or background work running, a
-   * quiet stretch is the end. A later update opens a new background turn, so nothing is lost. */
-  private quietEndOfBackground(run: BackgroundRun): void {
-    clearTimeout(this.backgroundQuiet);
-    if (this.pendingTools.size || this.backgroundLevel || this.hasActiveSubagents()) return;
-    this.backgroundQuiet = setTimeout(() => {
-      if (this.background !== run || this.pendingTools.size || this.backgroundLevel || this.hasActiveSubagents()) return;
-      this.finishBackground('completed');
-    }, this.backgroundQuietMs);
-    this.backgroundQuiet.unref?.();
   }
 
   /** Updates that are the agent's status, not its content: shown as the
    * waiting line (a warning as a notice) so a turn emitting only these is
-   * seen to be working. The watchdog was reset by the caller. */
+   * seen to be working. */
   private statusUpdate(input: HarnessTurnObserver, update: Json): boolean {
     const name = (value: unknown, fallback: string): string => typeof value === 'string' && value.trim() ? value.trim().slice(0, 80) : fallback;
     switch (update.sessionUpdate) {
@@ -1211,14 +1201,12 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (toolSettled(update)) {
       this.pendingTools.delete(id);
       this.pendingAgents.delete(id);
-      target?.watchdog?.toolFinished(id);
       if (target && target === this.turn && this.pendingTools.size === 0) {
         this.steerPause(this.turn);
       }
     } else if (update.sessionUpdate === 'tool_call' ? toolRunning(update) : update.status === 'in_progress' || update.status === 'pending') {
       if (!this.pendingTools.has(id)) this.pendingTools.set(id, String(update.title ?? 'tool'));
       if (acpActivityEvent(update)?.agent) this.pendingAgents.add(id);
-      target?.watchdog?.toolStarted(id);
     }
   }
 
@@ -1332,19 +1320,15 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const command = this.turn?.input.command ?? 'the agent';
     const detail = typeof params.detail === 'string' ? params.detail : '';
     const category = typeof params.category === 'string' ? params.category : '';
-    const count = category && this.retryStreak?.category === category ? this.retryStreak.count + 1 : 1;
-    this.retryStreak = { category, count };
-    target.observer.onPhase?.(`${command} is retrying${category || detail ? ` (${[category.replace(/_/g, ' '), detail].filter(Boolean).join(': ')})` : ''}, attempt ${count}`);
+    target.observer.onPhase?.(`${command} is retrying${category || detail ? ` (${[category.replace(/_/g, ' '), detail].filter(Boolean).join(': ')})` : ''}`);
   }
 
   /** Where a session-scoped extension notification goes: the user's turn, or
-   * the background turn. Its arrival is the agent being alive, so the
-   * watchdog is reset here. A notice for another session is not ours. */
+   * the background turn. A notice for another session is not ours. */
   private liveTarget(params: Json): Stream | undefined {
     const expected = this.turn?.sessionId ?? this.sessionId;
     if (typeof params.sessionId === 'string' && expected && params.sessionId !== expected) return undefined;
     const target: Stream | undefined = this.turn ? (this.turn.done || !this.turn.promptStarted ? undefined : this.turn) : this.background;
-    target?.watchdog?.activity();
     return target;
   }
 
@@ -1384,11 +1368,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (target) target.observer.onBackgroundWork?.(opened ? this.fullLevel() : update);
     const run = this.background;
     if (!run || run.channel.done) return;
-    if (this.backgroundLevel) run.watchdog?.toolStarted(LEVEL_WATCH);
-    else {
-      run.watchdog?.toolFinished(LEVEL_WATCH);
-      if (target === run && this.pendingTools.size === 0) this.finishBackground('completed');
-    }
+    if (!this.backgroundLevel && target === run && this.pendingTools.size === 0) this.finishBackground('completed');
   }
 
   /** claude-agent-acp pushes the identity it runs as (`_auth/status_update`
@@ -1415,12 +1395,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     if (typeof requestId === 'string' || typeof requestId === 'number') this.requestPrompts.get(String(requestId))?.();
   }
 
-  /** Puts a question to the user through `stream`, with steering and the idle
-   * watchdog held while it is open. Never answered for the user. */
+  /** Puts a question to the user through `stream`, with steering held while it
+   * is open. Never answered for the user. */
   private async askUser(
     stream: Stream, turn: ActiveTurn | undefined, request: HarnessQuestionRequest, id: number | string | undefined, declined: string,
   ): Promise<HarnessQuestionResult> {
-    const resume = stream.watchdog?.pause();
     if (turn) turn.approvals++;
     const prompt = this.openPrompt();
     if (id !== undefined) this.requestPrompts.set(String(id), prompt.abort);
@@ -1430,7 +1409,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     } finally {
       if (id !== undefined) this.requestPrompts.delete(String(id));
       prompt.release();
-      resume?.();
       if (turn) {
         turn.approvals--;
         this.steerPause(turn);
@@ -1507,8 +1485,6 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
         acpApprovalDetail(params.toolCall),
         plan.allowIsPersistent ? 'Approving grants this permanently: the agent offers no one-time option.' : undefined,
       ].filter(Boolean).join('\n') || undefined;
-      // The agent is waiting on the user, not wedged.
-      const resume = stream.watchdog?.pause();
       // Nothing is steered in while the user is being asked.
       if (turn) turn.approvals++;
       const prompt = this.openPrompt();
@@ -1520,8 +1496,7 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       } finally {
         if (id !== undefined) this.requestPrompts.delete(String(id));
         prompt.release();
-        resume?.();
-        if (turn) {
+          if (turn) {
           turn.approvals--;
           this.steerPause(turn);
         }

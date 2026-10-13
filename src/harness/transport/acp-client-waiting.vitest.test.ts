@@ -1,6 +1,5 @@
-/** How an ACP turn waits: for the answer to session/prompt, with the idle
- * watchdog as a ceiling -- and where updates the agent sends between prompts
- * go. Driven by a real child speaking ACP. */
+/** How an ACP turn waits: for the answer to session/prompt, with no ceiling of
+ * ClikCode's own -- and where updates the agent sends between prompts go. Driven by a real child speaking ACP. */
 import { describe, expect, it, vi } from 'vitest';
 import { createAcpSession } from './acp-client.js';
 import type { VendorBackgroundTurn } from './background-turn.js';
@@ -44,33 +43,11 @@ function input(prompts: Step[][], extra: Record<string, unknown> = {}) {
   };
 }
 
-describe('the idle watchdog on an ACP prompt', () => {
-  it('fails a prompt the agent never answers, as an idle timeout', async () => {
-    const session = createAcpSession({ idleMs: 200 });
+describe('an ACP prompt has no silence ceiling', () => {
+  it('waits through a long quiet stretch and a user deciding an approval', async () => {
+    const session = createAcpSession();
     try {
-      const failure = await session.runTurn(input([[{ update: chunk('thinking...') }]])).catch((error: Error & { reason?: string }) => error);
-      expect((failure as Error & { reason?: string }).reason).toBe('idle-timeout');
-      expect((failure as Error).message).toBe('fake produced no output for 0s and was stopped');
-    } finally { await session.close(); }
-  });
-
-  it('gives a running tool the longer budget, and each update restarts it', async () => {
-    const session = createAcpSession({ idleMs: 200, toolIdleMs: 2000 });
-    try {
-      const result = await session.runTurn(input([[
-        { update: tool('b', 'pending') }, { after: 400, update: tool('b', 'completed') },
-        { after: 120, update: chunk('built') }, { after: 120, answer: true },
-      ]]));
-      expect(result.text).toBe('built');
-    } finally { await session.close(); }
-  });
-
-  it('does not count time the user spends deciding an approval', async () => {
-    // Unpaused, 300ms of silence would fire at 300ms; the answer comes at 400
-    // and the next update at 500.
-    const session = createAcpSession({ idleMs: 300 });
-    try {
-      const result = await session.runTurn(input([[{ permission: true }, { after: 500, update: chunk('ok') }, { answer: true }]], {
+      const result = await session.runTurn(input([[{ permission: true }, { after: 900, update: chunk('ok') }, { answer: true }]], {
         onApproval: () => new Promise<boolean>((resolve) => setTimeout(() => resolve(true), 400)),
       }));
       expect(result.text).toBe('ok');
@@ -81,7 +58,7 @@ describe('the idle watchdog on an ACP prompt', () => {
 describe('a permission switch made while an ACP turn runs', () => {
   const run = async (live?: 'bypass' | 'ask') => {
     const asked = vi.fn(async () => true);
-    const session = createAcpSession({ idleMs: 2000 });
+    const session = createAcpSession();
     try {
       await session.runTurn(input([[{ permission: true }, { after: 50, update: chunk('ok') }, { answer: true }]], {
         onApproval: asked,
@@ -101,7 +78,7 @@ describe('a permission switch made while an ACP turn runs', () => {
 describe('updates an ACP agent sends between prompts', () => {
   it('lets an Agent tool finish after its parent request runs out of usage', async () => {
     const turns: VendorBackgroundTurn[] = [];
-    const session = createAcpSession({ idleMs: 200, toolIdleMs: 200, backgroundTurns: (turn) => turns.push(turn) });
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
     try {
       const failure = await session.runTurn(input([[
         { update: { ...tool('agent-1', 'pending'), rawInput: { subagent_type: 'Explore' } } },
@@ -122,9 +99,10 @@ describe('updates an ACP agent sends between prompts', () => {
     } finally { await session.close(); }
   });
 
-  it('open a background turn that ends on the agent\'s end-of-turn bookkeeping', async () => {
+  it('relays what the agent says between prompts instead of opening a working turn for it', async () => {
     const turns: VendorBackgroundTurn[] = [];
-    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn) });
+    const said: string[] = [];
+    const session = createAcpSession({ backgroundTurns: (turn) => turns.push(turn), outOfTurn: (what) => said.push(what.text) });
     try {
       const result = await session.runTurn(input([[
         { update: chunk('first') }, { answer: true },
@@ -134,9 +112,8 @@ describe('updates an ACP agent sends between prompts', () => {
         { update: { sessionUpdate: 'session_info_update', updatedAt: 'now' } },
       ]]));
       expect(result.text).toBe('first');
-      await vi.waitFor(() => expect(turns).toHaveLength(1), { timeout: 5000, interval: 10 });
-      expect(await turns[0]!.finished).toEqual({ text: 'A task you started finished.', ended: 'completed' });
-      expect(turns).toHaveLength(1);
+      await vi.waitFor(() => expect(said).toEqual(['A task you started finished.']), { timeout: 5000, interval: 10 });
+      expect(turns).toHaveLength(0);
     } finally { await session.close(); }
   });
 

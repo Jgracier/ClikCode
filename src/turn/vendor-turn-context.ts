@@ -19,7 +19,6 @@ export interface AttemptState {
   /** Bounded to one attempt: signing in again is a reactive fallback, and
    * retrying more than once would risk a loop if login does not fix it. */
   authRetried: boolean;
-  effortRetried: boolean;
   /** Whether this turn opened a standby for its failover account. */
   standbyOpened: boolean;
   /** The account this turn's thread was copied to before its first attempt
@@ -27,7 +26,6 @@ export interface AttemptState {
   threadCopiedTo: string | undefined;
   /** A fresh native thread gets one recovery attempt per account. */
   nativeThreadRetried: boolean;
-  transientRetried: boolean;
 }
 
 export interface VendorTurnContext {
@@ -124,12 +122,10 @@ export async function createVendorTurnContext(input: {
     state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts,
     requestContext: prepared.textContext, images, cliCarriesImages, baseMessages,
     account: input.account, model, turnText, askedText: turnText,
-    attempt: { authRetried: false, effortRetried: false, standbyOpened: false, threadCopiedTo: undefined, nativeThreadRetried: false, transientRetried: false },
+    attempt: { authRetried: false, standbyOpened: false, threadCopiedTo: undefined, nativeThreadRetried: false },
   };
   return context;
 }
 
-export const effortKey = (ctx: VendorTurnContext): string => `${ctx.harness.command} ${ctx.model ?? ''} ${ctx.session.effort}`;
-/** The reasoning level to ask for: the session's, unless the vendor refused it for this model. */
-export const turnEffort = (ctx: VendorTurnContext): string | undefined =>
-  ctx.session.effort && ctx.session.effortRefused !== effortKey(ctx) ? ctx.session.effort : undefined;
+/** The reasoning level to ask for: the conversation's, passed to the vendor as set. */
+export const turnEffort = (ctx: VendorTurnContext): string | undefined => ctx.session.effort || undefined;

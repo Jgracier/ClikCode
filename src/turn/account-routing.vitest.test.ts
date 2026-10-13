@@ -303,8 +303,8 @@ describe('the failover step both account backends take', () => {
     expect(tally.attempted.size).toBe(0);
   });
 
-  it('ends on a stall instead of starting the request over on another account', async () => {
-    const stalled = Object.assign(new Error('Codex produced no output for 600s and was stopped'), { reason: 'idle-timeout' });
+  it('ends on a failure that is not the account\'s instead of starting the request over elsewhere', async () => {
+    const stalled = new Error('Codex exited 1');
     await expect(step({ accounts: [account('a'), account('b')], failure: stalled, kind: 'other' }).result).rejects.toBe(stalled);
   });
 

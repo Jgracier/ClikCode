@@ -223,7 +223,7 @@ export async function accountAfterFailure(input: {
     throw turnCancelledError();
   }
   if (kind === 'authentication-required') account.status = 'needs_login';
-  if (!ACCOUNT_FAILURES.has(kind) || (failure as { reason?: unknown } | undefined)?.reason === 'idle-timeout') {
+  if (!ACCOUNT_FAILURES.has(kind)) {
     await input.persist();
     throw failure;
   }

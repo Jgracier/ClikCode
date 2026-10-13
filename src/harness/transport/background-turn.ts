@@ -23,9 +23,7 @@ export type BackgroundTurnEnd =
   /** A user turn started; it receives whatever the vendor says next. */
   | 'superseded'
   /** The vendor process went away (closed, crashed, restarted). */
-  | 'closed'
-  /** Safety ceiling: the vendor said nothing for the whole idle budget. */
-  | 'idle-timeout';
+  | 'closed';
 
 export interface BackgroundTurnOutcome {
   /** Prose the vendor wrote during the background turn. */
@@ -45,6 +43,12 @@ export interface VendorBackgroundTurn {
 }
 
 export type VendorBackgroundTurnHandler = (turn: VendorBackgroundTurn) => void;
+
+/** What a vendor says with no prompt open and no tool running: a message or a
+ * thought. It belongs to the conversation, not to a background turn: nothing
+ * runs, so nothing is shown as working. `replace` is the whole message so far,
+ * for a vendor that re-sends it. */
+export type OutOfTurnRelay = (said: { kind: 'message' | 'thought'; text: string; mode: 'append' | 'replace' }) => void;
 
 type Call = (observer: HarnessTurnObserver) => void;
 

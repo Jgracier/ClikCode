@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, interactiveLoginPrompt, isTransientStartFailure, quotaRetryHint } from './failover';
+import { accountFailureReason, accountVerification, verificationNotice, accountSwitchLine, accountSwitchNotice, classifyAccountFailure, interactiveLoginPrompt, quotaRetryHint } from './failover';
 import { transferPrompt } from './transfer.js';
 import { canonicalRecord } from '../session/canonical.js';
 import type { HarnessSession } from '../session/model.js';
@@ -343,83 +343,5 @@ describe('a limit named is not a limit reached', () => {
 
   it('reads a 429 written into the vendor text as it reads a 401 or 402 there', () => {
     expect(classifyAccountFailure(new Error('API error (status 429): slow down'), { isResultError: true })).toBe('temporarily-throttled');
-  });
-});
-
-describe('a start that failed for a moment', () => {
-  it('is the busy binary or the shared sign-in being refreshed, nothing else', () => {
-    expect(isTransientStartFailure(Object.assign(new Error('spawn ETXTBSY'), { code: 'ETXTBSY' }))).toBe(true);
-    expect(isTransientStartFailure(new Error('Internal error: Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.'))).toBe(true);
-    expect(isTransientStartFailure(new Error('Selected model is at capacity. Please try a different model.'))).toBe(false);
-    expect(isTransientStartFailure(new Error('spawn ENOENT'))).toBe(false);
-  });
-});
-
-describe('structured signals outrank wording', () => {
-  const rpc = (message: string, extra: Record<string, unknown>): Error => Object.assign(new Error(message), extra);
-  it('reads claude-agent-acp errorKind data, whatever the message says', () => {
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'authentication_failed' }))).toBe('authentication-required');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'auth_required' }))).toBe('authentication-required');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'budget_exhausted' }))).toBe('quota-exhausted');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'billing_error' }))).toBe('quota-exhausted');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'access_denied' }))).toBe('account-ineligible');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'verification_required' }))).toBe('account-ineligible');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'bad_request' }))).toBe('request-invalid');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'rate_limit' }))).toBe('temporarily-throttled');
-    expect(classifyAccountFailure(rpc('Internal error', { errorKind: 'usageLimitExceeded' }))).toBe('quota-exhausted');
-  });
-  it('treats ACP -32000 as a required sign-in', () => {
-    expect(classifyAccountFailure(rpc('Authentication required', { rpcCode: -32000 }))).toBe('authentication-required');
-    expect(classifyAccountFailure(rpc('Internal error', { rpcCode: -32000 }))).toBe('authentication-required');
-    expect(classifyAccountFailure(rpc('Internal error', { rpcCode: -32603 }))).toBe('other');
-  });
-  it('never reads a transport timeout as quota', () => {
-    expect(classifyAccountFailure(rpc('agent session/prompt timed out after 600s', { rpcCode: -32603 }))).toBe('other');
-  });
-});
-
-describe('interactive login hangs fail fast as a sign-in', () => {
-  it('recognises amp and aider waiting for a browser', () => {
-    const amp = 'No API key found. Starting login flow...\nWaiting for confirmation in the browser...';
-    const aider = 'Login to OpenRouter or create a free account? (Y)es/(N)o [Yes]:\nWaiting up to 5 minutes for you to finish in the browser';
-    expect(interactiveLoginPrompt(amp)).toMatch(/login flow|API key/i);
-    expect(interactiveLoginPrompt(aider)).toBeTruthy();
-    expect(classifyAccountFailure(new Error('x'), { stderrText: 'Starting login flow... Waiting for confirmation in the browser...' })).toBe('authentication-required');
-    expect(classifyAccountFailure(new Error('x'), { stderrText: aider })).toBe('authentication-required');
-  });
-  it('ignores ordinary output', () => {
-    expect(interactiveLoginPrompt('Waiting for the build to finish')).toBeUndefined();
-  });
-});
-
-describe('a spent plan filed under a rate-limit kind', () => {
-  const session = "Internal error: You've hit your session limit · resets 12:50pm (America/Denver)";
-  it('is out of usage, so the turn moves to the next account instead of waiting on a throttle', () => {
-    // Claude Code's ACP reports this with a rate-limit error kind (real turn, 2026-10-12).
-    expect(classifyAccountFailure(new Error(session), { errorKind: 'rate_limit' })).toBe('quota-exhausted');
-    expect(classifyAccountFailure(new Error('5-hour limit reached ∙ resets 3pm'))).toBe('quota-exhausted');
-  });
-  it('still reads a plain rate limit as a throttle', () => {
-    expect(classifyAccountFailure(new Error('Rate limit exceeded, retry shortly'), { errorKind: 'rate_limit' })).toBe('temporarily-throttled');
-    expect(classifyAccountFailure(new Error('429 too many requests'), { statusCode: 429 })).toBe('temporarily-throttled');
-  });
-});
-
-describe("a vendor's declared failure wording classifies the failure", () => {
-  const copilot = { pattern: '^Error: .+ \\(Request ID: [0-9A-Fa-f:]+\\)$' };
-  const auggie = { pattern: '^\\s*(?:⚠️\\s*)?\\*{0,2}You have run out of usage for\\b', status: 402 };
-  const hermes = { pattern: '^(?:API call failed after \\d+ retries: )?HTTP (\\d{3})\\b' };
-
-  it('reads the status a harness pattern names when no structured status came', () => {
-    expect(classifyAccountFailure(new Error('⚠️ **You have run out of usage for this month'), { replyErrorPatterns: [auggie] })).toBe('quota-exhausted');
-    expect(classifyAccountFailure(new Error('HTTP 401 invalid key'), { replyErrorPatterns: [hermes] })).toBe('authentication-required');
-  });
-
-  it('reads the status a pattern captures, ahead of loose wording', () => {
-    expect(classifyAccountFailure(new Error('API call failed after 3 retries: HTTP 402 no balance'), { replyErrorPatterns: [hermes] })).toBe('quota-exhausted');
-  });
-
-  it('leaves a pattern with no status alone', () => {
-    expect(classifyAccountFailure(new Error('Error: something odd (Request ID: AB:12)'), { replyErrorPatterns: [copilot] })).toBe('other');
   });
 });

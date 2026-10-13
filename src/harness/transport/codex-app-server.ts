@@ -17,7 +17,6 @@ import { compactCodexThread, codexTurnStartParams, listCodexModels } from './cod
 import { asRecord } from '../protocol/json-lines.js';
 import { countsOf, turnShareOf, turnStopReason, type TurnUsage } from '../protocol/turn-usage.js';
 import { BackgroundTurnChannel } from './background-turn.js';
-import { turnIdleError, type TurnWatchdog } from './turn-watchdog.js';
 import { CANCEL_SETTLE_MS, PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptions } from './persistent-session.js';
 
 type JsonObject = Record<string, unknown>;
@@ -314,7 +313,6 @@ interface Stream {
   usageStart?: TurnUsage;
   /** Compaction is announced twice (an item, and a deprecated notification). */
   compacted?: boolean;
-  watchdog?: TurnWatchdog;
 }
 
 interface ActiveTurn extends Stream {
@@ -473,7 +471,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
         items: new Map([...(items ?? [])].filter(([id]) => this.pendingWork.has(`item:${id}`))), output: new Map(), thoughts: new Map(),
         ...(vendorTurnId ? { vendorTurnId } : {}),
       };
-    }, (watchdog) => { for (const key of this.pendingWork.keys()) watchdog.toolStarted(key); });
+    });
   }
 
   /** Unified-exec processes (commandExecution items with source
@@ -519,13 +517,10 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
   private workStarted(key: string, work: PendingWork, target: Stream | undefined): void {
     if (this.pendingWork.has(key)) return;
     this.pendingWork.set(key, work);
-    target?.watchdog?.toolStarted(key);
   }
 
   private workFinished(key: string, target: Stream | undefined): boolean {
-    target?.watchdog?.toolFinished(key);
-    const removed = this.pendingWork.delete(key);
-    return removed;
+    return this.pendingWork.delete(key);
   }
 
   private ensureLive(input: CodexAppServerTurnInput, threadKey: string): LiveServer {
@@ -590,12 +585,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     markTurn('ready');
     await this.promptSent();
     stillRunning();
-    // The turn ends on Codex's own turn/completed. This is only the ceiling
-    // for a server that has stopped talking without saying so -- counted from
-    // the prompt going out, not from before promptSent's scan of every
-    // process on the machine, which on a loaded one took long enough to be
-    // mistaken for Codex's silence.
-    turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError('Codex', afterMs)));
+    // The turn ends on Codex's own turn/completed, or the user stopping it.
     markTurn('prompt-sent');
     const turnResult = await peer.request('turn/start', codexTurnStartParams({
       threadId, prompt: input.prompt, images: input.images, cwd: input.cwd, model: input.model, effort: input.effort,
@@ -671,8 +661,6 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       // reviewer escalated -- so the user decides, exactly as in `ask`.
       const fileChange = /fileChange|applyPatch/.test(method);
       const item = typeof params.itemId === 'string' ? stream.items.get(params.itemId) : undefined;
-      // Codex is waiting on the user, not wedged.
-      const resume = stream.watchdog?.pause();
       // Answered elsewhere (serverRequest/resolved): stop waiting on the user.
       let resolvedElsewhere!: () => void;
       const elsewhere = new Promise<'elsewhere'>((resolve) => { resolvedElsewhere = () => resolve('elsewhere'); });
@@ -690,7 +678,6 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
       } finally {
         if (id !== undefined) this.openApprovals.delete(String(id));
         prompt.release();
-        resume?.();
       }
     })();
   }
@@ -702,7 +689,6 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     const turn = this.turn && !this.turn.done ? this.turn : undefined;
     const stream: Stream | undefined = turn ?? this.background ?? this.openBackground('vendor-turn');
     if (!stream) return CANCELLED;
-    const resume = stream.watchdog?.pause();
     const prompt = this.openPrompt();
     if (id !== undefined) this.openApprovals.set(String(id), () => prompt.abort());
     try {
@@ -712,7 +698,6 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     } finally {
       if (id !== undefined) this.openApprovals.delete(String(id));
       prompt.release();
-      resume?.();
     }
   }
 
@@ -798,7 +783,6 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     if (method === 'turn/completed' && ours) this.turnCompletedWaiter?.();
     if (method === 'thread/compacted' && ours) this.compactWaiter?.done();
     const target = this.targetFor(method, params, ours);
-    target?.watchdog?.activity();
     if (ours) this.trackTerminals(target, method, params);
     if (!ours) this.otherThread(target, method, params, threadId!);
     else if (target) this.ownThread(target, method, params);
@@ -1004,7 +988,7 @@ class CodexSessionImpl extends PersistentSession<LiveServer, ActiveTurn, Backgro
     } else if (method === 'modelProvider/authRecoveryStarted') {
       observer.onPhase?.('refreshing sign-in');
     } else if (method === 'item/autoApprovalReview/completed' || method === 'modelProvider/authRecoveryCompleted') {
-      // Activity only: the watchdog was reset on receipt.
+      // Activity only.
     } else if (method === 'error') {
       const error = (params.error as JsonObject) ?? {};
       // Say why it is retrying, not only that it is.

@@ -311,7 +311,7 @@ describe('an agent that is retrying a rate-limited call', () => {
     });
     // Never takes the echoed prompt as the answer.
     expect(result.text).toBe('PONG');
-    expect(phases).toEqual(['vibe is retrying (rate limited: HTTP 429), attempt 1']);
+    expect(phases).toEqual(['vibe is retrying (rate limited: HTTP 429)']);
   });
 });
 
@@ -362,16 +362,10 @@ describe('session setup has no clock', () => {
     binary: process.execPath, command: 'agent', argv: ['-e', script], cwd: process.cwd(), prompt: 'go', environment: {}, permissionMode: 'ask', ...extra,
   } as never);
 
-  it('waits for a slow session/new past the old idle window', async () => {
-    const before = process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS;
-    process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS = '200';
-    try {
-      const phases: string[] = [];
-      const result = await turn(agent(700), { onPhase: (p: string) => phases.push(p) });
-      expect(result.text).toBe('up');
-    } finally {
-      if (before === undefined) delete process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS; else process.env.CLIKCODE_TURN_IDLE_TIMEOUT_MS = before;
-    }
+  it('waits for a slow session/new', async () => {
+    const phases: string[] = [];
+    const result = await turn(agent(700), { onPhase: (p: string) => phases.push(p) });
+    expect(result.text).toBe('up');
   });
 
   it('a child that dies during setup rejects the turn', async () => {

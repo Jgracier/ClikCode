@@ -4,8 +4,7 @@
  * have tasks running that it started with `run_in_background` -- a build, a
  * test run, a dev server that never ends. Holding the ClikCode turn open until
  * they finish (background-wait.ts) kept the user's prompt, the thinking line
- * and every slash command waiting behind a dev server for the whole hour-long
- * tool budget, after which the watchdog killed it.
+ * and every slash command waiting behind a dev server that never ends.
  *
  * So the turn ends at that `result` and the process is handed here. It keeps
  * its stdin open, so a task that finishes still gets Claude's follow-up turn,
@@ -16,7 +15,7 @@
  *  - the next turn waits for its subagents and their follow-up, then closes
  *    stdin (`releaseHeldVendorProcess`); an independent background shell may
  *    still be stopped on exit,
- *  - the ceiling passes, or the idle watchdog stops a silent process.
+ *  - the process exits, or the user stops it.
  *
  * One per ClikCode session. */
 import { lifecycle } from '../../../runtime/lifecycle-log.js';
@@ -28,8 +27,6 @@ import { turnCancelledError } from '../../../agent/cancellation.js';
 
 type Json = Record<string, unknown>;
 
-/** Wall-clock ceiling on a held process: after this its stdin closes. */
-const HELD_VENDOR_CEILING_MS = 60 * 60 * 1000;
 /** How long a new turn waits for a held process to exit before stopping it. */
 const RELEASE_WAIT_MS = 5 * 60 * 1000;
 /** How long a process the user stopped gets to exit on its own. */
@@ -46,7 +43,6 @@ export interface HeldVendorOptions {
   /** Report one stdout line (and its record, when it is one) to a
    * background turn's observer. */
   report(line: string, observer: HarnessTurnObserver, record: Json | undefined): void;
-  ceilingMs?: number;
 }
 
 export interface HeldVendor {
@@ -93,19 +89,6 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
     channel?.finish(ended);
     channel = undefined;
   };
-  let ceiling: NodeJS.Timeout | undefined;
-  const armCeiling = (): void => {
-    ceiling = setTimeout(() => {
-      // A long-running shell can be released at the ceiling; an Agent call
-      // is finite work that must remain in its original Claude process.
-      if (options.background.agentWork) { armCeiling(); return; }
-      closing = true;
-      end('completed');
-      options.endInput();
-    }, options.ceilingMs ?? HELD_VENDOR_CEILING_MS);
-    ceiling.unref();
-  };
-  armCeiling();
   const vendor: HeldVendor = {
     get agentWork() { return options.background.agentWork; },
     line(text, record) {
@@ -138,18 +121,13 @@ export function holdVendorProcess(options: HeldVendorOptions): HeldVendor | unde
       }
     },
   };
-  const released = options.release.release((outcome) => {
+  const released = options.release.release(() => {
     exited = true;
-    clearTimeout(ceiling);
-    options.background.dispose();
-    end(outcome.timedOut ? 'idle-timeout' : options.background.settled ? 'completed' : 'closed');
+    end(options.background.settled ? 'completed' : 'closed');
     forget(options.sessionId, vendor);
     resolveExit();
   });
-  if (!released) {
-    clearTimeout(ceiling);
-    return undefined;
-  }
+  if (!released) return undefined;
   const previous = held.get(options.sessionId);
   held.set(options.sessionId, vendor);
   lifecycle('vendor.held', { pending: options.background.pending });

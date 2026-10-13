@@ -16,11 +16,10 @@ import { aiderHistoryNotice, aiderHistoryReply, aiderStdoutReply } from '../harn
 import { createStreamState } from '../harness/events/adapters.js';
 import { reportStructuredLine } from '../harness/events/structured.js';
 import { captureNativeHarness } from '../harness/transport/native/command.js';
-import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease, noteTurnActivityEvent } from '../harness/transport/native/turn.js';
+import { captureNativeHarnessTurn, createTurnInput, createTurnRelease } from '../harness/transport/native/turn.js';
 import { createBackgroundWait, streamJsonUserMessage } from '../harness/transport/native/background-wait.js';
 import { settleHeldVendor } from './turn-steps.js';
 import { holdVendorProcess, type HeldVendor } from '../harness/transport/native/held-vendor.js';
-import { vendorBackgroundEvent } from '../harness/transport/native/background-task.js';
 import { recordNativeStreamUsage } from '../harness/accounts/stream-usage.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { maxPromptArgvBytes, nativeHarnessTurnArgv, promptExceedsArgvLimit } from '../runtime/lazy-bridge.js';
@@ -98,7 +97,6 @@ export async function runVendorCliAttempt(input: {
     delete session.nativeSessionPreallocated;
     checkpoint.touch();
   };
-  const idle = createTurnIdleController();
   // One stream position per attempt: a retry is a new response, and
   // a vendor's per-record session ids must not decide which records
   // belong together (see adapters.ts StreamState).
@@ -111,16 +109,13 @@ export async function runVendorCliAttempt(input: {
   // running, so the turn it starts when that work finishes reaches this
   // conversation instead of being killed at exit (background-wait.ts).
   // A message typed while this turn runs goes straight to the vendor.
-  const vendorBackground = new Set<string>();
   const heldInput = turn.promptInput === 'stdin' && turn.stdinFormat === 'stream-json' ? createTurnInput() : undefined;
   // An answer with background tasks still running ends this
   // turn at once; the process is kept, and what it says when a task
   // finishes becomes a background turn (held-vendor.ts). With nobody to
   // show that (no session worker: `clikcode send`), the turn stays open
   // until the tasks finish and their result is in it -- ClikCode does not
-  // cut short work it was asked for. Each running task gives the idle
-  // watchdog its tool budget, so a server that never ends is still bounded,
-  // and a turn that had already answered ends normally then.
+  // cut short work it was asked for.
   const backgroundHandler = heldInput ? vendorBackgroundTurnHandlerFor(session.id) : undefined;
   const release = backgroundHandler ? createTurnRelease() : undefined;
   let held: HeldVendor | undefined;
@@ -134,12 +129,10 @@ export async function runVendorCliAttempt(input: {
     // The task's own tool row already shows it; what the turn is waiting on
     // goes on the status line, the rest to the lifecycle log.
     onTaskStarted: (id, description) => {
-      idle.toolStarted(`background:${id}`);
       lifecycle('turn.background-task', { session: session.id, task: id, state: 'started' });
       if (!held) prompter?.phase(`background: ${description}`);
     },
     onTaskFinished: (id, status) => {
-      idle.toolFinished(`background:${id}`);
       lifecycle('turn.background-task', { session: session.id, task: id, state: status });
     },
   }) : undefined;
@@ -154,7 +147,6 @@ export async function runVendorCliAttempt(input: {
     turnOutput = await captureNativeHarnessTurn(cliHarness, argv, environment, {
     cwd: session.workspace,
     signal,
-    idleController: idle,
     stdinText: turn.promptInput === 'stdin' ? (heldInput ? streamJsonUserMessage(turnText) : turnText) : undefined,
     ...(heldInput ? { input: heldInput } : {}),
     ...(release ? { release } : {}),
@@ -167,16 +159,6 @@ export async function runVendorCliAttempt(input: {
         return;
       }
       if (background && record) background.note(record);
-      else if (record && /"task_notification"|"isBackground":true/.test(lineText)) {
-        // A vendor that waits for its own background work in-process
-        // (Cursor) is silent meanwhile: that silence gets the running-tool
-        // budget, not the ordinary one. See background-task.ts.
-        const event = vendorBackgroundEvent(record);
-        if (event?.kind === 'started' && !vendorBackground.has(event.id)) {
-          vendorBackground.add(event.id);
-          idle.toolStarted(`background:${event.id}`);
-        } else if (event?.kind === 'finished' && vendorBackground.delete(event.id)) idle.toolFinished(`background:${event.id}`);
-      }
       // The same observer every other transport is handed. What is left
       // here is the turn loop's own bookkeeping, which no line parser
       // should be doing: confirming an optimistically minted session id,
@@ -184,23 +166,18 @@ export async function runVendorCliAttempt(input: {
       // itself.
       const outcome = reportStructuredLine(cliHarness, lineText, {
         ...sharedObserver,
-        // Only the idle bookkeeping is this transport's own: a line on
-        // stdout is the sole proof a one-shot CLI is still working.
         onResponseDelta: (text, mode) => {
           onOutputStart();
-          idle.noteActivity();
           sharedObserver.onResponseDelta?.(text, mode ?? 'append');
         },
         onActivity: (event) => {
           onOutputStart();
-          noteTurnActivityEvent(idle, event);
           sharedObserver.onActivity?.(event);
         },
       }, stream, record);
       if (outcome.usage) sawLineUsage = true;
       if (outcome.live) confirmNativeSession();
       if (outcome.error) onStreamError(outcome.error);
-      if (outcome.result) idle.noteResult(outcome.result);
       // Answered, and only background tasks left: the turn is over.
       if (outcome.result && release && background && backgroundHandler
         && background.pending > 0 && background.quiet && !background.settled) {
@@ -238,7 +215,6 @@ export async function runVendorCliAttempt(input: {
     // Whatever ended the process, input to it has nowhere to go now --
     // unless it was handed on still running.
     if (background && !held) {
-      background.dispose();
       run.liveInput?.setSteerHandler(undefined);
     }
   }

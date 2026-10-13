@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createBackgroundWait, streamJsonUserMessage } from './background-wait.js';
 import { hasHeldVendorProcess, holdVendorProcess, releaseHeldVendorProcess, stopHeldVendorProcess, waitForHeldVendorSubagents, whenHeldVendorGone, type HeldVendor } from './held-vendor.js';
-import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput, createTurnRelease } from './turn.js';
+import { captureNativeHarnessTurn, createTurnInput, createTurnRelease } from './turn.js';
 import { reportStructuredLine } from '../../events/structured.js';
 import { createStreamState } from '../../events/adapters.js';
 import type { BackgroundTurnOutcome, VendorBackgroundTurn } from '../background-turn.js';
@@ -52,7 +52,6 @@ const vendor = (delayMs: number | null, ignoresEnd = false, asAgent = false, fai
 /** The turn loop's side, as the vendor turn wires it. */
 async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = false, asAgent = false, failed = false) {
   const input = createTurnInput();
-  const idle = createTurnIdleController();
   const release = createTurnRelease();
   const turns: VendorBackgroundTurn[] = [];
   let held: HeldVendor | undefined;
@@ -61,7 +60,7 @@ async function runTurn(sessionId: string, delayMs: number | null, ignoresEnd = f
   const started = Date.now();
   const output = await captureNativeHarnessTurn(
     { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(delayMs, ignoresEnd, asAgent, failed), {}, {
-      stdinText: streamJsonUserMessage('go'), input, idleController: idle, idleTimeoutMs: 10_000, release,
+      stdinText: streamJsonUserMessage('go'), input, release,
       onStdoutLine: (line) => {
         const record = JSON.parse(line) as Json;
         if (held) { held.line(line, record); return; }

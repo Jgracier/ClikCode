@@ -1,32 +1,19 @@
 /** What a failed vendor attempt does next: each recovery is a named step that
  * says whether the turn runs again ('retry') or leaves the choice to the next
  * one ('pass'); when none applies the turn moves to another account. */
-import chalk from 'chalk';
 import { forgetNativeThread } from '../session/native-thread.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { closePersistentTransport, closeStandby, rememberFallbackTurn, standbyFor, usesFallbackTurn } from './vendor-process.js';
 import { moveThreadToAccount } from '../session/carry.js';
 import { switchAccountAfterFailure } from './account-switch.js';
-import { classifyAccountFailure, isTransientStartFailure, TRANSIENT_START_RETRY_MS, type AccountFailureKind } from './failover.js';
+import { classifyAccountFailure, type AccountFailureKind } from './failover.js';
 import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { nativeTurnFailure } from '../harness/protocol/turn-result.js';
 import { continueAnswer, editAnswer, retell } from './vendor-thread-takeup.js';
 import { signInForTurn } from './vendor-sign-in.js';
 import type { AttemptRecord } from './vendor-attempt.js';
 import type { VendorObserver } from './vendor-observer.js';
-import { effortKey, turnEffort, type AttemptState, type VendorTurnContext } from './vendor-turn-context.js';
-
-/** A vendor refusing the reasoning level itself, in the words the CLIs use. */
-const EFFORT_REJECTED = /\b(?:unknown|invalid|unsupported|not supported)\b[^\n]{0,40}\b(?:reasoning[ _-]?)?effort\b|\beffort\b[^\n]{0,40}\b(?:is not supported|not supported|unsupported|invalid)\b/i;
-
-/** Whether a failed turn is the vendor refusing the reasoning level: an ACP
- * session that offers no such level (acp-client.ts), or a CLI saying so in
- * its message or stderr -- never read from a model's reply. */
-export function isEffortRefusal(failure: Error): boolean {
-  if ((failure as { acpUnsupportedEffort?: unknown }).acpUnsupportedEffort === true) return true;
-  const stderr = (failure as { stderrTail?: unknown }).stderrTail;
-  return EFFORT_REJECTED.test([failure.message, typeof stderr === 'string' ? stderr : ''].join('\n'));
-}
+import type { AttemptState, VendorTurnContext } from './vendor-turn-context.js';
 
 /** Whether an attempt's streamed text is only the account refusal it then
  * failed with ("You've hit your session limit · resets 3:50pm" streamed as
@@ -38,31 +25,20 @@ export function echoesRefusal(text: string, failure: unknown): boolean {
   return said.length > 0 && refused.length > 0 && (refused.includes(said) || said.includes(refused));
 }
 
-export type Recovery = 'effort' | 'transient' | 'fallback-turn' | 'sign-in' | 'native-thread';
+export type Recovery = 'fallback-turn' | 'sign-in' | 'native-thread';
 
 /** The recoveries a failure could take, in the order they are tried. Pure: a
  * recovery may still decline (a sign-in that fails, a compatibility turn
  * already in use) and the next is tried. */
 export function recoveryCandidates(facts: {
-  failure: Error;
   failureKind: AccountFailureKind;
   cliOutputStarted: boolean;
-  /** The reasoning level asked for, if any. */
-  effort: string | undefined;
   cliTransport: boolean;
   hasFallbackTurn: boolean;
-  attempt: Pick<AttemptState, 'effortRetried' | 'transientRetried' | 'authRetried' | 'nativeThreadRetried'>;
+  attempt: Pick<AttemptState, 'authRetried' | 'nativeThreadRetried'>;
 }): Recovery[] {
-  const { failure, failureKind, cliOutputStarted, attempt } = facts;
+  const { failureKind, cliOutputStarted, attempt } = facts;
   const order: Recovery[] = [];
-  // A reasoning level the model does not take. Which levels a model
-  // takes is often only stated by the refusal itself ("Unknown effort
-  // \"medium\". Supported: high, max." -- Command Code, where it varies
-  // per model and is published nowhere else).
-  if (!cliOutputStarted && facts.effort && !attempt.effortRetried && isEffortRefusal(failure)) order.push('effort');
-  // A start that failed for a moment (failover.ts isTransientStartFailure):
-  // nothing was sent, so once more in place.
-  if (!cliOutputStarted && !attempt.transientRetried && isTransientStartFailure(failure)) order.push('transient');
   // A turn contract an older vendor build rejects outright.
   if (failureKind === 'other' && !cliOutputStarted && facts.hasFallbackTurn && facts.cliTransport) order.push('fallback-turn');
   if (failureKind === 'authentication-required' && !attempt.authRetried) order.push('sign-in');
@@ -72,23 +48,6 @@ export function recoveryCandidates(facts: {
 
 type Decision = 'retry' | 'pass';
 type Failed = AttemptRecord & { failure: Error; failureKind: AccountFailureKind };
-
-/** The vendor's default level, once the conversation's is refused: it drops
- * to it and says so, then runs the turn once more. */
-async function retryWithoutEffort(ctx: VendorTurnContext, _failed: Failed): Promise<Decision> {
-  ctx.attempt.effortRetried = true;
-  ctx.prompter?.activity(chalk.yellow(`${ctx.harness.displayName} does not take effort ${ctx.session.effort} on this model; using its default`));
-  ctx.session.effortRefused = effortKey(ctx);
-  await ctx.checkpoint.persistNow();
-  return 'retry';
-}
-
-async function retryTransientStart(ctx: VendorTurnContext, _failed: Failed): Promise<Decision> {
-  ctx.attempt.transientRetried = true;
-  ctx.prompter?.phase('retrying');
-  await new Promise((resolve) => setTimeout(resolve, TRANSIENT_START_RETRY_MS));
-  return 'retry';
-}
 
 /** Retry once on the harness's declared fallback contract, and remember it for that build. */
 async function retryOnFallbackTurn(ctx: VendorTurnContext, _failed: Failed): Promise<Decision> {
@@ -125,8 +84,6 @@ async function retryOnFreshThread(ctx: VendorTurnContext, failed: Failed): Promi
 }
 
 const RECOVERIES: Record<Recovery, (ctx: VendorTurnContext, failed: Failed) => Promise<Decision>> = {
-  effort: retryWithoutEffort,
-  transient: retryTransientStart,
   'fallback-turn': retryOnFallbackTurn,
   'sign-in': retryAfterSignIn,
   'native-thread': retryOnFreshThread,
@@ -224,7 +181,7 @@ export async function recoverFromFailure(ctx: VendorTurnContext, observer: Vendo
   });
   const failed: Failed = { ...record, failure, failureKind };
   const candidates = recoveryCandidates({
-    failure, failureKind, cliOutputStarted: record.cliOutputStarted, effort: turnEffort(ctx),
+    failureKind, cliOutputStarted: record.cliOutputStarted,
     cliTransport: transport === 'structured-cli' || transport === 'text-cli',
     hasFallbackTurn: Boolean(harness.fallbackTurn), attempt: ctx.attempt,
   });

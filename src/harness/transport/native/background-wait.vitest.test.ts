@@ -10,14 +10,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createBackgroundWait, streamJsonUserMessage } from './background-wait.js';
-import { captureNativeHarnessTurn, createTurnIdleController, createTurnInput } from './turn.js';
+import { captureNativeHarnessTurn, createTurnInput } from './turn.js';
 
 type Json = Record<string, unknown>;
 const fixture = (name: string): Json[] => readFileSync(join(__dirname, 'fixtures', `${name}.jsonl`), 'utf8')
   .split('\n').filter((line) => line.trim()).map((line) => JSON.parse(line) as Json);
 
 /** Replays records; returns the index of the record after which it settled. */
-function replay(records: readonly Json[], graceMs = 30_000): { settledAt: number; started: string[]; finished: string[] } {
+function replay(records: readonly Json[]): { settledAt: number; started: string[]; finished: string[] } {
   let settledAt = -1;
   let index = 0;
   const started: string[] = [];
@@ -26,10 +26,8 @@ function replay(records: readonly Json[], graceMs = 30_000): { settledAt: number
     onSettled: () => { settledAt = index; },
     onTaskStarted: (id) => started.push(id),
     onTaskFinished: (id, status) => finished.push(`${id}:${status}`),
-    graceMs,
   });
   for (; index < records.length; index += 1) wait.note(records[index]!);
-  wait.dispose();
   return { settledAt, started, finished };
 }
 
@@ -94,29 +92,21 @@ describe('background wait on a held-open Claude stdin', () => {
     expect(outcome.finished).toEqual(['b1:completed']);
   });
 
-  it('gives up on a task that left the list with no notification, after the ceiling', () => {
+  it('never gives up on a task on a clock: only the vendor\'s notice, the process or the user ends the wait', () => {
     vi.useFakeTimers();
     let settled = false;
-    const wait = createBackgroundWait({ onSettled: () => { settled = true; }, graceMs: 1_000 });
+    const wait = createBackgroundWait({ onSettled: () => { settled = true; } });
     wait.note({ type: 'system', subtype: 'task_started', task_id: 'b1', is_backgrounded: true });
     wait.note({ type: 'result', subtype: 'success', is_error: false });
+    // Off the list with no notification yet, and a follow-up owed after one.
     wait.note({ type: 'system', subtype: 'background_tasks_changed', tasks: [] });
-    expect(settled, 'an empty list precedes the notification; it must not close stdin').toBe(false);
-    vi.advanceTimersByTime(999);
+    vi.advanceTimersByTime(24 * 60 * 60_000);
     expect(settled).toBe(false);
-    vi.advanceTimersByTime(1);
-    expect(settled).toBe(true);
-  });
-
-  it('gives up on a follow-up turn that never starts, after the ceiling', () => {
-    vi.useFakeTimers();
-    let settled = false;
-    const wait = createBackgroundWait({ onSettled: () => { settled = true; }, graceMs: 1_000 });
-    wait.note({ type: 'system', subtype: 'task_started', task_id: 'b1', is_backgrounded: true });
-    wait.note({ type: 'result', subtype: 'success', is_error: false });
     wait.note({ type: 'system', subtype: 'task_notification', task_id: 'b1', status: 'completed' });
+    vi.advanceTimersByTime(24 * 60 * 60_000);
     expect(settled, 'a follow-up turn is owed').toBe(false);
-    vi.advanceTimersByTime(1_000);
+    wait.note({ type: 'system', subtype: 'init' });
+    wait.note({ type: 'result', subtype: 'success', is_error: false });
     expect(settled).toBe(true);
   });
 
@@ -161,14 +151,12 @@ describe('a held-open stdin on a real process', () => {
     const records = fixture('claude-background-bash');
     const followUp = records.at(-2) as Json;
     const input = createTurnInput();
-    const idle = createTurnIdleController();
     const wait = createBackgroundWait({ onSettled: () => input.end() });
     const output = await captureNativeHarnessTurn(
       { command: 'fixture', binary: process.execPath, displayName: 'Fixture' }, vendor(records), {}, {
-        stdinText: streamJsonUserMessage('go'), input, idleController: idle, idleTimeoutMs: 5_000,
+        stdinText: streamJsonUserMessage('go'), input,
         onStdoutLine: (line) => wait.note(JSON.parse(line) as Json),
       });
-    wait.dispose();
     expect(output.exitCode).toBe(0);
     expect(output.stdout).toContain(JSON.stringify(followUp));
     expect(output.stdout.trim().split('\n')).toHaveLength(records.length);
@@ -207,40 +195,6 @@ describe('ending the turn before the background work', () => {
         expect(wait.settled).toBe(false);
       }
     }
-    wait.dispose();
     expect(quietAt).toEqual([first, last]);
-  });
-
-  it('lets still-running tasks go a bounded while after a result, when asked to', () => {
-    vi.useFakeTimers();
-    let settled = false;
-    const finished: string[] = [];
-    const wait = createBackgroundWait({
-      onSettled: () => { settled = true; }, onTaskFinished: (id, status) => finished.push(`${id}:${status}`), resultGraceMs: 60_000,
-    });
-    wait.note({ type: 'system', subtype: 'init' });
-    wait.note({ type: 'system', subtype: 'task_started', task_id: 'dev', is_backgrounded: true });
-    wait.note({ type: 'result', subtype: 'success', is_error: false });
-    vi.advanceTimersByTime(59_999);
-    expect(settled).toBe(false);
-    vi.advanceTimersByTime(1);
-    expect(settled).toBe(true);
-    expect(finished).toEqual(['dev:abandoned']);
-  });
-
-  it('does not let tasks go while a follow-up turn runs', () => {
-    vi.useFakeTimers();
-    let settled = false;
-    const wait = createBackgroundWait({ onSettled: () => { settled = true; }, resultGraceMs: 1_000 });
-    wait.note({ type: 'system', subtype: 'task_started', task_id: 'a', is_backgrounded: true });
-    wait.note({ type: 'system', subtype: 'task_started', task_id: 'b', is_backgrounded: true });
-    wait.note({ type: 'result', subtype: 'success', is_error: false });
-    wait.note({ type: 'system', subtype: 'task_notification', task_id: 'a', status: 'completed' });
-    wait.note({ type: 'system', subtype: 'init' });
-    vi.advanceTimersByTime(5_000);
-    expect(settled).toBe(false);
-    wait.note({ type: 'result', subtype: 'success', is_error: false });
-    vi.advanceTimersByTime(1_000);
-    expect(settled).toBe(true);
   });
 });
