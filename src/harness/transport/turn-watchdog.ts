@@ -1,20 +1,19 @@
-/** The silence ceiling for a turn, on every transport: the persistent ones
- * (Codex app-server, ACP) and a one-shot CLI turn (native/turn.ts). A
- * turn ends on the vendor's own completion event, and this is only the
- * safety net for a vendor that has gone quiet for good. Every message from
- * the vendor restarts the countdown; while a tool it started is still
- * running, the countdown is the (much longer) tool budget, because a build or
- * a test suite is legitimately silent for a long time. While the user is
- * deciding an approval the vendor is waiting on us, so the clock is paused. */
+/** Optional silence ceiling for a turn, on every transport: the persistent
+ * ones (Codex app-server, ACP) and a one-shot CLI turn (native/turn.ts).
+ * Off unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set. A harness already stops
+ * itself, and a quiet stretch is often a long command or a background agent.
+ * A turn ends on the vendor's own completion event. When the clock is on,
+ * every message from the vendor restarts it; while a tool it started is
+ * still running, the countdown is the (much longer) tool budget. While the
+ * user is deciding an approval the vendor is waiting on us, so the clock
+ * is paused. */
 
-/** A turn whose vendor has said nothing at all for this long is wedged. */
-const PERSISTENT_TURN_IDLE_MS = 10 * 60 * 1000;
-/** A silent tool is given this long. */
+/** A silent tool is given this long, and only when the silence clock is on. */
 const PERSISTENT_TOOL_IDLE_MS = 60 * 60 * 1000;
 
 export interface TurnWatchdogOptions {
-  /** Ordinary silence budget. Default: CLIKCODE_TURN_IDLE_TIMEOUT_MS, else
-   * PERSISTENT_TURN_IDLE_MS. Zero or negative disables the watchdog. */
+  /** Ordinary silence budget. Default: configuredIdleMs(), which is off.
+   * Zero or negative disables the watchdog. */
   idleMs?: number;
   /** Budget while a tool is running; never shortens `idleMs`. */
   toolIdleMs?: number;
@@ -39,14 +38,16 @@ export interface TurnWatchdog {
   stop(): void;
 }
 
-/** The silence budget in force: CLIKCODE_TURN_IDLE_TIMEOUT_MS, else
- * PERSISTENT_TURN_IDLE_MS. Also how long an agent may take to start: a
- * request that waits on the agent's own startup is bounded by this, not by
- * the adapter handshake's few seconds. */
+/** The silence budget in force. Unset means none: the harness runs until it
+ * finishes, fails, or the user stops it. CLIKCODE_TURN_IDLE_TIMEOUT_MS, when
+ * set to a positive number, is how long a vendor may stay silent before the
+ * turn is stopped, and how long a control request may wait on an agent that
+ * is still starting. Zero or negative leaves the clock off. */
 export function configuredIdleMs(environment: NodeJS.ProcessEnv = process.env): number {
   const raw = environment.CLIKCODE_TURN_IDLE_TIMEOUT_MS;
+  if (raw === undefined || raw === '') return 0;
   const configured = Number(raw);
-  return raw !== undefined && raw !== '' && Number.isFinite(configured) ? configured : PERSISTENT_TURN_IDLE_MS;
+  return Number.isFinite(configured) ? configured : 0;
 }
 
 export function createTurnWatchdog(options: TurnWatchdogOptions): TurnWatchdog {

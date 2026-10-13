@@ -401,10 +401,6 @@ export function acpFailureMessage(output: string): string {
   return (why > 0 ? [lines[why]!, ...lines.slice(0, why), ...lines.slice(why + 1)] : lines).join('\n');
 }
 
-/** A category the agent keeps reporting with no progress between: this many
- * in a row ends the turn (a person's patience, not a clock). */
-const RETRY_STREAK_LIMIT = 5;
-
 /** Full child argv for one ACP launch, or undefined without an adapter.
  * The argv comes from the catalog (`harnessAcpLaunch`), which derives the
  * mode, model, effort and permission flags from the harness's own entry; no
@@ -738,7 +734,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // still starting: Claude Code connects every MCP server before it takes a
     // control request, and its adapter answers set_config_option only once
     // Claude Code has. That can take far longer than a handshake, and is not a
-    // fault. Bounded like a silent turn instead; Esc still cancels it.
+    // fault. No clock unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set. Esc still
+    // cancels it.
     const control = { timeoutMs: configuredIdleMs() };
     // Said once, only for an agent this turn started (one already running
     // answers at once), and only when it is slow to: not a flash every turn.
@@ -936,11 +933,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     stillRunning();
     lifecycle('vendor.acp.ready', { harness: input.command, cold, setupMs: Date.now() - setupAt, threadLoadMs });
     turn.promptStarted = true;
-    // The turn ends with the agent's answer to session/prompt. This is only
-    // the ceiling for an agent that has stopped talking without answering.
+    // The turn ends with the agent's answer to session/prompt. No silence
+    // ceiling unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set: the harness has
+    // its own, and a quiet stretch is often a long command.
     turn.watchdog = this.watchdog((afterMs) => turn.fail(turnIdleError(input.command, afterMs)));
-    // No wall-clock timeout: a prompt legitimately runs for hours, and the
-    // idle watchdog above is its only ceiling.
+    // No wall-clock timeout: a prompt legitimately runs for hours.
     turn.prompt = call('session/prompt', { sessionId: turn.sessionId, prompt: blocks }, {});
     markTurn('prompt-sent');
     if (live.steering) input.onSteerReady?.((text, hold) => this.steer(turn, text, hold));
@@ -1304,29 +1301,16 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
   /** The agent's own notice that it is retrying a failed model call
    * (`_session/retrying`, Vibe: `{category:"rate_limited", detail:"HTTP 429"}`).
    * Shown as a phase, nothing more: the agent retries by its own backoff and
-   * may well succeed, so ClikCode keeps no clock on it. Its final failure or
-   * stop reason ends the turn; the idle watchdog (reset by each notice) is
-   * the ceiling for an agent that goes quiet for good. */
+   * may well succeed. Its own failure or stop reason ends the turn. */
   private retrying(params: Json): void {
     const target = this.liveTarget(params);
     if (!target) return;
-    if ((this.retryStreak?.count ?? 0) >= RETRY_STREAK_LIMIT) return; // the turn is already ending
     const command = this.turn?.input.command ?? 'the agent';
     const detail = typeof params.detail === 'string' ? params.detail : '';
     const category = typeof params.category === 'string' ? params.category : '';
     const count = category && this.retryStreak?.category === category ? this.retryStreak.count + 1 : 1;
     this.retryStreak = { category, count };
     target.observer.onPhase?.(`${command} is retrying${category || detail ? ` (${[category.replace(/_/g, ' '), detail].filter(Boolean).join(': ')})` : ''}, attempt ${count}`);
-    // The same refusal again and again with nothing between: the account is
-    // spent or throttled and retrying here cannot help. End the turn with the
-    // vendor's own category so failover and account routing can act.
-    const turn = this.turn;
-    if (category && count >= RETRY_STREAK_LIMIT && turn && target === turn && !turn.done) {
-      const status = /\b([45]\d\d)\b/.exec(detail)?.[1];
-      turn.fail(Object.assign(new Error(`${command} kept failing with ${category.replace(/_/g, ' ')}${detail ? ` (${detail})` : ''} ${count} times in a row`), {
-        errorKind: category, ...(status ? { statusCode: Number(status) } : {}),
-      }));
-    }
   }
 
   /** Where a session-scoped extension notification goes: the user's turn, or
