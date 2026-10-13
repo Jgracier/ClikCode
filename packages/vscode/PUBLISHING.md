@@ -75,7 +75,8 @@ allowlist).
 
 The extension runs the user's installed ClikCode (`clikcode ide-bridge`) when there is one, and the
 copy it ships with (`bundled/clikcode`, staged by `scripts/package.mjs` from the repository's `dist`
-plus the runtime packages `dist` imports) only when there is none. The order matters: a worker is
+plus the runtime packages `dist` imports, each bundled into one file so the package stays well
+under vsce's 100-JavaScript-file warning) only when there is none. The order matters: a worker is
 retired by any client whose build differs, so two builds in play on one machine would retire each
 other's workers. Test the shipped shape with `CLIKCODE_IT_BUNDLED=1 CLIKCODE_IT_EXTENSION_PATH=<an
 unpacked .vsix> xvfb-run -a pnpm run test:integration` (no `clikcode.path`, no `clikcode` on PATH).
