@@ -512,7 +512,7 @@ function singleActivityEvent(harness: AiLocalHarnessDefinition, value: JsonRecor
   // tool_completed {toolCallId, toolName, result:[content blocks]} or
   // tool_errored {toolCallId, toolName, error}; a refused call emits
   // tool_denied / tool_hook_blocked instead of ever running.
-  if (harness.command === 'command') {
+  if (harness.eventDialect === 'command-code') {
     const inner = type === 'event' ? asRecord(value.event) : value;
     const innerType = String(inner?.type ?? '');
     const kind = innerType === 'tool_running' ? 'tool-start' as const

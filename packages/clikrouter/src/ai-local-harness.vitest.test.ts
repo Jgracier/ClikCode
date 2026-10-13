@@ -737,3 +737,14 @@ describe('model discovery declarations', () => {
     expect(formats).toEqual({ opencode: 'opencode-verbose', kilo: 'opencode-verbose', pi: 'pi-table' });
   });
 });
+
+describe('vendor quirks are declared by field', () => {
+  it('names which entry imports Claude config, quits on a dead MCP server, resolves a key identity and wraps events', () => {
+    const having = (field: 'claudeImports' | 'quitsOnDeadMcpServer' | 'keyIdentityArgv' | 'eventDialect') => AI_LOCAL_HARNESSES.filter((h) => h[field]).map((h) => h.command);
+    expect(having('claudeImports')).toEqual(['grok']);
+    expect(having('quitsOnDeadMcpServer')).toEqual(['grok']);
+    expect(having('keyIdentityArgv')).toEqual(['amp']);
+    expect(having('eventDialect')).toEqual(['command']);
+    expect(localHarnessForCommand('amp')!.authEnv?.[0]).toBe('AMP_API_KEY');
+  });
+});
