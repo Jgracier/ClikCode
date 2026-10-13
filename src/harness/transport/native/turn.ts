@@ -155,8 +155,8 @@ interface NativeHarnessTurnOptions {
   signal?: AbortSignal;
   onStdoutLine?: (line: string) => void;
   /** Milliseconds of complete silence -- no stdout, no stderr, no exit --
-   * after which the harness is treated as hung. Zero or negative disables it.
-   * Default: configuredIdleMs(). */
+   * after which the harness is stopped. Zero, negative, or omitted follows
+   * configuredIdleMs(), which is off unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set. */
   idleTimeoutMs?: number;
   /** See NativeTurnIdleController. Create with createTurnIdleController(). */
   idleController?: NativeTurnIdleController;
@@ -256,10 +256,9 @@ export async function captureNativeHarnessTurn(
       timer.unref();
       stopTimers.push(timer);
     };
-    // Deliberately an *idle* timeout rather than a wall-clock cap: a
-    // legitimate agentic turn can run for a very long time, but it narrates
-    // while it does. One that has said nothing at all for this long is
-    // wedged, and without this the turn blocks forever with only Ctrl+C.
+    // No silence ceiling unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set. A
+    // one-shot CLI that stays quiet is left to its own process; Esc still
+    // stops it.
     const watchdog = createTurnWatchdog({
       ...(options.idleTimeoutMs !== undefined ? { idleMs: options.idleTimeoutMs } : {}),
       onIdle: (afterMs) => {
