@@ -25,7 +25,8 @@ async function clikcode(args: readonly string[]): Promise<string> {
   });
 }
 
-export function registerCustomAcpCommands(context: vscode.ExtensionContext): void {
+/** `fail`: an error of a command the user just ran, said once in the chat. */
+export function registerCustomAcpCommands(context: vscode.ExtensionContext, fail: (text: string) => void): void {
   context.subscriptions.push(
     vscode.commands.registerCommand('clikcode.addAcpHarness', async () => {
       const command = await vscode.window.showInputBox({ title: 'Add ACP harness', prompt: 'Command name', placeHolder: 'my-agent', ignoreFocusOut: true });
@@ -40,9 +41,8 @@ export function registerCustomAcpCommands(context: vscode.ExtensionContext): voi
         if (name?.trim()) argv.push('--name', name.trim());
         argv.push(command.trim(), binary.trim(), '--', ...parseAcpArguments(flags));
         await clikcode(argv);
-        void vscode.window.showInformationMessage(`${name?.trim() || command.trim()} is in the provider list.`);
       } catch (error) {
-        void vscode.window.showErrorMessage(userError(`add ${name?.trim() || command.trim()}`, error));
+        fail(userError(`add ${name?.trim() || command.trim()}`, error));
       }
     }),
     vscode.commands.registerCommand('clikcode.removeAcpHarness', async () => {
@@ -52,13 +52,10 @@ export function registerCustomAcpCommands(context: vscode.ExtensionContext): voi
         const parsed = JSON.parse(out) as { harnesses?: { command?: string; displayName?: string }[] };
         listed = parsed.harnesses ?? [];
       } catch (error) {
-        void vscode.window.showErrorMessage(userError('list the ACP harnesses', error));
+        fail(userError('list the ACP harnesses', error));
         return;
       }
-      if (!listed.length) {
-        void vscode.window.showInformationMessage('No ACP harnesses have been added.');
-        return;
-      }
+      if (!listed.length) return;
       const pick = await vscode.window.showQuickPick(listed.map((item) => ({
         label: item.displayName || item.command || 'ACP harness',
         description: item.command,
@@ -67,9 +64,8 @@ export function registerCustomAcpCommands(context: vscode.ExtensionContext): voi
       if (!pick?.command) return;
       try {
         await clikcode(['acp', 'remove', pick.command]);
-        void vscode.window.showInformationMessage(`${pick.label} was removed.`);
       } catch (error) {
-        void vscode.window.showErrorMessage(userError(`remove ${pick.label}`, error));
+        fail(userError(`remove ${pick.label}`, error));
       }
     }),
   );

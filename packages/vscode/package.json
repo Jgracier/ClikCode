@@ -365,6 +365,22 @@
       ],
       "commandPalette": [
         {
+          "command": "clikcode.addToChat",
+          "when": "resourceScheme == file || resourceScheme == untitled"
+        },
+        {
+          "command": "clikcode.insertAtMention",
+          "when": "resourceScheme == file || resourceScheme == untitled"
+        },
+        {
+          "command": "clikcode.openConversationThatEdited",
+          "when": "resourceScheme == file"
+        },
+        {
+          "command": "clikcode.askAboutSelection",
+          "when": "editorHasSelection"
+        },
+        {
           "command": "clikcode.acceptProposedDiff",
           "when": "resourceScheme == clikcode-diff"
         },
