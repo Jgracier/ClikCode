@@ -129,6 +129,14 @@ describe('a prompt echoed locally is the worker\'s to confirm', () => {
     expect(rejected.ownTurn).toBeUndefined();
   });
 
+  it('is cleared by the worker shutting down mid-turn', () => {
+    const stopping = applyEvent(begin(), worker({ type: 'stopping' }));
+    const ended = applyEvent({ ...stopping, pendingPrompt: 'hello' }, worker({ type: 'shutdown', reason: 'replaced' }));
+    expect(ended.pendingPrompt).toBeUndefined();
+    expect(ended.live).toBeUndefined();
+    expect(ended.stopPending).toBeUndefined();
+  });
+
   it('is cleared by losing the connection when no worker ever answered', () => {
     const lost = connectionLost(submittingPrompt(emptyModel(), 'hello'));
     expect(lost.pendingPrompt).toBeUndefined();

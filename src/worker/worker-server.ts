@@ -2,6 +2,7 @@
 import { createServer } from 'node:net';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { releaseMcp } from '../agent/mcp/manager.js';
+import { sendEvent } from './broadcast-observer.js';
 import { FrameDecoder, type ClientCommand } from './protocol.js';
 import type { ConnectionState, WorkerContext } from './worker-context.js';
 
@@ -11,7 +12,15 @@ export function createWorkerServer(ctx: WorkerContext, handleCommand: (socket: C
     const connection: ConnectionState = { socket, frames: new FrameDecoder(), attached: false };
     connections.set(socket, connection);
     socket.on('data', (chunk) => {
-      for (const message of connection.frames.push(chunk)) void handleCommand(socket, message as ClientCommand, connection);
+      for (const message of connection.frames.push(chunk)) {
+        // A command that throws must not become an unhandled rejection (which ends the process, and
+        // every turn in it): the window is told, and goes on.
+        void handleCommand(socket, message as ClientCommand, connection).catch((error: unknown) => {
+          const reason = error instanceof Error ? error.message : String(error);
+          lifecycle('worker.command.failed', { type: (message as { type?: unknown }).type, message: reason });
+          sendEvent(socket, { type: 'notice', message: `The conversation's worker could not do that: ${reason}` });
+        });
+      }
     });
     socket.on('close', () => {
       connections.delete(socket);

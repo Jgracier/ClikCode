@@ -13,8 +13,6 @@ type Section = ConversationSection;
 /** The terminal board's sections, in its order and words (session/conversation-state.ts). */
 const SECTIONS = (['working', 'active', 'past'] as const).map((section): [Section, string] => [section, SECTION_TITLES[section]]);
 const ACTIVE_WITHIN_MS = 24 * 60 * 60 * 1000;
-/** Re-query while generating when ClikCode has not reported a change. */
-const FALLBACK_POLL_MS = 10_000;
 
 /** The row's section as ClikCode decided it; a bridge from before `section`
  * gets the same rule here (generating, else the last 24 hours, else Past). */
@@ -55,30 +53,21 @@ export function holdConversationWatch(): () => void {
 
 /** The conversation list, kept current: loaded (again whenever `key`
  * changes), reloaded when ClikCode says a turn started or ended, so a
- * pulse stops when its chat finishes. A slow poll covers a ClikCode that
- * does not say (older, or no watch possible): only while a chat is
- * generating and nothing has been heard for a while. */
+ * pulse stops when its chat finishes. ClikCode says so; there is no poll. */
 export function useConversations(onError?: (message: string) => void, key?: unknown): { rows: ListedConversation[] | undefined; load: () => void } {
   const [rows, setRows] = useState<ListedConversation[]>();
   const load = (): void => {
     request<ListedConversation[]>({ method: 'query', query: 'conversations' }).then(setRows, (failure: Error) => onError?.(failure.message));
   };
   useEffect(load, [key]);
-  const heardAt = useRef(0);
   useEffect(() => {
     const stop = listen((message) => {
       if (message.type !== 'conversations-changed') return;
-      heardAt.current = Date.now();
       load();
     });
     const release = holdConversationWatch();
     return () => { stop(); release(); };
   }, []);
-  useEffect(() => {
-    if (!rows?.some((row) => row.activity === 'working')) return;
-    const timer = setInterval(() => { if (Date.now() - heardAt.current >= FALLBACK_POLL_MS) load(); }, FALLBACK_POLL_MS);
-    return () => clearInterval(timer);
-  }, [rows]);
   return { rows, load };
 }
 

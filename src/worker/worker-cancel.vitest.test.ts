@@ -176,3 +176,14 @@ describe('settings-changed', () => {
     expect(ctx.liveSettings.permissionMode).toBe('bypass');
   });
 });
+
+describe('a Stop that fails while stopping vendor work', () => {
+  it('still says it is done, so a window is not left stopping', async () => {
+    const { ctx, send, alice } = build();
+    ctx.vendorBackground = { ...ctx.vendorBackground, busy: true } as never;
+    const { closePersistentTransport } = await import('../turn/vendor-process.js');
+    vi.mocked(closePersistentTransport).mockRejectedValueOnce(new Error('vendor gone'));
+    await expect(send({ type: 'cancel', restoreDraft: false })).rejects.toThrow('vendor gone');
+    expect(alice.events.map((event) => event.type)).toEqual(['stopping', 'stop-done']);
+  });
+});

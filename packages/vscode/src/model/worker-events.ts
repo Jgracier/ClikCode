@@ -9,6 +9,7 @@ import type { WorkerEvent } from '../protocol';
 import { applyActivity, cleanDiff, freshLive, liveBackground, rebaseOffsets, settled, stampAfter, takeSeq, withoutPhase } from './activity';
 import { answeredApproval, askedAt } from './approvals';
 import { applySnapshot } from './snapshot';
+import { NO_TRANSIENT } from './session';
 import { withNote } from './notes';
 import { endTurn } from './traces';
 import type { ChatModel } from './types';
@@ -28,7 +29,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
         turnUsage: undefined, stopPending: undefined,
       };
     case 'waiting-stop':
-      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], submissions: [], stopPending: undefined };
+      return { ...endTurn(model, event.stopped === true), ...NO_TRANSIENT };
     // The worker accepted a Stop: the one source of "stopping".
     case 'stopping':
       if (model.live?.stopping || model.stopPending) return model;
@@ -139,7 +140,7 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       // An idle worker retiring (a newer build, an idle timeout) is invisible:
       // the bridge attaches to its replacement. Only a cut-off turn is news.
       if (!model.running) return model;
-      return { ...endTurn(withNote(model, { kind: 'notice', level: 'warning', text: `The conversation's worker stopped: ${event.reason}` })), approvals: [] };
+      return { ...endTurn(withNote(model, { kind: 'notice', level: 'warning', text: `The conversation's worker stopped: ${event.reason}` })), ...NO_TRANSIENT };
     default:
       // suspend/resume, sign-in-request (the bridge handles it), restore-draft
       // (arrives separately) and anything a newer worker says.
