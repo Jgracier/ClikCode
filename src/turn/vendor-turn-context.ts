@@ -10,9 +10,6 @@ import { sessionTranscriptMessages } from './checkpoint.js';
 import { turnAccounts, turnBackendForAccount } from './account-routing.js';
 import { closePersistentTransport } from './vendor-process.js';
 import { startTurnCheckpoint, type DurableTurnCheckpoint } from './turn-journal.js';
-import { mcpServerNeedsSignIn, type McpSignInAnswer } from '../harness/mcp-sign-in.js';
-import type { McpServerEntry } from '../harness/mcp-registry.js';
-import { stateDirectory } from '../session/store/paths.js';
 import type { TurnObserver } from './observer.js';
 import type { TurnRunOptions } from './session-turn.js';
 
@@ -53,7 +50,6 @@ export interface VendorTurnContext {
   readonly cliCarriesImages: boolean;
   readonly cliImageNote: string;
   readonly baseMessages: ReturnType<typeof sessionTranscriptMessages>;
-  readonly checkMcpSignIn: (entry: McpServerEntry, headersReach: boolean) => Promise<McpSignInAnswer>;
   account: AiHarnessAccount;
   model: string | null;
   turnText: string;
@@ -128,22 +124,9 @@ export async function createVendorTurnContext(input: {
     persist: () => checkpoint.persistNow(), current: () => context.account, adopt: (to) => { context.account = to; },
     beforeSwitch: () => closePersistentTransport(session.id),
   });
-  // A quota refusal can try several accounts in one turn. A remote MCP
-  // server that times out otherwise costs its full probe timeout on every
-  // attempt, though its answer is the same for this harness and config.
-  const signInChecks = new Map<string, Promise<McpSignInAnswer>>();
-  const checkMcpSignIn = (entry: McpServerEntry, headersReach: boolean): Promise<McpSignInAnswer> => {
-    const key = JSON.stringify([entry.target, entry.headers, headersReach]);
-    let check = signInChecks.get(key);
-    if (!check) {
-      check = mcpServerNeedsSignIn(entry, { stateDir: stateDirectory(), headersReach });
-      signInChecks.set(key, check);
-    }
-    return check;
-  };
   const context: VendorTurnContext = {
     state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts,
-    requestContext, images, cliCarriesImages, cliImageNote, baseMessages, checkMcpSignIn,
+    requestContext, images, cliCarriesImages, cliImageNote, baseMessages,
     account: input.account, model, turnText, askedText: turnText,
     attempt: { authRetried: false, effortRetried: false, standbyOpened: false, threadCopiedTo: undefined, nativeThreadRetried: false, transientRetried: false },
   };

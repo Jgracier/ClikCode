@@ -6,7 +6,7 @@
 import { untilStopped } from './stop-signal.js';
 import type { Command } from 'commander';
 import { acpAdd, acpList, acpRemove } from '../commands/acp.js';
-import { mcpAdd, mcpList, mcpLogin, mcpLogout, mcpRemove, mcpTargets } from '../commands/mcp.js';
+import { mcpAdd, mcpList, mcpLogin, mcpLogout, mcpRemove } from '../commands/mcp.js';
 import type Conf from 'conf';
 import { sendScriptedTurn } from '../worker/scripted-send.js';
 import { aiPermissions } from '../tui/pickers/permissions.js';
@@ -32,7 +32,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   // the same reason as session-worker: neither is anything to type.
   program.command('ide-bridge', { hidden: true }).action(async () => (await import('../ide/bridge.js')).runIdeBridge(config));
   program.command('ide-terminal <spec>', { hidden: true }).action(async (spec: string) => (await import('../ide/terminal.js')).runIdeTerminal(spec));
-  program.command('conversations-mcp', { hidden: true }).description('Serves search_conversations, read_conversation, and active_conversations to a vendor agent over stdio MCP').action(async () => (await import('../search/mcp.js')).serveConversationsMcp());
   // The search /search runs, from a shell: the same engine and ranking.
   program.command('search <words...>').description('Find the conversations that mention something, any provider, most mentions first (--json: each hit and its first mention)')
     .action(async (words: string[]) => {
@@ -112,13 +111,12 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .allowUnknownOption()
     .action((command: string, binary: string, argv: string[], options: { name?: string; provider?: string }) => acpAdd(command, binary, argv, options));
   acp.command('remove <command>').description('Remove a harness added on this machine').action(acpRemove);
-  // Recorded once. Each harness receives it when that provider is chosen.
-  const mcp = program.command('mcp').description('Record an MCP server for whichever harness you choose');
+  const mcp = program.command('mcp').description("Record MCP servers for ClikCode's own agent");
   mcp.command('add')
     .argument('<name>', 'Name the server is known by')
     .argument('<target>', 'Command to launch, or a URL for a remote server')
     .argument('[args...]', 'Arguments for a launched command')
-    .description('Record an MCP server. It is installed into a harness when you choose that provider, if the name is not already there')
+    .description("Record an MCP server for ClikCode's own agent. A harness keeps its own MCP configuration")
     .option('--client-id <id>', "A remote server's OAuth client id, where its authorization server registers none itself")
     .option('--callback-port <port>', 'The fixed loopback port that client id was registered with')
     .option('--scope <scopes>', 'OAuth scopes to ask for, when the server names none')
@@ -126,10 +124,10 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
     .allowUnknownOption()
     .action((name: string, target: string, args: string[], options: { clientId?: string; callbackPort?: string; scope?: string }) => mcpAdd(name, target, args, options));
   mcp.command('list')
-    .description('List the MCP servers recorded in ClikCode, and the harnesses ClikCode has given each')
+    .description("List the MCP servers recorded for ClikCode's own agent")
     .action(mcpList);
   mcp.command('remove <name>')
-    .description('Remove a server from ClikCode, and take ClikCode\'s own copies back out of every harness (never one you added there)')
+    .description('Remove a server recorded in ClikCode (a harness\'s own servers are never touched)')
     .action(mcpRemove);
   mcp.command('login <name>')
     .description("Sign in to a remote server that asks for it (OAuth), for ClikCode's own agent")
@@ -137,9 +135,6 @@ export function registerClikCodeCommands(program: Command, config: Conf): void {
   mcp.command('logout <name>')
     .description("Forget ClikCode's sign-in to a remote server")
     .action(mcpLogout);
-  mcp.command('targets')
-    .description('Show how each harness would be given a server, when you choose it')
-    .action(mcpTargets);
   // Claude Code's plugins, as ClikCode's own agent uses them.
   const plugin = program.command('plugin').description('Choose which of Claude Code\'s plugins (skills, commands, agents, hooks, MCP servers) ClikCode\'s own agent uses');
   plugin.command('list').description('List the plugins installed for Claude Code, and whether ClikCode uses each')

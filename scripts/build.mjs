@@ -1,18 +1,14 @@
 /**
- * ClikCode build. Produces five files in dist/:
+ * ClikCode build. Produces four files in dist/:
  *
  *   index.js               The entry (bin): turns on Node's compile cache, then
- *                          loads cli.js -- or conversations-mcp.js for that one
- *                          command. Rewritten on every build, since its mtime
+ *                          loads cli.js. Rewritten on every build, since its mtime
  *                          and size are the build a worker records.
  *   cli.js                 The program (ESM). Small pure-JS dependencies are inlined
  *                          so startup is one file read instead of a node_modules walk.
  *   harness-catalog.cjs    The pure harness catalog (no AI SDKs); cheap to load.
  *   ai-router-runtime.cjs  streamAiChatTurn (`ai` + @ai-sdk providers);
  *                          only needed for local API-key model turns.
- *   conversations-mcp.js   `clikcode conversations-mcp` alone (search + stdio
- *                          MCP, no packages). Every vendor session keeps one
- *                          running, so it must not carry the whole program.
  *
  * Flags:
  *   --analyze   Print a metafile report: top inputs by bytes, runtime externals,
@@ -118,37 +114,8 @@ import { join } from 'node:path';
 try {
   module.enableCompileCache?.(join(process.env.XDG_CACHE_HOME?.trim() || join(homedir(), '.cache'), 'clikcode', 'node-compile-cache'));
 } catch { /* fail-open-ok: no cache is only a slower start. */ }
-const command = process.argv[2];
-if (command === 'npx-mcp') {
-  // \`npx-mcp <bin> <where its arguments start> <npx command…>\`, the form
-  // harness/npx-bin.ts gives a vendor for a user's npx MCP server: the bin,
-  // in this process, while it is there; once it is gone (a cleared npm
-  // cache) the user's npx command exactly as they wrote it.
-  const [bin, start, target, ...original] = process.argv.slice(3);
-  const { existsSync } = await import('node:fs');
-  if (existsSync(bin)) {
-    process.argv = [process.argv[0], bin, ...original.slice(Number(start))];
-    module.runMain(bin);
-  } else {
-    const { spawn } = await import('node:child_process');
-    const child = spawn(target, original, { stdio: 'inherit', shell: process.platform === 'win32' });
-    child.on('error', () => process.exit(127));
-    child.on('exit', (code, signal) => (signal ? process.kill(process.pid, signal) : process.exit(code ?? 1)));
-    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal));
-  }
-} else {
-  // Vendors start \`<this file> conversations-mcp\` once per session and keep
-  // it for the session's life: that one command loads only its own bundle.
-  await import(command === 'conversations-mcp' ? './conversations-mcp.js' : './cli.js');
-}
+await import('./cli.js');
 `);
-
-const conversationsMcp = await build({
-  ...common,
-  entryPoints: ['src/search/mcp-main.ts'],
-  format: 'esm',
-  outfile: 'dist/conversations-mcp.js',
-});
 
 const catalog = await build({
   ...common,
@@ -196,8 +163,6 @@ for (const name of Object.keys(pkg.dependencies ?? {})) {
 const catalogDependencies = Object.keys(catalog.metafile.inputs).filter((path) => /(^|\/)node_modules\//.test(path));
 if (catalogDependencies.length) failures.push(`harness-catalog.cjs must be dependency-free, but bundles: ${catalogDependencies.slice(0, 5).join(', ')}`);
 if (runtimeExternals(catalog.metafile, 'dist/harness-catalog.cjs').length) failures.push('harness-catalog.cjs must not import packages at runtime');
-const mcpDependencies = Object.keys(conversationsMcp.metafile.inputs).filter((path) => /(^|\/)node_modules\//.test(path));
-if (mcpDependencies.length) failures.push(`conversations-mcp.js must stay dependency-free, but bundles: ${mcpDependencies.slice(0, 5).join(', ')}`);
 
 // Load it the way harness-runtime.ts will: it must evaluate standalone and carry the catalog.
 {

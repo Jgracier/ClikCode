@@ -232,30 +232,21 @@ turns (a compaction), the summary goes in their place; `/history` and
 `/export` show it, and the conversation's row says "first N turns summarized".
 On a long thread that costs tokens and a few seconds. Nothing else changes.
 
-## One MCP server, whichever tool you choose
+## MCP servers for ClikCode's own agent
 
-Tools that support MCP each want it configured their own way. Add a server
-once. ClikCode's own agent uses it immediately. Another harness gets it the
-first time you choose that provider, and only if that name is not already
-there:
+A tool's MCP servers, skills and hooks are that tool's own: ClikCode never
+writes into its configuration. For ClikCode's own agent, record a server once:
 
 ```sh
-clikcode mcp targets                        # how each harness would receive it
-clikcode mcp add postgres -- npx -y pg-mcp  # record it; install on choose
-clikcode mcp list                           # what is recorded, and which harnesses have it
-clikcode mcp remove postgres                # forget it, and take ClikCode's copies back out
-clikcode mcp login <name>                   # OAuth sign-in to a remote server, for ClikCode's own agent
+clikcode mcp add postgres -- npx -y pg-mcp  # record it for ClikCode's own agent
+clikcode mcp list                           # what is recorded
+clikcode mcp remove postgres                # forget it
+clikcode mcp login <name>                   # OAuth sign-in to a remote server
 clikcode mcp logout <name>                  # forget that sign-in
 ```
 
-`mcp remove` takes out only the copies ClikCode itself wrote. A server you
-added to a tool by hand stays where you put it.
-
-ClikCode does not host or proxy these servers. Each tool talks to them
-directly, exactly as it would if you had configured it by hand. Skills follow
-the same rule. Hooks are never copied: Claude Code and Grok already run
-Claude's hook files themselves, and every other harness uses its own hook
-format, so ClikCode leaves those alone.
+A tool's own servers are managed with that tool's own commands (`/mcp` in a
+conversation on it).
 
 Claude Code's plugins (skills, commands, agents, hooks, MCP servers) can be
 used by ClikCode's own agent too. `clikcode plugin list` shows the plugins
@@ -282,7 +273,7 @@ when you would rather type than pick.
 | `clikcode search <words>` | Find the conversations that mention something, any provider, most mentions first; `--json` gives each hit and its first mention |
 | `clikcode logs [--session <id>] [--role <role>] [--since 10m] [-f]` | What every ClikCode window, worker and editor bridge did, in order; the first place to look when something went wrong |
 | `clikcode permissions [ask\|bypass\|auto]` | Approval behavior for the active chat |
-| `clikcode mcp add` / `list` / `remove` / `login` / `logout` / `targets` | One MCP server for every tool (below) |
+| `clikcode mcp add` / `list` / `remove` / `login` / `logout` | MCP servers for ClikCode's own agent (below) |
 | `clikcode plugin list` / `enable <plugin>` / `disable <plugin>` | Which of Claude Code's plugins ClikCode's own agent uses |
 | `clikcode acp add <command> <binary> [-- <flags>]` / `acp list` / `acp remove` | An ACP agent the catalog does not ship |
 | `clikcode gateway login [--github]` / `gateway status` / `gateway models` | ClikDeploy Gateway sign-in (Google by default), and the models it offers |
@@ -482,7 +473,7 @@ If you want to work on ClikCode itself:
 
 ```sh
 pnpm install
-pnpm build          # dist/index.js (the entry), cli.js, conversations-mcp.js, harness-catalog.cjs, ai-router-runtime.cjs
+pnpm build          # dist/index.js (the entry), cli.js, harness-catalog.cjs, ai-router-runtime.cjs
 pnpm build:analyze  # + bundle report: top inputs by bytes, runtime packages
 pnpm build:strict   # + fail on a missing or extra runtime dependency
 pnpm type-check     # tsc over src/ and over packages/clikrouter

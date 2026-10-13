@@ -23,28 +23,6 @@ describe('shared ACP adapter contract', () => {
       .rejects.toThrow(/Please log in to use Devin/);
   });
 
-  it('hands a session the MCP servers the caller named', async () => {
-    const agent = `
-      const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');
-      let servers = []; let buf = '';
-      process.stdin.on('data', (d) => { buf += d; let n; while ((n = buf.indexOf('\\n')) >= 0) {
-        const m = JSON.parse(buf.slice(0, n)); buf = buf.slice(n + 1);
-        if (m.method === 'initialize') send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });
-        else if (m.method === 'session/new') { servers = m.params.mcpServers; send({ id: m.id, result: { sessionId: 's1' } }); }
-        else if (m.method === 'session/prompt') {
-          send({ method: 'session/update', params: { sessionId: 's1', update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: JSON.stringify(servers) } } } });
-          send({ id: m.id, result: { stopReason: 'end_turn' } });
-        }
-      } });
-    `;
-    const result = await runAcpTurn({
-      binary: process.execPath, command: 'agent', argv: ['-e', agent], cwd: process.cwd(),
-      prompt: 'check', environment: {}, permissionMode: 'ask',
-      mcpServers: [{ name: 'notes', command: 'node', args: ['notes-mcp'], env: [] }],
-    });
-    expect(JSON.parse(result.text)).toEqual([{ name: 'notes', command: 'node', args: ['notes-mcp'], env: [] }]);
-  });
-
   it('fails an image turn before the prompt when the agent takes no images, so the CLI can run it', async () => {
     const agent = `
       const send = (m) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', ...m }) + '\\n');

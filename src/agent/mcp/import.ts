@@ -1,11 +1,9 @@
 /** Two things share this file. The one-time import (`importVendorMcpServers`)
  * copies the MCP servers the user already gave their vendor harnesses into
  * `<state dir>/mcp.json`, so ClikCode's own agent has them too. The vendor-config
- * readers (`vendorSources`, `normalize`, `vendorMcpServerNames`,
- * `vendorMcpServerUrls`, `importedFromCommand`, `removeFromVendorJsonFile`,
- * `stripJsonc`, `parseToml`) are NOT one-time: provisioning, the MCP registry and
- * ACP queries read vendors' files live through them. The rest of this comment
- * describes the import.
+ * readers (`vendorSources`, `normalize`, `vendorMcpServerNames`, `stripJsonc`,
+ * `parseToml`) are NOT one-time: they read vendors' files live, and never
+ * write them. The rest of this comment describes the import.
  *
  * Why it exists: `clikcode mcp add` only started writing mcp.json once this
  * agent could use MCP. Every server added before that -- through ClikCode or
@@ -35,7 +33,6 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { MCP_SERVERS_KEY, mcpConfigFilePath, parseMcpServerEntry } from './config.js';
 import type { AiHarnessMcpServerFile } from '@clikcode/router/ai-local-harness';
-import { CONVERSATIONS_MCP_NAME } from '../../search/mcp-entry.js';
 import { allLocalHarnesses, localHarnessCapabilityManifest } from '../../runtime/lazy-bridge.js';
 
 /** One vendor file, as the catalog records it (managers.mcp.serverFiles),
@@ -51,11 +48,6 @@ export function vendorSources(): VendorSource[] {
   return allLocalHarnesses().flatMap((harness) => (localHarnessCapabilityManifest(harness).managers?.mcp?.serverFiles ?? [])
     .map((file) => ({ ...file, vendor: harness.displayName, command: harness.command })));
 }
-
-/** What mcp-import.json called a vendor before it took the catalog's name. */
-const EARLIER_VENDOR_NAMES: Readonly<Record<string, string>> = {
-  Grok: 'grok', Copilot: 'copilot', Cursor: 'cursor', Kimi: 'kimi', Kiro: 'kiro', Cline: 'cline', Auggie: 'auggie', opencode: 'opencode', Kilo: 'kilo',
-};
 
 export const IMPORT_MARKER_FILE = 'mcp-import.json';
 
@@ -254,67 +246,6 @@ export async function vendorMcpServerNames(
   return { known: true, names };
 }
 
-/** The URL each remote server in this harness's own file points at, by name
- * -- what tells "ClikCode's copy of that server" from a different server the
- * user keeps under the same name. Local servers and entries that are not
- * portable (disabled, placeholders) are left out. */
-export async function vendorMcpServerUrls(
-  command: string, home: string, profile?: { env: string; path: string },
-): Promise<Map<string, string>> {
-  const urls = new Map<string, string>();
-  for (const source of vendorSources().filter((item) => item.command === command)) {
-    for (const path of vendorConfigCandidates(source, home, profile)) {
-      for (const [name, raw] of Object.entries(await readServerTable(path, source) ?? {})) {
-        const normalized = normalize(source.dialect, raw);
-        if ('entry' in normalized && typeof normalized.entry.url === 'string' && !urls.has(name)) urls.set(name, normalized.entry.url);
-      }
-    }
-  }
-  return urls;
-}
-
-/** The vendor whose own file an imported server came from (mcp-import.json),
- * as a harness command. That vendor's copy is the user's; every other copy
- * of it was fanned out by ClikCode. Undefined when the import never ran or
- * did not bring this name in. */
-export async function importedFromCommand(stateDir: string, name: string): Promise<string | undefined> {
-  try {
-    const parsed: unknown = JSON.parse(await readFile(join(stateDir, IMPORT_MARKER_FILE), 'utf8'));
-    const imported = isRecord(parsed) && Array.isArray(parsed.imported) ? parsed.imported as unknown[] : [];
-    const found = imported.find((item): item is ImportedServer => isRecord(item) && item.name === name && typeof item.from === 'string');
-    return found ? vendorSources().find((source) => source.vendor === found.from)?.command ?? EARLIER_VENDOR_NAMES[found.from] : undefined;
-  } catch { return undefined; }
-}
-
-/** Removes one server from a harness's JSON config by editing the file, for
- * a vendor with no `mcp remove` (opencode, Kilo). Only a file that is plain
- * JSON is rewritten: a JSONC file with comments would lose them, and the
- * user's comments are not ClikCode's to drop -- that case is reported. */
-export async function removeFromVendorJsonFile(
-  command: string, name: string, home: string, profile?: { env: string; path: string },
-): Promise<{ ok: boolean; detail?: string }> {
-  let removed = false;
-  for (const source of vendorSources().filter((item) => item.command === command && item.format !== 'toml' && item.format !== 'yaml')) {
-    for (const path of vendorConfigCandidates(source, home, profile)) {
-      const text = await readFile(path, 'utf8').catch(() => undefined);
-      if (!text?.trim()) continue;
-      let root: unknown;
-      try { root = JSON.parse(text); } catch {
-        const table = await readServerTable(path, source);
-        if (table && name in table) return { ok: false, detail: `${path} has comments or trailing commas; remove "${name}" by hand` };
-        continue;
-      }
-      let table: unknown = root;
-      for (const key of source.key) table = isRecord(table) ? table[key] : undefined;
-      if (!isRecord(table) || !(name in table)) continue;
-      delete table[name];
-      await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
-      removed = true;
-    }
-  }
-  return removed ? { ok: true } : { ok: false, detail: 'not found in any config file ClikCode knows for this harness' };
-}
-
 /** The files to read for one source: the user's own, then each isolated
  * ClikCode account profile for that vendor, whose directory is either a
  * whole fake HOME or the vendor's own config root. */
@@ -364,7 +295,7 @@ export async function importVendorMcpServers(
       if (!table) continue;
       for (const [name, raw] of Object.entries(table)) {
         const from = source.vendor;
-        if (name === CONVERSATIONS_MCP_NAME) {
+        if (name === 'clikcode-conversations') {
           skipped.push({ name, from, reason: 'is ClikCode\'s own; its agent has these tools built in' });
           continue;
         }
