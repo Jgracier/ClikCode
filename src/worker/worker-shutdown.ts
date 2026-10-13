@@ -1,15 +1,9 @@
-/** The worker's shutdown: what it records for the model, what it stops, and the
- * successor it may start. */
+/** The worker's shutdown: what it stops, and the successor it may start. */
 import { spawn } from 'node:child_process';
 import { unlink } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { startsSuccessor } from './idle-decisions.js';
-import { readState } from '../session/state/read.js';
-import { writeState } from '../session/state/write.js';
-import { enqueueSessionTurn } from '../turn/checkpoint.js';
-import { CLIKCODE_NOTICE_TAG } from '../session/clikcode-notice.js';
-import { closePersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
+import { closePersistentTransport } from '../turn/vendor-process.js';
 import { disposeSessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { shutdownLanguageServers } from '../agent/lsp/servers.js';
@@ -19,21 +13,6 @@ import type { WorkerContext } from './worker-context.js';
 
 export function createShutdown(ctx: WorkerContext) {
   const { observer, sessionId, token, hold, socketPath, connections } = ctx;
-  const { recordNotifications } = ctx.io;
-  /** Tell the model, through the next worker for this conversation, that
-   * work its vendor left running was stopped -- never stopped unsaid. */
-  const recordVendorWorkStopped = async (reason: string): Promise<void> => {
-    const latest = await readState({ transcripts: [sessionId] });
-    const found = latest.sessions.find((item) => item.id === sessionId);
-    if (!found) return;
-    const submittedAt = new Date().toISOString();
-    enqueueSessionTurn(found, {
-      id: randomUUID(), submittedAt, kind: 'notification',
-      text: `${CLIKCODE_NOTICE_TAG}Background work you started in an earlier turn (a background command or server) was stopped: ${reason}. Check whether it finished, and start it again if it is still needed.`,
-    }, submittedAt);
-    await writeState(latest);
-  };
-
   /** Once: a second signal while the first shutdown is still recording
    * what it stopped must not exit underneath that write. */
   let shuttingDown: Promise<void> | undefined;
@@ -54,18 +33,9 @@ export function createShutdown(ctx: WorkerContext) {
     // shutdown reason, not just the idle one: whenever this worker is going
     // away, so is the session whose shells these are.
     //
-    // What the model was never told -- notifications not yet delivered, and
-    // each shell this stops -- is recorded as a queued turn first, so the
-    // next worker for the conversation delivers it.
-    const undelivered = disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
-    let owed = undelivered.length > 0;
-    await recordNotifications(undelivered).catch(() => undefined);
-    // The same for work a persistent vendor left running: closing the child
-    // below stops it.
-    if (await persistentWorkRunning(sessionId)) {
-      owed = true;
-      await recordVendorWorkStopped(`ClikCode's worker for this conversation stopped (${reason})`).catch(() => undefined);
-    }
+    // Nothing is queued for the model about what this stops: killing
+    // ClikCode leaves no turn behind and no text.
+    disposeSessionState(stateDirectory(), sessionId, `ClikCode's worker for this conversation stopped (${reason})`);
     // Codex app-server and ACP children are spawned detached too, and were
     // orphaned the same way.
     await closePersistentTransport().catch(() => undefined);
@@ -83,14 +53,12 @@ export function createShutdown(ctx: WorkerContext) {
     await removeWorkerRecord(sessionId, token).catch(() => undefined);
     if (await hold.held()) await unlink(socketPath).catch(() => undefined);
     await hold.release().catch(() => undefined);
-    // Owed the model something and stopped by nobody's choice (a newer
-    // build, the 24-hour ceiling): a successor -- on whatever build is
-    // installed now -- delivers it at once, instead of waiting for someone
-    // to reopen the conversation. Stopped by a signal, it stays stopped.
-    // A turn parked for the reset is owed too: the successor sends it.
+    // A turn parked for the reset is owed: stopped by nobody's choice (a
+    // newer build, the 24-hour ceiling), a successor -- on whatever build is
+    // installed now -- sends it. Stopped by a signal, it stays stopped.
     ctx.resumeWaiter.stop();
-    const successor = startsSuccessor(owed || ctx.resumeWaiter.pending, reason);
-    lifecycle('worker.stopped', { reason, owed, successor });
+    const successor = startsSuccessor(ctx.resumeWaiter.pending, reason);
+    lifecycle('worker.stopped', { reason, successor });
     if (successor) startSuccessor();
     process.exit(0);
   };

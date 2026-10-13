@@ -5,6 +5,8 @@ import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { enqueueSessionTurn } from '../turn/checkpoint.js';
 import { takeShellNotifications } from '../agent/session-state.js';
+import { diagnostic } from '../runtime/lifecycle-log.js';
+import { consumeQueuedTurn } from './consume-queued.js';
 import { sendEvent } from './broadcast-observer.js';
 import type { ClientCommand } from './protocol.js';
 import type { Socket } from 'node:net';
@@ -12,7 +14,9 @@ import type { WorkerContext } from './worker-context.js';
 
 export function createWorkerQueue(ctx: WorkerContext) {
   const { observer, sessionId, agentSession } = ctx;
-  const { currentSessionAndAccount, broadcastNotice, broadcastQueueChanged, recordNotifications } = ctx.io;
+  const { currentSessionAndAccount, broadcastQueueChanged, recordNotifications } = ctx.io;
+  /** Notifications queued by an earlier worker (older builds recorded them at shutdown) are not run: the shells they speak of are gone. */
+  const startedAt = Date.now();
   /** A background shell finished. A running turn hands it to the model
    * before its next step (run-turn.ts) and needs nothing from here; with no
    * turn running, it is recorded and run as a follow-up turn, whether or not
@@ -25,7 +29,7 @@ export function createWorkerQueue(ctx: WorkerContext) {
         await drainQueue();
       }
     } catch (error) {
-      broadcastNotice(`Could not deliver a background shell's exit: ${error instanceof Error ? error.message : String(error)}`);
+      diagnostic('worker.notification-undelivered', error instanceof Error ? error.message : String(error));
     } finally {
       ctx.idle.scheduleIdleExit();
     }
@@ -56,13 +60,18 @@ export function createWorkerQueue(ctx: WorkerContext) {
    * slash command only ever runs there. Anything else at the head is left,
    * and the windows are told the queue changed. */
   const reportDrainFailure = (error: unknown): void => {
-    broadcastNotice(`Could not read the queue: ${error instanceof Error ? error.message : String(error)}`);
+    diagnostic('worker.queue-unreadable', error instanceof Error ? error.message : String(error));
   };
   const drainQueue = async (): Promise<void> => {
     if (ctx.turnRunning || ctx.draining) return;
     ctx.draining = true;
     try {
-      const { session: current } = await currentSessionAndAccount();
+      let { session: current } = await currentSessionAndAccount();
+      // Dropped without a word, and never run.
+      while (current.queuedTurns?.[0]?.kind === 'notification' && Date.parse(current.queuedTurns[0].submittedAt) < startedAt) {
+        if (await consumeQueuedTurn(sessionId, current.queuedTurns[0].id) === 'gone') break;
+        current = (await currentSessionAndAccount()).session;
+      }
       const head = current.queuedTurns?.[0];
       if (!head || head.id === ctx.stalledQueuedTurnId) return;
       if (head.kind !== 'notification') { broadcastQueueChanged(); return; }

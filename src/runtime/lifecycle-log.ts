@@ -69,6 +69,13 @@ export function lifecycle(event: string, fields: Readonly<Record<string, unknown
   } catch { /* fail-open-ok: logging must never break what it records */ }
 }
 
+/** Something that went wrong or was decided on the user's behalf and is not
+ * worth interrupting them for: ClikCode's log is where it goes, never the chat.
+ * `kind` is a short stable name; `message` the one line of why. */
+export function diagnostic(kind: string, message: string): void {
+  lifecycle('note', { kind, message: message.slice(0, 300) });
+}
+
 let exitHooked = false;
 
 /** Log this process's start, and its end: an exit with its code, and an

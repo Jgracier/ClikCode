@@ -67,6 +67,8 @@ export class BridgeTurns {
       const session = state.sessions.find((item) => item.id === this.host.sessionId);
       const queued = session?.queuedTurns?.[0];
       if (!session || !queued) return;
+      // What ClikCode owes the model is the worker's to run, silently.
+      if (queued.kind === 'notification') return;
       // Still at the head after its run: it failed and could not be taken
       // out (the worker refuses it from then on). Sending it again would
       // only fail the same way; it waits for the user to remove it.
