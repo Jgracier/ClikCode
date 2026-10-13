@@ -70,7 +70,7 @@ export class ClikCodeController implements vscode.Disposable {
     private readonly first: { mode: 'new' | 'continue' | 'resume'; sessionId?: string } | undefined,
     readonly label: string,
   ) {
-    this.changes = new ChangeViews(host.diffs, () => this.model, () => this.workspaceFolder());
+    this.changes = new ChangeViews(host.diffs, () => this.model, () => this.workspaceFolder(), (text) => { void this.fail(text); });
   }
 
   get state(): ChatModel {
@@ -244,6 +244,24 @@ export class ClikCodeController implements vscode.Disposable {
       ...(provider ? { provider } : {}),
       currentAccount,
     });
+  }
+
+  /** The one native toast ClikCode shows: something waits on the user and the
+   * chat is out of sight. One on screen shows the question already. */
+  private askAttention(title: string, allow?: () => void): void {
+    if (this.visible) return;
+    void vscode.window.showInformationMessage(`ClikCode asks: ${title}`, ...(allow ? ['Allow', 'Show'] : ['Show'])).then((choice) => {
+      if (choice === 'Allow') allow?.();
+      else if (choice) void this.host.reveal(this);
+    });
+  }
+
+  /** A failure of something the user just did: one error line in the chat
+   * (opened if it was not showing), and in the log. */
+  async fail(text: string): Promise<void> {
+    this.host.log.appendLine(text);
+    this.note(text, 'error');
+    if (!this.visible) await this.host.reveal(this);
   }
 
   private note(text: string, level: 'info' | 'warning' | 'error' = 'info'): void {
@@ -496,12 +514,7 @@ export class ClikCodeController implements vscode.Disposable {
       return;
     }
     if (event.type === 'question-request') {
-      // A chat out of sight says so in a toast; the question itself is in the chat.
-      if (!this.visible) {
-        void vscode.window.showInformationMessage(`ClikCode asks: ${event.request.title}`, 'Show').then((choice) => {
-          if (choice) void this.host.reveal(this);
-        });
-      }
+      this.askAttention(event.request.title);
       return;
     }
     if (event.type === 'approval-request') {
@@ -511,15 +524,7 @@ export class ClikCodeController implements vscode.Disposable {
       // takes a preserveFocus (VS Code 1.123) -- so those wait for the
       // card's diff button.
       if (event.preview?.diff?.length === 1 && vscode.workspace.getConfiguration('clikcode').get<boolean>('openDiffOnApproval', true)) void this.changes.viewApproval(event.id);
-      // Only a chat out of sight asks in a toast: one on screen shows the
-      // question already, and a toast for it was the same question twice
-      // when the user came back to the window.
-      if (!this.visible) {
-        void vscode.window.showInformationMessage(`ClikCode asks: ${event.title}`, 'Allow', 'Show').then((choice) => {
-          if (choice === 'Allow') this.approve(event.id, true);
-          else if (choice) void this.host.reveal(this);
-        });
-      }
+      this.askAttention(event.title, () => this.approve(event.id, true));
       return;
     }
     if (event.type === 'unqueued') {
@@ -786,7 +791,7 @@ export class ClikCodeController implements vscode.Disposable {
         this.host.log.appendLine(`[${this.label} page] ${message.text}`);
         return;
       case 'openFile':
-        void openWorkspaceFile(message.path, message.line, this.model.workspace ?? this.workspaceFolder());
+        void openWorkspaceFile(message.path, message.line, this.model.workspace ?? this.workspaceFolder()).catch(() => this.fail(userError(`open ${message.path}`)));
         return;
       default:
         return;
@@ -812,11 +817,7 @@ export class ClikCodeController implements vscode.Disposable {
 async function openWorkspaceFile(path: string, line: number | undefined, workspace: string): Promise<void> {
   const clean = path.replace(/^file:\/\//, '').replace(/^~(?=\/)/, homedir());
   const uri = /^([a-zA-Z]:[\\/]|\/)/.test(clean) ? vscode.Uri.file(clean) : vscode.Uri.joinPath(vscode.Uri.file(workspace), clean);
-  try {
-    const document = await vscode.workspace.openTextDocument(uri);
-    const position = line && line > 0 ? new vscode.Position(line - 1, 0) : undefined;
-    await vscode.window.showTextDocument(document, { preview: true, ...(position ? { selection: new vscode.Range(position, position) } : {}) });
-  } catch {
-    void vscode.window.showWarningMessage(userError(`open ${path}`));
-  }
+  const document = await vscode.workspace.openTextDocument(uri);
+  const position = line && line > 0 ? new vscode.Position(line - 1, 0) : undefined;
+  await vscode.window.showTextDocument(document, { preview: true, ...(position ? { selection: new vscode.Range(position, position) } : {}) });
 }

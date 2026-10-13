@@ -19,6 +19,7 @@ export class ChangeViews {
     private readonly diffs: DiffDocuments,
     private readonly model: () => ChatModel,
     private readonly workspaceFolder: () => string,
+    private readonly report: (text: string) => void,
   ) {}
 
   private workspace(): string {
@@ -101,7 +102,7 @@ export class ChangeViews {
     const diff = this.changeOf(key, userIndex);
     if (!diff?.length) return;
     const files = await Promise.all(diff.map(async (file) => ({ ...(await this.fileVersions(file, 'made')), created: file.change === 'add' })));
-    await undoFiles(files, 'this change', (names) => `Undo ClikCode's change to ${names}?`, 'Undo Change');
+    await undoFiles(files, 'this change', (names) => `Undo ClikCode's change to ${names}?`, 'Undo Change', this.report);
   }
 
   /** Every file a finished turn changed, as it was before the turn and as
@@ -130,17 +131,17 @@ export class ChangeViews {
   async revertTurn(userIndex: number): Promise<void> {
     const files = await this.turnFiles(userIndex);
     if (!files.length) return;
-    await undoFiles(files, "this turn's changes", (names) => `Undo all of ClikCode's changes in this turn (${files.length} file${files.length === 1 ? '' : 's'}: ${names})?`, 'Undo All');
+    await undoFiles(files, "this turn's changes", (names) => `Undo all of ClikCode's changes in this turn (${files.length} file${files.length === 1 ? '' : 's'}: ${names})?`, 'Undo All', this.report);
   }
 }
 
 /** Files put back as they were, as one WorkspaceEdit VS Code can itself
  * undo: a file the agent created is deleted. Nothing is touched unless
  * every file still places cleanly. */
-async function undoFiles(files: ReadonlyArray<{ name?: string; path?: string; before: string; whole: boolean; created: boolean }>, what: string, question: (names: string) => string, action: string): Promise<void> {
+async function undoFiles(files: ReadonlyArray<{ name?: string; path?: string; before: string; whole: boolean; created: boolean }>, what: string, question: (names: string) => string, action: string, report: (text: string) => void): Promise<void> {
   const stale = files.filter((item) => !item.whole || !item.path);
   if (stale.length) {
-    void vscode.window.showWarningMessage(userError(`undo ${what}`, `${stale.map((item) => item.name ?? 'a file').join(', ')} changed since`));
+    report(userError(`undo ${what}`, `${stale.map((item) => item.name ?? 'a file').join(', ')} changed since`));
     return;
   }
   const names = files.map((item) => item.name).join(', ');
@@ -153,6 +154,6 @@ async function undoFiles(files: ReadonlyArray<{ name?: string; path?: string; be
     const document = await vscode.workspace.openTextDocument(uri);
     edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), item.before);
   }
-  if (!(await vscode.workspace.applyEdit(edit))) { void vscode.window.showErrorMessage(userError(`undo the change to ${names}`)); return; }
+  if (!(await vscode.workspace.applyEdit(edit))) { report(userError(`undo the change to ${names}`)); return; }
   await Promise.all(files.filter((item) => !item.created).map(async (item) => (await vscode.workspace.openTextDocument(vscode.Uri.file(item.path!))).save()));
 }

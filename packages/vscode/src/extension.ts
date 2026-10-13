@@ -191,16 +191,18 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     const target = await shown();
     target.post({ type: 'show', menu: name });
   };
+  /** An error of a command the user just ran: one line in the chat, opened if it was not showing. */
+  async function chatError(text: string): Promise<void> {
+    await active().fail(text);
+  }
   const addToChat = async (target: unknown): Promise<void> => {
     const uri = target instanceof vscode.Uri ? target : undefined;
     const editor = vscode.window.activeTextEditor;
     const mention = uri && (!editor || editor.document.uri.toString() !== uri.toString())
       ? mentionFromUri(uri)
       : editor ? mentionFromEditor(editor) : undefined;
-    if (!mention || (uri && uri.scheme !== 'file') || (!uri && editor?.document.uri.scheme !== 'file' && editor?.document.uri.scheme !== 'untitled')) {
-      void vscode.window.showInformationMessage('Open a file to add it to the chat.');
-      return;
-    }
+    // Not offered where there is no file (package.json `when`); a call that gets here anyway does nothing.
+    if (!mention || (uri && uri.scheme !== 'file') || (!uri && editor?.document.uri.scheme !== 'file' && editor?.document.uri.scheme !== 'untitled')) return;
     const chat = await shown();
     chat.post({ type: 'mention', mention });
     chat.post({ type: 'focus' });
@@ -209,10 +211,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
    * the chat lists them, and the one chosen opens at that turn. */
   const openConversationThatEdited = async (target: unknown): Promise<void> => {
     const uri = target instanceof vscode.Uri ? target : vscode.window.activeTextEditor?.document.uri;
-    if (!uri || uri.scheme !== 'file') {
-      void vscode.window.showInformationMessage('Open a file on disk to find the conversation that edited it.');
-      return;
-    }
+    if (!uri || uri.scheme !== 'file') return;
     await slash(`/changes ${uri.fsPath}`)();
   };
   /** Accept or reject the proposed change shown in the active diff editor. */
@@ -220,20 +219,14 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     const uri = target instanceof vscode.Uri ? target : vscode.window.activeTextEditor?.document.uri;
     const id = DiffDocuments.approvalOf(uri);
     const owner = id ? all().find((item) => item.hasApproval(id)) : undefined;
-    if (!id || !owner) {
-      void vscode.window.showInformationMessage('This change is no longer waiting for an answer.');
-      return;
-    }
+    if (!id || !owner) return;
     // "Always" only where the request offered a rule to remember, as in the
     // terminal: a choice that looks remembered and is not is worse than none.
-    if (approved === 'always' && !owner.state.approvals.find((item) => item.id === id)?.rule) {
-      void vscode.window.showInformationMessage('This change can only be allowed once.');
-      return;
-    }
+    if (approved === 'always' && !owner.state.approvals.find((item) => item.id === id)?.rule) return;
     owner.approve(id, approved);
   };
 
-  registerCustomAcpCommands(context);
+  registerCustomAcpCommands(context, chatError);
   context.subscriptions.push(
     // What was selected in files, so a paste of it becomes a reference.
     rememberSelections(),
@@ -291,12 +284,21 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       terminal.show();
       terminal.sendText(INSTALL_COMMAND);
       log.appendLine(`Running: ${INSTALL_COMMAND}\nIf the npm registry is not reachable, run instead: ${INSTALL_FALLBACK_COMMAND}`);
-      const choice = await vscode.window.showInformationMessage(`When \`${INSTALL_COMMAND}\` finishes, reconnect ClikCode.`, 'Reconnect', 'Install from GitHub instead');
+      // Reconnected by itself when the install command ends (or its terminal closes).
       const reconnect = async (): Promise<void> => { for (const controller of all()) await controller.restart(); };
-      if (choice === 'Install from GitHub instead') {
-        terminal.sendText(INSTALL_FALLBACK_COMMAND);
-        if (await vscode.window.showInformationMessage('When the install finishes, reconnect ClikCode.', 'Reconnect')) await reconnect();
-      } else if (choice) await reconnect();
+      const done = [
+        vscode.window.onDidEndTerminalShellExecution((event) => {
+          if (event.terminal !== terminal) return;
+          done.forEach((item) => item.dispose());
+          if (event.exitCode === 0) void reconnect();
+        }),
+        vscode.window.onDidCloseTerminal((closed) => {
+          if (closed !== terminal) return;
+          done.forEach((item) => item.dispose());
+          void reconnect();
+        }),
+      ];
+      context.subscriptions.push(...done);
     })),
     vscode.commands.registerCommand('clikcode.updateExtension', async () => {
       await vscode.commands.executeCommand('workbench.extensions.search', `@id:${context.extension.id}`);
@@ -306,7 +308,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
       const target = active();
       let commands;
       try { commands = await target.slashCommands(); } catch (error) {
-        void vscode.window.showErrorMessage(userError('list the slash commands', error));
+        await chatError(userError('list the slash commands', error));
         return;
       }
       const items: Array<vscode.QuickPickItem & { command?: string }> = [];
@@ -328,10 +330,7 @@ export function activate(context: vscode.ExtensionContext): ClikCodeApi {
     // A question passed as the argument (a keybinding's `args`) skips the box.
     vscode.commands.registerCommand('clikcode.askAboutSelection', async (asked?: unknown) => {
       const editor = vscode.window.activeTextEditor;
-      if (!editor || editor.selection.isEmpty) {
-        void vscode.window.showInformationMessage('Select some code first.');
-        return;
-      }
+      if (!editor || editor.selection.isEmpty) return;
       const mention = mentionFromEditor(editor);
       const selected = { path: mention.label, languageId: mention.languageId ?? '', startLine: mention.startLine ?? 1, endLine: mention.endLine ?? 1, text: mention.text ?? '' };
       const question = typeof asked === 'string' ? asked : await vscode.window.showInputBox({ prompt: `Ask ClikCode about ${selected.path}`, placeHolder: 'What do you want to know or change? (Enter with nothing: add it to the chat instead)' });
