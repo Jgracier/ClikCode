@@ -464,3 +464,52 @@ describe("a turn that is the vendor's own background work", () => {
     expect(observer.liveSnapshot()).not.toHaveProperty('vendorWork');
   });
 });
+
+describe('a snapshot taken after the turn\'s record is saved', () => {
+  const session = { id: 's', route: 'local', messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }] } as never;
+
+  it('carries the live turn while the record is still being written', () => {
+    const observer = new BroadcastObserver();
+    const window = fakeClient();
+    observer.startTurn('thinking', 'go');
+    observer.snapshotFor(window.socket, session);
+    expect(window.frames.at(-1)).toMatchObject({ type: 'snapshot', live: expect.any(Object) });
+  });
+
+  it('says the turn is over, so a window never draws the saved turn and its live rows both', () => {
+    const observer = new BroadcastObserver();
+    const window = fakeClient();
+    observer.startTurn('thinking', 'go');
+    observer.turnRecordFinal();
+    // A queue change landing between the record being saved and the worker telling windows the turn ended.
+    observer.snapshotFor(window.socket, session);
+    expect(window.frames.at(-1)).not.toHaveProperty('live');
+    // The next turn is live again.
+    observer.startTurn('thinking', 'again');
+    observer.snapshotFor(window.socket, session);
+    expect(window.frames.at(-1)).toHaveProperty('live');
+  });
+});
+
+describe('a snapshot and the journal it was read against', () => {
+  const folded = { id: 's', route: 'local', messages: [{ role: 'user', content: 'go' }, { role: 'assistant', content: 'done' }] } as never;
+  const journaled = { id: 's', route: 'local', messages: [], pendingTurn: { prompt: 'go', response: 'do' } } as never;
+  const journal = (finished: boolean) => ({ sequencer: new MarkSequencer(), recordMark: () => undefined, setThought: () => undefined, steerOrder: () => undefined, finished });
+
+  it('is live while the journal is unfinished, and over once the folded record is what it holds', () => {
+    const observer = new BroadcastObserver();
+    const window = fakeClient();
+    observer.startTurn('thinking', 'go');
+    let finished = false;
+    observer.bindJournal({ ...journal(false), get finished() { return finished; } } as never);
+    observer.snapshotFor(window.socket, journaled);
+    expect(window.frames.at(-1)).toHaveProperty('live');
+    finished = true;
+    // Read before the final write landed: still the journal, still consistent with a live view.
+    observer.snapshotFor(window.socket, journaled);
+    expect(window.frames.at(-1)).toHaveProperty('live');
+    // Read after it: the finished turn, which must not also be drawn live.
+    observer.snapshotFor(window.socket, folded);
+    expect(window.frames.at(-1)).not.toHaveProperty('live');
+  });
+});

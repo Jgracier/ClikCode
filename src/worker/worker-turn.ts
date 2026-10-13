@@ -169,6 +169,8 @@ export function createTurnRunner(ctx: WorkerContext) {
         observer.broadcast({ type: 'turn-error', message: settleError instanceof Error ? settleError.message : String(settleError) });
       }
     } finally {
+      // Saved (answered, failed or cancelled and settled): what a snapshot sent from here on holds is final.
+      observer.turnRecordFinal();
       await finalizeTurn(turnId, turnStarted, turnOutcome, liveInput, submissions);
     }
   };

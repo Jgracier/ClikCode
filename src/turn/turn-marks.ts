@@ -217,4 +217,6 @@ export interface TurnMarkJournal {
   setThought(thought: OpenThought | undefined): void;
   /** Where the steer `id` was placed, once the turn took it. */
   steerOrder(id: string): { seq: number; responseOffset: number } | undefined;
+  /** The turn's durable record is final: saved, its journal folded into the conversation. */
+  readonly finished?: boolean;
 }
