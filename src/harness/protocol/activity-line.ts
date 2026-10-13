@@ -5,9 +5,10 @@ import chalk from 'chalk';
 import type { AiLocalHarnessDefinition } from '../definition.js';
 import type { HarnessActivityEvent } from '../prompter.js';
 import type { FileDiff } from '../../agent/line-diff.js';
-import { type CommandPreview, activityOutcome, commandOutputPreview, DIFF_PREVIEW_LINES, diffPreview, diffTotals, outputPreview, previewLinesFor } from './activity-view.js';
+import { activityOutcome, diffPreview, diffTotals, outputPreview } from './activity-view.js';
 import { activityResult, tensedLabel } from './turn-flow.js';
 import { TOOL_CATEGORY_STYLE } from './tool-category-style.js';
+import { EDIT_FILES_SHOWN, failedOutputTail } from './lean.js';
 import { claudeShaped, opencodeShaped, asRecord } from './json-lines.js';
 
 /** A call its turn was stopped under (HarnessActivityEvent.stopped). */
@@ -42,20 +43,27 @@ export function renderActivityLine(event: HarnessActivityEvent): string[] {
     : event.kind === 'tool-error'
     ? `${chalk.red(`${plainMark}${event.label}`)} ${chalk.red('failed')}`
     : `${mark}${chalk.dim(`${tensedLabel(event.label, event.kind === 'tool-start')}${result ? ` · ${result}` : ''}`)}`}${outcome ? ` ${chalk.dim(outcome)}` : ''}`;
+  // One line per call. Under a successful call nothing: its output, a read's
+  // contents, a search's hits are in the saved turn. Under a failed call the
+  // last lines of its output -- that is the error.
   if (!event.diff?.length) {
-    // Budgeted by kind: a read's row already names the file, so repeating its
-    // contents underneath says nothing the label did not.
-    const budget = previewLinesFor(event.category);
-    // A budget of zero means this kind of call says everything in its label.
-    // Counting what is not shown ("… 3 more lines" under a filename) is
-    // noise about noise -- strictly worse than the single clean row.
-    if (budget === 0) return [summary];
-    // A command whose whole output was kept: its first and last lines.
-    const command = commandOutputPreview(event);
-    if (command) return [summary, ...commandPreviewRows(command)];
-    return [summary, ...outputPreviewRows(event, budget)];
+    return activityOutcome(event)?.failed ? [summary, ...failedOutputRows(event)] : [summary];
   }
-  return [summaryWithCounts(summary, event.diff), ...fileDiffRows(event.diff, DIFF_PREVIEW_LINES)];
+  // An edit is a line per file -- `Edited path +N −M` -- and no hunks under
+  // it: the diff is /diff, /changes and the end-of-turn summary.
+  if (event.diff.length === 1) return [summaryWithCounts(summary, event.diff)];
+  const shown = event.diff.slice(0, EDIT_FILES_SHOWN).map((file) => {
+    const verb = file.change === 'add' ? 'Created' : file.change === 'delete' ? 'Deleted' : 'Edited';
+    const counts = changeCounts(file.additions, file.removals);
+    return `  ${mark}${chalk.dim(`${verb} ${file.path ?? 'file'}`)}${counts ? ` ${counts}` : ''}`;
+  });
+  const more = event.diff.length - EDIT_FILES_SHOWN;
+  return more > 0 ? [...shown, `  ${chalk.dim(`+${more} more file${more === 1 ? '' : 's'}`)}`] : shown;
+}
+
+/** The last lines of a failed call's output. */
+function failedOutputRows(event: HarnessActivityEvent): string[] {
+  return failedOutputTail(event.output?.join('\n')).map((line) => `    ${chalk.dim(line)}`);
 }
 
 function changeCounts(additions: number, removals: number): string {
@@ -104,13 +112,6 @@ export function outputPreviewRows(event: HarnessActivityEvent, budget: number): 
   const note = hidden > 0 ? [`    ${chalk.dim(`\u2026 ${hidden} ${fromEnd ? 'earlier' : 'more'} line${hidden === 1 ? '' : 's'}`)}`] : [];
   const rows = lines.map((line) => `    ${chalk.dim(line)}`);
   return fromEnd ? [...note, ...rows] : [...rows, ...note];
-}
-
-/** commandOutputPreview's choice, painted: head, `… N lines hidden`, tail. */
-function commandPreviewRows(preview: CommandPreview): string[] {
-  const row = (line: string): string => `    ${chalk.dim(line)}`;
-  const note = preview.hidden > 0 ? [row(`\u2026 ${preview.hidden} line${preview.hidden === 1 ? '' : 's'} hidden`)] : [];
-  return [...preview.head.map(row), ...note, ...preview.tail.map(row)];
 }
 
 /** `(exit 2 · 3.4s)`, `(12 tool uses · 30k tokens · 1m 5s)` after a

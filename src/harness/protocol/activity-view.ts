@@ -3,6 +3,7 @@
  * webview paints the same choices as HTML. Nothing here styles anything, so
  * the webview can bundle it. */
 
+import { callOutcomeParts } from './lean.js';
 import type { FileDiff, DiffLine } from '../../agent/line-diff.js';
 import type { HarnessActivityEvent, ToolCategory } from '../prompter.js';
 import { visibleSlice } from '../../tui/render/width.js';
@@ -452,8 +453,7 @@ export function activityOutcome(event: Pick<HarnessActivityEvent, 'kind' | 'stop
     ...(event.childTools ? [toolUses(event.childTools)] : []),
     // A sub-agent's spend, as Claude Code shows it: "30k tokens".
     ...(event.childTokens ? [`${compactCount(event.childTokens)} tokens`] : []),
-    ...(event.exitCode !== undefined && event.exitCode !== 0 ? [`exit ${event.exitCode}`] : []),
-    ...(event.durationMs !== undefined && event.durationMs >= 1000 ? [formatDuration(event.durationMs)] : []),
+    ...callOutcomeParts(event.exitCode, event.durationMs, formatDuration),
   ];
   return parts.length ? { parts, failed } : undefined;
 }

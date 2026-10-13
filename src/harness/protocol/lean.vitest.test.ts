@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { callOutcome, costShownInline, endLineShown, endLineUsageShown, failedOutputTail, usageIsLow } from './lean.js';
+import { callOutcomeParts, costShownInline, endLineShown, endLineUsageShown, failedOutputTail, usageIsLow } from './lean.js';
 
 describe('lean thresholds', () => {
   it('ends on a line only for a long turn or a turn that changed files', () => {
@@ -18,11 +18,12 @@ describe('lean thresholds', () => {
     expect(costShownInline(undefined)).toBe(false);
   });
   it('shows exit only when non-zero and duration from 5s', () => {
-    expect(callOutcome(0, 4_999)).toBeUndefined();
-    expect(callOutcome(undefined, undefined)).toBeUndefined();
-    expect(callOutcome(1, 1_000)).toBe('(exit 1)');
-    expect(callOutcome(0, 5_000)).toBe('(5s)');
-    expect(callOutcome(2, 65_000)).toBe('(exit 2 · 1m 5s)');
+    const words = (ms: number): string => `${ms / 1000}s`;
+    expect(callOutcomeParts(0, 4_999, words)).toEqual([]);
+    expect(callOutcomeParts(undefined, undefined, words)).toEqual([]);
+    expect(callOutcomeParts(1, 300, words)).toEqual(['exit 1']);
+    expect(callOutcomeParts(1, 2_000, words)).toEqual(['exit 1', '2s']);
+    expect(callOutcomeParts(0, 5_000, words)).toEqual(['5s']);
   });
   it('puts usage in the footer only when low or spent', () => {
     expect(usageIsLow(42, false)).toBe(false);

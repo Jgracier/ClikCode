@@ -44,7 +44,7 @@ describe('a turn stopped with calls still open', () => {
     const row = plain(renderActivityLine(stoppedCall({ kind: 'tool-start', label: '$ sleep 30', category: 'run' })))[0];
     expect(row).toBe('■ $ sleep 30 stopped');
     expect(plain(renderActivityLine({ kind: 'tool-done', label: '$ sleep 30', category: 'run' }))[0]).not.toContain('■');
-    expect(activityOutcome({ ...stoppedCall({ kind: 'tool-start' as const }), durationMs: 4000 })?.failed).toBe(false);
+    expect(activityOutcome({ ...stoppedCall({ kind: 'tool-start' as const }), durationMs: 4000 })?.failed ?? false).toBe(false);
   });
 
   it('stops only the open rows the turn is asked about, re-rendered', () => {
