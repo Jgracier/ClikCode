@@ -8,6 +8,7 @@ import { readTurnActivities } from '../../turn/turn-activities.js';
 import { endsWithSummary, turnSummary } from '../../harness/protocol/turn-flow.js';
 import { backgroundWorkOf } from '../../harness/protocol/background-agents.js';
 import { formatTurnUsage } from './usage-line.js';
+import { changedFileCount, endLineUsageShown } from '../../harness/protocol/lean.js';
 
 type Message = NonNullable<HarnessSession['messages']>[number];
 
@@ -33,10 +34,11 @@ export function turnEndLine(messages: readonly Message[], index: number): string
   const work = backgroundWorkOf(end);
   const pendingBackground = work?.agents ?? 0;
   const pendingWorkflows = work?.workflows ?? 0;
-  if (!stopped && !pendingBackground && !pendingWorkflows && !endsWithSummary(end.ms, events.length)) return undefined;
-  const usage = formatTurnUsage(end.usage, { brief: true });
+  const diffs = events.flatMap((event) => (event.diff?.length ? [event.diff] : []));
+  if (!stopped && !pendingBackground && !pendingWorkflows && !endsWithSummary(end.ms, changedFileCount(diffs))) return undefined;
+  const usage = endLineUsageShown(end.usage) ? formatTurnUsage(end.usage, { brief: true }) : '';
   return turnSummary({
-    ms: end.ms, stopped, diffs: events.flatMap((event) => (event.diff?.length ? [event.diff] : [])),
+    ms: end.ms, stopped, diffs,
     ...(usage ? { usage } : {}), ...(pendingBackground ? { pendingBackground } : {}), ...(pendingWorkflows ? { pendingWorkflows } : {}),
   });
 }

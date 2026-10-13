@@ -10,6 +10,7 @@ import { compactCount, formatElapsed } from './format.js';
 import type { TurnUsage } from './turn-usage.js';
 import { SHIMMER_WIDTH } from './timings.js';
 import { STOPPED } from './wording.js';
+import { endLineShown } from './lean.js';
 
 /** Each row's first word, running and done ("Reading" / "Read"), as all four
  * write it. A command keeps its `$`; an unknown tool keeps its own name. */
@@ -242,13 +243,11 @@ export function pastePlaceholder(text: string, index: number): string | undefine
   return `[Pasted text #${index}${lines > 1 ? ` +${lines} lines` : ''}]`;
 }
 
-/** A turn this long ends on its summary line even if it ran no tools. */
-const END_SUMMARY_MS = 10_000;
-
-/** Whether a turn ends on the summary line: it did real work -- ran a tool,
- * or took a while. A quick answer needs no "Worked for 2s" under it. */
-export function endsWithSummary(ms: number, calls: number): boolean {
-  return calls > 0 || ms >= END_SUMMARY_MS;
+/** Whether a turn ends on the summary line: it changed files, or took a
+ * while (lean.ts). A quick answer, and a quick look-around, need no
+ * "Worked for 2s" under them. */
+export function endsWithSummary(ms: number, filesChanged: number): boolean {
+  return endLineShown(ms, filesChanged);
 }
 
 /** The line a turn ends on, as Codex's "Worked for 1m 2s" and Cursor's
