@@ -16,6 +16,7 @@ import type { McpServerEntry } from '../harness/mcp-registry.js';
 import { stateDirectory } from '../session/store/paths.js';
 import type { TurnObserver } from './observer.js';
 import type { TurnRunOptions } from './session-turn.js';
+import { withResourceNotes } from './resource-notes.js';
 
 /** What this turn has already tried: each recovery runs once per turn (or,
  * for a fresh native thread, once per account). */
@@ -119,6 +120,8 @@ export async function createVendorTurnContext(input: {
   const titleRequest = titleSource === 'ask' ? prepareSessionTitle(session, turnText) : undefined;
   const titleStream = titleRequest?.stream;
   if (titleRequest) turnText = titleRequest.prompt;
+  // Resource notes ClikCode held for this conversation ride the same way (turn/resource-notes.ts).
+  turnText = withResourceNotes(session.id, turnText);
   const supportsImages = harnessSupportsImages(harness);
   const images = supportsImages ? prepared.images : [];
   const imageListing = `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
