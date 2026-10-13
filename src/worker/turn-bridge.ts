@@ -85,6 +85,8 @@ interface WorkerTracker {
   usage?: TurnUsage;
   /** What the vendor says runs in the background, by kind (a level). */
   background?: BackgroundWork;
+  /** The followed turn is the vendor's own background work (waiting-start `vendorWork`). */
+  vendorWork?: boolean;
   wake?: (reason: 'turn' | 'queue') => void;
   /** Counts queue-changed events, so a change that lands between the loop
    * reading the queue and its prompt opening is not missed (workerQueueMark). */
@@ -116,7 +118,7 @@ function track(sessionId: string, client: WorkerClient): void {
       // The snapshot is the whole truth about these: what it lacks, the turn
       // has not got.
       marks: live.marks ? [...live.marks] : [], unsequenced: [], thought: live.thought, phase: live.phase, usage: live.usage,
-      background: backgroundWorkOf(live),
+      background: backgroundWorkOf(live), vendorWork: live.vendorWork === true,
     });
   };
   const initial = client.initialEvent;
@@ -127,7 +129,7 @@ function track(sessionId: string, client: WorkerClient): void {
     if (event.type === 'waiting-start') {
       Object.assign(tracker, {
         running: true, prompt: event.prompt, liveText: '', activities: [], plan: [], marks: [], unsequenced: [],
-        thought: undefined, phase: undefined, usage: undefined, background: undefined,
+        thought: undefined, phase: undefined, usage: undefined, background: undefined, vendorWork: event.vendorWork === true,
       });
       tracker.wake?.('turn');
     } else if (event.type === 'waiting-stop') {
@@ -623,6 +625,8 @@ async function driveWorkerTurn(
         // cancel the turn, so a sub-agent it started keeps running.
         () => { client.send({ type: 'send-queued' }); },
       );
+      // What this window follows is the vendor's own background work: Esc leaves it, Ctrl+C stops it.
+      if (tracker.vendorWork === true) rl.markVendorWork?.();
       // This follow lasts exactly as long as the display it drives: ended
       // by anything else, the loop asks the worker again -- it follows the
       // turn afresh or opens the prompt, and is never left with neither.

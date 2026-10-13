@@ -104,7 +104,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
     // not the user turn's before or after it.
     const recorder = new TurnRecorder(BACKGROUND_TURN_LABEL, 'reported');
     recorder.start();
-    observer.startTurn(BACKGROUND_TURN_LABEL);
+    observer.startTurn(BACKGROUND_TURN_LABEL, undefined, true);
     // The waiting line is this turn's until another turn starts over it.
     const generation = observer.turnGeneration;
     const owned = (): boolean => observer.turnGeneration === generation && !deps.userTurnRunning();
