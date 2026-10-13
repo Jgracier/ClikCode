@@ -59,13 +59,18 @@ export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserve
   const responseBefore = session.pendingTurn?.response?.length ?? 0;
   const wroteBefore = Boolean(session.pendingTurn?.outputStarted);
   observer.resetAttempt();
-  const runStructuredCliTurn = (): Promise<NativeTurnResult> => runVendorCliAttempt({
-    harness, session, turnText: `${ctx.turnText}${ctx.cliImageNote}`, model: ctx.model, environment,
-    images: ctx.cliCarriesImages ? ctx.images : [], signal: ctx.signal, run: ctx.run, checkpoint,
-    effort: turnEffort(ctx), sharedObserver: observer.sharedObserver,
-    onOutputStart: () => { cliOutputStarted = true; },
-    onStreamError: (error) => { streamError = error; },
-  });
+  const runStructuredCliTurn = async (): Promise<NativeTurnResult> => {
+    if (ctx.images.length && !ctx.cliCarriesImages) {
+      throw new Error(`Image attachments are not available for ${harness.displayName} over its CLI. Clear them with /attachments clear.`);
+    }
+    return runVendorCliAttempt({
+      harness, session, turnText: ctx.turnText, model: ctx.model, environment,
+      images: ctx.images, signal: ctx.signal, run: ctx.run, checkpoint,
+      effort: turnEffort(ctx), sharedObserver: observer.sharedObserver,
+      onOutputStart: () => { cliOutputStarted = true; },
+      onStreamError: (error) => { streamError = error; },
+    });
+  };
   await openFailoverStandby(ctx, transport);
   try {
     if (transport === 'structured-cli' || transport === 'text-cli') {

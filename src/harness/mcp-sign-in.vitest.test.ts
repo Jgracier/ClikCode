@@ -75,7 +75,7 @@ describe('whether a remote MCP server needs a sign-in', () => {
   });
 });
 
-describe('the decision provisioning asks for', () => {
+describe('the decision a sign-in check asks for', () => {
   const never = async (): Promise<never> => { throw new Error('must not ask the server'); };
 
   it('never asks about a local server', async () => {

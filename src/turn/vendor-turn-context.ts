@@ -48,7 +48,6 @@ export interface VendorTurnContext {
   readonly requestContext: string;
   readonly images: string[];
   readonly cliCarriesImages: boolean;
-  readonly cliImageNote: string;
   readonly baseMessages: ReturnType<typeof sessionTranscriptMessages>;
   account: AiHarnessAccount;
   model: string | null;
@@ -104,16 +103,13 @@ export async function createVendorTurnContext(input: {
     model = await resolveNativeModel(harness, input.account) ?? null;
     if (model) session.model = model;
   }
-  const supportsImages = harnessSupportsImages(harness);
-  const images = supportsImages ? prepared.images : [];
-  const imageListing = `\n\nImage files available in the workspace:\n${prepared.images.map((path) => `- ${path}`).join('\n')}`;
-  const imageNote = prepared.images.length && !supportsImages ? imageListing : '';
-  // An ACP agent takes the images as blocks; if it does not advertise them the
-  // turn lands on the CLI, which (no attach flag) is told where the files are.
+  // A vendor that takes no images is sent none, and nothing about them in
+  // words: the user is told, and the files stay attached.
+  if (prepared.images.length && !harnessSupportsImages(harness)) {
+    throw new Error(`Image attachments are not available for ${harness.displayName}. Clear them with /attachments clear.`);
+  }
+  const images = prepared.images;
   const cliCarriesImages = Boolean(harness.imageArgvPrefix);
-  const cliImageNote = images.length && !cliCarriesImages ? imageListing : '';
-  turnText += imageNote;
-  const requestContext = `${prepared.textContext}${imageNote}`;
   session.nativeHarness = harness.command;
   session.provider = harness.provider;
   session.workspace ??= process.cwd();
@@ -126,7 +122,7 @@ export async function createVendorTurnContext(input: {
   });
   const context: VendorTurnContext = {
     state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts,
-    requestContext, images, cliCarriesImages, cliImageNote, baseMessages,
+    requestContext: prepared.textContext, images, cliCarriesImages, baseMessages,
     account: input.account, model, turnText, askedText: turnText,
     attempt: { authRetried: false, effortRetried: false, standbyOpened: false, threadCopiedTo: undefined, nativeThreadRetried: false, transientRetried: false },
   };

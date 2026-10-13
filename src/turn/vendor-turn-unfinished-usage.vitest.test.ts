@@ -27,11 +27,6 @@ vi.mock('../harness/transport/native/inspect.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../harness/transport/native/inspect.js')>(),
   ensureNativeHarness: async () => undefined,
 }));
-vi.mock('../harness/provision.js', () => ({ provisionChosenHarness: async () => ({ mcpInstalled: [], mcpRemoved: [], mcpSkipped: [] }) }));
-vi.mock('../search/mcp-entry.js', async (importOriginal) => ({
-  ...await importOriginal<typeof import('../search/mcp-entry.js')>(),
-  builtClikcodeLauncher: () => undefined, conversationsForAcpSession: () => [], conversationsMcpEntry: () => undefined,
-}));
 vi.mock('../session/discovery/cli-listing.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../session/discovery/cli-listing.js')>(), adoptListedNativeId: async () => false,
 }));
