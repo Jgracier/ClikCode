@@ -12,6 +12,7 @@ import { closePersistentTransport } from './vendor-process.js';
 import { startTurnCheckpoint, type DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnObserver } from './observer.js';
 import type { TurnRunOptions } from './session-turn.js';
+import { withResourceNotes } from './resource-notes.js';
 
 /** What this turn has already tried: each recovery runs once per turn (or,
  * for a fresh native thread, once per account). */
@@ -121,7 +122,7 @@ export async function createVendorTurnContext(input: {
   const context: VendorTurnContext = {
     state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts,
     requestContext: prepared.textContext, images, cliCarriesImages, baseMessages,
-    account: input.account, model, turnText, askedText: turnText,
+    account: input.account, model, turnText: withResourceNotes(session.id, turnText), askedText: turnText,
     attempt: { authRetried: false, standbyOpened: false, threadCopiedTo: undefined, nativeThreadRetried: false },
   };
   return context;

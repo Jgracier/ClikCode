@@ -6,6 +6,7 @@ import { exploreRuns } from '../../../../src/harness/protocol/turn-flow';
 import { useNow, useSpinFrame } from './clock';
 import type { TurnUsage } from '../../../../src/harness/protocol/turn-usage';
 import { turnStalled } from '../../../../src/harness/protocol/turn-pace';
+import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
 import { planWindow } from '../../../../src/tui/render/plan-window';
 import { liveElapsedMs, turnMarks, type Activity, type ChatModel, type DecisionEntry, type LiveTurn, type Note, type PlanAt, type ThoughtEntry, type TurnTrace } from '../model';
 import { post } from './bus';
@@ -55,7 +56,7 @@ export function TurnFlow(props: {
     // as it grows and as a call starts after it: its DOM survives.
     if (props.live) parts.push(<LiveMarkdown key={`t${at}`} text={piece} />);
     else {
-      const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(piece);
+      const html = props.cacheKey ? renderFinished(`${props.cacheKey}@${at}`, piece) : renderMarkdown(withoutOtherOrgThinkingNotice(piece));
       parts.push(<div key={`t${at}`} class="markdown" dangerouslySetInnerHTML={{ __html: html }} />);
     }
     at = end;
@@ -219,11 +220,35 @@ export function Working({ live, asking, usage, reconnecting: away = false }: { l
         ) : null}
         {/* Not announced: a clock changing every second would be read out. */}
         {live && !held ? <WorkingDetail live={live} usage={usage} /> : null}
-        {/* Background terminals the vendor runs (standard section 10): its
-            footer indicator, here beside the clock. Not on the closing line. */}
-        {workingIndicator(live) ? <span class="muted working-background">{workingIndicator(live)}</span> : null}
+        {/* Counts live in the expandable band immediately above this row. */}
       </div>
       {open && thought ? <Reasoning text={thought} /> : null}
+    </div>
+  );
+}
+
+/** Running calls stay beside the status as they do in the terminal. Their
+ * latest step is one line; a click shows the other live rows and background
+ * counts. Settled calls return to their place in the transcript. */
+export function PinnedProgress({ live, workspace }: { live: LiveTurn; workspace?: string }): JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const running = live.activities.filter((activity) => activity.kind === 'tool-start');
+  const background = workingIndicator(live);
+  if (!running.length && !background) return null;
+  const latest = running.at(-1);
+  const label = latest?.child || latest?.label || background || '';
+  return (
+    <div class="pinned-progress">
+      <button type="button" class="pinned-progress-toggle" aria-expanded={open} onClick={() => setOpen(!open)}
+        title={open ? 'Hide live progress' : 'Show live progress'}>
+        {latest ? <Spinner tone={latest.agent ? 'tone-cyan' : undefined} /> : <Icon name="pulse" />}
+        <span class="pinned-progress-label">{label}</span>
+        <span class="muted">{open ? 'Hide' : 'Show progress'}</span>
+      </button>
+      {open ? <div class="pinned-progress-detail">
+        {running.length ? <RunGroups groups={exploreRuns(running.slice(-8))} workspace={workspace} /> : null}
+        {background ? <div class="muted working-background">{background}</div> : null}
+      </div> : null}
     </div>
   );
 }
@@ -263,11 +288,12 @@ export const LiveTurnView = memo(({ live, workspace, asking, plan, notes, turn, 
 }): JSX.Element => (
   <div class="message assistant live" aria-busy="true">
     {live ? (
-      <TurnFlow text={live.text} activities={live.activities} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
+      <TurnFlow text={live.text} activities={live.activities.filter((activity) => activity.kind !== 'tool-start')} thoughts={live.reasoning} steers={live.steers} workspace={workspace} live={{ startedAt: live.startedAt }}
         {...(live.planAt ? { plan: { entries: plan, at: live.planAt } } : {})}
         {...(live.decisions?.length ? { decisions: live.decisions } : {})}
         {...(turn !== undefined ? { notes: notes.filter((note) => note.turn === turn) } : {})} />
     ) : null}
+    {live ? <PinnedProgress live={live} workspace={workspace} /> : null}
     <Working live={live} asking={asking} reconnecting={away} {...(usage ? { usage } : {})} />
   </div>
 ));

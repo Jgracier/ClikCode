@@ -378,6 +378,25 @@ describe('parallel calls keep the order they started in', () => {
     expect(done.finished).toEqual(['✓ agent (3 tool uses)']);
   });
 
+  it('pins a running call beside the status instead of in the scrolling answer', () => {
+    const transcript = new TurnTranscript();
+    const running = transcript.advance({
+      content: 'The answer keeps going.',
+      tools: [t('agent', false, 0, { seq: 1, agent: true, pin: true, lines: ['  agent Explore', '    Grep(charge)'] })],
+      turnEnded: false, renderBlocks: text,
+    });
+    expect(running.live.join('\n')).not.toContain('Grep');
+    expect(running.pinned).toEqual(['  agent Explore', '    Grep(charge)']);
+    expect(running.finished).toEqual([]);
+    const settled = transcript.advance({
+      content: 'The answer keeps going.',
+      tools: [t('agent', true, 0, { seq: 1, agent: true, lines: ['  ✓ Explore'] })],
+      turnEnded: false, renderBlocks: text,
+    });
+    expect(settled.pinned).toEqual([]);
+    expect(settled.finished.join('\n')).toContain('✓ Explore');
+  });
+
   it('settles a sub-agent in place when nothing was written under it', () => {
     const transcript = new TurnTranscript();
     const agent = t('A', false, 0, { seq: 1, agent: true, released: ['A · running'], completed: ['✓ A'] });
