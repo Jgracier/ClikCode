@@ -2169,7 +2169,7 @@ export function harnessSupportsPermissionMode(harness: AiLocalHarnessDefinition,
 /** A turn may carry images: the one-shot CLI has an attach flag, or the ACP
  * agent can be handed image blocks. For ACP the agent's own initialize response
  * (`promptCapabilities.image`) has the last word at turn time (the client then
- * fails with `acpUnsupportedImages` and the CLI turn takes the files as a note);
+ * fails with `acpUnsupportedImages` and the turn runs on the CLI, which has an attach flag or refuses the images);
  * `acp.promptImages: false` records an agent verified not to advertise it. */
 export function harnessSupportsImages(harness: AiLocalHarnessDefinition): boolean {
   return Boolean(harness.imageArgvPrefix) || (harnessTurnTransport(harness) === 'acp' && harness.acp?.promptImages !== false);

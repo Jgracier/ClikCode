@@ -1,12 +1,5 @@
-/** Whether a remote MCP server needs a browser sign-in before it answers.
- *
- * Why it matters: every vendor and every isolated account profile keeps its
- * own OAuth token store, so a server that needs a sign-in can never be
- * "signed in once" for all of them. Copied everywhere, it is a sign-in owed in
- * every one -- and a vendor that starts OAuth on its own (Copilot's ACP
- * server opens the authorization page as a session starts) opened a browser
- * tab on every session ClikCode started. So provisioning never hands such a
- * server to a vendor; the user signs it in where they put it.
+/** Whether a remote MCP server needs a browser sign-in before it answers,
+ * shown beside the servers recorded for ClikCode's own agent.
  *
  * The answer comes from the server itself: an unauthenticated MCP request
  * (POST initialize) answered 401/403 with a `WWW-Authenticate` challenge is
@@ -14,9 +7,7 @@
  * optional OAuth is not -- Context7 does exactly that, answering 200 with a
  * WWW-Authenticate header and a published protected-resource document.
  *
- * Fail closed: a server that cannot be reached is 'unknown', and unknown is
- * never copied -- the one wrong answer that costs the user something is a
- * popup.
+ * A server that cannot be reached is 'unknown', not 'open'.
  *
  * Cached by URL (the server's identity) with a clock, since it is a remote
  * server's answer and nothing local changes when it does. An unknown is never
