@@ -69,6 +69,7 @@ export async function runVendorSessionAttempt(input: {
     await handler(steerText, (withdraw) => { held = true; return hold(withdraw); });
     // A held message was queued as the fallback: take that copy out in the
     // same write that records the steer, so no snapshot shows it twice.
+    if (submission.kind === 'note') return;
     if (held) checkpoint.unqueueSoon(submission);
     await checkpoint.steer(submission);
   } : undefined);

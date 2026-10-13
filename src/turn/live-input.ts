@@ -9,8 +9,10 @@ export interface LiveTurnSubmission {
    * ends, with the screen to itself. See tui/waiting-slash.ts.
    * `notification`: not typed by anyone -- background shells the agent
    * started have finished, and this tells the model (session-worker.ts).
-   * Sent as a message like any other; the worker runs it on its own. */
-  kind?: 'command' | 'notification';
+   * Sent as a message like any other; the worker runs it on its own.
+   * `note`: ClikCode's own word to the model, steered in (steerNote) and
+   * never journaled, queued or shown. */
+  kind?: 'command' | 'notification' | 'note';
 }
 
 /** What became of a waiting message the user took back: `removed` -- it is
@@ -91,6 +93,23 @@ export class LiveTurnInputBroker {
 
   setSteerHandler(handler?: SteerHandler): void {
     this.steerHandler = handler;
+  }
+
+  /** A note from ClikCode itself for the model only (turn/resource-notes.ts):
+   * into the running turn at its next safe moment, like a held message, but
+   * never journaled, queued or shown -- the steer handler skips `note`s.
+   * True once it is in the turn; false when nothing running could take it or
+   * the turn ended first, and the caller keeps it for the next turn. */
+  async steerNote(text: string): Promise<boolean> {
+    const steer = this.steerHandler;
+    if (!steer) return false;
+    const submission: LiveTurnSubmission = { id: randomUUID(), text, submittedAt: new Date().toISOString(), kind: 'note' };
+    try {
+      await steer(text, submission, () => Promise.resolve());
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /** Called when a steer that timed out (and was therefore queued) turns out

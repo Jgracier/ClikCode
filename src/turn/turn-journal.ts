@@ -183,8 +183,12 @@ export class DurableTurnCheckpoint {
   }
 
   async queue(submission: LiveTurnSubmission, options: { held?: boolean } = {}): Promise<void> {
+    // ClikCode's own note to the model (steerNote) is never a queued turn.
+    const { kind, ...rest } = submission;
+    if (kind === 'note') return;
+    const queued = { ...rest, ...(kind ? { kind } : {}) };
     const heldForTurn = options.held ? this.session.pendingTurn?.startedAt : undefined;
-    enqueueSessionTurn(this.session, heldForTurn ? { ...submission, heldForTurn } : submission, new Date().toISOString());
+    enqueueSessionTurn(this.session, heldForTurn ? { ...queued, heldForTurn } : queued, new Date().toISOString());
     try {
       await this.persistNow();
     } catch (error) {

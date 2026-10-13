@@ -153,7 +153,7 @@ export async function runVendorCliAttempt(input: {
     run.liveInput?.setSteerHandler(async (steerText, submission) => {
       if (background.settled || !heldInput.write(streamJsonUserMessage(steerText))) throw new Error('turn is finishing');
       background.noteInput();
-      await checkpoint.steer(submission);
+      if (submission.kind !== 'note') await checkpoint.steer(submission);
     });
   }
   try {

@@ -15,6 +15,7 @@
  */
 
 import { carriesTitleRequest } from '../session/title.js';
+import { stripResourceNotes } from './resource-notes.js';
 
 /** Opening line of every rehydration prompt; the marker that identifies one.
  *
@@ -86,7 +87,7 @@ const CLIKCODE_OPENINGS = [...[FAILOVER_PREAMBLE, ...EARLIER_PREAMBLES].map((pre
 
 /** Replace any rehydration prompt in an imported transcript with the request
  * it carried, drop a bare INTERRUPTED_TURN_REQUEST, and strip a provider
- * boundary note. Idempotent: the result no longer begins with the preamble
+ * boundary note and any resource note. Idempotent: the result no longer begins with the preamble
  * or a note. A prompt with nothing recoverable is dropped rather than left
  * blank. */
 export function normalizeImportedTranscript<T extends { role: string; content: string }>(
@@ -95,7 +96,9 @@ export function normalizeImportedTranscript<T extends { role: string; content: s
   const normalized: T[] = [];
   for (const original of messages) {
     if (original.role !== 'user') { normalized.push(original); continue; }
-    const content = original.content.replace(PROVIDER_BOUNDARY_NOTE, '');
+    // A resource note ClikCode sent the model (turn/resource-notes.ts) is not
+    // the user's: one steered in alone is dropped, one on a turn's text cut off it.
+    const content = stripResourceNotes(original.content.replace(PROVIDER_BOUNDARY_NOTE, ''));
     if (content !== original.content && !content.trim()) continue;
     const message = content === original.content ? original : { ...original, content };
     if (message.content.trim() === INTERRUPTED_TURN_REQUEST) continue;

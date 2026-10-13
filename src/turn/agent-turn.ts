@@ -28,6 +28,7 @@ import { ConversationStore } from '../agent/conversation.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
+import { withResourceNotes } from './resource-notes.js';
 
 /** The account and model as the user has them now, before each model step.
  * Leaving this agent route hands the conversation to that account without
@@ -89,7 +90,8 @@ export async function runAgentTurn(input: {
   // Every other turn sends the prompt unchanged and does not filter the reply.
   const agentTitle = prepareSessionTitle(session, `${text}${prepared.textContext}`);
   const titleStream = agentTitle.stream;
-  const turnText = agentTitle.prompt;
+  // Resource notes ClikCode held for this conversation ride the same way (turn/resource-notes.ts).
+  const turnText = withResourceNotes(session.id, agentTitle.prompt);
   // Before the checkpoint, so a route that cannot serve a turn (the Gateway
   // not signed in, ClikCode Local's engine absent) fails without recording
   // a turn that never ran.
@@ -202,7 +204,7 @@ export async function runAgentTurn(input: {
         // The loop takes steering before each model step (run-turn.ts).
         onSteerReady: (handler) => run.liveInput?.setSteerHandler(handler ? async (steerText, submission) => {
           await handler(steerText);
-          await checkpoint.steer(submission);
+          if (submission.kind !== 'note') await checkpoint.steer(submission);
         } : undefined),
       });
       const nothingRan = harnessTurn.steps === 0 && !session.pendingTurn?.response?.trim();
