@@ -146,12 +146,15 @@ function lowerOwnPriority(sessionId: string): void {
 }
 
 /** Keeps the agent's work from starving the program the user is looking at.
- * Call before any vendor process starts, so every child is born separated. */
-export async function separateFromForeground(sessionId: string): Promise<void> {
-  if (process.env.CLIKCODE_OWN_SCOPE === '0') return;
+ * Call before any vendor process starts, so every child is born separated.
+ * The agent slice's cgroup directory when the worker is now in its own scope
+ * under it -- what worker/resource-guard.ts watches -- else undefined. */
+export async function separateFromForeground(sessionId: string): Promise<string | undefined> {
+  if (process.env.CLIKCODE_OWN_SCOPE === '0') return undefined;
   if (process.platform === 'linux') {
     const cgroup = await ownCgroup();
-    if (userManagerOwns(cgroup) && await moveToOwnScope(sessionId, cgroup)) return;
+    if (userManagerOwns(cgroup) && await moveToOwnScope(sessionId, cgroup)) return agentSliceDirectory(cgroup);
   }
   lowerOwnPriority(sessionId);
+  return undefined;
 }
