@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { AGENT_GROUP, COMMAND_GROUP, commandLabel, findCommands, groupPids, readProc, type ProcInfo, type ProcReader } from './command-groups.js';
 
 /** How a unit is stopped: its cgroup, or its process tree. */
-export type StopTarget = { cgroup: string } | { pids: number[]; root: number; command: string };
+export type StopTarget = { cgroup: string } | { pids: number[]; root: number; command: string; startedAt?: string };
 
 /** Something that can be stopped, as its probe accounts it. */
 export interface Unit {
@@ -153,7 +153,7 @@ export function cgroupProbe(sliceDir: string): Probe {
 
 // --- Everywhere else: the process table ----------------------------------------
 
-export interface TableEntry extends ProcInfo { bytes: number }
+export interface TableEntry extends ProcInfo { bytes: number; startedAt?: string }
 
 /** `ps -axo pid=,ppid=,rss=,ucomm=,args=` (macOS, Linux): rss in KiB. */
 export function parsePs(output: string): TableEntry[] {
@@ -166,18 +166,38 @@ export function parsePs(output: string): TableEntry[] {
   return entries;
 }
 
-/** Win32_Process as `pid<TAB>ppid<TAB>workingSetBytes<TAB>name<TAB>commandLine` lines. */
+/** Win32_Process as JSON: command lines can contain tabs and newlines. */
 export function parseWindowsProcesses(output: string): TableEntry[] {
-  const entries: TableEntry[] = [];
-  for (const line of output.split(/\r?\n/)) {
-    const [pid, ppid, bytes, name, ...rest] = line.split('\t');
-    if (!pid || !/^\d+$/.test(pid) || !ppid || !name) continue;
-    entries.push({ pid: Number(pid), ppid: Number(ppid), bytes: Number(bytes) || 0, exe: name.toLowerCase().replace(/\.exe$/, ''), command: rest.join('\t') });
-  }
-  return entries;
+  try {
+    const parsed: unknown = JSON.parse(output);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    return rows.flatMap((row: unknown) => {
+      if (!row || typeof row !== 'object') return [];
+      const item = row as Record<string, unknown>;
+      if (!Number.isInteger(item.ProcessId) || !Number.isInteger(item.ParentProcessId) || typeof item.Name !== 'string') return [];
+      const startedAt = windowsStartedAt(item.CreationDate);
+      return [{
+        pid: Number(item.ProcessId), ppid: Number(item.ParentProcessId), bytes: Number(item.WorkingSetSize) || 0,
+        exe: item.Name.toLowerCase().replace(/\.exe$/, ''), command: typeof item.CommandLine === 'string' ? item.CommandLine : '',
+        ...(startedAt ? { startedAt } : {}),
+      }];
+    });
+  } catch { return []; }
 }
 
-const WINDOWS_TABLE = '$ErrorActionPreference="SilentlyContinue"; Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)`t$($_.ParentProcessId)`t$($_.WorkingSetSize)`t$($_.Name)`t$($_.CommandLine)" }';
+/** CIM dates are not JSON dates. Emit UTC ISO-8601, which Date.parse accepts. */
+const WINDOWS_TABLE = '$ErrorActionPreference="SilentlyContinue"; Get-CimInstance Win32_Process | ForEach-Object { [pscustomobject]@{ ProcessId=$_.ProcessId; ParentProcessId=$_.ParentProcessId; WorkingSetSize=[int64]$_.WorkingSetSize; Name=$_.Name; CommandLine=$_.CommandLine; CreationDate=$(if($_.CreationDate){$_.CreationDate.ToUniversalTime().ToString("o")}) } } | ConvertTo-Json -Compress -Depth 3';
+
+/** PowerShell 5 emits `\/Date(ms)\/` unless the query formats the date itself. */
+function windowsStartedAt(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  const wrapped = /^\/Date\((-?\d+)\)\/$/.exec(value);
+  if (wrapped) {
+    const parsed = new Date(Number(wrapped[1]));
+    return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
+  }
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
+}
 
 export async function readProcessTable(platform: NodeJS.Platform = process.platform): Promise<TableEntry[]> {
   try {
@@ -194,7 +214,14 @@ export async function readProcessTable(platform: NodeJS.Platform = process.platf
  * the worker's agent started, with every process below it. */
 export function tableInventory(entries: readonly TableEntry[]): Inventory {
   const children = new Map<number, TableEntry[]>();
-  for (const entry of entries) children.set(entry.ppid, [...(children.get(entry.ppid) ?? []), entry]);
+  const byPid = new Map(entries.map((entry) => [entry.pid, entry]));
+  for (const entry of entries) {
+    const parent = byPid.get(entry.ppid);
+    // Windows can reuse a PID while a child still points at the old parent.
+    // CreationDate makes that ambiguous relationship safe to exclude.
+    if (parent?.startedAt && entry.startedAt && Date.parse(entry.startedAt) < Date.parse(parent.startedAt)) continue;
+    children.set(entry.ppid, [...(children.get(entry.ppid) ?? []), entry]);
+  }
   const bytesOf = new Map(entries.map((entry) => [entry.pid, entry.bytes]));
   const units: Unit[] = [];
   const workers: number[] = [];
@@ -205,7 +232,9 @@ export function tableInventory(entries: readonly TableEntry[]): Inventory {
     while (stack.length) { const next = stack.pop()!; tree.push(next); stack.push(...(children.get(next.pid) ?? [])); }
     for (const command of findCommands(tree)) {
       units.push({
-        kind: 'command', target: { pids: command.pids, root: command.root.pid, command: command.root.command }, owner: worker.pid,
+        kind: 'command', target: { pids: command.pids, root: command.root.pid, command: command.root.command,
+          ...(entries.find((entry) => entry.pid === command.root.pid)?.startedAt
+            ? { startedAt: entries.find((entry) => entry.pid === command.root.pid)!.startedAt } : {}) }, owner: worker.pid,
         label: commandLabel(command.root.command), freeable: command.pids.reduce((sum, pid) => sum + (bytesOf.get(pid) ?? 0), 0),
       });
     }
@@ -259,6 +288,7 @@ export function processProbe(platform: NodeJS.Platform = process.platform, optio
       const stillThere = current.units.find((unit) => 'pids' in unit.target
         && unit.target.root === target.root
         && unit.target.command === target.command
+        && unit.target.startedAt === target.startedAt
         && unit.target.pids.length === target.pids.length
         && unit.target.pids.every((pid) => target.pids.includes(pid)));
       if (!stillThere) return false;
