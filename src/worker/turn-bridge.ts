@@ -52,10 +52,15 @@ export interface WorkerTurnRequest {
 const clients = new Map<string, WorkerClient>();
 
 /** Messages typed during a turn, waiting for the worker to say what happened
- * to them. Longer than the broker's own 5s steer timeout, so a slow steer is
- * answered rather than guessed. */
+ * to them. The worker always answers; losing its connection is the only other end. */
 const pendingSubmissions = new Map<string, (event: Extract<WorkerEvent, { type: 'submission' }>) => void>();
-const SUBMISSION_ANSWER_MS = 8_000;
+
+/** The worker's answer, or `onClosed` if its connection ends first. */
+async function answeredOrClosed<T>(client: WorkerClient, answered: Promise<T>, onClosed: T): Promise<T> {
+  let onClose: (() => void) | undefined;
+  const closed = new Promise<T>((resolveClosed) => { onClose = () => resolveClosed(onClosed); client.once('close', onClose); });
+  try { return await Promise.race([answered, closed]); } finally { if (onClose) client.off('close', onClose); }
+}
 /** The worker running a turn went away mid-turn. */
 const WORKER_STOPPED = "The conversation's worker stopped; send again to continue.";
 /** Messages being taken back (Esc), waiting for the worker's `unqueued`. */
@@ -595,14 +600,9 @@ async function driveWorkerTurn(
             pendingSubmissions.set(id, resolveAnswer);
           });
           client.send({ type: 'steer', text, id });
-          // A worker too old to answer (the one still running when this
-          // client updated) is the only reason no answer comes. Queued is the
-          // safe assumption for that: it never claims a delivery that did not
-          // happen.
-          const outcome = await Promise.race([
-            answered,
-            new Promise<undefined>((resolveLate) => { setTimeout(() => resolveLate(undefined), SUBMISSION_ANSWER_MS).unref(); }),
-          ]);
+          // The worker answers every steer; a lost connection is the only other
+          // end, and says queued: it never claims a delivery that did not happen.
+          const outcome = await answeredOrClosed<Extract<WorkerEvent, { type: 'submission' }> | undefined>(client, answered, undefined);
           pendingSubmissions.delete(id);
           if (outcome?.disposition === 'error') throw new Error(outcome.message ?? 'message not sent');
           return { disposition: outcome?.disposition ?? 'queued', submission, ...(outcome?.unsteered ? { unsteered: true as const } : {}) };
@@ -628,7 +628,7 @@ async function driveWorkerTurn(
           const answered = new Promise<TakeBackOutcome>((resolveAnswer) => { pendingTakeBacks.set(id, resolveAnswer); });
           client.send({ type: 'unqueue', id });
           try {
-            return await Promise.race([answered, new Promise<TakeBackOutcome>((resolveLate) => { setTimeout(() => resolveLate('error'), SUBMISSION_ANSWER_MS).unref(); })]);
+            return await answeredOrClosed<TakeBackOutcome>(client, answered, 'error');
           } finally { pendingTakeBacks.delete(id); }
         },
         // Enter again: into the chat at the next pause. The worker does not
