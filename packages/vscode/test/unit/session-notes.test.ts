@@ -19,7 +19,7 @@ describe('notes when a chat moves to another provider', () => {
   });
 
   it('stay once the chat has a conversation in it', () => {
-    const talking = { ...onGrok, messages: [{ role: 'user', content: 'hi' }] };
+    const talking = { ...onGrok, messages: [{ role: 'user' as const, content: 'hi' }] };
     expect(applySession(talking, session('opencode', [{ role: 'user', content: 'hi' }])).notes).toEqual([info]);
   });
 
