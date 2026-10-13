@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { adoptArgs, AGENT_MEMORY_SHARES, AGENT_SLICE, WORKER_MEMORY_SHARES, agentSliceDirectory, scopeUnitName, sliceArgs, userManagerOwns } from './own-scope.js';
+import { adoptArgs, AGENT_SLICE, agentSliceDirectory, scopeUnitName, sliceArgs, userManagerOwns } from './own-scope.js';
 
 describe('own scope', () => {
   it('names a valid, per-process unit from any session id', () => {
@@ -14,11 +14,10 @@ describe('own scope', () => {
     expect(args[args.indexOf('StartTransientUnit') + 2]).toBe('u.scope');
   });
 
-  it('caps each worker below the agent slice, so one conversation cannot starve the rest', () => {
-    const args = adoptArgs('u.scope', 99, 64 * 2 ** 30);
-    expect(args.slice(args.indexOf('MemoryHigh'), args.indexOf('MemoryHigh') + 3)).toEqual(['MemoryHigh', 't', String(Math.floor(64 * 2 ** 30 * 0.35))]);
-    expect(args.slice(args.indexOf('MemoryMax'), args.indexOf('MemoryMax') + 3)).toEqual(['MemoryMax', 't', String(Math.floor(64 * 2 ** 30 * 0.45))]);
-    expect(WORKER_MEMORY_SHARES.max).toBeLessThan(AGENT_MEMORY_SHARES.high);
+  it('gives a worker no memory ceiling of its own: the resource guard answers a ballooning one', () => {
+    const args = adoptArgs('u.scope', 99);
+    expect(args).not.toContain('MemoryHigh');
+    expect(args).not.toContain('MemoryMax');
   });
 
   it('moves only processes the user manager owns', () => {
@@ -41,7 +40,7 @@ describe('own scope', () => {
   it('keeps the worker when one process in its scope is killed at the ceiling', () => {
     const args = adoptArgs('u.scope', 99);
     expect(args.slice(args.indexOf('OOMPolicy'), args.indexOf('OOMPolicy') + 3)).toEqual(['OOMPolicy', 's', 'continue']);
-    expect(args[args.indexOf('u.scope') + 2]).toBe('6');
+    expect(args[args.indexOf('u.scope') + 2]).toBe('4');
   });
 
   it('finds the agent slice under the user manager, beside app.slice', () => {
