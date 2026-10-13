@@ -10,7 +10,7 @@ import {
 import { bashTool } from './tools/bash.js';
 import { disposeSessionState, sessionState } from './session-state.js';
 import type { ToolContext } from './tool-contract.js';
-import { runGatewayHarnessTurn } from './run-turn.js';
+import { runAgentLoop } from './run-turn.js';
 import { ScriptedModelClient } from './testing.js';
 import type { AiHarnessPermissionMode } from '../harness/definition.js';
 
@@ -248,7 +248,7 @@ describe.skipIf(!hasSandbox || outsideIsWritable)('the sandbox in a turn', () =>
   const turn = async (permissionMode: AiHarnessPermissionMode, args: Record<string, unknown> = {}, extra: { planMode?: boolean } = {}) => {
     const asked: { title: string; detail?: string }[] = [];
     const client = new ScriptedModelClient([{ toolCalls: [{ id: 'b', name: 'bash', args: { command: `touch ${outside}`, ...args } }] }, { text: 'ok' }]);
-    await runGatewayHarnessTurn({
+    await runAgentLoop({
       sessionId: `sandbox-turn-${Math.random()}`, cwd: dir, stateDir: dir, homeDir: dir, userConfigDir: dir, prompt: 'go',
       permissionMode, modelClient: client, sandbox: 'workspace', ...extra,
       onApproval: async (title, detail) => { asked.push({ title, ...(detail ? { detail } : {}) }); return true; },

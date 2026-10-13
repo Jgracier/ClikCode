@@ -1,0 +1,169 @@
+/** The commands that act on the running turn or the queue behind it: stop it,
+ * steer a message into it, send a queued one now, take one out of the queue. */
+import { randomUUID } from 'node:crypto';
+import type { Socket } from 'node:net';
+import { lifecycle } from '../runtime/lifecycle-log.js';
+import { readState } from '../session/state/read.js';
+import { writeState } from '../session/state/write.js';
+import { consumeSessionTurn, enqueueSessionTurn } from '../turn/checkpoint.js';
+import { deliverTyped } from '../turn/send-mode.js';
+import { closePersistentTransport, persistentWorkRunning } from '../turn/vendor-process.js';
+import { hasHeldVendorProcess, stopHeldVendorProcess } from '../harness/transport/native/held-vendor.js';
+import { sendEvent } from './broadcast-observer.js';
+import type { ClientCommand } from './protocol.js';
+import type { WorkerContext } from './worker-context.js';
+
+export function createLiveCommands(ctx: WorkerContext) {
+  const { observer, sessionId } = ctx;
+  const { currentSessionAndAccount, broadcastNotice, broadcastQueueChanged, showEveryWindow } = ctx.io;
+
+  /** Take a message out of the queue. */
+  const handleUnqueue = async (socket: Socket, command: Extract<ClientCommand, { type: 'unqueue' }>): Promise<void> => {
+    // Always answered: the window waits on this to know whether it may stop
+    // the running turn for its "send now".
+    const answer = (outcome: 'removed' | 'running' | 'gone' | 'error', message?: string): void => {
+      sendEvent(socket, { type: 'unqueued', id: command.id, outcome, ...(message ? { message } : {}) });
+    };
+    if (ctx.activeQueuedTurnId === command.id) { answer('running'); return; }
+    // One the running turn is holding to steer in must not be sent now;
+    // one already on its way into the turn is not the queue's any more.
+    if (ctx.activeLiveInput?.withdraw(command.id) === false) { answer('running'); return; }
+    try {
+      const state = await readState({ transcripts: [sessionId] });
+      const found = state.sessions.find((item) => item.id === sessionId);
+      if (!found || !consumeSessionTurn(found, command.id)) { answer('gone'); return; }
+      await writeState(state);
+    } catch (error) {
+      answer('error', error instanceof Error ? error.message : String(error));
+      return;
+    }
+    answer('removed');
+    observer.broadcast({ type: 'queue-changed' });
+    // Every window drops it now, a turn running or not.
+    void currentSessionAndAccount().then(({ session: current, account }) => observer.render(current, account)).catch(() => undefined);
+    return;
+  };
+
+  const handleSendQueued = async (socket: Socket, command: Extract<ClientCommand, { type: 'send-queued' }>): Promise<void> => {
+    // Enter again. The oldest message the user queued goes into this turn
+    // at the next pause. The turn is not cancelled, so a sub-agent it
+    // started keeps running. A command or a notice stays for the turn's end.
+    const answer = (disposition: 'steered' | 'queued' | 'error', id?: string, message?: string, unsteered?: boolean): void => {
+      if (id) sendEvent(socket, { type: 'submission', id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}), ...(disposition === 'steered' ? observer.steerOrder(id) ?? {} : {}) });
+    };
+    if (!ctx.activeLiveInput) return;
+    const liveInput = ctx.activeLiveInput;
+    let item: { id: string; text: string } | undefined;
+    try {
+      const state = await readState({ transcripts: [sessionId] });
+      const session = state.sessions.find((entry) => entry.id === sessionId);
+      const queued = session?.queuedTurns?.find((entry) => entry.kind !== 'command' && entry.kind !== 'notification');
+      if (!session || !queued) return;
+      if (liveInput.holding(queued.id)) {
+        answer('queued', queued.id);
+        return;
+      }
+      if (!consumeSessionTurn(session, queued.id)) return;
+      await writeState(state);
+      item = { id: queued.id, text: queued.text };
+    } catch (error) {
+      answer('error', undefined, error instanceof Error ? error.message : String(error));
+      return;
+    }
+    if (!item) return;
+    const queuedItem = item;
+    observer.broadcast({ type: 'queue-changed' });
+    const handled = (async () => {
+      try {
+        const result = await liveInput.submit(queuedItem.text, queuedItem.id, { queue: false });
+        answer(result.disposition === 'steered' ? 'steered' : 'queued', queuedItem.id, undefined, result.unsteered);
+        if (result.disposition !== 'steered') broadcastQueueChanged();
+        else showEveryWindow();
+        void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
+      } catch (error) {
+        answer('error', queuedItem.id, error instanceof Error ? error.message : String(error));
+      }
+    })();
+    ctx.activeSubmissions?.add(handled);
+    await handled;
+    return;
+  };
+
+  const handleCancel = async (socket: Socket, command: Extract<ClientCommand, { type: 'cancel' }>): Promise<void> => {
+    if (ctx.activeController) {
+      lifecycle('worker.cancel', { stopped: 'turn' });
+      // A second Stop (the editor repeats it until the turn ends) must not take back the first's draft.
+      if (command.restoreDraft) ctx.activeRestoreDraft = socket;
+      ctx.activeController.abort();
+      return;
+    }
+    // No turn: what the window shows running is the vendor's background
+    // work (its tasks, sub-agents, or a follow-up between turns), and Stop
+    // stops that too. It used to be dropped here, so the work -- and the
+    // window following it -- ran on until it ended by itself.
+    if (hasHeldVendorProcess(sessionId)) {
+      lifecycle('worker.cancel', { stopped: 'held vendor' });
+      await stopHeldVendorProcess(sessionId);
+      return;
+    }
+    if (ctx.vendorBackground.busy || await persistentWorkRunning(sessionId)) {
+      lifecycle('worker.cancel', { stopped: 'vendor background work' });
+      await closePersistentTransport(sessionId);
+      return;
+    }
+    // Else a turn parked for the reset, if there is one. Nothing running
+    // is not an error: a cancel racing a turn's own end is ordinary.
+    lifecycle('worker.cancel', { stopped: ctx.resumeWaiter.pending ? 'reset wait' : 'nothing' });
+    await ctx.resumeWaiter.cancel('Stopped waiting for the reset');
+    return;
+  };
+
+  const handleSteer = async (socket: Socket, command: Extract<ClientCommand, { type: 'steer' }>): Promise<void> => {
+    const answer = (disposition: 'steered' | 'queued' | 'error', message?: string, unsteered?: boolean): void => {
+      if (command.id) sendEvent(socket, { type: 'submission', id: command.id, disposition, ...(message ? { message } : {}), ...(unsteered ? { unsteered } : {}), ...(disposition === 'steered' ? observer.steerOrder(command.id) ?? {} : {}) });
+    };
+    // The turn ended between the client's Enter and this arriving. This used
+    // to `return` -- and the message was simply gone. Nothing is running to
+    // steer into, so it is queued durably and the interactive loop sends it
+    // as the next turn, exactly as a queued message always is.
+    if (!ctx.activeLiveInput) {
+      try {
+        const state = await readState({ transcripts: [sessionId] });
+        const session = state.sessions.find((item) => item.id === sessionId);
+        if (!session) throw new Error('conversation not found');
+        const submittedAt = new Date().toISOString();
+        enqueueSessionTurn(session, { id: command.id ?? randomUUID(), text: command.text.trim(), submittedAt }, submittedAt);
+        await writeState(state);
+        answer('queued');
+        broadcastQueueChanged();
+      } catch (error) {
+        answer('error', error instanceof Error ? error.message : String(error));
+      }
+      return;
+    }
+    const liveInput = ctx.activeLiveInput;
+    const handled = (async () => {
+      try {
+        // `/send queue` is the user's global choice, read as the message
+        // arrives so a change mid-turn applies to the next one typed.
+        const settings = await readState({ transcripts: [] }).then((state) => state.globalSettings, () => undefined);
+        const result = await deliverTyped(liveInput, command.text, command.id, settings);
+        answer(result.disposition === 'steered' ? 'steered' : 'queued', undefined, result.unsteered);
+        // Every window shows the queue, not only the one that typed it.
+        if (result.disposition !== 'steered') broadcastQueueChanged();
+        else showEveryWindow();
+        // Held for the next pause, then steered in: out of the queue and
+        // into the turn, on every window.
+        void result.landed?.then((steered) => { if (steered) broadcastQueueChanged(); });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        answer('error', message);
+        if (!command.id) broadcastNotice(`Could not send: ${message}`);
+      }
+    })();
+    ctx.activeSubmissions?.add(handled);
+    await handled;
+    return;
+  };
+  return { handleUnqueue, handleSendQueued, handleCancel, handleSteer };
+}

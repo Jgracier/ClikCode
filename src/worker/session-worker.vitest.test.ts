@@ -21,7 +21,7 @@ const spawnedClients: WorkerClient[] = [];
 /** Every session id this file has spawned a worker for, so afterEach can
  * actually terminate each one -- closing the WorkerClient only disconnects;
  * the worker itself is designed to keep running for up to 30 idle minutes
- * (see IDLE_EXIT_MS in session-worker.ts), which is correct in production
+ * (see IDLE_EXIT_MS in worker-idle.ts), which is correct in production
  * and exactly wrong left to itself in a test suite run over and over. A
  * real run of this file once left 70+ of these alive on a real machine
  * before this existed -- confirmed live, not a hypothetical. */

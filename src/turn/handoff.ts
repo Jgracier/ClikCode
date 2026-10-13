@@ -19,7 +19,7 @@ import { allLocalHarnesses, harnessSupportsEffort, harnessSupportsPermissionMode
  * to the target's defaults only where it does not. A permission mode carries
  * by meaning (carriedPermissionMode), never to one that allows more. `efforts` is the levels
  * the target offers (effortChoicesFor), when known; unknown, the vendor's own
- * refusal decides (vendor-turn.ts isEffortRefusal). */
+ * refusal decides (vendor-recovery.ts isEffortRefusal). */
 export function carriedHandoffSettings(
   source: Pick<HarnessSession, 'effort' | 'permissionMode'> & Partial<Pick<HarnessSession, 'nativeHarness'>>,
   target: AiLocalHarnessDefinition, defaults: HarnessDefaultSettings, efforts?: readonly string[],

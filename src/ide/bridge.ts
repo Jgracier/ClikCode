@@ -13,86 +13,48 @@
  */
 import { lifecycle, setLifecycleSession } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
 import type Conf from 'conf';
 import { CLIKCODE_VERSION } from '../version.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
 import { isClikCodeAgent, isGatewayService } from '../session/route.js';
-import { planModeOnChat, setAgentPlanMode } from '../agent/plan-mode-setting.js';
-import { afterTurnFailure, claimConversation, leaveConversation, openConversation, prepareTurn, resolveSessionModel } from '../session/attach.js';
-import { expandHomePath } from '../session/attachments.js';
-import { consumeSessionTurn } from '../turn/checkpoint.js';
+import { claimConversation, leaveConversation, openConversation, resolveSessionModel } from '../session/attach.js';
 import { synchronizeNativeTranscript } from '../turn/handoff.js';
-import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { nativeUsageReading, recheckRecoveredAccounts } from '../harness/accounts/account-usage.js';
 import { gatewayCreditLabel } from '../gateway/credit-label.js';
 import { usageNextReset, usageResetLabel, usageWindowsDetail } from '../harness/accounts/usage-reading.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
-import { loginNativeHarness } from '../harness/transport/native/login.js';
-import { signInCancelledLine, withSignIn } from '../commands/account.js';
-import { newConversation } from '../commands/ai/conversations.js';
+import { signInCancelledLine } from '../commands/account.js';
 import { setHarnessInstallReporter, type HarnessInstallReporter } from '../harness/transport/native/install.js';
 import { reconcileLocalModelLeases } from '../commands/ai/local-model.js';
-import { isShellCommandLine } from '../commands/ai/shell-run.js';
-import { aiSessionCommand } from '../tui/slash/handlers.js';
-import { selectGatewayAgent } from '../commands/ai/sessions.js';
-import { dispatchLine, type SlashHost } from '../tui/slash/dispatch.js';
-import { slashControls, slashHelpText, slashPalette, TERMINAL_ONLY_COMMANDS } from '../tui/slash/registry.js';
-import { lastAnswer } from '../tui/slash/handlers.js';
 import { conversationCost } from '../tui/slash/usage-report.js';
-import { browseSearch, walkTurns, type MentionScreen } from '../tui/slash/search-browse.js';
-import { emitHarnessOutput } from '../harness/output.js';
-import { sessionHarness, slashExtrasFor, slashRouteContextFor } from '../tui/slash/context.js';
-import { commandDuringTurn, slashLineIsCommand } from '../tui/slash/queue.js';
-import { withArgValues } from '../tui/slash/arg-values.js';
-import type { PaletteEntry } from '../tui/command-palette.js';
-import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
-import { autoSelectSessionHarness, providerConversationKey } from '../tui/pickers/engine.js';
-import { addAccountForHarness, manageAccountAction, useAddedAccount } from '../tui/pickers/account.js';
-import { interactiveSessionPicker } from '../tui/pickers/session.js';
-import { type ExhaustionRetryGuard } from '../tui/pickers/resume-in.js';
-import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
-import { WorkerClient } from '../worker/client.js';
+import { autoSelectSessionHarness } from '../tui/pickers/engine.js';
 import { currentWorkerBuild, readWorkerRecord, workerIsReachable } from '../worker/registry.js';
-import { shownSettingsKey, type WorkerEvent } from '../worker/protocol.js';
+import { shownSettingsKey } from '../worker/protocol.js';
 import { IdePrompter, type IdeChannel } from './prompter.js';
 import { watchConversationList, type ListWatch } from '../session/list-watch.js';
-import { encodeTerminalSpec, type IdeChoice, type IdeEvent, type IdeFeature, type IdeQueryName, type IdeRequest, type IdeSlashCommand, type IdeTerminalSpec } from './protocol.js';
+import { encodeTerminalSpec, type IdeEvent, type IdeFeature, type IdeRequest, type IdeTerminalSpec } from './protocol.js';
 import { IDE_PROTOCOL } from './protocol-version.js';
 import { sessionEvent } from './session-event.js';
-import { selectProviderConversation } from '../tui/pickers/conversation.js';
-import {
-  accountList, chatSettings, conversationList, gatewayCheckoutUrl, gatewayStatus, modelList, providerList,
-  sessionHarnessDefinition,
-} from './queries.js';
-
-/** A turn's own failure. The worker has already reported it (its turn-error
- * reaches the editor as a worker event), so the bridge does not say it twice. */
-class TurnFailed extends Error {}
+import { searchScreen } from './bridge-slash-host.js';
+import type { MentionScreen } from '../tui/slash/search-browse.js';
+import { BridgeTurns } from './bridge-turns.js';
+import { choose } from './bridge-choose.js';
+import { answerQuery } from './bridge-query.js';
+import { messageOf, TurnFailed } from './bridge-support.js';
+import { WorkerLink } from './bridge-worker.js';
+import type { BridgeHost } from './bridge-host.js';
+import type { InteractiveSlashOutcome } from '../tui/slash/interactive-keys.js';
 
 const USAGE_REFRESH_MS = 15_000;
-import { STOP_RESEND_MS, STOP_RESENDS } from '../worker/stop-resend.js';
 
 export class IdeBridge {
   readonly prompter: IdePrompter;
   private sessionId: string | undefined;
-  private worker: { sessionId: string; client: WorkerClient } | undefined;
   /** shownSettingsKey of the chat as last sent to the editor. */
   private shownSettings: string | undefined;
-  /** Seen waiting-start without its waiting-stop: a turn is running on this
-   * conversation's worker, whichever client started it. */
-  private workerTurnRunning = false;
-  private turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
   private preparedRoute: string | undefined;
-  /** The same-provider retry after running out: once per interrupted turn. */
-  private readonly exhaustionGuard: ExhaustionRetryGuard = {};
-  /** What the last turn actually sent, when a slash command expanded the
-   * line (/review): what an interrupted turn recorded is compared to. */
-  private sentPrompt: string | undefined;
   private drainScheduled = false;
   private work: Promise<void> = Promise.resolve();
   private readonly signIns = new Map<string, { resolve: () => void; reject: (error: Error) => void }>();
@@ -112,9 +74,44 @@ export class IdeBridge {
   private shown = true;
   /** /search waiting on the editor's next key. */
   private searchKey: ((key: Extract<IdeRequest, { type: 'search-key' }>['key']) => void) | undefined;
+  /** What the parts of the bridge (bridge-*.ts) see of it. */
+  private readonly host: BridgeHost;
+  private readonly link: WorkerLink;
+  private readonly turns: BridgeTurns;
 
   constructor(private readonly config: Conf, private readonly channel: IdeChannel) {
     this.prompter = new IdePrompter(channel);
+    const bridge = this;
+    this.host = {
+      config, channel, prompter: this.prompter,
+      get sessionId() { return bridge.sessionId; },
+      get closed() { return bridge.closed; },
+      get shown() { return bridge.shown; },
+      get features() { return bridge.features; },
+      get link() { return bridge.link; },
+      quietly: async (job) => {
+        bridge.quietOutput += 1;
+        try { return await job(); } finally { bridge.quietOutput -= 1; }
+      },
+      requireSession: () => bridge.requireSession(),
+      current: (id) => bridge.current(id),
+      emitSession: () => bridge.emitSession(),
+      enqueue: (job) => bridge.enqueue(job),
+      report: (error) => bridge.report(error),
+      switchTo: (id) => bridge.switchTo(id),
+      prepareRoute: () => bridge.prepareRoute(),
+      refreshUsage: () => bridge.refreshUsage(),
+      scheduleDrain: () => bridge.scheduleDrain(),
+      closeConversation: () => { bridge.link.detach(); bridge.sessionId = undefined; },
+      setSearchKey: (answer) => { bridge.searchKey = answer; },
+      runInTerminal: (spec, request) => bridge.runInTerminal(spec, request),
+      drainQueue: () => bridge.drainQueue(),
+      execute: (line, options) => bridge.execute(line, options),
+      runTurn: (targetId, prompt, turn) => bridge.runTurn(targetId, prompt, turn),
+      dispatch: (line, fromQueuedCommand) => bridge.dispatch(line, fromQueuedCommand),
+    };
+    this.link = new WorkerLink(this.host);
+    this.turns = new BridgeTurns(this.host);
   }
 
   start(): void {
@@ -142,22 +139,22 @@ export class IdeBridge {
         });
         return;
       case 'send':
-        void this.send(request.text, request.id);
+        void this.turns.send(request.text, request.id);
         return;
       case 'cancel':
-        void this.cancelTurn(request.restoreDraft);
+        void this.link.cancelTurn(request.restoreDraft);
         return;
       case 'send-queued':
-        this.worker?.client.send({ type: 'send-queued' });
+        this.link.worker?.client.send({ type: 'send-queued' });
         return;
       case 'unqueue':
-        if (this.sessionId) void this.workerFor(this.sessionId).then((client) => client.send({ type: 'unqueue', id: request.id }), (error: unknown) => this.report(error));
+        if (this.sessionId) void this.link.workerFor(this.sessionId).then((client) => client.send({ type: 'unqueue', id: request.id }), (error: unknown) => this.report(error));
         return;
       case 'approval-response':
-        this.worker?.client.send({ type: 'approval-response', id: request.id, approved: request.approved });
+        this.link.worker?.client.send({ type: 'approval-response', id: request.id, approved: request.approved });
         return;
       case 'question-response':
-        this.worker?.client.send({ type: 'question-response', id: request.id, result: request.result });
+        this.link.worker?.client.send({ type: 'question-response', id: request.id, result: request.result });
         return;
       case 'ui-response':
         this.prompter.answer(request.id, request.result);
@@ -177,10 +174,10 @@ export class IdeBridge {
         return;
       }
       case 'query':
-        void this.query(request.requestId, request.query ?? 'slash-commands', request);
+        void answerQuery(this.host, request.requestId, request.query ?? 'slash-commands', request);
         return;
       case 'choose':
-        void this.choose(request.requestId, request.choice);
+        void choose(this.host, request.requestId, request.choice);
         return;
       case 'watch-conversations':
         this.watchConversations(request.on);
@@ -234,12 +231,12 @@ export class IdeBridge {
     this.listWatch?.stop();
     this.listWatch = undefined;
     for (const timer of this.timers) clearInterval(timer);
-    clearInterval(this.stopWatch);
+    clearInterval(this.link.stopWatch);
     this.prompter.cancelAll();
     this.searchKey?.('done');
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));
     this.signIns.clear();
-    this.detachWorker();
+    this.link.detach();
     await reconcileLocalModelLeases(undefined).catch(() => undefined);
     if (this.sessionId) await leaveConversation(this.sessionId);
   }
@@ -282,7 +279,7 @@ export class IdeBridge {
     // A command here changed what the chat runs on: every other window
     // attached to its worker (a terminal, another editor) re-renders.
     const key = shownSettingsKey(session);
-    if (this.shownSettings?.startsWith(`${session.id}|`) && this.shownSettings !== key && this.worker?.sessionId === session.id) this.worker.client.send({ type: 'refresh' });
+    if (this.shownSettings?.startsWith(`${session.id}|`) && this.shownSettings !== key && this.link.worker?.sessionId === session.id) this.link.worker.client.send({ type: 'refresh' });
     this.shownSettings = key;
   }
 
@@ -313,8 +310,8 @@ export class IdeBridge {
   private async switchTo(id: string): Promise<void> {
     const previous = this.sessionId;
     if (previous && previous !== id) {
-      if (this.worker?.sessionId === previous) this.worker.client.send({ type: 'release' });
-      this.detachWorker();
+      if (this.link.worker?.sessionId === previous) this.link.worker.client.send({ type: 'release' });
+      this.link.detach();
       await leaveConversation(previous);
     }
     this.sessionId = id;
@@ -327,12 +324,12 @@ export class IdeBridge {
     // is already up paint what it has streamed; nothing is started for a
     // conversation that has none yet.
     const record = await readWorkerRecord(id).catch(() => undefined);
-    if (record && await workerIsReachable(record.socketPath)) await this.workerFor(id).catch(() => undefined);
+    if (record && await workerIsReachable(record.socketPath)) await this.link.workerFor(id).catch(() => undefined);
     await this.prepareRoute();
     void this.refreshUsage().catch(() => undefined);
   }
 
-  private async refreshUsage(): Promise<void> {
+  async refreshUsage(): Promise<void> {
     if (!this.sessionId) return;
     const state = await readState({ transcripts: [] });
     const session = state.sessions.find((item) => item.id === this.sessionId);
@@ -364,138 +361,9 @@ export class IdeBridge {
     const key = `${session.id} ${session.route}`;
     if (key === this.preparedRoute) return;
     this.preparedRoute = key;
-    if (!isClikCodeAgent(session) && this.worker?.sessionId !== session.id) return;
-    const client = await this.workerFor(session.id).catch(() => undefined);
+    if (!isClikCodeAgent(session) && this.link.worker?.sessionId !== session.id) return;
+    const client = await this.link.workerFor(session.id).catch(() => undefined);
     client?.send({ type: 'prepare' });
-  }
-
-  // ---- the worker ----------------------------------------------------------
-
-  private async workerFor(sessionId: string): Promise<WorkerClient> {
-    if (this.worker?.sessionId === sessionId) return this.worker.client;
-    this.detachWorker();
-    const client = await WorkerClient.attach(sessionId);
-    const initial = await client.initialSnapshot;
-    this.worker = { sessionId, client };
-    this.workerTurnRunning = initial.type === 'snapshot' && Boolean(initial.live);
-    this.channel.send({ type: 'worker', sessionId, event: initial });
-    client.on('event', (event: WorkerEvent) => this.onWorkerEvent(sessionId, client, event));
-    client.on('close', () => {
-      if (this.worker?.client !== client) return;
-      const midTurn = this.workerTurnRunning || Boolean(this.turnWaiter);
-      this.worker = undefined;
-      this.workerTurnRunning = false;
-      if (midTurn) { this.failTurn(new Error('session worker connection closed unexpectedly')); return; }
-      // An idle worker left -- retired for a newer build, or timed out. Not
-      // the user's concern: attach to (or start) its replacement so this
-      // window keeps following the conversation.
-      if (this.closed || this.sessionId !== sessionId) return;
-      this.enqueue(async () => {
-        if (this.closed || this.sessionId !== sessionId || this.worker) return;
-        await this.workerFor(sessionId).catch(() => undefined);
-      });
-    });
-    return client;
-  }
-
-  private stopWatch: NodeJS.Timeout | undefined;
-
-  /** Stop, and see that it lands. The editor shows "stopping" until the turn
-   * ends, so a Stop that never reached a turn -- no worker attached just then,
-   * or one that arrived before the worker had started the turn -- left it
-   * stopping for as long as the turn ran. The cancel is sent to a worker found
-   * or reattached, and sent again while the turn is still running; when none
-   * is, the worker is asked for a snapshot, which ends the editor's turn. */
-  private async cancelTurn(restoreDraft: boolean): Promise<void> {
-    const id = this.sessionId;
-    try {
-      const client = this.worker?.client ?? (id ? await this.workerFor(id) : undefined);
-      client?.send({ type: 'cancel', restoreDraft });
-    } catch (error) { this.report(error); }
-    clearInterval(this.stopWatch);
-    let looks = 0;
-    this.stopWatch = setInterval(() => {
-      looks += 1;
-      const running = this.workerTurnRunning || Boolean(this.turnWaiter);
-      if (this.closed || looks > STOP_RESENDS || (!running && looks > 1)) { clearInterval(this.stopWatch); this.stopWatch = undefined; }
-      const client = this.worker?.client;
-      if (!client || this.closed) return;
-      // Still running: ask again (the draft was restored, or not, by the first).
-      // Not running: nothing was cancelled, so bring the editor up to date.
-      client.send(running ? { type: 'cancel', restoreDraft: false } : { type: 'refresh' });
-    }, STOP_RESEND_MS);
-    this.stopWatch.unref();
-  }
-
-  private detachWorker(): void {
-    const worker = this.worker;
-    if (!worker) return;
-    this.worker = undefined;
-    this.workerTurnRunning = false;
-    try { worker.client.send({ type: 'detach' }); worker.client.close(); } catch { /* already gone */ }
-  }
-
-  private onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {
-    this.channel.send({ type: 'worker', sessionId, event });
-    switch (event.type) {
-      case 'waiting-start':
-        this.workerTurnRunning = true;
-        return;
-      case 'sign-in-request':
-        // The worker has no terminal; the editor has one. The worker retries
-        // the turn once this answers.
-        // The sign-in runs here and shows in the panel, like every other. It
-        // is the turn's, which holds the queue anyway: not the job that
-        // happened to attach this worker.
-        void this.prompter.holding(undefined, () => withSignIn(this.prompter, event.name, async () => {
-          const harness = localHarnessForCommand(event.command);
-          if (!harness) throw new Error(`unknown harness ${event.command}`);
-          await loginNativeHarness({ ...harness, loginArgv: event.argv }, event.environment);
-        }))
-          .then(() => client.send({ type: 'sign-in-response', id: event.id }),
-            (error: unknown) => client.send({ type: 'sign-in-response', id: event.id, error: messageOf(error) }));
-        return;
-      case 'turn-error':
-        if (this.turnWaiter) this.turnWaiter.error = new TurnFailed(event.message);
-        return;
-      case 'waiting-stop': {
-        this.workerTurnRunning = false;
-        clearInterval(this.stopWatch);
-        this.stopWatch = undefined;
-        const waiter = this.turnWaiter;
-        this.turnWaiter = undefined;
-        // The turn's cost is on the conversation's figure now.
-        if (this.shown) void this.refreshUsage().catch(() => undefined);
-        if (waiter) (waiter.error ? waiter.reject(waiter.error) : waiter.resolve());
-        // A turn this editor only followed (a terminal's, or one the worker
-        // started) ended: what was queued behind it is this client's to send.
-        // Its own turn's caller drains once the turn returns.
-        else this.scheduleDrain();
-        return;
-      }
-      case 'queue-changed':
-        // Something was queued or consumed: nothing runs it but a client, and
-        // the one that queued it may be this editor following another's turn.
-        this.scheduleDrain();
-        return;
-      case 'submit-queued': {
-        // The worker had a turn running and queued this submit behind it.
-        // The waiter resolves at that turn's waiting-stop and the drain sends
-        // the message then; if that stop came first, nothing is left to wait
-        // for, and resending now cannot land in a running turn.
-        if (this.workerTurnRunning) return;
-        const waiter = this.turnWaiter;
-        this.turnWaiter = undefined;
-        waiter?.resolve();
-        return;
-      }
-      case 'shutdown':
-        // A worker only retires idle; the close that follows reattaches.
-        if (this.workerTurnRunning || this.turnWaiter) this.failTurn(new Error(`session worker exited mid-turn: ${event.reason}`));
-        return;
-      default:
-        return;
-    }
   }
 
   /** Send the queue's head once no turn runs. Coalesced: however many
@@ -503,22 +371,16 @@ export class IdeBridge {
    * turn runs or this client is sending one (its caller drains after). */
   private scheduleDrain(): void {
     if (this.drainScheduled || this.closed || !this.sessionId) return;
-    if (this.workerTurnRunning || this.turnWaiter) return;
+    if (this.link.running) return;
     this.drainScheduled = true;
     this.enqueue(async () => {
       this.drainScheduled = false;
-      if (this.workerTurnRunning || this.turnWaiter) return;
+      if (this.link.running) return;
       await this.drainQueue();
     });
   }
 
-  private failTurn(error: Error): void {
-    const waiter = this.turnWaiter;
-    this.turnWaiter = undefined;
-    waiter?.reject(error);
-  }
-
-  private runInTerminal(spec: IdeTerminalSpec, request: { environment: Readonly<Record<string, string>>; name: string }): Promise<void> {
+  runInTerminal(spec: IdeTerminalSpec, request: { environment: Readonly<Record<string, string>>; name: string }): Promise<void> {
     if (this.closed) return Promise.reject(new Error('the editor closed'));
     const id = randomUUID();
     return new Promise((resolve, reject) => {
@@ -527,402 +389,21 @@ export class IdeBridge {
     });
   }
 
-  // ---- lines -----------------------------------------------------------------
-
-  private async send(text: string, id?: string): Promise<void> {
-    const line = text.trim();
-    if (!line) return;
-    try {
-      if (this.workerTurnRunning && this.worker) {
-        const sessionId = this.worker.sessionId;
-        const { session } = await this.current(sessionId);
-        const context = slashRouteContextFor(session, sessionHarness(session), (path) => existsSync(expandHomePath(path)));
-        if (isShellCommandLine(line) || slashLineIsCommand(line, context)) {
-          // ClikCode's own command: applied now if it is a pure setting,
-          // otherwise run when the turn ends -- never sent to the model.
-          const result = await commandDuringTurn(sessionId, line);
-          if (id) this.channel.send({ type: 'worker', sessionId, event: { type: 'submission', id, disposition: result.disposition === 'queued' ? 'queued' : 'steered' } });
-          await this.emitSession();
-          return;
-        }
-        this.worker.client.send({ type: 'steer', text: line, ...(id ? { id } : {}) });
-        return;
-      }
-    } catch (error) {
-      this.report(error);
-      return;
-    }
-    this.enqueue(async () => {
-      await this.execute(line, {});
-      await this.drainQueue();
-    });
-  }
-
-  /** Messages typed during a turn that the harness could not take mid-turn,
-   * and commands that waited for the turn to end: sent in order, as the
-   * interactive loop does at the top of every pass. */
-  private async drainQueue(): Promise<void> {
-    let previous: string | undefined;
-    while (!this.closed && this.sessionId) {
-      const state = await readState({ transcripts: [this.sessionId!] });
-      const session = state.sessions.find((item) => item.id === this.sessionId);
-      const queued = session?.queuedTurns?.[0];
-      if (!session || !queued) return;
-      // Still at the head after its run: it failed and could not be taken
-      // out (the worker refuses it from then on). Sending it again would
-      // only fail the same way; it waits for the user to remove it.
-      if (queued.id === previous) return;
-      previous = queued.id;
-      if (queued.kind === 'command') {
-        if (consumeSessionTurn(session, queued.id)) await writeState(state);
-        await this.execute(queued.text, { fromQueuedCommand: true });
-      } else {
-        await this.execute(queued.text, { queuedTurnId: queued.id });
-      }
-    }
-  }
-
-  private async execute(line: string, options: { queuedTurnId?: string; fromQueuedCommand?: boolean }): Promise<void> {
-    const id = this.requireSession();
-    this.sentPrompt = undefined;
-    try {
-      if (options.queuedTurnId) {
-        await this.runTurn(id, line, { echo: true, queuedTurnId: options.queuedTurnId });
-        return;
-      }
-      const outcome = await this.dispatch(line, Boolean(options.fromQueuedCommand));
-      if (outcome.notice) this.channel.send({ type: 'notice', message: outcome.notice, level: 'info' });
-      if (outcome.exit) {
-        this.channel.send({ type: 'closed', sessionId: id });
-        this.detachWorker();
-        this.sessionId = undefined;
-        return;
-      }
-      if (outcome.id && outcome.id !== this.sessionId) await this.switchTo(outcome.id);
-      else await this.emitSession();
-      // /redo: the conversation went back; its prompt goes to the message box.
-      if (outcome.draft !== undefined) this.channel.send({ type: 'restore-draft', text: outcome.draft });
-      if (outcome.prompt) {
-        this.sentPrompt = outcome.prompt;
-        await this.runTurn(this.requireSession(), outcome.prompt, { echo: outcome.echo !== false });
-      }
-    } catch (error) {
-      const next = await afterTurnFailure(this.prompter, id, error, {
-        line, sent: this.sentPrompt ?? line, guard: this.exhaustionGuard, ...(options.queuedTurnId ? { queuedTurnId: options.queuedTurnId } : {}),
-      });
-      if ('retry' in next) {
-        await this.execute(next.retry, {});
-        return;
-      }
-      if ('moved' in next) {
-        await this.switchTo(next.moved.id);
-        // No prompt: another window already carried this turn on there.
-        if (next.moved.prompt !== undefined) await this.execute(next.moved.prompt, {});
-        return;
-      }
-      if (next.waiting) {
-        // The worker sends it at the reset; it hears of the parked turn now.
-        this.worker?.client.send({ type: 'refresh' });
-        this.channel.send({ type: 'notice', message: `${resumeWaitLabel(next.waiting)} · a new message cancels`, level: 'info' });
-        void this.refreshUsage().catch(() => undefined);
-        return;
-      }
-      if (next.back.length) this.channel.send({ type: 'restore-draft', text: next.back.join('\n\n') });
-      this.report(error);
-    } finally {
-      await this.emitSession().catch(() => undefined);
-    }
-  }
-
-  /** One turn through the conversation's worker, after what the terminal
-   * does before one (prepareTurn). */
-  private async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
-    // Carrying on an interrupted turn is not something the user typed.
-    if (prompt === INTERRUPTED_TURN_REQUEST) turn = { ...turn, echo: false };
-    await prepareTurn(targetId, (label) => this.channel.send({ type: 'busy', ...(label ? { label } : {}) }));
-    await this.prepareRoute();
-    const client = await this.workerFor(targetId);
-    this.channel.send({ type: 'turn-start', sessionId: targetId, ...(turn.echo ? { prompt } : {}), ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        this.turnWaiter = { resolve, reject };
-        client.send({ type: 'submit', text: prompt, echo: turn.echo, ...(turn.queuedTurnId ? { queuedTurnId: turn.queuedTurnId } : {}) });
-      });
-    } catch (error) {
-      throw error instanceof TurnFailed ? error : new TurnFailed(messageOf(error));
-    }
-  }
-
-  /** A line typed between turns: the terminal's routing (dispatchLine), with
-   * the editor's widgets where the terminal draws its own. */
-  private async dispatch(line: string, fromQueuedCommand: boolean): Promise<InteractiveSlashOutcome> {
-    const id = this.requireSession();
-    // `!<command>`: run here, its output a transcript message for next turn.
-    if (isShellCommandLine(line)) {
-      return this.withBusy(line, async () => {
-        // Quiet: its result payload repeats the transcript message the chat
-        // already shows, and would be drawn a second time as an output card.
-        this.quietOutput += 1;
-        try {
-          const resulting = await aiSessionCommand(id, line);
-          return resulting !== id ? { id: resulting } : {};
-        } finally { this.quietOutput -= 1; }
-      });
-    }
-    return dispatchLine(this.slashHost(), id, line, { fromQueuedCommand });
-  }
-
-  private async withBusy<T>(label: string, work: () => Promise<T>): Promise<T> {
-    this.channel.send({ type: 'busy', label });
-    try { return await work(); } finally { this.channel.send({ type: 'busy' }); }
-  }
-
-  /** The editor as the screen a slash command runs for. */
-  private slashHost(): SlashHost {
-    return {
-      config: this.config,
-      prompter: this.prompter,
-      canPick: true,
-      pickProviderBeforeSending: true,
-      panel: (_kind, title, body) => this.prompter.panel(title, body),
-      withBusy: (label, work) => this.withBusy(label, work),
-      ask: (label) => this.prompter.question(label),
-      redraw: () => this.emitSession(),
-      runTurn: (targetId, prompt) => this.runTurn(targetId, prompt, { echo: false }),
-      openConversationPicker: async (id) => {
-        const picked = await interactiveSessionPicker(this.prompter, id);
-        if (picked && 'new' in picked) return { id: await newConversation(id) };
-        return { id: picked?.id ?? id };
-      },
-      editFile: async (path) => {
-        if (!existsSync(path)) {
-          await mkdir(dirname(path), { recursive: true });
-          await writeFile(path, '', { flag: 'a' });
-        }
-        this.channel.send({ type: 'open-file', path });
-      },
-      runManager: (harness, label, argv, environment) =>
-        this.runInTerminal({ command: harness.command, mode: 'run', argv }, { environment, name: `${harness.displayName} ${label}` }),
-      exported: (path) => this.channel.send({ type: 'open-file', path }),
-      // The terminal's walk, where the editor can show it.
-      ...(this.features.has('search-walk') ? {
-        browseSearch: (query: string) => browseSearch(this.searchScreen(), query, (label, work) => this.withBusy(label, work)),
-        walkTurns: (turns, start) => walkTurns(this.searchScreen(), turns, start),
-      } satisfies Pick<SlashHost, 'browseSearch' | 'walkTurns'> : {}),
-      intercept: (route, session, harness) => {
-        const name = route.entry.name;
-        if (TERMINAL_ONLY_COMMANDS.has(name)) return { notice: `/${name} is for the terminal; the editor has no use for it.` };
-        if (name === 'help') {
-          emitHarnessOutput({ panel: 'help', helpText: slashHelpText(session, harness, { ...slashExtrasFor(session, harness), omit: TERMINAL_ONLY_COMMANDS }), controls: slashControls() });
-          return {};
-        }
-        // The editor's own clipboard: the bridge's machine may not be the
-        // one the user is at (Remote-SSH), and has no terminal for OSC 52.
-        if (name === 'copy' && this.features.has('copy')) {
-          this.channel.send({ type: 'copy', text: lastAnswer(session) });
-          return { notice: 'Last response copied to the clipboard.' };
-        }
-        return undefined;
-      },
-    };
-  }
-
-  /** /search's screen in the editor: each mention opens its conversation
-   * there (a `search` event says where); the editor's keys come back as
-   * `search-key`. */
-  private searchScreen(): MentionScreen {
-    let shown: Promise<void> = Promise.resolve();
-    return {
-      showMention: (session, focus) => {
-        shown = shown.then(async () => {
-          if (session.id !== this.sessionId) await this.switchTo(session.id);
-          this.channel.send({ type: 'search', focus: {
-            sessionId: session.id, messageIndex: focus.messageIndex, occurrence: focus.occurrence, words: [...focus.words], status: focus.status ?? '',
-          } });
-        });
-      },
-      mentionKey: async () => {
-        await shown;
-        if (this.closed) return 'done';
-        return new Promise((resolve) => { this.searchKey = resolve; });
-      },
-      endMention: () => {
-        this.searchKey = undefined;
-        this.channel.send({ type: 'search' });
-      },
-    };
-  }
-
-  /** The editor's screens as data (queries.ts). Answered straight away, not
-   * behind the work queue: a list must open while a turn is running. */
-  private async query(requestId: string, query: IdeQueryName, options: { provider?: string; network?: boolean }): Promise<void> {
-    const answer = (data: unknown): void => this.channel.send({ type: 'result', requestId, ok: true, data });
-    try {
-      // Every screen lists from the index; only the open chat's history is read.
-      const state = await readState({ transcripts: query === 'conversations' || !this.sessionId ? [] : [this.sessionId] });
-      const session = this.sessionId ? state.sessions.find((item) => item.id === this.sessionId) : undefined;
-      switch (query) {
-        case 'slash-commands': {
-          const { session: current } = await this.current();
-          const harness = sessionHarness(current);
-          // The terminal palette's own values (withArgValues): the vendor
-          // lists fill in as they load, so a later query has more.
-          const rows: PaletteEntry[] = withArgValues(slashPalette(current, harness, { ...slashExtrasFor(current, harness), omit: TERMINAL_ONLY_COMMANDS }), current, harness, state);
-          answer(rows.map((row) => {
-            const values = row.argValues?.();
-            return {
-              command: row.value, description: row.detail ?? '', ...(row.argHint ? { argHint: row.argHint } : {}), group: row.group,
-              ...(row.aliases?.length ? { aliases: row.aliases } : {}), ...(values?.length ? { argValues: values } : {}),
-            } satisfies IdeSlashCommand;
-          }));
-          return;
-        }
-        case 'providers': answer(await providerList(this.config, state, session)); return;
-        case 'models':
-          if (!options.provider) throw new Error('models needs a provider');
-          answer(await modelList(this.config, state, session, options.provider));
-          return;
-        case 'conversations':
-          answer(await conversationList(state, this.sessionId));
-          return;
-        case 'accounts': answer(await accountList(state, session, Boolean(options.network))); return;
-        case 'chat-settings': answer(session ? await chatSettings(state, session) : {}); return;
-        case 'gateway': answer(await gatewayStatus(this.config)); return;
-        default: throw new Error(`unknown query "${String(query)}"`);
-      }
-    } catch (error) {
-      this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
-    }
-  }
-
-  /** A choice made in the editor's own widgets, applied with the command the
-   * terminal's picker ends in. A setting that can change mid-turn does so
-   * (commandDuringTurn); anything that moves the conversation waits for no
-   * turn, and says so. */
-  private async choose(requestId: string, choice: IdeChoice): Promise<void> {
-    const done = (data?: unknown): void => this.channel.send({ type: 'result', requestId, ok: true, ...(data === undefined ? {} : { data }) });
-    const failed = (error: unknown): void => this.channel.send({ type: 'result', requestId, ok: false, error: messageOf(error) });
-    const quietly = async <T>(job: () => Promise<T>): Promise<T> => {
-      this.quietOutput += 1;
-      try { return await job(); } finally { this.quietOutput -= 1; }
-    };
-    const setting = async (line: string): Promise<void> => {
-      const id = this.requireSession();
-      await quietly(async () => { if (this.workerTurnRunning) await commandDuringTurn(id, line); else await aiSessionCommand(id, line); });
-      await this.emitSession();
-    };
-    const queued = (job: () => Promise<unknown>): void => {
-      this.enqueue(async () => {
-        try { done(await quietly(job)); } catch (error) { failed(error); }
-      });
-    };
-    try {
-      switch (choice.kind) {
-        case 'model': {
-          const { session } = await this.current();
-          const line = session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`;
-          await setting(line);
-          done();
-          return;
-        }
-        case 'agent': {
-          // The terminal picker's own step: the chat stays on the Gateway and its next turn runs as
-          // the agent; a different agent starts a fresh agent thread.
-          await selectGatewayAgent(this.requireSession(), choice.agent ?? undefined);
-          await this.emitSession();
-          done();
-          return;
-        }
-        case 'effort': await setting(`/effort ${choice.value}`); done(); return;
-        case 'permissions': await setting(`/permissions ${choice.value}`); done(); return;
-        case 'account': await setting(`/settings account ${choice.accountId}`); done(); return;
-        case 'fast': await setting(`/fast ${choice.on ? 'on' : 'off'}`); done(); return;
-        case 'swarm': {
-          const on = typeof choice.enabled === 'boolean' ? choice.enabled : (choice.names?.length ?? 0) > 0;
-          await setting(on ? '/swarm on' : '/swarm off');
-          done();
-          return;
-        }
-        case 'plan': {
-          const { session } = await this.current();
-          const harness = sessionHarnessDefinition(session);
-          if (planModeOnChat(session, harness)) { await setAgentPlanMode(session.id, choice.on); await this.emitSession(); done(); return; }
-          if (!harness?.planMode) throw new Error('This provider has no plan mode.');
-          const on = harness.planMode.value === true ? 'on' : String(harness.planMode.value);
-          await setting(`/settings option ${harness.planMode.option} ${choice.on ? on : 'default'}`);
-          done();
-          return;
-        }
-        case 'provider': {
-          if (this.workerTurnRunning) throw new Error('A turn is running: stop it or wait for it to finish before switching provider.');
-          queued(async () => {
-            const id = this.requireSession();
-            const moved = await selectProviderConversation(this.config, this.prompter, id, providerConversationKey(choice.provider));
-            if (choice.model) {
-              const { session } = await this.current(moved);
-              await aiSessionCommand(moved, session.route === 'clikcode-local' ? `/model --download ${choice.model}` : `/model ${choice.model}`);
-            } else await resolveSessionModel(moved);
-            // A sign-in let the queue go: the user may have opened another
-            // chat meanwhile, and keeps it.
-            if (this.sessionId !== id) return { sessionId: moved };
-            if (moved !== id) await this.switchTo(moved);
-            await this.prepareRoute().catch(() => undefined);
-            await this.emitSession();
-            void this.refreshUsage().catch(() => undefined);
-            return { sessionId: this.sessionId };
-          });
-          return;
-        }
-        case 'add-account':
-          queued(async () => {
-            const harness = localHarnessForCommand(choice.provider);
-            if (!harness) throw new Error(`unknown provider "${choice.provider}"`);
-            const added = await addAccountForHarness(this.prompter, harness);
-            if (added && this.sessionId) {
-              const { session } = await this.current();
-              if (session.provider === harness.provider || session.nativeHarness === harness.command) await useAddedAccount(session.id, harness, added);
-              await this.emitSession();
-            }
-            return { added: added ?? null };
-          });
-          return;
-        case 'account-action':
-          queued(async () => {
-            await manageAccountAction(this.prompter, choice.accountId, choice.action);
-            await this.emitSession().catch(() => undefined);
-          });
-          return;
-        case 'conversation': {
-          const current = choice.sessionId === this.sessionId;
-          if (current && this.workerTurnRunning && choice.action === 'delete') {
-            throw new Error('A turn is running in this conversation: stop it first.');
-          }
-          queued(async () => {
-            // Putting away the open chat lands on a fresh one with its setup,
-            // as the terminal's list does; made before, while there is a setup.
-            const replacement = current && choice.action === 'delete' ? await newConversation(choice.sessionId) : undefined;
-            if (choice.action === 'rename') {
-              const name = choice.name?.trim();
-              if (!name) throw new Error('A name is needed.');
-              await aiSessionCommand(choice.sessionId, `/rename ${name}`);
-            } else await aiSessionCommand(choice.sessionId, '/delete confirm');
-            if (replacement) await this.switchTo(replacement);
-            else if (this.sessionId) await this.emitSession();
-            return { sessionId: this.sessionId };
-          });
-          return;
-        }
-        case 'gateway-credit': done({ url: await gatewayCheckoutUrl(this.config) }); return;
-        default: throw new Error(`unknown choice "${String((choice as { kind?: unknown }).kind)}"`);
-      }
-    } catch (error) {
-      failed(error);
-    }
-  }
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  // The turn and worker steps live in bridge-turns.ts and bridge-worker.ts; these
+  // are the seams the parts call through (and the ones a test replaces).
+  get worker(): WorkerLink['worker'] { return this.link.worker; }
+  set worker(value: WorkerLink['worker']) { this.link.worker = value; }
+  get workerTurnRunning(): boolean { return this.link.workerTurnRunning; }
+  set workerTurnRunning(value: boolean) { this.link.workerTurnRunning = value; }
+  get turnWaiter(): WorkerLink['turnWaiter'] { return this.link.turnWaiter; }
+  set turnWaiter(value: WorkerLink['turnWaiter']) { this.link.turnWaiter = value; }
+  onWorkerEvent(sessionId: string, client: Parameters<WorkerLink['onWorkerEvent']>[1], event: Parameters<WorkerLink['onWorkerEvent']>[2]): void { this.link.onWorkerEvent(sessionId, client, event); }
+  private drainQueue(): Promise<void> { return this.turns.drainQueue(); }
+  private execute(line: string, options: { queuedTurnId?: string; fromQueuedCommand?: boolean }): Promise<void> { return this.turns.execute(line, options); }
+  private runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> { return this.turns.runTurn(targetId, prompt, turn); }
+  /** /search's screen in the editor (bridge-slash-host.ts). */
+  searchScreen(): MentionScreen { return searchScreen(this.host); }
+  private dispatch(line: string, fromQueuedCommand: boolean): Promise<InteractiveSlashOutcome> { return this.turns.dispatch(line, fromQueuedCommand); }
 }
 
 /** Everything this process prints to stdout is either a command's JSON result

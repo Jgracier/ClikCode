@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runGatewayHarnessTurn } from '../run-turn.js';
+import { runAgentLoop } from '../run-turn.js';
 import { disposeSessionState } from '../session-state.js';
 import { ScriptedModelClient } from '../testing.js';
 import type { ToolContext, ToolDefinition } from '../tool-contract.js';
@@ -349,7 +349,7 @@ describe('in a turn', () => {
       { text: 'done' },
     ]);
     const stateDir = join(dir, 'state');
-    const result = await runGatewayHarnessTurn({
+    const result = await runAgentLoop({
       sessionId: 'mcp-turn', cwd: dir, stateDir, homeDir: dir, prompt: 'go', permissionMode: 'auto',
       modelClient: client, extraTools: tools,
       onApproval: async (title, detail) => { approvals.push(`${title}\n${detail}`); return true; },
@@ -371,7 +371,7 @@ describe('in a turn', () => {
     const rules: Array<string | undefined> = [];
     const stateDir = join(dir, 'state');
     const turn = async (id: string) => {
-      await runGatewayHarnessTurn({
+      await runAgentLoop({
         sessionId: id, cwd: dir, stateDir, homeDir: dir, prompt: 'go', permissionMode: 'ask', extraTools: tools,
         modelClient: new ScriptedModelClient([
           { toolCalls: [{ id: 'c1', name: 'mcp__fake__fail', args: {} }] },
