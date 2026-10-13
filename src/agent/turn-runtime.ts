@@ -14,7 +14,7 @@ import { defaultTools, mergeTools } from './tools/registry.js';
 import { exposeTools } from './mcp/deferred.js';
 import { gateNotebookTool, workspaceHasNotebooks } from './tools/notebook-gate.js';
 import { turnCancelledError } from './cancellation.js';
-import type { ConversationItem, GatewayHarnessTurnInput, GatewayHarnessTurnResult, ModelToolCall, TokenUsage } from './model-client.js';
+import type { ConversationItem, AgentTurnInput, AgentTurnResult, ModelToolCall, TokenUsage } from './model-client.js';
 import type { ToolDefinition } from './tool-contract.js';
 import { emptyLedger } from './usage.js';
 import { resolveContextProfile } from './context-profile.js';
@@ -28,7 +28,7 @@ import { abortable } from './turn-support.js';
 export type LastContext = { contextTokens?: number; contextWindow?: number; servedModel?: string; contextProfile: ReturnType<typeof resolveContextProfile>['name']; stopReason?: string };
 
 export interface TurnRuntime {
-  readonly input: GatewayHarnessTurnInput;
+  readonly input: AgentTurnInput;
   readonly signal: AbortSignal | undefined;
   readonly cwd: string;
   readonly addDirs: string[];
@@ -43,7 +43,7 @@ export interface TurnRuntime {
   readonly baseSystem: string;
   /** One rule set for the whole turn, its sub-agents included: an "always"
    * answered for one call already covers the calls queued behind it. */
-  readonly turnRules: NonNullable<GatewayHarnessTurnInput['permissionRules']>;
+  readonly turnRules: NonNullable<AgentTurnInput['permissionRules']>;
   readonly turnHookInfo: { sessionId: string; cwd: string; signal?: AbortSignal };
   /** Background coding agents belong to this turn: it does not end while one
    * runs, and whatever ends it stops them. */
@@ -56,7 +56,7 @@ export interface TurnRuntime {
   /** Notification hooks watch the agent wait on the user; they never hold
    * up the prompt, so they are not awaited. */
   readonly notifyHook: (message: string, notificationType: 'permission_prompt' | 'idle_prompt') => void;
-  readonly result: (extra: Partial<GatewayHarnessTurnResult> & Pick<GatewayHarnessTurnResult, 'stopReason'>) => GatewayHarnessTurnResult;
+  readonly result: (extra: Partial<AgentTurnResult> & Pick<AgentTurnResult, 'stopReason'>) => AgentTurnResult;
   /** Steering: text typed mid-turn is queued and lands before the next model step. */
   readonly steerQueue: string[];
   steerOpen: boolean;
@@ -97,7 +97,7 @@ export interface TurnRuntime {
 
 /** Opens a turn: its scope, tools, prompt and conversation, the user's hooks,
  * and the prompt's own item. `promptBlocked` is a UserPromptSubmit hook's refusal. */
-export async function openTurn(input: GatewayHarnessTurnInput): Promise<{ rt: TurnRuntime; promptBlocked: string | undefined }> {
+export async function openTurn(input: AgentTurnInput): Promise<{ rt: TurnRuntime; promptBlocked: string | undefined }> {
   const signal = input.signal;
   const throwIfAborted = (): void => { if (signal?.aborted) throw turnCancelledError(); };
   throwIfAborted();

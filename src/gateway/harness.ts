@@ -8,7 +8,7 @@
  * tool, and the calls the model makes stream back for this machine to run.
  * ClikCode Local plugs a local model server in at the same seam.
  *
- * This module turns a ClikCode session into a GatewayHarnessTurnInput, and the
+ * This module turns a ClikCode session into a AgentTurnInput, and the
  * loop's callbacks back into the prompter's own transcript rows.
  */
 import type { ApprovalPreview } from '../tui/render/approval-block.js';
@@ -16,9 +16,9 @@ import type { McpServerSpec } from '../agent/mcp/config.js';
 import { runAgentLoop } from '../agent/run-turn.js';
 import { mcpToolsForTurn } from '../agent/mcp/manager.js';
 import { hooksForWorkspace, toolHooksFrom } from '../agent/hooks.js';
-import type { GatewayHarnessTurnResult, ModelClient, TokenUsage, UsageReport } from '../agent/model-client.js';
+import type { AgentTurnResult, ModelClient, TokenUsage, UsageReport } from '../agent/model-client.js';
 import { turnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
-import type { HarnessActivityEvent as GatewayActivityEvent } from '../harness/prompter.js';
+import type { HarnessActivityEvent as AgentActivityEvent } from '../harness/prompter.js';
 import { GATEWAY_HARNESS_COMMAND, toolCategory } from '../harness/protocol/tools.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
@@ -28,7 +28,7 @@ import type { HarnessSession } from '../session/model.js';
 import type { HarnessTurnObserver } from '../harness/events/turn-observer.js';
 import type { TurnObserver } from '../turn/observer.js';
 
-interface GatewayHarnessSessionTurn extends HarnessTurnObserver {
+interface AgentSessionTurnInput extends HarnessTurnObserver {
   session: HarnessSession;
   prompt: string;
   prompter?: TurnObserver;
@@ -67,9 +67,9 @@ export function agentTurnUsage(report: TokenUsage & Partial<UsageReport>): TurnU
 /** One turn of ClikCode's own coding agent, run on this machine. Named for
  * the Gateway, where it began; ClikCode Local sessions run it too, with a
  * different model client. */
-export async function runGatewayHarnessSessionTurn(
-  input: GatewayHarnessSessionTurn,
-): Promise<GatewayHarnessTurnResult> {
+export async function runAgentSessionTurn(
+  input: AgentSessionTurnInput,
+): Promise<AgentTurnResult> {
   const { session, prompter, modelClient } = input;
   // The gateway picks the model and the effort; what it cannot pick is how
   // much this machine lets the agent do without asking, because that is a
@@ -97,7 +97,7 @@ export async function runGatewayHarnessSessionTurn(
   });
   const hooks = toolHooksFrom(hookConfig, (message) => prompter?.activity(message));
   let servedModel: string | undefined;
-  const publishActivity = (event: GatewayActivityEvent): void => {
+  const publishActivity = (event: AgentActivityEvent): void => {
     const category = event.category ?? toolCategory(event.label, undefined, Boolean(event.diff), GATEWAY_HARNESS_COMMAND);
     const classified = category && !event.category ? { ...event, category } : event;
     input.onActivity?.(classified as never);

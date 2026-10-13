@@ -2,7 +2,7 @@
  * provider, a sub-agent): model step → tool calls → results → repeat, emitting
  * the same normalized events as the vendor transports. */
 import { DEFAULT_CONTEXT_WINDOW, estimateContextTokens, MAX_REQUEST_ITEMS, PLAN_MODE_INSTRUCTIONS, shouldCompact, compactionThreshold, compactionRegrowth } from './context.js';
-import type { GatewayHarnessTurnInput, GatewayHarnessTurnResult } from './model-client.js';
+import type { AgentTurnInput, AgentTurnResult } from './model-client.js';
 import { abortable } from './turn-support.js';
 import { compactTurn } from './turn-compaction.js';
 import { runModelStep, recordStep } from './turn-model-step.js';
@@ -24,7 +24,7 @@ async function compactIfNeeded(rt: TurnRuntime, system: string): Promise<void> {
   }
 }
 
-export async function runAgentLoop(input: GatewayHarnessTurnInput): Promise<GatewayHarnessTurnResult> {
+export async function runAgentLoop(input: AgentTurnInput): Promise<AgentTurnResult> {
   const { rt, promptBlocked } = await openTurn(input);
   const { signal } = rt;
   const tools = createToolRunner(rt, runAgentLoop);

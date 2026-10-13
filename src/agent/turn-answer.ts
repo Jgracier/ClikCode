@@ -1,6 +1,6 @@
 /** What a step that has been recorded means for the turn: a reply cut off at the
  * output limit, steering or background work still pending, the Stop hooks, or done. */
-import type { GatewayHarnessTurnResult, ModelToolCall } from './model-client.js';
+import type { AgentTurnResult, ModelToolCall } from './model-client.js';
 import { abortable } from './turn-support.js';
 import { CONTINUE_AFTER_LENGTH, MAX_LENGTH_CONTINUES, MAX_STOP_HOOK_CONTINUES } from './turn-recovery.js';
 import type { TurnRuntime } from './turn-runtime.js';
@@ -9,7 +9,7 @@ import type { TurnRuntime } from './turn-runtime.js';
  * step's tool calls are to be run. */
 export async function settleStep(
   rt: TurnRuntime, step: { calls: readonly ModelToolCall[]; cutOff: boolean; stepText: string; finalOnly: boolean },
-): Promise<'continue' | GatewayHarnessTurnResult | undefined> {
+): Promise<'continue' | AgentTurnResult | undefined> {
   const { input, session, signal, backgroundAgents } = rt;
   const { calls, cutOff, stepText } = step;
   if (step.finalOnly) return rt.result({ stopReason: 'completed', stalled: true });

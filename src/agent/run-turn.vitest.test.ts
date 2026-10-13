@@ -10,7 +10,7 @@ import { retryDelaySeconds, stepRecovery } from './turn-recovery.js';
 import { MAX_REQUEST_ITEMS } from './context.js';
 import { disposeSessionState, formatShellNotifications, sessionState } from './session-state.js';
 import { ScriptedModelClient, type ScriptEntry } from './testing.js';
-import { type GatewayHarnessTurnInput } from './model-client.js';
+import { type AgentTurnInput } from './model-client.js';
 import { defineTool, type ToolDefinition } from './tool-contract.js';
 
 let root: string;
@@ -32,13 +32,13 @@ afterEach(async () => {
 });
 
 interface Harness {
-  input: GatewayHarnessTurnInput;
+  input: AgentTurnInput;
   events: HarnessActivityEvent[];
   deltas: string[];
   client: ScriptedModelClient;
 }
 
-function harness(script: ScriptEntry[], overrides: Partial<GatewayHarnessTurnInput> = {}, fallback?: ScriptEntry): Harness {
+function harness(script: ScriptEntry[], overrides: Partial<AgentTurnInput> = {}, fallback?: ScriptEntry): Harness {
   const events: HarnessActivityEvent[] = [];
   const deltas: string[] = [];
   const client = new ScriptedModelClient(script, fallback);

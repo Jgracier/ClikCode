@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runGatewayHarnessSessionTurn } from './harness';
+import { runAgentSessionTurn } from './harness';
 import { ScriptedModelClient } from '../agent/testing';
 import type { HarnessSession } from '../session/model';
 
@@ -55,7 +55,7 @@ describe('a gateway turn runs the agent loop on this machine', () => {
       { toolCalls: [{ name: 'read_file', args: { path: 'src/a.ts' } }] },
       { text: 'It exports a.' },
     ]);
-    const result = await runGatewayHarnessSessionTurn({
+    const result = await runAgentSessionTurn({
       session: session(cwd), prompt: 'what does src/a.ts export?',
       modelClient: client as never,
       onActivity: (event) => activity.push(`${event.kind}:${event.label}`),
@@ -78,7 +78,7 @@ describe('a headless turn', () => {
       { toolCalls: [{ name: 'bash', args: { command: 'python3 greet.py' } }] },
       { text: 'done' },
     ]);
-    await runGatewayHarnessSessionTurn({
+    await runAgentSessionTurn({
       session: { ...session(cwd), permissionMode: 'auto' } as HarnessSession, prompt: 'run it',
       modelClient: client as never,
     });
@@ -102,7 +102,7 @@ describe('a headless turn', () => {
     const written: string[] = [];
     const spy = vi.spyOn(process.stderr, 'write').mockImplementation((chunk: unknown) => { written.push(String(chunk)); return true; });
     try {
-      await runGatewayHarnessSessionTurn({
+      await runAgentSessionTurn({
         session: session(workspace()), prompt: 'status?',
         modelClient: new ScriptedModelClient([{ text: 'ok' }]) as never,
         mcpServers: [{ name: 'silas', transport: 'http', url: `http://127.0.0.1:${port}/mcp?toolmode=deferred&turn=chat` }],
