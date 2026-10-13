@@ -102,6 +102,9 @@ export class DurableTurnCheckpoint {
   /** A debounced write that failed with no caller to reject to. Surfaced by
    *  complete(), so a turn whose conversation was never saved says so. */
   private writeError: Error | undefined;
+  private saved = false;
+  /** complete() has written the turn's final record. */
+  get finished(): boolean { return this.saved; }
   /** Also told every activity: the turn's record for /undo (session/turn-changes.ts). */
   private recorder: { add(event: HarnessActivityEvent): void } | undefined;
 
@@ -239,6 +242,9 @@ export class DurableTurnCheckpoint {
       this.writeError = undefined;
       this.persistFailed('complete', error);
     }
+    // Straight after the write, in the same turn of the event loop: a snapshot sent from here on that
+    // holds the final record knows the turn is over (BroadcastObserver.liveSnapshot).
+    this.saved = true;
   }
 
   /** The turn's state could not be written. Kept dirty so the next write

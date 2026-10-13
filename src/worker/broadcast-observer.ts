@@ -54,6 +54,10 @@ export class BroadcastObserver implements TurnObserver {
    * sees -- not a re-derivation, a read of the one copy this class owns. */
   private liveText = '';
   private waitingLabel = '';
+  /** The turn's durable record is final (folded into the conversation, its journal gone) though the
+   * turn has not been told to end yet. A snapshot taken in that gap must not say the turn still runs:
+   * a window would draw the saved turn and its live rows both, into scrollback that cannot be taken back. */
+  private recordFinal = false;
   /** True once ANY
    * visible content -- an answer token or a tool activity line -- has
    * streamed for the turn currently in flight. What a cancel handler needs
@@ -138,8 +142,13 @@ export class BroadcastObserver implements TurnObserver {
 
   /** What a freshly-attached client needs painted immediately: the turn in
    * flight, if any, exactly as far along as it has actually gotten. */
-  liveSnapshot(): LiveTurn | undefined {
+  liveSnapshot(session?: HarnessSession): LiveTurn | undefined {
     if (!this.waitingLabel) return undefined;
+    // The record this snapshot holds is the finished turn (folded, no journal left) though the worker
+    // has not yet told windows it ended: a window given `live` as well would draw the turn twice, into
+    // scrollback that cannot be taken back. A snapshot read before the record was final still holds the
+    // journal, and its live view is the consistent one.
+    if ((this.recordFinal || this.journal?.finished) && !session?.pendingTurn) return undefined;
     return {
       text: this.liveText, waitingLabel: this.waitingLabel, ...(this.livePrompt !== undefined ? { prompt: this.livePrompt } : {}),
       ...(this.liveVendorWork ? { vendorWork: true as const } : {}),
@@ -162,7 +171,7 @@ export class BroadcastObserver implements TurnObserver {
    * window -- read synchronously, so no event can fall between what the
    * snapshot holds and what the window is sent after it. */
   snapshotFor(socket: Socket, session: HarnessSession, account?: string): void {
-    const live = this.liveSnapshot();
+    const live = this.liveSnapshot(session);
     sendEvent(socket, { type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
   }
 
@@ -262,7 +271,7 @@ export class BroadcastObserver implements TurnObserver {
   }
 
   render(session: HarnessSession, account?: string, notice?: string): void {
-    const live = this.liveSnapshot();
+    const live = this.liveSnapshot(session);
     this.broadcast({ type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
     if (notice) this.broadcast({ type: 'notice', message: notice });
   }
@@ -421,6 +430,7 @@ export class BroadcastObserver implements TurnObserver {
   startTurn(message: string, prompt?: string, vendorWork = false): void {
     this.generation++;
     this.liveVendorWork = vendorWork;
+    this.recordFinal = false;
     this.seenActivity.clear();
     this.liveText = '';
     this.waitingLabel = message;
@@ -434,6 +444,11 @@ export class BroadcastObserver implements TurnObserver {
 
   stopWaiting(): void {
     this.endWaiting(false);
+  }
+
+  /** The turn's record is saved: from here a snapshot is the finished conversation, with no `live`. */
+  turnRecordFinal(): void {
+    this.recordFinal = true;
   }
 
   /** A new turn's rows are numbered from its own counter; the last one's

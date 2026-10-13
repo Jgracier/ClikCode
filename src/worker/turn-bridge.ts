@@ -151,6 +151,10 @@ function track(sessionId: string, client: WorkerClient): void {
       if (unseen) recordDecision(tracker, event);
     } else if (event.type === 'snapshot') {
       if (event.live) joinLive(event.live, event.session);
+      // A snapshot without `live` says nothing is running: it holds the finished turn (the worker sends
+      // `live` for as long as a turn's record is unfinished). Left running until waiting-stop, this
+      // window's prompt would follow the same turn again and draw it a second time.
+      else tracker.running = false;
     } else if (event.type === 'delta') {
       tracker.liveText = event.mode === 'replace' ? event.text : tracker.liveText + event.text;
     } else if (event.type === 'activity') {
