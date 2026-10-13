@@ -57,14 +57,16 @@ export function failoverPromptRequest(text: string): string | undefined {
   return unescapeFailoverContent(request ?? '').trim();
 }
 
-/** What ClikCode sends to carry on an interrupted turn. It is plumbing like
- * the preamble: the user's request is the interrupted turn's own prompt, so
- * this is never stored, shown or replayed as something they typed. */
-export const INTERRUPTED_TURN_REQUEST = 'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.';
+/** What older ClikCode builds sent a vendor to carry on an interrupted turn.
+ * ClikCode no longer sends it (a failed turn is asked again in the user's own
+ * words); it is only recognized in records written then, so none of them
+ * shows or replays it as something the user typed. */
+export const LEGACY_INTERRUPTED_TURN_REQUEST = 'Continue the interrupted latest request. Inspect the current workspace first and finish the remaining work without repeating completed steps.';
 
-/** The line a written native thread opens each provider switch with
- * (session/canonical.ts markProviderBoundaries). Plumbing too: read back out
- * of a vendor's transcript, it is stripped. */
+/** The line older builds wrote into a vendor's native thread at each provider
+ * switch. No longer written (the vendor's thread is the vendor's own), and
+ * the agent's seed (turn/agent-history.ts) still names it for its own use;
+ * read back out of a vendor's transcript, it is stripped. */
 export const providerBoundaryNote = (label: string): string => `[ClikCode: the following turns ran on ${label}]`;
 const PROVIDER_BOUNDARY_NOTE = /^\[ClikCode: the following turns ran on [^\n]*\](?:\s*\n|\s*$)\s*/;
 
@@ -83,7 +85,7 @@ export function isClikCodeOpening(text: string): boolean {
 const CLIKCODE_OPENINGS = [...[FAILOVER_PREAMBLE, ...EARLIER_PREAMBLES].map((preamble) => preamble.slice(0, 40)), providerBoundaryNote('').slice(0, -1)];
 
 /** Replace any rehydration prompt in an imported transcript with the request
- * it carried, drop a bare INTERRUPTED_TURN_REQUEST, and strip a provider
+ * it carried, drop a bare legacy continuation request, and strip a provider
  * boundary note and any resource note. Idempotent: the result no longer begins with the preamble
  * or a note. A prompt with nothing recoverable is dropped rather than left
  * blank. */
@@ -98,12 +100,12 @@ export function normalizeImportedTranscript<T extends { role: string; content: s
     const content = stripResourceNotes(original.content.replace(PROVIDER_BOUNDARY_NOTE, ''));
     if (content !== original.content && !content.trim()) continue;
     const message = content === original.content ? original : { ...original, content };
-    if (message.content.trim() === INTERRUPTED_TURN_REQUEST) continue;
+    if (message.content.trim() === LEGACY_INTERRUPTED_TURN_REQUEST) continue;
     const request = failoverPromptRequest(message.content);
     if (request === undefined) normalized.push(message);
     // A transfer that continued an interrupted turn carried ClikCode's own
     // request, not the user's: nothing of it is theirs.
-    else if (request && request !== INTERRUPTED_TURN_REQUEST) normalized.push({ ...message, content: request });
+    else if (request && request !== LEGACY_INTERRUPTED_TURN_REQUEST) normalized.push({ ...message, content: request });
   }
   return normalized;
 }

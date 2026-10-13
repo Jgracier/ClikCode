@@ -44,6 +44,17 @@ describe('startConversationThread', () => {
     expect(seen).toEqual([{ harness, workspace: '/w', environment: { HOME: '/profiles/fake-2' }, model: 'm1', version: '1.2.3' }]);
   });
 
+  it('writes no provider-boundary note into the vendor thread when the conversation came from another provider', async () => {
+    const written: Array<{ providerNote?: string }[]> = [];
+    const writer: NativeThreadWriter = {
+      testedVersions: ['1.2.3'], versionOk: () => true,
+      write: async (rec) => { written.push(rec.turns); return { nativeId: 'native-1' }; },
+    };
+    await startConversationThread(input({ writer }));
+    expect(written).toHaveLength(1);
+    expect(written[0]!.some((turn) => turn.providerNote)).toBe(false);
+  });
+
   it('transfers when there is no writer', async () => {
     const start = await startConversationThread(input({}));
     expect(start.kind).toBe('transfer');

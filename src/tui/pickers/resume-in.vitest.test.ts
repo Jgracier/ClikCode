@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../../harness/definition';
 import { accountHasUsage, resumeInCandidates, resumePromptForPendingTurn, sessionProviderHasUsage } from './resume-in';
-import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { leaveProvider } from '../../session/native-thread.js';
 import type { HarnessSession } from '../../session/model.js';
 
@@ -18,11 +17,10 @@ const account = (id: string, provider: string, fields: Partial<AiHarnessAccount>
 } as AiHarnessAccount);
 
 describe('resume in', () => {
-  it('continues an interrupted request the conversation carries instead of submitting it twice', () => {
+  it('sends the user own request again, never a ClikCode line, whether or not the turn wrote anything', () => {
     expect(resumePromptForPendingTurn({ prompt: 'finish the edit', response: 'changed a.ts', startedAt: '', updatedAt: '', outputStarted: true }, 'finish the edit'))
-      .toBe(INTERRUPTED_TURN_REQUEST);
-    // Quota died before any output. The request is asked again; "continue"
-    // would point at the previous finished turn.
+      .toBe('finish the edit');
+    // Quota died before any output: the same.
     expect(resumePromptForPendingTurn({ prompt: 'finish the edit', startedAt: '', updatedAt: '', outputStarted: false }, 'finish the edit'))
       .toBe('finish the edit');
     expect(resumePromptForPendingTurn(undefined, 'finish the edit')).toBe('finish the edit');
@@ -35,9 +33,9 @@ describe('resume in', () => {
     expect(moved.pendingTurn).toBeUndefined();
     expect(moved.messages?.map(({ content }) => content)).toEqual(['earlier request', 'finish the edit', 'changed a.ts']);
   });
-  it('compares what the turn recorded, not the typed line, so an expanded /review is continued rather than run again', () => {
+  it('compares what the turn recorded, not the typed line, so an expanded /review is sent again as recorded', () => {
     const review = { prompt: 'Review the uncommitted changes for bugs.', response: 'Looked at a.ts', startedAt: '', updatedAt: '', outputStarted: true };
-    expect(resumePromptForPendingTurn(review, '/review', 'Review the uncommitted changes for bugs.\n')).toBe(INTERRUPTED_TURN_REQUEST);
+    expect(resumePromptForPendingTurn(review, '/review', 'Review the uncommitted changes for bugs.\n')).toBe('Review the uncommitted changes for bugs.\n');
     const unstarted = { prompt: 'Review the uncommitted changes for bugs.\n', startedAt: '', updatedAt: '', outputStarted: false };
     expect(resumePromptForPendingTurn(unstarted, '/review', 'Review the uncommitted changes for bugs.\n')).toBe('Review the uncommitted changes for bugs.\n');
     // The recorded turn is an older one: this request never started, and the

@@ -103,9 +103,10 @@ export interface CanonicalTurn {
    * still in its journal). Whoever takes it over continues it. */
   interrupted: boolean;
   origin: CanonicalOrigin;
-  /** Set only on a record about to be written as a native thread, at a
-   * provider boundary (markProviderBoundaries): the line a writer puts before
-   * this turn's request (withProviderNote). */
+  /** A line a writer puts before this turn's request (withProviderNote): set
+   * by markProviderBoundaries for ClikCode's own agent's seed, and by the
+   * summary note of a thread written for a vendor. Never a provider-boundary
+   * note in a vendor's thread. */
   providerNote?: string;
 }
 

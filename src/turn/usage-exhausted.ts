@@ -57,7 +57,7 @@ export function isUsageExhaustedMessage(message: string): boolean {
 
 /** A turn parked until its provider's quota comes back (HarnessSession
  * `resumeAt`): `at` is the reset, `prompt` what to send then -- the
- * continuation of the interrupted turn, or the line when it never started.
+ * user's own request, sent again.
  * On the session, so a closed window or a restarted worker does not lose it;
  * the conversation's worker sends it (worker/resume-wait.ts). */
 export interface ResumeAt { at: string; prompt: string; setAt: string }

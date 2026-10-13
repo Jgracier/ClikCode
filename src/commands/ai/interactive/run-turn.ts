@@ -10,7 +10,6 @@ import { prepareTurn } from '../../../session/attach.js';
 import { sessionTranscriptMessages } from '../../../turn/checkpoint.js';
 import { signInBeforeUse } from '../harness.js';
 import { signInOutcomeSaid } from '../../account.js';
-import { INTERRUPTED_TURN_REQUEST } from '../../../turn/failover-prompt.js';
 import { runTurnThroughWorker } from '../../../worker/turn-bridge.js';
 
 /** What a turn left for the loop: a notice, and whether Left was pressed to open the board. */
@@ -28,7 +27,7 @@ export async function runTimedTurn(
     // overwrote -- which is what made the message the user had just sent
     // appear and then vanish. See tui/render/pending-prompt.ts. Held from
     // here, so a sign-in before the turn does not hide it either.
-    terminal?.submitted(turn.echo && promptText !== INTERRUPTED_TURN_REQUEST ? promptText : undefined);
+    terminal?.submitted(turn.echo ? promptText : undefined);
     // A typed message replaces a turn parked for the quota reset (the
     // worker drops it): said here, under the message, before its answer.
     if (terminal && turn.echo && !turn.queuedTurnId && lastSeen.id === targetId && lastSeen.resumeAt) {

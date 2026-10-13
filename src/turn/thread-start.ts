@@ -18,7 +18,7 @@
  * a provider that never sees it. */
 
 import type { AiLocalHarnessDefinition } from '../harness/definition.js';
-import { markProviderBoundaries, type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
+import { type CanonicalRecord, type CanonicalTurn } from '../session/canonical.js';
 import { summarizedRecord, summaryNote, type ConversationSummary } from '../session/conversation-summary.js';
 import type { NativeSessionEnvironment, NativeThreadWriter, NativeThreadWritten } from '../session/discovery/stores.js';
 import { modelProvider } from '../runtime/lazy-bridge.js';
@@ -46,9 +46,9 @@ export type ThreadStart =
 export interface ThreadStartInput {
   record: CanonicalRecord;
   /** What to answer now: the user's request as the turn would send it, or
-   * INTERRUPTED_TURN_REQUEST (+ what the interrupted request carried). */
+   * the interrupted turn's own request, sent again. */
   request: string;
-  /** The record's newest turn was cut off and `request` continues it. */
+  /** The record's newest turn was cut off; `request` is that turn's request again. */
   interrupted: boolean;
   harness: AiLocalHarnessDefinition;
   workspace: string;
@@ -155,12 +155,11 @@ async function written(input: ThreadStartInput): Promise<{ written: NativeThread
       input.onFallback?.(`${input.harness.command} ${context.version ?? '(version unknown)'} is not a build its thread writer was verified against (${writer.testedVersions.join(', ') || 'none'})`);
       return undefined;
     }
-    // Which provider ran which turns, said once per switch (the transfer
-    // says it in its own preamble). A summary takes its room first.
+    // A summary takes its room first. No note of which provider ran which
+    // turns is written into the vendor's thread: it is the vendor's own.
     const summary = input.record.summary;
     const fitted = fitRecord(input.record, nativeThreadBudget(input.contextWindow) - (summary ? Buffer.byteLength(summary.text, 'utf8') : 0));
-    const marked = markProviderBoundaries(fitted.record, input.harness.command, input.displayName);
-    const result = await writer.write(summary && !writer.writesSummary ? withSummaryNote(marked, summary) : marked, context);
+    const result = await writer.write(summary && !writer.writesSummary ? withSummaryNote(fitted.record, summary) : fitted.record, context);
     if (!result?.nativeId) input.onFallback?.(`${input.harness.command} thread writer declined`);
     return result?.nativeId ? { written: result, omitted: fitted.omitted } : undefined;
   } catch (error) {

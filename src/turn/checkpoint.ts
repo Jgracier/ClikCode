@@ -6,7 +6,7 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { commandIsReadOnly } from '../agent/command-classifier.js';
 import { isAgentToolName } from '../harness/protocol/tools.js';
 import type { HarnessSession, MessageOrigin, OpenThought, TurnMark } from '../session/model.js';
-import { INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
+import { LEGACY_INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
 import { orderMarks } from '../harness/protocol/activity-view.js';
 import { activitiesBetween, marksBetween, readTurnActivities, recordTurnActivity, runningTurnActivity, stopOpenActivities } from './turn-activities.js';
 import { readTurnMarks, settledThought, upsertMark } from './turn-marks.js';
@@ -136,9 +136,9 @@ export function sessionTranscriptMessages(session: HarnessSession): Message[] {
   const messages = normalizeImportedTranscript(session.messages ?? []);
   const pending = session.pendingTurn;
   if (!pending) return messages;
-  // A continuation's prompt is ClikCode's, not the user's: its answer
-  // follows the interrupted one directly.
-  if (pending.prompt !== INTERRUPTED_TURN_REQUEST) {
+  // A continuation's prompt in a journal an older build wrote was ClikCode's,
+  // not the user's: its answer follows the interrupted one directly.
+  if (pending.prompt !== LEGACY_INTERRUPTED_TURN_REQUEST) {
     messages.push({ role: 'user', content: pending.prompt, ...(pending.attachments?.length ? { attachments: [...pending.attachments] } : {}) });
   }
   const response = pending.response ?? '';

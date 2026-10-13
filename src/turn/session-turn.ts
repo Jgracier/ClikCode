@@ -14,7 +14,6 @@ import type { LiveTurnInputBroker } from './live-input.js';
 import { LiveSettings } from './live-settings.js';
 import type { TurnObserver } from './observer.js';
 import { turnBackendForAccount } from './account-routing.js';
-import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { runAgentTurn } from './agent-turn.js';
 import { sendDirectApiTurn } from './direct-turn.js';
 import { sendVendorTurn } from './vendor-turn.js';
@@ -79,7 +78,7 @@ export async function runSessionTurn(
       const fresh = await readState({ transcripts: [id] });
       const now = fresh.sessions.find((item) => item.id === id);
       if (!now || isClikCodeAgent(now)) return;
-      return await runAccountTurn(fresh, now, handed === 'continue' ? INTERRUPTED_TURN_REQUEST : prompt, signal, recorded);
+      return await runAccountTurn(fresh, now, prompt, signal, recorded);
     }
     return await runAccountTurn(state, session, prompt, signal, recorded);
   } catch (error) {

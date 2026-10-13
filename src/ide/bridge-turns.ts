@@ -7,7 +7,6 @@ import { afterTurnFailure, prepareTurn } from '../session/attach.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import { consumeSessionTurn } from '../turn/checkpoint.js';
-import { INTERRUPTED_TURN_REQUEST } from '../turn/failover-prompt.js';
 import { resumeWaitLabel } from '../turn/usage-exhausted.js';
 import { isShellCommandLine } from '../commands/ai/shell-run.js';
 import { aiSessionCommand } from '../tui/slash/handlers.js';
@@ -136,8 +135,6 @@ export class BridgeTurns {
   /** One turn through the conversation's worker, after what the terminal
    * does before one (prepareTurn). */
   async runTurn(targetId: string, prompt: string, turn: { echo: boolean; queuedTurnId?: string }): Promise<void> {
-    // Carrying on an interrupted turn is not something the user typed.
-    if (prompt === INTERRUPTED_TURN_REQUEST) turn = { ...turn, echo: false };
     await prepareTurn(targetId, (label) => this.host.channel.send({ type: 'busy', ...(label ? { label } : {}) }));
     await this.host.prepareRoute();
     const client = await this.host.link.workerFor(targetId);

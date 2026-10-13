@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HarnessSession, TranscriptMessage } from '../../session/model';
-import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt';
+import { LEGACY_INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt';
 import { forkPoint, forkPointOptions, messagesThrough } from './fork-at';
 
 vi.mock('../../runtime/lazy-bridge', async (importOriginal) => {
@@ -23,7 +23,7 @@ const { loadSessionFile } = await import('../../session/store/records');
 const conversation: TranscriptMessage[] = [
   { role: 'user', content: 'first question' }, { role: 'assistant', content: 'first answer' },
   { role: 'user', content: 'second question' }, { role: 'assistant', content: 'second answer' },
-  { role: 'user', content: INTERRUPTED_TURN_REQUEST }, { role: 'assistant', content: 'second answer, continued' },
+  { role: 'user', content: LEGACY_INTERRUPTED_TURN_REQUEST }, { role: 'assistant', content: 'second answer, continued' },
   { role: 'user', content: 'third question' }, { role: 'assistant', content: 'third answer' },
 ];
 

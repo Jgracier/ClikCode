@@ -17,7 +17,6 @@ import { readState } from '../../session/state/read.js';
 import { writeState } from '../../session/state/write.js';
 import { moveToProvider, takeQueuedMessages } from '../../commands/ai/conversations.js';
 import { preferredAccountId } from '../../commands/ai/preferred-account.js';
-import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt.js';
 import { nextQuotaReset, type ResumeAt } from '../../turn/usage-exhausted.js';
 import { quotaResetPhrase } from '../../harness/protocol/format.js';
 import { chooseOption } from './choose.js';
@@ -146,14 +145,13 @@ export async function resumeIn(
 /** What to send after the turn on record failed.
  *
  * Compared with what the turn recorded, which is the sent prompt, trimmed:
- * comparing the typed line re-sent an expanded /review whole. The continuation
- * is only for a turn that already wrote an answer or ran a tool. One that
- * died before any output is sent again in those same words: "continue the
- * interrupted request" points at the previous finished turn. A turn that
- * never started sends the typed line. */
+ * comparing the typed line re-sent an expanded /review whole. The user's own
+ * request goes again in those same words, whether or not the turn wrote
+ * anything: what it wrote is in the conversation the new provider is given.
+ * A turn that never started sends the typed line. */
 export function resumePromptForPendingTurn(pending: HarnessSession['pendingTurn'], prompt: string, sent = prompt): string {
   if (!pending || pending.prompt.trim() !== sent.trim()) return prompt;
-  return pending.outputStarted ? INTERRUPTED_TURN_REQUEST : sent;
+  return sent;
 }
 
 /** What carries a turn on after it ran out of usage on every account:
@@ -196,9 +194,7 @@ export async function carryOnAfterExhaustion(
   if (moved) return { moved };
   // Not carried on (Esc on Resume-in, or nowhere to go): the message comes
   // back to the composer to send again, with anything queued behind it.
-  // (Not a continuation ClikCode asked for: that was never typed.)
-  const typed = prompt === INTERRUPTED_TURN_REQUEST ? [] : [prompt];
-  return { stayed: [...typed, ...(await sameProviderCanTakeTurn(id) ? [] : await takeQueuedMessages(id))] };
+  return { stayed: [prompt, ...(await sameProviderCanTakeTurn(id) ? [] : await takeQueuedMessages(id))] };
 }
 
 /** Takes a parked turn off the session ("Wait for reset" cancelled from a

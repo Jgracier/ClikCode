@@ -3,7 +3,6 @@ import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import { moveThreadToAccount, reconcileNativeThread } from '../session/carry.js';
 import type { prepareAttachments } from '../session/attachments.js';
-import { INTERRUPTED_TURN_REQUEST } from './failover-prompt.js';
 import { closePersistentTransport, closeStandby, persistentWorkRunning, waitForPersistentWork } from './vendor-process.js';
 import { settleHeldVendor } from './turn-steps.js';
 import type { TurnRunOptions } from './session-turn.js';
@@ -57,7 +56,7 @@ async function startVendorTurn(ctx: VendorTurnContext): Promise<void> {
   // it: takeUp writes it as the vendor's own thread, or transfers it. The
   // failover retries take the same path mid-turn.
   if ((!session.nativeSessionId || session.nativeSessionPreallocated) && ctx.baseMessages.length > 0) {
-    ctx.turnText = await takeUp(ctx, ctx.turnText, { interrupted: ctx.text === INTERRUPTED_TURN_REQUEST, withJournal: false });
+    ctx.turnText = await takeUp(ctx, ctx.turnText, { interrupted: false, withJournal: false });
   }
 }
 

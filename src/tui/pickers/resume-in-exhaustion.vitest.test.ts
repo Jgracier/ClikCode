@@ -10,7 +10,6 @@ import type { HarnessSession } from '../../session/model';
 import { readState } from '../../session/state/read';
 import { writeState } from '../../session/state/write';
 import { forceStoreSession, unforceStoreSession } from '../../session/ephemeral';
-import { INTERRUPTED_TURN_REQUEST } from '../../turn/failover-prompt';
 import { carryOnAfterExhaustion, type ExhaustionRetryGuard } from './resume-in';
 
 const saved = process.env.CLIKCODE_HOME;
@@ -54,12 +53,12 @@ const queue = (): NonNullable<HarnessSession['queuedTurns']> => [
 ];
 
 describe('running out of usage', () => {
-  it('retries on the same provider at most once per interrupted turn, though the retry sends the continuation', async () => {
+  it('retries on the same provider at most once per interrupted turn, the retry sending the user request again', async () => {
     await chat([account('a1', false)], { pendingTurn: { prompt: 'fix the parser', response: 'half', startedAt: '', updatedAt: '', outputStarted: true } });
     const guard: ExhaustionRetryGuard = {};
-    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', guard)).toEqual({ retry: INTERRUPTED_TURN_REQUEST });
+    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', guard)).toEqual({ retry: 'fix the parser' });
     // The continuation ran out as well: no second same-provider retry.
-    expect(await carryOnAfterExhaustion(noPicker, 's1', INTERRUPTED_TURN_REQUEST, guard)).toEqual({ stayed: [] });
+    expect(await carryOnAfterExhaustion(noPicker, 's1', 'fix the parser', guard)).toEqual({ stayed: ['fix the parser'] });
   });
 
   it('asks an unstarted request again instead of continuing the previous turn', async () => {

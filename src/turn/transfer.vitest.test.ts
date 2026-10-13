@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { HarnessSession, TranscriptMessage } from '../session/model.js';
 import { canonicalRecord } from '../session/canonical.js';
-import { failoverPromptRequest, INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
+import { failoverPromptRequest, LEGACY_INTERRUPTED_TURN_REQUEST, normalizeImportedTranscript } from './failover-prompt.js';
 import { extractiveSummary, targetContextWindow, transferBudget, transferPrompt, TRANSFER_MAX_BYTES, TRANSFER_MIN_BYTES } from './transfer.js';
 
 const now = '2026-10-04T00:00:00.000Z';
@@ -84,11 +84,11 @@ describe('transferPrompt', () => {
 
   it('continues an interrupted turn, naming the files it may have left half-edited', () => {
     const live = session(messages, { pendingTurn: { prompt: 'split the file', response: 'Moving the lexer', startedAt: now, updatedAt: now, outputStarted: true, touchedFiles: ['src/lexer.ts'] } as HarnessSession['pendingTurn'] });
-    const prompt = transferPrompt(canonicalRecord(live), INTERRUPTED_TURN_REQUEST, { interrupted: true });
+    const prompt = transferPrompt(canonicalRecord(live), LEGACY_INTERRUPTED_TURN_REQUEST, { interrupted: true });
     expect(prompt).toContain('3. split the file');
     expect(prompt).toContain('Moving the lexer\n[interrupted here: this answer was cut off]');
     expect(prompt).toContain('The interrupted turn had started changing src/lexer.ts');
-    expect(failoverPromptRequest(prompt)).toBe(INTERRUPTED_TURN_REQUEST);
+    expect(failoverPromptRequest(prompt)).toBe(LEGACY_INTERRUPTED_TURN_REQUEST);
     // Read back from a vendor's copy, it is nothing at all.
     expect(normalizeImportedTranscript([{ role: 'user', content: prompt }])).toEqual([]);
   });
