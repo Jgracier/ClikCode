@@ -50,7 +50,8 @@ describe('local harness catalog', () => {
     ] as const;
     for (const [command, expected] of cases) {
       const harness = localHarnessForCommand(command)!;
-      expect(harness.tier).toBe('experimental');
+      // Devin ran a real turn on 2026-10-12 and is promoted; the others are not yet.
+      expect(harness.tier).toBe(command === 'devin' ? 'more' : 'experimental');
       expect(harnessTurnTransport(harness)).toBe('acp');
       const model = command === 'dcode' ? 'anthropic:claude-sonnet-5' : command === 'mcode' ? null : command === 'devin' ? 'opus' : 'sonnet';
       const launch = harnessAcpLaunch(harness, { model, effort: null, permissionMode: 'ask' })!;
@@ -710,5 +711,17 @@ describe('steering', () => {
   it('is recorded as unsupported for Junie, which advertises it but starts a detached turn when idle', () => {
     expect(AI_LOCAL_HARNESSES.find((harness) => harness.command === 'junie')?.acp?.steering).toBe(false);
     expect(AI_LOCAL_HARNESSES.filter((harness) => harness.acp?.steering === false).map((harness) => harness.command)).toEqual(['junie']);
+  });
+});
+
+describe('live checks', () => {
+  it('promotes an entry past experimental only with a verified live check, and says why the others are not', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      if (harness.liveCheck?.verified) expect(harness.tier, harness.command).not.toBe('experimental');
+      if (harness.liveCheck && !harness.liveCheck.verified) expect(harness.liveCheck.note, harness.command).toBeTruthy();
+    }
+    expect(localHarnessForCommand('devin')).toMatchObject({ tier: 'more', liveCheck: { verified: true } });
+    expect(localHarnessForCommand('devin')!.experimental).toBeUndefined();
+    expect(localHarnessForCommand('junie')).toMatchObject({ tier: 'experimental', liveCheck: { verified: false } });
   });
 });
