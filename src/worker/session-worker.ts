@@ -28,7 +28,6 @@ import { createResumeWaiter } from './resume-wait.js';
 import { separateFromForeground } from './own-scope.js';
 import { startResourceGuard } from './resource-guard.js';
 import { startStuckWatchdog } from './stuck-watchdog.js';
-import { holdResourceNote, wrapResourceNote } from '../turn/resource-notes.js';
 import { LiveSettings } from '../turn/live-settings.js';
 import { sessionState } from '../agent/session-state.js';
 import { stateDirectory } from '../session/store/paths.js';
@@ -42,6 +41,7 @@ import { createCommandHandler } from './worker-commands.js';
 import { createWorkerServer } from './worker-server.js';
 import { createShutdown } from './worker-shutdown.js';
 import { createOutOfTurnRelay } from './out-of-turn.js';
+import { createResourceNoteDelivery } from './resource-note-delivery.js';
 
 /** This conversation for this worker, or undefined when another worker has
  * it. A scripted turn running in-process (worker/scripted-send.ts) is waited
@@ -138,11 +138,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   if (agentSlice) {
     startResourceGuard({
       sessionId, sliceDir: agentSlice,
-      deliver: (note) => {
-        const live = ctx.activeLiveInput;
-        if (!live) { holdResourceNote(sessionId, note); return; }
-        void live.steerNote(wrapResourceNote(note)).then((steered) => { if (!steered) holdResourceNote(sessionId, note); });
-      },
+      deliver: createResourceNoteDelivery(ctx),
     });
   }
 
