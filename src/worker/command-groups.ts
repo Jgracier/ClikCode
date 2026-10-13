@@ -90,6 +90,20 @@ export function commandLabel(command: string): string {
   return text.length > 160 ? `${text.slice(0, 157)}...` : text;
 }
 
+const WRAPPER = /__grok_user_cmd|builtin read -r/;
+
+/** The program the agent started, not the vendor's shell wrapper and not a
+ * cgroup id. A child program wins; a remembered label covers a shell that
+ * has already exited. */
+export function bestLabel(root: ProcInfo | undefined, descendants: readonly ProcInfo[], remembered?: string): string {
+  const program = descendants.find((entry) => !SHELLS.has(entry.exe) && entry.command && !MCP.test(entry.command));
+  if (program) return commandLabel(program.command);
+  const fromRoot = root ? commandLabel(root.command) : '';
+  if (fromRoot && !WRAPPER.test(fromRoot)) return fromRoot;
+  if (remembered && !WRAPPER.test(remembered)) return remembered;
+  return '';
+}
+
 export interface CommandSweep {
   /** What each command group's agent ran, by group name. */
   readonly labels: ReadonlyMap<string, string>;

@@ -73,8 +73,10 @@ export function adoptArgs(unit: string, pid: number): string[] {
  * kill took VS Code's GPU process -- the editor quit -- while 4G vitest runs
  * lived. At the slice's own MemoryMax the kernel picks inside the slice
  * instead, normally the largest test run, and the editor never gets chosen.
- * Swap is bounded too: swapped agent pages count toward neither RAM limit. */
-export const AGENT_MEMORY_SHARES = { high: 0.7, max: 0.8, swap: 0.1 } as const;
+ * Swap is bounded too: swapped agent pages count toward neither RAM limit.
+ * No MemoryHigh. A soft cap throttles every agent while the guard, which
+ * stops only the one large command, is what should react (2026-10-13). */
+export const AGENT_MEMORY_SHARES = { max: 0.8, swap: 0.1 } as const;
 
 /** Creates the agent slice with the default limits. systemd refuses when a
  * unit file for it exists -- a host's own limits win, untouched. */
@@ -83,9 +85,8 @@ export function sliceArgs(ramBytes: number): string[] {
   return [
     '--user', 'call', 'org.freedesktop.systemd1', '/org/freedesktop/systemd1',
     'org.freedesktop.systemd1.Manager', 'StartTransientUnit', 'ssa(sv)a(sa(sv))',
-    AGENT_SLICE, 'fail', '4',
+    AGENT_SLICE, 'fail', '3',
     'Description', 's', 'ClikCode agent work',
-    'MemoryHigh', 't', bytes(AGENT_MEMORY_SHARES.high),
     'MemoryMax', 't', bytes(AGENT_MEMORY_SHARES.max),
     'MemorySwapMax', 't', bytes(AGENT_MEMORY_SHARES.swap),
     '0',
