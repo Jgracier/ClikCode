@@ -11,7 +11,7 @@ import { outputPreviewRows, renderActivityLine } from '../../../harness/protocol
 import { tensedLabel } from '../../../harness/protocol/turn-flow.js';
 import { ExploreGrouping, mergedExploreLines, mergedExploreSummaryLine, type GroupRow, type TurnGroup } from '../../render/explore-groups.js';
 import { TOOL_CATEGORY_STYLE } from '../../../harness/protocol/tool-category-style.js';
-import { STEER_WORDS, steerTranscriptRows } from '../../render/steer-rows.js';
+import { steerTranscriptRows } from '../../render/steer-rows.js';
 import { messageRows as cachedMessageRows } from '../../render/message-blocks.js';
 import { callRow, underCallRow } from '../../render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from '../../render/turn-mark-rows.js';
@@ -216,7 +216,7 @@ export function createTurnTools(
     // One row on each side, matching every other message: a steer is a
     // message the user wrote mid-answer.
     const steerRows = (text: string): string[] => [
-      '', '', ...messageRows(text, userMarker), `  ${chalk.dim(`↳ ${STEER_WORDS.steered}`)}`, '',
+      '', '', ...messageRows(text, userMarker), '',
     ];
     const steers = steerTranscriptRows({
       durable: pending?.steers ?? [], live: p.waitingSubmissions,

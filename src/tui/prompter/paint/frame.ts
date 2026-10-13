@@ -44,13 +44,13 @@ export function paint(this: TerminalHarnessPrompter, composer: string, options: 
   // share it) are unaffected.
   const conversationInner = rowWidth - 2;
   const { pending, pendingPrompt, persistedMessages, hasTransientAssistant } = frameMessages(this, session);
-  const { queuedMessages, enterAt, escAt } = queuedMessagesOf(this, session, pending);
+  const { queuedMessages } = queuedMessagesOf(this, session, pending);
   const bands = frameBands(this, { composer, options, prompt, cursor, palette, width, inner });
   const { targetHeight, maxComposerRows, composerRows } = bands;
   const { finished, liveConversation, userRows } = writeTranscript(this, {
     session, pending, persistedMessages, hasTransientAssistant, conversationInner, maxComposerRows,
   });
-  liveConversation.push(...queuedMessageRows(queuedMessages, enterAt, escAt, inner, userRows));
+  liveConversation.push(...queuedMessageRows(queuedMessages, userRows));
   const conversationLines = liveConversationLines(liveConversation, true);
   const { footer, composerStart } = buildFooter.call(this, { inner, rowWidth, width, prompt, options, selected, palette, session, targetHeight, bands });
   // The live region is bounded by the viewport: it is erased and redrawn as

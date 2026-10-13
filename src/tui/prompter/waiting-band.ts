@@ -2,15 +2,18 @@
 import chalk from 'chalk';
 import { isKeyShaped } from '../../gateway/login/vendor-sign-in.js';
 import { commandPaletteMatches } from '../command-palette.js';
-import { terminalCellWidth, visiblePathTail, visibleSlice } from '../render/width.js';
-import { compactPath, sessionProviderLabel } from '../../harness/protocol/labels.js';
+import { terminalCellWidth, visibleSlice } from '../render/width.js';
+import { composerUsageLabel, usageLabelIsSpent, usageRemainingPercent } from '../render/usage-words.js';
+import { usageIsLow } from '../../harness/protocol/lean.js';
+import { HARNESS_DEFAULT_SETTINGS } from '../../session/state/settings.js';
+import { sessionProviderLabel } from '../../harness/protocol/labels.js';
 import { sessionModelLabel } from '../../harness/output.js';
 import { isGatewayService } from '../../session/route.js';
 import { harnessSupportsEffort, localHarnessForCommand } from '../../runtime/lazy-bridge.js';
 import { nativeModelLabel } from '../../harness/accounts/model-catalog.js';
 import { localModelLabel } from '../../local-models/catalog.js';
 import { turnElapsedMs, waitingSpinnerGlyph } from '../../harness/protocol/activity-view.js';
-import { answerWriting, tokenMeterLabel, turnStatus } from '../../harness/protocol/turn-flow.js';
+import { answerWriting, turnStatus } from '../../harness/protocol/turn-flow.js';
 import { waitStalled } from '../../harness/protocol/turn-pace.js';
 import { paintStatus } from '../render/status-line.js';
 import { PAINT_COALESCE_MS } from '../../harness/protocol/timings.js';
@@ -19,12 +22,13 @@ import { keyHint, keyHintFor } from '../../harness/protocol/wording.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
 import { WaitingTurn } from './state.js';
 
-/** The line under the composer, fitted to `width`: a narrow screen
- * shortens the directory from the left (`…/clikcode`) before anything. */
+/** The one footer line under the composer, fitted to `width`: the model, its
+ * effort only when it is not the default, and the usage figure only when it
+ * is low or spent. The provider is the chat's (/status), the directory is the
+ * shell's, the full usage is /usage. */
 export function statusText(this: TerminalHarnessPrompter, width: number): string {
   const session = this.currentSession;
   if (!session) return '';
-  const path = compactPath(session.workspace ?? process.cwd());
   const provider = sessionProviderLabel(session);
   const harness = session.nativeHarness ? localHarnessForCommand(session.nativeHarness) : undefined;
   // What the harness reported running beats what it was asked to run: a
@@ -44,12 +48,18 @@ export function statusText(this: TerminalHarnessPrompter, width: number): string
   // model is its engine's catalog entry, named by label.
   const model = session.route === 'clikcode-local' ? localModelLabel(session.model)
     : isGatewayService(session) ? sessionModelLabel(session, session.reported?.model ?? session.model) : nativeModelLabel(harness?.command, rawModel);
-  const effort = harness && harnessSupportsEffort(harness) ? session.effort : undefined;
-  // The title is not on this line: it sits on the rule under the composer,
-  // so a long one never truncates the provider, model or directory.
-  const lead = [provider, [model, effort].filter(Boolean).join(' ')].filter(Boolean).join('  •  ');
-  const context = visiblePathTail(path, Math.max(12, width - terminalCellWidth(lead) - 5));
-  return visibleSlice([lead, context].filter(Boolean).join('  •  '), width);
+  const effort = harness && harnessSupportsEffort(harness) && session.effort !== HARNESS_DEFAULT_SETTINGS.effort ? session.effort : undefined;
+  // No model known yet: the provider says what the chat is running as.
+  const lead = [model, effort].filter(Boolean).join(' ') || provider;
+  return visibleSlice(lead, width);
+}
+
+/** The usage reading for the footer line: only when it is low or spent. */
+export function footerUsage(this: TerminalHarnessPrompter): { label: string; spent: boolean } | undefined {
+  const label = composerUsageLabel(this.usageLabel, this.usageResetLabel);
+  if (!label) return undefined;
+  const spent = usageLabelIsSpent(label);
+  return usageIsLow(usageRemainingPercent(this.usageLabel), spent) ? { label, spent } : undefined;
 }
 
 /** `⠋  Reading prompter.ts · 1m 12s`: what the turn is doing and how long
@@ -57,10 +67,8 @@ export function statusText(this: TerminalHarnessPrompter, width: number): string
  * what actually arrives: the open call names the verb, the clock stops for
  * an approval. The spinner turns yellow once the turn has gone quiet.
  *
- * One key hint, where it fits in `width`: `esc stop` while Esc is what
- * stops the turn (Claude Code's and Codex's "esc to interrupt"). Enter
- * again's is on the waiting message's own row, and Esc's there too while
- * a message waits -- Esc takes that back rather than stopping anything. */
+ * No token meter and no `esc stop`: the spinner, one word and the clock.
+ * Only a sign-in's wait keeps its `esc cancel`. */
 export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, width: number): string {
   const now = Date.now();
   const elapsed = formatElapsed(turnElapsedMs(turn.clock, now));
@@ -80,8 +88,7 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
   const asking = this.waitingOnUser();
   // What the agent is doing is essential and stays at full contrast; the
   // clock is dimmed. Waiting on the user stops the clock, so it is not shown.
-  const meter = asking ? undefined : tokenMeterLabel(turn.tokens ?? 0);
-  const rest = asking ? '' : ` · ${elapsed}${meter ? ` · ${meter}` : ''}`;
+  const rest = asking ? '' : ` · ${elapsed}`;
   // One spinner, one motion, for every harness and every tool, the label
   // shimmering with it. An approval is the turn waiting on the user, not
   // working: a still dot, and no clock (it is stopped).
@@ -93,10 +100,10 @@ export function waitingLine(this: TerminalHarnessPrompter, turn: WaitingTurn, wi
     stalled: waitStalled({ conversationTurn: Boolean(turn.submit || turn.early), onUser: asking, cancelled: turn.cancelled, quietMs: now - turn.activeAt }),
   });
   const line = `${painted.spinner}${asking ? ' ' : '  '}${painted.label}${chalk.dim(rest)}`;
-  // A sign-in's wait: Esc cancels it.
+  // A sign-in's wait: Esc cancels it. Esc stopping a turn is in /help.
   const cancels = this.signingIn && !turn.cancelled;
-  const hint = ` · ${cancels ? keyHintFor('esc', 'cancel') : keyHint('escStop')}`;
-  return (cancels || this.escStops()) && terminalCellWidth(line) + terminalCellWidth(hint) <= width ? `${line}${chalk.dim(hint)}` : line;
+  const hint = ` · ${keyHintFor('esc', 'cancel')}`;
+  return cancels && terminalCellWidth(line) + terminalCellWidth(hint) <= width ? `${line}${chalk.dim(hint)}` : line;
 }
 
 /** Esc would stop the running turn (see onWaitingKey): a conversation's

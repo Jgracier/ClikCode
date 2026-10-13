@@ -79,22 +79,15 @@ describe('the status line motion', () => {
     } finally { rl.close(); }
   });
 
-  it('shows the turn\'s tokens in the status line: estimated from the answer, then the vendor\'s figure', () => {
+  it('shows the spinner, one word and the clock: no token meter, no key hint', () => {
     const { rl, line } = open();
     try {
-      expect(line()).not.toContain('tokens');
       rl.response('x'.repeat(4000));
-      vi.advanceTimersByTime(SPIN_MS * 40);
-      expect(line()).toMatch(/thinking|writing/);
-      expect(line()).toContain('↓ 1.0k tokens');
-      // The vendor reports fewer: the number never goes down within a turn.
-      (rl as unknown as { setTurnUsage(u: { output: number }): void }).setTurnUsage({ output: 300 });
-      vi.advanceTimersByTime(SPIN_MS * 10);
-      expect(line()).toContain('↓ 1.0k tokens');
-      // And rises with the vendor's figure once it passes.
       (rl as unknown as { setTurnUsage(u: { output: number }): void }).setTurnUsage({ output: 3400 });
       vi.advanceTimersByTime(SPIN_MS * 60);
-      expect(line()).toContain('↓ 3.4k tokens');
+      expect(line()).toMatch(/(thinking|writing) · \d+s$/);
+      expect(line()).not.toContain('tokens');
+      expect(line()).not.toContain('esc stop');
     } finally { rl.close(); }
   });
 
