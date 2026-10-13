@@ -740,9 +740,10 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     // Said once, only for an agent this turn started (one already running
     // answers at once), and only when it is slow to: not a flash every turn.
     let announced = Boolean(live.capabilities);
+    let connectingShown = false;
     const waitOnStart = async <T>(pending: Promise<T>): Promise<T> => {
       if (announced) return pending;
-      const notice = setTimeout(() => { announced = true; input.onPhase?.(`connecting to ${input.command}`); }, START_NOTICE_MS);
+      const notice = setTimeout(() => { announced = true; connectingShown = true; input.onPhase?.(`connecting to ${input.command}`); }, START_NOTICE_MS);
       notice.unref?.();
       try { return await pending; } finally { clearTimeout(notice); }
     };
@@ -933,6 +934,8 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     stillRunning();
     lifecycle('vendor.acp.ready', { harness: input.command, cold, setupMs: Date.now() - setupAt, threadLoadMs });
     turn.promptStarted = true;
+    // "connecting to …" was true until here; left up, it read as stuck for as long as the agent thought.
+    if (connectingShown) input.onPhase?.('thinking');
     // The turn ends with the agent's answer to session/prompt. No silence
     // ceiling unless CLIKCODE_TURN_IDLE_TIMEOUT_MS is set: the harness has
     // its own, and a quiet stretch is often a long command.
@@ -1146,7 +1149,23 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
       // bookkeeping arrived.
       const settledLastTool = update.sessionUpdate === 'tool_call_update' && toolSettled(update);
       if (settledLastTool || TURN_BOOKKEEPING_UPDATES.has(String(update.sessionUpdate))) this.finishBackground('completed');
+      else this.quietEndOfBackground(run);
     }
+  }
+
+  /** ACP announces no end for work the agent does between prompts: only a settled last tool or
+   * (some agents) a usage update ends a background turn here. An agent that sends neither -- a
+   * trailing message or thought, a tool whose result never came back as an update -- left the chat
+   * "working" for hours, until the user typed. With no tool, agent or background work running, a
+   * quiet stretch is the end. A later update opens a new background turn, so nothing is lost. */
+  private quietEndOfBackground(run: BackgroundRun): void {
+    clearTimeout(this.backgroundQuiet);
+    if (this.pendingTools.size || this.backgroundLevel || this.hasActiveSubagents()) return;
+    this.backgroundQuiet = setTimeout(() => {
+      if (this.background !== run || this.pendingTools.size || this.backgroundLevel || this.hasActiveSubagents()) return;
+      this.finishBackground('completed');
+    }, this.backgroundQuietMs);
+    this.backgroundQuiet.unref?.();
   }
 
   /** Updates that are the agent's status, not its content: shown as the

@@ -25,6 +25,8 @@ export interface PersistentSessionOptions {
   /** Watchdog budgets (see turn-watchdog.ts); tests shorten them. */
   idleMs?: number;
   toolIdleMs?: number;
+  /** How long a background turn may go quiet, with nothing running, before it counts as over. */
+  backgroundQuietMs?: number;
 }
 
 interface PersistentLive { peer: JsonRpcPeer; key: string; pid?: number }
@@ -57,6 +59,9 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
   protected isClosed = false;
   private readonly spawn: PersistentSpawn;
   private readonly onBackgroundTurn?: VendorBackgroundTurnHandler;
+  protected readonly backgroundQuietMs: number;
+  /** Ends a background turn the vendor never announces the end of (see AcpSessionImpl.quietEndOfBackground). */
+  protected backgroundQuiet?: NodeJS.Timeout;
   private readonly idleMs?: number;
   private readonly toolIdleMs?: number;
   /** The child's process group when the current turn's prompt went out
@@ -72,6 +77,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     this.spawn = options.spawn ?? ((binary, argv, spawnOptions) => spawnPortable(binary, [...argv], spawnOptions));
     this.onBackgroundTurn = options.backgroundTurns;
     this.idleMs = options.idleMs;
+    this.backgroundQuietMs = options.backgroundQuietMs ?? 30_000;
     this.toolIdleMs = options.toolIdleMs;
   }
 
@@ -317,6 +323,7 @@ export abstract class PersistentSession<L extends PersistentLive, T extends Pers
     const run = this.background;
     if (!run) return;
     this.background = undefined;
+    clearTimeout(this.backgroundQuiet);
     run.watchdog?.stop();
     run.channel.finish(ended);
   }
