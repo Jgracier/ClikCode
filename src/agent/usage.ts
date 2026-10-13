@@ -1,14 +1,7 @@
 /** Per-turn usage ledger. Pure: the loop owns when to report. */
 import type { TokenUsage } from './model-client.js';
 
-interface UsageLedgerEntry {
-  step: number;
-  usage: TokenUsage;
-  servedModel?: string;
-}
-
 interface UsageLedger {
-  entries: UsageLedgerEntry[];
   total: TokenUsage;
   /** Input size of the most recent step: the best available measure of how
    * full the context window currently is. */
@@ -34,14 +27,13 @@ function finite(value: unknown): number | undefined {
 }
 
 export function emptyLedger(): UsageLedger {
-  return { entries: [], total: {} };
+  return { total: {} };
 }
 
-export function recordUsage(ledger: UsageLedger, entry: UsageLedgerEntry): UsageLedger {
-  const input = finite(entry.usage.input);
+export function recordUsage(ledger: UsageLedger, usage: TokenUsage): UsageLedger {
+  const input = finite(usage.input);
   return {
-    entries: [...ledger.entries, entry],
-    total: addUsage(ledger.total, entry.usage),
+    total: addUsage(ledger.total, usage),
     lastInputTokens: input ?? ledger.lastInputTokens,
   };
 }

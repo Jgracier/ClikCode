@@ -318,6 +318,13 @@ export function compactionThreshold(contextWindow: number | undefined): number {
   return Math.floor(window - headroom);
 }
 
+/** How much the context must grow after a compaction before another is
+ * considered: a tenth of the window, at least 4k tokens. */
+export function compactionRegrowth(contextWindow: number | undefined): number {
+  const window = contextWindow && contextWindow > 0 ? contextWindow : DEFAULT_CONTEXT_WINDOW;
+  return Math.max(4_096, Math.floor(window * 0.1));
+}
+
 export function shouldCompact(contextTokens: number, contextWindow: number | undefined): boolean {
   return contextTokens >= compactionThreshold(contextWindow);
 }
@@ -350,6 +357,25 @@ function elideOldToolResults(items: readonly ConversationItem[], keepRecent = KE
     if (item.output.length <= ELIDE_KEEP_CHARS * 2 + 80) return { ...rest, output: `${item.output}${imageNote}` };
     const dropped = item.output.length - ELIDE_KEEP_CHARS * 2;
     return { ...rest, output: `${item.output.slice(0, ELIDE_KEEP_CHARS)}\n… [${dropped} characters elided to save context] …\n${item.output.slice(-ELIDE_KEEP_CHARS)}${imageNote}` };
+  });
+}
+
+/** Past this, a tool result still among the recent items is shrunk when
+ * compaction would otherwise leave the context over its target. */
+const RECENT_RESULT_LIMIT_CHARS = 16_000;
+/** What each end of such a result keeps: bounded, so the result that was
+ * shrunk is never more than twice this plus a line. */
+const RECENT_RESULT_KEEP_CHARS = 4_000;
+
+/** Stage 1b: the recent tool results that are themselves most of the window.
+ * Old ones are elided by `elideOldToolResults`; without this a few huge recent
+ * ones left every compaction above its target, and compaction ran again before
+ * every step. */
+function shrinkRecentToolResults(items: readonly ConversationItem[]): ConversationItem[] {
+  return items.map((item) => {
+    if (item.type !== 'tool_result' || item.output.length <= RECENT_RESULT_LIMIT_CHARS) return item;
+    const dropped = item.output.length - RECENT_RESULT_KEEP_CHARS * 2;
+    return { ...item, output: `${item.output.slice(0, RECENT_RESULT_KEEP_CHARS)}\n… [${dropped} characters elided to save context; run the tool again for a narrower result] …\n${item.output.slice(-RECENT_RESULT_KEEP_CHARS)}` };
   });
 }
 
@@ -408,8 +434,13 @@ export async function compactConversation(input: CompactionInput): Promise<Compa
   if (input.targetTokens !== undefined && estimateContextTokens(input.system ?? '', elided) < input.targetTokens && (input.maxItems === undefined || elided.length <= input.maxItems)) {
     return { items: elided, stage: changed ? 'elided' : 'none' };
   }
+  const stillOver = (candidate: readonly ConversationItem[]): boolean =>
+    input.targetTokens === undefined || estimateContextTokens(input.system ?? '', candidate) >= input.targetTokens;
   const cut = safeCut(elided, keepRecent);
-  if (cut < 2) return { items: elided, stage: changed ? 'elided' : 'none' };
+  if (cut < 2) {
+    const shrunk = stillOver(elided) ? shrinkRecentToolResults(elided) : elided;
+    return { items: shrunk, stage: changed || shrunk.some((item, index) => item !== elided[index]) ? 'elided' : 'none' };
+  }
   const kept = elided.slice(cut);
   const step = await input.modelClient.step({
     system: SUMMARY_SYSTEM,
@@ -421,5 +452,10 @@ export async function compactConversation(input: CompactionInput): Promise<Compa
   const summary = step.text.trim();
   // A failed summary must not destroy context: keep the elided form instead.
   if (!summary) return { items: elided, stage: changed ? 'elided' : 'none', usage: step.usage };
-  return { items: [{ type: 'summary', text: summary }, ...kept], stage: 'summarized', summary, kept, usage: step.usage };
+  const summarized: ConversationItem[] = [{ type: 'summary', text: summary }, ...kept];
+  // What was kept may itself be over the target (a few huge recent results):
+  // shrunk here, so the next step does not start above the line again.
+  const items = stillOver(summarized) ? shrinkRecentToolResults(summarized) : summarized;
+  const keptItems = items.slice(1);
+  return { items, stage: 'summarized', summary, kept: keptItems, usage: step.usage };
 }
