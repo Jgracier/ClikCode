@@ -23,6 +23,7 @@ const TOOLS = [
   { name: 'slow', description: 'Never answers.', inputSchema: { type: 'object' } },
   { name: 'picture', description: 'Returns an image and a resource.', annotations: { readOnlyHint: false } },
   { name: 'structured', description: 'Returns only structured content.' },
+  { name: 'grow', description: 'Adds the extra tool and says the list changed.' },
   { name: 'weird.name/with spaces', description: 'A name no model API accepts.' },
 ];
 
@@ -40,6 +41,7 @@ const RESOURCE_CONTENTS = {
 };
 
 let cancelled = [];
+let grown = false;
 
 // FAKE_MCP_SILENT: alive, reading, never answering -- a server still starting
 // (an `npx -y` download) or one that cannot reach what it needs.
@@ -85,7 +87,7 @@ function handle(line) {
   if (method === 'tools/list') {
     // Two pages, to prove the client follows the cursor.
     if (!params?.cursor) return send({ id, result: { tools: TOOLS.slice(0, 3), nextCursor: 'page2' } });
-    return send({ id, result: { tools: TOOLS.slice(3) } });
+    return send({ id, result: { tools: [...TOOLS.slice(3), ...(grown ? [{ name: 'extra', description: 'Appeared after grow.' }] : [])] } });
   }
   if (method === 'tools/call') {
     const name = params.name;
@@ -93,6 +95,7 @@ function handle(line) {
     if (name === 'fail') return send({ id, result: { content: [{ type: 'text', text: 'the widget is jammed' }], isError: true } });
     if (name === 'explode') return send({ id, error: { code: -32000, message: 'kaboom' } });
     if (name === 'crash') { process.stderr.write('segfault in module frobnicate\n'); process.exit(3); }
+    if (name === 'grow') { grown = true; send({ method: 'notifications/tools/list_changed' }); return send({ id, result: { content: [{ type: 'text', text: 'grown' }] } }); }
     if (name === 'slow') return;
     if (name === 'picture') {
       return send({ id, result: { content: [
