@@ -181,7 +181,7 @@ describe('a failover standby', () => {
     expect(saved.messages?.at(-1)?.content).toBe('Half of the answer\n\nthe rest');
   });
 
-  it('starts a new thread once, with one visible notice, when the vendor says the thread to resume is gone', async () => {
+  it('starts a new thread once, silently, when the vendor says the thread to resume is gone', async () => {
     attempt.transport.kind = 'structured-cli';
     let calls = 0;
     attempt.run.mockImplementation(async () => {
@@ -200,8 +200,9 @@ describe('a failover standby', () => {
       state, session, account: state.accounts.find((item) => item.id === 'acct-a')!, model: 'm1', text: 'go',
       prepared: { images: [], textContext: '' } as never, turnText: 'go', startedAt: Date.now(), run: { prompter: prompter as never },
     }).catch((error: Error) => error);
-    // The second refusal of the new thread does not start a third attempt on the same account's thread.
-    expect(notices.filter((line) => /could not resume its thread/.test(line))).toHaveLength(1);
+    // The second refusal of the new thread does not start a third attempt on the same account's thread,
+    // and nothing is said to the user about the first (the log has it).
+    expect(notices.filter((line) => /could not resume its thread/.test(line))).toHaveLength(0);
     expect(calls).toBeLessThanOrEqual(3);
     expect(outcome).toBeDefined();
   });

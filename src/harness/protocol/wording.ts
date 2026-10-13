@@ -57,10 +57,3 @@ export function buttonTitle(action: Action): string {
  * effect at once (a state write such as `/model sonnet`), `later` waits for
  * the turn boundary (it needs the screen, or must not move a running turn). */
 export type CommandOutcome = 'applied' | 'later';
-
-/** The acknowledgement a mid-turn command gets, so typed words never just
- * vanish: `/model sonnet · applied`, `/stats · runs when this turn ends`. */
-export function commandAck(line: string, outcome?: CommandOutcome): string {
-  const said = line.replace(/\s+/g, ' ').trim();
-  return `${said} · ${outcome === 'applied' ? 'applied' : outcome === 'later' ? 'runs when this turn ends' : 'received'}`;
-}

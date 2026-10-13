@@ -256,9 +256,8 @@ export class IdeBridge {
 
   private report(error: unknown): void {
     if (error instanceof TurnFailed) return;
-    // The user's own Cancel is an outcome: one plain line, as the terminal says it.
-    const cancelled = signInCancelledLine(error);
-    if (cancelled) { this.channel.send({ type: 'notice', message: cancelled, level: 'info' }); return; }
+    // The user's own Cancel is their choice: nothing is said.
+    if (signInCancelledLine(error)) return;
     this.channel.send({ type: 'notice', message: messageOf(error), level: 'error' });
   }
 
@@ -443,10 +442,7 @@ export function captureStdout(channel: IdeChannel, stream: NodeJS.WriteStream = 
 export function ideInstallReporter(channel: IdeChannel): HarnessInstallReporter {
   return {
     start: (label) => channel.send({ type: 'busy', label }),
-    done: (message) => {
-      channel.send({ type: 'busy' });
-      channel.send({ type: 'notice', message, level: 'info' });
-    },
+    done: () => channel.send({ type: 'busy' }),
     // The error itself reaches the editor as the failed request's notice.
     failed: () => channel.send({ type: 'busy' }),
   };

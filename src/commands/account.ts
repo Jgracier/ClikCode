@@ -351,14 +351,13 @@ async function signInAccount(harnessCommandName: string, label: string | undefin
  * screen: the CLI's band, the VS Code panel's card. Every vendor, the same
  * way (gateway/login/vendor-sign-in.ts). Without one (a shell, a worker) the
  * sign-in falls back to plain stdin/stdout. One line in the conversation,
- * written once it is over, says how it went. */
+ * written when it failed, says why; a sign-in that worked or was cancelled says nothing. */
 export async function withSignIn<T>(prompter: Pick<HarnessPrompter, 'signInScreen' | 'activity'> | undefined, name: string, work: () => Promise<T>): Promise<T> {
   const screen = prompter?.signInScreen?.(name);
   if (!screen) return work();
   try {
     const result = await withSignInScreen(screen, work);
     screen.stop();
-    prompter?.activity?.(`${chalk.green('signed in to')} ${chalk.dim(name)}`);
     return result;
   } catch (error) {
     screen.stop();
@@ -366,9 +365,7 @@ export async function withSignIn<T>(prompter: Pick<HarnessPrompter, 'signInScree
     // why. Either way this is the one line about it: the error goes on
     // marked as said (signInOutcomeSaid).
     const cancelled = screen.signal.aborted || error instanceof SignInCancelled;
-    prompter?.activity?.(cancelled
-      ? chalk.dim(`Sign-in to ${name} cancelled`)
-      : `${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
+    if (!cancelled) prompter?.activity?.(`${chalk.yellow(`sign-in to ${name} did not finish`)}${error instanceof Error && error.message ? chalk.dim(` · ${error.message.split('\n')[0]}`) : ''}`);
     throw Object.assign(error instanceof Error ? error : new Error(String(error)), {
       [SIGN_IN_SAID]: cancelled ? 'cancelled' : 'failed',
       ...(cancelled ? { [SIGN_IN_CANCELLED_LINE]: `Sign-in to ${name} cancelled` } : {}),

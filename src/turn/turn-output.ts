@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { stdout as output } from 'node:process';
 import chalk from 'chalk';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
+import { diagnostic } from '../runtime/lifecycle-log.js';
 import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { stopReasonNotice, type TurnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
@@ -59,14 +60,9 @@ export function recordUnfinishedInvocation(
 /** An answer the vendor cut short says so, beside the answer. */
 export function showStopReason(prompter: TurnObserver | undefined, reason: TurnStopReason | undefined): void {
   const stopped = stopReasonNotice(reason);
-  if (stopped && prompter) prompter.activity(chalk.yellow(stopped));
-  else if (stopped && !isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(stopped)}\n`);
-}
-
-/** A line about a turn that completed but not as asked, beside its answer. */
-export function showTurnNote(prompter: TurnObserver | undefined, note: string): void {
-  if (prompter) prompter.activity(chalk.yellow(note));
-  else if (!isJsonDefaultMode()) process.stderr.write(`${chalk.yellow(note)}\n`);
+  if (!stopped) return;
+  if (prompter) prompter.activity(chalk.yellow(stopped));
+  else diagnostic('turn.stop-reason', stopped);
 }
 
 /** An activity row: on the prompter, or as a line on stdout headless. */

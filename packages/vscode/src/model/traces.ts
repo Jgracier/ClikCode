@@ -23,7 +23,7 @@ export function withSavedTraces(traces: TurnTrace[], messages: NonNullable<Harne
     if (message.role !== 'assistant') return;
     const saved = readTurnActivities(message.activities, message.content.length);
     // The worker's own record of how the turn ended: what the live window
-    // said ("Worked for 1m 2s", "Stopped after 3s"), said again on reopen.
+    // said ("Worked for 1m 2s", "Stopped"), said again on reopen.
     const end = message.turnEnd;
     const work = backgroundWorkOf(end);
     const pendingBackground = work?.agents ?? 0;

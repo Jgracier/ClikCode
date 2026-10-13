@@ -152,8 +152,6 @@ export async function interactiveAccountPicker(
       rl.panel?.('Verify this account', verificationNotice(pending));
     }
     await aiSessionCommand(id, `/settings account ${selected.accountId}`);
-    const chosen = providerAccounts.find((account) => account.id === selected.accountId);
-    if (chosen) rl.notice?.(`Using ${chosen.label}`);
     return id;
   }
 }
@@ -205,8 +203,6 @@ export async function manageAccountAction(rl: HarnessPrompter, accountId: string
   const environment = nativeProfileEnvironment(account.nativeProfile);
   if (action === 'disconnect') {
     await signOutAccount(account.id);
-    // Said, and how to undo it: it asked nothing first.
-    rl.activity?.(`Signed out of ${account.label} · /login signs back in`);
   } else if (action === 'reauthenticate' && harness.loginArgv) {
     await withSignIn(rl, harness.displayName, () => loginNativeHarness(harness, environment));
     await syncAccountIdentityAfterLogin(harness, account, state);

@@ -30,7 +30,7 @@ export interface ResumeWaiter {
   /** Read the session and act on what is parked there (or no longer is). */
   check(): Promise<void>;
   /** Drop the parked turn; `why` is told to every window when there was one. */
-  cancel(why?: string): Promise<void>;
+  cancel(): Promise<void>;
   readonly pending: boolean;
   stop(): void;
 }
@@ -88,11 +88,11 @@ export function createResumeWaiter(host: ResumeWaiterHost): ResumeWaiter {
 
   return {
     check: () => serial(look),
-    cancel: (why) => serial(async () => {
+    // The user's own Esc or new message: nothing is said.
+    cancel: () => serial(async () => {
       clearTimer();
-      const taken = await takeResumeAt(host.sessionId);
+      await takeResumeAt(host.sessionId);
       setPending(false);
-      if (taken && why) host.notice(why);
     }),
     get pending() { return pending; },
     stop: clearTimer,

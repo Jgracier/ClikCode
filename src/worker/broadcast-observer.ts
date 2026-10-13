@@ -270,10 +270,9 @@ export class BroadcastObserver implements TurnObserver {
     for (const client of this.clients) if (client !== except) sendEvent(client, event);
   }
 
-  render(session: HarnessSession, account?: string, notice?: string): void {
+  render(session: HarnessSession, account?: string): void {
     const live = this.liveSnapshot(session);
     this.broadcast({ type: 'snapshot', session, ...(account ? { account } : {}), ...(live ? { live } : {}) });
-    if (notice) this.broadcast({ type: 'notice', message: notice });
   }
 
   response(text: string, mode: 'append' | 'replace' = 'append'): void {

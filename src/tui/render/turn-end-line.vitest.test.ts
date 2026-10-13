@@ -48,7 +48,7 @@ describe('the line a saved turn ends on', () => {
   });
 
   it('says a stopped turn stopped, however short', () => {
-    expect(turnEndLine([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hel', turnEnd: { ms: 900, stopped: true } }], 1)).toBe('Stopped after 1s');
+    expect(turnEndLine([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'Hel', turnEnd: { ms: 900, stopped: true } }], 1)).toBe('Stopped');
   });
 });
 

@@ -47,7 +47,7 @@ describe.skipIf(process.platform === 'win32')('a sign-in on the prompter\'s own 
     return path;
   };
 
-  it('shows the link and code on that screen, takes it down, and says how it went', async () => {
+  it('shows the link and code on that screen, takes it down, and says nothing of a sign-in that worked', async () => {
     const spec = { command: 'grok', binary: await vendor(0.5), displayName: 'Grok Build', loginArgv: [] };
     const { value, calls } = prompter();
     await withSignIn(value, 'Grok Build', () => loginNativeHarness(spec, {}));
@@ -55,18 +55,17 @@ describe.skipIf(process.platform === 'win32')('a sign-in on the prompter\'s own 
       'screen Grok Build',
       'show https://accounts.x.ai/oauth2/device?user_code=5FCB-TTXG 5FCB-TTXG',
       'stop',
-      'activity signed in to Grok Build',
     ]);
   });
 
-  it('cancels from the screen and says, in one plain line, it was cancelled', async () => {
+  it('cancels from the screen, saying nothing: the cancel was the user\'s', async () => {
     const spec = { command: 'grok', binary: await vendor(30), displayName: 'Grok Build', loginArgv: [] };
     const { value, calls, cancel } = prompter();
     const login = withSignIn(value, 'Grok Build', () => loginNativeHarness(spec, {}));
     setTimeout(cancel, 1_000);
     await expect(login).rejects.toThrow(/cancelled/);
-    expect(calls.at(-2)).toBe('stop');
-    expect(calls.at(-1)).toBe('activity Sign-in to Grok Build cancelled');
+    expect(calls.at(-1)).toBe('stop');
+    expect(calls.some((call) => call.startsWith('activity'))).toBe(false);
     await login.catch((error: unknown) => expect(signInOutcomeSaid(error)).toBe('cancelled'));
   });
 });

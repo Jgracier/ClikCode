@@ -184,8 +184,8 @@ export type WorkerEvent =
    * sign-in on, so the client runs it on its own and answers with
    * `sign-in-response`; the worker then retries the turn. */
   | { type: 'sign-in-request'; id: string; command: string; argv: readonly string[]; environment: Record<string, string>; name: string }
-  | { type: 'notice'; message: string }
-  | { type: 'turn-error'; message: string }
+  /** `said`: the turn's own note already carries the failure's line. */
+  | { type: 'turn-error'; message: string; said?: true }
   /** A cancelled turn that produced nothing worth keeping is discarded
    * outright (see worker-turn.ts's runTurn) -- but the words the user
    * actually typed are still theirs, so the client's own composer gets them

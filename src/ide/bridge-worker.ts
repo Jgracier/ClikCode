@@ -65,7 +65,7 @@ export class WorkerLink {
   }
 
   onWorkerEvent(sessionId: string, client: WorkerClient, event: WorkerEvent): void {
-    this.host.channel.send({ type: 'worker', sessionId, event, ...(event.type === 'note' || event.type === 'notice' ? { level: noticeLevel(event.message) } : {}) });
+    this.host.channel.send({ type: 'worker', sessionId, event, ...(event.type === 'note' ? { level: noticeLevel(event.message) } : {}) });
     switch (event.type) {
       case 'waiting-start':
         this.workerTurnRunning = true;

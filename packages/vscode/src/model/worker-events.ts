@@ -118,16 +118,17 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
       return model.approvals.some((item) => item.id === event.id) || event.outcome
         ? answeredApproval(model, event.id, event.outcome ? { outcome: event.outcome, ...(event.label ? { label: stripAnsi(event.label) } : {}), ...(event.callId ? { callId: event.callId } : {}) } : undefined)
         : model;
-    case 'notice':
     case 'note':
       // The terminal colours its notes: yellow for an account switch or a
       // limit, red for a failure. The colour is the level.
       return withNote(model, {
-        kind: 'notice', level: (event.type === 'note' ? level : undefined) ?? noticeLevel(event.message), text: stripAnsi(event.message),
-        ...(event.type === 'note' && event.seq !== undefined ? { seq: event.seq } : {}),
-        ...(event.type === 'note' && event.responseOffset !== undefined ? { offset: event.responseOffset } : {}),
+        kind: 'notice', level: level ?? noticeLevel(event.message), text: stripAnsi(event.message),
+        ...(event.seq !== undefined ? { seq: event.seq } : {}),
+        ...(event.responseOffset !== undefined ? { offset: event.responseOffset } : {}),
       });
     case 'turn-error': {
+      // The turn's own note already says it.
+      if (event.said) return model;
       const msg = failureLine(stripAnsi(event.message));
       // Exhaustion is an outcome, not a fault — show it as informational chat
       // text rather than a red error banner so it reads as part of the flow.

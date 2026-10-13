@@ -269,13 +269,8 @@ describe('a slash command typed while the turn runs', () => {
     } finally { rl.close(); }
   }
 
-  it('is acknowledged, with what became of it, where the typed text does not just vanish', async () => {
-    const screen = await typeCommand('/model sonnet', { commandOutcome: 'applied' });
-    expect(screen).toContain('/model sonnet · applied');
-  });
-
-  it('says when it will run, if it waits for the turn to end', async () => {
-    const screen = await typeCommand('/stats', { commandOutcome: 'later' });
-    expect(screen).toContain('/stats · runs when this turn ends');
+  it('says nothing of what became of it: the footer shows a model, the turn\'s end shows the rest', async () => {
+    expect(await typeCommand('/model sonnet', { commandOutcome: 'applied' })).not.toContain('applied');
+    expect(await typeCommand('/stats', { commandOutcome: 'later' })).not.toContain('runs when this turn ends');
   });
 });

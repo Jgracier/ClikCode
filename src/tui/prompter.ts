@@ -32,7 +32,7 @@ import { type ComposerFrame, EMPTY_COMPOSER, type WaitingTurn } from './prompter
 import { retakeScreen, retakeTerminalSignals, takeTerminalTitle, terminalSignals, notifyIfAway, suspendToShell, onContinue, close, suspend, resume } from './prompter/terminal-lifecycle.js';
 import { scrollTranscript, drainScroll, queueScroll, drainAtBatchEnd, scheduleScrollPaint, handleScrollKey, handleSelection, lineAtScreenRow, selectionText, followSelectionEdge, stepSelectionScroll, stopSelectionScroll, redrawSelection, noteReadingDirection, forgetScreenPosition } from './prompter/scroll-selection.js';
 import { showMention, mentionKey, endMention, jumpToMention } from './prompter/mention.js';
-import { notice, showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
+import { showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
 import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, markVendorWork, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
@@ -50,7 +50,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   closed = false;
   history: string[] = [];
   currentSession?: HarnessSession;
-  currentNotice?: string;
   /** The composer as the last paint drew it, for repaint() to draw again. */
   composer: ComposerFrame = EMPTY_COMPOSER;
   /** The turn (or other wait) in flight: see WaitingTurn. */
@@ -401,7 +400,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     return held ? stable.length + 1 : this.transcriptMessages(session).length;
   }
 
-  render(session: HarnessSession, _account?: string, notice?: string, journal?: JournalState): void {
+  render(session: HarnessSession, _account?: string, journal?: JournalState): void {
     if (this.currentSession?.id !== session.id) {
       setLifecycleSession(session.id);
       lifecycle('window.conversation', { from: this.currentSession?.id ?? null, harness: session.nativeHarness ?? session.route });
@@ -442,7 +441,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     if (!this.turn) this.waitingSubmissions = [];
     this.currentSession = session;
-    this.currentNotice = notice;
     // A render receives authoritative persisted state. Drop the transient
     // stream so the just-saved assistant message is never painted twice --
     // but NOT while a turn is running, where the live answer is the one thing
@@ -703,8 +701,6 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   noteReadingDirection(...args: Parameters<typeof noteReadingDirection>): ReturnType<typeof noteReadingDirection> { return noteReadingDirection.apply(this, args); }
 
   forgetScreenPosition(...args: Parameters<typeof forgetScreenPosition>): ReturnType<typeof forgetScreenPosition> { return forgetScreenPosition.apply(this, args); }
-
-  notice(...args: Parameters<typeof notice>): ReturnType<typeof notice> { return notice.apply(this, args); }
 
   showTransientNotice(...args: Parameters<typeof showTransientNotice>): ReturnType<typeof showTransientNotice> { return showTransientNotice.apply(this, args); }
 

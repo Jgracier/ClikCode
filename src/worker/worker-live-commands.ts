@@ -15,7 +15,7 @@ import type { WorkerContext } from './worker-context.js';
 
 export function createLiveCommands(ctx: WorkerContext) {
   const { observer, sessionId } = ctx;
-  const { currentSessionAndAccount, broadcastNotice, broadcastQueueChanged, showEveryWindow } = ctx.io;
+  const { currentSessionAndAccount, note, broadcastQueueChanged, showEveryWindow } = ctx.io;
 
   /** Take a message out of the queue. */
   const handleUnqueue = async (socket: Socket, command: Extract<ClientCommand, { type: 'unqueue' }>): Promise<void> => {
@@ -134,7 +134,7 @@ export function createLiveCommands(ctx: WorkerContext) {
     // Else a turn parked for the reset, if there is one. Said out loud
     // either way: the window that asked is waiting to hear that it is over.
     lifecycle('worker.cancel', { stopped: ctx.resumeWaiter.pending ? 'reset wait' : 'nothing' });
-    try { await ctx.resumeWaiter.cancel('Stopped waiting for the reset'); } finally { sendEvent(socket, { type: 'stop-done', nothing: true }); }
+    try { await ctx.resumeWaiter.cancel(); } finally { sendEvent(socket, { type: 'stop-done', nothing: true }); }
     return;
   };
 
@@ -178,7 +178,7 @@ export function createLiveCommands(ctx: WorkerContext) {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         answer('error', message);
-        if (!command.id) broadcastNotice(`Could not send: ${message}`);
+        if (!command.id) note(`Could not send: ${message}`);
       }
     })();
     ctx.activeSubmissions?.add(handled);

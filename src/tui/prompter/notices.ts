@@ -1,12 +1,6 @@
 /** Transient notices and the scrollable panel above the composer. */
 import { sanitizeTerminalText } from '../render/text.js';
-import { NOTICE_MS } from '../../harness/protocol/timings.js';
 import type { TerminalHarnessPrompter } from '../prompter.js';
-
-export function notice(this: TerminalHarnessPrompter, text: string): void {
-  this.showTransientNotice(text, NOTICE_MS, () => this.repaint());
-  this.repaint();
-}
 
 export function showTransientNotice(this: TerminalHarnessPrompter, text: string, durationMs: number, redraw: () => void): void {
   this.clearTransientNotice();

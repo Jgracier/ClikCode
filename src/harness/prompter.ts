@@ -99,7 +99,7 @@ export interface HarnessPrompter {
   board?(settings: import('../tui/conversation-board.js').ConversationBoardSettings): Promise<import('../tui/conversation-board.js').BoardResult | undefined>;
   /** `journal`: whether something still runs the conversation's turn journal
    * (`pendingTurn`). Unsaid, it may be running, and is never drawn as ended. */
-  render?(session: HarnessSession, account?: string, notice?: string, journal?: JournalState): void;
+  render?(session: HarnessSession, account?: string, journal?: JournalState): void;
   /** The prompt this client has just submitted, or undefined for a synthetic
    * turn that shows none. Held until the turn ends: see
    * tui/render/pending-prompt.ts for why a snapshot cannot carry it. */
@@ -116,9 +116,6 @@ export interface HarnessPrompter {
   /** Where a vendor sign-in shows its link, code and questions
    * (commands/account.ts withSignIn): the CLI's band, the VS Code card. */
   signInScreen?(name: string): import('../gateway/login/vendor-sign-in.js').SignInScreen;
-  /** A one-line confirmation under the composer that clears itself:
-   * "Effort set to High". Where nothing can show one, nothing is said. */
-  notice?(text: string): void;
   close(): void;
 }
 

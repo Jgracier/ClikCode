@@ -13,7 +13,7 @@
  */
 import { backgroundWorkOf, type BackgroundWork } from '../harness/protocol/background-agents.js';
 import type { HarnessQuestionResult } from '../harness/events/question.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { randomUUID } from 'node:crypto';
 import { commandDuringTurn } from '../tui/slash/queue.js';
 import type { TerminalHarnessPrompter } from '../tui/prompter.js';
@@ -61,8 +61,6 @@ async function answeredOrClosed<T>(client: WorkerClient, answered: Promise<T>, o
   const closed = new Promise<T>((resolveClosed) => { onClose = () => resolveClosed(onClosed); client.once('close', onClose); });
   try { return await Promise.race([answered, closed]); } finally { if (onClose) client.off('close', onClose); }
 }
-/** The worker running a turn went away mid-turn. */
-const WORKER_STOPPED = "The conversation's worker stopped; send again to continue.";
 /** Messages being taken back (Esc), waiting for the worker's `unqueued`. */
 const pendingTakeBacks = new Map<string, (outcome: TakeBackOutcome) => void>();
 
@@ -254,16 +252,11 @@ export async function closeAllWorkerClients(): Promise<void> {
 /** The waiting band's cancel and submit callbacks, sent over the socket: the
  * worker owns the turn's AbortController and LiveTurnInputBroker.
  *
- * Returns whatever notice the worker reported (a cancellation's "Stopped",
- * for instance) so the caller can fold it into the SAME `notice` local
- * variable its own next loop iteration already shows on the following
- * render -- there is no separate "show a notice" method on the interface
- * to call here directly, by design: a notice belongs to the next render,
- * not a side channel of its own (see prompter.ts's own render(session,
- * account, notice) signature). */
+ * Returns `left` when Left was pressed to open the board. Whatever the
+ * turn has to say is in the transcript already (a note of the turn). */
 export async function runTurnThroughWorker(
   sessionId: string, rl: TerminalHarnessPrompter, promptText: string, turn: WorkerTurnRequest,
-): Promise<{ notice?: string; left?: true }> {
+): Promise<{ left?: true }> {
   // The first message of a conversation waits on its worker starting; the
   // message and the spinner do not.
   if (!clients.has(sessionId)) rl.turnStarting();
@@ -386,7 +379,7 @@ export async function followWorkerTurn(
   /** Where the turn already is when this window joins it: its real start, so
    * the timer is not reset to zero, and the call it is running now. */
   joined?: { startedAt?: number; activity?: string },
-): Promise<{ notice?: string; left?: true }> {
+): Promise<{ left?: true }> {
   const client = clients.get(sessionId);
   const tracker = client ? trackers.get(client) : undefined;
   if (!client || !tracker?.running) return {};
@@ -398,8 +391,7 @@ export async function followWorkerTurn(
 
 async function driveWorkerTurn(
   sessionId: string, client: WorkerClient, rl: TerminalHarnessPrompter, begin: () => void, stillRunning?: () => boolean,
-): Promise<{ notice?: string; left?: true }> {
-  let notice: string | undefined;
+): Promise<{ left?: true }> {
   let left = false;
   /** The account the worker last named, for a render of this window's own. */
   let account: string | undefined;
@@ -436,7 +428,7 @@ async function driveWorkerTurn(
             // `live` says the worker still runs this turn, so its journal is
             // the live view's and is never drawn as ended; a snapshot without
             // it (the one that closes a turn) holds an interrupted one.
-            rl.render(event.session, event.account, undefined, event.live ? { running: true, ...(event.live.prompt !== undefined ? { prompt: event.live.prompt } : {}) } : { running: false });
+            rl.render(event.session, event.account, event.live ? { running: true, ...(event.live.prompt !== undefined ? { prompt: event.live.prompt } : {}) } : { running: false });
             // The turn as far as it has got -- one this window did not start
             // (a queued message it is behind) included.
             if (event.live) showLive(rl, tracker);
@@ -487,7 +479,7 @@ async function driveWorkerTurn(
             openPrompts.set(event.id, closing);
             // A terminal with no question surface cancels it, visibly: the worker's vendor never waits.
             const asked = rl.askQuestions ? rl.askQuestions(event.request, closing.signal)
-              : Promise.resolve<HarnessQuestionResult>({ kind: 'cancelled' }).then((result) => { rl.activity?.(`A question was declined because this screen cannot show it: ${event.request.title}`); return result; });
+              : Promise.resolve<HarnessQuestionResult>({ kind: 'cancelled' }).then((result) => { diagnostic('terminal.question-declined', event.request.title); return result; });
             void asked.catch((): HarnessQuestionResult => ({ kind: 'cancelled' })).then((result) => {
               openPrompts.delete(event.id);
               if (!closing.signal.aborted) { rl.markDrawn?.(`outcome:${event.id}`); client.send({ type: 'question-response', id: event.id, result }); }
@@ -521,14 +513,11 @@ async function driveWorkerTurn(
           case 'restore-draft':
             rl.restoreDraft(event.text);
             return;
-          case 'notice':
-            notice = event.message;
-            return;
           case 'submission':
             // Answered by the connection's own listener (track).
             return;
           case 'turn-error':
-            pendingError = new Error(event.message);
+            pendingError = Object.assign(new Error(event.message), event.said ? { said: true } : {});
             return;
           case 'waiting-stop':
             // Stopped from another window too: ended here as stopped.
@@ -550,7 +539,6 @@ async function driveWorkerTurn(
           case 'submit-queued':
             // Another turn was already running; this message waits behind it
             // and the loop sends it when its turn comes.
-            notice = 'Queued behind the turn already running';
             // That turn is shown here until it ends -- the snapshot the worker
             // sends next brings up what it has streamed. Returning at once
             // sent the loop straight back with the queued message, to be
@@ -584,11 +572,10 @@ async function driveWorkerTurn(
         // settle as stopped -- drawn from what the worker saved of it, while
         // the live view is still this turn's, so the answer is retired in
         // its place under its prompt rather than above it.
-        notice = WORKER_STOPPED;
         rl.turnStopped();
         void readState({ transcripts: [sessionId] }).then((state) => {
           const saved = state.sessions.find((item) => item.id === sessionId);
-          if (saved) rl.render({ ...saved, messages: sessionTranscriptMessages(saved), pendingTurn: undefined }, account, undefined, { running: false });
+          if (saved) rl.render({ ...saved, messages: sessionTranscriptMessages(saved), pendingTurn: undefined }, account, { running: false });
         }).catch(() => undefined).finally(() => finish('closed', () => resolveTurn()));
       };
       client.on('event', onEvent);
@@ -664,5 +651,5 @@ async function driveWorkerTurn(
     if (left) rl.leaveTurn();
     else rl.stopWaiting();
   }
-  return { ...(notice !== undefined ? { notice } : {}), ...(left ? { left: true as const } : {}) };
+  return left ? { left: true as const } : {};
 }

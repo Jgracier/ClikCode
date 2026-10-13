@@ -66,7 +66,7 @@ export async function runShellInChat(terminal: TerminalHarnessPrompter | undefin
   // only if it runs long enough to need one.
   // As it is saved (shellMessageContent), so reopening draws the same row.
   terminal?.submitted(`!${command}`);
-  terminal?.render(lastSeen, undefined, undefined, { running: false });
+  terminal?.render(lastSeen, undefined, { running: false });
   let result: ShellNote;
   try {
     result = await withSlowWait(terminal, `! ${command}`, () => runShellLine(id, command, controller.signal), () => controller.abort());

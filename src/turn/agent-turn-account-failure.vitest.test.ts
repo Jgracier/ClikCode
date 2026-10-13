@@ -95,11 +95,11 @@ describe('a Gateway turn refused for the account', () => {
     };
   };
 
-  it('out of credit is "All accounts exhausted", with the Gateway\'s own words on the turn', async () => {
+  it('out of credit is "All accounts exhausted", and nothing else is said about it', async () => {
     replies.push(() => ({ status: 402, body: { error: { message: 'Insufficient credits', code: 'insufficient_credits' } } }));
     const watching = prompter();
     await expect(runSessionTurn(config, 's1', 'go', undefined, { prompter: watching.observer })).rejects.toThrow(/^All accounts exhausted$/);
-    expect(watching.activity.join('\n')).toContain('Insufficient credits');
+    expect(watching.activity.join('\n')).not.toContain('Insufficient credits');
   }, 30_000);
 
   it('a 429 without a time to come back is out of usage; with one it is a throttle', async () => {

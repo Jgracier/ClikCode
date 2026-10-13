@@ -1,4 +1,5 @@
 /** The window loop. */
+import { diagnostic } from '../../../runtime/lifecycle-log.js';
 import { beginTurnClock, endTurnClock, markTurn } from '../../../runtime/turn-latency.js';
 import { randomUUID } from 'node:crypto';
 import { isClikCodeAgent } from '../../../session/route.js';
@@ -52,7 +53,7 @@ export class ChatLoop {
    * every other window attached to it re-renders. */
   private shownSettings: string | undefined;
   private shownLiveSettings: string | undefined;
-  /** A notice for the next frame, from whatever the last pass did. */
+  /** One line for the transcript after the next frame: the answer to a command the user just ran. */
   private notice: string | undefined;
   /** What this pass's turn actually sent, when a slash command expanded
    * the line (/review): what an interrupted turn recorded is compared to. */
@@ -137,14 +138,16 @@ export class ChatLoop {
       // way, and says so. Leaving ClikCode is never the answer to that.
       this.id = await newConversation(this.lastSeen.id, { sameModel: true, lastSeen: this.lastSeen });
       await claimConversation(this.id).catch(() => undefined);
-      this.notice = DELETED_ELSEWHERE;
+      diagnostic('window.conversation-deleted', DELETED_ELSEWHERE);
       return 'continue';
     }
     const account = await this.prepareRound(latest, latestState);
     const running = terminal ? await workerTurn(latest.id) : undefined;
-    terminal?.render(latest, account, this.notice, running ? { running: true, ...running } : { running: false });
+    terminal?.render(latest, account, running ? { running: true, ...running } : { running: false });
     // After a turn or a command: a Gateway balance a turn just billed.
     refreshUsage(latest, latestState, true);
+    // What the last pass has to say goes into the transcript, as a line.
+    if (this.notice) terminal?.activity(this.notice);
     this.notice = undefined;
     if (this.synchronizedSessionId !== this.id) {
       const syncId = this.id;
@@ -154,7 +157,7 @@ export class ChatLoop {
       void synchronizeNativeTranscript(latestState, latest).then(async (changed) => {
         if (!changed || syncId !== this.id) return;
         await writeState(latestState);
-        if (syncId === this.id) terminal?.render(latest, account, undefined, running ? { running: true, ...running } : { running: false });
+        if (syncId === this.id) terminal?.render(latest, account, running ? { running: true, ...running } : { running: false });
       }).catch(() => undefined);
     }
     return this.pickLine(latest, latestState, account, running, queueMark);
@@ -195,7 +198,7 @@ export class ChatLoop {
           if (!stopped) return;
           refreshSessionWorker(parkedId);
           delete latest.resumeAt;
-          terminal.render(latest, account, 'Stopped waiting for the reset', { running: false });
+          terminal.render(latest, account, { running: false });
           refreshUsage(latest, latestState);
         }).catch(() => undefined);
       } : undefined;
@@ -209,10 +212,9 @@ export class ChatLoop {
    * out of usage offers to send again. */
   private async followRunning(terminal: TerminalHarnessPrompter, latest: HarnessSession, account: string | undefined, prompt: string | undefined, resendText: string | undefined): Promise<void> {
     terminal.submitted(prompt);
-    terminal.render(latest, account, undefined, { running: true, ...(prompt !== undefined ? { prompt } : {}) });
+    terminal.render(latest, account, { running: true, ...(prompt !== undefined ? { prompt } : {}) });
     try {
       const followed = await followWorkerTurn(latest.id, terminal, joinedTurn(latest, prompt));
-      if (followed.notice) this.notice = followed.notice;
       if (followed.left) this.openBoard = true;
     } catch (error) {
       await this.handleTurnFailure(error, { line: resendText });
@@ -302,7 +304,6 @@ export class ChatLoop {
     try {
       this.sentPrompt = promptText;
       const result = await runTimedTurn({ config, terminal, lastSeen: this.lastSeen }, targetId, promptText, { ...turn, turnId, submittedAt });
-      if (result.notice) this.notice = result.notice;
       if (result.left) this.openBoard = true;
     } finally {
       endTurnClock(turnId);

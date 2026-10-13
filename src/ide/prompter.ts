@@ -191,9 +191,8 @@ export class IdePrompter implements HarnessPrompter {
     }
   }
 
-  render(session: HarnessSession, account?: string, notice?: string): void {
+  render(session: HarnessSession, account?: string): void {
     this.channel.send(sessionEvent(session, account));
-    if (notice) this.channel.send({ type: 'notice', message: notice, level: 'info' });
   }
 
   panel(title: string, body: string): void {

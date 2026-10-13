@@ -239,13 +239,20 @@ describe('chat model', () => {
     const model = run([
       { type: 'session', session: session({ queuedTurns: [{ id: 'q', text: 'later', submittedAt: '' }] }) },
       worker({ type: 'approval-request', id: 'a', title: 'Edit a.ts', preview: { diff: [change] }, rule: 'Edit(*)' }),
-      worker({ type: 'notice', message: '\u001b[33mStopped\u001b[0m' }),
+      worker({ type: 'note', message: '\u001b[33mSwitched account\u001b[0m' }),
       worker({ type: 'turn-error', message: 'boom' }),
     ]);
     expect(model.approvals).toEqual([{ id: 'a', title: 'Edit a.ts', rule: 'Edit(*)', diff: [change] }]);
     // The terminal's colour is the level: yellow warns.
-    expect(model.notes.map((n) => [n.level, n.text])).toEqual([['warning', 'Stopped'], ['error', 'boom']]);
+    expect(model.notes.map((n) => [n.level, n.text])).toEqual([['warning', 'Switched account'], ['error', 'boom']]);
     expect(model.queued).toEqual([{ id: 'q', text: 'later', command: false }]);
+  });
+
+  it('shows a failed turn once: the turn\'s own note says it, and the end event adds nothing', () => {
+    const said = run([worker({ type: 'note', message: 'Error: boom', seq: 1, responseOffset: 0 }), worker({ type: 'turn-error', message: 'boom', said: true })]);
+    expect(said.notes.map((note) => note.text)).toEqual(['Error: boom']);
+    const unsaid = run([worker({ type: 'turn-error', message: 'boom' })]);
+    expect(unsaid.notes.map((note) => note.text)).toEqual(['boom']);
   });
 
   it('never shows what ClikCode queued for the model: not as a queued row, not as a message', () => {

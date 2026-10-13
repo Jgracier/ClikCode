@@ -22,11 +22,9 @@ import { embeddedImagePaths, expandHomePath, queueAttachment, resolveStandaloneA
 import { compactPath } from '../../harness/protocol/labels.js';
 import { turnEnvironment } from '../../turn/turn-environment.js';
 import { localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider } from '../../runtime/lazy-bridge.js';
-import { harnessModelLabel } from '../../harness/accounts/model-catalog.js';
 import { aiSessionLeave } from '../../commands/ai/sessions.js';
 import { moveToProvider, newConversation } from '../../commands/ai/conversations.js';
 import { aiHarnessSelect } from '../../commands/ai/harness.js';
-import { settingLabel } from '../pickers/setting-scope.js';
 import { chooseOption } from '../pickers/choose.js';
 import { interactiveEnginePicker } from '../pickers/engine.js';
 import { selectProviderConversation } from '../pickers/conversation.js';
@@ -34,12 +32,11 @@ import { addAccountForHarness, interactiveAccountPicker, manageAccountAction, us
 import { interactiveModelPicker } from '../pickers/model.js';
 import { interactiveEffortPicker } from '../pickers/effort.js';
 import { interactivePermissionPicker } from '../pickers/permissions.js';
-import { parseSandboxMode, sandboxModeText } from '../../agent/sandbox.js';
 import { interactiveHarnessOptionPicker } from '../pickers/options.js';
 import { interactiveToolsPicker } from '../pickers/tools.js';
 import { interactiveSettingsPicker } from '../pickers/settings.js';
 import { doctorSummary } from '../doctor-summary.js';
-import { parseSendMode, sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
+import { sendModeOf, SEND_MODE_DETAIL, SEND_MODES } from '../../turn/send-mode.js';
 import { aiSessionCommand, lastAnswer, slashRouteTurn } from './handlers.js';
 import { copyToClipboard } from '../../session/attachments.js';
 import { parseSlashInput, routeSlashInput, type SlashHandlerKey, type SlashRoute } from './registry.js';
@@ -125,7 +122,8 @@ async function agentMcpCommand(host: SlashHost, words: readonly string[]): Promi
   const [action, name] = words;
   if ((action === 'login' || action === 'logout') && !name) throw new Error(`Usage: /mcp ${action} <name>`);
   if (action === 'logout') {
-    return { notice: await forgetMcpOAuth(stateDirectory(), name!) ? `Signed out of ${name}` : `ClikCode holds no sign-in for ${name}` };
+    await forgetMcpOAuth(stateDirectory(), name!);
+    return {};
   }
   if (action === 'login') {
     const screen = host.prompter.signInScreen?.(name!);
@@ -133,10 +131,10 @@ async function agentMcpCommand(host: SlashHost, words: readonly string[]): Promi
     try {
       await loginMcpServer(name!, mcpSignInUiFor(screen));
     } catch (error) {
-      if (screen.signal.aborted) return { notice: `Sign-in to ${name} cancelled` };
+      if (screen.signal.aborted) return {};
       throw error;
     } finally { screen.stop(); }
-    return { notice: `Signed in to ${name}; its tools are offered from the next turn` };
+    return {};
   }
   if (action) throw new Error('Usage: /mcp [login|logout <name>]');
   const text = await host.withBusy('checking MCP servers…', () => mcpServersText());
@@ -162,7 +160,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     session.updatedAt = new Date().toISOString();
     await writeState(state);
     host.attached?.(session.attachments ?? []);
-    return { notice: `Attached ${compactPath(attachment)} for the next request` };
+    return {};
   }
   const harness = sessionHarness(session);
   // `/etc/hosts explain this` is a request about a file, not a command.
@@ -232,12 +230,6 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
   if (!availability.available) throw new Error(availability.reason ?? `/${route.entry.name} is not available here.`);
   const text = `/${route.entry.name}${route.args ? ` ${route.args}` : ''}`;
   const { args } = route;
-  /** A setting typed with its value says what it set, as the pickers do. */
-  const setWithValue = async (said: string): Promise<InteractiveSlashOutcome> => {
-    const outcome = await viaHeadless(text);
-    rl.notice?.(said);
-    return outcome;
-  };
   const handlers: Record<InteractiveSlashHandlerKey, () => Promise<InteractiveSlashOutcome | void>> = {
     exit: async () => { await aiSessionLeave(id); return { exit: true }; },
     new: async () => ({ id: await newConversation(id), ...(args ? { prompt: args, echo: true } : {}) }),
@@ -260,17 +252,13 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
     },
     model: async () => {
       if (!args) return interactiveModelPicker(rl, id);
-      const outcome = await viaHeadless(text);
-      const movedTo = outcome.id ?? id;
-      const model = (await readState({ transcripts: [movedTo] })).sessions.find((item) => item.id === movedTo)?.model;
-      if (model) rl.notice?.(`Model set to ${harness ? harnessModelLabel(harness, model) : model}`);
-      return outcome;
+      return viaHeadless(text);
     },
-    effort: async () => args ? setWithValue(`Effort set to ${settingLabel(args.trim().toLowerCase() === 'default' ? '' : args.trim().toLowerCase())}`) : interactiveEffortPicker(rl, id),
-    permissions: async () => args ? setWithValue(`Permissions set to ${settingLabel(args.trim().toLowerCase())}`) : interactivePermissionPicker(rl, id),
-    sandbox: async () => (args ? setWithValue(sandboxModeText(parseSandboxMode(args) ?? 'off')) : viaHeadless(text)),
+    effort: async () => args ? viaHeadless(text) : interactiveEffortPicker(rl, id),
+    permissions: async () => args ? viaHeadless(text) : interactivePermissionPicker(rl, id),
+    sandbox: async () => viaHeadless(text),
     send: async () => {
-      if (args) return setWithValue(`Messages typed mid-turn: ${parseSendMode(args)}`);
+      if (args) return viaHeadless(text);
       // Two rows, the current one marked: what a message typed while a turn
       // runs does from now on, in every conversation.
       const current = sendModeOf(state.globalSettings);
@@ -279,14 +267,13 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       })), undefined, { startAt: current });
       if (!chosen) return {};
       await viaHeadless(`/send ${chosen}`);
-      rl.notice?.(`Messages typed mid-turn: ${chosen}`);
       return {};
     },
     // Said in the TUI too, where the `copied` panel is a confirmation it
     // drops: over SSH (OSC 52) nothing else shows it happened.
     copy: async () => {
       await copyToClipboard(lastAnswer(session));
-      return { notice: 'Copied' };
+      return {};
     },
     options: async () => interactiveHarnessOptionPicker(rl, id),
     capabilities: async () => {
@@ -330,9 +317,7 @@ export async function dispatchLine(host: SlashHost, id: string, line: string, op
       const options = args || !host.canPick ? [] : forkPointOptions(sessionTranscriptMessages(session));
       const at = options.length > 1 ? await chooseOption(rl, 'Fork after which message?', options) : forkPoint(route.words[0]);
       if (options.length > 1 && at === undefined) return {};
-      const outcome = await viaHeadless(options.length > 1 ? `/fork @${at}` : text);
-      // Said here too: the panel is drawn on the conversation being left.
-      return at === undefined ? outcome : { ...outcome, notice: `Forked after message ${at} · files on disk are not rewound: /changes lists each turn's edits, /redo puts them back` };
+      return viaHeadless(options.length > 1 ? `/fork @${at}` : text);
     },
     // `/changes <path>`: the turns, in any conversation, that edited it --
     // newest first; the chosen one opens at its prompt. `/changes [N]` and a

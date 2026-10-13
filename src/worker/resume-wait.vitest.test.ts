@@ -124,19 +124,19 @@ describe('the worker waiting for the reset', () => {
     expect(sent).toHaveLength(1);
   });
 
-  it('a cancel or a new message drops it, with a notice', async () => {
+  it('a cancel or a new message drops it, saying nothing', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'], now: T0 });
     await chat({ resumeAt: park() });
     const { waiter, sent, notices } = host();
     await waiter.check();
-    await waiter.cancel('Stopped waiting for the reset');
-    expect(notices).toEqual(['Stopped waiting for the reset']);
+    await waiter.cancel();
+    expect(notices).toEqual([]);
     expect(await parked()).toBeUndefined();
     await vi.advanceTimersByTimeAsync(RESET - T0 + RESUME_RECHECK_MS);
     expect(sent).toEqual([]);
     // Nothing parked: cancel says nothing.
-    await waiter.cancel('again');
-    expect(notices).toHaveLength(1);
+    await waiter.cancel();
+    expect(notices).toHaveLength(0);
   });
 
   it('stops with a notice when no account can take it an hour past the reset', async () => {

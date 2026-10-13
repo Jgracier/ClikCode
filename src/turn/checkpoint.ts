@@ -384,7 +384,7 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
   settleOpenThought(session.pendingTurn, Date.parse(now));
   const before = session.messages?.length ?? 0;
   const startedAt = Date.parse(session.pendingTurn.startedAt);
-  const { accountSwitch, signedInTo, pendingBackground, background } = session.pendingTurn;
+  const { accountSwitch, pendingBackground, background } = session.pendingTurn;
   if (response?.trim() || session.pendingTurn.response?.trim()) {
     const pending = session.pendingTurn;
     const streamed = pending.response ?? '';
@@ -407,7 +407,6 @@ export function finishPendingTurn(session: HarnessSession, response: string | un
     const reported = Date.parse(at) >= startedAt && Object.keys(spent).length ? spent : undefined;
     last.turnEnd = { ms: Math.max(0, ms), ...(stopped ? { stopped: true as const } : {}), ...(reported ? { usage: reported } : {}), ...(pendingBackground && pendingBackground > 0 ? { pendingBackground } : {}), ...(background ? { background } : {}) };
     if (accountSwitch) last.accountSwitch = accountSwitch;
-    if (signedInTo) last.signedInTo = signedInTo;
   }
 }
 

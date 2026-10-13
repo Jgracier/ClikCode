@@ -10,7 +10,7 @@
  * transport ends it and hands the vendor to that turn), and one that arrives
  * while a user turn is still finishing starts right after. */
 import { mergeBackgroundWork, type BackgroundWork } from '../harness/protocol/background-agents.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { readState } from '../session/state/read.js';
 import { writeState } from '../session/state/write.js';
 import type { HarnessSession } from '../session/model.js';
@@ -124,7 +124,7 @@ export function createVendorBackgroundRunner(deps: RunnerDependencies): VendorBa
       onPhase: (phase) => observer.phase(phase),
       onPlan: (entries) => observer.setPlan(entries),
       onApproval: async (title, detail, preview, signal, callId) => (await observer.approval(title, detail, preview, undefined, signal, callId)) !== false,
-      onNotice: (message) => observer.activity(message),
+      onNotice: (message) => diagnostic('vendor.notice', message),
       ...(observer.askQuestions ? { onQuestion: (request, signal) => observer.askQuestions!(request, signal) } : {}),
     };
     turn.attach(sink);

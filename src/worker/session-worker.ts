@@ -118,7 +118,7 @@ export async function runSessionWorker(sessionId: string): Promise<void> {
   /** A turn parked until the quota resets (worker/resume-wait.ts): sent from
    * here once it has, once. `resumingTurn` marks that turn for the turn runner. */
   ctx.resumeWaiter = createResumeWaiter({
-    sessionId, turnRunning: () => ctx.turnRunning || ctx.draining, notice: ctx.io.broadcastNotice, changed: () => ctx.idle.scheduleIdleExit(),
+    sessionId, turnRunning: () => ctx.turnRunning || ctx.draining, notice: ctx.io.note, changed: () => ctx.idle.scheduleIdleExit(),
     send: async (prompt) => {
       // A wait an older build parked holds its continuation line, which is
       // never sent: the turn's own request is.

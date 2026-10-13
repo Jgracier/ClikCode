@@ -45,7 +45,7 @@ export function frameBands(p: TerminalHarnessPrompter, input: BandInput) {
   // maxLiveConversation below. The distinction is the point: a spinner and
   // an elapsed clock in a fixed place are status, while a sentence being
   // rewritten under the eye is the thing that made reading impossible.
-  const notice = p.mentionFocus?.status ?? p.transientNotice ?? p.currentNotice;
+  const notice = p.mentionFocus?.status ?? p.transientNotice;
   const noticeShown = notice ? noticeLines(notice, inner) : [];
   const indicatorText = p.turn ? backgroundTerminalsLabel(p.backgroundTerminals) : undefined;
   const budget = frameRowBudget({

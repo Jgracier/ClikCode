@@ -53,7 +53,6 @@ export async function signInGatewayForTurn(
       }, GATEWAY_LABEL, run);
     } else {
       await run();
-      prompter.activity(`signed in to ${GATEWAY_LABEL}`);
     }
     return true;
   } catch (error) {

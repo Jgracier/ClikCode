@@ -165,7 +165,7 @@ describe('the editor bridge and a pending sign-in', () => {
 });
 
 describe('the editor bridge reporting a sign-in the user cancelled', () => {
-  it('says it as one plain line, as the terminal does, never a red error', async () => {
+  it('says nothing: cancelling was the user\'s own choice', async () => {
     const { withSignIn } = await import('../commands/account.js');
     const { SignInCancelled } = await import('../gateway/login/vendor-sign-in.js');
     const events: Array<{ type: string; message?: string; level?: string }> = [];
@@ -177,7 +177,7 @@ describe('the editor bridge reporting a sign-in the user cancelled', () => {
       throw new SignInCancelled('Grok Build');
     }).catch((caught: unknown) => caught);
     (bridge as unknown as { report(error: unknown): void }).report(new Error('wrapped', { cause: error }));
-    expect(events).toEqual([{ type: 'notice', message: 'Sign-in to Grok Build cancelled', level: 'info' }]);
+    expect(events).toEqual([]);
   });
 });
 

@@ -186,7 +186,6 @@ function writeMessages(
     }
     // What the turn needed on the way -- a sign-in, another account --
     // saved with its answer, then its closing line.
-    if (message.role === 'assistant' && message.signedInTo) emit(['', `  ${chalk.green('signed in to')} ${chalk.dim(message.signedInTo)}`]);
     if (message.role === 'assistant' && message.accountSwitch) emit(['', `  ${chalk.yellow(accountSwitchLine(message.accountSwitch))}`]);
     const ended = message.role === 'assistant' ? turnEndLine(persistedMessages, index) : undefined;
     if (ended) emit(['', `  ${chalk.dim(`─ ${ended} ─`)}`]);

@@ -12,8 +12,8 @@ import { signInBeforeUse } from '../harness.js';
 import { signInOutcomeSaid } from '../../account.js';
 import { runTurnThroughWorker } from '../../../worker/turn-bridge.js';
 
-/** What a turn left for the loop: a notice, and whether Left was pressed to open the board. */
-export interface TurnResult { notice?: string; left?: boolean }
+/** What a turn left for the loop: whether Left was pressed to open the board. */
+export interface TurnResult { left?: boolean }
 
 /** One turn through the worker (or in process without a terminal), with
  * the sign-in before it and the draft written for it. */
@@ -28,11 +28,6 @@ export async function runTimedTurn(
     // appear and then vanish. See tui/render/pending-prompt.ts. Held from
     // here, so a sign-in before the turn does not hide it either.
     terminal?.submitted(turn.echo ? promptText : undefined);
-    // A typed message replaces a turn parked for the quota reset (the
-    // worker drops it): said here, under the message, before its answer.
-    if (terminal && turn.echo && !turn.queuedTurnId && lastSeen.id === targetId && lastSeen.resumeAt) {
-      terminal.activity(chalk.dim('Stopped waiting for the reset · a new message was sent'));
-    }
     // Using a provider no account is signed in to is when its sign-in
     // opens -- here, before the turn, so it shows on its own and its
     // outcome stays in the transcript. Nothing signed in at launch.
@@ -66,7 +61,7 @@ export async function runTimedTurn(
       // decision on a cancel (worker/session-worker.ts's runTurn), and
       // runTurnThroughWorker rethrows only a genuine failure.
       const outcome = await runTurnThroughWorker(targetId, terminal, promptText, turn);
-      return { ...(outcome.notice ? { notice: outcome.notice } : {}), ...(outcome.left ? { left: true } : {}) };
+      return outcome.left ? { left: true } : {};
     }
     output.write(`${chalk.dim(`${active ? sessionProviderLabel(active) : 'Provider'} · working…`)}\n`);
     await runSessionTurn(config, targetId, promptText, undefined, {

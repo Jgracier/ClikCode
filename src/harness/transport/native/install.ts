@@ -78,7 +78,7 @@ function defaultReporter(): HarnessInstallReporter {
  * band already up -- the turn's -- is borrowed and given back. The outcome
  * is a notice, as the editor shows it. */
 export function terminalInstallReporter(
-  terminal: Pick<TerminalHarnessPrompter, 'startWaiting' | 'stopWaiting' | 'updateWaitingLabel' | 'waitingLabel' | 'notice'>,
+  terminal: Pick<TerminalHarnessPrompter, 'startWaiting' | 'stopWaiting' | 'updateWaitingLabel' | 'waitingLabel'>,
 ): HarnessInstallReporter {
   let started = false;
   let borrowed: string | undefined;
@@ -97,7 +97,7 @@ export function terminalInstallReporter(
       }
       terminal.updateWaitingLabel(label);
     },
-    done: (message) => { end(); terminal.notice(message); },
+    done: () => { end(); },
     failed: end,
   };
 }

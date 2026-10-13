@@ -2,8 +2,9 @@
  * ended -- cancelled, failed or finished -- before the next one may start. */
 import { randomUUID } from 'node:crypto';
 import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
-import { STOPPED } from '../harness/protocol/wording.js';
-import { lifecycle } from '../runtime/lifecycle-log.js';
+import chalk from 'chalk';
+import { failureLine } from '../harness/protocol/stderr-line.js';
+import { diagnostic, lifecycle } from '../runtime/lifecycle-log.js';
 import { beginTurnClock, endTurnClock, markTurn } from '../runtime/turn-latency.js';
 import { isUsageExhaustedMessage } from '../turn/usage-exhausted.js';
 import { runSessionTurn } from '../turn/session-turn.js';
@@ -19,7 +20,7 @@ type SubmitCommand = Extract<ClientCommand, { type: 'submit' }>;
 
 export function createTurnRunner(ctx: WorkerContext) {
   const { observer, sessionId, config, agentSession } = ctx;
-  const { currentSessionAndAccount, broadcastNotice } = ctx.io;
+  const { currentSessionAndAccount } = ctx.io;
 
   /** A turn that was stopped: something worth keeping (text or tool activity
    * already streamed) is preserved as an interrupted turn a future turn can
@@ -38,11 +39,10 @@ export function createTurnRunner(ctx: WorkerContext) {
     const restoreTo = answered ? undefined : ctx.activeRestoreDraft;
     if (answered) await preserveInterruptedTurn(sessionId, command.text, observer.liveResponseText, true);
     else await discardInterruptedTurn(sessionId, command.text);
-    observer.broadcast({ type: 'notice', message: STOPPED }, restoreTo);
-    if (restoreTo && !restoreTo.destroyed) {
-      sendEvent(restoreTo, { type: 'restore-draft', text: command.text });
-      sendEvent(restoreTo, { type: 'notice', message: `${STOPPED} · draft restored` });
-    }
+    // Nothing is said: a stopped turn that kept an answer ends on its own
+    // "Stopped" row (the saved turn's end), one that gave the prompt back
+    // simply has it back.
+    if (restoreTo && !restoreTo.destroyed) sendEvent(restoreTo, { type: 'restore-draft', text: command.text });
   };
 
   /** A turn that failed: journaled as failed, told to the windows, and its queue entry taken out. */
@@ -51,9 +51,13 @@ export function createTurnRunner(ctx: WorkerContext) {
     await markFailedTurn(sessionId, command.text).catch((saveError: unknown) => {
       lifecycle('worker.turn.failed-journal-error', { message: saveError instanceof Error ? saveError.message : String(saveError) });
     });
-    observer.broadcast({ type: 'turn-error', message });
+    // One line in the turn, saved with it. Running out of usage is said by
+    // whoever carries on from it (the window's own next step).
+    const said = !isUsageExhaustedMessage(message);
+    if (said) observer.activity(chalk.red(`Error: ${failureLine(message)}`));
+    observer.broadcast({ type: 'turn-error', message, ...(said ? { said: true as const } : {}) });
     // The one retry after the reset ran out too: it is not parked again.
-    if (resumed && isUsageExhaustedMessage(message)) broadcastNotice('Still out of usage after the reset · not retrying again');
+    if (resumed && isUsageExhaustedMessage(message)) diagnostic('worker.resume-still-exhausted', message);
     // A queued turn is consumed once its checkpoint starts; one that
     // failed before that is still at the head, and would be run again
     // straight after this -- and fail the same way, for ever. When it
@@ -61,7 +65,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     if (command.queuedTurnId) {
       await consumeQueuedTurn(sessionId, command.queuedTurnId).catch((consumeError: unknown) => {
         ctx.stalledQueuedTurnId = command.queuedTurnId;
-        broadcastNotice(`A queued message failed and could not be taken out of the queue (${consumeError instanceof Error ? consumeError.message : String(consumeError)}); it will not be run again until it is removed.`);
+        diagnostic('worker.queue-stalled', consumeError instanceof Error ? consumeError.message : String(consumeError));
       });
     }
   };
