@@ -167,6 +167,10 @@ export type WorkerEvent =
   /** A Stop was accepted (a turn is being aborted, or one about to start
    * will be): the one source of a client's "stopping". Ended by waiting-stop
    * or `stop-done`. */
+  /** The vendor said something with no turn open: the worker has appended it to
+   * the conversation (a snapshot follows with it in the transcript) and tells
+   * every window, as it said it. */
+  | { type: 'out-of-turn'; kind: 'message' | 'thought'; text: string; mode: 'append' | 'replace' }
   | { type: 'stopping'; restoreDraft?: true }
   /** A Stop that has nothing left to end: `nothing` when there was no turn
    * and no submit in flight to stop, else the vendor's background work it

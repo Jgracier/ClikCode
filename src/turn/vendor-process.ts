@@ -10,6 +10,7 @@ import type { AcpSession } from '../harness/transport/acp-client.js';
 import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harness/transport/background-turn.js';
 import { turnCancelledError } from '../agent/cancellation.js';
 import { outOfTurnRecorder } from './out-of-turn-record.js';
+import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
 
 /** Harnesses whose `turn` contract was rejected, by the build that rejected
  * it; later turns on that build go straight to the catalog's declared
@@ -45,6 +46,18 @@ const TRANSPORT_SESSIONS = { codex: createCodexSession, acp: createAcpSession };
 /** Who receives the work a persistent vendor does between ClikCode turns
  * (harness/transport/background-turn.ts), per ClikCode session. The session
  * worker registers here; without a registration that work is not surfaced. */
+/** Who handles what a vendor says out of turn, per conversation: the session worker (records it and
+ * tells every window). Without one the text is only recorded. */
+const outOfTurnHandlers = new Map<string, OutOfTurnRelay>();
+export function setOutOfTurnHandler(sessionId: string, handler: OutOfTurnRelay | undefined): void {
+  if (handler) outOfTurnHandlers.set(sessionId, handler);
+  else outOfTurnHandlers.delete(sessionId);
+}
+const outOfTurnFor = (sessionId: string): OutOfTurnRelay => {
+  const record = outOfTurnRecorder(sessionId);
+  return (said) => { const handler = outOfTurnHandlers.get(sessionId); if (handler) handler(said); else void record(said); };
+};
+
 const vendorBackgroundTurnHandlers = new Map<string, VendorBackgroundTurnHandler>();
 export function setVendorBackgroundTurnHandler(sessionId: string, handler: VendorBackgroundTurnHandler | undefined): void {
   if (handler) vendorBackgroundTurnHandlers.set(sessionId, handler);
@@ -80,7 +93,7 @@ export function persistentTransportFor(sessionId: string, transport: HarnessTurn
     persistentTransports.set(sessionId, standby.transport);
     return standby.transport;
   }
-  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnRecorder(sessionId) };
+  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnFor(sessionId) };
   const created: PersistentTransport = {
     key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
   };
@@ -138,7 +151,7 @@ export function standbyFor(sessionId: string, accountId: string): StandbyTranspo
 export function openStandby(sessionId: string, accountId: string, transport: HarnessTurnTransport, key: string,
   prepare: (session: CodexSession | AcpSession) => Promise<void>): StandbyTransport {
   void closeStandby(sessionId);
-  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnRecorder(sessionId) };
+  const background = { backgroundTurns: (turn: VendorBackgroundTurn) => vendorBackgroundTurnHandlers.get(sessionId)?.(turn), outOfTurn: outOfTurnFor(sessionId) };
   const created: PersistentTransport = {
     key, transport, session: transport === 'codex-app-server' ? TRANSPORT_SESSIONS.codex(background) : TRANSPORT_SESSIONS.acp(background),
   };
