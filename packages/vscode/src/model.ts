@@ -16,7 +16,6 @@ import type { IdeEvent, IdeProvider, WorkerEvent } from './protocol';
 import { formatOutput } from './format';
 import { modelLabel } from './webview/format';
 import { stripAnsi } from './text';
-import { freshLive } from './model/activity';
 import { resumed } from './model/clock';
 import { withNote } from './model/notes';
 import { applySession, freshFor } from './model/session';
@@ -76,7 +75,7 @@ export function connectionLost(model: ChatModel, patch: Partial<ChatModel> = {})
     ...model, ...patch, running: false, live: undefined, approvals: [], ownTurn: undefined, pendingPrompt: undefined, turnUserIndex: undefined,
     // Only a live bridge ends these: a 'signing in…' or busy label, the queue
     // it was holding and the submissions it had yet to answer.
-    busy: undefined, signIn: undefined, queued: [], submissions: [],
+    busy: undefined, signIn: undefined, queued: [], submissions: [], stopPending: undefined,
   };
 }
 
@@ -201,12 +200,6 @@ export function turnHasAnswer(model: Pick<ChatModel, 'live'>): boolean {
 export function queuedRowLabel(model: Pick<ChatModel, 'submissions'>, item: { id: string; held?: boolean }, enterAgain: boolean): string {
   const unsteered = model.submissions.some((entry) => entry.id === item.id && entry.unsteered);
   return [item.held ? STEER_WORDS.held : 'queued', ...(unsteered ? [STEER_WORDS.unsteered] : []), ...(enterAgain ? [STEER_WORDS.sendNow] : [])].join(' · ');
-}
-
-/** Stop was asked for: the turn shows it is stopping until it ends. */
-export function stoppingTurn(model: ChatModel): ChatModel {
-  if (!model.running || model.live?.stopping) return model;
-  return { ...model, live: { ...(model.live ?? freshLive('thinking')), stopping: true } };
 }
 
 export function typedDuringTurn(model: ChatModel, id: string, text: string): ChatModel {

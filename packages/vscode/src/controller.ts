@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { BridgeClient } from './bridge-client';
 import type { WebviewSurface } from './chat-view';
 import { diffModel } from './model-patch';
-import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
+import { answeredApproval, applyEvent, connectionLost, conversationAttention, emptyModel, preparing, rejectedPrompt, submittingPrompt, takenBackText, withNote, typedDuringTurn, type ChatModel } from './model';
 import type { IdeAccounts, IdeChatSettings, IdeConversation, IdeEvent, IdeFeature, IdeRequest, IdeProvider, IdeSlashCommand, IdeUiRequest, HarnessQuestionResult, WorkerEvent } from './protocol';
 import { bridgeCommandMissing, bridgeCompatibility, tooOldToStartMessage, versionSkew, type Remedy } from './compat';
 import { entryBuild, resolveRuntime, RuntimeError } from './runtime';
@@ -601,8 +601,8 @@ export class ClikCodeController implements vscode.Disposable {
       this.setModel({ ...rejectedPrompt(this.model), submissions: [] });
       if (restoreDraft) this.post({ type: 'setDraft', text });
     }
-    if (!this.deliver({ type: 'cancel', restoreDraft }, 'Stop')) return;
-    this.setModel(stoppingTurn(this.model));
+    // "Stopping" is shown when the worker says it accepted the Stop.
+    this.deliver({ type: 'cancel', restoreDraft }, 'Stop');
   }
 
   /** A question answered, or dismissed (cancelled). */

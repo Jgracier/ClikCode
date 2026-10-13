@@ -35,7 +35,7 @@ import { showMention, mentionKey, endMention, jumpToMention } from './prompter/m
 import { notice, showTransientNotice, clearTransientNotice, panel, panelKey } from './prompter/notices.js';
 import { answerApproval, restoreTellingDraft, approval, withdrawApproval, askQuestions, questionKey, presentNextApproval, settleApprovals } from './prompter/approvals.js';
 import { activity, setPlan, settlePlan, activityEvent, settleThought, markDrawn, joinMark, joinThought, settleDecision, ofThisTurn, settleSavedStops } from './prompter/activity-state.js';
-import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, markVendorWork, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
+import { editTurnDraft, waitingUserMessages, enterAgainReady, turnHasAnswer, takeBackWaiting, submitWaiting, waitingLabel, updateWaitingLabel, joinedWaiting, markVendorWork, startWaiting, turnStarting, toolStatus, turnWaits, waitingOnUser, scheduleWaitingTick, stepTokens, setTurnUsage, setBackgroundWork, pauseClock, resumeClock, flushWaitingSubmissions, leaveTurn, turnStopped, turnStopping, stopSettled, onWaitingEnded, stopWaiting, vendorAnswered, phase } from './prompter/waiting-turn.js';
 import { statusText, waitingLine, escStops, updateWaiting, schedulePaint, paintWaiting, repaint } from './prompter/waiting-band.js';
 import { onWaitingKey } from './prompter/waiting-keys.js';
 import { viewportRows, onResize, repaintAfterResize, rewrapIfWidthChanged, clearTranscript } from './prompter/viewport.js';
@@ -544,6 +544,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   leaveTurn(...args: Parameters<typeof leaveTurn>): ReturnType<typeof leaveTurn> { return leaveTurn.apply(this, args); }
 
   turnStopped(...args: Parameters<typeof turnStopped>): ReturnType<typeof turnStopped> { return turnStopped.apply(this, args); }
+  turnStopping(...args: Parameters<typeof turnStopping>): ReturnType<typeof turnStopping> { return turnStopping.apply(this, args); }
+  stopSettled(...args: Parameters<typeof stopSettled>): ReturnType<typeof stopSettled> { return stopSettled.apply(this, args); }
 
   onWaitingEnded(...args: Parameters<typeof onWaitingEnded>): ReturnType<typeof onWaitingEnded> { return onWaitingEnded.apply(this, args); }
 

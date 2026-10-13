@@ -76,9 +76,24 @@ export function createCommandHandler(ctx: WorkerContext) {
     if (connection.attaching) await connection.attaching.catch(() => undefined);
     if (!connection.attached) return;
     if (command.type === 'submit') {
+      // Counted from acceptance to the answer: a Stop that comes in between
+      // is the turn's, kept until it starts (worker-live-commands.ts).
+      ctx.submitsInFlight++;
       try { await ctx.queue.handleSubmit(socket, command); } catch (error) {
-        sendEvent(socket, { type: 'turn-error', message: error instanceof Error ? error.message : String(error) });
+        const message = error instanceof Error ? error.message : String(error);
+        sendEvent(socket, { type: 'submit-rejected', message });
+        sendEvent(socket, { type: 'turn-error', message });
         sendEvent(socket, { type: 'waiting-stop' });
+      } finally {
+        ctx.submitsInFlight--;
+        // The submit ended without a turn to stop (queued, rejected): the Stop
+        // asked for has nothing to apply to, and its askers are told.
+        if (ctx.submitsInFlight === 0 && ctx.pendingCancel) {
+          const { askers } = ctx.pendingCancel;
+          ctx.pendingCancel = undefined;
+          if (!ctx.activeController) ctx.stopAnnounced = false;
+          for (const asker of askers) sendEvent(asker, { type: 'stop-done', nothing: true });
+        }
       }
       return;
     }

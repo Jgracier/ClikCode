@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { answeredApproval, applyEvent, emptyModel, enterAgainReady, liveElapsedMs, queuedRowLabel, rejectedPrompt, stoppingTurn, submittingPrompt, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
+import { answeredApproval, applyEvent, emptyModel, enterAgainReady, liveElapsedMs, queuedRowLabel, rejectedPrompt, connectionLost, submittingPrompt, takenBackText, turnHasAnswer, type Activity, type ChatModel, type LiveTurn } from '../../src/model';
 import { foldedGroupCount, foldedSummary, runSummary, workingStatus } from '../../src/webview/flow';
 import { commandOutputPreview } from '../../../../src/harness/protocol/activity-view';
 import { turnChanges, unwindChanges } from '../../src/text';
@@ -83,22 +83,56 @@ describe("a turn's changes, together", () => {
   });
 });
 
-describe('stop: a turn asked to stop says so until it ends', () => {
-  it('says "Stopping" over the open call, and only once', () => {
+describe('stop: "stopping" is the worker\'s word, shown until the turn ends', () => {
+  it('says "Stopping" over the open call only once the worker says stopping', () => {
     const running = applyEvent(begin(), activity({ kind: 'tool-start', id: 't', label: '$ sleep 30', category: 'run' }));
     expect(workingStatus(running.live, false, Date.now()).label).toBe('Running sleep…');
-    const stopping = stoppingTurn(running);
+    const stopping = applyEvent(running, worker({ type: 'stopping' }));
     expect(stopping.live!.stopping).toBe(true);
     expect(workingStatus(stopping.live, false, Date.now()).label).toBe('Stopping…');
-    expect(stoppingTurn(stopping)).toBe(stopping);
-    // A snapshot or a delta while it stops keeps it stopping.
+    expect(applyEvent(stopping, worker({ type: 'stopping' }))).toBe(stopping);
+    // A delta while it stops keeps it stopping.
     expect(applyEvent(stopping, worker({ type: 'delta', text: 'more', mode: 'append' })).live!.stopping).toBe(true);
   });
 
-  it('is not a state of a turn that is not running, nor of the next turn', () => {
-    expect(stoppingTurn(emptyModel())).toEqual(emptyModel());
-    const ended = run([worker({ type: 'waiting-stop' }), { type: 'turn-start', sessionId: 's1', prompt: 'again' }, worker({ type: 'waiting-start', message: 'thinking' })], stoppingTurn(begin()));
+  it('a Stop the worker accepted before the turn started lands on the turn when it starts', () => {
+    const early = applyEvent(emptyModel(), worker({ type: 'stopping' }));
+    expect(early.running).toBe(false);
+    expect(early.live).toBeUndefined();
+    const started = applyEvent(early, worker({ type: 'waiting-start', message: 'thinking' }));
+    expect(started.live!.stopping).toBe(true);
+    expect(started.stopPending).toBeUndefined();
+  });
+
+  it('is cleared by the terminal event, by stop-done, and by losing the connection', () => {
+    const stopping = applyEvent(begin(), worker({ type: 'stopping' }));
+    expect(applyEvent(stopping, worker({ type: 'waiting-stop', stopped: true })).live).toBeUndefined();
+    expect(applyEvent(stopping, worker({ type: 'stop-done' })).live!.stopping).toBeUndefined();
+    expect(applyEvent(applyEvent(emptyModel(), worker({ type: 'stopping' })), worker({ type: 'stop-done', nothing: true })).stopPending).toBeUndefined();
+    const lost = connectionLost(applyEvent(applyEvent(emptyModel(), worker({ type: 'stopping' })), worker({ type: 'stopping' })));
+    expect(lost.stopPending).toBeUndefined();
+    expect(connectionLost(stopping).live).toBeUndefined();
+  });
+
+  it('is not a state of the next turn', () => {
+    const ended = run([worker({ type: 'waiting-stop' }), { type: 'turn-start', sessionId: 's1', prompt: 'again' }, worker({ type: 'waiting-start', message: 'thinking' })], applyEvent(begin(), worker({ type: 'stopping' })));
     expect(ended.live!.stopping).toBeUndefined();
+  });
+});
+
+describe('a prompt echoed locally is the worker\'s to confirm', () => {
+  it('is cleared by an explicit rejection from the worker', () => {
+    const sent = submittingPrompt(emptyModel(), 'hello');
+    expect(sent.pendingPrompt).toBe('hello');
+    const rejected = applyEvent(sent, worker({ type: 'submit-rejected', message: 'conversation not found' }));
+    expect(rejected.pendingPrompt).toBeUndefined();
+    expect(rejected.ownTurn).toBeUndefined();
+  });
+
+  it('is cleared by losing the connection when no worker ever answered', () => {
+    const lost = connectionLost(submittingPrompt(emptyModel(), 'hello'));
+    expect(lost.pendingPrompt).toBeUndefined();
+    expect(lost.ownTurn).toBeUndefined();
   });
 });
 
@@ -153,7 +187,7 @@ describe('a finished turn has no call still running', () => {
   ], begin());
 
   it('marks a call open when the turn was stopped as stopped, and the turn as stopped', () => {
-    const ended = applyEvent(stoppingTurn(opened()), worker({ type: 'waiting-stop' }));
+    const ended = applyEvent(applyEvent(opened(), worker({ type: 'stopping' })), worker({ type: 'waiting-stop' }));
     const trace = ended.traces.at(-1)!;
     expect(trace.activities.map((item) => [item.key, item.kind, item.stopped ?? false])).toEqual([['r', 'tool-done', false], ['s', 'tool-error', true]]);
     expect(trace.stopped).toBe(true);

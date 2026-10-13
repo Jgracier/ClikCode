@@ -24,11 +24,24 @@ export function applyWorkerEvent(model: ChatModel, sessionId: string, event: Wor
     case 'waiting-start':
       return {
         ...model, running: true, turnUserIndex: model.messages.length,
-        live: freshLive(stripAnsi(event.message)), plan: [], submissions: [],
-        turnUsage: undefined,
+        live: { ...freshLive(stripAnsi(event.message)), ...(model.stopPending ? { stopping: true } : {}) }, plan: [], submissions: [],
+        turnUsage: undefined, stopPending: undefined,
       };
     case 'waiting-stop':
-      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], submissions: [] };
+      return { ...endTurn(model, event.stopped === true), pendingPrompt: undefined, approvals: [], submissions: [], stopPending: undefined };
+    // The worker accepted a Stop: the one source of "stopping".
+    case 'stopping':
+      if (model.live?.stopping || model.stopPending) return model;
+      return model.running ? { ...model, live: { ...(model.live ?? freshLive('thinking')), stopping: true } } : { ...model, stopPending: true };
+    // A Stop that ended nothing: no longer stopping.
+    case 'stop-done': {
+      if (!model.live) return { ...model, stopPending: undefined };
+      const { stopping: _stopping, ...live } = model.live;
+      return { ...model, stopPending: undefined, live };
+    }
+    // The worker could not take the submit on: the echoed prompt is not pending.
+    case 'submit-rejected':
+      return model.running ? model : { ...model, ownTurn: undefined, pendingPrompt: undefined, stopPending: undefined };
     case 'delta': {
       const live = model.live ?? freshLive('thinking');
       const text = event.mode === 'replace' ? event.text : live.text + event.text;

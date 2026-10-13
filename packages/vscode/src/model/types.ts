@@ -174,11 +174,14 @@ export interface LiveTurn {
   pausedAt?: number;
   /** Stop was asked for (the button, Esc, the command): the working line
    * says so and Stop cannot be asked again, until the turn ends -- the
-   * terminal's "stopping…". */
+   * terminal's "stopping…". Set only by the worker's `stopping` event. */
   stopping?: boolean;
 }
 
 export interface ChatModel {
+  /** The worker accepted a Stop before the turn it is for has started; carried
+   * onto the turn when it starts, cleared by its end or `stop-done`. */
+  stopPending?: boolean;
   connection: 'starting' | 'ready' | 'stopped' | 'error';
   /** IDE protocol revision the bridge speaks (compat.ts refuses one older
    * than the structured queries the panel's menus are built on). */

@@ -158,6 +158,18 @@ export type WorkerEvent =
   /** The turn is over. `stopped`: it was stopped (Esc or Ctrl+C in any
    * window), so every window ends it as stopped, not finished. */
   | { type: 'waiting-stop'; stopped?: true }
+  /** A Stop was accepted (a turn is being aborted, or one about to start
+   * will be): the one source of a client's "stopping". Ended by waiting-stop
+   * or `stop-done`. */
+  | { type: 'stopping'; restoreDraft?: true }
+  /** A Stop that has nothing left to end: `nothing` when there was no turn
+   * and no submit in flight to stop, else the vendor's background work it
+   * stopped. Clients clear "stopping" on it. */
+  | { type: 'stop-done'; nothing?: true }
+  /** A `submit` the worker could not take on (it failed before a turn began).
+   * The submitting client drops the prompt it echoed. Always followed by
+   * `waiting-stop`. */
+  | { type: 'submit-rejected'; message: string }
   /** A turn needs the vendor signed in. The worker has no terminal to run a
    * sign-in on, so the client runs it on its own and answers with
    * `sign-in-response`; the worker then retries the turn. */

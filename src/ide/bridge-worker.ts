@@ -6,7 +6,6 @@ import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import { loginNativeHarness } from '../harness/transport/native/login.js';
 import { WorkerClient } from '../worker/client.js';
 import type { WorkerEvent } from '../worker/protocol.js';
-import { STOP_RESEND_MS, STOP_RESENDS } from '../worker/stop-resend.js';
 import { messageOf, TurnFailed } from './bridge-support.js';
 import type { BridgeHost } from './bridge-host.js';
 
@@ -16,7 +15,6 @@ export class WorkerLink {
    * conversation's worker, whichever client started it. */
   workerTurnRunning = false;
   turnWaiter: { resolve: () => void; reject: (error: Error) => void; error?: Error } | undefined;
-  stopWatch: NodeJS.Timeout | undefined;
 
   constructor(private readonly host: Pick<BridgeHost, 'channel' | 'prompter' | 'sessionId' | 'closed' | 'shown' | 'enqueue' | 'report' | 'refreshUsage' | 'scheduleDrain'>) {}
 
@@ -47,31 +45,15 @@ export class WorkerLink {
     return client;
   }
 
-  /** Stop, and see that it lands. The editor shows "stopping" until the turn
-   * ends, so a Stop that never reached a turn -- no worker attached just then,
-   * or one that arrived before the worker had started the turn -- left it
-   * stopping for as long as the turn ran. The cancel is sent to a worker found
-   * or reattached, and sent again while the turn is still running; when none
-   * is, the worker is asked for a snapshot, which ends the editor's turn. */
+  /** Stop: sent to the worker, attached on the way if need be. The worker
+   * answers (`stopping`, then the turn's end, or `stop-done`); this keeps no
+   * clock and sends nothing twice. */
   async cancelTurn(restoreDraft: boolean): Promise<void> {
     const id = this.host.sessionId;
     try {
       const client = this.worker?.client ?? (id ? await this.workerFor(id) : undefined);
       client?.send({ type: 'cancel', restoreDraft });
     } catch (error) { this.host.report(error); }
-    clearInterval(this.stopWatch);
-    let looks = 0;
-    this.stopWatch = setInterval(() => {
-      looks += 1;
-      const running = this.workerTurnRunning || Boolean(this.turnWaiter);
-      if (this.host.closed || looks > STOP_RESENDS || (!running && looks > 1)) { clearInterval(this.stopWatch); this.stopWatch = undefined; }
-      const client = this.worker?.client;
-      if (!client || this.host.closed) return;
-      // Still running: ask again (the draft was restored, or not, by the first).
-      // Not running: nothing was cancelled, so bring the editor up to date.
-      client.send(running ? { type: 'cancel', restoreDraft: false } : { type: 'refresh' });
-    }, STOP_RESEND_MS);
-    this.stopWatch.unref();
   }
 
   detach(): void {
@@ -107,8 +89,6 @@ export class WorkerLink {
         return;
       case 'waiting-stop': {
         this.workerTurnRunning = false;
-        clearInterval(this.stopWatch);
-        this.stopWatch = undefined;
         const waiter = this.turnWaiter;
         this.turnWaiter = undefined;
         // The turn's cost is on the conversation's figure now.
