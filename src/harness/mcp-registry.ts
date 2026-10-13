@@ -1,53 +1,17 @@
 /**
- * One MCP server, recorded once, installed into a harness when that provider
- * is chosen and the server is not already there.
+ * The MCP servers a user records for ClikCode's own agent, in
+ * `<state dir>/mcp.json` (read by agent/mcp/config.ts).
  *
- * ClikCode does not host these servers and does not proxy them: the harness
- * process connects to an MCP server itself, so the only way to give a harness
- * a tool is to write it into that harness's own configuration. The shared list
- * lives in ClikCode's mcp.json. A harness that is never opened is left alone.
- *
- * The write goes through each harness's own `mcp add`, not through its config
- * file. A config format is a private detail a vendor may change between
- * releases; `mcp add` is the documented surface, and it is what validates the
- * entry. Four grammars exist, every one read off a real CLI: most take the
- * target as a positional (`mcp add <name> <commandOrUrl> [args...]`, identical
- * across Claude, Gemini, Grok, Qwen and Command Code), Codex requires
- * `--url <url>` for a remote server or `-- <command> [args...]` for a local
- * one, Copilot/Amp/Cline take a URL positionally but insist on `--` before a
- * local command, and Hermes/Auggie name every part with a flag.
- *
- * Where a vendor has no usable `mcp add` at all, its config FILE is written
- * instead -- but only when that file's shape has been observed, and only for
- * JSON. Cursor has every mcp subcommand except add and Kimi has none, yet
- * both read a plain `{ "mcpServers": { … } }` file; verified by writing one
- * by hand and asking Cursor to list it back, which found all three servers
- * including one already in the file. Hermes and Goose keep theirs in YAML,
- * and rewriting a user's YAML would cost them comments and formatting for a
- * gain that a new dependency does not justify.
- *
- * A harness with an MCP manager but no recorded grammar and no observed
- * config file is left out rather than guessed at. Cursor is the instructive case: it has `mcp login`, `list`,
- * `list-tools`, `enable` and `disable` but no `add` at all, because it reads
- * servers from `.cursor/mcp.json` and `enable` only approves one that is
- * already written. Guessing an `add` for it would write nothing and report
- * success.
+ * A vendor harness keeps its own MCP configuration: ClikCode never writes a
+ * server into it. This file's `mcpServers` object is the user's, so a write
+ * merges one entry and leaves everything else as it was.
  */
-import { captureNativeHarnessOutput } from './transport/native/command.js';
-import { nativeProfileEnvironment } from './transport/profile-environment.js';
-import { localHarnessCapabilityManifest } from '../runtime/lazy-bridge.js';
-import { allLocalHarnesses } from '../runtime/lazy-bridge.js';
-import { inspectNativeHarness } from './transport/native/inspect.js';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
-import type { AiHarnessAccount, AiLocalHarnessDefinition } from './definition.js';
+import { dirname } from 'node:path';
 import { MCP_SERVERS_KEY, mcpConfigFilePath } from '../agent/mcp/config.js';
 import { stateDirectory } from '../session/store/paths.js';
-import { removeFromVendorJsonFile } from '../agent/mcp/import.js';
 
-/** What a user asked ClikCode to make available, in the one shape both
- * grammars can be produced from. */
+/** What a user asked ClikCode to make available. */
 export interface McpServerEntry {
   name: string;
   /** A URL for a remote server, or the executable for a local one. */
@@ -64,79 +28,9 @@ export function isRemoteTarget(target: string): boolean {
   return /^https?:\/\//i.test(target);
 }
 
-/** How one harness spells `mcp add`, as the catalog records it. */
-type McpAddGrammar = {
-  argv: readonly string[];
-  shape: 'positional' | 'url-or-doubledash' | 'doubledash-local' | 'named-flags';
-  transportPrefix?: readonly string[];
-  urlPrefix?: readonly string[];
-  commandPrefix?: readonly string[];
-  argsPrefix?: readonly string[];
-  argsStyle?: 'list' | 'joined' | 'repeat-equals' | 'json-array';
-  namePrefix?: readonly string[];
-  remoteOnly?: true;
-  localTransport?: string;
-  remoteExtraArgv?: readonly string[];
-  confirmStdin?: string;
-  headerPrefix?: readonly string[];
-  envPrefix?: readonly string[];
-};
-
-/** The file ClikCode writes a server into, for a harness with no usable add:
- * the catalog's first `serverFiles` entry, where it says `writesServerFile`. */
-type McpConfigFile = {
-  rootEnv?: string;
-  homeRelativeDir: readonly string[];
-  file: string;
-  key: string;
-  format?: 'json' | 'yaml';
-  entryShape?: 'mcp-servers' | 'goose-extension';
-};
-
-export function mcpConfigFile(harness: AiLocalHarnessDefinition): McpConfigFile | undefined {
-  const mcp = localHarnessCapabilityManifest(harness).managers?.mcp;
-  const first = mcp?.writesServerFile ? mcp.serverFiles?.[0] : undefined;
-  if (!first) return undefined;
-  return {
-    ...(first.rootEnv ? { rootEnv: first.rootEnv } : {}),
-    homeRelativeDir: first.homeRelative.slice(0, -1),
-    file: first.homeRelative[first.homeRelative.length - 1]!,
-    key: first.key[0]!,
-    ...(first.format === 'yaml' ? { format: 'yaml' as const } : {}),
-    ...(first.dialect === 'goose' ? { entryShape: 'goose-extension' as const } : {}),
-  };
-}
-
-/** The absolute path of that file, under a GIVEN environment so an isolated
- *  account profile resolves to its own copy. */
-export function mcpConfigPath(
-  config: McpConfigFile, environment: Readonly<Record<string, string>> = {},
-): string {
-  const root = (config.rootEnv ? environment[config.rootEnv]?.trim() : undefined)
-    || join(environment.HOME?.trim() || homedir(), ...config.homeRelativeDir);
-  return join(root, config.file);
-}
-
-/** One server, spelled the way this vendor's file spells it.
- *
- *  `mcp-servers` is the common convention -- `{ command, args }` or `{ url }`
- *  -- which Cursor and Kimi both read. `goose-extension` is Goose's own
- *  shape, verified by writing it and reading it back with `goose info -v`:
- *  it names the server inside the entry as well as keying on it, and calls
- *  the command `cmd` and the URL `uri`. */
-export function mcpConfigEntry(
-  entry: McpServerEntry, shape: McpConfigFile['entryShape'] = 'mcp-servers',
-): Record<string, unknown> {
-  const remote = isRemoteTarget(entry.target);
-  if (shape === 'goose-extension') {
-    return {
-      name: entry.name,
-      type: remote ? 'streamable_http' : 'stdio',
-      ...(remote ? { uri: entry.target } : { cmd: entry.target, args: [...(entry.args ?? [])] }),
-      enabled: true,
-    };
-  }
-  return remote
+/** One server, spelled the `mcpServers` way: `{ command, args }` or `{ url }`. */
+export function mcpConfigEntry(entry: McpServerEntry): Record<string, unknown> {
+  return isRemoteTarget(entry.target)
     ? { url: entry.target, ...(nonEmpty(entry.headers) ? { headers: { ...entry.headers } } : {}) }
     : {
       command: entry.target,
@@ -149,251 +43,40 @@ function nonEmpty(record: Readonly<Record<string, string>> | undefined): record 
   return !!record && Object.keys(record).length > 0;
 }
 
-/** Merges one server into the file, preserving everything else in it --
- *  other servers, and any key this does not know about. A vendor config is
- *  the user's file; adding to it must never be rewriting it. */
-export async function writeMcpConfigEntry(
-  path: string, key: string, entry: McpServerEntry, config: Partial<McpConfigFile> = {},
-): Promise<void> {
-  const value = mcpConfigEntry(entry, config.entryShape);
-  if (config.format === 'yaml') {
-    // Through a document parse, not a re-serialize: the user's comments and
-    // formatting survive, which is the whole reason this route is acceptable
-    // at all. Goose keeps its provider settings in this same file.
-    const { parseDocument } = await import('yaml');
-    const existing = await readFile(path, 'utf8').catch(() => '');
-    const document = parseDocument(existing);
-    if (existing.trim() && document.errors.length) throw new Error(`${path} is not valid YAML`);
-    document.setIn([key, entry.name], value);
-    await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, document.toString(), 'utf8');
-    return;
-  }
-  let root: Record<string, unknown> = {};
+async function readRoot(path: string): Promise<Record<string, unknown> | undefined> {
   const existing = await readFile(path, 'utf8').catch(() => undefined);
-  if (existing?.trim()) {
-    const parsed: unknown = JSON.parse(existing);
-    // A file that is not an object is not something to merge into.
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`${path} is not a JSON object`);
-    }
-    root = parsed as Record<string, unknown>;
-  }
+  if (!existing?.trim()) return undefined;
+  const parsed: unknown = JSON.parse(existing);
+  // A file that is not an object is not something to merge into.
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${path} is not a JSON object`);
+  return parsed as Record<string, unknown>;
+}
+
+/** Merges one server into the file, preserving everything else in it --
+ *  other servers, and any key this does not know about. */
+export async function writeMcpConfigEntry(path: string, key: string, entry: McpServerEntry): Promise<void> {
+  const root = await readRoot(path) ?? {};
   const current = root[key];
   const servers = current && typeof current === 'object' && !Array.isArray(current)
     ? { ...current as Record<string, unknown> }
     : {};
-  servers[entry.name] = value;
+  servers[entry.name] = mcpConfigEntry(entry);
   root[key] = servers;
   await mkdir(dirname(path), { recursive: true });
   await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
 }
 
-/** What the catalog says about this harness, or undefined when it records no
- * `mcp add` at all. */
-export function mcpAddGrammar(harness: AiLocalHarnessDefinition): McpAddGrammar | undefined {
-  return localHarnessCapabilityManifest(harness)?.managers?.mcp?.add;
-}
-
-/** The argv that registers `entry` under `add`.
- *
- * Takes the grammar rather than looking it up, so the part that has to be
- * exactly right is a pure function of its inputs and can be tested without a
- * catalog runtime behind it. */
-export function mcpAddArgv(
-  add: McpAddGrammar | undefined, entry: McpServerEntry,
-): readonly string[] | undefined {
-  if (!add) return undefined;
-  const remote = isRemoteTarget(entry.target);
-  // opencode and Kilo take a URL happily and have no flag at all for a local
-  // command: extra positionals are refused and they fall back to their
-  // interactive picker, which a headless install cannot answer. Declining is
-  // the honest answer -- see the caller, which reports the reason.
-  if (add.remoteOnly && !remote) return undefined;
-  if (add.shape === 'url-or-doubledash') {
-    // Codex: a URL is a flag, a command is everything after `--`. Passing a
-    // command positionally here is accepted and then read as a URL.
-    return remote
-      ? [...add.argv, entry.name, '--url', entry.target]
-      : [...add.argv, entry.name, '--', entry.target, ...(entry.args ?? [])];
-  }
-  if (add.shape === 'doubledash-local') {
-    // Copilot, Amp and Cline take a URL positionally but insist on `--`
-    // before a local command, so its arguments are not read as their own.
-    const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
-    const headers = add.headerPrefix
-      ? Object.entries(entry.headers ?? {}).flatMap(([key, value]) => [...add.headerPrefix!, `${key}: ${value}`])
-      : [];
-    const env = add.envPrefix
-      ? Object.entries(entry.env ?? {}).flatMap(([key, value]) => [...add.envPrefix!, `${key}=${value}`])
-      : [];
-    return remote
-      ? [...add.argv, ...transport, entry.name, entry.target, ...headers]
-      : [...add.argv, entry.name, ...env, '--', entry.target, ...(entry.args ?? [])];
-  }
-  if (add.shape === 'named-flags') {
-    // Hermes and Auggie: nothing positional but the name. Hermes documents
-    // `--args` as "must be the last option", which the name-first order below
-    // satisfies for both.
-    const transport = add.transportPrefix && remote ? [...add.transportPrefix, 'http'] : [];
-    const name = [...(add.namePrefix ?? []), entry.name];
-    if (remote) return [...add.argv, ...name, ...transport, ...(add.urlPrefix ?? []), entry.target, ...(add.remoteExtraArgv ?? [])];
-    return [
-      ...add.argv, ...name, ...localTransportArgv(add),
-      ...(add.commandPrefix ?? []), entry.target, ...localArgsArgv(add, entry),
-    ];
-  }
-  const transport = add.transportPrefix
-    ? (remote ? [...add.transportPrefix, 'http'] : localTransportArgv(add))
-    : [];
-  return [...add.argv, ...transport, entry.name, entry.target, ...(entry.args ?? []), ...(remote ? add.remoteExtraArgv ?? [] : [])];
-}
-
-/** The transport flag a LOCAL add needs, for the harnesses that demand one. */
-function localTransportArgv(add: McpAddGrammar): string[] {
-  return add.transportPrefix && add.localTransport ? [...add.transportPrefix, add.localTransport] : [];
-}
-
-/** A local server's arguments, spelled the way this harness parses them. */
-function localArgsArgv(add: McpAddGrammar, entry: McpServerEntry): string[] {
-  const args = entry.args ?? [];
-  if (!args.length || !add.argsPrefix) return [];
-  // repeat-equals uses `--arg=VALUE` deliberately: `--arg -y` makes Vibe's
-  // parser read -y as a flag of its own and fail. joined pre-joins into one
-  // string for Auggie; list passes them bare for Hermes. Getting this wrong
-  // fails at connect time rather than at add time.
-    // A JSON list is unambiguous for arguments containing dashes or commas,
-  // which is exactly why Kiro documents it alongside the repeated form.
-  if (add.argsStyle === 'json-array') return [...add.argsPrefix, JSON.stringify(args)];
-  if (add.argsStyle === 'repeat-equals') return args.flatMap((arg) => [`${add.argsPrefix![0]}=${arg}`]);
-  if (add.argsStyle === 'joined') return [...add.argsPrefix, args.join(' ')];
-  return [...add.argsPrefix, ...args];
-}
-
-/** Every harness that can take this entry -- installed, and with an `mcp add`
- * grammar recorded. A harness with an MCP manager but no recorded grammar is
- * deliberately not guessed at: a wrong argv writes a broken server entry. */
-export async function harnessesAcceptingMcp(): Promise<AiLocalHarnessDefinition[]> {
-  const candidates = allLocalHarnesses().filter((harness) => mcpAddGrammar(harness) ?? mcpConfigFile(harness));
-  const installed = await Promise.all(candidates.map(async (harness) => {
-    const inspection = await inspectNativeHarness(harness, 800).catch(() => undefined);
-    return inspection?.installed ? harness : undefined;
-  }));
-  return installed.filter((harness): harness is AiLocalHarnessDefinition => harness !== undefined);
-}
-
-interface McpInstallResult { harness: string; account?: string; ok: boolean; detail?: string }
-
-/** Registers `entry` with one harness, under one account's own profile.
- *
- * Failures are reported, never thrown: one harness refusing a server is not a
- * reason for the turn to stop. The caller has already checked the name is
- * absent; this does not look, and a second call would overwrite a config-file
- * harness. */
-export async function installMcpOnHarness(
-  harness: AiLocalHarnessDefinition, entry: McpServerEntry, account?: AiHarnessAccount,
-): Promise<McpInstallResult> {
-  const label = { harness: harness.command, ...(account?.label ? { account: account.label } : {}) };
-  const environment = nativeProfileEnvironment(account?.nativeProfile);
-  // Second-best route, used only where the vendor offers no add at all.
-  const config = mcpAddGrammar(harness) ? undefined : mcpConfigFile(harness);
-  if (config) {
-    try {
-      await writeMcpConfigEntry(mcpConfigPath(config, environment), config.key, entry, config);
-      return { ...label, ok: true };
-    } catch (error) {
-      return { ...label, ok: false, detail: error instanceof Error ? error.message : 'could not write config' };
-    }
-  }
-  const argv = mcpAddArgv(mcpAddGrammar(harness), entry);
-  if (!argv) {
-    const grammar = mcpAddGrammar(harness);
-    return {
-      ...label, ok: false,
-      detail: grammar?.remoteOnly
-        ? `${harness.displayName} can only be given a remote MCP server without prompting`
-        : 'no mcp add grammar recorded',
-    };
-  }
-  try {
-    await captureNativeHarnessOutput(harness, argv, environment, undefined, undefined, mcpAddGrammar(harness)?.confirmStdin);
-    return { ...label, ok: true };
-  } catch (error) {
-    return { ...label, ok: false, detail: error instanceof Error ? error.message.split('\n')[0] : 'failed' };
-  }
-}
-
-/** ClikCode's own agent (the Gateway and local routes) has no vendor config
- * to write into, so the server is recorded in ClikCode's state directory, in
- * the same `mcpServers` shape and through the same merge that preserves
- * whatever else the file holds. See agent/mcp/config.ts, which reads it.
- * Choosing a provider later copies a missing name into that harness. */
+/** Records a server for ClikCode's own agent (the Gateway and local routes). */
 export async function recordSharedMcpServer(entry: McpServerEntry): Promise<void> {
   await writeMcpConfigEntry(mcpConfigFilePath(stateDirectory()), MCP_SERVERS_KEY, entry);
 }
 
-/** Whether this harness is given a remote server's headers along with its
- * URL. A config file in the `mcpServers` shape keeps them; Goose's extension
- * shape has no field for them; an `mcp add` keeps them only where the
- * catalog records the flag that carries them (Claude's --header). A
- * credential that never reaches the vendor does not sign it in. */
-export function mcpHeadersReachHarness(harness: AiLocalHarnessDefinition): boolean {
-  const add = mcpAddGrammar(harness);
-  if (add) return add.shape === 'doubledash-local' && !!add.headerPrefix;
-  const config = mcpConfigFile(harness);
-  return !!config && (config.entryShape ?? 'mcp-servers') === 'mcp-servers';
-}
-
-/** Removes one server from a config file of the shape mcpConfigFile
- *  describes, leaving everything else in it as it was. */
-export async function removeMcpConfigEntry(
-  path: string, key: string, name: string, config: Partial<McpConfigFile> = {},
-): Promise<boolean> {
-  const existing = await readFile(path, 'utf8').catch(() => undefined);
-  if (!existing?.trim()) return false;
-  if (config.format === 'yaml') {
-    const { parseDocument } = await import('yaml');
-    const document = parseDocument(existing);
-    if (document.errors.length || !document.hasIn([key, name])) return false;
-    document.deleteIn([key, name]);
-    await writeFile(path, document.toString(), 'utf8');
-    return true;
-  }
-  const root: unknown = JSON.parse(existing);
-  if (!root || typeof root !== 'object' || Array.isArray(root)) return false;
-  const servers = (root as Record<string, unknown>)[key];
-  if (!servers || typeof servers !== 'object' || Array.isArray(servers) || !(name in servers)) return false;
+/** Removes one server from the file, leaving everything else in it as it was. */
+export async function removeMcpConfigEntry(path: string, key: string, name: string): Promise<boolean> {
+  const root = await readRoot(path);
+  const servers = root?.[key];
+  if (!root || !servers || typeof servers !== 'object' || Array.isArray(servers) || !(name in servers)) return false;
   delete (servers as Record<string, unknown>)[name];
   await writeFile(path, `${JSON.stringify(root, null, 2)}\n`, 'utf8');
   return true;
-}
-
-/** Takes one server back out of one harness, under one account's profile --
- *  by the same route the install used: the vendor's own `mcp remove` where
- *  `mcp add` wrote it, the config file where ClikCode wrote the file.
- *  opencode and Kilo add through the CLI but have no remove; their file is
- *  edited only when it is plain JSON (see removeFromVendorJsonFile). */
-export async function removeMcpFromHarness(
-  harness: AiLocalHarnessDefinition, name: string, account?: AiHarnessAccount, home: string = homedir(),
-): Promise<McpInstallResult> {
-  const label = { harness: harness.command, ...(account?.label ? { account: account.label } : {}) };
-  const environment = nativeProfileEnvironment(account?.nativeProfile);
-  const config = mcpAddGrammar(harness) ? undefined : mcpConfigFile(harness);
-  try {
-    if (config) {
-      const removed = await removeMcpConfigEntry(mcpConfigPath(config, { HOME: home, ...environment }), config.key, name, config);
-      return removed ? { ...label, ok: true } : { ...label, ok: false, detail: 'not in the config file' };
-    }
-    const remove = (localHarnessCapabilityManifest(harness) as {
-      managers?: { mcp?: { remove?: { argv: readonly string[] } } };
-    }).managers?.mcp?.remove;
-    if (remove) {
-      await captureNativeHarnessOutput(harness, [...remove.argv, name], environment, undefined);
-      return { ...label, ok: true };
-    }
-    const profile = account?.nativeProfile ? { env: account.nativeProfile.env, path: account.nativeProfile.path } : undefined;
-    return { ...label, ...await removeFromVendorJsonFile(harness.command, name, home, profile) };
-  } catch (error) {
-    return { ...label, ok: false, detail: error instanceof Error ? error.message.split('\n')[0] : 'failed' };
-  }
 }

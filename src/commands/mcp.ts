@@ -1,35 +1,23 @@
 /**
- * `clikcode mcp` -- one MCP server, recorded once.
+ * `clikcode mcp` -- MCP servers recorded for ClikCode's own agent.
  *
- * The server is written to ClikCode's mcp.json, which ClikCode's own agent
- * reads. A vendor harness receives it the first time that provider is chosen,
- * and only when that harness does not already have the name.
+ * A server is written to ClikCode's mcp.json, which ClikCode's own agent
+ * reads. A vendor harness keeps its own MCP configuration; ClikCode never
+ * writes into it.
  */
 import chalk from 'chalk';
 import { stdin as input, stdout as output } from 'node:process';
 import { createInterface } from 'node:readline/promises';
 import { isJsonDefaultMode } from '../cli/output-mode.js';
 import { emitResult } from '../cli/structured-output.js';
-import {
-  harnessesAcceptingMcp, isRemoteTarget, mcpAddArgv, mcpAddGrammar, recordSharedMcpServer,
-  type McpServerEntry,
-} from '../harness/mcp-registry.js';
-import { listSharedMcpServers, removeSharedMcpServer, type ProvisionedCopy } from '../harness/provision.js';
-import { readState } from '../session/state/read.js';
-import type { AiHarnessAccount } from '../harness/definition.js';
-import { loadMcpServers, writeMcpOAuthConfig, type McpOAuthConfig, type McpServerSpec } from '../agent/mcp/config.js';
+import { isRemoteTarget, recordSharedMcpServer, removeMcpConfigEntry, type McpServerEntry } from '../harness/mcp-registry.js';
+import { loadMcpServers, MCP_SERVERS_KEY, mcpConfigFilePath, writeMcpOAuthConfig, type McpOAuthConfig, type McpServerSpec } from '../agent/mcp/config.js';
 import { forgetMcpOAuth, mcpOAuthState, signInMcpServer, type McpSignInUi } from '../agent/mcp/oauth.js';
 import { mcpServerNeedsSignIn } from '../harness/mcp-sign-in.js';
 import { userMcpServers } from '../agent/mcp/manager.js';
 import { stateDirectory } from '../session/store/paths.js';
 import { hasLocalDisplay, loginUrlNotice, openLoginUrl } from '../gateway/login/url.js';
 import type { SignInScreen } from '../gateway/login/vendor-sign-in.js';
-
-/** `claude` or `claude (work)`: the harness, and the account profile when it is one. */
-function copyLabel(copy: ProvisionedCopy, accounts: readonly AiHarnessAccount[]): string {
-  const account = copy.accountId ? accounts.find((item) => item.id === copy.accountId) : undefined;
-  return account ? `${copy.harness} (${account.label})` : copy.harness;
-}
 
 export interface McpAddOptions { clientId?: string; callbackPort?: string; scope?: string }
 
@@ -49,7 +37,7 @@ export async function mcpAdd(name: string, target: string, args: readonly string
   if (isJsonDefaultMode()) return emitResult({ mcp: 'add', server: { ...entry, ...(signsIn ? { oauth } : {}) }, recorded: 'clikcode' });
   output.write(signsIn
     ? `\n${chalk.green('✓')} ${chalk.bold(name)} recorded for ClikCode's own agent. Sign in with ${chalk.bold(`clikcode mcp login ${name}`)}.\n\n`
-    : `\n${chalk.green('✓')} ${chalk.bold(name)} recorded. A harness gets it the first time you choose that provider, if it is not already there.\n\n`);
+    : `\n${chalk.green('✓')} ${chalk.bold(name)} recorded for ClikCode's own agent.\n\n`);
 }
 
 type McpServerSignIn = 'signed-in' | 'needs-sign-in' | 'open' | 'unknown';
@@ -148,72 +136,43 @@ export async function mcpServersText(stateDir: string = stateDirectory()): Promi
   return lines.join('\n');
 }
 
-/** Which harnesses this would reach, and how each spells the request. Shown
- * before anything is written, so a fan-out is never a surprise. */
-export async function mcpTargets(): Promise<void> {
-  const harnesses = await harnessesAcceptingMcp();
-  const rows = harnesses.map((harness) => ({
-    harness: harness.command,
-    argv: (mcpAddArgv(mcpAddGrammar(harness), { name: '<name>', target: '<command-or-url>' }) ?? []).join(' '),
-  }));
-  if (isJsonDefaultMode()) return emitResult({ mcp: 'targets', harnesses: rows });
-  output.write(`\n${chalk.bold('Harnesses that would receive an MCP server')}\n`);
-  for (const row of rows) output.write(`  ${row.harness.padEnd(12)}${chalk.dim(row.argv)}\n`);
-  if (!rows.length) output.write(`  ${chalk.dim('none installed')}\n`);
-  output.write('\n');
-}
-
-/** ClikCode's servers, and which harnesses ClikCode has given each. */
+/** The servers recorded for ClikCode's own agent. */
 export async function mcpList(): Promise<void> {
-  const { servers, problem } = await listSharedMcpServers();
-  const { accounts } = await readState({ transcripts: [] });
   const stateDir = stateDirectory();
-  const states = await mcpSignInStates(stateDir, (await loadMcpServers(stateDir)).servers);
+  const { servers, problem } = await loadMcpServers(stateDir);
+  const states = await mcpSignInStates(stateDir, servers);
   if (isJsonDefaultMode()) {
     return emitResult({
       mcp: 'list',
-      servers: servers.map(({ copies, headers: _headers, env: _env, ...server }) => ({
-        ...server, copies: copies.map((copy) => copyLabel(copy, accounts)),
-        ...(states.has(server.name) ? { signIn: states.get(server.name) } : {}),
+      servers: servers.map((spec) => ({
+        name: spec.name,
+        ...(spec.transport === 'stdio' ? { target: spec.command, args: spec.args } : { target: spec.url }),
+        ...(states.has(spec.name) ? { signIn: states.get(spec.name) } : {}),
       })),
       ...(problem ? { problem } : {}),
     });
   }
-  output.write(`\n${chalk.bold('MCP servers recorded in ClikCode')}\n`);
-  for (const server of servers) {
-    const state = states.get(server.name);
+  output.write(`\n${chalk.bold("MCP servers recorded for ClikCode's own agent")}\n`);
+  for (const spec of servers) {
+    const state = states.get(spec.name);
     const label = state ? SIGN_IN_LABEL[state] : '';
-    output.write(`  ${chalk.bold(server.name.padEnd(24))}${chalk.dim([server.target, ...server.args ?? []].join(' '))}${label ? `  ${label}` : ''}\n`);
-    if (state === 'needs-sign-in') output.write(`  ${''.padEnd(24)}${chalk.dim(`sign in: clikcode mcp login ${server.name}`)}\n`);
-    if (server.copies.length) output.write(`  ${''.padEnd(24)}${chalk.dim(`given to ${server.copies.map((copy) => copyLabel(copy, accounts)).join(', ')}`)}\n`);
+    const where = spec.transport === 'stdio' ? [spec.command, ...spec.args].join(' ') : spec.url;
+    output.write(`  ${chalk.bold(spec.name.padEnd(24))}${chalk.dim(where)}${label ? `  ${label}` : ''}\n`);
+    if (state === 'needs-sign-in') output.write(`  ${''.padEnd(24)}${chalk.dim(`sign in: clikcode mcp login ${spec.name}`)}\n`);
   }
   if (!servers.length) output.write(`  ${chalk.dim('none -- add one with `mcp add <name> <command-or-url>`')}\n`);
   if (problem) output.write(`  ${chalk.yellow(problem)}\n`);
   output.write('\n');
 }
 
-/** Forget a server: out of ClikCode's mcp.json, and ClikCode's own copies
- * out of every vendor it gave them to. A copy the user put there stays. */
+/** Forget a server: out of ClikCode's mcp.json, with its tokens and client
+ * registration. A harness's own servers are never touched. */
 export async function mcpRemove(name: string): Promise<void> {
-  const { accounts } = await readState({ transcripts: [] });
-  const result = await removeSharedMcpServer(name, { accounts });
-  // Its tokens and client registration go with it.
-  await forgetMcpOAuth(stateDirectory(), name).catch(() => false);
-  const found = result.unrecorded || result.takenBack.length > 0 || result.failed.length > 0;
-  if (isJsonDefaultMode()) {
-    emitResult({
-      mcp: 'remove', name, removed: result.unrecorded,
-      takenBack: result.takenBack.map((copy) => copyLabel(copy, accounts)),
-      failed: result.failed.map((copy) => ({ harness: copyLabel(copy, accounts), ...(copy.detail ? { detail: copy.detail } : {}) })),
-    });
-  } else {
-    if (!found) output.write(`\n${chalk.dim(`${name} is not recorded in ClikCode.`)}\n\n`);
-    else {
-      output.write(`\n${chalk.green('✓')} ${chalk.bold(name)} ${result.unrecorded ? 'removed from ClikCode' : 'was not in ClikCode\'s list'}.\n`);
-      if (result.takenBack.length) output.write(`  ${chalk.dim(`Taken back out of ${result.takenBack.map((copy) => copyLabel(copy, accounts)).join(', ')}.`)}\n`);
-      for (const copy of result.failed) output.write(`  ${chalk.yellow(`Still in ${copyLabel(copy, accounts)}${copy.detail ? `: ${copy.detail}` : ''}`)}\n`);
-      output.write('\n');
-    }
-  }
-  if (!found || result.failed.length) process.exitCode = 1;
+  const stateDir = stateDirectory();
+  const removed = await removeMcpConfigEntry(mcpConfigFilePath(stateDir), MCP_SERVERS_KEY, name);
+  const forgotten = await forgetMcpOAuth(stateDir, name).catch(() => false);
+  if (isJsonDefaultMode()) emitResult({ mcp: 'remove', name, removed });
+  else if (!removed && !forgotten) output.write(`\n${chalk.dim(`${name} is not recorded in ClikCode.`)}\n\n`);
+  else output.write(`\n${chalk.green('✓')} ${chalk.bold(name)} ${removed ? 'removed from ClikCode' : 'was not in ClikCode\'s list'}.\n\n`);
+  if (!removed && !forgotten) process.exitCode = 1;
 }

@@ -46,8 +46,6 @@ export async function runVendorSessionAttempt(input: {
   sharedObserver: HarnessTurnObserver;
   effort?: string;
   onSessionId: (id: string) => Promise<void>;
-  /** MCP servers to hand an ACP session. */
-  mcpServers?: readonly Record<string, unknown>[];
   runCli: () => Promise<NativeTurnResult>;
 }): Promise<NativeTurnResult> {
   const { harness, account, session, transport, turnText, model, environment, images, signal, run, checkpoint, sharedObserver, effort, onSessionId, runCli } = input;
@@ -92,7 +90,7 @@ export async function runVendorSessionAttempt(input: {
       result = persistent ? await (persistent.session as CodexSession).runTurn(codexInput) : await runCodexAppServerTurn(codexInput);
     } else {
       const acpInput: AcpTurnInput = {
-        ...acpLaunchInput({ harness, account, session, model, effort, environment, mcpServers: input.mcpServers, checkpoint, prompter }),
+        ...acpLaunchInput({ harness, account, session, model, effort, environment, checkpoint, prompter }),
         prompt: turnText, signal, images, onSessionId,
         ...sharedObserver,
         onSteerReady,
@@ -163,7 +161,7 @@ export async function runVendorSessionAttempt(input: {
  * standby (prepareAcpStandby), so the standby is the child the turn wants. */
 function acpLaunchInput(input: {
   harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string;
-  environment: Record<string, string>; mcpServers?: readonly Record<string, unknown>[];
+  environment: Record<string, string>;
   checkpoint?: DurableTurnCheckpoint; prompter?: TurnRunOptions['prompter'];
 }): Omit<AcpTurnInput, 'prompt'> {
   const { harness, account, session, model, effort, environment, checkpoint, prompter } = input;
@@ -193,7 +191,6 @@ function acpLaunchInput(input: {
   if (harness.acp?.inheritCliOptions === false && optionArgv.length) {
     throw new Error(`${harness.displayName} ACP does not accept the selected CLI-only options. Clear them before sending.`);
   }
-  const mcpServers = [...input.mcpServers ?? []];
   return {
     binary: launch.binary, command: harness.command,
     argv: launch.modeArgv, optionPlacement: launch.optionPlacement,
@@ -220,7 +217,6 @@ function acpLaunchInput(input: {
     // would otherwise start a second copy of the agent to read.
     onSessionModels: (answer, fresh) => { void recordLiveModelCatalog(harness, account, answer, fresh).catch(() => undefined); },
     environment: launch.env && Object.keys(launch.env).length ? { ...environment, ...launch.env } : environment,
-    ...(mcpServers.length ? { mcpServers } : {}),
   };
 }
 
@@ -237,7 +233,7 @@ function standbyOf(
  * then starts at the prompt. The thread must already be in its profile. */
 export function prepareAcpStandby(input: {
   harness: AiLocalHarnessDefinition; account: AiHarnessAccount; session: HarnessSession; model: string | null; effort?: string;
-  environment: Record<string, string>; mcpServers?: readonly Record<string, unknown>[];
+  environment: Record<string, string>;
 }): Promise<boolean> {
   const launch = acpLaunchInput(input);
   return standbyOf(input, 'acp', async (child) => { await (child as AcpSession).runTurn({ ...launch, prompt: '', prepareOnly: true }); });

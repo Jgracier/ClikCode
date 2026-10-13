@@ -104,8 +104,6 @@ export interface AcpTurnInput extends HarnessTurnObserver {
   extraArgv?: readonly string[];
   /** The adapter handshake's timeout (initialize). Requests that wait on the
    *  agent starting up are bounded by the idle budget instead. */
-  /** Servers this session should start. Empty keeps the previous request. */
-  mcpServers?: readonly Record<string, unknown>[];
   /** Open the session -- start the agent, load the thread, apply model,
    *  mode and effort -- and stop before the prompt: the next turn on this
    *  session then starts at the prompt (a failover's standby account). */
@@ -774,12 +772,11 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
     const call = (method: string, params: Json, options: { timeoutMs?: number } = setup): Promise<Json> =>
       peer.request(method, params, options);
     const capabilities = live.capabilities;
-    const mcpServers = input.mcpServers ?? [];
     const directories = input.additionalDirectories ?? [];
     if (directories.length && !capabilities.sessionCapabilities?.additionalDirectories) {
       throw new Error(`${input.command} ACP does not accept additional directories (/add-dir); remove them or start from a common parent directory`);
     }
-    const sessionParams = { cwd: input.cwd, mcpServers, _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
+    const sessionParams = { cwd: input.cwd, mcpServers: [], _meta: ACP_SESSION_META, ...(directories.length ? { additionalDirectories: [...directories] } : {}) };
     const images = input.images ?? [];
     if (images.length && capabilities.promptCapabilities?.image !== true) {
       throw Object.assign(new Error(`${input.command} ACP does not accept image prompts`), { acpUnsupportedImages: true });

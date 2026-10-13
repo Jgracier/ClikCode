@@ -2,9 +2,8 @@
  *
  * The source is `<state dir>/mcp.json`, in the same `{ "mcpServers": { … } }`
  * shape Cursor, Kimi and Claude's project file use. `clikcode mcp add` (and
- * the Tools picker) writes it here. A vendor harness does not read this file:
- * the first turn on that provider copies any name it does not already have
- * into its own config. See provisionChosenHarness.
+ * the Tools picker) writes it here. A vendor harness does not read this file,
+ * and ClikCode never writes into a vendor's config.
  *
  * The file is read, never assumed to be ClikCode's alone: a user may edit it by
  * hand, so the keys other tools write (`env`, `headers`, `type`, `disabled`)

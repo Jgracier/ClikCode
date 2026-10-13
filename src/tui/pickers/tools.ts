@@ -33,7 +33,7 @@ export async function interactiveToolsPicker(rl: HarnessPrompter, id: string, ha
       detail: `· ${[manager.listArgv ? 'list' : '', manager.manageArgv ? `open ${harness.displayName}'s manager` : ''].filter(Boolean).join(' · ')}`,
       value: name,
     })),
-    { label: 'Add an MCP server', detail: '· recorded once, installed into a harness when you choose it', value: '__mcp_everywhere__' },
+    { label: 'Add an MCP server', detail: "· for ClikCode's own agent", value: '__mcp_everywhere__' },
   ]);
   if (!choice) return;
   if (choice === '__mcp_everywhere__') return addMcpEverywhere(rl);
@@ -66,5 +66,5 @@ async function addMcpEverywhere(rl: HarnessPrompter): Promise<void> {
   if (!line) return;
   const [target, ...args] = line.split(/\s+/);
   await recordSharedMcpServer({ name, target: target!, ...(args.length ? { args } : {}) });
-  rl.panel?.(`MCP server ${name}`, `${name} is recorded. A harness receives it the first time you choose that provider, if the name is not already there.`);
+  rl.panel?.(`MCP server ${name}`, `${name} is recorded for ClikCode's own agent.`);
 }
