@@ -77,6 +77,7 @@ import { PlanEntry, planBlockRows } from './render/plan-block.js';
 import { callRow, thoughtRow, underCallRow } from './render/tool-rows.js';
 import { callDecision, savedTurnRanks, turnMarkLines } from './render/turn-mark-rows.js';
 import { composerUsageLabel, liveConversationLines, paintTitleRule, paintUsageRule, runningChatLine } from './render/waiting.js';
+import { pinnedProgressRows } from './render/pinned-progress.js';
 import { appendThought, liveWaitKind, sameCall, waitingSpinnerGlyph, type Thought } from '../harness/protocol/activity-view.js';
 import { formatElapsed } from '../harness/protocol/format.js';
 import { commandAck, keyHint, keyHintFor } from '../harness/protocol/wording.js';
@@ -180,6 +181,14 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
   private waitingFrame = 0;
   /** Background terminals the vendor says are running (the footer indicator). */
   private backgroundTerminals = 0;
+  /** Agents and workflows too, for the pinned band. Terminals stay on
+   * `backgroundTerminals` for the short-terminal budget. */
+  private backgroundWork: BackgroundWork | undefined;
+  /** A click shows the running steps; the next click leaves the latest line. */
+  private progressOpen = false;
+  private progressAvailable = false;
+  /** Screen row the composer starts on. A click below it is for the draft. */
+  private composerRow = Number.POSITIVE_INFINITY;
   /** Orders answer text against call starts for answerWriting: a counter, so
    * two events in one millisecond keep their order. */
   private statusOrder = 0;
@@ -1524,9 +1533,19 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
    * (`2 background terminals running`); agents and workflows are the end
    * line's, from the saved turn. */
   setBackgroundWork(work: BackgroundWork | undefined): void {
-    const terminals = work?.terminals && work.terminals > 0 ? Math.floor(work.terminals) : 0;
-    if (this.backgroundTerminals === terminals) return;
+    const count = (value: number | undefined): number => value && value > 0 ? Math.floor(value) : 0;
+    const agents = count(work?.agents);
+    const terminals = count(work?.terminals);
+    const workflows = count(work?.workflows);
+    const next: BackgroundWork | undefined = agents || terminals || workflows
+      ? { ...(agents ? { agents } : {}), ...(terminals ? { terminals } : {}), ...(workflows ? { workflows } : {}) }
+      : undefined;
+    const same = this.backgroundTerminals === terminals
+      && (this.backgroundWork?.agents ?? 0) === agents
+      && (this.backgroundWork?.workflows ?? 0) === workflows;
+    if (same) return;
     this.backgroundTerminals = terminals;
+    this.backgroundWork = next;
     this.schedulePaint();
   }
 
@@ -1611,6 +1630,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     }
     this.turn = undefined;
     this.backgroundTerminals = 0;
+    this.backgroundWork = undefined;
+    this.progressOpen = false;
     this.thought = undefined;
     this.thoughtStart = undefined;
     // Anything typed during the turn and not submitted is still the user's
@@ -2211,6 +2232,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // rewritten under the eye is the thing that made reading impossible.
     const notice = this.mentionFocus?.status ?? this.transientNotice ?? this.currentNotice;
     const noticeShown = notice ? noticeLines(notice, inner) : [];
+    // The band already says what is waiting. This row is only the fallback
+    // for a terminal too short to give the band a line of its own.
     const indicatorText = this.turn ? backgroundTerminalsLabel(this.backgroundTerminals) : undefined;
     const budget = frameRowBudget({
       targetHeight, waiting: Boolean(this.turn), notice: noticeShown.length, requestedPaletteCapacity,
@@ -2375,7 +2398,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         };
       })() : {};
       return {
-        id, done: false, responseOffset: entry.responseOffset, ...order, ...agentRows,
+        id, done: false, pin: true, responseOffset: entry.responseOffset, ...order, ...agentRows,
         lines: ['', `  ${row}`, ...live],
       };
     };
@@ -2388,7 +2411,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       const under = calls.map(underCall);
       if (running && !group.done) {
         const row = runningChatLine(summary, this.reducedMotion ? 0 : this.waitingFrame, 'tool', first.event?.category).trim();
-        return { id: group.key, done: false, responseOffset: first.responseOffset, ...(first.sequence === undefined ? {} : { seq: first.sequence }), lines: ['', `  ${row}`, ...under] };
+        return { id: group.key, done: false, pin: true, responseOffset: first.responseOffset, ...(first.sequence === undefined ? {} : { seq: first.sequence }), lines: ['', `  ${row}`, ...under] };
       }
       const { line, category } = mergedExploreSummaryLine(group.members.map((member) => member.event), summary);
       return { id: group.key, done: group.done, responseOffset: first.responseOffset, ...(first.sequence === undefined ? {} : { seq: first.sequence }), lines: [...activityRows([line], category), ...under] };
@@ -2461,7 +2484,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         for (const child of this.liveChildren.rows(open.map((entry) => ({ id: entry.event!.id!, offset: entry.responseOffset, seq: entry.sequence })))) {
           const uses = child.newest ? open.find((entry) => entry.event!.id === child.parentId)?.event?.childTools : undefined;
           tools.push({
-            id: child.id, done: false, nested: true, parent: child.parentId, responseOffset: child.offset, seq: child.seq,
+            id: child.id, done: false, pin: true, nested: true, parent: child.parentId, responseOffset: child.offset, seq: child.seq,
             lines: [`    ${chalk.cyan(waitingSpinnerGlyph(frame))} ${chalk.dim(`${child.label}${uses ? ` · ${toolUses(uses)}` : ''}`)}`],
           });
         }
@@ -2606,6 +2629,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     this.emitted.settle(persistedMessages.length);
 
     const liveConversation: string[] = [];
+    let pinnedLines: readonly string[] = [];
     if (hasTransientAssistant) {
       this.emitted.liveAssistantIndex = this.emitted.writtenCount();
       const content = sanitizeTerminalText(this.liveResponse);
@@ -2624,6 +2648,7 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
         agentHoldRows: Math.max(3, Math.floor(maxComposerRows / 2)),
       });
       emit(step.finished);
+      pinnedLines = step.pinned;
       liveConversation.push(...step.live);
     }
     for (const [queueIndex, message] of queuedMessages.entries()) {
@@ -2674,13 +2699,24 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     footer.push(...approvalRows, ...midRows);
     // The generating band: a blank above the status where the height has the
     // row for it. The status itself is always drawn while a turn runs.
+    // Running steps sit here, above the spinner, not in the answer. Closed
+    // is the latest line. A click opens the live rows; the next click closes.
+    const progressRoom = Math.max(0, targetHeight - footer.length - 8);
+    const progressLimit = this.progressOpen ? Math.min(8, progressRoom) : Math.min(1, progressRoom);
+    const progressBand = progressRoom > 0 ? pinnedProgressRows({
+      lines: pinnedLines, open: this.progressOpen, background: this.backgroundWork,
+      width: inner, limit: progressLimit,
+    }) : [];
+    this.progressAvailable = pinnedLines.some((line) => line.trim().length > 0) || this.backgroundWork !== undefined;
+    if (progressBand.length) footer.push(...progressBand);
     const statusBlank = waitingRows >= 2 && this.turn ? '' : undefined;
     const statusRow = this.turn ? `  ${visibleSlice(this.waitingLine(this.turn, Math.max(1, inner)), Math.max(1, inner))}` : undefined;
     if (statusBlank !== undefined) footer.push(statusBlank);
     if (statusRow !== undefined) footer.push(statusRow);
     // Background terminals the vendor runs: one dim row under the status,
     // not drawn at zero, and the first row a short terminal gives up.
-    const indicatorRow = indicatorRows && indicatorText !== undefined
+    const bandSaysIt = indicatorText !== undefined && progressBand.some((line) => line.includes(indicatorText));
+    const indicatorRow = indicatorRows && indicatorText !== undefined && !bandSaysIt
       ? `  ${chalk.dim(visibleSlice(indicatorText, Math.max(1, inner)))}` : undefined;
     if (indicatorRow !== undefined) footer.push(indicatorRow);
     // Usage lives on the upper composer border, mirroring the title on the
@@ -2760,6 +2796,8 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
     // caret parked there is the one every report of "the cursor is under the
     // composer" is actually describing.
     const cursorRow = Math.max(0, liveConversationRows + composerStart + composerRows.cursorRow - overflow);
+    const liveLength = unbounded.length - overflow;
+    this.composerRow = Math.max(0, targetHeight - liveLength) + Math.max(0, liveConversationRows + composerStart - overflow);
     const cursorColumn = 3 + terminalCellWidth(prompt) + composerRows.cursorWidth;
     this.pendingSignals += this.terminalSignals();
     this.renderFrame(finished, live, cursorRow, cursorColumn, Boolean(palette?.hideCursor));
@@ -3192,16 +3230,26 @@ export class TerminalHarnessPrompter implements HarnessPrompter {
       return;
     }
     const selection = this.selection;
-    if (!selection) return;
-    if (Number.isFinite(at.row)) selection.head = at;
-    if (action.kind === 'drag') {
+    if (action.kind === 'drag' && selection) {
+      if (Number.isFinite(at.row)) selection.head = at;
       this.followSelectionEdge(action.at.row, action.at.col);
       this.redrawSelection();
       return;
     }
+    if (action.kind !== 'release') return;
     this.stopSelectionScroll();
     this.selection = undefined;
-    if (selectionIsEmpty(selection)) return;
+    // A click, not a drag, and not in the composer. The progress band is in
+    // the live footer, which is not a transcript line, so a press there never
+    // starts a selection. Claude Code opens the collapsed step the same way,
+    // and the next click puts it back.
+    const dragged = Boolean(selection && !selectionIsEmpty(selection));
+    if (!dragged && action.at.row < this.composerRow && this.progressAvailable) {
+      this.progressOpen = !this.progressOpen;
+      this.schedulePaint(0);
+      return;
+    }
+    if (!selection || selectionIsEmpty(selection)) return;
     const text = this.selectionText(selection);
     this.redrawSelection();
     if (!text) return;
