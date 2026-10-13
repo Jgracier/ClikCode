@@ -23,6 +23,7 @@ import { PersistentSession, runOneTurn, turnFailure, type PersistentSessionOptio
 import { lifecycle } from '../../runtime/lifecycle-log.js';
 import { backgroundWork, mergeBackgroundWork, type BackgroundWork } from '../protocol/background-agents.js';
 import { markTurn } from '../../runtime/turn-latency.js';
+import { OTHER_ORG_THINKING_TITLE } from '../protocol/claude-thinking-notice.js';
 
 type Json = Record<string, any>;
 
@@ -1208,6 +1209,17 @@ class AcpSessionImpl extends PersistentSession<LiveAgent, ActiveTurn, Background
 
   private deliver(target: Stream, update: Json, totals?: TurnUsage): void {
     const input = target.observer;
+    // Claude can no longer reuse signed thinking after an account switch. The
+    // adapter reports that as a notice, or (older builds) as a message chunk.
+    // It is informational; let Claude continue, without adding it to the
+    // visible or saved answer. Keep every other warning untouched.
+    if (update.sessionUpdate === 'notice' && update.severity === 'warning'
+      && update.title === OTHER_ORG_THINKING_TITLE) return;
+    if (update.sessionUpdate === 'agent_message_chunk'
+      && update._meta?.claudeCode?.kind === 'informational'
+      && update._meta.claudeCode.level === 'warning'
+      && typeof update.content?.text === 'string'
+      && update.content.text.startsWith(`**Warning:** ${OTHER_ORG_THINKING_TITLE}\n`)) return;
     // Session totals (usage_update's cost; Vibe's and OpenHands' `_meta`
     // tokens, which OpenHands puts on its message and tool updates) count
     // for this turn by what they grew since it began.

@@ -4,6 +4,7 @@ import { memo } from 'preact/compat';
 import { useRef, useState } from 'preact/hooks';
 import { clikCodeNoticeBody, isClikCodeNotice } from '../../../../src/session/clikcode-notice';
 import { COPIED_MS } from '../../../../src/harness/protocol/timings';
+import { withoutOtherOrgThinkingNotice } from '../../../../src/harness/protocol/claude-thinking-notice';
 import { post, uid } from './bus';
 import { createStreamingMarkdown, renderMarkdown } from './markdown';
 import { Icon } from './ui';
@@ -19,7 +20,7 @@ export const FINISHED_LIMIT = 400;
 export function renderFinished(key: string, text: string): string {
   const hit = finishedHtml.get(key);
   if (hit?.text === text) return hit.html;
-  const html = renderMarkdown(text);
+  const html = renderMarkdown(withoutOtherOrgThinkingNotice(text));
   finishedHtml.delete(key);
   finishedHtml.set(key, { text, html });
   if (finishedHtml.size > FINISHED_LIMIT) finishedHtml.delete(finishedHtml.keys().next().value!);
@@ -48,7 +49,7 @@ export const AssistantMessage = memo(({ cacheKey, text }: { cacheKey: string; te
  * separate nodes, so a delta replaces only the last block's HTML. */
 export function LiveMarkdown({ text }: { text: string }): JSX.Element {
   const render = useRef(createStreamingMarkdown());
-  const { parts, tail } = render.current(text);
+  const { parts, tail } = render.current(withoutOtherOrgThinkingNotice(text));
   // One node per settled chunk, keyed by its place: a chunk is final, so
   // growing the answer adds nodes and leaves the earlier ones' DOM alone.
   return (
