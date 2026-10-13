@@ -151,10 +151,19 @@ export type GuardAction =
 /** What to do at this ratio: stop the largest command past the limit; near
  * it, nudge whoever runs the largest (or, with no command running, holds the
  * most). Who acts is the owner (`worker`), and only they. */
+/** Smallest command worth stopping: one below this frees nothing that
+ * matters. MEASURED 2026-10-13: with agents choking on memory held outside any
+ * command (their own processes, orphans, /tmp), the largest command was an
+ * agent's `sleep` -- 70 of 102 stops in half an hour were 8 MB sleeps, which
+ * freed nothing and broke the agents' wait loops. */
+export function worthStopping(command: CommandTree, budget: AgentBudget): boolean {
+  return command.bytes >= Math.max(GIB, budget.limit * 0.03);
+}
+
 export function decideAction(budget: AgentBudget, view: ProcessView): GuardAction {
   if (budget.ratio < NUDGE_AT) return { kind: 'none' };
   const largest = view.commands[0];
-  if (budget.ratio >= 1 && largest) return { kind: 'stop', command: largest };
+  if (budget.ratio >= 1 && largest && worthStopping(largest, budget)) return { kind: 'stop', command: largest };
   if (largest) return { kind: 'nudge', worker: largest.worker, command: largest };
   const heaviest = [...view.byWorker].sort((a, b) => b[1] - a[1])[0];
   return heaviest ? { kind: 'nudge', worker: heaviest[0] } : { kind: 'none' };
