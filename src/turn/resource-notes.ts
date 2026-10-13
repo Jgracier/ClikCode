@@ -5,7 +5,7 @@
  *
  * A note goes into the running turn at its next pause when the turn can take
  * one (LiveTurnInputBroker.steerNote); otherwise it waits here and rides on
- * the next turn's text, the way a title request does -- never on what is
+ * the next turn's text -- never on what is
  * stored as the user's message. A vendor keeps what it was sent, so a note
  * read back out of its transcript is stripped there (stripResourceNotes, in
  * normalizeImportedTranscript). */
