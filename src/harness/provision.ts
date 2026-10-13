@@ -159,9 +159,9 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
 
   const loaded = await loadMcpServers(stateDir);
   const present = await vendorMcpServerNames(input.harness.command, home, profile);
-  // Grok reads ~/.claude.json unless [compat.claude] mcps is turned off, so a
+  // A vendor (Grok) reads ~/.claude.json unless [compat.claude] mcps is turned off, so a
   // name Claude already has is already available. Adding it again connects twice.
-  const grokClaudeMcp = input.harness.command === 'grok' && await grokImports(home, 'mcps')
+  const importedClaudeMcp = await importsClaude(input.harness, home, 'mcps')
     ? await vendorMcpServerNames('claude', home)
     : undefined;
   const userEntries = loaded.servers.map(specToEntry);
@@ -187,7 +187,7 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
   // dev server that was down), where every other vendor goes on without it.
   // So Grok gets a local server only while it is up; asking costs nothing,
   // since a refused connection fails at once.
-  const down = input.harness.command === 'grok'
+  const down = input.harness.quitsOnDeadMcpServer
     ? new Set((await Promise.all(entries.filter((entry) => isRemoteTarget(entry.target))
       .map(async (entry) => (await (input.serverDown ?? localServerDown)(entry.target)) ? entry.name : undefined))).filter(Boolean))
     : new Set<string | undefined>();
@@ -228,7 +228,7 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     }
     if (input.takeBackOnly) continue;
     if (present.known && present.names.has(entry.name)) continue;
-    if (grokClaudeMcp?.names.has(entry.name)) continue;
+    if (importedClaudeMcp?.names.has(entry.name)) continue;
     if (!present.known && await alreadyProvisioned(stateDir, input, entry.name)) continue;
     // Only the vendor's copy: mcp.json keeps the user's own npx line.
     const written = launcher ? await withoutNpx(entry, () => (roots ??= input.npx ? Promise.resolve(input.npx) : npxRoots(home)), launcher) : entry;
@@ -250,13 +250,13 @@ export async function provisionChosenHarness(input: ProvisionInput): Promise<Pro
     const userDir = skillRoot(userDirParts, home, profile);
     const projectParts = PROJECT_SKILL_DIR[input.harness.command];
     const projectDir = projectParts ? join(workspace, ...projectParts) : userDir;
-    const grokSeesClaudeSkills = input.harness.command === 'grok' && await grokImports(home, 'skills');
+    const seesClaudeSkills = await importsClaude(input.harness, home, 'skills');
     for (const skill of catalog.skills) {
       // A plugin's skill belongs to the plugin, which ClikCode's own agent
       // loads; a vendor with plugins of its own installs them there.
       if (skill.source === 'plugin') continue;
       // Those two sources are the directories Grok scans on its own.
-      if (grokSeesClaudeSkills && (skill.source === 'user-claude' || skill.source === 'project-claude')) continue;
+      if (seesClaudeSkills && (skill.source === 'user-claude' || skill.source === 'project-claude')) continue;
       const directory = skill.source === 'project' || skill.source === 'project-claude' ? projectDir : userDir;
       try {
         if (await copySkill(skill, directory)) skillsCopied.push(skill.name);
@@ -316,10 +316,13 @@ async function mcpOwnership(
   return { urls, recorded, owns, settle };
 }
 
-/** Grok's compat.claude flags default to on. An explicit false is the only off. */
-async function grokImports(home: string, flag: 'mcps' | 'skills'): Promise<boolean> {
-  const text = await readFile(join(home, '.grok', 'config.toml'), 'utf8').catch(() => '');
-  const section = text.match(/\[compat\.claude\][^\[]*/);
+/** Whether the vendor imports Claude Code's `flag` itself (catalog `claudeImports`). Its flags
+ * default to on: an explicit false is the only off. */
+async function importsClaude(harness: AiLocalHarnessDefinition, home: string, flag: 'mcps' | 'skills'): Promise<boolean> {
+  const imports = harness.claudeImports;
+  if (!imports) return false;
+  const text = await readFile(join(home, imports.file), 'utf8').catch(() => '');
+  const section = text.match(new RegExp(`\\[${imports.section.replace(/\./g, '\\.')}\\][^\\[]*`));
   if (!section) return true;
   return !new RegExp(`^${flag}\\s*=\\s*false\\s*$`, 'm').test(section[0]);
 }

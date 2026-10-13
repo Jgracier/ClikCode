@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
+import permissionLaunchBefore from './permission-launch.before.json';
 import { modelDisplayId, modelIdFromDisplay, AI_LOCAL_HARNESSES, AI_LOCAL_HARNESS_ADAPTER_VERSION, AI_LOCAL_HARNESS_CAPABILITIES, HOME_REDIRECT_ENV_DEFAULTS, allLocalHarnesses, customAcpHarness, guardedPromptArgv, harnessAcpLaunch, harnessLoginArgvForModel, harnessReplyError, harnessCanRunTurns, harnessTierRank, harnessTurnTransport, maxPromptArgvBytes, promptExceedsArgvLimit, registerCustomHarnesses, harnessIntegrationLevel, harnessSupportsEffort, harnessSupportsImages, harnessSupportsModelSelection, harnessSupportsPermissionMode, localHarnessCapabilityManifest, localHarnessForCommand, localHarnessForProvider, nativeHarnessTurnArgv } from './ai-local-harness';
 
 
@@ -50,7 +51,8 @@ describe('local harness catalog', () => {
     ] as const;
     for (const [command, expected] of cases) {
       const harness = localHarnessForCommand(command)!;
-      expect(harness.tier).toBe('experimental');
+      // Devin ran a real turn on 2026-10-12 and is promoted; the others are not yet.
+      expect(harness.tier).toBe(command === 'devin' ? 'more' : 'experimental');
       expect(harnessTurnTransport(harness)).toBe('acp');
       const model = command === 'dcode' ? 'anthropic:claude-sonnet-5' : command === 'mcode' ? null : command === 'devin' ? 'opus' : 'sonnet';
       const launch = harnessAcpLaunch(harness, { model, effort: null, permissionMode: 'ask' })!;
@@ -160,7 +162,7 @@ describe('local harness catalog', () => {
   it('drives one Plan mode through each harness’s own planning flag', () => {
     const expected: Record<string, string[]> = {
       copilot: ['--plan'], cline: ['--plan'], command: ['--plan'], droid: ['--use-spec'], auggie: ['--ask'],
-      cursor: ['--mode', 'plan'], antigravity: ['--mode', 'plan'],
+      cn: ['--readonly'], kimi: ['--plan'], cursor: ['--mode', 'plan'], antigravity: ['--mode', 'plan'],
     };
     const planned = AI_LOCAL_HARNESSES.filter((harness) => harness.planMode);
     expect(planned.map((harness) => harness.command).sort()).toEqual(Object.keys(expected).sort());
@@ -487,8 +489,8 @@ describe('local harness catalog', () => {
   });
 
   it('derives Kilo from the shared OpenCode base, differing only where declared', () => {
-    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, permissionEnv: _pe, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, ...opencode } = localHarnessForCommand('opencode')!;
-    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, permissionEnv: _kpe, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, ...kilo } = localHarnessForCommand('kilo')!;
+    const { command: _c, provider: _p, displayName: _d, tier: _t, binary: _b, npmPackage: _n, permissionModes: _pm, permissionArgv: _pa, permissionEnv: _pe, customCommandDirs: _cd, normalizedPermissionOptionIds: _np, authFiles: _af, signInOptional: _so, freePlan: _fp, quotaProbe: _oq, ...opencode } = localHarnessForCommand('opencode')!;
+    const { command: _kc, provider: _kp, displayName: _kd, tier: _kt, binary: _kb, npmPackage: _kn, permissionModes: _kpm, permissionArgv: _kpa, permissionEnv: _kpe, authFiles: _kaf, loginAccountChoose: _kac, freePlan: _kfp, quotaProbe: _kq, ...kilo } = localHarnessForCommand('kilo')!;
     expect(kilo).toEqual(opencode);
     expect(localHarnessForCommand('kilo')!.permissionModes).toEqual(['ask', 'auto']);
     // Only OpenCode's free models were proven to answer signed out.
@@ -703,5 +705,79 @@ describe('image support follows the transport', () => {
     expect(harnessSupportsImages(localHarnessForCommand('grok')!)).toBe(false);
     expect(localHarnessForCommand('grok')!.acp?.promptImages).toBe(false);
     expect(harnessSupportsImages(localHarnessForCommand('codex')!)).toBe(true);
+  });
+});
+
+describe('steering', () => {
+  it('is recorded as unsupported for Junie, which advertises it but starts a detached turn when idle', () => {
+    expect(AI_LOCAL_HARNESSES.find((harness) => harness.command === 'junie')?.acp?.steering).toBe(false);
+    expect(AI_LOCAL_HARNESSES.filter((harness) => harness.acp?.steering === false).map((harness) => harness.command)).toEqual(['junie']);
+  });
+});
+
+describe('live checks', () => {
+  it('promotes an entry past experimental only with a verified live check, and says why the others are not', () => {
+    for (const harness of AI_LOCAL_HARNESSES) {
+      if (harness.liveCheck?.verified) expect(harness.tier, harness.command).not.toBe('experimental');
+      if (harness.liveCheck && !harness.liveCheck.verified) expect(harness.liveCheck.note, harness.command).toBeTruthy();
+    }
+    expect(localHarnessForCommand('devin')).toMatchObject({ tier: 'more', liveCheck: { verified: true } });
+    expect(localHarnessForCommand('devin')!.experimental).toBeUndefined();
+    expect(localHarnessForCommand('junie')).toMatchObject({ tier: 'experimental', liveCheck: { verified: false } });
+  });
+});
+
+describe('model discovery declarations', () => {
+  it('declares each vendor-specific reader by field, not by command name', () => {
+    const strategies = Object.fromEntries(AI_LOCAL_HARNESSES.filter((h) => h.modelStrategy).map((h) => [h.command, h.modelStrategy]));
+    expect(strategies).toEqual({
+      claude: 'claude-table', codex: 'codex-cache', hermes: 'hermes-inventory', openclaw: 'openclaw-inventory',
+      aider: 'aider-providers', copilot: 'copilot-server', goose: 'goose-providers',
+    });
+    const formats = Object.fromEntries(AI_LOCAL_HARNESSES.filter((h) => h.modelListFormat).map((h) => [h.command, h.modelListFormat]));
+    expect(formats).toEqual({ opencode: 'opencode-verbose', kilo: 'opencode-verbose', pi: 'pi-table' });
+  });
+});
+
+describe('vendor quirks are declared by field', () => {
+  it('names which entry imports Claude config, quits on a dead MCP server, resolves a key identity and wraps events', () => {
+    const having = (field: 'claudeImports' | 'quitsOnDeadMcpServer' | 'keyIdentityArgv' | 'eventDialect') => AI_LOCAL_HARNESSES.filter((h) => h[field]).map((h) => h.command);
+    expect(having('claudeImports')).toEqual(['grok']);
+    expect(having('quitsOnDeadMcpServer')).toEqual(['grok']);
+    expect(having('keyIdentityArgv')).toEqual(['amp']);
+    expect(having('eventDialect')).toEqual(['command']);
+    expect(localHarnessForCommand('amp')!.authEnv?.[0]).toBe('AMP_API_KEY');
+  });
+});
+
+describe('one permission declaration per harness', () => {
+  it('still produces, for all harnesses, the turn argv, ACP launch and ACP mode ids it did before the merge', () => {
+    const sort = (value: unknown): unknown => Array.isArray(value) ? value.map(sort)
+      : value && typeof value === 'object' ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => [k, sort(v)])) : value;
+    const now: Record<string, unknown> = {};
+    for (const harness of AI_LOCAL_HARNESSES) {
+      now[harness.command] = {};
+      for (const mode of ['ask', 'bypass', 'auto'] as const) {
+        const turn = harness.turn || harness.transport === 'text-cli' ? (() => { try { return nativeHarnessTurnArgv(harness, { prompt: 'hi', permissionMode: mode }); } catch (error) { return (error as Error).message; } })() : null;
+        const acp = harness.acp ? (() => { try { return harnessAcpLaunch(harness, { model: null, effort: null, permissionMode: mode }); } catch (error) { return (error as Error).message; } })() : null;
+        (now[harness.command] as Record<string, unknown>)[mode] = { turn, acp, ...(harness.acp?.permissionModeIds?.[mode] ? { ids: harness.acp.permissionModeIds[mode] } : {}) };
+      }
+    }
+    expect(Object.keys(now)).toHaveLength(29);
+    expect(sort(JSON.parse(JSON.stringify(now)))).toEqual(permissionLaunchBefore);
+  });
+
+  it('derives both launch paths from `permissions` and keeps the Hermes exception explicit', () => {
+    for (const command of ['claude', 'droid', 'qwen', 'cline', 'command', 'kimi']) {
+      const harness = localHarnessForCommand(command)!;
+      expect(harness.permissions, command).toBeTruthy();
+      for (const [mode, declared] of Object.entries(harness.permissions!)) {
+        expect(harness.permissionArgv?.[mode as 'ask']?.argv, `${command} ${mode}`).toEqual(declared.argv);
+        expect(harness.acp?.permissionModeIds?.[mode as 'ask'], `${command} ${mode}`).toBe(declared.acpModeId);
+      }
+    }
+    const hermes = localHarnessForCommand('hermes')!;
+    expect(hermes.permissions).toBeUndefined();
+    expect(hermes.acp?.permissionArgv).toEqual({ bypass: ['--yolo'] });
   });
 });
