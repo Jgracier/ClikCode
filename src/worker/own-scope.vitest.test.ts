@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { adoptArgs, AGENT_SLICE, agentSliceDirectory, scopeUnitName, sliceArgs, userManagerOwns } from './own-scope.js';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { adoptArgs, AGENT_SLICE, agentSliceDirectory, scopeUnitName, sliceArgs, userManagerLaunch, userManagerOwns } from './own-scope.js';
 
 describe('own scope', () => {
   it('names a valid, per-process unit from any session id', () => {
@@ -47,5 +51,46 @@ describe('own scope', () => {
     expect(agentSliceDirectory('0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-code-1.scope\n'))
       .toBe('/sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/clikcode.slice');
     expect(agentSliceDirectory('0::/system.slice/tailscaled.service\n')).toBeUndefined();
+  });
+
+  const sshSession = '0::/user.slice/user-1000.slice/session-145.scope\n';
+  const launchContext = (over: Partial<Parameters<typeof userManagerLaunch>[1]> = {}) => ({
+    cgroup: sshSession, uid: 1000, env: { HOME: '/home/u', CLIKCODE_HOME: '/h' }, cwd: '/work', execPath: '/bin/node',
+    unit: 'clikcode-start-x.service', busExists: () => true, ...over,
+  });
+
+  it('starts a worker from an SSH session through the user manager, into the agent slice, with this window\'s environment and folder', () => {
+    const launch = userManagerLaunch(['/x/index.js', 'session-worker', 's1'], launchContext())!;
+    expect(launch.command).toBe('systemd-run');
+    expect(launch.args).toEqual(expect.arrayContaining(['--user', '--collect', `--slice=${AGENT_SLICE}`, 'OOMPolicy=continue',
+      '--working-directory=/work', '--setenv=HOME=/home/u', '--setenv=CLIKCODE_HOME=/h']));
+    expect(launch.args.slice(launch.args.indexOf('--'))).toEqual(['--', '/bin/node', '/x/index.js', 'session-worker', 's1']);
+    // Tailscale SSH sets no runtime dir: the user's own is used to reach the manager.
+    expect(launch.env.XDG_RUNTIME_DIR).toBe('/run/user/1000');
+  });
+
+  it('leaves every other start alone: already under the user manager, no user bus, or turned off', () => {
+    expect(userManagerLaunch([], launchContext({ cgroup: '0::/user.slice/user-1000.slice/user@1000.service/app.slice/x.scope\n' }))).toBeUndefined();
+    expect(userManagerLaunch([], launchContext({ busExists: () => false }))).toBeUndefined();
+    expect(userManagerLaunch([], launchContext({ env: { CLIKCODE_OWN_SCOPE: '0' } }))).toBeUndefined();
+    expect(userManagerLaunch([], launchContext({ cgroup: '' }))).toBeUndefined();
+  });
+
+  const userBus = `${process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.()}`}/bus`;
+  it.skipIf(process.platform !== 'linux' || !existsSync(userBus))('really lands the process in the agent slice, in its folder, with its environment', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'clikcode-launch-'));
+    try {
+      const out = join(dir, 'seen');
+      const launch = userManagerLaunch(['-e', `require('fs').writeFileSync(${JSON.stringify(out)}, [require('fs').readFileSync('/proc/self/cgroup','utf8').trim(), process.cwd(), process.env.CLIKCODE_PROBE].join('|'))`], {
+        cgroup: sshSession, uid: process.getuid!(), env: { ...process.env, CLIKCODE_PROBE: 'carried' }, cwd: dir, execPath: process.execPath,
+        unit: `clikcode-launch-test-${process.pid}-${Date.now()}.service`, busExists: existsSync,
+      })!;
+      expect(spawnSync(launch.command, launch.args, { env: launch.env }).status).toBe(0);
+      const deadline = Date.now() + 10_000;
+      while (!existsSync(out) && Date.now() < deadline) spawnSync('sleep', ['0.05']);
+      const [cgroup, cwd, probe] = readFileSync(out, 'utf8').split('|');
+      expect(cgroup).toContain(`/${AGENT_SLICE}/clikcode-launch-test-`);
+      expect([cwd, probe]).toEqual([dir, 'carried']);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
   });
 });

@@ -95,6 +95,37 @@ export function userManagerOwns(cgroup: string): boolean {
   return /^0::\/user\.slice\/user-\d+\.slice\/user@\d+\.service\//m.test(cgroup);
 }
 
+/** How to start a worker from outside the user's systemd manager -- an SSH or
+ * Tailscale SSH session, VS Code Remote-SSH. A process there belongs to the
+ * system manager, and the user manager may not move it into the agent slice:
+ * such a worker kept no more than a lower priority, outside every limit
+ * (12 of them on 2026-10-10). So the user manager starts it instead, inside
+ * its own tree, as a transient service with this window's environment and
+ * folder; the worker then moves to its own scope like any other, and the
+ * service ends with it. Undefined where none of that applies: off Linux,
+ * already under the user manager, or no user bus to ask. Placement only:
+ * nothing about the worker changes but where it is accounted. */
+export function userManagerLaunch(argv: readonly string[], context: {
+  cgroup: string; uid: number; env: NodeJS.ProcessEnv; cwd: string; execPath: string; unit: string;
+  busExists: (path: string) => boolean;
+}): { command: string; args: string[]; env: NodeJS.ProcessEnv } | undefined {
+  if (!context.cgroup || userManagerOwns(context.cgroup) || context.env.CLIKCODE_OWN_SCOPE === '0') return undefined;
+  const runtime = context.env.XDG_RUNTIME_DIR || `/run/user/${context.uid}`;
+  if (!context.busExists(`${runtime}/bus`)) return undefined;
+  const setenv = Object.entries(context.env)
+    .filter((entry): entry is [string, string] => typeof entry[1] === 'string' && !entry[1].includes('\0'))
+    .map(([key, value]) => `--setenv=${key}=${value}`);
+  return {
+    command: 'systemd-run',
+    args: [
+      '--user', '--quiet', '--collect', `--unit=${context.unit}`, `--slice=${AGENT_SLICE}`,
+      '-p', 'OOMPolicy=continue', '-p', 'StandardOutput=null', '-p', 'StandardError=null',
+      `--working-directory=${context.cwd}`, ...setenv, '--', context.execPath, ...argv,
+    ],
+    env: { ...context.env, XDG_RUNTIME_DIR: runtime },
+  };
+}
+
 /** Where the agent slice lives in the cgroup tree, from this process's own line. */
 export function agentSliceDirectory(cgroup: string): string | undefined {
   const manager = /^0::(\/user\.slice\/user-\d+\.slice\/user@\d+\.service)\//m.exec(cgroup)?.[1];
