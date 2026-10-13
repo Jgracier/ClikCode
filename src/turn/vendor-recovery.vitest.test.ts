@@ -3,18 +3,12 @@ import { recoveryCandidates } from './vendor-recovery.js';
 
 const fresh = { authRetried: false, nativeThreadRetried: false };
 const base = {
-  failureKind: 'other' as const, cliOutputStarted: false,
-  cliTransport: false, hasFallbackTurn: false, attempt: fresh,
+  failureKind: 'other' as const, attempt: fresh,
 };
 
 describe('recoveryCandidates', () => {
   it('offers nothing for an ordinary failure, leaving the account switch', () => {
     expect(recoveryCandidates(base)).toEqual([]);
-  });
-
-  it('offers the compatibility turn only on a CLI transport that declares one', () => {
-    expect(recoveryCandidates({ ...base, cliTransport: true, hasFallbackTurn: true })).toEqual(['fallback-turn']);
-    expect(recoveryCandidates({ ...base, hasFallbackTurn: true })).toEqual([]);
   });
 
   it('offers a sign-in or a fresh thread by the failure kind, each once', () => {

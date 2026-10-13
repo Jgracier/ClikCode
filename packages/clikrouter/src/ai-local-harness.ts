@@ -577,11 +577,6 @@ export interface AiLocalHarnessDefinition {
   /** Vendor-supported configuration root used for isolated local accounts. */
   profileEnv?: string;
   turn?: AiHarnessTurnDefinition;
-  /** Proven contract to retry with when `turn` is rejected outright, before
-   * any output, by an older vendor build; remembered for that build
-   * (turn/vendor-process.ts). Applies wherever it is declared, whatever the
-   * tier or `experimental`. */
-  fallbackTurn?: AiHarnessTurnDefinition;
   /**
    * Source-backed native session invocation.  Omitted means ClikCode may
    * launch the harness but must not claim it can centrally resume its chats.
@@ -944,9 +939,9 @@ const CATALOG_HARNESSES: readonly AiLocalHarnessDefinition[] = [
   // Amp's execute mode has a documented `--stream-json` switch that emits
   // Claude Code-compatible stream-json (system/assistant/result envelopes), so
   // it borrows the claude-stream-json parser family. UNVERIFIED LIVE: amp is
-  // not installed where this was written, hence `experimental`; `fallbackTurn`
-  // is the previously shipped plain-text contract, unchanged.
-  { command: 'amp', keyIdentityArgv: ['usage'], quotaProbe: true, capabilities: { childActivity: true, thinking: true, plan: true, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'amp', displayName: 'Amp', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/amp/secrets.json', contains: 'apiKey@' }], authEnv: ['AMP_API_KEY'], loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: ['--stream-json'], resumeArgv: ['threads', 'continue'], resumeIdSuffix: ['--stream-json'], promptArgvPrefix: ['-x'], output: 'json-lines', responseFields: ['result'], mcpConfigArgv: ['--mcp-config'] }, fallbackTurn: { startArgv: [], resumeArgv: ['threads', 'continue'], promptArgvPrefix: ['-x'], output: 'text' }, session: { resumeIdPrefix: ['threads', 'continue'] } },
+  // not installed where this was written, hence `experimental`. A turn that
+  // fails fails visibly: ClikCode does not retry on another contract.
+  { command: 'amp', keyIdentityArgv: ['usage'], quotaProbe: true, capabilities: { childActivity: true, thinking: true, plan: true, usage: true, toolOutput: true, backgroundAgents: false, backgroundTerminals: false, workflows: false }, provider: 'amp', displayName: 'Amp', tier: 'more', transport: 'structured-cli', integration: 'structured', parser: 'claude-stream-json', memoryFile: 'AGENTS.md', nativeSlashPassthrough: false, experimental: true, localAuth: ['api-key', 'oauth', 'vendor-cli'], binary: 'amp', npmPackage: '@ampcode/cli', authFiles: [{ path: '${XDG_DATA_HOME:-~/.local/share}/amp/secrets.json', contains: 'apiKey@' }], authEnv: ['AMP_API_KEY'], loginArgv: ['login'], versionArgv: ['version'], turn: { startArgv: ['--stream-json'], resumeArgv: ['threads', 'continue'], resumeIdSuffix: ['--stream-json'], promptArgvPrefix: ['-x'], output: 'json-lines', responseFields: ['result'], mcpConfigArgv: ['--mcp-config'] }, session: { resumeIdPrefix: ['threads', 'continue'] } },
   // Verified against Antigravity's own official headless-mode docs
   // (antigravity.google/docs/cli/headless/): -p/--print for a single
   // non-interactive prompt, --model <slug>, --continue/-c for the most

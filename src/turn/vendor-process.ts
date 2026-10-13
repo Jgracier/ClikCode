@@ -1,5 +1,4 @@
-/** Reusable vendor processes and build-specific transport fallback. */
-import { harnessBinaryIdentity } from '../harness/transport/native/version-memo.js';
+/** Reusable vendor processes. */
 import { createCodexSession } from '../harness/transport/codex-app-server.js';
 import { createAcpSession } from '../harness/transport/acp-client.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
@@ -11,26 +10,6 @@ import type { VendorBackgroundTurn, VendorBackgroundTurnHandler } from '../harne
 import { turnCancelledError } from '../agent/cancellation.js';
 import { outOfTurnRecorder } from './out-of-turn-record.js';
 import type { OutOfTurnRelay } from '../harness/transport/background-turn.js';
-
-/** Harnesses whose `turn` contract was rejected, by the build that rejected
- * it; later turns on that build go straight to the catalog's declared
- * `fallbackTurn`.
- *
- * Keyed on the binary's identity, not just the harness. It was a plain set of
- * names, held for the life of the process -- so an update to a vendor build
- * that accepts the newer contract went on being sent the fallback,
- * because an OLDER build had once said no. What was learned is a fact about
- * that build, and it stops applying the moment the binary changes. */
-const rejectedTurnContract = new Map<string, string | undefined>();
-
-export async function usesFallbackTurn(harness: AiLocalHarnessDefinition): Promise<boolean> {
-  if (!rejectedTurnContract.has(harness.command)) return false;
-  return rejectedTurnContract.get(harness.command) === await harnessBinaryIdentity(harness.binary);
-}
-
-export async function rememberFallbackTurn(harness: AiLocalHarnessDefinition): Promise<void> {
-  rejectedTurnContract.set(harness.command, await harnessBinaryIdentity(harness.binary));
-}
 
 /** ACP `available_commands_update`, per ClikCode session, for the slash registry. */
 export const nativeAvailableCommands = new Map<string, readonly HarnessAvailableCommand[]>();
