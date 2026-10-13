@@ -118,15 +118,20 @@ async function gatewayModelFacts(session: HarnessSession, config: Conf): Promise
     // Imported here: gateway/models.ts imports this module for gatewayConnection.
     const { savedGatewayModels, gatewayModels, sameGatewayModel } = await import('../../gateway/models.js');
     // Model facts tune the local loop; the Gateway resolves the actual model.
-    // A turn must not wait for a catalogue request before its first model step.
+    // With a saved list a turn does not wait for the network. With none (the
+    // first use on this machine) the list is fetched before the first step, so
+    // the loop does not assume a 128k window and no vision: bounded by the
+    // list request's own timeout, after which the turn runs on what it has.
     let list = await savedGatewayModels({ config });
+    const fetchedNow = !list;
+    if (!list) list = await gatewayModels({ config }).catch(() => undefined);
     let auto = list?.auto ?? null;
     const id = session.model ?? undefined;
     // However the id is spelled (an agent's own pin is `claude-opus-5-5`, the list `claude-opus-5.5`).
     let model = id ? list?.models.find((entry) => sameGatewayModel(entry.id, id)) : undefined;
-    // An image requires a vision-capable model. Only this case needs a fresh
-    // catalogue when the current account has no facts for the selected model.
-    if (!model && session.attachments?.some((file) => /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|avif)$/i.test(file))) {
+    // An image requires a vision-capable model: a list that does not know the
+    // selected model is asked again.
+    if (!model && !fetchedNow && session.attachments?.some((file) => /\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|avif)$/i.test(file))) {
       list = await gatewayModels({ config });
       const wanted = session.model ?? undefined;
       model = wanted ? list.models.find((entry) => sameGatewayModel(entry.id, wanted)) : undefined;
