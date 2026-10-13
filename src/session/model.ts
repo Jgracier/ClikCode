@@ -135,11 +135,9 @@ export interface HarnessSession {
   planMode?: boolean;
   name?: string;
   /** Who named it. `user` is a /rename and is never overwritten; `provider` is
-   * the harness's own title, or one the first turn asked the model for. A name
-   * with no source is a legacy one derived from the first message. */
-  nameSource?: 'user' | 'provider';
-  /** Whether this conversation has spent its one embedded title request. */
-  titleAttempts?: number;
+   * the harness's own title; `message` is the user's first message, which gives
+   * way to a vendor title. A name with no source is a legacy one. */
+  nameSource?: 'user' | 'provider' | 'message';
   createdAt: string;
   updatedAt: string;
   /** A closed chat is retained for history but is never reopened implicitly. */

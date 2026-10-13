@@ -8,7 +8,6 @@ vi.mock('../harness/transport/native/held-vendor.js', () => ({
   hasHeldVendorProcess: held.has, waitForHeldVendorSubagents: held.wait, releaseHeldVendorProcess: held.release,
 }));
 
-import { replyWithoutTitle } from '../session/title.js';
 import { setPlanMode, settleHeldVendor, unfinishedUsageRecorder } from './turn-steps.js';
 
 describe('unfinishedUsageRecorder', () => {
@@ -31,19 +30,6 @@ describe('unfinishedUsageRecorder', () => {
     unfinishedUsageRecorder(state, { touch }, () => undefined)('stopped');
     expect(state.invocations).toEqual([]);
     expect(touch).not.toHaveBeenCalled();
-  });
-});
-
-describe('replyWithoutTitle', () => {
-  const marked = '<<<TITLE: Fix login>>>\nHello';
-  it('leaves a reply that did not ask for a name exactly as written', () => {
-    expect(replyWithoutTitle('<<<TITLE: x>>> hi', false)).toEqual({ text: '<<<TITLE: x>>> hi' });
-  });
-  it('takes the title off one that did, and strips repeats only when told to', () => {
-    const once = replyWithoutTitle(marked, true);
-    expect(once.text).toBe(replyWithoutTitle(marked, true, true).text);
-    const repeated = replyWithoutTitle(`${marked}\n\n${marked}`, true);
-    expect(replyWithoutTitle(`${marked}\n\n${marked}`, true, true).text.length).toBeLessThanOrEqual(repeated.text.length);
   });
 });
 

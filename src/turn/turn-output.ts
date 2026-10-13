@@ -9,7 +9,6 @@ import type { HarnessActivityEvent } from '../harness/prompter.js';
 import { renderActivityLine } from '../harness/protocol/activity-line.js';
 import { stopReasonNotice, type TurnStopReason, type TurnUsage } from '../harness/protocol/turn-usage.js';
 import type { HarnessState } from '../session/model.js';
-import type { StreamingTitle } from '../session/title.js';
 import type { DurableTurnCheckpoint } from './turn-journal.js';
 import type { TurnObserver } from './observer.js';
 import { markTurn } from '../runtime/turn-latency.js';
@@ -70,28 +69,20 @@ function showActivity(prompter: TurnObserver | undefined, event: HarnessActivity
   else if (!isJsonDefaultMode()) for (const activity of renderActivityLine(event)) output.write(`${activity}\n`);
 }
 
-/** Where a turn's streamed answer and activity go: the answer through the
- * title filter (`title`, read per delta: a retry replaces the stream), then
- * to the checkpoint and to the screen alike, so what is shown and what is
- * saved cannot differ. `keep` may refuse a delta the filter let through. */
+/** Where a turn's streamed answer and activity go: to the checkpoint and to
+ * the screen alike, so what is shown and what is saved cannot differ. `keep`
+ * may refuse a delta. */
 export function turnSink(checkpoint: Pick<DurableTurnCheckpoint, 'response' | 'activity'>, prompter: TurnObserver | undefined, options: {
-  title?: () => StreamingTitle | undefined;
   keep?: (visible: string, mode: 'append' | 'replace') => boolean;
 } = {}) {
   return {
     response(text: string, mode: 'append' | 'replace' = 'append'): void {
-      const titleStream = options.title?.();
-      const visible = titleStream ? titleStream.push(text, mode) : text;
-      // undefined: the title filter is still holding the head back. '': a
-      // replace arrived before that question was settled. Either one used to
-      // be written through, and an empty replace clears the answer already
-      // on screen -- the reply flashed, then was gone.
-      if (!visible || (options.keep && !options.keep(visible, mode))) return;
+      if (!text || (options.keep && !options.keep(text, mode))) return;
       // Once per turn each: after the first, a Set lookup and no I/O.
       markTurn('first-event');
-      if (visible.trim()) markTurn('first-text');
-      checkpoint.response(visible, mode);
-      prompter?.response(visible, mode);
+      if (text.trim()) markTurn('first-text');
+      checkpoint.response(text, mode);
+      prompter?.response(text, mode);
     },
     activity(event: HarnessActivityEvent): void {
       markTurn('first-event');

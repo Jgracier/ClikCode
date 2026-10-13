@@ -86,12 +86,8 @@ export async function completeVendorTurn(ctx: VendorTurnContext, observer: Vendo
   const invocation = recordInvocation(state, { sessionId: session.id, accountId: ctx.account.id, provider: harness.provider, model: ctx.model, startedAt: ctx.startedAt, usage });
   recordSuccessfulAccountTurn(state, ctx.account, invocation);
   showStopReason(prompter, usage?.stopReason);
-  // Completion always extracts the title, including when the stream that
-  // filtered an earlier attempt was replaced during a retry.
   const completedText = await completeTurnCheckpoint(session, ctx.checkpoint, result.text, {
-    title: ctx.titleStream?.title,
-    asked: ctx.titleStream !== undefined,
-    ...(ctx.titleSource === 'vendor'
+    ...(harness.titleSource === 'vendor'
       ? { vendor: () => nativeGeneratedTitle(harness, session.nativeSessionId, session.workspace, environment) }
       : {}),
   });

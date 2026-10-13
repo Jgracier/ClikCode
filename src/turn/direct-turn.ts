@@ -1,7 +1,6 @@
 /** One turn through a directly addressable model API. */
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessSession, HarnessState } from '../session/model.js';
-import { prepareSessionTitle, titleStreamForAttempt } from '../session/title.js';
 import { sessionTranscriptMessages } from './checkpoint.js';
 import { textTranscript } from './turn-activities.js';
 import { startTurnCheckpoint, completeTurnCheckpoint } from './turn-journal.js';
@@ -30,22 +29,18 @@ export async function sendDirectApiTurn(input: {
   run: TurnRunOptions;
 }): Promise<void> {
   const { state, session, model, text, prepared, startedAt, signal, run } = input;
-  let { account, turnText } = input;
+  let { account } = input;
+  const { turnText } = input;
   const prompter = run.prompter;
   if (prepared.images.length) throw new Error('Image attachments need a vendor harness that accepts images; direct API-key accounts do not. Switch providers with /provider or clear them with /attachments clear.');
   if (!model) throw new Error('local AI session has no model selected');
   const baseMessages = textTranscript(sessionTranscriptMessages(session));
-  // No harness on this path writes its own titles. One turn asks, once the
-  // user has said enough to name the chat, and no other turn touches the reply.
-  const directTitle = prepareSessionTitle(session, turnText);
-  turnText = directTitle.prompt;
-  let titleStream = directTitle.stream;
   const checkpoint = await startTurnCheckpoint(state, session, text, run);
   const accounts = turnAccounts({
     state, session, prompter, matchesBackend: (item) => matchesDirectTurnModel(item, model),
     persist: () => checkpoint.persistNow(), current: () => account, adopt: (to) => { account = to; },
   });
-  const sink = turnSink(checkpoint, prompter, { title: () => titleStream });
+  const sink = turnSink(checkpoint, prompter);
   // A provider that fails mid-answer reports no usage, but what it streamed was
   // generated and billed: counted from the text (about four characters a token).
   let streamedChars = 0;
@@ -76,10 +71,6 @@ export async function sendDirectApiTurn(input: {
   };
   let turn: Awaited<ReturnType<typeof streamLocalAiTurn>>;
   for (;;) {
-    // Same rule as the vendor path. This path re-sends the whole prompt on a
-    // switch, title request included, so the stream restarts rather than
-    // being dropped -- which is a consequence of the rule, not a second rule.
-    titleStream = titleStreamForAttempt(titleStream, turnText);
     try {
       turn = await invoke(account);
       break;
@@ -96,7 +87,7 @@ export async function sendDirectApiTurn(input: {
     usage: { input: turn.usage.inputTokens, output: turn.usage.outputTokens },
   });
   recordSuccessfulAccountTurn(state, account, invocation);
-  const completedText = await completeTurnCheckpoint(session, checkpoint, turn.text, { title: titleStream?.title, asked: titleStream !== undefined });
+  const completedText = await completeTurnCheckpoint(session, checkpoint, turn.text);
   if (!prompter) emitHarnessOutput({ session, text: completedText, toolCalls: turn.toolCalls, usage: turn.usage, invocation, ...accounts.switched() });
   } finally {
     await checkpoint.flush();

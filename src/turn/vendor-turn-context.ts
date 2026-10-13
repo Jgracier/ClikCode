@@ -3,7 +3,6 @@ import chalk from 'chalk';
 import type { HarnessSession, HarnessState } from '../session/model.js';
 import type { AiHarnessAccount, AiLocalHarnessDefinition } from '../harness/definition.js';
 import { resolveNativeModel } from '../harness/accounts/model-catalog.js';
-import { sessionTitleSource, prepareSessionTitle, type StreamingTitle } from '../session/title.js';
 import { ensureNativeHarness } from '../harness/transport/native/inspect.js';
 import { harnessCanRunTurns, harnessSupportsImages, localHarnessForCommand, localHarnessForProvider } from '../runtime/lazy-bridge.js';
 import type { prepareAttachments } from '../session/attachments.js';
@@ -46,7 +45,6 @@ export interface VendorTurnContext {
   readonly prompter: TurnObserver | undefined;
   readonly checkpoint: DurableTurnCheckpoint;
   readonly accounts: ReturnType<typeof turnAccounts>;
-  readonly titleSource: ReturnType<typeof sessionTitleSource>;
   /** What the request carried besides its words. A retry on a fresh thread
    * retells the conversation from ClikCode's copy, which holds only what was
    * typed -- without this the attached files were silently gone from it. (`!`
@@ -64,7 +62,6 @@ export interface VendorTurnContext {
    * that produced no output sends this again; rebuilding the transcript
    * would repeat the whole conversation on top of a thread that already has it. */
   askedText: string;
-  titleStream: StreamingTitle | undefined;
   readonly attempt: AttemptState;
 }
 
@@ -112,14 +109,6 @@ export async function createVendorTurnContext(input: {
     model = await resolveNativeModel(harness, input.account) ?? null;
     if (model) session.model = model;
   }
-  // An unnamed chat gets a title from the harness that writes one. Where the
-  // harness does not, one turn asks, once the user has said enough to name
-  // the chat. The request rides on that turn's text only -- never on what is
-  // stored as the user's message -- and only that reply drops the marker.
-  const titleSource = sessionTitleSource(harness);
-  const titleRequest = titleSource === 'ask' ? prepareSessionTitle(session, turnText) : undefined;
-  const titleStream = titleRequest?.stream;
-  if (titleRequest) turnText = titleRequest.prompt;
   // Resource notes ClikCode held for this conversation ride the same way (turn/resource-notes.ts).
   turnText = withResourceNotes(session.id, turnText);
   const supportsImages = harnessSupportsImages(harness);
@@ -156,9 +145,9 @@ export async function createVendorTurnContext(input: {
     return check;
   };
   const context: VendorTurnContext = {
-    state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts, titleSource,
+    state, session, harness, text, startedAt, signal, run, prompter, checkpoint, accounts,
     requestContext, images, cliCarriesImages, cliImageNote, baseMessages, checkMcpSignIn,
-    account: input.account, model, turnText, askedText: turnText, titleStream,
+    account: input.account, model, turnText, askedText: turnText,
     attempt: { authRetried: false, effortRetried: false, standbyOpened: false, threadCopiedTo: undefined, nativeThreadRetried: false, transientRetried: false },
   };
   return context;

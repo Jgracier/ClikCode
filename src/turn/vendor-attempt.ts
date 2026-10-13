@@ -9,7 +9,6 @@ import { lifecycle } from '../runtime/lifecycle-log.js';
 import { sessionTurnTransport } from '../harness/transport/select.js';
 import type { NativeTurnResult } from '../harness/protocol/turn-result.js';
 import { isTurnCancelled } from '../agent/cancellation.js';
-import { titleStreamForAttempt } from '../session/title.js';
 import { closePersistentTransport } from './vendor-process.js';
 import { turnEnvironment } from './turn-environment.js';
 import { runVendorCliAttempt } from './vendor-cli-attempt.js';
@@ -90,12 +89,6 @@ export async function runAttempt(ctx: VendorTurnContext, observer: VendorObserve
   const responseBefore = session.pendingTurn?.response?.length ?? 0;
   const wroteBefore = Boolean(session.pendingTurn?.outputStarted);
   observer.resetAttempt();
-  // Naming is for a new chat, and only from a reply that was actually
-  // asked for a name -- so nothing about it may cross a retry. This loop
-  // has several retry paths and each one either keeps this prompt or replaces
-  // it; deciding here, from the prompt itself, is what makes that true for
-  // all of them instead of the ones someone remembered.
-  ctx.titleStream = titleStreamForAttempt(ctx.titleStream, ctx.turnText);
   const runStructuredCliTurn = (): Promise<NativeTurnResult> => runVendorCliAttempt({
     harness, session, turnText: `${ctx.turnText}${ctx.cliImageNote}`, model: ctx.model, environment,
     images: ctx.cliCarriesImages ? ctx.images : [], signal: ctx.signal, run: ctx.run, checkpoint,
