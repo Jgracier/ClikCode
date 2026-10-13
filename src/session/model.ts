@@ -107,6 +107,8 @@ export interface HarnessSession {
   accountId: string | null;
   provider: string | null;
   model: string | null;
+  /** The model this conversation last used on each route it has left (session/route-models.ts). */
+  routeModels?: Record<string, string | null>;
   /** Gateway only: the account-private platform agent chosen in /model.
    * UI state until a separate durable-agent execution path exists. */
   gatewayAgentId?: string;

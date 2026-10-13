@@ -1,6 +1,7 @@
 /** Switching the conversation a session is attached to, including the
  * handover a change of provider forces. */
 
+import { recallRouteModel, rememberRouteModel } from '../../session/route-models.js';
 import type { HarnessPrompter } from '../../harness/prompter.js';
 import { randomUUID } from 'node:crypto';
 import type { HarnessSession, HarnessState } from '../../session/model.js';
@@ -133,8 +134,13 @@ export async function moveToProvider(
   const lastUsedModel = [...state.sessions]
     .filter((session) => session.nativeHarness === harness.command && session.model)
     .sort((left, right) => Date.parse(right.updatedAt ?? '') - Date.parse(left.updatedAt ?? ''))[0]?.model;
-  const model = selection.model ?? carriedHandoffModel(current, account?.models ?? [],
+  // Back on a harness this conversation already used: the model it last ran there, if the account still lists it.
+  const recalled = recallRouteModel(current, harness.command, state);
+  const listed = (candidate: string | null | undefined): candidate is string => Boolean(candidate)
+    && (!account?.models.length || account.models.includes(candidate!));
+  const model = selection.model ?? (listed(recalled) ? recalled : null) ?? carriedHandoffModel(current, account?.models ?? [],
     lastUsedModel ?? state.providerSettings[harness.provider]?.model ?? null);
+  rememberRouteModel(current);
   leaveProvider(current);
   Object.assign(current, {
     route: 'local', provider: harness.provider, nativeHarness: harness.command, accountId, model,

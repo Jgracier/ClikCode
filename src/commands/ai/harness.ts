@@ -326,7 +326,7 @@ async function startOrResumeAgentChat(options: { route: 'clikcode-local' | 'gate
     }
   } else {
     session = launchSession(state, process.cwd());
-    applyClikCodeAgentSessionPolicy(session, options.route);
+    applyClikCodeAgentSessionPolicy(session, options.route, state);
     state.sessions.push(session);
     // On disk before the worker is asked for it, as a vendor chat's is: a
     // draft held only in this process's memory is a chat the worker cannot
