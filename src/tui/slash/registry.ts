@@ -7,7 +7,8 @@
 import type { AiLocalHarnessDefinition } from '../../harness/definition.js';
 import type { HarnessSession } from '../../session/model.js';
 import { AGENT_COMPACTS_ITSELF, isClikCodeAgent, isGatewayService } from '../../session/route.js';
-import { harnessSupportsModelSelection } from '../../runtime/lazy-bridge.js';
+import { harnessSupportsEffort, harnessSupportsModelSelection } from '../../runtime/lazy-bridge.js';
+import { sessionPermissionModes } from '../../session/options.js';
 
 type SlashGroup =
   | 'Common' | 'Conversation' | 'Workspace' | 'Provider' | 'Settings' | 'Sessions' | 'Info' | 'Tools' | 'Custom' | 'Switch harness';
@@ -103,6 +104,16 @@ const needsHarness = (what: string) => (session: HarnessSession | undefined, har
   return harness ? { available: true } : { available: false, reason: `Choose a provider before ${what}.`, needs: 'provider' };
 };
 
+/** A control the vendor does not expose: said as such, and nothing is sent in
+ * its place. Applies only where a vendor harness runs the conversation. */
+const notOffered = (
+  what: string, base: SlashAvailability, harness: AiLocalHarnessDefinition | undefined,
+  offered: (harness: AiLocalHarnessDefinition) => boolean, session?: HarnessSession,
+): SlashAvailability => {
+  if (!base.available || !harness || isClikCodeAgent(session)) return base;
+  return offered(harness) ? base : { available: false, reason: `${what} are not available for ${harness.displayName}.`.replace('effort are', 'effort is') };
+};
+
 /** Governs what the agent may do to THIS machine, so it applies on both
  * routes. The gateway picks the model; it does not get to pick how much of
  * the user's filesystem an agent may touch without asking. */
@@ -184,7 +195,7 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       ? { available: false, reason: CLIKCODE_LOCAL_NO_EFFORT }
       // The Gateway takes a reasoning level with every step.
       : isGatewayService(session) ? { available: true }
-        : needsHarness('setting effort')(session, harness)),
+        : notOffered('Reasoning effort', needsHarness('setting effort')(session, harness), harness, harnessSupportsEffort)),
   }),
   entry('fast', 'Settings', 'serve from the fastest provider instead of the cheapest', {
     argHint: '[on|off]', duringTurn: 'apply',
@@ -192,7 +203,11 @@ export const SLASH_COMMANDS: readonly SlashCommandEntry[] = [
       ? { available: true }
       : { available: false, reason: 'Speed is a ClikDeploy Gateway choice: it picks among the providers of one model.' }),
   }),
-  entry('permissions', 'Settings', 'approval behavior', { argHint: '[ask|bypass|auto]', availability: bothRoutes('setting permissions'), duringTurn: 'apply' }),
+  entry('permissions', 'Settings', 'approval behavior', {
+    argHint: '[ask|bypass|auto]', duringTurn: 'apply',
+    availability: (session, harness) => notOffered('Permission modes', bothRoutes('setting permissions')(session, harness), harness,
+      (found) => sessionPermissionModes(session ?? { route: 'local' }, found).length > 0, session),
+  }),
   entry('sandbox', 'Settings', "whether the agent's shell commands write only the workspace, temp and caches (on by default)", { argHint: '[on|off]', availability: agentOnly }),
   entry('send', 'Settings', 'messages typed mid-turn: steer into the turn, or queue for after it', { argHint: '[steer|queue]', duringTurn: 'apply' }),
   entry('options', 'Settings', 'provider-specific modes and controls', { availability: needsHarness('setting options') }),
