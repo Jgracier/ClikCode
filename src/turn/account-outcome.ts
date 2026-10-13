@@ -1,20 +1,16 @@
 /** What a turn's outcome records on its account. */
 import { clearQuotaMark, markQuotaExhausted, vendorWindows, windowKey, windowSpent } from '../harness/accounts/usage-reading.js';
-import { noteAllowedTurn, noteRefusal } from '../harness/accounts/learned-usage.js';
 import { quotaRetryHint, quotaRollingWindowMs } from './failover.js';
 import type { AiHarnessAccount } from '../harness/definition.js';
 import type { HarnessState } from '../session/model.js';
 
-type Invocation = HarnessState['invocations'][number];
-
-/** A turn the vendor allowed, already in the invocation log. */
-export function recordSuccessfulAccountTurn(state: HarnessState, account: AiHarnessAccount, invocation: Invocation): void {
+/** A turn the vendor allowed. */
+export function recordSuccessfulAccountTurn(account: AiHarnessAccount): void {
   // The vendor served this turn: any window its reading calls spent is not.
   const spent = vendorWindows(account).filter(windowSpent).map(windowKey);
   if (spent.length) account.disprovenWindows = [...new Set([...account.disprovenWindows ?? [], ...spent])];
   clearQuotaMark(account);
   account.verification = undefined;
-  noteAllowedTurn(state, account, invocation);
 }
 
 /** A free-plan refusal can arrive before the billing probe has named the
@@ -28,24 +24,20 @@ function noteFreePlan(account: AiHarnessAccount, failure: unknown): void {
 }
 
 /** A refusal holds until the vendor says it ends: the refusal's own "resets
- * in", else the reset of a window its last reading showed spent, else --
- * for a harness that reports no usage -- when what has been learned says.
- * A rolling window names its length, not an instant, so the learned age-out
- * is the reset and the whole window is only the fallback. With none of
- * those, the mark uses the default (see quotaMarkExpiresAt). */
+ * in", else the reset of a window its last reading showed spent, else the
+ * rolling window's length the refusal named. With none of those, the mark
+ * uses the default (see quotaMarkExpiresAt) and the account is tried again
+ * on a later turn. */
 export function recordQuotaRefusal(state: HarnessState, account: AiHarnessAccount, failure: unknown, now = Date.now()): void {
   // A refusal makes the vendor's readings credible again.
   account.disprovenWindows = undefined;
   noteFreePlan(account, failure);
   const named = quotaRetryHint(failure, now);
-  // A rolling window names its length. Passing that as a reset instant makes
-  // the learner reject it: the window ends when the oldest spend ages out,
-  // not a full length from now.
+  // A rolling window names its length, not a reset instant: it is the last resort.
   const windowMs = quotaRollingWindowMs(failure);
   const exact = windowMs ? undefined : named;
   const spentReset = vendorWindows(account)
     .filter((window) => windowSpent(window) && window.resetsAt !== undefined && Date.parse(window.resetsAt) > now)
     .map((window) => window.resetsAt!).sort().at(-1);
-  const learnedReset = noteRefusal(state, account, now, exact, windowMs);
-  markQuotaExhausted(account, now, exact ?? spentReset ?? learnedReset ?? named);
+  markQuotaExhausted(account, now, exact ?? spentReset ?? named);
 }

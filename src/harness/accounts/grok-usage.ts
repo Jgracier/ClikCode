@@ -52,8 +52,7 @@ export function grokBillingReading(result: unknown): UsageReading | undefined {
   // A Free account's limit is tokens over a rolling 24 hours ("603117/500000",
   // 2026-10-06), which this answer never mentions: its weekly window read
   // "100% left" on a spent account and cleared every refusal. The plan name
-  // is all this probe can say. Once a refusal names the window, learned usage
-  // shows the figure and the reset, the same way a harness with no probe does.
+  // is all this probe can say.
   if (typeof tier === 'string' && /free/i.test(tier)) return { windows: [], label: 'Free plan', plan: { name: tier } };
   const reading = usageReading([usageWindow(name, protoNumber(config!.creditUsagePercent) ?? 0, period.end ?? config!.billingPeriodEnd)]);
   return reading && typeof tier === 'string' && tier ? { ...reading, plan: { name: tier } } : reading;

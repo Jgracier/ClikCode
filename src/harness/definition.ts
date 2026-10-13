@@ -2,7 +2,6 @@
  * and the router runtime that reads it. One canonical definition, so a
  * per-vendor fact is always a field here and never a name in a branch. */
 
-import type { UsageLearning } from './accounts/usage-learning.js';
 
 /** The catalog's own vocabulary (packages/clikrouter/src/ai-local-harness.ts),
  * type-only: erased at build, so the catalog bundle still loads lazily. */
@@ -69,9 +68,6 @@ export interface AiHarnessAccount {
    * models that plan runs when the vendor names them (Cursor: Auto only).
    * See free-plan.ts. */
   plan?: { name: string; models?: string[] };
-  /** What this account's vendor has shown about its limit, for a harness
-   *  that reports no usage of its own -- see usage-learning.ts. */
-  usageLearning?: UsageLearning;
   nativeProfile?: {
     env: string;
     path: string;

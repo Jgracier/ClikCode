@@ -1,7 +1,7 @@
 /** The pickers' rows as data: one rule for the terminal and the editor. Each
  * test below is a place where the copies used to disagree, and says which
  * rule won. The vendor is never asked: PATH, credentials on disk, effort
- * discovery and learned usage are stubbed. */
+ * discovery is stubbed. */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type Conf from 'conf';
 import type { AiHarnessAccount } from '../harness/definition.js';
@@ -13,7 +13,6 @@ const vendor = vi.hoisted(() => ({
   installed: new Set<string>(),
   evidence: new Set<string>(),
   efforts: undefined as string[] | undefined,
-  learned: undefined as UsageReading | undefined,
 }));
 vi.mock('../harness/transport/native/inspect.js', async (original) => ({
   ...await original<object>(),
@@ -29,10 +28,6 @@ vi.mock('../harness/accounts/effort-choices.js', async (original) => ({
     if (!vendor.efforts) throw new Error('help would not run');
     return { values: vendor.efforts, source: 'vendor-help' };
   },
-}));
-vi.mock('../harness/accounts/learned-usage.js', async (original) => ({
-  ...await original<object>(),
-  learnedReading: () => vendor.learned,
 }));
 const { accountRow, accountUsage, effortChoices, harnessSignedIn, providerRows } = await import('./picker-rows.js');
 
@@ -65,7 +60,6 @@ beforeEach(() => {
   vendor.installed = new Set();
   vendor.evidence = new Set();
   vendor.efforts = undefined;
-  vendor.learned = undefined;
 });
 
 describe('signed in', () => {
@@ -110,16 +104,12 @@ describe('account rows', () => {
 describe('usage', () => {
   it('reads current windows first', () => {
     const live = account({ usage: { at: new Date(NOW).toISOString(), label: '5h 40% left', windows: [{ name: '5h', usedPct: 60, resetsAt: LATER }] } as AiHarnessAccount['usage'] });
-    vendor.learned = { windows: [{ name: '5h', usedPct: 10 }], label: 'learned' };
     expect(accountUsage(live, state([live]), NOW)).toEqual({ label: '5h 40% left', windows: [{ name: '5h', usedPct: 60, resetsAt: LATER }] });
   });
 
-  it('falls back to what refusals taught once the windows have passed, and says it is an estimate', () => {
+  it('reads no estimate once the windows have passed: only what the vendor said', () => {
     const stale = account({ usage: { at: new Date(NOW).toISOString(), label: '5h 40% left', windows: [{ name: '5h', usedPct: 60, resetsAt: EARLIER }] } as AiHarnessAccount['usage'] });
-    vendor.learned = { windows: [{ name: '5h', usedPct: 30, resetsAt: LATER }], label: '5h ~70% left' };
-    const usage = accountUsage(stale, state([stale]), NOW)!;
-    expect(usage).toMatchObject({ learned: true, label: '5h ~70% left' });
-    expect(accountUsageText(usage)).toBe('5h ~70% left · estimated');
+    expect(accountUsage(stale, state([stale]), NOW)).toBeUndefined();
   });
 
   // /usage showed a balance with no window (Auggie, Amp, Kilo); the editor's

@@ -100,7 +100,7 @@ function providerIds(session: HarnessSession, providerId?: string): Set<string> 
 
 /** Quota and metered use for every account on the harness this chat is using,
  * then those figures added together, then this conversation. Nothing here
- * asks a vendor: a percentage is the last saved window or the learned limit,
+ * asks a vendor: a percentage is the last saved window,
  * and tokens are the turns ClikCode itself recorded. */
 export function usageReport(
   state: HarnessState, session: HarnessSession, options: { now?: number; providerName?: string; providerId?: string } = {},

@@ -272,9 +272,8 @@ describe('the approval card', () => {
 });
 
 describe('an account\'s usage in the account menu', () => {
-  it('reads its windows, not only the label, and marks a learned figure as the terminal\'s /usage does', () => {
+  it('reads its windows, not only the label', () => {
     expect(accountUsageText({ windows: [{ name: '5h', usedPct: 60 }, { name: 'weekly', usedPct: 10 }] })).toBe('5h 40% left · Weekly 90% left');
-    expect(accountUsageText({ windows: [{ name: '5h', usedPct: 30 }], learned: true })).toBe('5h 70% left · estimated');
     expect(accountUsageText({ label: '$3 left', windows: [] })).toBe('$3 left');
   });
 });
