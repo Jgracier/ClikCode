@@ -108,7 +108,7 @@ describe('slash registry', () => {
   /** Typing `/` on a phone shows about six rows before anything scrolls, so
    * what sits in those rows is the whole of the feature for most uses. */
   it('opens with the pinned commands, in their fixed order', () => {
-    const palette = slashPalette(session(), harness(), VENDOR_EXTRAS);
+    const palette = slashPalette(session(), harness({ permissionModes: ['ask'], permissionArgv: { ask: { argv: ['--ask'] } } }), VENDOR_EXTRAS);
     expect(palette.slice(0, SLASH_PALETTE_PINNED.length).map((row) => row.value))
       .toEqual(SLASH_PALETTE_PINNED.map((name) => `/${name}`));
     expect(SLASH_PALETTE_PINNED.slice(0, 4)).toEqual(['resume', 'provider', 'account', 'model']);
@@ -242,3 +242,17 @@ describe('a command that is missing only its provider', () => {
   });
 });
 
+
+describe('a control the vendor does not expose', () => {
+  const availability = (name: string, target: AiLocalHarnessDefinition) => resolveSlashCommand(name)!.availability?.(session(), target, '');
+
+  it('says it is not available for that harness', () => {
+    const bare = harness();
+    expect(availability('effort', bare)).toMatchObject({ available: false, reason: 'Reasoning effort is not available for Vendor.' });
+    expect(availability('permissions', bare)).toMatchObject({ available: false, reason: 'Permission modes are not available for Vendor.' });
+  });
+
+  it('is available where the vendor has the control', () => {
+    expect(availability('effort', harness({ effortArgvPrefix: ['--effort'], effortValues: ['low', 'high'] }))).toEqual({ available: true });
+  });
+});
