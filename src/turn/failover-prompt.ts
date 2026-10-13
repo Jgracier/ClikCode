@@ -15,7 +15,7 @@
  */
 
 import { carriesTitleRequest } from '../session/title.js';
-import { stripResourceNotes } from './resource-notes.js';
+import { stripResourceNotes } from './resource-note-text.js';
 
 /** Opening line of every transfer prompt; the marker that identifies one. A
  * statement of fact about the text that follows, not an instruction: the
