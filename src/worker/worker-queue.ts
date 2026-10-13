@@ -37,7 +37,16 @@ export function createWorkerQueue(ctx: WorkerContext) {
     if (ctx.turnRunning) return false;
     ctx.turnRunning = true;
     ctx.activeQueuedTurnId = command.queuedTurnId;
-    void ctx.runTurn(command);
+    // runTurn settles its own end; this is for a throw it did not foresee,
+    // which must still end the turn on every window rather than leave it open.
+    void ctx.runTurn(command).catch((error: unknown) => {
+      ctx.turnRunning = false;
+      ctx.activeController = undefined; ctx.activeLiveInput = undefined; ctx.activeSubmissions = undefined; ctx.activeRestoreDraft = undefined;
+      ctx.activeQueuedTurnId = undefined;
+      observer.broadcast({ type: 'turn-error', message: error instanceof Error ? error.message : String(error) });
+      observer.endTurn();
+      ctx.idle.scheduleIdleExit();
+    });
     return true;
   };
 

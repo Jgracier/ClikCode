@@ -272,12 +272,7 @@ export function startWaiting(
   const keys = onSubmit ? this.typedAhead.splice(0) : [];
   if (keys.length) setImmediate(() => { for (const key of keys) if (this.turn === turn) this.onWaitingKey(key); });
   const interrupt = early?.early?.interrupt;
-  if (interrupt && onCancel) {
-    turn.cancelled = true;
-    turn.label = interrupt.restoreDraft ? 'editing…' : 'stopping…';
-    onCancel(interrupt.restoreDraft);
-    this.updateWaiting();
-  }
+  if (interrupt && onCancel) onCancel(interrupt.restoreDraft);
 }
 
 /** A turn is on its way, but what runs it is not answering yet: the first
@@ -403,6 +398,25 @@ export function leaveTurn(this: TerminalHarnessPrompter): void {
  * announced as finished. */
 export function turnStopped(this: TerminalHarnessPrompter): void {
   if (this.turn) this.turn.cancelled = true;
+}
+
+/** The worker accepted a Stop (`stopping`): the one thing that makes this
+ * window say so. */
+export function turnStopping(this: TerminalHarnessPrompter, restoreDraft: boolean): void {
+  const turn = this.turn;
+  if (!turn) return;
+  turn.cancelled = true;
+  turn.label = restoreDraft ? 'editing…' : 'stopping…';
+  this.updateWaiting();
+}
+
+/** The worker says a Stop ended nothing (`stop-done`): no longer stopping. */
+export function stopSettled(this: TerminalHarnessPrompter): void {
+  const turn = this.turn;
+  if (!turn?.cancelled) return;
+  turn.cancelled = false;
+  turn.label = 'thinking';
+  this.updateWaiting();
 }
 
 /** The turn showing now drives it, if a follow does (see WaitingTurn.ended). */

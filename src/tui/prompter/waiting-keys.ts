@@ -76,17 +76,15 @@ export function onWaitingKey(this: TerminalHarnessPrompter, key: string): void {
       return;
     }
     if (!turn.submit && !turn.early) return;
+    // "stopping" is shown when the worker says it accepted the Stop (turnStopping).
     const restoreDraft = !this.turnHasAnswer();
-    turn.cancelled = true;
-    turn.label = restoreDraft ? 'editing…' : 'stopping…';
-    this.updateWaiting();
     if (turn.early) turn.early.interrupt = { restoreDraft };
     turn.cancel?.(restoreDraft);
   } else if (action === 'stop') {
     if (turn.cancelled) return;
-    turn.cancelled = true;
-    turn.label = 'stopping…';
-    this.updateWaiting();
+    // A conversation turn shows "stopping" when its worker says so
+    // (turnStopping); any other wait (a download, a shell) is this window's own.
+    if (!turn.submit && !turn.early) { turn.cancelled = true; turn.label = 'stopping…'; this.updateWaiting(); }
     // A turn that did nothing yet gives its prompt back to edit -- unless
     // something is already typed, which keeps the composer.
     const restoreDraft = !turn.draft.trim();

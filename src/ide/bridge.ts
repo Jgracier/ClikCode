@@ -233,7 +233,6 @@ export class IdeBridge {
     this.listWatch?.stop();
     this.listWatch = undefined;
     for (const timer of this.timers) clearInterval(timer);
-    clearInterval(this.link.stopWatch);
     this.prompter.cancelAll();
     this.searchKey?.('done');
     for (const pending of this.signIns.values()) pending.reject(new Error('the editor closed'));

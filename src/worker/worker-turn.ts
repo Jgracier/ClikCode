@@ -1,7 +1,7 @@
 /** One turn of the worker: run it for the attached windows, and settle how it
  * ended -- cancelled, failed or finished -- before the next one may start. */
 import { randomUUID } from 'node:crypto';
-import { isTurnCancelled } from '../agent/cancellation.js';
+import { isTurnCancelled, turnCancelledError } from '../agent/cancellation.js';
 import { STOPPED } from '../harness/protocol/wording.js';
 import { lifecycle } from '../runtime/lifecycle-log.js';
 import { beginTurnClock, endTurnClock, markTurn } from '../runtime/turn-latency.js';
@@ -74,6 +74,7 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.activeLiveInput = undefined;
     ctx.activeSubmissions = undefined;
     ctx.activeRestoreDraft = undefined;
+    ctx.stopAnnounced = false;
     // A message typed as the turn ended may still be on its way into the
     // queue (the broker falls back to it once steering has closed). The
     // final snapshot, the queue drained below and its answer to the window
@@ -83,10 +84,13 @@ export function createTurnRunner(ctx: WorkerContext) {
     await Promise.allSettled([...submissions]);
     // What background work this turn superseded did, now that the turn's own
     // save (which rewrites the transcript) is done.
-    await ctx.vendorBackground.saveSuperseded();
-    const ended = await currentSessionAndAccount();
-    observer.endTurn(ended.session, ended.account, turnOutcome === 'cancelled');
+    await ctx.vendorBackground.saveSuperseded().catch(() => undefined);
+    // The terminal event goes out whatever the read of the conversation did:
+    // a window waits on it, and a worker that never sent it would hold the
+    // turn open on every window for ever.
+    const ended = await currentSessionAndAccount().catch(() => undefined);
     ctx.turnRunning = false;
+    observer.endTurn(ended?.session, ended?.account, turnOutcome === 'cancelled');
     lifecycle('worker.turn.end', { outcome: turnOutcome, ms: Date.now() - turnStarted });
     endTurnClock(turnId);
     ctx.idle.vendorUsed();
@@ -125,6 +129,14 @@ export function createTurnRunner(ctx: WorkerContext) {
     ctx.activeController = controller;
     ctx.activeLiveInput = liveInput;
     ctx.activeSubmissions = submissions;
+    // A Stop that arrived before this turn started: applied now, and the turn
+    // ends through the ordinary cancelled path.
+    const earlyStop = ctx.pendingCancel;
+    ctx.pendingCancel = undefined;
+    if (earlyStop) {
+      if (earlyStop.restoreDraft) ctx.activeRestoreDraft = earlyStop.restoreDraft;
+      controller.abort();
+    }
     // startWaiting/stopWaiting bracket the call the same way interactive.ts's
     // own runInteractiveTurn does today -- the turn itself never calls
     // either, by design (see turn/observer.ts): they are the ORCHESTRATOR
@@ -138,6 +150,7 @@ export function createTurnRunner(ctx: WorkerContext) {
       // A background turn's record still being saved: this turn's checkpoint
       // would read the conversation without it and then write it back whole.
       await ctx.vendorBackground.settled();
+      if (controller.signal.aborted) throw turnCancelledError();
       await runSessionTurn(config, sessionId, command.text, controller.signal, {
         persistentTransports: true,
         prompter: observer,
@@ -147,8 +160,13 @@ export function createTurnRunner(ctx: WorkerContext) {
     } catch (error) {
       const cancelled = isTurnCancelled(error);
       turnOutcome = cancelled ? 'cancelled' : `error: ${(error instanceof Error ? error.message : String(error)).slice(0, 200)}`;
-      if (cancelled) await settleCancelledTurn(command);
-      else await settleFailedTurn(command, error, resumed);
+      try {
+        if (cancelled) await settleCancelledTurn(command);
+        else await settleFailedTurn(command, error, resumed);
+      } catch (settleError) {
+        // Settling is bookkeeping; the turn's end must still be told.
+        observer.broadcast({ type: 'turn-error', message: settleError instanceof Error ? settleError.message : String(settleError) });
+      }
     } finally {
       await finalizeTurn(turnId, turnStarted, turnOutcome, liveInput, submissions);
     }

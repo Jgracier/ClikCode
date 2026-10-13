@@ -34,7 +34,6 @@ import { localHarnessForCommand } from '../runtime/lazy-bridge.js';
 import type { TakeBackOutcome } from '../turn/live-input.js';
 import { readState } from '../session/state/read.js';
 import { sessionTranscriptMessages } from '../turn/checkpoint.js';
-import { STOP_RESEND_MS, STOP_RESENDS } from './stop-resend.js';
 
 export interface WorkerTurnRequest {
   echo: boolean;
@@ -398,13 +397,9 @@ async function driveWorkerTurn(
       // itself moments earlier. waiting-stop is the one true end-of-turn
       // signal; a recorded error is only ever surfaced once it arrives.
       let pendingError: Error | undefined;
-      /** Stop is asked again while the turn runs: a Stop that reached the worker before it had
-       * started the turn found nothing to cancel, and the window then waited on a turn that ran on. */
-      let stopWatch: NodeJS.Timeout | undefined;
       const finish = (why: string, fn: () => void): void => {
         if (settled) return;
         settled = true;
-        clearInterval(stopWatch);
         lifecycle('window.follow.end', { why });
         client.off('event', onEvent);
         client.off('close', onClose);
@@ -544,6 +539,15 @@ async function driveWorkerTurn(
             if (tracker.running) { rl.submitted?.(tracker.prompt); return; }
             finish('queued-after-end', () => resolveTurn());
             return;
+          case 'stopping':
+            rl.turnStopping(event.restoreDraft === true);
+            return;
+          case 'stop-done':
+            rl.stopSettled();
+            return;
+          case 'submit-rejected':
+            // The turn-error and waiting-stop that follow carry it.
+            return;
           case 'queue-changed':
           case 'retire-declined':
             return;
@@ -570,17 +574,7 @@ async function driveWorkerTurn(
       client.on('close', onClose);
       rl.startWaiting(
         'thinking',
-        (restoreDraft) => {
-          client.send({ type: 'cancel', restoreDraft });
-          clearInterval(stopWatch);
-          let asked = 0;
-          stopWatch = setInterval(() => {
-            asked += 1;
-            if (settled || asked > STOP_RESENDS) { clearInterval(stopWatch); return; }
-            client.send({ type: 'cancel', restoreDraft: false });
-          }, STOP_RESEND_MS);
-          stopWatch.unref();
-        },
+        (restoreDraft) => { client.send({ type: 'cancel', restoreDraft }); },
         async (text) => {
           // The worker decides steered vs. queued -- it owns the broker the
           // steer races -- and now says which, on a `submission` event

@@ -89,32 +89,57 @@ export function createLiveCommands(ctx: WorkerContext) {
     return;
   };
 
+  /** Told once per stopped turn: every window says "stopping", and the one
+   * whose Esc asked for its message back says "editing". */
+  const announceStopping = (restoreTo: Socket | undefined): void => {
+    if (ctx.stopAnnounced) return;
+    ctx.stopAnnounced = true;
+    observer.broadcast({ type: 'stopping' }, restoreTo);
+    if (restoreTo) sendEvent(restoreTo, { type: 'stopping', restoreDraft: true });
+  };
+
   const handleCancel = async (socket: Socket, command: Extract<ClientCommand, { type: 'cancel' }>): Promise<void> => {
     if (ctx.activeController) {
       lifecycle('worker.cancel', { stopped: 'turn' });
-      // A second Stop (the editor repeats it until the turn ends) must not take back the first's draft.
-      if (command.restoreDraft) ctx.activeRestoreDraft = socket;
+      // A repeated Stop must not take back the first's draft decision.
+      if (command.restoreDraft && !ctx.stopAnnounced) ctx.activeRestoreDraft = socket;
+      announceStopping(ctx.activeRestoreDraft);
       ctx.activeController.abort();
+      return;
+    }
+    // A submit accepted but not yet a turn: the Stop is the turn's, and is
+    // applied the moment it starts (worker-turn.ts).
+    if (ctx.submitsInFlight > 0) {
+      lifecycle('worker.cancel', { stopped: 'pending turn' });
+      const pending = ctx.pendingCancel ?? (ctx.pendingCancel = { restoreDraft: command.restoreDraft ? socket : undefined, askers: new Set() });
+      pending.askers.add(socket);
+      announceStopping(pending.restoreDraft);
       return;
     }
     // No turn: what the window shows running is the vendor's background
     // work (its tasks, sub-agents, or a follow-up between turns), and Stop
-    // stops that too. It used to be dropped here, so the work -- and the
-    // window following it -- ran on until it ended by itself.
+    // stops that too.
     if (hasHeldVendorProcess(sessionId)) {
       lifecycle('worker.cancel', { stopped: 'held vendor' });
+      announceStopping(undefined);
       await stopHeldVendorProcess(sessionId);
+      ctx.stopAnnounced = false;
+      observer.broadcast({ type: 'stop-done' });
       return;
     }
     if (ctx.vendorBackground.busy || await persistentWorkRunning(sessionId)) {
       lifecycle('worker.cancel', { stopped: 'vendor background work' });
+      announceStopping(undefined);
       await closePersistentTransport(sessionId);
+      ctx.stopAnnounced = false;
+      observer.broadcast({ type: 'stop-done' });
       return;
     }
-    // Else a turn parked for the reset, if there is one. Nothing running
-    // is not an error: a cancel racing a turn's own end is ordinary.
+    // Else a turn parked for the reset, if there is one. Said out loud
+    // either way: the window that asked is waiting to hear that it is over.
     lifecycle('worker.cancel', { stopped: ctx.resumeWaiter.pending ? 'reset wait' : 'nothing' });
     await ctx.resumeWaiter.cancel('Stopped waiting for the reset');
+    sendEvent(socket, { type: 'stop-done', nothing: true });
     return;
   };
 

@@ -64,6 +64,14 @@ export interface WorkerContext {
   activeSubmissions: Set<Promise<void>> | undefined;
   /** The window whose Esc stopped the turn asking for its message back. */
   activeRestoreDraft: Socket | undefined;
+  /** `submit`s accepted and not yet answered (started, queued or rejected). A
+   * `cancel` that finds no turn while one is in flight is kept in
+   * `pendingCancel` and applied the moment the turn starts. */
+  submitsInFlight: number;
+  /** A Stop that arrived before the turn it is for had started. */
+  pendingCancel: { restoreDraft: Socket | undefined; askers: Set<Socket> } | undefined;
+  /** The running turn's Stop has been accepted and announced (`stopping`). */
+  stopAnnounced: boolean;
   /** A turn parked until the quota resets was sent from here: marks it for the turn runner. */
   resumingTurn: boolean;
   /** A newer build asked for this worker while it was busy. */
