@@ -69,6 +69,19 @@ describe('resource guard', () => {
     expect(decideAction({ used: 11, limit: 10, ratio: 1.1 }, idle)).toEqual({ kind: 'nudge', worker: 100 });
   });
 
+  it('never stops a command too small to free anything: it nudges instead', () => {
+    // 2026-10-13: 70 of 102 stops were agents' 8 MB `sleep`s while memory sat outside any command.
+    const sleeps = viewProcesses([
+      proc(100, 1, 0.3, 'node', 'node /x/dist/index.js session-worker aaaa'),
+      proc(101, 100, 0.4, 'claude', '/opt/claude'),
+      proc(102, 101, 0.01, 'bash', '/bin/bash -c sleep 10'),
+      proc(103, 102, 0.008, 'sleep', 'sleep 10'),
+    ]);
+    const over = { used: 36 * GIB, limit: 35 * GIB, ratio: 36 / 35 };
+    expect(decideAction(over, sleeps)).toMatchObject({ kind: 'nudge', worker: 100 });
+    expect(decideAction(over, viewProcesses(table))).toMatchObject({ kind: 'stop' });
+  });
+
   it('tells the agent what happened and what to do instead', () => {
     const view = viewProcesses(table);
     const budget = { used: 30 * GIB, limit: 29 * GIB, ratio: 30 / 29 };
