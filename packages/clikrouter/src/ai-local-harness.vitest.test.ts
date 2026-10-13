@@ -725,3 +725,15 @@ describe('live checks', () => {
     expect(localHarnessForCommand('junie')).toMatchObject({ tier: 'experimental', liveCheck: { verified: false } });
   });
 });
+
+describe('model discovery declarations', () => {
+  it('declares each vendor-specific reader by field, not by command name', () => {
+    const strategies = Object.fromEntries(AI_LOCAL_HARNESSES.filter((h) => h.modelStrategy).map((h) => [h.command, h.modelStrategy]));
+    expect(strategies).toEqual({
+      claude: 'claude-table', codex: 'codex-cache', hermes: 'hermes-inventory', openclaw: 'openclaw-inventory',
+      aider: 'aider-providers', copilot: 'copilot-server', goose: 'goose-providers',
+    });
+    const formats = Object.fromEntries(AI_LOCAL_HARNESSES.filter((h) => h.modelListFormat).map((h) => [h.command, h.modelListFormat]));
+    expect(formats).toEqual({ opencode: 'opencode-verbose', kilo: 'opencode-verbose', pi: 'pi-table' });
+  });
+});
