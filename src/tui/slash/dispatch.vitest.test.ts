@@ -63,8 +63,15 @@ describe('one dispatch for every client', () => {
     expect((await readState()).sessions[0]?.attachments).toEqual([join(workspace, 'shot.png')]);
   });
 
-  it('turns /review into a turn that is not shown as typed', async () => {
-    expect(await dispatchLine(recordingHost(), 's1', '/review')).toMatchObject({ echo: false });
+  it('relays /review to a tool that has its own, as a turn that is not shown as typed', async () => {
+    await writeState(stateWith(chat({ workspace, nativeHarness: 'claude' })));
+    expect(await dispatchLine(recordingHost(), 's1', '/review the parser')).toMatchObject({ prompt: '/review the parser', echo: false });
+  });
+
+  it('says /review is not available for a tool with none, and sends nothing', async () => {
+    await writeState(stateWith(chat({ workspace, nativeHarness: 'aider', provider: 'aider' })));
+    const host = recordingHost();
+    await expect(dispatchLine(host, 's1', '/review')).rejects.toThrow(/not available for Aider/);
   });
 
   it('puts /capabilities in the host\'s panel', async () => {

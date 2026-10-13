@@ -256,3 +256,17 @@ describe('a control the vendor does not expose', () => {
     expect(availability('effort', harness({ effortArgvPrefix: ['--effort'], effortValues: ['low', 'high'] }))).toEqual({ available: true });
   });
 });
+
+describe('commands ClikCode used to emulate on a vendor', () => {
+  const availability = (name: string, target: AiLocalHarnessDefinition) => resolveSlashCommand(name)!.availability?.(session(), target, '');
+
+  it('are the vendor\'s own where it has them, and not available where it does not', () => {
+    const bare = harness();
+    const native = harness({ nativeSlashPassthrough: true });
+    for (const name of ['compact', 'review', 'init']) {
+      expect(availability(name, bare), name).toMatchObject({ available: false, reason: `/${name} is not available for Vendor.` });
+      expect(availability(name, native), name).toEqual({ available: true });
+    }
+    expect(availability('compact', harness({ nativeOperations: ['compact'] }))).toEqual({ available: true });
+  });
+});

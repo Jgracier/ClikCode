@@ -319,7 +319,7 @@ reference reads better that way. All of them, grouped as `/help` groups them:
 | Command | What it does |
 | --- | --- |
 | `/new [first message]` (also `/clear`, `/reset`) | start a fresh conversation (the current one stays resumable) |
-| `/compact [focus]` | summarize the conversation and continue in a fresh native session (a vendor tool; ClikCode's own agent compacts by itself) |
+| `/compact [focus]` | the tool's own compaction of this conversation, where it has one (ClikCode's own agent compacts by itself) |
 | `/history` | show this conversation; a summary carried for its opening turns comes first |
 | `/copy` | copy the last answer |
 | `/export [path]` | write the transcript as markdown |
@@ -340,8 +340,8 @@ not reversed.
 
 | Command | What it does |
 | --- | --- |
-| `/review [focus]` | ask the provider to review uncommitted changes |
-| `/init` | create or improve the tool's own instructions file for this project |
+| `/review [focus]` | review uncommitted changes: the tool's own `/review` where it takes slash commands, and ClikCode's own agent; not available for other tools |
+| `/init` | create or improve the instructions file: the tool's own `/init` where it takes slash commands |
 | `/memory [edit]` | show what the tool remembers about this project; `edit` opens `$EDITOR` |
 | `/diff` | changes against HEAD, staged included, plus untracked files |
 | `/cwd [dir]` | show or change the working directory |
